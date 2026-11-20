@@ -1,5 +1,13 @@
 use bevy::prelude::*;
 
+use crate::placement::stomped_object_edit_preparation::{
+    prepare_placement_stomp_removals, StompablePlacedObject,
+};
+use openzt2_game_data::world_definitions::object_placement::placement_stomp_rules::PlacementStompAction;
+use openzt2_zoo_state::placement::{
+    placement_occupancy_index::PlacedObjectFootprintOccupancyIndex,
+    placement_transaction_types::{ObjectPlacementEditPrepared, PreparedObjectPlacementEdit, PreparedObjectPlacementMutation},
+};
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
@@ -274,6 +282,65 @@ fn prepare_path_construction_snapshots(
     Ok((snapshots, cost))
 }
 
+fn prepare_objects_stomped_by_ground_path(
+    snapshots: &[TopologySnapshot],
+    grid: TopologyGrid,
+    definitions: WorldDefinitionsView<'_>,
+    placement: &PlacedObjectFootprintOccupancyIndex,
+    targets: &Query<StompablePlacedObject>,
+) -> Result<Vec<PreparedObjectPlacementMutation>, PlacementFailure> {
+    let Some(TopologySnapshot::Path { definition, .. }) = snapshots.first() else {
+        return Ok(Vec::new());
+    };
+    let Some(path) = definitions
+        .find_path(*definition)
+        .filter(|path| !path.elevated)
+    else {
+        return Ok(Vec::new());
+    };
+    let Some(policy) = definitions
+        .path_stomp_policy(*definition)
+        .filter(|policy| !policy.families.is_empty())
+    else {
+        return Ok(Vec::new());
+    };
+    let half_width = Vec2::splat(f32::from(path.width_cm) * 0.005);
+    let cells = snapshots
+        .iter()
+        .filter_map(|snapshot| match snapshot {
+            TopologySnapshot::Path { cell, .. } if cell.z == 0 => {
+                Some(grid.cell_translation(*cell).xz())
+            }
+            _ => None,
+        })
+        .flat_map(|centre| {
+            let min = (centre - half_width).floor().as_ivec2();
+            let max = (centre + half_width).ceil().as_ivec2();
+            (min.y..max.y).flat_map(move |y| (min.x..max.x).map(move |x| IVec2::new(x, y)))
+        });
+    prepare_placement_stomp_removals(
+        cells,
+        placement,
+        targets,
+        |_| false,
+        |target| {
+            let facts = definitions.placement_target_facts(target);
+            let types = facts
+                .map(|facts| facts.types.as_slice())
+                .or_else(|| {
+                    definitions
+                        .find_object(target)
+                        .map(|object| object.behavior_type_identifiers.as_slice())
+                })
+                .unwrap_or_default();
+            policy
+                .action_for_target(types, facts.map(|facts| &facts.properties))
+                .unwrap_or(PlacementStompAction::Allow)
+        },
+    )
+    .ok_or(PlacementFailure::Occupied)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn prepare_topology_construction_transaction(
     mut commands: Commands,
@@ -305,6 +372,11 @@ pub(super) fn prepare_topology_construction_transaction(
     (mut prepared, mut rejected): (
         MessageWriter<TopologyEditPrepared>,
         MessageWriter<TopologyEditPreparationRejected>,
+    ),
+    (placement, stomp_targets, mut placement_prepared): (
+        Res<PlacedObjectFootprintOccupancyIndex>,
+        Query<StompablePlacedObject>,
+        MessageWriter<ObjectPlacementEditPrepared>,
     ),
 ) {
     let Some(definitions) = active_definitions.get(&definitions) else {
@@ -390,6 +462,34 @@ pub(super) fn prepare_topology_construction_transaction(
         };
         match result {
             Ok((created, removed, cost)) => {
+                match prepare_objects_stomped_by_ground_path(
+                    &created,
+                    *grid,
+                    definitions,
+                    &placement,
+                    &stomp_targets,
+                ) {
+                    Ok(mutations) if !mutations.is_empty() => {
+                        commands
+                            .entity(request.transaction)
+                            .insert(PreparedObjectPlacementEdit {
+                                mutations: mutations.into_boxed_slice(),
+                            });
+                        placement_prepared.write(ObjectPlacementEditPrepared {
+                            transaction: request.transaction,
+                            cost: Money::ZERO,
+                        });
+                    }
+                    Ok(_) => {}
+                    Err(reason) => {
+                        write_topology_edit_preparation_rejection(
+                            request.transaction,
+                            reason,
+                            &mut rejected,
+                        );
+                        continue;
+                    }
+                }
                 commands.entity(request.transaction).insert(TopologyEdit {
                     created: created.into_boxed_slice(),
                     removed: removed.into_boxed_slice(),

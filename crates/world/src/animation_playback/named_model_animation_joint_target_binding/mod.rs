@@ -8,7 +8,9 @@ use openzt2_world_state::animation_graph::animation_graph_playback_state_types::
 
 use super::standard_bevy_animation_player_projection_types::StandardBevyAnimationJointBlendPose;
 use crate::animation_playback::animation_playback_controller_ancestor_lookup::find_animation_playback_controller_ancestor;
-use openzt2_world_state::animation_playback::animation_joint_target_types::AnimationJointTarget;
+use openzt2_world_state::animation_playback::animation_joint_target_types::{
+    AnimationJointTarget, AnimationRigJoints,
+};
 use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackController;
 
 type NewlyAvailableAnimationController = (
@@ -38,6 +40,7 @@ pub(super) fn bind_new_named_model_entities_and_new_animation_playback_controlle
     children: Query<&Children>,
     entity_parents: Query<&ChildOf>,
     animation_players: Query<(), With<AnimationPlayer>>,
+    rig_joints: Query<&AnimationRigJoints>,
     animation_playback_controllers: Query<(
         &AnimationPlaybackController,
         Option<&AnimationGraphPlaybackState>,
@@ -45,7 +48,10 @@ pub(super) fn bind_new_named_model_entities_and_new_animation_playback_controlle
     mut visited_entities: Local<HashSet<Entity>>,
 ) {
     visited_entities.clear();
-    let mut inherited_blend_poses = None;
+    let mut inherited_blend_poses = HashMap::<
+        Entity,
+        HashMap<AnimationTargetId, StandardBevyAnimationJointBlendPose>,
+    >::default();
     let AnimationJointBindingChanges {
         renamed_entities,
         reparented_entities,
@@ -102,33 +108,31 @@ pub(super) fn bind_new_named_model_entities_and_new_animation_playback_controlle
         }
         let target_id =
             AnimationTargetId::from_name(&Name::new(entity_name.as_str().to_ascii_lowercase()));
-        let blend_poses = inherited_blend_poses.get_or_insert_with(|| {
-            named_entities
-                .iter()
-                .filter_map(|(name, binding, _, snapshot)| {
-                    let binding = binding?;
-                    let snapshot = snapshot?;
-                    Some((
-                        (
-                            binding.animation_playback_controller_entity,
+        let blend_poses = inherited_blend_poses
+            .entry(animation_playback_controller_entity)
+            .or_insert_with(|| {
+                rig_joints
+                    .get(animation_playback_controller_entity)
+                    .into_iter()
+                    .flat_map(|rig| named_entities.iter_many(rig.joints()).matched())
+                    .filter_map(|(name, _, _, snapshot)| {
+                        let snapshot = snapshot?;
+                        Some((
                             AnimationTargetId::from_name(&Name::new(
                                 name.as_str().to_ascii_lowercase(),
                             )),
-                        ),
-                        *snapshot,
-                    ))
-                })
-                .collect::<HashMap<_, _>>()
-        });
+                            *snapshot,
+                        ))
+                    })
+                    .collect::<HashMap<_, _>>()
+            });
         insert_animation_joint_target_binding(
             &mut commands,
             named_entity,
             entity_name,
             animation_playback_controller_entity,
             &animation_players,
-            blend_poses
-                .get(&(animation_playback_controller_entity, target_id))
-                .copied(),
+            blend_poses.get(&target_id).copied(),
             target_id,
         );
     }

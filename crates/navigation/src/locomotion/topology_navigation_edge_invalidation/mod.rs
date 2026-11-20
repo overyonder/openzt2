@@ -21,22 +21,26 @@ pub(super) fn invalidate_routes_after_topology_changes(
     topology_grid: Res<TopologyGrid>,
     mut active_routes: Query<(&GlobalTransform, &Route, &mut Destination)>,
 ) {
-    for topology_change in topology_changes.read() {
-        if active_navigation_graph.is_none() {
-            continue;
-        }
-        let changed_world_bounds =
-            calculate_topology_rectangle_world_cell_bounds(topology_change.bounds, *topology_grid);
-        for (route_start_transform, route, mut destination) in &mut active_routes {
-            if remaining_route_intersects_changed_topology_rectangle(
-                route_start_transform.translation(),
-                route,
-                changed_world_bounds,
-            ) {
+    let bounds: Vec<_> = topology_changes
+        .read()
+        .map(|change| calculate_topology_rectangle_world_cell_bounds(change.bounds, *topology_grid))
+        .collect();
+    if bounds.is_empty() || active_navigation_graph.is_none() {
+        return;
+    }
+    active_routes
+        .par_iter_mut()
+        .for_each(|(transform, route, mut destination)| {
+            if bounds.iter().copied().any(|bounds| {
+                remaining_route_intersects_changed_topology_rectangle(
+                    transform.translation(),
+                    route,
+                    bounds,
+                )
+            }) {
                 destination.set_changed();
             }
-        }
-    }
+        });
 }
 
 #[derive(SystemParam)]
@@ -63,6 +67,13 @@ pub(super) fn synchronize_fence_navigation_crossings(
     active_graph: Option<Res<ActiveTerrainDerivedNavigationGraph>>,
     grid: Res<TopologyGrid>,
     mut sources: FenceNavigationCrossingSources,
+    mut installations: MessageReader<super::world_navigation_installation::NavigationGraphReplaced>,
+    mut path_changes: MessageReader<
+        super::path_surface_navigation_projection::NavigationPathGraphChanged,
+    >,
+    mut terrain_changes: MessageReader<
+        super::terrain_edit_navigation_refresh::NavigationTerrainGraphChanged,
+    >,
     mut changed_endpoints: Local<EntityHashSet>,
     mut crossed_edges: Local<Vec<DirectedNavigationEdge>>,
 ) {
@@ -75,9 +86,12 @@ pub(super) fn synchronize_fence_navigation_crossings(
     changed_endpoints.extend(sources.changed_nodes.iter());
     changed_endpoints.extend(sources.removed_nodes.read());
 
+    let refresh_all = (installations.read().count() != 0)
+        | (path_changes.read().filter(|change| change.elevated).count() != 0)
+        | (terrain_changes.read().count() != 0);
     let Some((graph, refresh_all_fences, cell_size, maximum_cell)) =
         active_graph.and_then(|active| {
-            let refresh_all_fences = active.is_changed() || grid.is_changed();
+            let refresh_all_fences = refresh_all || grid.is_changed();
             let graph = active.into_inner().terrain_derived_navigation_graph();
             let (cell_size, maximum_cell) = navigation_cell_bounds(graph)?;
             Some((graph, refresh_all_fences, cell_size, maximum_cell))

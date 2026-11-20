@@ -98,10 +98,11 @@ pub(super) fn spawn_behavior_objects_at_actor(
             mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
             continue;
         };
-        let transform = pose_validation
-            .select_spawn_pose(
-                actor, object.id, actor_pose, actor_pose, *pose, view, random,
-            )
+        let placement = pose_validation.select_spawn_pose(
+            actor, *world, object.id, actor_pose, actor_pose, *pose, view, random,
+        );
+        let transform = placement
+            .transform
             .mul_transform(Transform::from_scale(Vec3::splat(object.prefab_scale)));
         let spawned = if let Some((handle, prefab)) = presentation {
             spawn_loaded_scene_prefab_as_world_instance(
@@ -130,6 +131,9 @@ pub(super) fn spawn_behavior_objects_at_actor(
                 ))
                 .id()
         };
+        for occupant in placement.stomped_objects {
+            commands.entity(occupant).try_despawn();
+        }
         if object
             .properties
             .contains_all(WorldObjectPropertyFlags::LOOSE_LITTER)

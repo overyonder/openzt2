@@ -1,4 +1,7 @@
-use bevy::prelude::*;
+use bevy::{
+    ecs::{relationship::RelationshipTarget, system::SystemParam},
+    prelude::*,
+};
 use openzt2_game_data::ui_document::node_property_binding::UiIntegerPropertyBindingSource;
 
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiValue;
@@ -11,12 +14,66 @@ use openzt2_zoo_state::donations::donation_payment_types::DonationTotal;
 use openzt2_zoo_state::economy::currency_formatting::write_whole_dollar_currency_with_thousands_separators;
 use openzt2_zoo_state::economy::facility_economy_types::FacilityProfit;
 use openzt2_zoo_state::economy::facility_economy_types::OperatingSinceDay;
-use openzt2_zoo_state::economy::facility_economy_types::ServiceFacility;
+use openzt2_zoo_state::economy::service_types::FacilityReservations;
 use openzt2_zoo_state::guests::guest_simulation_types::GuestSatisfaction;
 use openzt2_zoo_state::staff::staff_assignment_types::StaffAssignment;
 use openzt2_zoo_state::transport_tours::transport_vehicle_types::TransportVehicle;
 
 use super::{visit_information_row, InformationRows};
+
+#[derive(SystemParam)]
+pub(crate) struct InformationValueInvalidation<'w, 's> {
+    subjects: Query<
+        'w,
+        's,
+        Entity,
+        Or<(
+            Changed<CumulativeNeedPoints>,
+            Added<Disease>,
+            Added<Pregnancy>,
+            Changed<GuestSatisfaction>,
+            Changed<StaffAssignment>,
+            Changed<FacilityReservations>,
+            Changed<OperatingSinceDay>,
+            Changed<FacilityProfit>,
+            Changed<DonationTotal>,
+            Changed<TransportVehicle>,
+        )>,
+    >,
+    removed: (
+        RemovedComponents<'w, 's, CumulativeNeedPoints>,
+        RemovedComponents<'w, 's, Disease>,
+        RemovedComponents<'w, 's, Pregnancy>,
+        RemovedComponents<'w, 's, GuestSatisfaction>,
+        RemovedComponents<'w, 's, StaffAssignment>,
+        RemovedComponents<'w, 's, FacilityReservations>,
+        RemovedComponents<'w, 's, OperatingSinceDay>,
+        RemovedComponents<'w, 's, FacilityProfit>,
+        RemovedComponents<'w, 's, DonationTotal>,
+        RemovedComponents<'w, 's, TransportVehicle>,
+    ),
+    row_sources_removed: RemovedComponents<
+        'w,
+        's,
+        openzt2_interface_state::information::entity_selection_types::InformationEntitySource,
+    >,
+    rows_removed: RemovedComponents<
+        'w,
+        's,
+        openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::UiListRow,
+    >,
+    bindings: Query<
+        'w,
+        's,
+        Entity,
+        (
+            With<UiValueBinding>,
+            Or<(Changed<UiValueBinding>, Changed<ChildOf>, Added<Text>)>,
+        ),
+    >,
+    parents: Query<'w, 's, &'static ChildOf>,
+    last_day: Local<'s, u32>,
+}
 
 /// Updates information-list values from the referenced entities.
 pub(crate) fn project_live_world_subject_values_to_information_list_rows(
@@ -28,16 +85,55 @@ pub(crate) fn project_live_world_subject_values_to_information_list_rows(
     animal_pregnancies: Query<(), With<Pregnancy>>,
     guest_satisfaction: Query<&GuestSatisfaction>,
     staff_assignments: Query<&StaffAssignment>,
-    service_facilities: Query<&ServiceFacility>,
+    facility_reservations: Query<&FacilityReservations>,
     facility_operating_dates: Query<&OperatingSinceDay>,
     facility_profits: Query<&FacilityProfit>,
     donation_totals: Query<&DonationTotal>,
     transport_vehicles: Query<&TransportVehicle>,
     zoo_clock: Res<ZooClock>,
     mut bound_values: Query<(&UiValueBinding, &mut UiValue, Option<&mut Text>)>,
+    mut invalidation: InformationValueInvalidation,
 ) {
+    let removed = &mut invalidation.removed;
+    let dirty_subjects = invalidation
+        .subjects
+        .iter()
+        .chain(removed.0.read())
+        .chain(removed.1.read())
+        .chain(removed.2.read())
+        .chain(removed.3.read())
+        .chain(removed.4.read())
+        .chain(removed.5.read())
+        .chain(removed.6.read())
+        .chain(removed.7.read())
+        .chain(removed.8.read())
+        .chain(removed.9.read())
+        .collect::<std::collections::HashSet<_>>();
+    let mut dirty_rows = std::collections::HashSet::new();
+    for node in invalidation
+        .bindings
+        .iter()
+        .chain(invalidation.row_sources_removed.read())
+        .chain(invalidation.rows_removed.read())
+    {
+        if let Some(row) = std::iter::once(node)
+            .chain(invalidation.parents.iter_ancestors::<ChildOf>(node))
+            .find(|&candidate| information_entity_sources.contains(candidate))
+        {
+            dirty_rows.insert(row);
+        }
+    }
+    let day_changed = *invalidation.last_day != zoo_clock.absolute_day;
+    *invalidation.last_day = zoo_clock.absolute_day;
     let (stack, formatted) = &mut *scratch;
     for (row, source) in &information_entity_sources {
+        if !source.is_changed()
+            && !dirty_subjects.contains(&source.0)
+            && !dirty_rows.contains(&row)
+            && !(day_changed && facility_operating_dates.contains(source.0))
+        {
+            continue;
+        }
         visit_information_row(
             row,
             &children,
@@ -56,7 +152,7 @@ pub(crate) fn project_live_world_subject_values_to_information_list_rows(
                     &animal_pregnancies,
                     &guest_satisfaction,
                     &staff_assignments,
-                    &service_facilities,
+                    &facility_reservations,
                     &facility_operating_dates,
                     &facility_profits,
                     &donation_totals,
@@ -94,7 +190,7 @@ fn project_information_list_value(
     animal_pregnancies: &Query<(), With<Pregnancy>>,
     guest_satisfaction: &Query<&GuestSatisfaction>,
     staff_assignments: &Query<&StaffAssignment>,
-    service_facilities: &Query<&ServiceFacility>,
+    facility_reservations: &Query<&FacilityReservations>,
     facility_operating_dates: &Query<&OperatingSinceDay>,
     facility_profits: &Query<&FacilityProfit>,
     donation_totals: &Query<&DonationTotal>,
@@ -126,9 +222,9 @@ fn project_information_list_value(
             .get(subject)
             .map(|opened| i64::from(absolute_day.saturating_sub(opened.0) / 30))
             .unwrap_or(0),
-        UiIntegerPropertyBindingSource::FacilityCapacityUsed => service_facilities
+        UiIntegerPropertyBindingSource::FacilityCapacityUsed => facility_reservations
             .get(subject)
-            .map(|facility| i64::from(facility.occupied))
+            .map(|reservations| i64::try_from(reservations.len()).unwrap_or(i64::MAX))
             .unwrap_or(0),
         UiIntegerPropertyBindingSource::FacilityProfitCents => facility_profits
             .get(subject)

@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use bevy::prelude::*;
 
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -9,15 +11,17 @@ pub struct Gate {
     pub locked: bool,
 }
 
-/// Only the polling clock is live mechanism state. Policy is borrowed from
-/// the canonical fence definition; animation playback owns the gate's pose.
-#[derive(Component, Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub struct GateMechanism {
-    pub elapsed_poll_time: std::time::Duration,
+#[derive(Component, Debug, Clone)]
+pub struct GateMechanism(pub Timer);
+
+impl Default for GateMechanism {
+    fn default() -> Self {
+        Self(Timer::new(Duration::ZERO, TimerMode::Repeating))
+    }
 }
 
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct GateAutoClose(pub u32);
+#[derive(Component, Debug, Clone)]
+pub struct GateAutoClose(pub Timer);
 
 #[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SetGateState {

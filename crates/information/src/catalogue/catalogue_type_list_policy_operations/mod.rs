@@ -13,32 +13,6 @@ use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types:
 
 use openzt2_interface_state::information::catalogue_types::TypeListFilter;
 
-pub(crate) fn count_catalogue_entries_in_authored_type_list(
-    type_list_policy: &UiTypeListPolicy,
-    type_list_filter: TypeListFilter,
-    world_definitions: WorldDefinitionsView<'_>,
-    world_session_mode: Option<WorldSessionMode>,
-    scenario_availability: Option<&ScenarioContentAvailability>,
-    unlocked_catalogue_definitions: &UnlockedCatalogueDefinitionSet,
-) -> u16 {
-    world_definitions
-        .catalogue_in_authored_purchase_order()
-        .filter(|(catalogue_index, catalogue_entry)| {
-            catalogue_entry_is_included_by_authored_type_list(
-                type_list_policy,
-                type_list_filter,
-                *catalogue_index,
-                catalogue_entry,
-                world_definitions,
-                world_session_mode,
-                scenario_availability,
-                unlocked_catalogue_definitions,
-            )
-        })
-        .count()
-        .min(u16::MAX as usize) as u16
-}
-
 // Availability checks need the list policy, world restrictions and unlock state.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn catalogue_entry_is_included_by_authored_type_list(
@@ -154,12 +128,17 @@ pub(crate) fn choose_remembered_or_first_included_catalogue_entry<'a>(
     world_session_mode: Option<WorldSessionMode>,
     scenario_availability: Option<&ScenarioContentAvailability>,
     unlocked_catalogue_definitions: &UnlockedCatalogueDefinitionSet,
+    scenario_disabled: Option<&openzt2_interface_state::information::catalogue_types::ScenarioDisabledCatalogueDefinitions>,
 ) -> Option<(usize, &'a CatalogueEntry)> {
+    let scenario_allows = |entry: &CatalogueEntry| {
+        scenario_disabled.is_none_or(|disabled| !disabled.0.contains(&entry.definition))
+    };
     if let Some(remembered_definition) = remembered_definition {
         if let Some(selected) = world_definitions
             .catalogue_in_authored_purchase_order()
             .find(|&(catalogue_index, catalogue_entry)| {
                 AssetId(catalogue_entry.definition.0) == remembered_definition
+                    && scenario_allows(catalogue_entry)
                     && catalogue_entry_is_selectable_for_type_list(
                         type_list_policy,
                         type_list_filter,
@@ -179,15 +158,16 @@ pub(crate) fn choose_remembered_or_first_included_catalogue_entry<'a>(
     world_definitions
         .catalogue_in_authored_purchase_order()
         .find(|&(catalogue_index, catalogue_entry)| {
-            catalogue_entry_is_selectable_for_type_list(
-                type_list_policy,
-                type_list_filter,
-                catalogue_index,
-                catalogue_entry,
-                world_definitions,
-                world_session_mode,
-                scenario_availability,
-                unlocked_catalogue_definitions,
-            )
+            scenario_allows(catalogue_entry)
+                && catalogue_entry_is_selectable_for_type_list(
+                    type_list_policy,
+                    type_list_filter,
+                    catalogue_index,
+                    catalogue_entry,
+                    world_definitions,
+                    world_session_mode,
+                    scenario_availability,
+                    unlocked_catalogue_definitions,
+                )
         })
 }

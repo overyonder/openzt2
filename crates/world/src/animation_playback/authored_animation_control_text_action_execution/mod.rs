@@ -63,9 +63,17 @@ impl AuthoredAnimationControlTextActionExecutionContext<'_, '_> {
         animation_playback_controller_entity: Entity,
         animation_graph_is_enabled: bool,
     ) {
-        self.commands
-            .entity(animation_playback_controller_entity)
-            .insert(AnimationGraphEnabled(animation_graph_is_enabled));
+        let enabled = AnimationGraphEnabled(animation_graph_is_enabled);
+        if let Ok(mut current) = self
+            .graphs_enabled
+            .get_mut(animation_playback_controller_entity)
+        {
+            current.set_if_neq(enabled);
+        } else {
+            self.commands
+                .entity(animation_playback_controller_entity)
+                .try_insert(enabled);
+        }
     }
 
     pub(super) fn request_authored_animation_traversal_transition(

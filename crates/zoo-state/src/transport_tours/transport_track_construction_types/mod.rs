@@ -55,15 +55,9 @@ pub struct PreparedTransportTrackConstructionEdit {
 /// removes its route and lays the road left on each side.
 #[derive(Component, Debug, Clone, Default)]
 pub struct TransportTrackConstructionEditSteps {
-    pub steps: Vec<Entity>,
-    /// The application in progress and how many steps of it are done.
-    pub in_flight: Option<(EditApplication, usize)>,
-    /// How many steps the last application completed, for rolling it back.
-    pub completed: usize,
+    pub application: Option<EditApplication>,
     pub last_application: Option<EditApplication>,
-    /// The application whose failed step is being rolled back, acknowledged
-    /// as failed once the steps before it are reversed.
-    pub failed: Option<EditApplication>,
+    pub rejected_application: Option<EditApplication>,
 }
 
 #[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
@@ -92,6 +86,4 @@ pub struct TransportTrackConstructionEditApplicationAcknowledged {
 }
 
 #[derive(Component)]
-pub struct TransportTrackConstructionPreviewAuthoredPrefab {
-    pub owner: Entity,
-}
+pub struct TransportTrackConstructionPreviewAuthoredPrefab;

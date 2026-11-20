@@ -4,9 +4,11 @@ use openzt2_game_assets::animation::animation_set_asset_types::AnimationSetAsset
 
 use crate::animation_playback::authored_animation_event_cursor_types::AuthoredAnimationEventCursor;
 use crate::animation_playback::authored_animation_text_action_execution_context::AuthoredAnimationTextActionExecutionContext;
-use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackController;
+use openzt2_world_state::animation_playback::animation_playback_controller_types::{
+    AnimationPlaybackClock, AnimationPlaybackController,
+};
 
-pub(super) fn execute_crossed_authored_animation_events(
+pub(super) fn execute_crossed_authored_animation_events<const REAL_TIME: bool>(
     animation_set_assets: Res<Assets<AnimationSetAsset>>,
     mut changed_animation_playback_controllers: Query<
         (
@@ -18,19 +20,26 @@ pub(super) fn execute_crossed_authored_animation_events(
     >,
     mut authored_animation_text_action_execution: AuthoredAnimationTextActionExecutionContext,
 ) {
+    let playback_clock = if REAL_TIME {
+        AnimationPlaybackClock::RealTime
+    } else {
+        AnimationPlaybackClock::Simulation
+    };
     for (
         animation_playback_controller_entity,
         mut animation_playback_controller,
         mut authored_animation_event_cursor,
     ) in &mut changed_animation_playback_controllers
     {
+        if animation_playback_controller.playback_clock != playback_clock {
+            continue;
+        }
         let animation_playback_clip_changed = authored_animation_event_cursor
             .requires_initial_event_sample
             || authored_animation_event_cursor.playback_generation
                 != animation_playback_controller.playback_generation
             || authored_animation_event_cursor.animation_clip_asset_key
                 != animation_playback_controller.animation_clip_asset_key;
-        // Both clocks can see the same controller change when a frame runs fixed ticks.
         if !animation_playback_clip_changed
             && authored_animation_event_cursor.previous_elapsed_milliseconds
                 == animation_playback_controller.elapsed_milliseconds
@@ -67,21 +76,10 @@ pub(super) fn execute_crossed_authored_animation_events(
             continue;
         };
 
-        for (event_time_milliseconds, authored_animation_text_command) in
-            authored_animation_clip_metadata
-                .authored_animation_text_keys
-                .iter()
-                .flat_map(|authored_text_key| {
-                    let event_time_milliseconds = calculate_authored_text_key_time_milliseconds(
-                        authored_text_key,
-                        animation_clip.duration_milliseconds,
-                    );
-                    authored_text_key.animation_text_commands.iter().map(
-                        move |authored_animation_text_command| {
-                            (event_time_milliseconds, authored_animation_text_command)
-                        },
-                    )
-                })
+        for (&event_time_milliseconds, text_key) in animation_clip
+            .text_key_times_milliseconds
+            .iter()
+            .zip(&authored_animation_clip_metadata.authored_animation_text_keys)
         {
             if authored_animation_event_time_was_crossed_by_playback(
                 event_time_milliseconds,
@@ -91,13 +89,15 @@ pub(super) fn execute_crossed_authored_animation_events(
                 animation_playback_moves_forward,
                 animation_playback_time_wrapped,
             ) {
-                authored_animation_text_action_execution
-                    .execute_one_crossed_authored_animation_text_command(
-                        animation_playback_controller_entity,
-                        &mut animation_playback_controller,
-                        event_time_milliseconds,
-                        authored_animation_text_command,
-                    );
+                for command in &text_key.animation_text_commands {
+                    authored_animation_text_action_execution
+                        .execute_one_crossed_authored_animation_text_command(
+                            animation_playback_controller_entity,
+                            &mut animation_playback_controller,
+                            event_time_milliseconds,
+                            command,
+                        );
+                }
             }
         }
         update_authored_animation_event_cursor_after_execution(
@@ -148,34 +148,6 @@ fn authored_animation_event_time_was_crossed_by_playback(
         animation_event_time_milliseconds < previous_elapsed_milliseconds
             && animation_event_time_milliseconds >= current_elapsed_milliseconds
     }
-}
-
-fn calculate_authored_text_key_time_milliseconds(
-    authored_text_key: &openzt2_game_data::animation::animation_text_key::AuthoredAnimationTextKey,
-    animation_duration_milliseconds: u32,
-) -> u32 {
-    authored_text_key
-        .authored_time_seconds
-        .map(|seconds| (seconds.max(0.0) * 1000.0).round() as u32)
-        .or_else(|| {
-            authored_text_key
-                .authored_frame_number
-                .map(|frame| (frame.max(0.0) * 1000.0 / 30.0).round() as u32)
-        })
-        .or_else(|| {
-            authored_text_key
-                .authored_playback_percentage
-                .map(|percent| {
-                    let fraction = if percent > 1.0 {
-                        percent / 100.0
-                    } else {
-                        percent
-                    };
-                    (fraction.clamp(0.0, 1.0) * animation_duration_milliseconds as f32).round()
-                        as u32
-                })
-        })
-        .unwrap_or(0)
 }
 
 #[cfg(test)]

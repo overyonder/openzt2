@@ -274,7 +274,7 @@ pub(crate) fn select_catalogue_filter_row(
     mut activations: MessageReader<UiNodeActivated>,
     choices: Query<&CatalogueFilterChoice>,
     parents: Query<&ChildOf>,
-    filters: Query<&TypeListFilter>,
+    mut filters: Query<&mut TypeListFilter>,
     drop_lists: Query<(&UiDocumentOwner, &UiListPolicy)>,
     nodes: Query<(Entity, &UiNodeId, &UiDocumentOwner)>,
     mut visibility: Query<&mut Visibility>,
@@ -293,9 +293,16 @@ pub(crate) fn select_catalogue_filter_row(
         .find_map(|entity| choices.get(entity).ok()) else {
             continue;
         };
-        let mut filter = filters.get(choice.type_list).copied().unwrap_or_default();
-        filter.field_value = choice.field_value;
-        commands.entity(choice.type_list).insert(filter);
+        if let Ok(mut filter) = filters.get_mut(choice.type_list) {
+            if filter.field_value != choice.field_value {
+                filter.field_value = choice.field_value;
+            }
+        } else {
+            commands.entity(choice.type_list).insert(TypeListFilter {
+                field_value: choice.field_value,
+                ..default()
+            });
+        }
         if let Some(localization) =
             localization_index.borrow_loaded_localization_view(&localizations)
         {

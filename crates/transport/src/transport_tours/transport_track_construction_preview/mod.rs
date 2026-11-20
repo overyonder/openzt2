@@ -10,6 +10,7 @@ use openzt2_game_data::AssetId;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_zoo_state::construction::construction_interaction_types::CommitConstruction;
+use openzt2_zoo_state::construction::construction_transaction_types::ConstructionCommitted;
 use openzt2_zoo_state::construction::construction_interaction_types::ConstructionCursor;
 use openzt2_zoo_state::construction::construction_interaction_types::ConstructionPreview;
 use openzt2_zoo_state::construction::construction_interaction_types::PlacementFailure;
@@ -45,6 +46,57 @@ fn selected_transport_track_definition(
     }
 }
 
+#[derive(Component)]
+pub(super) struct ContinueTransportTrackFrom(pub(super) Entity);
+
+pub(super) fn continue_track_preview_from_committed_junction(
+    mut committed: MessageReader<ConstructionCommitted>,
+    mut commands: Commands,
+    tool: Res<ConstructionTool>,
+    continuations: Query<&ContinueTransportTrackFrom>,
+    tracks: Query<(&TrackSegment, &TrackProfile, &CircuitMember, &WorldMember)>,
+    junctions: Query<(&GlobalTransform, &WorldMember), With<TransportTrackJunction>>,
+    previews: Query<(), With<TransportTrackConstructionPreview>>,
+    cursors: Query<&WorldMember, With<ConstructionCursor>>,
+) {
+    let mut resume = previews.is_empty();
+    for commit in committed.read() {
+        let Ok(continuation) = continuations.get(commit.transaction) else {
+            continue;
+        };
+        commands
+            .entity(commit.transaction)
+            .remove::<ContinueTransportTrackFrom>();
+        let (true, Some((definition, kind)), Ok(world)) = (
+            resume,
+            selected_transport_track_definition(*tool),
+            cursors.single(),
+        ) else {
+            continue;
+        };
+        let Ok((track, profile, circuit, track_world)) = tracks.get(continuation.0) else {
+            continue;
+        };
+        let Ok((junction, junction_world)) = junctions.get(track.to) else {
+            continue;
+        };
+        if track_world.root != world.root
+            || junction_world.root != world.root
+            || track.definition != definition
+            || profile.kind != kind
+        {
+            continue;
+        }
+        spawn_transport_track_construction_preview(
+            &mut commands,
+            definition,
+            (track.to, circuit.0, 0, junction.translation()),
+            *world,
+        );
+        resume = false;
+    }
+}
+
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(super) fn begin_or_commit_transport_track_construction_from_primary_pointer_action(
     mut commands: Commands,
@@ -69,13 +121,8 @@ pub(super) fn begin_or_commit_transport_track_construction_from_primary_pointer_
         &WorldMember,
     )>,
     segments: Query<(Entity, &CircuitMember, &TrackSegment, &TrackProfile)>,
-    previews: Query<(
-        Entity,
-        &ConstructionPreview,
-        &TransportTrackConstructionPreview,
-    )>,
+    previews: Query<(Entity, &ConstructionPreview), With<TransportTrackConstructionPreview>>,
     mut commits: MessageWriter<CommitConstruction>,
-    mut continue_from: Local<Option<Vec3>>,
     pointer_ray: Res<openzt2_interface_state::camera::world_pointer_ray_types::WorldPointerRay>,
 ) {
     let primary_just_pressed = pointer_inputs.read().any(|input| {
@@ -83,7 +130,6 @@ pub(super) fn begin_or_commit_transport_track_construction_from_primary_pointer_
     });
     pointer_inputs.clear();
     let Some((definition, kind)) = selected_transport_track_definition(*tool) else {
-        *continue_from = None;
         return;
     };
     let (Ok((cursor, world_member)), Some(definitions)) =
@@ -91,45 +137,16 @@ pub(super) fn begin_or_commit_transport_track_construction_from_primary_pointer_
     else {
         return;
     };
-    // As in the original, placing a piece that doesn't end at a station keeps
-    // building from its end. The end junction is spawned by the commit, so
-    // wait for it before starting the next preview.
-    if previews.is_empty() {
-        if let Some(end) = *continue_from {
-            if let Some(junction) = find_nearest_compatible_transport_track_junction(
-                end,
-                kind,
-                world_member.root,
-                None,
-                None,
-                &junctions,
-                &segments,
-            ) {
-                *continue_from = None;
-                spawn_transport_track_construction_preview(
-                    &mut commands,
-                    definition,
-                    junction,
-                    *world_member,
-                );
-            }
-            return;
-        }
-    }
     if !primary_just_pressed || ui_capture.over_ui {
         return;
     }
-    if let Ok((preview_entity, preview, track_preview)) = previews.single() {
+    if let Ok((preview_entity, preview)) = previews.single() {
         if preview.definition == definition
             && matches!(preview.validity, PlacementValidity::Valid { .. })
         {
             commits.write(CommitConstruction {
                 preview: preview_entity,
             });
-            *continue_from = track_preview
-                .to_station
-                .is_none()
-                .then_some(track_preview.to_position);
         }
         return;
     }
@@ -331,17 +348,16 @@ pub(super) fn update_transport_track_construction_preview_from_pointer_and_stati
                 .unwrap_or(cursor.world);
             (None, 0, projected_position, chain)
         };
-    track_preview.to_station = to_station;
-    track_preview.to_endpoint_index = to_endpoint_index;
-    track_preview.to_position = to_position;
     let midpoint = from_position.midpoint(to_position);
     let direction = to_position - from_position;
-    preview.transform = Transform::from_translation(midpoint);
+    let mut preview_transform = Transform::from_translation(midpoint);
     if direction.xz().length_squared() > f32::EPSILON {
-        preview.transform.rotation = Quat::from_rotation_y(direction.x.atan2(direction.z));
+        preview_transform.rotation = Quat::from_rotation_y(direction.x.atan2(direction.z));
     }
-    *transform = preview.transform;
-    preview.validity = if let Some((mut path_points, cost)) = path_points_and_cost {
+    let (path_points, to_position, validity) = if let Some((mut path_points, cost)) =
+        path_points_and_cost
+    {
+        let mut endpoint_position = to_position;
         if selected_kind == TransportationTrackKind::Ground {
             drape_ground_level_track_points_on_terrain(
                 &mut path_points,
@@ -349,7 +365,7 @@ pub(super) fn update_transport_track_construction_preview_from_pointer_and_stati
                 &terrain,
             );
             if let Some(&last) = path_points.last() {
-                track_preview.to_position = last;
+                endpoint_position = last;
             }
         }
         // Laying the road on the terrain can make a piece steeper than the
@@ -361,20 +377,36 @@ pub(super) fn update_transport_track_construction_preview_from_pointer_and_stati
             &path_points,
         );
         let gentle = track_piece_chain_turns_are_gentle(from_heading, &path_points, to_heading);
-        track_preview.path_points = path_points;
-        if !gentle {
+        let validity = if !gentle {
             PlacementValidity::Invalid(PlacementFailure::InvalidTopology)
         } else if valid {
             PlacementValidity::Valid { cost }
         } else {
             PlacementValidity::Invalid(PlacementFailure::TooSteep)
-        }
+        };
+        (path_points, endpoint_position, validity)
     } else {
-        track_preview.path_points.clear();
-        track_preview.path_points.push(from_position);
-        track_preview.path_points.push(to_position);
-        PlacementValidity::Invalid(PlacementFailure::InvalidTopology)
+        (
+            vec![from_position, to_position],
+            to_position,
+            PlacementValidity::Invalid(PlacementFailure::InvalidTopology),
+        )
     };
+    if track_preview.to_station != to_station
+        || track_preview.to_endpoint_index != to_endpoint_index
+        || track_preview.to_position != to_position
+        || track_preview.path_points != path_points
+    {
+        track_preview.to_station = to_station;
+        track_preview.to_endpoint_index = to_endpoint_index;
+        track_preview.to_position = to_position;
+        track_preview.path_points = path_points;
+    }
+    if preview.transform != preview_transform || preview.validity != validity {
+        preview.transform = preview_transform;
+        preview.validity = validity;
+    }
+    transform.set_if_neq(preview_transform);
 }
 
 const GAP_START_SNAP_DISTANCE_METRES: f32 = 8.0;

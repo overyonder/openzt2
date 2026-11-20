@@ -1,10 +1,15 @@
-use bevy::picking::{events::PointerPress, pointer::PointerButton};
-use bevy::prelude::*;
-use openzt2_game_data::ui_document::{
-    overview_map_presentation::UiMapLayerRecord, widget::UiWidgetRecord,
-    widget_live_collection::UiWidgetLiveCollectionSource,
+use bevy::{
+    ecs::relationship::RelationshipTarget,
+    picking::{events::PointerPress, pointer::PointerButton},
+    prelude::*,
 };
-use openzt2_game_data::AssetId;
+use openzt2_game_data::{
+    ui_document::{
+        overview_map_presentation::UiMapLayerRecord, widget::UiWidgetRecord,
+        widget_live_collection::UiWidgetLiveCollectionSource,
+    },
+    AssetId,
+};
 
 use openzt2_game_assets::{
     localization::{
@@ -13,190 +18,154 @@ use openzt2_game_assets::{
     },
     ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset,
 };
-use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::SetUiListRowCount;
-use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::UiListPolicy;
-use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::UiListRow;
-use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::UiTablePolicy;
-use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner;
-use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentRoot;
-use openzt2_interface_state::ui::authored_ui_node_projection_components::UiNodeId;
-use openzt2_interface_state::ui::authored_ui_selection_state::UiSelected;
-use openzt2_interface_state::ui::authored_ui_visual_types::UiVisualLayer;
+use openzt2_interface_state::information::overview::overview_types::{
+    OverviewLegendControls, OverviewLegendLayer,
+};
+use openzt2_interface_state::ui::{
+    authored_reusable_list_and_table_runtime_types::{
+        RequestedUiListRowCount, UiListPolicy, UiListRow,
+    },
+    authored_ui_node_projection_components::{
+        UiDocumentMembers, UiDocumentOwner, UiDocumentRoot, UiNodeId,
+    },
+    authored_ui_selection_state::UiSelected,
+    authored_ui_visual_types::UiVisualLayer,
+};
 
-use openzt2_interface_state::information::overview::overview_types::OverviewLegendListState;
-use openzt2_interface_state::information::overview::overview_types::OverviewLegendRow;
-use openzt2_interface_state::information::overview::overview_types::OverviewMapCanvas;
-
-fn find_authored_overview_map_layer_records(
-    ui_document: &UiDocumentAsset,
-) -> Option<&[UiMapLayerRecord]> {
-    ui_document
+fn authored_overview_map_layers(document: &UiDocumentAsset) -> Option<&[UiMapLayerRecord]> {
+    document
         .canonical_ui_document()
         .nodes
         .iter()
-        .find_map(|node| match &node.widget {
-            UiWidgetRecord::WorldMap { layers, .. } => Some(layers.as_slice()),
-            _ => None,
+        .find_map(|node| {
+            if let UiWidgetRecord::WorldMap { layers, .. } = &node.widget {
+                Some(layers.as_slice())
+            } else {
+                None
+            }
         })
 }
 
-fn entity_is_descendant_of_ancestor(
-    descendant_entity: Entity,
-    ancestor_entity: Entity,
-    parent_relationships: &Query<&ChildOf>,
-) -> bool {
-    let mut current_ancestor_candidate = descendant_entity;
-    while let Ok(parent_relationship) = parent_relationships.get(current_ancestor_candidate) {
-        if parent_relationship.parent() == ancestor_entity {
-            return true;
-        }
-        current_ancestor_candidate = parent_relationship.parent();
-    }
-    false
-}
-
-pub(crate) fn request_authored_overview_map_legend_row_entities(
-    overview_legend_lists: Query<(
-        Entity,
-        &UiListPolicy,
-        &UiDocumentOwner,
-        Option<&OverviewLegendListState>,
+pub(crate) fn size_authored_overview_map_legends(
+    mut lists: Query<(
+        Ref<UiListPolicy>,
+        Ref<UiDocumentOwner>,
+        &mut RequestedUiListRowCount,
     )>,
-    overview_map_surfaces: Query<(&UiNodeId, &UiDocumentOwner, &UiTablePolicy)>,
-    ui_document_roots: Query<&UiDocumentRoot>,
-    ui_documents: Res<Assets<UiDocumentAsset>>,
-    mut row_count_requests: MessageWriter<SetUiListRowCount>,
-    mut commands: Commands,
+    roots: Query<&UiDocumentRoot>,
+    documents: Res<Assets<UiDocumentAsset>>,
 ) {
-    for (legend_list, list_policy, document_owner, current_list_state) in &overview_legend_lists {
-        if list_policy.source != UiWidgetLiveCollectionSource::OverviewLayers {
+    for (policy, owner, mut requested) in &mut lists {
+        if policy.source != UiWidgetLiveCollectionSource::OverviewLayers
+            || (requested.0.is_some()
+                && !policy.is_changed()
+                && !owner.is_changed()
+                && !documents.is_changed())
+        {
             continue;
         }
-        let Ok(document_root) = ui_document_roots.get(document_owner.0) else {
-            continue;
-        };
-        let Some(ui_document) = ui_documents.get(&document_root.document) else {
-            continue;
-        };
-        let Some((overview_map_node, _, _)) =
-            overview_map_surfaces
-                .iter()
-                .find(|(_, candidate_owner, candidate_table_policy)| {
-                    candidate_owner.0 == document_owner.0
-                        && **candidate_table_policy == UiTablePolicy::WorldMap
-                })
+        let Some(layers) = roots
+            .get(owner.0)
+            .ok()
+            .and_then(|root| documents.get(&root.document))
+            .and_then(authored_overview_map_layers)
         else {
             continue;
         };
-        let Some(UiWidgetRecord::WorldMap { layers, .. }) = ui_document
-            .canonical_ui_document()
-            .nodes
-            .get(overview_map_node.index as usize)
-            .map(|node_record| &node_record.widget)
-        else {
-            continue;
-        };
-        let required_row_count = layers.len().min(usize::from(u16::MAX)) as u16;
-        if current_list_state.is_none_or(|state| state.rows != required_row_count) {
-            row_count_requests.write(SetUiListRowCount {
-                list: legend_list,
-                count: required_row_count,
-            });
-            commands
-                .entity(legend_list)
-                .insert(OverviewLegendListState {
-                    rows: required_row_count,
-                });
-        }
+        let count = u16::try_from(layers.len()).unwrap_or(u16::MAX);
+        requested.set_if_neq(RequestedUiListRowCount(Some(count)));
     }
 }
 
-pub(crate) fn bind_authored_overview_map_layer_data_to_legend_rows(
-    legend_rows: Query<(
+pub(crate) fn bind_authored_overview_map_legend_controls(
+    rows: Query<(
         Entity,
         Ref<UiListRow>,
         Ref<ChildOf>,
-        Option<&OverviewLegendRow>,
+        Option<&OverviewLegendLayer>,
     )>,
-    legend_list_owners: Query<&UiDocumentOwner>,
-    ui_document_roots: Query<&UiDocumentRoot>,
-    ui_documents: Res<Assets<UiDocumentAsset>>,
-    active_localization: Res<LocalizationPrecedenceIndex>,
-    localization_assets: Res<Assets<LocalizationAsset>>,
-    parent_relationships: Query<&ChildOf>,
-    projected_ui_nodes: Query<(Entity, &UiNodeId)>,
-    visual_layer_entities: Query<Entity, With<UiVisualLayer>>,
-    mut text_nodes: Query<&mut Text>,
-    mut image_nodes: Query<&mut ImageNode>,
+    lists: Query<(&UiListPolicy, &UiDocumentOwner)>,
+    roots: Query<(&UiDocumentRoot, &UiDocumentMembers)>,
+    documents: Res<Assets<UiDocumentAsset>>,
+    active_locale: Res<LocalizationPrecedenceIndex>,
+    locales: Res<Assets<LocalizationAsset>>,
+    children: Query<&Children>,
+    ids: Query<&UiNodeId>,
+    bindings: Query<&OverviewLegendLayer>,
+    visibility: Query<&Visibility>,
+    selections: Query<(), With<UiSelected>>,
+    mut text: Query<&mut Text>,
+    mut icons: Query<&mut ImageNode, With<UiVisualLayer>>,
     mut commands: Commands,
 ) {
-    let Some(active_localization) =
-        active_localization.borrow_loaded_localization_view(&localization_assets)
-    else {
+    let Some(locale) = active_locale.borrow_loaded_localization_view(&locales) else {
         return;
     };
-    let legend_text_node_id = AssetId::from_key("ui/role/fragment/node/textname");
-    let legend_checkbox_node_id = AssetId::from_key("ui/role/fragment/node/checkbox");
-    for (row_entity, list_row, parent, current_legend_row) in &legend_rows {
-        if !list_row.is_changed() && !parent.is_changed() && current_legend_row.is_some() {
+    let definitions_changed =
+        documents.is_changed() || active_locale.is_changed() || locales.is_changed();
+    let label_id = AssetId::from_key("ui/role/fragment/node/textname");
+    let checkbox_id = AssetId::from_key("ui/role/fragment/node/checkbox");
+    for (entity, row, parent, current) in &rows {
+        if current.is_some() && !definitions_changed && !row.is_changed() && !parent.is_changed() {
             continue;
         }
-        let Ok(document_owner) = legend_list_owners.get(parent.parent()) else {
+        let Ok((policy, owner)) = lists.get(parent.parent()) else {
             continue;
         };
-        let Some((ui_document, layer_index, layer_record)) = ui_document_roots
-            .get(document_owner.0)
-            .ok()
-            .and_then(|document_root| ui_documents.get(&document_root.document))
-            .and_then(|ui_document| {
-                find_authored_overview_map_layer_records(ui_document).and_then(|layer_records| {
-                    let layer_index = u32::from(list_row.index);
-                    layer_records
-                        .get(layer_index as usize)
-                        .map(|layer_record| (ui_document, layer_index, layer_record))
-                })
-            })
-        else {
+        if policy.source != UiWidgetLiveCollectionSource::OverviewLayers {
             continue;
-        };
-        let legend_row_presentation = OverviewLegendRow {
-            owner: document_owner.0,
-            layer: layer_index,
-            visible: current_legend_row.is_none_or(|current_row| current_row.visible),
-        };
-        if current_legend_row != Some(&legend_row_presentation) {
-            commands.entity(row_entity).insert(legend_row_presentation);
         }
-        let localized_layer_label = active_localization
-            .find_plain_localized_text(AssetId(layer_record.localization_key.0))
-            .unwrap_or("Overview layer");
-        let layer_icon = ui_document.cloned_texture_image_handle(AssetId(layer_record.icon.0));
-        for (projected_node, node_id) in &projected_ui_nodes {
-            if !entity_is_descendant_of_ancestor(projected_node, row_entity, &parent_relationships)
-            {
-                continue;
-            }
-            if node_id.id == legend_text_node_id {
-                if let Ok(mut text) = text_nodes.get_mut(projected_node) {
-                    if text.0 != localized_layer_label {
-                        text.0.clear();
-                        text.0.push_str(localized_layer_label);
+        let resolved = (|| {
+            let (root, members) = roots.get(owner.0).ok()?;
+            let document = documents.get(&root.document)?;
+            let record = authored_overview_map_layers(document)?.get(usize::from(row.index))?;
+            let layer_id = AssetId(record.node.0);
+            let layer = members.iter().find(|&node| {
+                ids.get(node).is_ok_and(|id| id.id == layer_id) && visibility.contains(node)
+            })?;
+            Some((document, record, layer))
+        })();
+        let Some((document, record, layer)) = resolved else {
+            if current.is_some() {
+                commands.entity(entity).remove::<OverviewLegendLayer>();
+                for child in children.iter_descendants::<Children>(entity) {
+                    if bindings.contains(child) {
+                        commands.entity(child).remove::<OverviewLegendLayer>();
                     }
                 }
-            } else if node_id.id == legend_checkbox_node_id {
-                commands.entity(projected_node).insert((
-                    legend_row_presentation,
-                    UiSelected(legend_row_presentation.visible),
-                ));
-                if let Some(layer_icon) = layer_icon.clone() {
-                    for visual_layer_entity in &visual_layer_entities {
-                        if entity_is_descendant_of_ancestor(
-                            visual_layer_entity,
-                            projected_node,
-                            &parent_relationships,
-                        ) {
-                            if let Ok(mut image_node) = image_nodes.get_mut(visual_layer_entity) {
-                                image_node.image = layer_icon.clone();
+            }
+            continue;
+        };
+        let binding = OverviewLegendLayer(layer);
+        if current != Some(&binding) {
+            commands.entity(entity).insert(binding);
+        }
+        let label = locale
+            .find_plain_localized_text(AssetId(record.localization_key.0))
+            .unwrap_or("Overview layer");
+        let icon = document.cloned_texture_image_handle(AssetId(record.icon.0));
+        for node in children.iter_descendants::<Children>(entity) {
+            if ids.get(node).is_ok_and(|id| id.id == label_id) {
+                if let Ok(mut text) = text.get_mut(node) {
+                    if text.0 != label {
+                        text.0.clear();
+                        text.0.push_str(label);
+                    }
+                }
+            } else if ids.get(node).is_ok_and(|id| id.id == checkbox_id) {
+                if bindings.get(node) != Ok(&binding) {
+                    commands.entity(node).insert(binding);
+                }
+                if !selections.contains(node) {
+                    commands
+                        .entity(node)
+                        .insert(UiSelected(visibility.get(layer) != Ok(&Visibility::Hidden)));
+                }
+                if let Some(icon) = &icon {
+                    for descendant in children.iter_descendants::<Children>(node) {
+                        if let Ok(mut image) = icons.get_mut(descendant) {
+                            if image.image != *icon {
+                                image.image = icon.clone();
                             }
                         }
                     }
@@ -208,55 +177,38 @@ pub(crate) fn bind_authored_overview_map_layer_data_to_legend_rows(
 
 pub(crate) fn toggle_overview_map_layers_from_pressed_legend_rows(
     mut presses: MessageReader<PointerPress>,
-    mut pressed_legend_rows: Query<(&mut OverviewLegendRow, Option<&mut UiSelected>)>,
-    ui_document_roots: Query<&UiDocumentRoot>,
-    ui_documents: Res<Assets<UiDocumentAsset>>,
-    mut overview_map_canvases: Query<(&OverviewMapCanvas, &mut Visibility)>,
-    mut projected_ui_nodes: Query<
-        (&UiNodeId, &UiDocumentOwner, &mut Visibility),
-        Without<OverviewMapCanvas>,
-    >,
+    rows: Query<&OverviewLegendLayer>,
+    mut layers: Query<&mut Visibility, With<OverviewLegendControls>>,
 ) {
     for press in presses
         .read()
         .filter(|press| press.pointer.id.is_mouse() && press.button == PointerButton::Primary)
     {
-        let Ok((mut legend_row, selected_state)) = pressed_legend_rows.get_mut(press.entity) else {
+        let Ok(binding) = rows.get(press.entity) else {
             continue;
         };
-        legend_row.visible = !legend_row.visible;
-        if let Some(mut selected_state) = selected_state {
-            selected_state.0 = legend_row.visible;
+        if let Ok(mut visibility) = layers.get_mut(binding.0) {
+            *visibility = if *visibility == Visibility::Hidden {
+                Visibility::Inherited
+            } else {
+                Visibility::Hidden
+            };
         }
-        for (overview_map_canvas, mut visibility) in &mut overview_map_canvases {
-            if overview_map_canvas.layer == legend_row.layer {
-                *visibility = if legend_row.visible {
-                    Visibility::Inherited
-                } else {
-                    Visibility::Hidden
-                };
-            }
-        }
-        let Some(authored_layer_node_id) = ui_document_roots
-            .get(legend_row.owner)
-            .ok()
-            .and_then(|document_root| ui_documents.get(&document_root.document))
-            .and_then(|ui_document| {
-                find_authored_overview_map_layer_records(ui_document)?
-                    .get(legend_row.layer as usize)
-            })
-            .map(|layer_record| AssetId(layer_record.node.0))
-        else {
-            continue;
-        };
-        for (node_id, document_owner, mut visibility) in &mut projected_ui_nodes {
-            if document_owner.0 == legend_row.owner && node_id.id == authored_layer_node_id {
-                *visibility = if legend_row.visible {
-                    Visibility::Inherited
-                } else {
-                    Visibility::Hidden
-                };
-                break;
+    }
+}
+
+pub(crate) fn project_overview_legend_checkbox_selection(
+    layers: Query<
+        (&Visibility, &OverviewLegendControls),
+        Or<(Changed<Visibility>, Changed<OverviewLegendControls>)>,
+    >,
+    mut selected: Query<&mut UiSelected>,
+) {
+    for (visibility, controls) in &layers {
+        let value = UiSelected(*visibility != Visibility::Hidden);
+        for entity in controls.iter() {
+            if let Ok(mut selected) = selected.get_mut(entity) {
+                selected.set_if_neq(value);
             }
         }
     }

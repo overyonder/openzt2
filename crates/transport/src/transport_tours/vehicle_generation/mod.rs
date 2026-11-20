@@ -110,16 +110,19 @@ pub(super) fn record_transport_vehicle_purchase_results(
 
 /// Holds the vehicle prefab load while a paid purchase waits for it.
 #[derive(Component)]
-pub(super) struct PendingTransportVehiclePrefab(
-    #[allow(dead_code, reason = "keeps the load alive")] Handle<ScenePrefabAsset>,
-);
+pub(super) struct PendingTransportVehiclePrefab(Handle<ScenePrefabAsset>);
 
 /// Materializes paid vehicle purchases through the ordinary scene-prefab path.
 ///
 /// A purchase remains live while its prefab or models load, so payment cannot
 /// produce a definition-only placeholder without its authored presentation.
 pub(super) fn spawn_paid_transport_vehicle_prefab_instances(
-    pending_purchases: Query<(Entity, &PendingTransportVehiclePurchase, &WorldMember)>,
+    pending_purchases: Query<(
+        Entity,
+        &PendingTransportVehiclePurchase,
+        &WorldMember,
+        Option<&PendingTransportVehiclePrefab>,
+    )>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     prefabs: Res<Assets<ScenePrefabAsset>>,
@@ -131,7 +134,7 @@ pub(super) fn spawn_paid_transport_vehicle_prefab_instances(
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };
-    for (purchase_operation, pending_purchase, world_member) in &pending_purchases {
+    for (purchase_operation, pending_purchase, world_member, pending_prefab) in &pending_purchases {
         if !pending_purchase.paid {
             continue;
         }
@@ -143,15 +146,20 @@ pub(super) fn spawn_paid_transport_vehicle_prefab_instances(
         })() else {
             continue;
         };
-        let Some(prefab_handle) = definitions.scene(scene_prefab) else {
+        let Some(prefab_handle) = pending_prefab
+            .map(|pending| pending.0.clone())
+            .or_else(|| definitions.scene(scene_prefab))
+        else {
             continue;
         };
         let Some(prefab) = prefabs.get(&prefab_handle) else {
             // The definition set hands out a fresh load handle; keep it on the
             // purchase, or the load is dropped before the prefab arrives.
-            commands
-                .entity(purchase_operation)
-                .insert(PendingTransportVehiclePrefab(prefab_handle));
+            if pending_prefab.is_none() {
+                commands
+                    .entity(purchase_operation)
+                    .insert(PendingTransportVehiclePrefab(prefab_handle));
+            }
             continue;
         };
         if first_missing_prefab_collider_model_asset_id(prefab, &models).is_some() {

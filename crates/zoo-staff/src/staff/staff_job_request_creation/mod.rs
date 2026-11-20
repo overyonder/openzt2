@@ -23,7 +23,7 @@ pub(crate) struct BatchedStaffJobRequest {
 pub(crate) fn create_or_raise_priority_of_requested_staff_jobs(
     mut commands: Commands,
     mut requests: MessageReader<StaffJobRequest>,
-    jobs: Query<(Entity, &StaffJob, Option<&JobClaim>)>,
+    mut jobs: Query<(&mut StaffJob, Option<&JobClaim>)>,
     members: Query<&WorldMember>,
     mut persistent_identifiers: ResMut<PersistentIdAllocator>,
     mut batched_request_maximums: Local<Vec<BatchedStaffJobRequest>>,
@@ -64,14 +64,13 @@ pub(crate) fn create_or_raise_priority_of_requested_staff_jobs(
             token,
             urgency,
         } = batched_request;
-        if let Some((job_entity, job, claim)) = jobs
-            .iter()
-            .find(|(_, job, _)| job.kind == kind && job.target == target && job.token == token)
+        if let Some((job, claim)) = jobs
+            .iter_mut()
+            .find(|(job, _)| job.kind == kind && job.target == target && job.token == token)
         {
             if claim.is_none() && urgency > job.urgency {
-                commands
-                    .entity(job_entity)
-                    .insert(StaffJob { urgency, ..*job });
+                job.map_unchanged(|job| &mut job.urgency)
+                    .set_if_neq(urgency);
             }
             continue;
         }

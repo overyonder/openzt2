@@ -108,6 +108,7 @@ impl Plugin for ConstructionPlugin {
                 Update,
                 (
                     crate::construction::construction_ui_action_routing::route_construction_ui_actions,
+                    crate::construction::construction_ui_action_routing::route_authored_construction_tool_activations,
                     crate::construction::catalogue_purchase_construction_tool_routing::route_construction_purchase_choices,
                     crate::construction::construction_tool_and_action_routing::select_construction_tool,
                     crate::construction::construction_edit_history_input_routing::request_undo_redo.run_if(

@@ -1,6 +1,6 @@
 //! Top rails of tank wall segments, drawn level at the wall top.
 
-use bevy::prelude::*;
+use bevy::{ecs::relationship::RelationshipTarget, prelude::*};
 use openzt2_game_data::world_definitions::fences_and_gates::FenceSegmentPrefabs;
 use openzt2_game_data::AssetId;
 
@@ -15,8 +15,25 @@ use openzt2_zoo_state::topology::topology_graph_types::{FenceEdge, TopologyGrid,
 use openzt2_zoo_state::topology::topology_grid_geometry::calculate_topology_edge_world_transform;
 
 /// The rail drawn for one tank wall segment.
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct TankWallRailOf(pub Entity);
+#[derive(Component)]
+#[relationship(relationship_target = TankWallRails)]
+pub(super) struct TankWallRailOf(Entity);
+
+#[derive(Component)]
+#[relationship_target(relationship = TankWallRailOf, linked_spawn)]
+pub(super) struct TankWallRails(Vec<Entity>);
+
+pub(super) fn remove_tank_wall_rails_on_component_removal(
+    removed: On<Remove<(FenceEdge, TankWallTopHeight, FenceSegmentPrefab)>>,
+    walls: Query<&TankWallRails>,
+    mut commands: Commands,
+) {
+    if let Ok(rails) = walls.get(removed.entity) {
+        for rail in rails.iter() {
+            commands.entity(rail).try_despawn();
+        }
+    }
+}
 
 /// The original selects a wall's top rail by prefixing the selected segment
 /// binder's name with `t`, so the rail takes the same shape slot as the
@@ -54,25 +71,21 @@ pub(super) fn present_changed_tank_wall_rails(
         Option<&FenceTerrainEndpointPresentationCells>,
         Has<Gate>,
         &WorldMember,
+        Option<&TankWallRails>,
     )>,
     nodes: Query<&TopologyNode>,
-    rails: Query<(Entity, &TankWallRailOf)>,
 ) {
     let definitions_changed = definitions.is_changed() || active_definitions.is_changed();
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };
-    for (wall, edge, segment, top, endpoint_cells, gate, member) in &walls {
-        if !definitions_changed
-            && !segment.is_changed()
-            && !top.is_changed()
-            && rails.iter().any(|(_, of)| of.0 == wall)
-        {
-            continue;
-        }
-        for (rail, of) in &rails {
-            if of.0 == wall {
-                commands.entity(rail).despawn();
+    for (wall, edge, segment, top, endpoint_cells, gate, member, rails) in &walls {
+        if let Some(rails) = rails.filter(|rails| !rails.is_empty()) {
+            if !definitions_changed && !segment.is_changed() && !top.is_changed() {
+                continue;
+            }
+            for rail in rails.iter() {
+                commands.entity(rail).try_despawn();
             }
         }
         let fence = if gate {
@@ -111,18 +124,5 @@ pub(super) fn present_changed_tank_wall_rails(
             *member,
             PrefabPresentation::new(handle),
         ));
-    }
-}
-
-/// Removes rails whose wall is gone or no longer has a top.
-pub(super) fn remove_orphaned_tank_wall_rails(
-    mut commands: Commands,
-    rails: Query<(Entity, &TankWallRailOf)>,
-    walls: Query<(), (With<FenceEdge>, With<TankWallTopHeight>)>,
-) {
-    for (rail, of) in &rails {
-        if walls.get(of.0).is_err() {
-            commands.entity(rail).despawn();
-        }
     }
 }

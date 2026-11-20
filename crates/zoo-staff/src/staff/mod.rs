@@ -53,7 +53,9 @@ pub struct StaffPlugin;
 
 impl Plugin for StaffPlugin {
     fn build(&self, app: &mut App) {
-        app.add_message::<StaffJobRequest>()
+        app.add_observer(staff_assignment_cleanup::release_staff_restrictions_when_target_leaves_world)
+            .init_resource::<staff_job_eligibility::StaffTasksByRequestToken>()
+            .add_message::<StaffJobRequest>()
             .add_message::<HireStaffRequest>()
             .add_message::<FireStaffRequest>()
             .add_message::<StaffHired>()
@@ -91,36 +93,60 @@ impl Plugin for StaffPlugin {
                 FixedUpdate,
                 (
                     spawned_staff_identification::identify_spawned_staff_from_world_definition,
-                    worker_duty_assignment::enable_every_maintenance_worker_duty_for_new_staff_by_default,
-                    staff_navigation_agent_projection::project_authored_staff_locomotion_onto_staff_entities,
-                    staff_assignment_cleanup::clear_assignments_to_despawned_world_entities,
-                    tank_cleaning_requests::request_keeper_cleaning_for_dirty_tanks,
+                    worker_duty_assignment::enable_every_maintenance_worker_duty_for_new_staff_by_default
+                        .after(spawned_staff_identification::identify_spawned_staff_from_world_definition),
+                    staff_navigation_agent_projection::project_authored_staff_locomotion_onto_staff_entities
+                        .after(spawned_staff_identification::identify_spawned_staff_from_world_definition),
+                    tank_cleaning_requests::request_keeper_cleaning_for_dirty_tanks
+                        .before(StaffJobRequestCreation),
                     staff_job_request_creation::create_or_raise_priority_of_requested_staff_jobs
                         .in_set(StaffJobRequestCreation),
-                    staff_request_candidate_cleanup::clear_unsuccessful_candidates_at_authored_manager_interval,
-                    staff_job_claiming::claim_highest_ranked_compatible_jobs_for_available_staff,
-                    idle_staff_task_selection::interrupt_idle_staff_tasks_for_claimed_jobs,
-                    staff_job_behavior_start_and_completion::start_unstarted_authored_behavior_tasks_for_claimed_staff_jobs,
-                    idle_staff_task_selection::start_staff_token_tasks,
-                    idle_staff_task_selection::start_authored_idle_staff_tasks,
-                    idle_staff_task_selection::execute_staff_exit_tank_gate_actions,
+                    staff_request_candidate_cleanup::clear_unsuccessful_candidates_at_authored_manager_interval
+                        .run_if(staff_request_candidate_cleanup::staff_candidate_cleanup_is_due),
+                    staff_job_eligibility::index_winning_staff_token_tasks,
+                    staff_job_completion_and_cancellation::mark_explicit_staff_job_cancellations
+                        .after(StaffJobRequestCreation)
+                        .run_if(on_message::<CancelStaffJobRequest>),
+                    staff_job_claiming::claim_highest_ranked_compatible_jobs_for_available_staff
+                        .after(staff_job_completion_and_cancellation::mark_explicit_staff_job_cancellations)
+                        .after_ignore_deferred(staff_job_eligibility::index_winning_staff_token_tasks)
+                        .after(worker_duty_assignment::enable_every_maintenance_worker_duty_for_new_staff_by_default)
+                        .after(staff_navigation_agent_projection::project_authored_staff_locomotion_onto_staff_entities)
+                        .after_ignore_deferred(staff_request_candidate_cleanup::clear_unsuccessful_candidates_at_authored_manager_interval),
+                    idle_staff_task_selection::interrupt_idle_staff_tasks_for_claimed_jobs
+                        .after(staff_job_claiming::claim_highest_ranked_compatible_jobs_for_available_staff),
+                    staff_job_behavior_start_and_completion::start_unstarted_authored_behavior_tasks_for_claimed_staff_jobs
+                        .after(idle_staff_task_selection::interrupt_idle_staff_tasks_for_claimed_jobs),
+                    idle_staff_task_selection::start_staff_token_tasks
+                        .after(staff_job_behavior_start_and_completion::start_unstarted_authored_behavior_tasks_for_claimed_staff_jobs),
+                    idle_staff_task_selection::start_authored_idle_staff_tasks
+                        .after(idle_staff_task_selection::start_staff_token_tasks),
+                    idle_staff_task_selection::execute_staff_exit_tank_gate_actions
+                        .after(idle_staff_task_selection::start_authored_idle_staff_tasks),
                 )
-                    .chain()
                     .in_set(FixedGameSet::Think),
             )
             .add_systems(
                 FixedUpdate,
                 (
                     authored_disease_cure_execution::apply_authored_disease_cures_for_live_staff_claims,
-                    staff_job_behavior_start_and_completion::release_staff_assignment_after_authored_behavior_failure_finishes,
-                    staff_behavior_fact_completion_execution::acknowledge_staff_job_completion_fact_actions_owned_by_terminal_domain_systems,
-                    staff_behavior_terminal_target_termination_acknowledgement::acknowledge_staff_target_termination_owned_by_terminal_maintenance_systems,
-                    staff_job_behavior_start_and_completion::settle_staff_jobs_after_authored_behavior_finishes.in_set(StaffBehaviorSettlement),
-                    staff_facility_operation_job_execution::apply_completed_tank_maintenance_work,
-                    staff_animal_health_job_execution::request_animal_health_effects_after_authored_staff_behavior_finishes,
-                    staff_animal_health_job_execution::complete_staff_jobs_after_animal_health_effects_apply,
+                    staff_job_behavior_start_and_completion::release_staff_assignment_after_authored_behavior_failure_finishes
+                        .after(authored_disease_cure_execution::apply_authored_disease_cures_for_live_staff_claims),
+                    staff_behavior_fact_completion_execution::acknowledge_staff_job_completion_fact_actions_owned_by_terminal_domain_systems
+                        .after(staff_job_behavior_start_and_completion::release_staff_assignment_after_authored_behavior_failure_finishes),
+                    staff_behavior_terminal_target_termination_acknowledgement::acknowledge_staff_target_termination_owned_by_terminal_maintenance_systems
+                        .after(staff_job_behavior_start_and_completion::release_staff_assignment_after_authored_behavior_failure_finishes),
+                    staff_job_behavior_start_and_completion::settle_staff_jobs_after_authored_behavior_finishes
+                        .after(staff_job_behavior_start_and_completion::release_staff_assignment_after_authored_behavior_failure_finishes)
+                        .after(staff_behavior_terminal_target_termination_acknowledgement::acknowledge_staff_target_termination_owned_by_terminal_maintenance_systems)
+                        .in_set(StaffBehaviorSettlement),
+                    staff_facility_operation_job_execution::apply_completed_tank_maintenance_work
+                        .after(staff_job_behavior_start_and_completion::release_staff_assignment_after_authored_behavior_failure_finishes),
+                    staff_animal_health_job_execution::request_animal_health_effects_after_authored_staff_behavior_finishes
+                        .after(StaffBehaviorSettlement),
+                    staff_animal_health_job_execution::complete_staff_jobs_after_animal_health_effects_apply
+                        .after(staff_animal_health_job_execution::request_animal_health_effects_after_authored_staff_behavior_finishes),
                 )
-                    .chain()
                     .in_set(FixedGameSet::Act),
             )
             .add_systems(
@@ -143,11 +169,12 @@ impl Plugin for StaffPlugin {
                 FixedUpdate,
                 (
                     staff_job_completion_and_cancellation::release_staff_and_despawn_completed_jobs,
-                    staff_job_completion_and_cancellation::cancel_requested_jobs_and_jobs_with_invalid_world_relations,
-                    staff_firing_lifecycle::release_claimed_job_and_despawn_fired_staff,
+                    staff_job_completion_and_cancellation::cancel_requested_jobs_and_jobs_with_invalid_world_relations
+                        .after(staff_job_completion_and_cancellation::release_staff_and_despawn_completed_jobs),
+                    staff_firing_lifecycle::release_claimed_job_and_despawn_fired_staff
+                        .after(staff_job_completion_and_cancellation::cancel_requested_jobs_and_jobs_with_invalid_world_relations),
                     staff_wage_lifecycle::discard_settled_staff_wage_payment_operations,
                 )
-                    .chain()
                     .in_set(FixedGameSet::Cleanup),
             )
             .add_systems(

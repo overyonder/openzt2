@@ -21,6 +21,8 @@ pub(super) struct StaffRequestRowIdentity {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct StaffRequestRuntimeState {
     pub(super) row: StaffRequestRowIdentity,
+    pub(super) row_index: usize,
+    pub(super) job_kind: Option<StaffJobKind>,
     pub(super) previous: Option<StaffRequestThresholdState>,
 }
 

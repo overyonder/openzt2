@@ -1,430 +1,158 @@
-use bevy::prelude::*;
+use bevy::{ecs::relationship::RelationshipTarget, prelude::*};
 use openzt2_game_data::world_definitions::facilities_and_maintenance::FacilityPaymentTrigger;
 
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
 use super::{
     facility_economy_types::{Inventory, Price, ServiceFacility, Wallet},
-    service_types::{PendingServiceRequest, ServiceProgress, ServiceReservation},
+    service_types::{
+        FacilityReservations, PendingServiceRequest, ReservationFacility, ServiceCustomer,
+        ServiceOperation, ServicePhase, ServiceReservation,
+    },
 };
 
 pub(super) fn reserve_requested_facility_capacity_and_inventory_for_customers(
-    service_requests: Query<(Entity, &PendingServiceRequest)>,
-    world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
-    active_world_definitions: Res<WorldDefinitions>,
-    customers: Query<(&Wallet, Option<&ServiceReservation>)>,
-    mut facilities: Query<(&Price, &mut ServiceFacility, Option<&mut Inventory>)>,
+    requests: Query<(Entity, &PendingServiceRequest)>,
+    assets: Res<Assets<WorldDefinitionAsset>>,
+    definitions: Res<WorldDefinitions>,
     mut commands: Commands,
 ) {
-    let Some(world_definitions) = active_world_definitions.get(&world_definition_assets) else {
+    let Some(definitions) = definitions.get(&assets) else {
         return;
     };
-
-    let mut requests = service_requests.iter().collect::<Vec<_>>();
-    requests.sort_unstable_by_key(|(_, request)| request.sequence);
-    for (customer, request) in requests {
-        commands.entity(customer).remove::<PendingServiceRequest>();
-        let Ok((wallet, existing_reservation)) = customers.get(customer) else {
+    let mut ordered_requests = requests.iter().collect::<Vec<_>>();
+    ordered_requests.sort_unstable_by_key(|(customer, request)| (request.sequence, *customer));
+    for (customer, request) in ordered_requests {
+        commands
+            .entity(customer)
+            .try_remove::<PendingServiceRequest>();
+        let Some(definition) = definitions.find_facility(request.service) else {
             continue;
         };
-        if existing_reservation.is_some() {
+        if definition.payment_trigger != FacilityPaymentTrigger::TimedTicks {
+            warn!(?customer, facility = ?request.facility, "timed service requested for a behavior-paid facility");
             continue;
         }
-        let Some(service_definition) = world_definitions.find_facility(request.service) else {
-            continue;
-        };
-        if service_definition.payment_trigger != FacilityPaymentTrigger::TimedTicks {
-            // The guest buy behavior handles these services.
-            warn!(
-                customer = ?customer,
-                facility = ?request.facility,
-                "timed service requested for a behavior-paid facility"
-            );
-            continue;
-        }
-        let Ok((price, mut facility, inventory)) = facilities.get_mut(request.facility) else {
-            continue;
-        };
+        let request = *request;
+        let inventory_units = definition.inventory_units_per_service;
+        let duration = definition.service_ticks;
+        // Requests competing for the same facility must see the previous
+        // request's newly created reservation and reserved stock.
+        commands.queue(move |world: &mut World| {
+            commit_timed_service_reservation(world, customer, request, inventory_units, duration);
+        });
+    }
+}
 
-        let inventory_units = service_definition.inventory_units_per_service;
-        // The requested service must match the live facility.
-        if facility.payment_trigger != FacilityPaymentTrigger::TimedTicks {
-            warn!(
-                customer = ?customer,
-                facility = ?request.facility,
-                requested_service = ?request.service,
-                "timed reservation requested for a behavior-paid facility"
-            );
-            continue;
-        }
-        if facility.definition != request.service {
-            warn!(
-                customer = ?customer,
-                facility = ?request.facility,
-                requested_service = ?request.service,
-                "live facility does not provide the requested service definition; refusing timed reservation"
-            );
-            continue;
-        }
-        if price.0 .0 < 0 || wallet.0 < price.0 {
-            continue;
-        }
-        let mut inventory = inventory;
-        if inventory_units > 0
-            && inventory
-                .as_ref()
-                .is_none_or(|stock| !stock.can_reserve(inventory_units))
-        {
-            continue;
-        }
-        if !facility.try_acquire() {
-            continue;
-        }
-        if let Some(stock) = inventory.as_mut() {
-            if !stock.reserve(inventory_units) {
-                facility.release();
-                continue;
-            }
-        }
-
-        commands.entity(customer).insert((
-            ServiceReservation {
-                facility: request.facility,
-                service: request.service,
-                inventory_units,
-            },
-            ServiceProgress {
-                facility: request.facility,
-                remaining_ticks: service_definition.service_ticks,
-            },
-        ));
+fn commit_timed_service_reservation(
+    world: &mut World,
+    customer: Entity,
+    request: PendingServiceRequest,
+    inventory_units: u16,
+    duration: u32,
+) {
+    let facility = request.facility;
+    let Some((price, service, wallet)) = world
+        .get::<Price>(facility)
+        .zip(world.get::<ServiceFacility>(facility))
+        .zip(world.get::<Wallet>(customer))
+        .map(|((price, service), wallet)| (price.0, *service, wallet.0))
+    else {
+        return;
+    };
+    if service.payment_trigger != FacilityPaymentTrigger::TimedTicks
+        || service.definition != request.service
+    {
+        warn!(?customer, ?facility, requested_service = ?request.service, "live facility does not provide the requested timed service");
+        return;
+    }
+    if price.0 < 0
+        || wallet < price
+        || world
+            .get::<ServiceReservation>(customer)
+            .is_some_and(|reservation| !reservation.is_empty())
+        || world
+            .get::<FacilityReservations>(facility)
+            .map_or(0, RelationshipTarget::len)
+            >= usize::from(service.capacity)
+    {
+        return;
+    }
+    if inventory_units > 0
+        && !world
+            .get_mut::<Inventory>(facility)
+            .is_some_and(|mut stock| stock.reserve(inventory_units))
+    {
+        return;
+    }
+    let member = world.get::<WorldMember>(customer).copied();
+    let mut operation = world.spawn((
+        ServiceCustomer(customer),
+        ReservationFacility(facility),
+        ServiceOperation {
+            service: request.service,
+            inventory_units,
+            phase: ServicePhase::Timing(duration),
+        },
+    ));
+    if let Some(member) = member {
+        operation.insert(member);
     }
 }
 
 #[cfg(test)]
-mod behavior_owned_service_reservation_gate_tests {
+mod tests {
     use super::*;
-    use openzt2_game_data::world_definitions::{
-        document::WorldDefinitionDocument,
-        facilities_and_maintenance::{FacilityDefinition, FacilityServiceKind},
-        staff_management::StaffRoleKind,
-    };
     use openzt2_game_data::AssetId;
     use openzt2_zoo_state::economy::money_types::Money;
 
-    fn cart_facility_id() -> AssetId {
-        AssetId::from_key("facility/snackcart_fruitcup_df")
-    }
-
-    fn timed_diner_id() -> AssetId {
-        AssetId::from_key("facility/test_diner")
-    }
-
-    fn authored_cart_definition() -> FacilityDefinition {
-        FacilityDefinition {
-            id: cart_facility_id(),
-            object: AssetId::from_key("snackcart_fruitcup_df"),
-            service: FacilityServiceKind::Food,
-            capacity: 1,
-            service_ticks: 0,
-            payment_trigger: FacilityPaymentTrigger::AuthoredBehavior,
-            price_cents: 1_200,
-            staffing: StaffRoleKind::None,
-            inventory_capacity: 0,
-            inventory_units_per_service: 0,
-            inventory_restock_per_zoo_day: 0,
-        }
-    }
-
-    fn timed_diner_definition() -> FacilityDefinition {
-        FacilityDefinition {
-            id: timed_diner_id(),
-            object: AssetId::from_key("test_diner"),
-            service: FacilityServiceKind::Food,
-            capacity: 1,
-            service_ticks: 30,
-            payment_trigger: FacilityPaymentTrigger::TimedTicks,
-            price_cents: 500,
-            staffing: StaffRoleKind::None,
-            inventory_capacity: 0,
-            inventory_units_per_service: 0,
-            inventory_restock_per_zoo_day: 0,
-        }
-    }
-
-    /// Installs facility documents with one authored cart and one timed diner,
-    /// a placed facility entity, and one paying guest. Each test decides which
-    /// service id is requested and which live facts the entity declares.
-    fn create_application_with_facility_documents() -> (App, Entity, Entity) {
-        // The system reads only the Assets resource; no AssetServer or asset
-        // plugin is involved, matching the established test fixture pattern.
-        let mut application = App::new();
-        application
-            .insert_resource(Assets::<WorldDefinitionAsset>::default())
-            .init_resource::<WorldDefinitions>()
-            .add_systems(
-                Update,
-                reserve_requested_facility_capacity_and_inventory_for_customers,
-            );
-        let document = WorldDefinitionDocument {
-            facilities: vec![authored_cart_definition(), timed_diner_definition()],
-            ..default()
-        };
-        let handle = application
-            .world_mut()
-            .resource_mut::<Assets<WorldDefinitionAsset>>()
-            .add(WorldDefinitionAsset::from_test_document(document.clone()));
-        application
-            .world_mut()
-            .resource_mut::<WorldDefinitions>()
-            .index_test_document(handle, &document);
-        let cart = application.world_mut().spawn(()).id();
-        let guest = application.world_mut().spawn(Wallet(Money(5_000))).id();
-        (application, cart, guest)
-    }
-
-    fn insert_live_facility(
-        application: &mut App,
-        facility_entity: Entity,
-        definition: AssetId,
-        payment_trigger: FacilityPaymentTrigger,
-    ) {
-        application.world_mut().entity_mut(facility_entity).insert((
-            Price(Money(1_200)),
-            ServiceFacility {
-                definition,
-                capacity: 1,
-                occupied: 0,
-                payment_trigger,
-            },
-        ));
-    }
-
-    fn write_service_request(
-        application: &mut App,
-        facility_entity: Entity,
-        guest: Entity,
-        service: AssetId,
-    ) {
-        application
-            .world_mut()
-            .entity_mut(guest)
-            .insert(PendingServiceRequest {
-                sequence: 0,
-                facility: facility_entity,
-                service,
-            });
-    }
-
     #[test]
-    fn behavior_owned_service_request_is_never_reserved_or_charged_by_the_timer_path() {
-        let (mut application, cart, guest) = create_application_with_facility_documents();
-        insert_live_facility(
-            &mut application,
-            cart,
-            cart_facility_id(),
-            FacilityPaymentTrigger::AuthoredBehavior,
-        );
-        write_service_request(&mut application, cart, guest, cart_facility_id());
-
-        application.update();
-        assert!(application
-            .world()
-            .get::<PendingServiceRequest>(guest)
-            .is_none());
-
-        assert!(
-            application
-                .world()
-                .get::<ServiceReservation>(guest)
-                .is_none(),
-            "a behavior-owned facility must not be claimed by the timed reservation path"
-        );
-        assert!(application.world().get::<ServiceProgress>(guest).is_none());
-        assert_eq!(
-            application
-                .world()
-                .get::<ServiceFacility>(cart)
-                .unwrap()
-                .occupied,
-            0,
-            "service capacity must not be acquired for behavior-owned payment"
-        );
-    }
-
-    #[test]
-    fn timed_service_id_cannot_reserve_a_behavior_owned_live_facility() {
-        let (mut application, cart, guest) = create_application_with_facility_documents();
-        // The timed definition exists in the catalogue, but the targeted live
-        // entity declares behavior-owned payment.
-        insert_live_facility(
-            &mut application,
-            cart,
-            timed_diner_id(),
-            FacilityPaymentTrigger::AuthoredBehavior,
-        );
-        write_service_request(&mut application, cart, guest, timed_diner_id());
-
-        application.update();
-        assert!(application
-            .world()
-            .get::<PendingServiceRequest>(guest)
-            .is_none());
-
-        assert!(
-            application.world().get::<ServiceReservation>(guest).is_none(),
-            "a timed service id must not reserve a live entity that declares behavior-owned payment"
-        );
-        assert_eq!(
-            application
-                .world()
-                .get::<ServiceFacility>(cart)
-                .unwrap()
-                .occupied,
-            0
-        );
-    }
-
-    #[test]
-    fn service_id_mismatching_the_live_facility_definition_is_refused() {
-        let (mut application, cart, guest) = create_application_with_facility_documents();
-        // The entity claims the authored cart while the guest requests the
-        // timed diner: the definition lookup succeeds but the live facts do
-        // not match the requested service.
-        insert_live_facility(
-            &mut application,
-            cart,
-            cart_facility_id(),
-            FacilityPaymentTrigger::TimedTicks,
-        );
-        write_service_request(&mut application, cart, guest, timed_diner_id());
-
-        application.update();
-        assert!(application
-            .world()
-            .get::<PendingServiceRequest>(guest)
-            .is_none());
-
-        assert!(
-            application
-                .world()
-                .get::<ServiceReservation>(guest)
-                .is_none(),
-            "a timed reservation must require the live definition to match the requested service"
-        );
-        assert_eq!(
-            application
-                .world()
-                .get::<ServiceFacility>(cart)
-                .unwrap()
-                .occupied,
-            0
-        );
-    }
-
-    #[test]
-    fn timed_facility_service_still_reserves_capacity_for_its_timer() {
-        let (mut application, cart, guest) = create_application_with_facility_documents();
-        insert_live_facility(
-            &mut application,
-            cart,
-            timed_diner_id(),
-            FacilityPaymentTrigger::TimedTicks,
-        );
-        write_service_request(&mut application, cart, guest, timed_diner_id());
-
-        application.update();
-        assert!(application
-            .world()
-            .get::<PendingServiceRequest>(guest)
-            .is_none());
-
-        let reservation = application
-            .world()
-            .get::<ServiceReservation>(guest)
-            .expect("a timed facility keeps its reservation path");
-        assert_eq!(reservation.facility, cart);
-        assert_eq!(reservation.service, timed_diner_id());
-        assert_eq!(
-            application
-                .world()
-                .get::<ServiceFacility>(cart)
-                .unwrap()
-                .occupied,
-            1
-        );
-    }
-    #[test]
-    fn pending_handoff_waits_for_definitions_and_preserves_arrival_order_once() {
-        let (mut application, facility, first_guest) = create_application_with_facility_documents();
-        insert_live_facility(
-            &mut application,
+    fn reservation_checks_live_facility_and_recovers_stock_when_customer_despawns() {
+        let mut app = App::new();
+        app.add_observer(super::super::service_cancellation::release_removed_service_reservation);
+        let world = app.world_mut();
+        let definition = AssetId::from_key("facility/test_diner");
+        let facility = world
+            .spawn((
+                Price(Money(20)),
+                ServiceFacility {
+                    definition,
+                    capacity: 1,
+                    payment_trigger: FacilityPaymentTrigger::AuthoredBehavior,
+                },
+                Inventory {
+                    available: 5,
+                    reserved: 0,
+                    capacity: 5,
+                },
+            ))
+            .id();
+        let guest = world.spawn(Wallet(Money(40))).id();
+        let other_guest = world.spawn(Wallet(Money(40))).id();
+        let request = PendingServiceRequest {
+            sequence: 0,
             facility,
-            timed_diner_id(),
-            FacilityPaymentTrigger::TimedTicks,
-        );
-        let second_guest = application.world_mut().spawn(Wallet(Money(5_000))).id();
-        for (guest, sequence) in [(first_guest, 1), (second_guest, 0)] {
-            application
-                .world_mut()
-                .entity_mut(guest)
-                .insert(PendingServiceRequest {
-                    sequence,
-                    facility,
-                    service: timed_diner_id(),
-                });
-        }
-        let definitions = application
-            .world_mut()
-            .remove_resource::<WorldDefinitions>()
-            .unwrap();
-        application
-            .world_mut()
-            .insert_resource(WorldDefinitions::default());
-        application.update();
-        assert!(application
-            .world()
-            .get::<PendingServiceRequest>(first_guest)
-            .is_some());
-        assert!(application
-            .world()
-            .get::<PendingServiceRequest>(second_guest)
-            .is_some());
-        application.world_mut().insert_resource(definitions);
-        application.update();
-        assert!(application
-            .world()
-            .get::<PendingServiceRequest>(first_guest)
-            .is_none());
-        assert!(application
-            .world()
-            .get::<PendingServiceRequest>(second_guest)
-            .is_none());
-        assert!(application
-            .world()
-            .get::<ServiceReservation>(first_guest)
-            .is_none());
-        assert!(application
-            .world()
-            .get::<ServiceReservation>(second_guest)
-            .is_some());
-        application.update();
+            service: definition,
+        };
+        commit_timed_service_reservation(world, guest, request, 2, 3);
+        assert!(world.get::<ServiceReservation>(guest).is_none());
+        world
+            .get_mut::<ServiceFacility>(facility)
+            .unwrap()
+            .payment_trigger = FacilityPaymentTrigger::TimedTicks;
+        commit_timed_service_reservation(world, guest, request, 2, 3);
+        commit_timed_service_reservation(world, other_guest, request, 2, 3);
         assert_eq!(
-            application
-                .world()
-                .get::<ServiceFacility>(facility)
-                .unwrap()
-                .occupied,
+            world.get::<FacilityReservations>(facility).unwrap().len(),
             1
         );
-        assert_eq!(
-            application.world().get::<Wallet>(first_guest).unwrap().0,
-            Money(5_000)
-        );
-        assert_eq!(
-            application.world().get::<Wallet>(second_guest).unwrap().0,
-            Money(5_000)
-        );
+        assert!(world.get::<ServiceReservation>(other_guest).is_none());
+        assert_eq!(world.get::<Inventory>(facility).unwrap().available, 3);
+        world.despawn(guest);
+        world.flush();
+        assert!(world.get::<FacilityReservations>(facility).is_none());
+        assert_eq!(world.get::<Inventory>(facility).unwrap().available, 5);
     }
 }

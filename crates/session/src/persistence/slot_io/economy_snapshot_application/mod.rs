@@ -93,14 +93,13 @@ pub(super) fn apply_economy_snapshot_records_to_live_economy_resources_and_facil
             entity.insert(ServiceFacility {
                 definition: service.definition,
                 capacity: service.capacity,
-                occupied: service.occupied,
                 payment_trigger: service.payment_trigger,
             });
         }
         if let Some([available, reserved, capacity]) = record.inventory {
             entity.insert(Inventory {
-                available,
-                reserved,
+                available: available.saturating_add(reserved).min(capacity),
+                reserved: 0,
                 capacity,
             });
         }

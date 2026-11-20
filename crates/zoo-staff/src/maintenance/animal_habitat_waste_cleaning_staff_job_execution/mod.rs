@@ -18,7 +18,7 @@ use openzt2_zoo_state::staff::staff_job_types::CurrentJob;
 use openzt2_zoo_state::staff::staff_job_types::JobClaim;
 use openzt2_zoo_state::staff::staff_job_types::StaffJob;
 use openzt2_zoo_state::staff::staff_job_types::StaffJobBehaviorTask;
-use openzt2_zoo_state::staff::staff_lifecycle_messages::CancelStaffJobRequest;
+use openzt2_zoo_state::staff::staff_job_types::StaffJobCancellationPending;
 use openzt2_zoo_state::staff::staff_lifecycle_messages::StaffJobCompleted;
 
 use super::{
@@ -48,15 +48,12 @@ pub(super) fn apply_authored_staff_habitat_waste_termination(
         Option<&AppliedHabitatWasteCleanup>,
     )>,
     targets: Query<(&AnimalHabitatWaste, &DefinitionId, &GlobalTransform), With<WorldMember>>,
-    mut cancellations: MessageReader<CancelStaffJobRequest>,
-    mut cancelled_jobs: Local<HashSet<Entity>>,
+    cancelling: Query<(), With<StaffJobCancellationPending>>,
     mut consumed_targets: Local<HashSet<Entity>>,
 ) {
-    cancelled_jobs.clear();
     consumed_targets.clear();
-    cancelled_jobs.extend(cancellations.read().map(|request| request.job));
     for (actor, current, (execution, instruction, running_action)) in &mut staff {
-        let Ok((job, claim, behavior, applied)) = jobs.get(current.job) else {
+        let Ok((job, claim, behavior, applied)) = jobs.get(current.job()) else {
             continue;
         };
         if job.kind != StaffJobKind::CleanHabitat || execution.next_action_tick > clock.tick {
@@ -69,7 +66,7 @@ pub(super) fn apply_authored_staff_habitat_waste_termination(
         if !termination.kill_target || termination.kill_subject {
             continue;
         }
-        if cancelled_jobs.contains(&current.job)
+        if cancelling.contains(current.job())
             || job.token != Some(AssetId::from_key("t_rakepoo"))
             || claim.staff != actor
             || behavior.execution_id != Some(execution.execution_id)
@@ -96,7 +93,6 @@ pub(super) fn apply_authored_staff_habitat_waste_termination(
             mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
             continue;
         }
-        // The component removal hook owns the cleanliness debit.
         commands.entity(job.target).despawn();
         commands.entity(actor).insert(BehaviorKilledTarget {
             execution_id: execution.execution_id,
@@ -105,7 +101,7 @@ pub(super) fn apply_authored_staff_habitat_waste_termination(
             translation: transform.translation(),
         });
         commands
-            .entity(current.job)
+            .entity(current.job())
             .insert(AppliedHabitatWasteCleanup {
                 execution_id: execution.execution_id,
             });
@@ -124,11 +120,10 @@ pub(super) fn complete_applied_habitat_cleanup_after_behavior_exits(
         &AppliedHabitatWasteCleanup,
     )>,
     mut completed: MessageWriter<StaffJobCompleted>,
-    mut cancellations: MessageReader<CancelStaffJobRequest>,
+    cancelling: Query<(), With<StaffJobCancellationPending>>,
     mut settled_jobs: Local<HashSet<Entity>>,
 ) {
     settled_jobs.clear();
-    settled_jobs.extend(cancellations.read().map(|request| request.job));
     // A later script failure cannot undo the preceding authored kill action.
     for (actor, execution_id) in finished
         .read()
@@ -138,16 +133,21 @@ pub(super) fn complete_applied_habitat_cleanup_after_behavior_exits(
         let Ok(current) = staff.get(actor) else {
             continue;
         };
-        let Ok((job, claim, behavior, applied)) = jobs.get(current.job) else {
+        let Ok((job, claim, behavior, applied)) = jobs.get(current.job()) else {
             continue;
         };
         if job.kind == StaffJobKind::CleanHabitat
             && claim.staff == actor
             && behavior.execution_id == Some(execution_id)
             && applied.execution_id == execution_id
-            && settled_jobs.insert(current.job)
+            && !cancelling.contains(current.job())
+            && settled_jobs.insert(current.job())
         {
-            completed.write(create_completed_staff_job_message(current.job, job, actor));
+            completed.write(create_completed_staff_job_message(
+                current.job(),
+                job,
+                actor,
+            ));
         }
     }
 }

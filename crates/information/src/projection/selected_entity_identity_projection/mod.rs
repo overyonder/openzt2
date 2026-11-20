@@ -1,4 +1,4 @@
-use bevy::{prelude::*, text::EditableText};
+use bevy::{ecs::relationship::RelationshipTarget, prelude::*, text::EditableText};
 use openzt2_game_data::{
     ui_document::node_property_binding::{
         UiImagePropertyBindingSource, UiTextPropertyBindingSource,
@@ -11,7 +11,7 @@ use openzt2_game_assets::localization::localization_precedence_index::Localizati
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_ui::authored_ui_image_content_binding::UiImageBinding;
-use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner;
+use openzt2_interface_state::ui::authored_ui_node_projection_components::{UiDocumentMembers, UiDocumentOwner};
 use openzt2_ui::authored_ui_text_content_binding::UiTextBinding;
 use openzt2_interface_state::ui::authored_ui_visual_types::UiSourceRect;
 use openzt2_interface_state::ui::authored_ui_visual_types::UiVisualLayer;
@@ -34,17 +34,20 @@ pub(crate) fn project_live_zoo_name_to_authored_editable_fields(
     }
 }
 
-pub(crate) fn project_authored_definition_name_to_selected_entity_panel(
+pub(crate) fn project_selected_entity_identity_to_authored_panel_members(
     mut commands: Commands,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,
     active_localization: Res<LocalizationPrecedenceIndex>,
     localization_assets: Res<Assets<LocalizationAsset>>,
-    inspectable_world_subjects: Query<&Inspectable>,
-    information_panels: Query<(Entity, &ChildOf, Ref<InheritedVisibility>), With<InfoPanel>>,
+    inspectable_world_subjects: Query<(&Inspectable, Option<&Name>)>,
+    information_panels: Query<
+        (&ChildOf, &InheritedVisibility, &UiDocumentMembers),
+        With<InfoPanel>,
+    >,
     selections: Query<Ref<SelectedSubject>>,
-    mut text_nodes: Query<(&UiDocumentOwner, &UiTextBinding, &mut Text)>,
-    image_nodes: Query<(Entity, &UiDocumentOwner, &UiImageBinding)>,
+    mut text_nodes: Query<(&UiTextBinding, &mut Text)>,
+    image_nodes: Query<&UiImageBinding>,
     children: Query<&Children>,
     mut visual_images: Query<
         (Entity, Option<&UiSourceRect>, Option<&mut ImageNode>),
@@ -54,17 +57,16 @@ pub(crate) fn project_authored_definition_name_to_selected_entity_panel(
     let world_definitions = active_world_definitions.get(&world_definition_assets);
     let active_localization =
         active_localization.borrow_loaded_localization_view(&localization_assets);
-    for (panel_entity, parent, inherited_visibility) in &information_panels {
+    for (parent, inherited_visibility, members) in &information_panels {
         let Ok(selection) = selections.get(parent.parent()) else {
             continue;
         };
         if !inherited_visibility.get() {
             continue;
         }
-        let world_definition = inspectable_world_subjects
-            .get(selection.0)
-            .ok()
-            .and_then(|subject| world_definitions?.find_object(subject.definition));
+        let subject = inspectable_world_subjects.get(selection.0).ok();
+        let world_definition =
+            subject.and_then(|(subject, _)| world_definitions?.find_object(subject.definition));
         // A newly selected or reloading subject must never retain another
         // subject's identity while its definition/localization is unavailable.
         let localized_definition_name = world_definition
@@ -72,26 +74,27 @@ pub(crate) fn project_authored_definition_name_to_selected_entity_panel(
                 active_localization?.find_plain_localized_text(AssetId(definition.name_key.0))
             })
             .unwrap_or_default();
-        for (document_owner, text_binding, mut text) in &mut text_nodes {
-            if document_owner.0 == panel_entity
-                && matches!(
-                    &text_binding.0,
-                    UiTextPropertyBindingSource::SelectedEntityName
-                        | UiTextPropertyBindingSource::SelectedEntityDefinitionName
-                )
-            {
-                replace_projected_ui_text_if_changed(&mut text.0, localized_definition_name);
-            }
-        }
+        let live_name = subject
+            .and_then(|(_, name)| name)
+            .map_or(localized_definition_name, Name::as_str);
         let icon_image = world_definition
             .and_then(|definition| world_definitions?.texture_image(AssetId(definition.icon.0)));
-        for (entity, document_owner, image_binding) in &image_nodes {
-            if document_owner.0 != panel_entity
-                || !matches!(
-                    &image_binding.0,
-                    UiImagePropertyBindingSource::SelectedEntityIcon
-                )
-            {
+        for entity in members.iter() {
+            if let Ok((binding, mut text)) = text_nodes.get_mut(entity) {
+                let name = match &binding.0 {
+                    UiTextPropertyBindingSource::SelectedEntityName => Some(live_name),
+                    UiTextPropertyBindingSource::SelectedEntityDefinitionName => {
+                        Some(localized_definition_name)
+                    }
+                    _ => None,
+                };
+                if let Some(name) = name {
+                    replace_projected_ui_text_if_changed(&mut text.0, name);
+                }
+            }
+            if !image_nodes.get(entity).is_ok_and(|binding| {
+                matches!(&binding.0, UiImagePropertyBindingSource::SelectedEntityIcon)
+            }) {
                 continue;
             }
             let Ok(children) = children.get(entity) else {
@@ -128,36 +131,6 @@ pub(crate) fn project_authored_definition_name_to_selected_entity_panel(
                     image_node.image_mode = NodeImageMode::Stretch;
                     commands.entity(visual_entity).insert(image_node);
                 }
-            }
-        }
-    }
-}
-
-/// Uses the live name when present, otherwise the definition name.
-pub(crate) fn project_live_name_to_selected_entity_panel(
-    information_panels: Query<(Entity, &ChildOf, Ref<InheritedVisibility>), With<InfoPanel>>,
-    selections: Query<Ref<SelectedSubject>>,
-    inspectable_world_subjects: Query<(&Inspectable, Option<&Name>)>,
-    mut text_nodes: Query<(&UiDocumentOwner, &UiTextBinding, &mut Text)>,
-) {
-    for (panel_entity, parent, inherited_visibility) in &information_panels {
-        let Ok(selection) = selections.get(parent.parent()) else {
-            continue;
-        };
-        if !inherited_visibility.get() {
-            continue;
-        }
-        let Ok((_, Some(subject_name))) = inspectable_world_subjects.get(selection.0) else {
-            continue;
-        };
-        for (document_owner, text_binding, mut text) in &mut text_nodes {
-            if document_owner.0 == panel_entity
-                && matches!(
-                    &text_binding.0,
-                    UiTextPropertyBindingSource::SelectedEntityName
-                )
-            {
-                replace_projected_ui_text_if_changed(&mut text.0, subject_name.as_str());
             }
         }
     }

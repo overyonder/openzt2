@@ -1,4 +1,5 @@
 //! Direct steering at a live entity: a one-point route on its current position.
+use bevy::ecs::entity::EntityIndexMap;
 use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 use openzt2_zoo_state::aquatic::tank_navigation_water::TankNavigationWater;
 
@@ -29,13 +30,13 @@ pub(super) fn accept_entity_pursuit_requests(
     mut pursuit_requests: MessageReader<PursueEntity>,
     active_navigation_graph: Option<Res<ActiveTerrainDerivedNavigationGraph>>,
     water: Query<&TankNavigationWater, With<WorldRoot>>,
-    pursuers: Query<(
+    mut pursuers: Query<(
         &NavAgent,
         Option<&LocomotionMode>,
         &GlobalTransform,
         Option<&AnimalVariant>,
-        Option<&EntityPursuit>,
-        Option<&Destination>,
+        Option<&mut EntityPursuit>,
+        Option<&mut Destination>,
     )>,
     targets: Query<(&GlobalTransform, Option<&LocomotionMode>)>,
     animal_policy: AnimalNavigationPolicy,
@@ -44,6 +45,8 @@ pub(super) fn accept_entity_pursuit_requests(
     mut navigation_failures: MessageWriter<NavigationFailed>,
 ) {
     let tank_water = water.single().ok();
+    let mut inserted_destinations = EntityIndexMap::<Destination>::default();
+    let mut transitions = EntityIndexMap::<Option<EntityPursuit>>::default();
     for request in pursuit_requests.read() {
         let Ok((target_transform, target_mode)) = targets.get(request.target) else {
             navigation_failures.write(NavigationFailed {
@@ -63,8 +66,10 @@ pub(super) fn accept_entity_pursuit_requests(
             continue;
         }
         let pursuer = pursuers.get(request.entity).ok();
-        let continuing = pursuer
-            .and_then(|(.., current, _)| current)
+        let continuing = transitions
+            .get(&request.entity)
+            .copied()
+            .unwrap_or_else(|| pursuer.and_then(|(.., current, _)| current.copied()))
             .is_some_and(|current| current.request_id == request.request_id);
         let line_is_clear = pursuer.is_some_and(|(agent, mode, transform, variant, ..)| {
             let (Some(graph), Ok((agent, maximum_ground_slope_radians))) = (
@@ -96,27 +101,30 @@ pub(super) fn accept_entity_pursuit_requests(
             )
         });
         if line_is_clear {
-            // A clear re-test leaves the live steering as it is.
             if !continuing {
-                commands
-                    .entity(request.entity)
-                    .insert((
-                        Destination {
-                            request_id: request.request_id,
-                            world: target,
-                            arrival_radius_m: request.arrival_radius_m,
-                        },
-                        EntityPursuit {
-                            request_id: request.request_id,
-                            target: request.target,
-                        },
-                    ))
-                    .remove::<Docking>();
+                let next = Destination {
+                    request_id: request.request_id,
+                    world: target,
+                    arrival_radius_m: request.arrival_radius_m,
+                };
+                if let Ok((.., Some(mut destination))) = pursuers.get_mut(request.entity) {
+                    destination.set_if_neq(next);
+                } else {
+                    inserted_destinations.insert(request.entity, next);
+                }
+                transitions.insert(
+                    request.entity,
+                    Some(EntityPursuit {
+                        request_id: request.request_id,
+                        target: request.target,
+                    }),
+                );
+                commands.entity(request.entity).remove::<Docking>();
             }
             continue;
         }
         if continuing {
-            commands.entity(request.entity).remove::<EntityPursuit>();
+            transitions.insert(request.entity, None);
         }
         navigation_failures.write(NavigationFailed {
             entity: request.entity,
@@ -124,8 +132,9 @@ pub(super) fn accept_entity_pursuit_requests(
             reason: NavigationFailure::NoRoute,
         });
         let refused_route = request.refused_route;
-        let route_is_current = pursuer
-            .and_then(|(.., destination)| destination)
+        let route_is_current = inserted_destinations
+            .get(&request.entity)
+            .or_else(|| pursuer.and_then(|(.., destination)| destination))
             .is_some_and(|destination| destination.request_id == refused_route.request_id);
         if !route_is_current {
             route_requests.write(NavigateTo {
@@ -134,6 +143,23 @@ pub(super) fn accept_entity_pursuit_requests(
                 destination: target,
                 arrival_radius_m: refused_route.arrival_radius_m,
             });
+        }
+    }
+    for (actor, destination) in inserted_destinations {
+        commands.entity(actor).insert(destination);
+    }
+    for (actor, next) in transitions {
+        match next {
+            Some(next) => {
+                if let Ok((.., Some(mut pursuit), _)) = pursuers.get_mut(actor) {
+                    pursuit.set_if_neq(next);
+                } else {
+                    commands.entity(actor).insert(next);
+                }
+            }
+            None => {
+                commands.entity(actor).remove::<EntityPursuit>();
+            }
         }
     }
 }

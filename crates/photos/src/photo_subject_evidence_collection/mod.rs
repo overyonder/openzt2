@@ -9,8 +9,9 @@ use openzt2_zoo_state::extinct_animals::fossil_collection_and_assembly_types::Fo
 
 use openzt2_game_assets::animation::animation_set_asset_types::AnimationSetAsset;
 use openzt2_interface_state::information::entity_selection_types::Inspectable;
+use openzt2_interface_state::photos::photo_capture_types::{AlbumPhotoReadbackOf, PhotoMode};
 use openzt2_world_state::animation_graph::animation_graph_playback_state_types::AnimationGraphPlaybackState;
-use openzt2_world_state::animation_graph::animation_presentation_relationship_types::AnimationPresentationOwner;
+use openzt2_world_state::animation_graph::animation_presentation_relationship_types::AnimationPresentations;
 use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackController;
 use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 use openzt2_zoo_state::animal_behavior::interaction_container_membership::InteractionContainerMemberships;
@@ -42,10 +43,10 @@ use openzt2_zoo_state::habitat::habitat_types::HabitatClimate;
 use openzt2_zoo_state::habitat::habitat_types::HabitatMember;
 
 use super::photo_capture_types::{
-    PendingPhotoCapture, PendingPhotoEvidence, PendingPhotoSemantics, PhotoEvidence,
-    PhotoSemanticEvidence, PhotoSubjectContainedEntitiesEvidence,
-    PhotoSubjectContainedEntityEvidence, PhotoSubjectFacts, PhotoSubjectTaskEvidence,
-    PhotoSubjectsCollected, PhotographableFossil, PhotographableHealth, PhotographableShowTrick,
+    PendingPhotoCapture, PendingPhotoEvidence, PhotoEvidence, PhotoSemanticEvidence,
+    PhotoSubjectContainedEntitiesEvidence, PhotoSubjectContainedEntityEvidence, PhotoSubjectFacts,
+    PhotoSubjectTaskEvidence, PhotoSubjectsCollected, PhotographableFossil, PhotographableHealth,
+    PhotographableShowTrick,
 };
 
 #[derive(SystemParam)]
@@ -55,11 +56,11 @@ pub(super) struct PhotographableSemanticFactQueries<'w, 's> {
         'w,
         's,
         (
-            &'static AnimationPresentationOwner,
             &'static AnimationGraphPlaybackState,
             &'static AnimationPlaybackController,
         ),
     >,
+    animation_presentations: Query<'w, 's, &'static AnimationPresentations>,
     habitat_members: Query<'w, 's, &'static HabitatMember>,
     habitats: Query<'w, 's, &'static HabitatClimate>,
     aquatic: Query<'w, 's, (), With<AquaticAnimal>>,
@@ -106,14 +107,13 @@ pub(super) struct PhotographableSemanticFactQueries<'w, 's> {
 pub(super) fn collect_visible_photo_subjects_and_semantic_evidence_for_pending_captures(
     spatial_query: SpatialQuery,
     mut commands: Commands,
-    mut cameras: Query<
+    cameras: Query<(&Camera, &GlobalTransform), With<PhotoMode>>,
+    mut captures: Query<
         (
             Entity,
-            &Camera,
-            &GlobalTransform,
+            &AlbumPhotoReadbackOf,
             &mut PendingPhotoCapture,
             &mut PendingPhotoEvidence,
-            &mut PendingPhotoSemantics,
         ),
         Without<PhotoSubjectsCollected>,
     >,
@@ -135,12 +135,18 @@ pub(super) fn collect_visible_photo_subjects_and_semantic_evidence_for_pending_c
     memberships: InteractionContainerMemberships,
     semantic_queries: PhotographableSemanticFactQueries,
 ) {
-    for (camera_entity, camera, camera_transform, mut pending, mut evidence, mut semantics) in
-        &mut cameras
-    {
+    for (capture_entity, owner, mut capture, mut evidence) in &mut captures {
+        let Ok((camera, camera_transform)) = cameras.get(owner.0) else {
+            continue;
+        };
+        capture.camera_position = camera_transform.translation();
+        capture.camera_rotation = camera_transform.rotation();
         // Include stationary objects as well as moving animals.
         for (entity, species, definition, transform, visible, colliders, behavior_task) in &subjects
         {
+            if !visible.get() {
+                continue;
+            }
             let Some(definition) = species
                 .map(|species| species.species)
                 .or_else(|| definition.map(|definition| definition.0))
@@ -157,7 +163,7 @@ pub(super) fn collect_visible_photo_subjects_and_semantic_evidence_for_pending_c
             }) else {
                 continue;
             };
-            if !visible.get() || coverage.screen_permille == 0 {
+            if coverage.screen_permille == 0 {
                 continue;
             }
             let facts = calculate_photo_subject_visual_facts(
@@ -170,14 +176,12 @@ pub(super) fn collect_visible_photo_subjects_and_semantic_evidence_for_pending_c
                 &spatial_query,
                 behavior_task.is_some(),
             );
-            pending.subjects.insert(entity);
-            evidence.insert(PhotoEvidence {
-                entity,
-                definition,
-                facts,
-            });
-            semantics.0.push(PhotoSemanticEvidence {
-                entity,
+            let semantics = PhotoSemanticEvidence {
+                animal: species.is_some(),
+                guest: semantic_queries
+                    .entity_kinds
+                    .get(entity)
+                    .is_ok_and(|(_, guest, _, _)| guest.is_some()),
                 position_mm: (transform.translation() * 1000.0).round().as_ivec3(),
                 animal_variant: semantic_queries
                     .animal_variants
@@ -185,24 +189,18 @@ pub(super) fn collect_visible_photo_subjects_and_semantic_evidence_for_pending_c
                     .ok()
                     .map(|variant| variant.0),
                 behavior: behavior_task.map(BehaviorTaskExecutionState::program),
-                animation: semantic_queries.animations.iter().find_map(
-                    |(owner, state, animation_playback_controller)| {
-                        (owner.gameplay_entity == entity)
-                            .then(|| {
-                                animation_set_assets
-                                    .get(&animation_playback_controller.animation_set_asset)
-                            })
-                            .flatten()
-                            .and_then(|asset| {
-                                asset
-                                    .animation_graph_nodes
-                                    .get(state.current_animation_graph_node_index as usize)
-                            })
-                            .map(|animation_graph_node| {
-                                animation_graph_node.animation_graph_node_asset_key.clone()
-                            })
-                    },
-                ),
+                animation: AnimationPresentations::for_subject(
+                    entity,
+                    semantic_queries.animation_presentations.get(entity).ok(),
+                )
+                .find_map(|controller| {
+                    let (state, controller) = semantic_queries.animations.get(controller).ok()?;
+                    animation_set_assets
+                        .get(&controller.animation_set_asset)?
+                        .animation_graph_nodes
+                        .get(state.current_animation_graph_node_index as usize)
+                        .map(|node| node.animation_graph_node_asset_key.clone())
+                }),
                 object_use: behavior_task
                     .and_then(BehaviorTaskExecutionState::target)
                     .and_then(|target| semantic_queries.entity_kinds.get(target).ok())
@@ -302,10 +300,19 @@ pub(super) fn collect_visible_photo_subjects_and_semantic_evidence_for_pending_c
                     &memberships,
                     &semantic_queries.entity_kinds,
                 ),
+            };
+            evidence.0.push(PhotoEvidence {
+                entity,
+                definition,
+                facts,
+                semantics,
             });
         }
+        evidence
+            .0
+            .sort_unstable_by_key(|subject| subject.entity.to_bits());
         commands
-            .entity(camera_entity)
+            .entity(capture_entity)
             .insert(PhotoSubjectsCollected);
     }
 }
@@ -335,7 +342,12 @@ fn capture_photo_subject_contained_entities<'w, 's>(
         else {
             return PhotoSubjectContainedEntitiesEvidence::UnsupportedAtCapture;
         };
-        contained.push(PhotoSubjectContainedEntityEvidence { entity, definition });
+        contained.push(PhotoSubjectContainedEntityEvidence {
+            entity,
+            definition,
+            guest: guest.is_some(),
+            animal: species.is_some(),
+        });
     }
     if contained.is_empty() {
         PhotoSubjectContainedEntitiesEvidence::Empty

@@ -1,12 +1,7 @@
-use std::collections::BTreeSet;
-
 use bevy::prelude::*;
 
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use openzt2_zoo_state::animal_health::types::Dead;
-use openzt2_zoo_state::animal_lifecycle::types::{Animal, SpeciesHandle};
-use openzt2_zoo_state::guests::guest_simulation_types::Guest;
 use openzt2_zoo_state::guests::guest_survey_types::{GuestSurvey, GuestSurveyRating};
 
 use super::{
@@ -25,6 +20,7 @@ use super::{
     profile_challenge_types::TotalAnimalsReleasedCount,
     rating_types::ZooRating,
     unlock_types::UnlockedCatalogueDefinitionSet,
+    zoo_rating_input_types::{GuestRatingFacts, LivingAnimalPopulation},
 };
 
 pub(super) fn apply_scenario_maximum_fame_requests(
@@ -53,20 +49,36 @@ pub(super) fn update_fame_and_apply_authored_fame_unlocks(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     rating: Res<ZooRating>,
-    animals: Query<&SpeciesHandle, (With<Animal>, Without<Dead>)>,
-    guests: Query<(), With<Guest>>,
+    animals: Res<LivingAnimalPopulation>,
+    guests: Res<GuestRatingFacts>,
     survey: Option<Res<GuestSurvey>>,
     scenario_award_points: Res<ScenarioAwardPointTotal>,
     earned_awards: Query<&EarnedProgressionAward>,
+    added_awards: Query<(), Added<EarnedProgressionAward>>,
+    mut removed_awards: RemovedComponents<EarnedProgressionAward>,
     total_animals_released: Res<TotalAnimalsReleasedCount>,
     mut fame: ResMut<Fame>,
     mut unlocks: ResMut<UnlockedCatalogueDefinitionSet>,
     mut changed: MessageWriter<ProgressionFactChanged>,
 ) {
+    let awards_removed = removed_awards.read().count() != 0;
+    if !definitions.is_changed()
+        && !active_definitions.is_changed()
+        && !rating.is_changed()
+        && !animals.is_changed()
+        && !guests.is_changed()
+        && !scenario_award_points.is_changed()
+        && !total_animals_released.is_changed()
+        && !survey.as_ref().is_some_and(|survey| survey.is_changed())
+        && added_awards.is_empty()
+        && !awards_removed
+    {
+        return;
+    }
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };
-    let guest_count = guests.iter().count() as u32;
+    let guest_count = guests.count;
 
     let (next_half_stars, current_percent) = if definitions.fame_thresholds().next().is_some() {
         if !rating.overall_available {
@@ -85,15 +97,9 @@ pub(super) fn update_fame_and_apply_authored_fame_unlocks(
         );
         (next, f32::from(next) * 10.0)
     } else {
-        let mut unique_species = BTreeSet::new();
-        let mut animal_count = 0_u32;
-        for handle in &animals {
-            animal_count = animal_count.saturating_add(1);
-            unique_species.insert(handle.species);
-        }
         let award_and_scenario_points = scenario_award_points
             .0
-            .saturating_add(earned_awards.iter().count() as u32);
+            .saturating_add(u32::try_from(earned_awards.iter().len()).unwrap_or(u32::MAX));
         let education_view_rate = survey.as_ref().map_or(rating.education_permille, |s| {
             s.rating_permille(GuestSurveyRating::Education)
                 .unwrap_or(rating.education_permille)
@@ -108,8 +114,8 @@ pub(super) fn update_fame_and_apply_authored_fame_unlocks(
                         .max(rating.guest_satisfaction_permille)
                 });
         calculate_authentic_zoo_fame(&ZooFameCalculationInputs {
-            animal_count,
-            species_count: unique_species.len() as u32,
+            animal_count: animals.animals,
+            species_count: animals.species,
             animal_happiness_permille: rating.animal_welfare_permille,
             guest_count,
             guest_happiness_permille: rating.guest_satisfaction_permille,
@@ -153,8 +159,13 @@ pub(super) fn update_fame_and_apply_authored_fame_unlocks(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::progression::zoo_rating_recomputation::{
+        recompute_guest_ratings, reduce_living_animal_population,
+    };
     use openzt2_game_data::world_definitions::document::WorldDefinitionDocument;
     use openzt2_game_data::AssetId;
+    use openzt2_zoo_state::animal_lifecycle::types::{Animal, SpeciesHandle};
+    use openzt2_zoo_state::guests::guest_simulation_types::Guest;
 
     #[test]
     fn authentic_fame_progression_advances_fame_and_emits_change() {
@@ -167,7 +178,16 @@ mod tests {
             .init_resource::<ScenarioAwardPointTotal>()
             .init_resource::<TotalAnimalsReleasedCount>()
             .add_message::<ProgressionFactChanged>()
-            .add_systems(Update, update_fame_and_apply_authored_fame_unlocks);
+            .init_resource::<LivingAnimalPopulation>()
+            .init_resource::<GuestRatingFacts>()
+            .add_systems(
+                Update,
+                (
+                    (reduce_living_animal_population, recompute_guest_ratings),
+                    update_fame_and_apply_authored_fame_unlocks,
+                )
+                    .chain(),
+            );
 
         let world_document = WorldDefinitionDocument::default();
         let world_handle = app

@@ -27,6 +27,7 @@ pub(super) fn refresh_fence_segment_prefabs_after_topology_index_changes(
         Entity,
         &FenceEdge,
         Option<&mut FenceSegmentPrefab>,
+        Option<&mut FenceTerrainEndpointPresentationCells>,
         Option<&TopologyPresentation>,
         Has<Gate>,
     )>,
@@ -39,7 +40,7 @@ pub(super) fn refresh_fence_segment_prefabs_after_topology_index_changes(
     }
     let segments = fences
         .iter()
-        .filter_map(|(entity, edge, _, _, _)| {
+        .filter_map(|(entity, edge, ..)| {
             Some((
                 entity,
                 (
@@ -61,7 +62,7 @@ pub(super) fn refresh_fence_segment_prefabs_after_topology_index_changes(
         .zip(partners)
         .map(|((entity, _), partner)| (*entity, partner))
         .collect::<bevy::platform::collections::HashMap<_, _>>();
-    for (fence_entity, edge, current_prefab, presentation, gate) in &mut fences {
+    for (fence_entity, edge, current_prefab, endpoint_cells, presentation, gate) in &mut fences {
         let (Ok(first_node), Ok(second_node)) = (nodes.get(edge.a), nodes.get(edge.b)) else {
             continue;
         };
@@ -88,9 +89,12 @@ pub(super) fn refresh_fence_segment_prefabs_after_topology_index_changes(
                 || transform.rotation != desired.rotation
             {
                 *transform = desired;
-                commands
-                    .entity(fence_entity)
-                    .insert(FenceTerrainEndpointPresentationCells { first, second });
+                let next_cells = FenceTerrainEndpointPresentationCells { first, second };
+                if let Some(mut endpoint_cells) = endpoint_cells {
+                    endpoint_cells.set_if_neq(next_cells);
+                } else {
+                    commands.entity(fence_entity).insert(next_cells);
+                }
             }
         }
         if current_prefab
@@ -108,7 +112,11 @@ pub(super) fn refresh_fence_segment_prefabs_after_topology_index_changes(
                 .remove::<TopologyPresentation>();
         }
         if selected_prefab.asset == openzt2_game_data::AssetId::default() {
-            commands.entity(fence_entity).remove::<FenceSegmentPrefab>();
+            if current_prefab.is_some() {
+                commands.entity(fence_entity).remove::<FenceSegmentPrefab>();
+            }
+        } else if let Some(mut current_prefab) = current_prefab {
+            *current_prefab = selected_prefab;
         } else {
             commands.entity(fence_entity).insert(selected_prefab);
         }

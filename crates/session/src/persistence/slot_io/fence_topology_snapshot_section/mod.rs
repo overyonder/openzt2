@@ -12,7 +12,7 @@ use openzt2_zoo_state::{
     topology::{
         gate_operation_types::{Gate, GateAutoClose, GateMechanism},
         topology_edit_types::{TopologyChanged, TopologySnapshot},
-        topology_graph_types::{EdgeKey, FenceEdge, TopologyGrid, TopologyIndex, TopologyNode},
+        topology_graph_types::{EdgeKey, FenceEdge, TopologyGrid, TopologyNode},
         topology_grid_geometry::{calculate_topology_edge_cell_bounds, calculate_topology_edge_world_transform, merge_topology_changed_cell_bounds},
     },
 };
@@ -324,9 +324,7 @@ fn validate_fence_topology_records(records: &[TopologySnapshot]) -> Result<(), F
 pub(super) struct FenceTopologySnapshotApplication<'w, 's> {
     entities: FenceTopologySnapshotEntities<'w, 's>,
     persistent: Query<'w, 's, (Entity, &'static PersistentId)>,
-    index: ResMut<'w, TopologyIndex>,
     grid: Res<'w, TopologyGrid>,
-    changed: MessageWriter<'w, TopologyChanged>,
 }
 
 impl FenceTopologySnapshotApplication<'_, '_> {
@@ -381,11 +379,10 @@ pub(super) fn apply_fence_topology_records(
                 .nodes
                 .get(edge.b)
                 .map_err(|_| Failure::BrokenPersistentEntityReference)?;
-            let key = EdgeKey::new(a.cell, b.cell).ok_or(Failure::CorruptSnapshotSection)?;
+            EdgeKey::new(a.cell, b.cell).ok_or(Failure::CorruptSnapshotSection)?;
             Ok((
                 entity,
                 *id,
-                key,
                 calculate_topology_edge_cell_bounds(a.cell, b.cell),
             ))
         })
@@ -425,17 +422,19 @@ pub(super) fn apply_fence_topology_records(
     }
     let ids: BTreeSet<_> = records.iter().map(|record| record.id().0).collect();
     let mut bounds = None;
-    for (entity, id, key, edge_bounds) in baseline_edges {
-        application.index.edges.remove(&key);
+    for (entity, id, edge_bounds) in baseline_edges {
         bounds = merge_topology_changed_cell_bounds(bounds, edge_bounds);
-        if !ids.contains(&id.0) {
+        if ids.contains(&id.0) {
+            commands.entity(entity).remove::<FenceEdge>();
+        } else {
             commands.entity(entity).despawn();
         }
     }
-    for (entity, id, node, member) in &application.entities.nodes {
+    for (entity, id, _, member) in &application.entities.nodes {
         if member.root == root {
-            application.index.nodes.remove(&node.cell);
-            if !ids.contains(&id.0) {
+            if ids.contains(&id.0) {
+                commands.entity(entity).remove::<TopologyNode>();
+            } else {
                 commands.entity(entity).despawn();
             }
         }
@@ -453,7 +452,6 @@ pub(super) fn apply_fence_topology_records(
         commands
             .entity(entity)
             .insert((*id, TopologyNode { cell: *cell }, WorldMember { root }));
-        application.index.nodes.insert(*cell, entity);
         nodes.insert(id.0, (entity, *cell));
         restored.insert(id.0, entity);
     }
@@ -493,10 +491,6 @@ pub(super) fn apply_fence_topology_records(
         if let Some(top) = wall_top {
             commands.entity(entity).insert(*top);
         }
-        application.index.edges.insert(
-            EdgeKey::new(a.1, b.1).expect("validated fence endpoints"),
-            entity,
-        );
         restored.insert(id.0, entity);
         bounds = merge_topology_changed_cell_bounds(
             bounds,
@@ -504,7 +498,7 @@ pub(super) fn apply_fence_topology_records(
         );
     }
     if let Some(bounds) = bounds {
-        application.changed.write(TopologyChanged {
+        commands.write_message(TopologyChanged {
             transaction: None,
             bounds,
         });

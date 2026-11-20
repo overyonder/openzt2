@@ -1,4 +1,6 @@
-use bevy::ecs::message::MessageCursor;
+use super::transport_track_sale_steps::{
+    ApplyTransportTrackSaleStep, TrackApplicationAcknowledgements,
+};
 use bevy::prelude::*;
 
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
@@ -163,15 +165,19 @@ fn transport_track_application_creates_entity(
 pub(super) fn apply_prepared_transport_track_construction_edits(
     mut commands: Commands,
     mut requests: MessageReader<ApplyPreparedTransportTrackConstructionEditRequest>,
+    mut step_requests: MessageReader<ApplyTransportTrackSaleStep>,
     mut edits: Query<(&mut PreparedTransportTrackConstructionEdit, &WorldMember)>,
     persistent_entities: Query<(Entity, &PersistentId)>,
     sales: openzt2_zoo_state::transport_tours::transport_track_sale::TransportTrackSaleQueries,
     mut connections: MessageWriter<ConnectTransportTrackRequest>,
     mut disconnections: MessageWriter<DisconnectTransportTrackRequest>,
-    mut acknowledged: MessageWriter<TransportTrackConstructionEditApplicationAcknowledged>,
+    mut acknowledged: TrackApplicationAcknowledgements,
     stepped: Query<(), With<TransportTrackConstructionEditSteps>>,
 ) {
-    for request in requests.read() {
+    for request in requests
+        .read()
+        .chain(step_requests.read().map(|request| &request.0))
+    {
         if stepped.contains(request.transaction) {
             continue;
         }
@@ -321,6 +327,7 @@ pub(super) fn apply_prepared_transport_track_construction_edits(
             commands
                 .spawn((
                     destination_junction_identifier,
+                    DefinitionId(edit.definition),
                     openzt2_zoo_state::transport_tours::transport_topology_types::TransportTrackJunction,
                     Transform::from_translation(destination_position),
                     GlobalTransform::from_translation(destination_position),
@@ -343,6 +350,7 @@ pub(super) fn apply_prepared_transport_track_construction_edits(
                 commands
                     .spawn((
                         source_id,
+                        DefinitionId(edit.definition),
                         openzt2_zoo_state::transport_tours::transport_topology_types::TransportTrackJunction,
                         openzt2_zoo_state::transport_tours::transport_circuit_types::CircuitMember(edit.circuit),
                         Transform::from_translation(source_position),
@@ -393,7 +401,8 @@ pub(super) fn acknowledge_completed_transport_track_topology_applications(
     mut applied_disconnections: MessageReader<TransportTrackDisconnectionApplied>,
     mut edits: Query<&mut PreparedTransportTrackConstructionEdit>,
     persistent_entities: Query<(Entity, &PersistentId)>,
-    mut acknowledged: MessageWriter<TransportTrackConstructionEditApplicationAcknowledged>,
+    previews: Query<(), With<TransportTrackConstructionPreview>>,
+    mut acknowledged: TrackApplicationAcknowledgements,
 ) {
     for applied in applied_connections.read() {
         let Ok(mut edit) = edits.get_mut(applied.transaction) else {
@@ -407,7 +416,16 @@ pub(super) fn acknowledge_completed_transport_track_topology_applications(
         edit.application_in_flight = None;
         if applied.application == EditApplication::InitialCommit {
             if let Some(preview) = edit.preview.take() {
-                commands.entity(preview).despawn();
+                if previews.contains(preview) {
+                    if edit.destination_junction_entity.is_some() {
+                        commands.entity(applied.transaction).insert(
+                            super::transport_track_construction_preview::ContinueTransportTrackFrom(
+                                applied.track,
+                            ),
+                        );
+                    }
+                    commands.entity(preview).despawn();
+                }
             }
         }
         acknowledged.write(TransportTrackConstructionEditApplicationAcknowledged {
@@ -486,147 +504,5 @@ fn despawn_source_junction(
             .find_map(|(entity, id)| (*id == wanted_id).then_some(entity))
     }) {
         commands.entity(endpoint).despawn();
-    }
-}
-
-/// The step to apply after `done` steps of `application`, and how.
-fn step_at(
-    steps: &TransportTrackConstructionEditSteps,
-    application: EditApplication,
-    done: usize,
-) -> Option<(Entity, EditApplication)> {
-    match application {
-        EditApplication::InitialCommit | EditApplication::Redo => {
-            steps.steps.get(done).map(|step| (*step, application))
-        }
-        EditApplication::Undo => steps
-            .steps
-            .len()
-            .checked_sub(done + 1)
-            .map(|index| (steps.steps[index], application)),
-        // Reverse the steps the failed application completed.
-        EditApplication::FailureRollback => {
-            let undo = match steps.last_application? {
-                EditApplication::Undo => EditApplication::Redo,
-                _ => EditApplication::Undo,
-            };
-            let applied_forward = steps.last_application != Some(EditApplication::Undo);
-            let index = if applied_forward {
-                steps.completed.checked_sub(done + 1)?
-            } else {
-                steps.steps.len().checked_sub(steps.completed)? + done
-            };
-            (done < steps.completed).then(|| (steps.steps[index], undo))
-        }
-    }
-}
-
-/// Applies a stepped transaction's route edits one after another, each once
-/// the one before it is acknowledged; an undo runs them in reverse, and a
-/// rollback reverses only the steps the failed application completed.
-// It reads and writes the same messages, so it holds them with its own cursors.
-pub(super) fn apply_stepped_transport_track_construction_edits(
-    mut step_requests: ResMut<Messages<ApplyPreparedTransportTrackConstructionEditRequest>>,
-    mut acknowledged: ResMut<Messages<TransportTrackConstructionEditApplicationAcknowledged>>,
-    mut request_cursor: Local<MessageCursor<ApplyPreparedTransportTrackConstructionEditRequest>>,
-    mut acknowledgement_cursor: Local<
-        MessageCursor<TransportTrackConstructionEditApplicationAcknowledged>,
-    >,
-    mut transactions: Query<(Entity, &mut TransportTrackConstructionEditSteps)>,
-) {
-    let wanted = request_cursor
-        .read(&step_requests)
-        .filter(|request| transactions.contains(request.transaction))
-        .copied()
-        .collect::<Vec<_>>();
-    for request in wanted {
-        let Ok((_, mut steps)) = transactions.get_mut(request.transaction) else {
-            continue;
-        };
-        if steps.in_flight.is_some() {
-            continue;
-        }
-        if request.application != EditApplication::FailureRollback {
-            steps.last_application = Some(request.application);
-            steps.completed = 0;
-        }
-        match step_at(&steps, request.application, 0) {
-            Some((step, application)) => {
-                steps.in_flight = Some((request.application, 0));
-                step_requests.write(ApplyPreparedTransportTrackConstructionEditRequest {
-                    transaction: step,
-                    application,
-                });
-            }
-            None => {
-                acknowledged.write(TransportTrackConstructionEditApplicationAcknowledged {
-                    transaction: request.transaction,
-                    application: request.application,
-                    accepted: true,
-                });
-            }
-        }
-    }
-    let step_acknowledgements = acknowledgement_cursor
-        .read(&acknowledged)
-        .copied()
-        .collect::<Vec<_>>();
-    for step_acknowledgement in step_acknowledgements {
-        let Some((transaction, mut steps)) = transactions.iter_mut().find(|(_, steps)| {
-            steps.steps.contains(&step_acknowledgement.transaction) && steps.in_flight.is_some()
-        }) else {
-            continue;
-        };
-        let Some((application, done)) = steps.in_flight else {
-            continue;
-        };
-        if step_at(&steps, application, done).map(|(step, _)| step)
-            != Some(step_acknowledgement.transaction)
-        {
-            continue;
-        }
-        if !step_acknowledgement.accepted {
-            // Reverse the steps already done, then report the failure.
-            let failed = steps.failed.take().unwrap_or(application);
-            if application != EditApplication::FailureRollback {
-                if let Some((step, step_application)) =
-                    step_at(&steps, EditApplication::FailureRollback, 0)
-                {
-                    steps.failed = Some(failed);
-                    steps.in_flight = Some((EditApplication::FailureRollback, 0));
-                    step_requests.write(ApplyPreparedTransportTrackConstructionEditRequest {
-                        transaction: step,
-                        application: step_application,
-                    });
-                    continue;
-                }
-            }
-            steps.in_flight = None;
-            acknowledged.write(TransportTrackConstructionEditApplicationAcknowledged {
-                transaction,
-                application: failed,
-                accepted: false,
-            });
-            continue;
-        }
-        let done = done + 1;
-        if application != EditApplication::FailureRollback {
-            steps.completed = done;
-        }
-        if let Some((step, step_application)) = step_at(&steps, application, done) {
-            steps.in_flight = Some((application, done));
-            step_requests.write(ApplyPreparedTransportTrackConstructionEditRequest {
-                transaction: step,
-                application: step_application,
-            });
-        } else {
-            steps.in_flight = None;
-            let failed = steps.failed.take();
-            acknowledged.write(TransportTrackConstructionEditApplicationAcknowledged {
-                transaction,
-                application: failed.unwrap_or(application),
-                accepted: failed.is_none(),
-            });
-        }
     }
 }

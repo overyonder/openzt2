@@ -9,14 +9,18 @@ use openzt2_zoo_state::guests::guest_simulation_types::GuestDeparted;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooCalendar;
 
 use super::{
-    account_transaction_types::{Account, TransactionCompleted, TransactionKind},
+    account_transaction_types::{
+        Account, TransactionCompleted, TransactionKind, TransactionSettlement,
+    },
     facility_economy_types::ServiceFacility,
     money_types::Money,
     monthly_finance_types::MonthlyFinanceHistory,
     zoo_cash_types::ZooCash,
 };
 
-pub(super) fn record_completed_transactions_and_guest_counts_in_monthly_finance_history(
+pub(super) fn record_completed_transactions_and_guest_counts_in_monthly_finance_history<
+    const PLAYER: bool,
+>(
     calendar: Res<ZooCalendar>,
     zoo_cash: Res<ZooCash>,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
@@ -27,19 +31,28 @@ pub(super) fn record_completed_transactions_and_guest_counts_in_monthly_finance_
         &openzt2_world_state::world_spawn::world_membership_types::DefinitionId,
     >,
     mut completed_transactions: MessageReader<TransactionCompleted>,
+    settlements: Query<&TransactionSettlement>,
     mut guest_arrivals: MessageReader<GuestArrived>,
     mut guest_departures: MessageReader<GuestDeparted>,
     mut finance_history: ResMut<MonthlyFinanceHistory>,
 ) {
-    let Some(world_definitions) = active_world_definitions.get(&world_definition_assets) else {
-        return;
-    };
+    let world_definitions = active_world_definitions.get(&world_definition_assets);
     let calendar_month_ordinal = u32::from(calendar.year)
         .saturating_mul(12)
         .saturating_add(u32::from(calendar.month.saturating_sub(1)));
-    finance_history.enter_calendar_month(calendar_month_ordinal, zoo_cash.0);
+    if !finance_history.has_initialized_month()
+        || calendar_month_ordinal != finance_history.current_calendar_month_ordinal()
+    {
+        finance_history.enter_calendar_month(calendar_month_ordinal, zoo_cash.0);
+    }
 
     for transaction in completed_transactions.read() {
+        if !settlements
+            .get(transaction.operation)
+            .is_ok_and(|state| state.is_settled_in_domain(PLAYER))
+        {
+            continue;
+        }
         let zoo_cash_change = match (transaction.debit, transaction.credit) {
             (Account::Zoo, Account::Zoo) => 0,
             (Account::Zoo, _) => -transaction.amount.0,
@@ -55,7 +68,7 @@ pub(super) fn record_completed_transactions_and_guest_counts_in_monthly_finance_
             let category = object_definitions
                 .get(payment.facility)
                 .ok()
-                .and_then(|id| world_definitions.find_object(id.0))
+                .and_then(|id| world_definitions?.find_object(id.0))
                 .and_then(|object| {
                     object
                         .transactions
@@ -81,7 +94,9 @@ pub(super) fn record_completed_transactions_and_guest_counts_in_monthly_finance_
         else {
             continue;
         };
-        let Some(facility_definition) = world_definitions.find_facility(facility.definition) else {
+        let Some(facility_definition) =
+            world_definitions.and_then(|view| view.find_facility(facility.definition))
+        else {
             continue;
         };
         match facility_definition.service {
@@ -93,12 +108,14 @@ pub(super) fn record_completed_transactions_and_guest_counts_in_monthly_finance_
         }
     }
 
-    guest_arrivals
-        .read()
-        .for_each(|_| finance_history.record_guest_arrival());
-    guest_departures
-        .read()
-        .for_each(|_| finance_history.record_guest_departure());
+    if !PLAYER {
+        guest_arrivals
+            .read()
+            .for_each(|_| finance_history.record_guest_arrival());
+        guest_departures
+            .read()
+            .for_each(|_| finance_history.record_guest_departure());
+    }
 }
 
 /// A zoo's finances belong to that zoo; the next world starts from none, and a

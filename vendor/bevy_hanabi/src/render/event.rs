@@ -21,9 +21,9 @@ use bytemuck::{Pod, Zeroable};
 use thiserror::Error;
 #[cfg(debug_assertions)]
 use wgpu::util::BufferInitDescriptor;
-#[cfg(not(debug_assertions))]
-use wgpu::BufferDescriptor;
-use wgpu::{BufferUsages, CommandEncoder, ShaderStages};
+use wgpu::{
+    BufferDescriptor, BufferUsages, CommandEncoder, CommandEncoderDescriptor, ShaderStages,
+};
 
 use super::{
     aligned_buffer_vec::HybridAlignedBufferVec, effect_cache::SlabState, gpu_buffer::GpuBuffer,
@@ -305,6 +305,16 @@ pub(crate) fn on_remove_cached_effect_events(
     };
 }
 
+pub(crate) fn on_remove_cached_parent_info(
+    trigger: On<Remove<CachedParentInfo>>,
+    parents: Query<&CachedParentInfo>,
+    mut cache: ResMut<EventCache>,
+) {
+    if let Ok(parent) = parents.get(trigger.entity) {
+        cache.child_infos_buffer.remove(parent.byte_range.clone());
+    }
+}
+
 /// Error code for [`EventCache::free()`].
 #[derive(Debug, Error)]
 pub enum CachedEventsError {
@@ -326,6 +336,12 @@ pub struct EventCache {
     /// Single shared GPU buffer storing all the [`GpuChildInfo`] structs
     /// for all the parent effects.
     child_infos_buffer: HybridAlignedBufferVec,
+    /// CPU-initialized records the next upload may overwrite.
+    new_child_info_ranges: Vec<Range<u32>>,
+    /// Old and new byte offsets of event counts for surviving children.
+    moved_event_counts: Vec<(u64, u64)>,
+    /// Counts saved before their old records are overwritten.
+    staged_event_counts: Option<Buffer>,
     /// Collection of event buffers managed by this cache. Some buffers might
     /// be `None` if the entry is not used. Since the buffers are referenced
     /// by index, we cannot move them once they're allocated.
@@ -365,10 +381,13 @@ impl EventCache {
         Self {
             device,
             child_infos_buffer: HybridAlignedBufferVec::new(
-                BufferUsages::STORAGE,
+                BufferUsages::STORAGE | BufferUsages::COPY_SRC,
                 NonZeroU64::new(4).unwrap(),
                 Some("hanabi:buffer:child_infos".to_string()),
             ),
+            new_child_info_ranges: Vec::new(),
+            moved_event_counts: Vec::new(),
+            staged_event_counts: None,
             buffers: vec![],
             init_indirect_dispatch_buffer,
             indirect_child_info_buffer_bind_group_layout: child_infos_bind_group_layout,
@@ -541,6 +560,7 @@ impl EventCache {
         assert!(!children.is_empty());
 
         let byte_range = self.child_infos_buffer.push_many(child_infos);
+        self.new_child_info_ranges.push(byte_range.clone());
         assert_eq!(byte_range.start as usize % size_of::<GpuChildInfo>(), 0);
         trace!(
             "Parent {:?}: newly allocated ChildInfo[] array at +{}",
@@ -582,6 +602,23 @@ impl EventCache {
             byte_range
         );
 
+        let row_size = GpuChildInfo::SHADER_SIZE.get();
+        let count_offset = std::mem::offset_of!(GpuChildInfo, event_count) as u64;
+        for (new_index, child) in children.iter().enumerate() {
+            if let Some(old_index) = cached_parent_info
+                .children
+                .iter()
+                .position(|old| old == child)
+            {
+                self.moved_event_counts.push((
+                    u64::from(cached_parent_info.byte_range.start)
+                        + old_index as u64 * row_size
+                        + count_offset,
+                    u64::from(byte_range.start) + new_index as u64 * row_size + count_offset,
+                ));
+            }
+        }
+        self.new_child_info_ranges.push(byte_range.clone());
         cached_parent_info.children = children;
         cached_parent_info.byte_range = byte_range;
     }
@@ -601,8 +638,32 @@ impl EventCache {
         self.init_indirect_dispatch_buffer
             .prepare_buffers(render_device);
 
-        self.child_infos_buffer
-            .write_buffer(render_device, render_queue);
+        if let Some(previous) = self
+            .child_infos_buffer
+            .buffer()
+            .filter(|_| !self.moved_event_counts.is_empty())
+        {
+            let staging = render_device.create_buffer(&BufferDescriptor {
+                label: Some("hanabi:relocate_child_event_counts"),
+                size: self.moved_event_counts.len() as u64 * 4,
+                usage: BufferUsages::COPY_SRC | BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            let mut encoder = render_device.create_command_encoder(&CommandEncoderDescriptor {
+                label: Some("hanabi:save_child_event_counts"),
+            });
+            for (index, &(old, _)) in self.moved_event_counts.iter().enumerate() {
+                encoder.copy_buffer_to_buffer(previous, old, &staging, index as u64 * 4, 4);
+            }
+            render_queue.submit([encoder.finish()]);
+            self.staged_event_counts = Some(staging);
+        }
+        self.child_infos_buffer.write_ranges(
+            render_device,
+            render_queue,
+            &self.new_child_info_ranges,
+        );
+        self.new_child_info_ranges.clear();
     }
 
     /// Schedule any pending buffer copy.
@@ -614,6 +675,19 @@ impl EventCache {
     pub fn write_buffers(&self, command_encoder: &mut CommandEncoder) {
         self.init_indirect_dispatch_buffer
             .write_buffers(command_encoder);
+        if let (Some(staging), Some(child_infos)) =
+            (&self.staged_event_counts, self.child_infos_buffer.buffer())
+        {
+            for (index, &(_, new)) in self.moved_event_counts.iter().enumerate() {
+                command_encoder.copy_buffer_to_buffer(
+                    staging,
+                    index as u64 * 4,
+                    child_infos,
+                    new,
+                    4,
+                );
+            }
+        }
     }
 
     /// Destroy old copies of buffers reallocated last frame and copied to a new
@@ -628,6 +702,8 @@ impl EventCache {
     pub fn clear_previous_frame_resizes(&mut self) {
         self.init_indirect_dispatch_buffer
             .clear_previous_frame_resizes();
+        self.staged_event_counts = None;
+        self.moved_event_counts.clear();
     }
 
     #[inline]

@@ -1,5 +1,8 @@
 //! Bounded entry into the authored task executor for idle guests.
 mod target_index;
+use openzt2_zoo_state::animal_behavior::behavior_token_types::{
+    BehaviorSelfToken, ClaimedBehaviorSelfToken,
+};
 
 use openzt2_zoo_state::guests::guest_simulation_types::GuestNeedTriggers;
 use openzt2_zoo_state::guests::guest_simulation_types::GuestTaskCooldowns;
@@ -101,20 +104,23 @@ pub(super) fn select_idle_guest_tasks(
         &WorldMember,
         Option<&FacilityContainedWaste>,
     )>,
-    held: Query<&DefinitionId>,
+    held: Query<(&DefinitionId, Option<&FacilityContainedWaste>)>,
+    (token_owners, tokens): (
+        Query<&Children>,
+        Query<(Entity, &BehaviorSelfToken), Without<ClaimedBehaviorSelfToken>>,
+    ),
     memberships: InteractionContainerMemberships,
-    paths: Query<(Entity, &GlobalTransform, &WorldMember, &PathTile)>,
-    viewable_animals: Query<
-        (&GlobalTransform, &Visibility, &WorldMember),
-        (With<Animal>, With<HabitatMember>),
-    >,
-    controllers: Query<
-        &AnimationPresentationOwner,
-        (
-            With<AnimationPlaybackController>,
-            With<AnimationGraphPlaybackState>,
-        ),
-    >,
+    (paths, viewable_animals, controllers): (
+        Query<(Entity, &GlobalTransform, &WorldMember, &PathTile)>,
+        Query<(&GlobalTransform, &Visibility, &WorldMember), (With<Animal>, With<HabitatMember>)>,
+        Query<
+            &AnimationPresentationOwner,
+            (
+                With<AnimationPlaybackController>,
+                With<AnimationGraphPlaybackState>,
+            ),
+        >,
+    ),
     mut commands: Commands,
 ) {
     if documents.is_changed() || assets.is_changed() {
@@ -201,27 +207,23 @@ pub(super) fn select_idle_guest_tasks(
         let held_items = memberships
             .members_of_container(guest)
             .filter_map(|item| {
-                let object = definitions.find_object(held.get(item).ok()?.0)?;
-                Some((item, object))
+                let (definition, waste) = held.get(item).ok()?;
+                let object = definitions.find_object(definition.0)?;
+                Some((item, object, waste.map(|waste| waste.contained_waste_units)))
             })
             .collect::<Vec<_>>();
         let mut ranking = BehaviorCandidateRanking::new(policy.minimum_score);
         let diagnostics = bevy::log::tracing::enabled!(bevy::log::Level::DEBUG);
         let subject_types = definition.behavior_subject_type_identifiers.as_slice();
         if !subject_tasks.by_subject_types.contains_key(subject_types) {
-            let declarations = view
+            let declarations: Vec<_> = view
                 .behavior_tasks()
                 .filter(|(_, _, task)| {
-                    // Token candidates still require their own producers.
-                    task.targets.len() == 1
-                        && task.targets[0] != "fromtoken"
-                        && task
-                            .candidate_eligibility_requirements
+                    (task.subjects.is_empty()
+                        || task
+                            .subjects
                             .iter()
-                            .any(|requirement| {
-                                requirement.candidate_role == BehaviorCandidateRole::Subject
-                                    && !requirement.candidate_type_identifiers.is_empty()
-                            })
+                            .any(|subject| subject_types.contains(&AssetId::from_key(subject))))
                         && candidate_requirements_are_satisfied(
                             &task.candidate_eligibility_requirements,
                             |role, required| {
@@ -269,144 +271,178 @@ pub(super) fn select_idle_guest_tasks(
             let matches_type = |object: &WorldObjectDefinition, required: AssetId| {
                 object.id == required || object.behavior_type_identifiers.contains(&required)
             };
-            // A task that uses an item takes the first held item its `Objects` name.
-            let object = if task.objects.is_empty() {
-                None
-            } else {
-                let Some(&(item, object)) = held_items.iter().find(|(_, object)| {
-                    candidate_requirements_are_satisfied(
-                        &task.candidate_eligibility_requirements,
-                        |role, required| {
-                            role != BehaviorCandidateRole::Object || matches_type(object, required)
-                        },
-                        |role, _| role != BehaviorCandidateRole::Object,
-                    )
-                }) else {
-                    continue;
-                };
-                Some((item, object))
-            };
-            let mut consider_target =
-                |target: Entity,
-                 target_definition: Option<&WorldObjectDefinition>,
-                 elevated_path: Option<bool>,
-                 target_trash_level: Option<u16>,
-                 target_position: Vec3| {
-                    if target_retry_delays.rejects(guest, target) {
-                        return;
-                    }
-                    let is_path = elevated_path.is_some();
-                    let is_self = target == guest;
-                    if !candidate_requirements_are_satisfied(
-                        &task.candidate_eligibility_requirements,
-                        |role, required| match role {
-                            BehaviorCandidateRole::Subject => true,
-                            BehaviorCandidateRole::Target => {
-                                if is_self {
-                                    required == AssetId::from_key("self")
-                                } else if is_path {
-                                    required == AssetId::from_key("path")
-                                } else {
-                                    target_definition
-                                        .is_some_and(|object| matches_type(object, required))
-                                }
+            let mut consider_target = |target: Entity,
+                                       target_definition: Option<&WorldObjectDefinition>,
+                                       elevated_path: Option<bool>,
+                                       target_trash_level: Option<u16>,
+                                       target_position: Vec3,
+                                       object: Option<(
+                Entity,
+                AssetId,
+                Option<&WorldObjectDefinition>,
+                Option<u16>,
+            )>,
+                                       from_token: bool| {
+                if target_retry_delays.rejects(guest, target) {
+                    return;
+                }
+                let is_path = elevated_path.is_some();
+                let is_self = target == guest;
+                if !candidate_requirements_are_satisfied(
+                    &task.candidate_eligibility_requirements,
+                    |role, required| match role {
+                        BehaviorCandidateRole::Subject => true,
+                        BehaviorCandidateRole::Target => {
+                            if from_token && required == AssetId::from_key("fromtoken") {
+                                true
+                            } else if is_self {
+                                required == AssetId::from_key("self")
+                            } else if is_path {
+                                required == AssetId::from_key("path")
+                            } else {
+                                target_definition
+                                    .is_some_and(|object| matches_type(object, required))
                             }
-                            BehaviorCandidateRole::Object => {
-                                object.is_some_and(|(_, object)| matches_type(object, required))
-                            }
-                        },
-                        |role, fact| {
-                            if role == BehaviorCandidateRole::Object {
-                                return false;
-                            }
-                            if role == BehaviorCandidateRole::Target && !is_self {
-                                return satisfies_guest_target_fact(
+                        }
+                        BehaviorCandidateRole::Object => {
+                            object.is_some_and(|(_, key, object, _)| {
+                                key == required
+                                    || object.is_some_and(|object| matches_type(object, required))
+                            })
+                        }
+                    },
+                    |role, fact| {
+                        if role == BehaviorCandidateRole::Object {
+                            return object.is_some_and(|(_, _, _, waste)| {
+                                satisfies_guest_target_fact(
                                     fact,
                                     transform.translation(),
-                                    target_position,
-                                    elevated_path,
-                                    target_trash_level,
-                                );
-                            }
-                            need_facts.satisfies(
+                                    transform.translation(),
+                                    None,
+                                    waste,
+                                )
+                            });
+                        }
+                        if role == BehaviorCandidateRole::Target && !is_self {
+                            return satisfies_guest_target_fact(
                                 fact,
-                                triggers,
-                                &definition.behavior_subject_type_identifiers,
-                            )
-                        },
-                    ) {
-                        // Report world objects of a named type whose qualifiers refused them.
-                        if diagnostics
-                            && target_definition.is_some()
-                            && candidate_requirements_are_satisfied(
-                                &task.candidate_eligibility_requirements,
-                                |role, required| match role {
-                                    BehaviorCandidateRole::Target => target_definition
-                                        .is_some_and(|object| matches_type(object, required)),
-                                    _ => true,
-                                },
-                                |_, _| true,
-                            )
-                        {
-                            debug!(?guest, ?target, task = %task.name,
+                                transform.translation(),
+                                target_position,
+                                elevated_path,
+                                target_trash_level,
+                            );
+                        }
+                        need_facts.satisfies(
+                            fact,
+                            triggers,
+                            &definition.behavior_subject_type_identifiers,
+                        )
+                    },
+                ) {
+                    // Report world objects of a named type whose qualifiers refused them.
+                    if diagnostics
+                        && target_definition.is_some()
+                        && candidate_requirements_are_satisfied(
+                            &task.candidate_eligibility_requirements,
+                            |role, required| match role {
+                                BehaviorCandidateRole::Target => target_definition
+                                    .is_some_and(|object| matches_type(object, required)),
+                                _ => true,
+                            },
+                            |_, _| true,
+                        )
+                    {
+                        debug!(?guest, ?target, task = %task.name,
                                 distance_m = transform.translation().xz().distance(target_position.xz()),
                                 "guest task target refused by its authored qualifiers");
-                        }
-                        return;
                     }
-                    let score = score_supported_behavior_task(
-                        task,
-                        policy.outside_range_need_value,
-                        transform.translation().distance(target_position),
-                        |attribute| need_facts.source_need(attribute, triggers),
-                        |value| {
-                            price_effect.sample(value, Some(target), |upper| {
-                                random.0.range_u32(upper).unwrap_or_default()
-                            })
-                        },
-                    );
-                    if diagnostics && target_definition.is_some() {
-                        let needs = task
-                            .scores
-                            .iter()
-                            .filter_map(|entry| {
-                                match entry {
-                                openzt2_game_data::behavior::score::BehaviorScore::AttributeValue {
-                                    attribute,
-                                    ..
-                                } => Some(need_facts.source_need(*attribute, triggers)),
-                                _ => None,
-                            }
-                            })
-                            .collect::<Vec<_>>();
-                        debug!(?guest, ?target, task = %task.name, ?score,
+                    return;
+                }
+                let score = score_supported_behavior_task(
+                    task,
+                    policy.outside_range_need_value,
+                    transform.translation().distance(target_position),
+                    |attribute| need_facts.source_need(attribute, triggers),
+                    |value| {
+                        price_effect.sample(value, Some(target), |upper| {
+                            random.0.range_u32(upper).unwrap_or_default()
+                        })
+                    },
+                );
+                if diagnostics && target_definition.is_some() {
+                    let needs = task
+                        .scores
+                        .iter()
+                        .filter_map(|entry| match entry {
+                            openzt2_game_data::behavior::score::BehaviorScore::AttributeValue {
+                                attribute,
+                                ..
+                            } => Some(need_facts.source_need(*attribute, triggers)),
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>();
+                    debug!(?guest, ?target, task = %task.name, ?score,
                             minimum_score = policy.minimum_score,
                             needs_q16_and_triggered = ?needs,
                             "guest task target scored");
-                    }
-                    let Some(score) = score else {
-                        return;
-                    };
-                    ranking.consider(
-                        (
-                            document,
-                            declaration,
-                            task,
-                            target,
-                            object.map(|(item, _)| item),
-                        ),
-                        task.priority.unwrap_or_default(),
-                        score,
-                        |upper| random.0.range_u32(upper),
-                    );
+                }
+                let Some(score) = score else {
+                    return;
                 };
-            if task.targets[0] == "self" {
-                consider_target(guest, None, None, None, transform.translation());
-            } else if task.targets[0] == "path" {
+                ranking.consider(
+                    (
+                        document,
+                        declaration,
+                        task,
+                        target,
+                        object.map(|(item, ..)| item),
+                        from_token,
+                    ),
+                    task.priority.unwrap_or_default(),
+                    score,
+                    |upper| random.0.range_u32(upper),
+                );
+            };
+            let mut consider_with_held_items =
+                |target, target_definition, elevated, waste, position| {
+                    if task.objects.is_empty() {
+                        consider_target(
+                            target,
+                            target_definition,
+                            elevated,
+                            waste,
+                            position,
+                            None,
+                            false,
+                        );
+                    } else {
+                        for &(entity, object, waste_level) in &held_items {
+                            if task
+                                .objects
+                                .iter()
+                                .any(|name| matches_type(object, AssetId::from_key(name)))
+                            {
+                                consider_target(
+                                    target,
+                                    target_definition,
+                                    elevated,
+                                    waste,
+                                    position,
+                                    Some((entity, object.id, Some(object), waste_level)),
+                                    false,
+                                );
+                            }
+                        }
+                    }
+                };
+            if task.targets.iter().any(|target| target == "self") {
+                consider_with_held_items(guest, None, None, None, transform.translation());
+            }
+            if task.targets.iter().any(|target| target == "path") {
                 if task.sensor_tag == Some(view_sensor) {
                     for &(path, position, root, elevated) in &viewing_paths {
                         if root == world.root {
-                            consider_target(path, None, Some(elevated), None, position);
+                            consider_with_held_items(path, None, Some(elevated), None, position);
                         }
                     }
                 } else if task.sensor_tag == Some(path_sensor) {
@@ -426,7 +462,7 @@ pub(super) fn select_idle_guest_tasks(
                         let elevated = definitions
                             .find_path(tile.definition)
                             .is_some_and(|definition| definition.elevated);
-                        consider_target(
+                        consider_with_held_items(
                             path,
                             None,
                             Some(elevated),
@@ -435,7 +471,15 @@ pub(super) fn select_idle_guest_tasks(
                         );
                     }
                 }
-            } else {
+            }
+            let regular_target = |target: &&str| !matches!(*target, "self" | "path" | "fromtoken");
+            if task.targets.is_empty()
+                || task
+                    .targets
+                    .iter()
+                    .map(String::as_str)
+                    .any(|target| regular_target(&target))
+            {
                 let index = target_index.get_or_insert_with(|| {
                     let mut index = GuestTargetIndex::default();
                     for (entity, definition, transform, world, waste) in &targets {
@@ -463,8 +507,18 @@ pub(super) fn select_idle_guest_tasks(
                     &task.candidate_eligibility_requirements,
                     &mut combined_targets,
                 ) {
-                    if target.entity != guest {
-                        consider_target(
+                    if target.entity != guest
+                        && (task.targets.is_empty()
+                            || task
+                                .targets
+                                .iter()
+                                .map(String::as_str)
+                                .filter(regular_target)
+                                .any(|required| {
+                                    matches_type(target.object, AssetId::from_key(required))
+                                }))
+                    {
+                        consider_with_held_items(
                             target.entity,
                             Some(target.object),
                             None,
@@ -474,9 +528,43 @@ pub(super) fn select_idle_guest_tasks(
                     }
                 }
             }
+            if task.targets.iter().any(|target| target == "fromtoken") {
+                for (token_entity, token) in tokens
+                    .iter_many(token_owners.get(guest).ok().into_iter().flatten().copied())
+                    .flatten()
+                {
+                    if clock.tick < token.available_at
+                        || clock.tick >= token.expires_at
+                        || !task
+                            .objects
+                            .iter()
+                            .any(|name| AssetId::from_key(name) == token.name)
+                    {
+                        continue;
+                    }
+                    let Some(payload) = token.payload else {
+                        continue;
+                    };
+                    let Ok((_, definition, position, member, waste)) = targets.get(payload) else {
+                        continue;
+                    };
+                    if member.root != world.root {
+                        continue;
+                    }
+                    consider_target(
+                        payload,
+                        definitions.find_object(definition.0),
+                        None,
+                        waste.map(|waste| waste.contained_waste_units),
+                        position.translation(),
+                        Some((token_entity, token.name, None, None)),
+                        true,
+                    );
+                }
+            }
         }
-        // The supported candidate subset cannot prove native singleton status.
-        let Some(((document, declaration, task, target, object), score)) = ranking.finish(false)
+        let Some(((document, declaration, task, target, object, from_token), score)) =
+            ranking.finish(true)
         else {
             debug!(?guest, "idle guest found no task scoring above the minimum");
             continue;
@@ -508,6 +596,13 @@ pub(super) fn select_idle_guest_tasks(
         debug!(?guest, task = %task.name, ?target, self_target = target == guest,
             "idle guest chose a task");
         let execution_id = executions.next();
+        if from_token {
+            if let Some(token) = object {
+                commands
+                    .entity(token)
+                    .insert(ClaimedBehaviorSelfToken { execution_id });
+            }
+        }
         commands.entity(guest).insert(BehaviorTaskEffectiveScore {
             execution_id,
             template_score: Some(task.priority.unwrap_or_default()),

@@ -16,7 +16,7 @@ pub(super) fn staff_member_owns_active_job(
     staff_job.kind == required_job_kind
         && staff_current_jobs
             .get(job_claim.staff)
-            .is_ok_and(|current_job| current_job.job == staff_job_entity)
+            .is_ok_and(|current_job| current_job.job() == staff_job_entity)
 }
 
 pub(super) fn create_completed_staff_job_message(

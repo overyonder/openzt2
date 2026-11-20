@@ -236,15 +236,12 @@ pub(super) fn apply_authored_particle_emission_and_close_finished_spawners(
         let mut emission_closed = window_closed;
         if within_window && timing.manual_particle_count > 0 {
             spawner.spawn_count = std::mem::take(&mut timing.manual_particle_count);
-        } else if let Some((points, looped)) = prepared
-            .birth_rate_curve
-            .and_then(|curve| curve.points(&document.particle_document))
-        {
+        } else if let Some((points, looped)) = &prepared.birth_rate_curve {
             let duration = points.last().map_or(0.0, |point| point.time);
-            let curve_ended = !looped && elapsed > duration;
+            let curve_ended = !*looped && elapsed > duration;
             emission_closed |= curve_ended;
             if within_window && !curve_ended {
-                let sample = if looped && duration > 0.0 {
+                let sample = if *looped && duration > 0.0 {
                     elapsed % duration
                 } else {
                     elapsed.min(duration)
@@ -301,7 +298,7 @@ pub(super) fn confirm_particle_readbacks_before_draining_collision_children(
 ) {
     for (entity, count, batch, children, mut retirement) in &mut readbacks {
         if *retirement != EffectRetirementReadback::WaitingForParticles
-            || count.sampled_count_after(batch.map_or(0, |batch| batch.submission)) != Some(0)
+            || !count.is_drained_after(batch.map_or(0, |batch| batch.submission))
         {
             continue;
         }

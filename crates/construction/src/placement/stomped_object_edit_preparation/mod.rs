@@ -15,7 +15,7 @@ use openzt2_zoo_state::placement::{
     placement_transaction_types::{PreparedObjectPlacementEditMutationKind, PreparedObjectPlacementMutation},
 };
 
-pub(super) type StompablePlacedObject = (
+pub(crate) type StompablePlacedObject = (
     &'static PersistentId,
     &'static PlacedObjectDefinitionReference,
     &'static Transform,
@@ -54,9 +54,24 @@ pub(super) fn prepare_stomped_object_removals(
     targets: &Query<StompablePlacedObject>,
     ignored: impl Fn(Entity) -> bool,
 ) -> Option<Vec<PreparedObjectPlacementMutation>> {
+    prepare_placement_stomp_removals(
+        cells.iter().copied(),
+        placement,
+        targets,
+        ignored,
+        |target| object_placement_stomp_action(definition, catalogue, Some(target)),
+    )
+}
+
+pub(crate) fn prepare_placement_stomp_removals(
+    cells: impl Iterator<Item = IVec2>,
+    placement: &PlacedObjectFootprintOccupancyIndex,
+    targets: &Query<StompablePlacedObject>,
+    ignored: impl Fn(Entity) -> bool,
+    action: impl Fn(AssetId) -> PlacementStompAction,
+) -> Option<Vec<PreparedObjectPlacementMutation>> {
     let overlapping = cells
-        .iter()
-        .flat_map(|cell| placement.entities_occupying_cell(*cell))
+        .flat_map(|cell| placement.entities_occupying_cell(cell))
         .filter(|entity| !ignored(*entity))
         .collect::<BTreeSet<_>>();
     let mut removals = Vec::new();
@@ -64,7 +79,7 @@ pub(super) fn prepare_stomped_object_removals(
         let Ok((id, target, transform, cells, prefab)) = targets.get(entity) else {
             return None;
         };
-        match object_placement_stomp_action(definition, catalogue, Some(target.definition)) {
+        match action(target.definition) {
             PlacementStompAction::Allow => continue,
             PlacementStompAction::Prevent => return None,
             PlacementStompAction::Delete => {}

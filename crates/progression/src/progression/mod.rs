@@ -28,6 +28,7 @@ mod research_ui_presentation;
 mod scenario_award_point_adjustment;
 pub(crate) mod scenario_content_availability;
 mod zoo_rating_calculations;
+mod zoo_rating_input_types;
 mod zoo_rating_recomputation;
 
 use award_and_progression_fact_types::{
@@ -67,20 +68,25 @@ impl Plugin for ProgressionPlugin {
             .init_resource::<TotalEndangeredAnimalBirthCount>()
             .init_resource::<TotalAnimalsReleasedCount>()
             .init_resource::<ZooRating>()
+            .init_resource::<zoo_rating_input_types::AnimalWelfareRating>()
+            .init_resource::<zoo_rating_input_types::LivingAnimalPopulation>()
+            .init_resource::<zoo_rating_input_types::GuestRatingFacts>()
+            .init_resource::<zoo_rating_input_types::ZooSceneryRating>()
+            .init_resource::<zoo_rating_input_types::ZooFinanceRating>()
+            .init_resource::<zoo_rating_input_types::ZooOverallRatingTarget>()
+            .add_systems(OnExit(GamePhase::InGame), zoo_rating_recomputation::reset_rating_inputs_after_leaving_game)
             .init_resource::<UnlockedCatalogueDefinitionSet>()
             .init_resource::<ProfileChallengeCompletionCounts>()
             .add_message::<ProgressionFactChanged>()
             .add_message::<StartResearchProjectRequest>()
             .add_message::<openzt2_zoo_state::progression::research_types::SetResearchDuration>()
-            .init_resource::<openzt2_zoo_state::progression::research_types::ResearchDurationOverrides>()
+            .add_observer(research_execution::release_retired_research_payment)
             .add_systems(
                 Update,
-                |mut requests: MessageReader<openzt2_zoo_state::progression::research_types::SetResearchDuration>,
-                 mut overrides: ResMut<openzt2_zoo_state::progression::research_types::ResearchDurationOverrides>| {
-                    for request in requests.read() {
-                        overrides.0.insert(request.definition, request.seconds);
-                    }
-                },
+                research_execution::apply_research_duration_overrides.after(
+                    catalogue_unlock_storage_initialization::
+                        initialize_catalogue_unlock_storage_from_active_world_definitions,
+                ),
             )
             .add_message::<ApplyCatalogueDefinitionUnlockRequest>()
             .add_message::<CatalogueDefinitionUnlockApplied>()
@@ -146,22 +152,28 @@ impl Plugin for ProgressionPlugin {
             .add_systems(
                 FixedUpdate,
                 (
-                    zoo_rating_recomputation::recompute_animal_welfare_rating,
-                    zoo_rating_recomputation::recompute_guest_ratings,
-                    zoo_rating_recomputation::recompute_variety_rating,
-                    zoo_rating_recomputation::recompute_scenery_rating,
-                    zoo_rating_recomputation::recompute_finance_rating,
-                    zoo_rating_recomputation::recompute_cleanliness_rating,
-                    zoo_rating_recomputation::recompute_overall_rating,
-                    award_evaluation_and_granting::evaluate_all_progression_award_conditions_and_queue_grants
-                        .run_if(simulation_is_running),
-                    fame_progression::update_fame_and_apply_authored_fame_unlocks,
+                    (
+                        (
+                            zoo_rating_recomputation::reduce_living_animal_population,
+                            zoo_rating_recomputation::recompute_animal_welfare_rating,
+                            zoo_rating_recomputation::recompute_guest_ratings,
+                            zoo_rating_recomputation::recompute_scenery_rating,
+                            zoo_rating_recomputation::recompute_finance_rating,
+                        ),
+                        zoo_rating_recomputation::reconcile_zoo_rating_and_weighted_target
+                            .after(openzt2_zoo_state::maintenance::ZooCleanlinessProjection),
+                        zoo_rating_recomputation::advance_zoo_rating_smoothing,
+                        (
+                            zoo_rating_recomputation::publish_zoo_rating_changes,
+                            award_evaluation_and_granting::evaluate_all_progression_award_conditions_and_queue_grants,
+                        ),
+                        fame_progression::update_fame_and_apply_authored_fame_unlocks
+                            .after(profile_challenge_fact_recording::record_released_animals_for_zoo_fame),
+                    ).chain(),
                     profile_challenge_fact_recording::record_released_animals_for_zoo_fame,
                 )
-                    .chain()
                     .in_set(FixedGameSet::Economy)
-                    .run_if(in_state(GamePhase::InGame))
-                    .after(openzt2_zoo_state::maintenance::ZooCleanlinessProjection),
+                    .run_if(in_state(GamePhase::InGame)),
             )
             .add_systems(
                 FixedUpdate,

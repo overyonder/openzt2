@@ -7,16 +7,23 @@ use openzt2_game_data::{
 };
 
 use openzt2_interface_state::immersive_modes::immersive_mode_control_types::PhotoControl;
+use openzt2_interface_state::photos::photo_challenge_types::CurrentPhotoChallengeSet;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentRoot;
 use openzt2_interface_state::ui::ui_document_lifecycle_contracts::ShowUiRole;
 use openzt2_ui::animation::UiShowHideAnimation;
+use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator;
+use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
 use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 
+use super::photo_capture::PhotoViewfinderSuppressors;
 use super::photo_capture_types::PhotoCaptured;
+
+#[derive(Component)]
+pub(super) struct PhotoChallengeGoals;
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct AuthoredPhotoModeDocumentPresentationOwner {
@@ -54,10 +61,12 @@ pub(super) fn show_authored_photo_mode_document_for_entered_photo_mode(
 }
 
 pub(super) fn initialize_authored_photo_mode_transient_surface_visibility_after_document_projection(
+    mut commands: Commands,
     document_presentation_owners: Query<(), With<AuthoredPhotoModeDocumentPresentationOwner>>,
     document_roots: Query<&ChildOf, With<UiDocumentRoot>>,
     mut projected_nodes: Query<
         (
+            Entity,
             &Name,
             &UiDocumentOwner,
             &mut Visibility,
@@ -66,7 +75,7 @@ pub(super) fn initialize_authored_photo_mode_transient_surface_visibility_after_
         Added<UiDocumentOwner>,
     >,
 ) {
-    for (name, document_owner, mut visibility, mut animation) in &mut projected_nodes {
+    for (entity, name, document_owner, mut visibility, mut animation) in &mut projected_nodes {
         let Ok(document_lifecycle_owner) = document_roots.get(document_owner.0) else {
             continue;
         };
@@ -78,16 +87,49 @@ pub(super) fn initialize_authored_photo_mode_transient_surface_visibility_after_
                 *visibility = Visibility::Inherited;
                 animation.start_authored_visibility_transition(true);
             }
-            // The native Photo mode overrides this authored-visible node from
-            // its current-challenge query. The current gameplay state has no
-            // selected challenge, so project that absent state immediately.
-            // The retained authored animation remains available when challenge
-            // selection owns showing this surface.
             "photo challenges layout" => {
-                *visibility = Visibility::Hidden;
-                animation.start_authored_visibility_transition(false);
+                commands.entity(entity).insert(PhotoChallengeGoals);
             }
             _ => {}
+        }
+    }
+}
+
+pub(super) fn project_photo_viewfinder_capture_visibility(
+    mut viewfinders: Query<
+        (&mut Visibility, Has<PhotoViewfinderSuppressors>),
+        With<AuthoredPhotoModeDocumentPresentationOwner>,
+    >,
+) {
+    for (mut visibility, suppressed) in &mut viewfinders {
+        visibility.set_if_neq(if suppressed {
+            Visibility::Hidden
+        } else {
+            Visibility::Inherited
+        });
+    }
+}
+
+pub(super) fn project_selected_photo_challenge_goals(
+    world: Option<Res<PersistentIdAllocator>>,
+    selected_sets: Query<&WorldMember, With<CurrentPhotoChallengeSet>>,
+    mut goals: Query<(&mut Visibility, &mut UiShowHideAnimation), With<PhotoChallengeGoals>>,
+) {
+    if goals.is_empty() {
+        return;
+    }
+    let visible = world.is_some_and(|world| {
+        selected_sets
+            .iter()
+            .any(|member| world.owns_world(member.root))
+    });
+    for (mut visibility, mut animation) in &mut goals {
+        if visibility.set_if_neq(if visible {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        }) {
+            animation.start_authored_visibility_transition(visible);
         }
     }
 }

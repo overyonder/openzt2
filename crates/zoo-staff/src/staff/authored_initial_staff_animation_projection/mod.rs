@@ -131,15 +131,13 @@ pub(crate) fn request_authored_initial_staff_animation_for_newly_resolved_prefab
 /// body model's prefab node as its owner. An attached head keeps its own
 /// owner so it never plays the body's clips.
 pub(crate) fn project_staff_animation_owners(
-    mut controllers: Query<
-        (Entity, &mut AnimationPresentationOwner),
-        Changed<AnimationPresentationOwner>,
-    >,
+    mut commands: Commands,
+    controllers: Query<(Entity, &AnimationPresentationOwner), Changed<AnimationPresentationOwner>>,
     parents: Query<&ChildOf>,
     staff: Query<(), With<Staff>>,
     attached_heads: Query<(), With<StaffAttachedHead>>,
 ) {
-    for (controller, mut owner) in &mut controllers {
+    for (controller, owner) in &controllers {
         if staff.contains(owner.gameplay_entity) {
             continue;
         }
@@ -150,7 +148,11 @@ pub(crate) fn project_staff_animation_owners(
             continue;
         };
         if staff.contains(ancestor) {
-            owner.gameplay_entity = ancestor;
+            commands
+                .entity(controller)
+                .try_insert(AnimationPresentationOwner {
+                    gameplay_entity: ancestor,
+                });
         }
     }
 }

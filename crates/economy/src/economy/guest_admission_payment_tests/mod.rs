@@ -7,7 +7,9 @@ use openzt2_zoo_state::guests::guest_simulation_types::GuestPhase;
 use openzt2_zoo_state::guests::guest_simulation_types::GuestReachedEntrance;
 
 use super::{
-    account_transaction_settlement::settle_requested_account_transactions,
+    account_transaction_settlement::{
+        settle_requested_account_transactions, stage_requested_account_transactions,
+    },
     account_transaction_types::{TransactionCompleted, TransactionRejected, TransactionRequest},
     facility_economy_types::Wallet,
     guest_admission_payment::{
@@ -35,7 +37,8 @@ fn create_application_with_guest_admission_payment(admission_price: Money) -> Ap
             Update,
             (
                 request_guest_admission_payment_after_entrance_reached,
-                settle_requested_account_transactions,
+                stage_requested_account_transactions::<false>,
+                settle_requested_account_transactions::<false>,
                 complete_guest_admission_after_successful_payment,
                 reject_guest_admission_after_failed_payment,
             )

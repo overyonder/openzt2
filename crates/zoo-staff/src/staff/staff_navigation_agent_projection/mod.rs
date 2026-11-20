@@ -17,7 +17,7 @@ pub(crate) fn project_authored_staff_locomotion_onto_staff_entities(
         (
             Entity,
             Ref<StaffRole>,
-            Option<&NavAgent>,
+            Option<&mut NavAgent>,
             Option<&mut Destination>,
             Option<&mut Route>,
         ),
@@ -48,10 +48,10 @@ pub(crate) fn project_authored_staff_locomotion_onto_staff_entities(
                 NavFlags::STAFF
             },
         };
-        if current_agent == Some(&agent) {
+        if current_agent.as_deref() == Some(&agent) {
             continue;
         }
-        if current_agent.is_some_and(|current| {
+        if current_agent.as_deref().is_some_and(|current| {
             current.radius_m != agent.radius_m || current.capabilities != agent.capabilities
         }) {
             if let Some(mut route) = route {
@@ -61,6 +61,10 @@ pub(crate) fn project_authored_staff_locomotion_onto_staff_entities(
                 destination.set_changed();
             }
         }
-        commands.entity(staff_entity).insert(agent);
+        if let Some(mut current_agent) = current_agent {
+            current_agent.set_if_neq(agent);
+        } else {
+            commands.entity(staff_entity).insert(agent);
+        }
     }
 }

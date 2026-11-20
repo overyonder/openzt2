@@ -4,11 +4,9 @@ use openzt2_game_data::{
     AssetId,
 };
 
-use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner;
-use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentRoot;
 use openzt2_interface_state::ui::ui_document_lifecycle_contracts::ShowUiRole;
 
-use crate::zoopedia::zoopedia_navigation_types::{
+use super::zoopedia_navigation_types::{
     PendingZoopediaEntry, ZoopediaHistory, ZoopediaNavigationActionContext, ZoopediaPage,
 };
 
@@ -31,30 +29,33 @@ pub(crate) fn apply_authored_zoopedia_navigation_action(
                 .selected_world_entity
                 .and_then(|entity| context.inspectable_world_entities.get(entity).ok())
                 .map(|inspectable| inspectable.definition);
-
-            let zoopedia_subject = catalogue_definition
+            let subject = catalogue_definition
                 .or(selected_definition)
                 .and_then(|definition| context.world_definitions?.find_object(definition))
                 .map(|object| object.zoopedia_subject)
                 .filter(|subject| *subject != AssetId::default());
-
-            if let Some(subject) = zoopedia_subject {
+            if let Some(subject) = subject {
                 open_zoopedia_for_subject(subject, context);
             }
         }
-        UiInformationAction::ZoopediaBack => {
-            visit_adjacent_zoopedia_history_subject(
-                context.source_document_entity,
-                context.zoopedia_pages,
-                ZoopediaHistory::visit_previous_subject,
-            );
-        }
-        UiInformationAction::ZoopediaForward => {
-            visit_adjacent_zoopedia_history_subject(
-                context.source_document_entity,
-                context.zoopedia_pages,
-                ZoopediaHistory::visit_next_subject,
-            );
+        UiInformationAction::ZoopediaBack | UiInformationAction::ZoopediaForward => {
+            let Ok((mut page, mut history)) = context
+                .zoopedia_pages
+                .get_mut(context.source_document_entity)
+            else {
+                return;
+            };
+            let subject = if matches!(action, UiInformationAction::ZoopediaBack) {
+                ZoopediaHistory::visit_previous_subject(&mut history)
+            } else {
+                ZoopediaHistory::visit_next_subject(&mut history)
+            };
+            if let Some(subject) = subject {
+                page.set_if_neq(ZoopediaPage {
+                    subject,
+                    section: 0,
+                });
+            }
         }
         _ => unreachable!("non-Zoopedia action sent to the Zoopedia navigation owner"),
     }
@@ -64,126 +65,38 @@ fn open_zoopedia_for_subject(
     subject: AssetId,
     context: &mut ZoopediaNavigationActionContext<'_, '_, '_>,
 ) {
-    let source_lifecycle_owner_entity = context.source_lifecycle_owner_entity;
-    context.commands.queue(move |world: &mut World| {
-        world.write_message(ShowUiRole {
-            role: UiDocumentRole::Zoopedia,
-            owner: source_lifecycle_owner_entity,
-        });
+    let owner = context.source_lifecycle_owner_entity;
+    context.show_roles.write(ShowUiRole {
+        role: UiDocumentRole::Zoopedia,
+        owner,
     });
 
-    // The shell's general Zoopedia button is authored as an empty hyperlink.
-    // It opens the hydrated home page; only a nonempty subject navigates.
+    // An empty authored hyperlink opens the current page without navigating.
     if subject == AssetId::default() {
         return;
     }
-
-    let mut matching_zoopedia_page_was_found = false;
-    for (page_entity, candidate_document_owner, mut page, history) in
-        context.zoopedia_pages.iter_mut()
-    {
-        let belongs_to_source_lifecycle = context
-            .document_roots
-            .get(candidate_document_owner.0)
-            .is_ok_and(|(_, parent)| parent.parent() == source_lifecycle_owner_entity);
-        if !belongs_to_source_lifecycle {
-            continue;
-        }
-
-        matching_zoopedia_page_was_found = true;
-        let previous_subject = page.subject;
-        page.subject = subject;
-        page.section = 0;
-        if let Some(mut history) = history {
+    let document = context
+        .document_children
+        .get(owner)
+        .ok()
+        .and_then(|children| {
+            <Children as bevy::ecs::relationship::RelationshipTarget>::iter(children)
+                .find(|child| context.zoopedia_pages.contains(*child))
+        });
+    if let Some(document) = document {
+        if let Ok((mut page, mut history)) = context.zoopedia_pages.get_mut(document) {
+            page.set_if_neq(ZoopediaPage {
+                subject,
+                section: 0,
+            });
             history.visit_subject(subject);
+        }
+    } else {
+        let entry = PendingZoopediaEntry(subject);
+        if let Ok(mut pending) = context.pending.get_mut(owner) {
+            pending.set_if_neq(entry);
         } else {
-            context
-                .commands
-                .entity(page_entity)
-                .insert(ZoopediaHistory::from_transition(previous_subject, subject));
+            context.commands.entity(owner).insert(entry);
         }
-    }
-
-    if !matching_zoopedia_page_was_found {
-        context
-            .commands
-            .entity(source_lifecycle_owner_entity)
-            .insert(PendingZoopediaEntry(subject));
-    }
-}
-
-fn visit_adjacent_zoopedia_history_subject(
-    source_document_entity: Entity,
-    zoopedia_pages: &mut Query<(
-        Entity,
-        &UiDocumentOwner,
-        &mut ZoopediaPage,
-        Option<&mut ZoopediaHistory>,
-    )>,
-    visit_history_subject: impl Fn(&mut ZoopediaHistory) -> Option<AssetId>,
-) {
-    for (_, candidate_document_owner, mut page, history) in zoopedia_pages.iter_mut() {
-        if candidate_document_owner.0 != source_document_entity {
-            continue;
-        }
-        let Some(mut history) = history else {
-            continue;
-        };
-        let Some(subject) = visit_history_subject(&mut history) else {
-            continue;
-        };
-
-        page.subject = subject;
-        page.section = 0;
-    }
-}
-
-pub(crate) fn apply_pending_zoopedia_entries_to_hydrated_pages(
-    mut commands: Commands,
-    pending_entries: Query<(Entity, &PendingZoopediaEntry)>,
-    document_root_parents: Query<&ChildOf, With<UiDocumentRoot>>,
-    mut zoopedia_pages: Query<(
-        Entity,
-        &UiDocumentOwner,
-        &mut ZoopediaPage,
-        Option<&mut ZoopediaHistory>,
-    )>,
-) {
-    for (lifecycle_owner_entity, pending_entry) in &pending_entries {
-        if pending_entry.0 == AssetId::default() {
-            commands
-                .entity(lifecycle_owner_entity)
-                .remove::<PendingZoopediaEntry>();
-            continue;
-        }
-
-        let Some((page_entity, _, mut page, history)) =
-            zoopedia_pages
-                .iter_mut()
-                .find(|(_, candidate_document_owner, _, _)| {
-                    document_root_parents
-                        .get(candidate_document_owner.0)
-                        .is_ok_and(|parent| parent.parent() == lifecycle_owner_entity)
-                })
-        else {
-            continue;
-        };
-
-        let previous_subject = page.subject;
-        page.subject = pending_entry.0;
-        page.section = 0;
-        if let Some(mut history) = history {
-            history.visit_subject(pending_entry.0);
-        } else {
-            commands
-                .entity(page_entity)
-                .insert(ZoopediaHistory::from_transition(
-                    previous_subject,
-                    pending_entry.0,
-                ));
-        }
-        commands
-            .entity(lifecycle_owner_entity)
-            .remove::<PendingZoopediaEntry>();
     }
 }

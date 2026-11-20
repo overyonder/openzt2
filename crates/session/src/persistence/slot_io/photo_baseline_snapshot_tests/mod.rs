@@ -683,7 +683,7 @@ fn loading_initializes_photo_receivers_before_snapshot_reference_validation_and_
     initialize_fixture_album_localization(app.world_mut());
     app.update();
     // The asset arrived after this frame's indexing pass. Hydration must not
-    // stamp the partial index's revision before a complete pass consumes it.
+    // publish readiness before a complete indexing pass consumes it.
     assert_eq!(app.world().get::<Name>(root).unwrap().as_str(), "baseline");
     assert_eq!(
         app.world_mut()
@@ -721,15 +721,14 @@ fn loading_initializes_photo_receivers_before_snapshot_reference_validation_and_
         .world_mut()
         .query::<(&PhotoChallenge, &PhotoChallengeProgress)>()
         .iter(app.world())
-        .map(|(challenge, progress)| (challenge.id, challenge.row, *progress))
+        .map(|(challenge, progress)| (challenge.id, *progress))
         .collect::<Vec<_>>();
     assert_eq!(challenges.len(), 2);
     for (id, expected_photo, stars) in [(FIRST, 41, 2), (SECOND, 42, 5)] {
-        let (_, row, progress) = challenges
+        let (_, progress) = challenges
             .iter()
             .find(|(challenge, ..)| *challenge == id)
             .unwrap();
-        assert_eq!(*row, 0);
         assert_eq!(progress.rating_stars, stars);
         let photo = progress.completed_by.unwrap();
         assert!(progress.completed);

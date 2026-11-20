@@ -5,7 +5,6 @@ use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and
 
 use openzt2_zoo_state::topology::fence_segment_presentation_types::FenceTerrainEndpointPresentationCells;
 use openzt2_zoo_state::topology::gate_operation_types::Gate;
-use openzt2_zoo_state::topology::gate_operation_types::GateAutoClose;
 use openzt2_zoo_state::topology::gate_operation_types::GateMechanism;
 use openzt2_zoo_state::topology::topology_graph_types::FenceEdge;
 use openzt2_zoo_state::topology::topology_graph_types::PathTile;
@@ -27,7 +26,6 @@ pub(super) fn hydrate_save_loaded_topology_definition_facts(
         &FenceEdge,
         Option<&Gate>,
         Option<&GateMechanism>,
-        Option<&GateAutoClose>,
         Option<&Transform>,
         Option<&FenceTerrainEndpointPresentationCells>,
         Option<&Visibility>,
@@ -37,7 +35,7 @@ pub(super) fn hydrate_save_loaded_topology_definition_facts(
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };
-    for (entity, edge, gate, mechanism, timer, transform, endpoint_cells, visibility) in &fences {
+    for (entity, edge, gate, mechanism, transform, endpoint_cells, visibility) in &fences {
         let (Ok(a), Ok(b)) = (nodes.get(edge.a), nodes.get(edge.b)) else {
             continue;
         };
@@ -61,9 +59,6 @@ pub(super) fn hydrate_save_loaded_topology_definition_facts(
         }
         if gate.is_some() && mechanism.is_none() {
             entity_commands.insert(GateMechanism::default());
-        }
-        if gate.is_some() && timer.is_none() {
-            entity_commands.insert(GateAutoClose(0));
         }
     }
 

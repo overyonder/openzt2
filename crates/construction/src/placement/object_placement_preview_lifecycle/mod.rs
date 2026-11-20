@@ -37,7 +37,6 @@ use openzt2_zoo_state::placement::placed_object_types::PlacedObjectDefinitionRef
 use openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementPrefabSource;
 use openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementPreviewModelPresentation;
 use openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementPreviewMotion;
-use openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementPreviewOwner;
 use openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementPreviewPermissionFacts;
 use openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementPreviewPrefabHydrated;
 use openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementPreviewRenderable;
@@ -170,25 +169,28 @@ pub(super) fn hydrate_object_placement_preview_prefab_render_tree(
     species_assets: Option<Res<Assets<SpeciesAsset>>>,
     species_index: Option<Res<SpeciesAssets>>,
     previews: Query<
-        (Entity, &ConstructionPreview, &ObjectPlacementPrefabSource),
+        (
+            Entity,
+            &ConstructionPreview,
+            &ObjectPlacementPrefabSource,
+            &Children,
+        ),
         (
             With<ConstructionPreview>,
             Without<ObjectPlacementPreviewPrefabHydrated>,
         ),
     >,
-    presentations: Query<(Entity, &ChildOf), With<ObjectPlacementPreviewModelPresentation>>,
+    presentations: Query<(), With<ObjectPlacementPreviewModelPresentation>>,
 ) {
     let species = species_index
         .as_ref()
         .zip(species_assets.as_ref())
         .and_then(|(index, assets)| index.get(assets));
-    for (entity, preview, source) in &previews {
+    for (entity, preview, source, children) in &previews {
         let Some(prefab) = prefabs.get(&source.0) else {
             continue;
         };
-        let Some(presentation) = presentations
-            .iter()
-            .find_map(|(candidate, parent)| (parent.parent() == entity).then_some(candidate))
+        let Some(presentation) = children.iter().find(|child| presentations.contains(*child))
         else {
             continue;
         };
@@ -203,7 +205,6 @@ pub(super) fn hydrate_object_placement_preview_prefab_render_tree(
         ) {
             commands.entity(renderable).insert((
                 ObjectPlacementPreviewRenderable,
-                ObjectPlacementPreviewOwner(entity),
                 PrefabModelTint(Color::WHITE),
             ));
             // Native model scenes do not embed the animal's BFM. Attach its
@@ -275,15 +276,14 @@ pub(super) fn apply_authored_initial_animal_placement_preview_animation_repetiti
     species_assets: Option<Res<Assets<SpeciesAsset>>>,
     species_index: Option<Res<SpeciesAssets>>,
     controllers: Query<
+        (Entity, &PrefabModel, &AnimationPlaybackController),
         (
-            Entity,
-            &PrefabModel,
-            &ObjectPlacementPreviewOwner,
-            &AnimationPlaybackController,
+            Added<ModelAnimationAttachmentResolved>,
+            With<ObjectPlacementPreviewRenderable>,
         ),
-        Added<ModelAnimationAttachmentResolved>,
     >,
     previews: Query<&ConstructionPreview>,
+    parents: Query<&ChildOf>,
     mut requests: MessageWriter<AnimationClipPlaybackRequest>,
 ) {
     let Some(species) = species_index
@@ -293,8 +293,11 @@ pub(super) fn apply_authored_initial_animal_placement_preview_animation_repetiti
     else {
         return;
     };
-    for (entity, model, owner, _) in &controllers {
-        let Ok(preview) = previews.get(owner.0) else {
+    for (entity, model, _) in &controllers {
+        let Some(preview) = parents
+            .iter_ancestors::<ChildOf>(entity)
+            .find_map(|ancestor| previews.get(ancestor).ok())
+        else {
             continue;
         };
         let Some(variant) =
@@ -401,25 +404,29 @@ pub(super) fn synchronize_object_placement_preview_with_construction_cursor(
 pub(super) fn animate_object_placement_preview_presentation_toward_authoritative_transform(
     time: Res<Time>,
     mut previews: Query<
-        (Entity, &Transform, &mut ObjectPlacementPreviewMotion),
+        (&Children, &Transform, &mut ObjectPlacementPreviewMotion),
         Without<ObjectPlacementPreviewModelPresentation>,
     >,
     mut presentations: Query<
-        (&ChildOf, &mut Transform),
+        &mut Transform,
         (
             With<ObjectPlacementPreviewModelPresentation>,
             Without<ConstructionPreview>,
         ),
     >,
 ) {
-    for (entity, authoritative, mut motion) in &mut previews {
+    for (children, authoritative, mut motion) in &mut previews {
         motion.advance(time.delta_secs());
-        for (parent, mut presentation) in &mut presentations {
-            if parent.parent() == entity {
-                presentation.translation = authoritative
-                    .rotation
-                    .inverse()
-                    .mul_vec3(motion.current - authoritative.translation);
+        let offset = authoritative
+            .rotation
+            .inverse()
+            .mul_vec3(motion.current - authoritative.translation);
+        for child in children.iter() {
+            let Ok(mut presentation) = presentations.get_mut(child) else {
+                continue;
+            };
+            if presentation.translation != offset {
+                presentation.translation = offset;
             }
         }
     }

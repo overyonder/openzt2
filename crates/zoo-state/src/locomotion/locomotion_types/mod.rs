@@ -1,4 +1,4 @@
-use bevy::prelude::*;
+use bevy::{ecs::system::SystemParam, prelude::*};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[repr(transparent)]
@@ -56,6 +56,14 @@ pub struct Destination {
     pub request_id: u64,
     pub world: Vec3,
     pub arrival_radius_m: f32,
+}
+
+/// Connects this request's authored off-map leg to its on-map gate anchor.
+#[derive(Component, Clone, Copy)]
+pub struct EntranceNavigationConnection {
+    pub request_id: u64,
+    pub gate: Vec3,
+    pub inbound: bool,
 }
 
 #[derive(Component)]
@@ -126,13 +134,6 @@ impl ContactSteering {
 #[derive(Component, Debug, Clone, Copy, Default, PartialEq)]
 pub struct DirectLocomotion {
     pub local_axes: Vec2,
-}
-
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SpatialCell(pub u32);
-
-impl SpatialCell {
-    pub const OUTSIDE: Self = Self(u32::MAX);
 }
 
 #[derive(
@@ -411,15 +412,41 @@ impl LocomotionCapacity {
     }
 }
 
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+#[relationship(relationship_target = SpatialCellMembers)]
+pub struct SpatialCell(pub Entity);
+
+#[derive(Component)]
+#[relationship_target(relationship = SpatialCell)]
+pub struct SpatialCellMembers(Vec<Entity>);
+
+#[derive(Component)]
+pub struct SpatialCellIndex(pub u32);
+
+#[derive(SystemParam)]
+pub struct SpatialGridMembership<'w, 's> {
+    grid: Res<'w, SpatialGrid>,
+    members: Query<'w, 's, &'static SpatialCellMembers>,
+}
+
+impl SpatialGridMembership<'_, '_> {
+    pub fn members(&self, cell: u32) -> impl Iterator<Item = Entity> + '_ {
+        self.grid
+            .cells
+            .get(cell as usize)
+            .and_then(|cell| self.members.get(*cell).ok())
+            .into_iter()
+            .flat_map(|members| members.iter())
+    }
+}
+
 #[derive(Resource, Debug)]
 pub struct SpatialGrid {
     pub origin: Vec2,
     pub cell_size_m: f32,
     pub width: u32,
     pub height: u32,
-    pub cell_offsets: Box<[u32]>,
-    pub write_cursors: Box<[u32]>,
-    pub entities: Vec<Entity>,
+    pub cells: Vec<Entity>,
 }
 
 impl Default for SpatialGrid {
@@ -429,38 +456,12 @@ impl Default for SpatialGrid {
             cell_size_m: 1.0,
             width: 0,
             height: 0,
-            cell_offsets: Box::new([]),
-            write_cursors: Box::new([]),
-            entities: Vec::new(),
+            cells: Vec::new(),
         }
     }
 }
 
 impl SpatialGrid {
-    pub fn reserve_layout(
-        &mut self,
-        origin: Vec2,
-        cell_size_m: f32,
-        width: u32,
-        height: u32,
-        entity_capacity: usize,
-    ) -> bool {
-        let Some(cells) = usize::try_from(u64::from(width) * u64::from(height)).ok() else {
-            return false;
-        };
-        if !origin.is_finite() || !cell_size_m.is_finite() || cell_size_m <= 0.0 || cells == 0 {
-            return false;
-        }
-        self.origin = origin;
-        self.cell_size_m = cell_size_m;
-        self.width = width;
-        self.height = height;
-        self.cell_offsets = vec![0; cells + 1].into_boxed_slice();
-        self.write_cursors = vec![0; cells].into_boxed_slice();
-        self.entities = Vec::with_capacity(entity_capacity);
-        true
-    }
-
     pub fn cell_of(&self, world_xz: Vec2) -> Option<u32> {
         if !world_xz.is_finite() || self.width == 0 || self.height == 0 {
             return None;
@@ -477,20 +478,6 @@ impl SpatialGrid {
     pub fn cell_xy(&self, index: u32) -> Option<UVec2> {
         (index < self.width.saturating_mul(self.height))
             .then(|| UVec2::new(index % self.width, index / self.width))
-    }
-
-    pub fn range(&self, cell: u32) -> &[Entity] {
-        let index = cell as usize;
-        let Some((&start, &end)) = self
-            .cell_offsets
-            .get(index)
-            .zip(self.cell_offsets.get(index + 1))
-        else {
-            return &[];
-        };
-        self.entities
-            .get(start as usize..end as usize)
-            .unwrap_or(&[])
     }
 }
 

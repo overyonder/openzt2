@@ -1,5 +1,6 @@
 //! Validates tank boundaries and links their habitat entities to fence segments.
 
+use bevy::ecs::entity::EntityHashSet;
 use bevy::prelude::*;
 
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
@@ -40,27 +41,13 @@ pub(super) fn synchronize_tank_boundary_relationships_after_habitat_region_chang
     active_definitions: Res<WorldDefinitions>,
     nodes: Query<&TopologyNode>,
     members: Query<&WorldMember>,
-    mut removed_tanks: RemovedComponents<Tank>,
-    existing_memberships: Query<(Entity, &TankBoundaryOf), With<TankBoundaryMember>>,
+    tank_boundaries: Query<&TankBoundaryMemberships>,
+    segments: Query<&TankBoundarySegment>,
 ) {
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };
-    for removed_tank in removed_tanks.read() {
-        for (membership_entity, boundary) in &existing_memberships {
-            if boundary.0 == removed_tank {
-                commands.entity(membership_entity).despawn();
-            }
-        }
-        if let Ok(mut entity) = commands.get_entity(removed_tank) {
-            entity.remove::<TankBoundaryMemberships>();
-        }
-    }
-
     for (tank_entity, region) in &changed_tanks {
-        if region.boundary_fence_entities.is_empty() {
-            continue;
-        }
         let Ok(tank_member) = members.get(tank_entity) else {
             continue;
         };
@@ -90,12 +77,23 @@ pub(super) fn synchronize_tank_boundary_relationships_after_habitat_region_chang
             continue;
         }
 
-        for (membership_entity, boundary) in &existing_memberships {
-            if boundary.0 == tank_entity {
-                commands.entity(membership_entity).despawn();
+        let mut missing: EntityHashSet = region.boundary_fence_entities.iter().copied().collect();
+        if let Ok(memberships) = tank_boundaries.get(tank_entity) {
+            for membership in memberships.iter() {
+                if !segments
+                    .get(membership)
+                    .is_ok_and(|segment| missing.remove(&segment.0))
+                {
+                    commands.entity(membership).try_despawn();
+                }
             }
         }
-        for segment in region.boundary_fence_entities.iter().copied() {
+        for segment in region
+            .boundary_fence_entities
+            .iter()
+            .copied()
+            .filter(|segment| missing.remove(segment))
+        {
             commands.spawn((
                 TankBoundaryMember,
                 TankBoundaryOf(tank_entity),
@@ -106,25 +104,26 @@ pub(super) fn synchronize_tank_boundary_relationships_after_habitat_region_chang
     }
 }
 
-/// Removes membership entities when their tank or fence segment disappears.
-pub(super) fn remove_tank_boundary_relationship_entities_with_missing_endpoints(
+pub(super) fn remove_memberships_when_tank_is_removed(
+    removed: On<Remove<(Tank, HabitatRegion)>>,
+    tanks: Query<&TankBoundaryMemberships>,
     mut commands: Commands,
-    memberships: Query<
-        (
-            Entity,
-            Option<&TankBoundaryOf>,
-            Option<&TankBoundarySegment>,
-        ),
-        With<TankBoundaryMember>,
-    >,
-    tanks: Query<(), With<Tank>>,
-    fences: Query<(), With<FenceEdge>>,
 ) {
-    for (relationship_entity, tank, segment) in &memberships {
-        if tank.is_none_or(|tank| tanks.get(tank.0).is_err())
-            || segment.is_none_or(|segment| fences.get(segment.0).is_err())
-        {
-            commands.entity(relationship_entity).despawn();
+    if let Ok(memberships) = tanks.get(removed.entity) {
+        for membership in memberships.iter() {
+            commands.entity(membership).try_despawn();
+        }
+    }
+}
+
+pub(super) fn remove_memberships_when_tank_wall_is_removed(
+    removed: On<Remove<FenceEdge>>,
+    walls: Query<&super::tank_boundary_types::TankSegmentMemberships>,
+    mut commands: Commands,
+) {
+    if let Ok(memberships) = walls.get(removed.entity) {
+        for membership in memberships.iter() {
+            commands.entity(membership).try_despawn();
         }
     }
 }

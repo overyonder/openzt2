@@ -7,7 +7,9 @@ use openzt2_interface_state::information::catalogue_types::SelectedCatalogueEntr
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentRoot;
 
-use super::research_types::{ResearchProjectAvailability, StartResearchProjectRequest};
+use super::research_types::{
+    ResearchProjectAvailability, StartResearchProjectRequest, WorldResearchItems,
+};
 use openzt2_interface_state::ui::authored_ui_action_projection_components::UiResearchActions;
 use openzt2_interface_state::ui::authored_ui_activation_contracts::UiNodeActivated;
 
@@ -18,11 +20,15 @@ pub(super) fn route_authored_research_ui_actions_to_start_requests(
     roots: Query<&UiDocumentRoot>,
     selected: Res<SelectedCatalogueEntry>,
     research: Query<&ResearchProjectAvailability>,
+    world_items: Query<&WorldResearchItems>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     mut requests: MessageWriter<StartResearchProjectRequest>,
 ) {
     let Some(definitions) = active_definitions.get(&definitions) else {
+        return;
+    };
+    let Some(items) = world_items.iter().next() else {
         return;
     };
     for activation in activations.read() {
@@ -39,14 +45,13 @@ pub(super) fn route_authored_research_ui_actions_to_start_requests(
             if activation.trigger != record.trigger {
                 continue;
             }
-            if let Some(definition) = selected
+            if let Some(item) = selected
                 .0
                 .and_then(|selected| definitions.research_for_definition(selected))
-                .and_then(|id| research.iter().find(|item| item.item == id))
-                .filter(|item| item.available)
-                .map(|item| item.item)
+                .and_then(|id| items.definitions.get(&id).copied())
+                .filter(|&entity| research.get(entity).is_ok_and(|item| item.available))
             {
-                requests.write(StartResearchProjectRequest { definition });
+                requests.write(StartResearchProjectRequest { item });
             }
         }
     }

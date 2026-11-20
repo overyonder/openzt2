@@ -64,10 +64,19 @@ pub(super) fn apply_prepared_placed_object_removal_edit(
     if !valid {
         return false;
     }
-    for cell in edit.cells.iter() {
-        placement.remove_entity_from_cell(*cell, target);
-    }
-    commands.entity(target).despawn();
+    despawn_indexed_placed_object(commands, placement, target, &edit.cells);
     edit.applied_entity = None;
     true
+}
+
+pub(super) fn despawn_indexed_placed_object(
+    commands: &mut Commands,
+    placement: &mut PlacedObjectFootprintOccupancyIndex,
+    entity: Entity,
+    cells: &[IVec2],
+) {
+    for &cell in cells {
+        placement.remove_entity_from_cell(cell, entity);
+    }
+    commands.entity(entity).try_despawn();
 }

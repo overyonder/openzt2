@@ -1,9 +1,9 @@
 use bevy::prelude::*;
 use openzt2_game_data::AssetId;
 
-use crate::transport_tours::transport_route_position_calculations::advance_route_position_toward_segment_end;
-use crate::transport_tours::transport_route_position_calculations::calculate_translation_along_transport_track_segment;
-use crate::transport_tours::transport_route_position_calculations::retreat_route_position_toward_segment_start;
+use crate::transport_tours::transport_route_position_calculations::{
+    step_transport_route_position, TrackTravelDistances,
+};
 use openzt2_zoo_state::transport_tours::transport_topology_types::TrackSegment;
 use openzt2_zoo_state::transport_tours::transport_vehicle_types::RoutePosition;
 
@@ -29,17 +29,18 @@ fn forward_route_position_clamps_at_track_segment_end() {
         segment: Entity::from_bits(3),
         distance: 9.75,
     };
-    assert!(advance_route_position_toward_segment_end(
+    assert!(step_transport_route_position(
         &mut route_position,
-        &track_segment,
+        track_segment.length,
         0.5,
+        false,
     ));
     assert_eq!(route_position.distance, 10.0);
     assert_eq!(
-        calculate_translation_along_transport_track_segment(
-            &track_segment,
-            route_position.distance,
-        ),
+        TrackTravelDistances::from_validated_segment(&track_segment)
+            .unwrap()
+            .translation_and_tangent(&track_segment, route_position.distance)
+            .0,
         Vec3::X * 10.0,
     );
 }
@@ -51,23 +52,25 @@ fn reverse_route_position_preserves_progress_and_clamps_at_track_segment_start()
         segment: Entity::from_bits(3),
         distance: 4.0,
     };
-    assert!(!retreat_route_position_toward_segment_start(
+    assert!(!step_transport_route_position(
         &mut route_position,
-        &track_segment,
+        track_segment.length,
         1.5,
+        true,
     ));
     assert_eq!(route_position.distance, 2.5);
     assert_eq!(
-        calculate_translation_along_transport_track_segment(
-            &track_segment,
-            route_position.distance,
-        ),
+        TrackTravelDistances::from_validated_segment(&track_segment)
+            .unwrap()
+            .translation_and_tangent(&track_segment, route_position.distance)
+            .0,
         Vec3::X * 2.5,
     );
-    assert!(retreat_route_position_toward_segment_start(
+    assert!(step_transport_route_position(
         &mut route_position,
-        &track_segment,
+        track_segment.length,
         3.0,
+        true,
     ));
     assert_eq!(route_position.distance, 0.0);
 }

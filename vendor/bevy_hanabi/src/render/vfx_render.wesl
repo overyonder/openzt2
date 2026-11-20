@@ -52,6 +52,9 @@ struct VertexOutput {
 {{PROPERTIES_BINDING}}
 {{MATERIAL_BINDINGS}}
 
+@if(DISTANCE_SORTED)
+@group(3) @binding(0) var<storage, read> distance_sorted_indices: array<vec2<u32>>;
+
 /// The resolved effect and particle location.
 ///
 /// This is calculated at the start of the thread execution, and used after that
@@ -214,6 +217,9 @@ fn vertex(
 
     // Fetch particle
     let indirect_read_index = (*spawner).render_indirect_read_index;
+    @if(DISTANCE_SORTED)
+    let particle_index = distance_sorted_indices[instance_index].y;
+    @if(!DISTANCE_SORTED)
     let particle_index = indirect_buffer.rows[base_particle + instance_index].particle_index[indirect_read_index];
     var particle = particle_buffer.particles[base_particle + particle_index];
 

@@ -1,86 +1,42 @@
-use bevy::prelude::*;
-use openzt2_game_data::{ui_document::action::information::UiInformationAction, AssetId};
-
-use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner;
-use openzt2_interface_state::ui::authored_ui_node_projection_components::UiNodeId;
+use bevy::{ecs::relationship::RelationshipTarget, prelude::*};
+use openzt2_game_data::ui_document::action::information::UiInformationAction;
 
 use openzt2_interface_state::information::catalogue_types::TypeListFilter;
+use openzt2_interface_state::ui::authored_ui_node_projection_components::{
+    UiDocumentMembers, UiNodeId,
+};
 
 pub(crate) fn apply_authored_catalogue_type_list_filter_action(
     action: &UiInformationAction,
-    source_document_entity: Entity,
-    authored_ui_nodes: &Query<(Entity, &UiDocumentOwner, &UiNodeId)>,
-    commands: &mut Commands,
+    source_document: Entity,
+    members: &Query<&UiDocumentMembers>,
+    mut_filters: &mut Query<(&UiNodeId, &mut TypeListFilter)>,
 ) {
-    match action {
-        UiInformationAction::SetResearchFilter {
-            list,
-            unlocked_only,
-        } => {
-            insert_catalogue_type_list_filter_on_authored_target(
-                source_document_entity,
-                AssetId(list.0),
-                TypeListFilter {
-                    unlocked_only: *unlocked_only,
-                    kind: None,
-                    field_value: None,
-                },
-                true,
-                authored_ui_nodes,
-                commands,
-            );
-        }
-        UiInformationAction::SetCatalogueKindFilter { list, kind } => {
-            insert_catalogue_type_list_filter_on_authored_target(
-                source_document_entity,
-                AssetId(list.0),
-                TypeListFilter {
-                    unlocked_only: false,
-                    kind: Some(AssetId(kind.0)),
-                    field_value: None,
-                },
-                false,
-                authored_ui_nodes,
-                commands,
-            );
-        }
-        UiInformationAction::ClearTypeFilter { list } => {
-            for (ui_node_entity, candidate_document_owner, ui_node_identifier) in authored_ui_nodes
-            {
-                if candidate_document_owner.0 == source_document_entity
-                    && ui_node_identifier.id == AssetId(list.0)
-                {
-                    commands.entity(ui_node_entity).remove::<TypeListFilter>();
-                }
-            }
-        }
+    let target = match action {
+        UiInformationAction::SetResearchFilter { list, .. }
+        | UiInformationAction::SetCatalogueKindFilter { list, .. }
+        | UiInformationAction::ClearTypeFilter { list } => *list,
         _ => unreachable!("non-filter action sent to the catalogue type-list filter owner"),
-    }
-}
-
-fn insert_catalogue_type_list_filter_on_authored_target(
-    source_document_entity: Entity,
-    target_ui_node_identifier: AssetId,
-    type_list_filter: TypeListFilter,
-    update_research: bool,
-    authored_ui_nodes: &Query<(Entity, &UiDocumentOwner, &UiNodeId)>,
-    commands: &mut Commands,
-) {
-    for (ui_node_entity, candidate_document_owner, ui_node_identifier) in authored_ui_nodes {
-        if candidate_document_owner.0 == source_document_entity
-            && ui_node_identifier.id == target_ui_node_identifier
-        {
-            commands
-                .entity(ui_node_entity)
-                .entry::<TypeListFilter>()
-                .and_modify(move |mut filter| {
-                    if update_research {
-                        filter.unlocked_only = type_list_filter.unlocked_only;
-                    } else {
-                        filter.kind = type_list_filter.kind;
-                    }
-                })
-                .or_insert(type_list_filter);
+    };
+    let Ok(members) = members.get(source_document) else {
+        return;
+    };
+    for entity in members.iter() {
+        let Ok((id, mut filter)) = mut_filters.get_mut(entity) else {
+            continue;
+        };
+        if id.id != target {
+            continue;
         }
+        let mut next = *filter;
+        match action {
+            UiInformationAction::SetResearchFilter { unlocked_only, .. } => {
+                next.unlocked_only = *unlocked_only
+            }
+            UiInformationAction::SetCatalogueKindFilter { kind, .. } => next.kind = Some(*kind),
+            UiInformationAction::ClearTypeFilter { .. } => next = TypeListFilter::default(),
+            _ => unreachable!(),
+        }
+        filter.set_if_neq(next);
     }
 }

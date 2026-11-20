@@ -87,7 +87,7 @@ impl SlabSliceRef {
     }
 }
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
 struct SimBindGroupKey {
     buffer: Option<BufferId>,
     offset: u32,
@@ -224,9 +224,7 @@ pub struct ParticleSlab {
     // slabs
     render_particles_buffer_layout: BindGroupLayout,
     /// Bind group particle@1 of the simulation passes (init and udpate).
-    sim_bind_group: Option<BindGroup>,
-    /// Key the `sim_bind_group` was created from.
-    sim_bind_group_key: SimBindGroupKey,
+    sim_bind_groups: HashMap<SimBindGroupKey, BindGroup>,
 }
 
 impl ParticleSlab {
@@ -352,8 +350,7 @@ impl ParticleSlab {
             used_size: 0,
             free_slices: vec![],
             asset,
-            sim_bind_group: None,
-            sim_bind_group_key: SimBindGroupKey::INVALID,
+            sim_bind_groups: HashMap::default(),
         }
     }
 
@@ -419,7 +416,7 @@ impl ParticleSlab {
         parent_binding_source: Option<&BufferBindingSource>,
     ) {
         let key: SimBindGroupKey = parent_binding_source.into();
-        if self.sim_bind_group.is_some() && self.sim_bind_group_key == key {
+        if self.sim_bind_groups.contains_key(&key) {
             return;
         }
 
@@ -446,8 +443,7 @@ impl ParticleSlab {
             parent_binding_source.is_some(),
         );
         let bind_group = render_device.create_bind_group(Some(&label[..]), layout, entries);
-        self.sim_bind_group = Some(bind_group);
-        self.sim_bind_group_key = key;
+        self.sim_bind_groups.insert(key, bind_group);
     }
 
     /// Invalidate any existing simulate bind group.
@@ -460,8 +456,7 @@ impl ParticleSlab {
     /// [`create_particle_sim_bind_group()`]: self::ParticleSlab::create_particle_sim_bind_group
     #[allow(dead_code)] // FIXME - review this...
     fn invalidate_particle_sim_bind_group(&mut self) {
-        self.sim_bind_group = None;
-        self.sim_bind_group_key = SimBindGroupKey::INVALID;
+        self.sim_bind_groups.clear();
     }
 
     /// Return the cached particle@1 bind group for the simulation (init and
@@ -476,8 +471,11 @@ impl ParticleSlab {
     ///
     /// [`create_particle_sim_bind_group()`]: self::ParticleSlab::create_particle_sim_bind_group
     /// [`invalidate_particle_sim_bind_groups()`]: self::ParticleSlab::invalidate_particle_sim_bind_groups
-    pub fn particle_sim_bind_group(&self) -> Option<&BindGroup> {
-        self.sim_bind_group.as_ref()
+    pub fn particle_sim_bind_group(
+        &self,
+        parent: Option<&BufferBindingSource>,
+    ) -> Option<&BindGroup> {
+        self.sim_bind_groups.get(&SimBindGroupKey::from(parent))
     }
 
     /// Try to recycle a free slice to store `size` items.
@@ -615,12 +613,12 @@ impl ParticleSlab {
     pub fn is_compatible(
         &self,
         handle: &Handle<EffectAsset>,
-        _particle_layout: &ParticleLayout,
+        particle_layout: &ParticleLayout,
     ) -> bool {
         // TODO - replace with check particle layout is compatible to allow
         // tighter packing in less buffers, and update in the less
         // dispatch calls
-        *handle == self.asset
+        *handle == self.asset && *particle_layout == self.particle_layout
     }
 }
 
@@ -1028,9 +1026,13 @@ impl EffectCache {
 
     /// Get the "particle" bind group for the simulation (init and update)
     /// passes a cached effect stored in a given GPU particle buffer.
-    pub fn particle_sim_bind_group(&self, slab_id: &SlabId) -> Option<&BindGroup> {
+    pub fn particle_sim_bind_group(
+        &self,
+        slab_id: &SlabId,
+        parent: Option<&BufferBindingSource>,
+    ) -> Option<&BindGroup> {
         self.get_slab(slab_id)
-            .and_then(|slab| slab.particle_sim_bind_group())
+            .and_then(|slab| slab.particle_sim_bind_group(parent))
     }
 
     pub fn create_particle_sim_bind_group(

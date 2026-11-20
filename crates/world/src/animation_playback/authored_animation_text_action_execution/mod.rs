@@ -15,20 +15,24 @@ impl AuthoredAnimationTextActionExecutionContext<'_, '_> {
         event_time_milliseconds: u32,
         authored_animation_text_command: &openzt2_game_data::animation::animation_text_key::AuthoredAnimationTextCommand,
     ) {
-        let authored_target_joint_asset_key = authored_animation_text_command
-            .target_skeleton_joint_asset_key
-            .as_deref()
-            .unwrap_or("");
         let resolved_action_target_entity = self
-            .named_animation_joint_targets
-            .iter()
-            .find_map(|(joint_entity, joint_target)| {
-                (joint_target.animation_playback_controller_entity
-                    == animation_playback_controller_entity
-                    && joint_target
-                        .joint_asset_key
-                        .eq_ignore_ascii_case(authored_target_joint_asset_key))
-                .then_some(joint_entity)
+            .animation_rig_joints
+            .get(animation_playback_controller_entity)
+            .ok()
+            .and_then(|rig| {
+                let joint_key = authored_animation_text_command
+                    .target_skeleton_joint_asset_key
+                    .as_deref()
+                    .unwrap_or("");
+                self.named_animation_joint_targets
+                    .iter_many(rig.joints())
+                    .matched()
+                    .find_map(|(joint, target)| {
+                        target
+                            .joint_asset_key
+                            .eq_ignore_ascii_case(joint_key)
+                            .then_some(joint)
+                    })
             })
             .unwrap_or(animation_playback_controller_entity);
 

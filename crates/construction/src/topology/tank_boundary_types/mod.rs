@@ -12,7 +12,7 @@ pub(super) struct TankBoundaryOf(pub(crate) Entity);
 
 /// Inverse membership collection maintained by Bevy on the tank entity.
 #[derive(Component, Debug, Default)]
-#[relationship_target(relationship = TankBoundaryOf)]
+#[relationship_target(relationship = TankBoundaryOf, linked_spawn)]
 pub(super) struct TankBoundaryMemberships(Vec<Entity>);
 
 /// Fence endpoint of a [`TankBoundaryMember`] relationship entity.
@@ -22,5 +22,5 @@ pub(super) struct TankBoundarySegment(pub(crate) Entity);
 
 /// Inverse membership collection maintained by Bevy on a fence entity.
 #[derive(Component, Debug, Default)]
-#[relationship_target(relationship = TankBoundarySegment)]
+#[relationship_target(relationship = TankBoundarySegment, linked_spawn)]
 pub(super) struct TankSegmentMemberships(Vec<Entity>);

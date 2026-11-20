@@ -32,11 +32,14 @@ pub struct AnimationClipRecord {
     pub animation_clip_handle: Handle<AnimationClip>,
     pub duration_milliseconds: u32,
     pub authored_animation_clip_metadata: Option<Arc<AuthoredAnimationClipMetadata>>,
+    pub text_key_times_milliseconds: Arc<[u32]>,
     pub authored_animation_policy: AuthoredAnimationPlaybackPolicy,
 }
 
 #[derive(Asset, TypePath, Clone, Debug)]
 pub struct AnimationClipSourceAsset {
     pub authored_animation_clip_metadata: Arc<AuthoredAnimationClipMetadata>,
+    pub text_key_times_milliseconds: Arc<[u32]>,
+    #[dependency]
     pub animation_clip_handle: Handle<AnimationClip>,
 }

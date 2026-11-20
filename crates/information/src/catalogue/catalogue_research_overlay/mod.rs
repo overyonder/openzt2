@@ -1,5 +1,7 @@
 use bevy::prelude::*;
 use openzt2_game_data::AssetId;
+use openzt2_interface_state::ui::authored_ui_focus_state::UiFocusable;
+use openzt2_interface_state::ui::authored_ui_visual_types::UiVisualPicking;
 
 use openzt2_game_assets::localization::localization_asset_types::LocalizationAsset;
 use openzt2_game_assets::localization::localization_precedence_index::LocalizationPrecedenceIndex;
@@ -10,7 +12,7 @@ use openzt2_interface_state::information::catalogue_types::CatalogueRowEntry;
 use openzt2_zoo_state::progression::adoption_and_content_availability_types::ScenarioContentAvailability;
 use openzt2_zoo_state::progression::catalogue_entry_availability::catalogue_entry_can_be_researched;
 use openzt2_zoo_state::progression::catalogue_entry_availability::catalogue_entry_is_available;
-use openzt2_zoo_state::progression::research_types::PendingResearchProjectPayment;
+use openzt2_zoo_state::progression::research_types::{ResearchPurchaseState, WorldResearchItems};
 use openzt2_zoo_state::progression::research_types::ResearchProject;
 use openzt2_zoo_state::progression::research_types::ResearchProjectAvailability;
 use openzt2_zoo_state::progression::unlock_types::UnlockedCatalogueDefinitionSet;
@@ -34,11 +36,11 @@ pub(crate) struct ResearchOverlayOf(Entity);
 #[relationship_target(relationship = ResearchOverlayOf)]
 pub(crate) struct RowResearchOverlays(Vec<Entity>);
 
-#[derive(Component, Default)]
-pub(crate) struct CatalogueResearchOverlay {
-    progress: Vec<Entity>,
-    projected_row: Option<Option<AssetId>>,
-}
+#[derive(Component)]
+pub(crate) struct HydratedCatalogueResearchOverlay;
+
+#[derive(Component)]
+pub(crate) struct ResearchOverlayProgress;
 
 pub(crate) fn attach_authored_catalogue_research_overlays(
     mut commands: Commands,
@@ -84,53 +86,93 @@ pub(crate) fn attach_authored_catalogue_research_overlays(
             false,
         );
         commands.entity(overlay).insert(ResearchOverlayOf(row));
-        commands.queue(move |world: &mut World| {
-            let mut descendants = vec![overlay];
-            let mut state = CatalogueResearchOverlay::default();
-            while let Some(entity) = descendants.pop() {
-                if let Some(children) = world.get::<Children>(entity) {
-                    descendants.extend(children.iter());
+    }
+}
+
+pub(crate) fn hydrate_authored_catalogue_research_overlay_controls(
+    overlays: Query<
+        Entity,
+        (
+            With<ResearchOverlayOf>,
+            Without<HydratedCatalogueResearchOverlay>,
+        ),
+    >,
+    children: Query<&Children>,
+    mut nodes: Query<(
+        Has<UiNodeId>,
+        Option<&Name>,
+        Option<&mut Pickable>,
+        Has<UiFocusable>,
+        Option<&mut UiVisualPicking>,
+        Option<&mut UiInteractionEnabled>,
+        Option<&mut Node>,
+        Option<&mut Visibility>,
+        Option<&mut UiMinimum>,
+        Option<&mut UiMaximum>,
+    )>,
+    mut commands: Commands,
+) {
+    for overlay in &overlays {
+        for entity in std::iter::once(overlay).chain(children.iter_descendants::<Children>(overlay))
+        {
+            let Ok((
+                authored,
+                name,
+                picking,
+                focusable,
+                visual_picking,
+                enabled,
+                layout,
+                visibility,
+                minimum,
+                maximum,
+            )) = nodes.get_mut(entity)
+            else {
+                continue;
+            };
+            if let Some(mut picking) = picking {
+                picking.set_if_neq(Pickable::IGNORE);
+            } else {
+                commands.entity(entity).insert(Pickable::IGNORE);
+            }
+            if focusable {
+                commands.entity(entity).remove::<UiFocusable>();
+            }
+            if let Some(mut visual_picking) = visual_picking {
+                visual_picking.set_if_neq(UiVisualPicking(false));
+            }
+            if !authored {
+                continue;
+            }
+            let name = name.map(Name::as_str);
+            if let Some(mut enabled) = enabled {
+                enabled.set_if_neq(UiInteractionEnabled(name == Some("beaker")));
+            }
+            if entity == overlay {
+                if let Some(mut layout) = layout {
+                    layout.position_type = PositionType::Absolute;
+                    layout.left = px(0.);
+                    layout.top = px(0.);
                 }
-                world.entity_mut(entity).insert(Pickable::IGNORE);
-                world
-                    .entity_mut(entity)
-                    .remove::<openzt2_interface_state::ui::authored_ui_focus_state::UiFocusable>();
-                if let Some(mut picking) =
-                    world
-                        .get_mut::<openzt2_interface_state::ui::authored_ui_visual_types::UiVisualPicking>(
-                            entity,
-                        )
-                {
-                    picking.0 = false;
+            } else if name == Some("fullcolor") {
+                if let Some(mut visibility) = visibility {
+                    visibility.set_if_neq(Visibility::Hidden);
+                } else {
+                    commands.entity(entity).insert(Visibility::Hidden);
                 }
-                if world.get::<UiNodeId>(entity).is_none() {
-                    continue;
+            } else if name == Some("progress") {
+                commands.entity(entity).insert(ResearchOverlayProgress);
+                if let Some(mut minimum) = minimum {
+                    minimum.set_if_neq(UiMinimum(0));
                 }
-                let name = world.get::<Name>(entity).map(Name::as_str);
-                let (beaker, fullcolor, progress) = (name == Some("beaker"), name == Some("fullcolor"), name == Some("progress"));
-                if let Some(mut enabled) = world.get_mut::<UiInteractionEnabled>(entity) {
-                    enabled.set_if_neq(UiInteractionEnabled(beaker));
-                }
-                if entity == overlay {
-                    if let Some(mut node) = world.get_mut::<Node>(entity) {
-                        node.position_type = PositionType::Absolute;
-                        node.left = px(0.);
-                        node.top = px(0.);
-                    }
-                } else if fullcolor {
-                    world.entity_mut(entity).insert(Visibility::Hidden);
-                } else if progress {
-                    state.progress.push(entity);
-                    if let Some(mut minimum) = world.get_mut::<UiMinimum>(entity) {
-                        minimum.set_if_neq(UiMinimum(0));
-                    }
-                    if let Some(mut maximum) = world.get_mut::<UiMaximum>(entity) {
-                        maximum.set_if_neq(UiMaximum(10_000));
-                    }
+                if let Some(mut maximum) = maximum {
+                    maximum.set_if_neq(UiMaximum(10_000));
                 }
             }
-            world.entity_mut(overlay).insert(state);
-        });
+        }
+        commands
+            .entity(overlay)
+            .insert(HydratedCatalogueResearchOverlay);
     }
 }
 
@@ -140,24 +182,33 @@ pub(crate) fn project_catalogue_research_overlays(
     unlocks: Res<UnlockedCatalogueDefinitionSet>,
     worlds: Query<
         (
-            Entity,
             Ref<SelectedWorldIdentity>,
             Option<Ref<ScenarioContentAvailability>>,
+            Option<Ref<WorldResearchItems>>,
         ),
         With<WorldRoot>,
     >,
-    availability: Query<Ref<ResearchProjectAvailability>>,
-    projects: Query<Ref<ResearchProject>>,
-    payments: Query<Ref<PendingResearchProjectPayment>>,
+    research_items: Query<(
+        Ref<ResearchProjectAvailability>,
+        Ref<ResearchPurchaseState>,
+        Option<Ref<ResearchProject>>,
+    )>,
     mut removals: (
-        RemovedComponents<ResearchProjectAvailability>,
         RemovedComponents<ResearchProject>,
-        RemovedComponents<PendingResearchProjectPayment>,
+        RemovedComponents<ScenarioContentAvailability>,
+        RemovedComponents<SelectedWorldIdentity>,
+        RemovedComponents<WorldResearchItems>,
     ),
-    mut overlays: Query<(Entity, &ResearchOverlayOf, &mut CatalogueResearchOverlay)>,
-    rows: Query<&CatalogueRowEntry>,
+    mut removed_bindings: RemovedComponents<CatalogueRowEntry>,
+    overlays: Query<(
+        Entity,
+        &ResearchOverlayOf,
+        Ref<HydratedCatalogueResearchOverlay>,
+    )>,
+    rows: Query<Ref<CatalogueRowEntry>>,
+    children: Query<&Children>,
+    progress_bars: Query<(), With<ResearchOverlayProgress>>,
     mut nodes: Query<(&mut Visibility, Option<&mut UiValue>)>,
-    mut previous_world: Local<Option<(Entity, bool)>>,
 ) {
     if overlays.is_empty() {
         return;
@@ -165,53 +216,84 @@ pub(crate) fn project_catalogue_research_overlays(
     let reindex = active_definitions.is_changed() || definitions.is_changed();
     let definitions = active_definitions.get(&definitions);
     let world = worlds.iter().next();
-    let world_key = world
-        .as_ref()
-        .map(|(entity, _, scenario)| (*entity, scenario.is_some()));
     let inputs_changed = reindex
         || unlocks.is_changed()
-        || *previous_world != world_key
-        || world.as_ref().is_some_and(|(_, identity, scenario)| {
-            identity.is_changed() || scenario.as_ref().is_some_and(Ref::is_changed)
+        || world.as_ref().is_some_and(|(identity, scenario, items)| {
+            identity.is_changed()
+                || scenario.as_ref().is_some_and(Ref::is_changed)
+                || items.as_ref().is_some_and(Ref::is_changed)
         })
-        || availability.iter().any(|value| value.is_changed())
-        || projects.iter().any(|value| value.is_changed())
-        || payments.iter().any(|value| value.is_changed())
-        || !removals.0.is_empty()
         || !removals.1.is_empty()
-        || !removals.2.is_empty();
-    removals.0.clear();
+        || !removals.2.is_empty()
+        || !removals.3.is_empty();
+    let finished_projects = removals.0.read().collect::<std::collections::BTreeSet<_>>();
     removals.1.clear();
     removals.2.clear();
-    *previous_world = world_key;
-    for (overlay, owner, mut state) in &mut overlays {
-        let row = rows.get(owner.0).ok().map(|row| row.definition);
-        if !inputs_changed && state.projected_row == Some(row) {
+    removals.3.clear();
+    let removed_rows = removed_bindings
+        .read()
+        .collect::<std::collections::BTreeSet<_>>();
+    let items = world.as_ref().and_then(|(_, _, items)| items.as_deref());
+    for (overlay, owner, hydrated) in &overlays {
+        let row = rows.get(owner.0).ok();
+        let entry = row
+            .as_ref()
+            .and_then(|row| definitions?.catalogue_entry_for_definition(row.definition));
+        let research = entry.and_then(|(_, entry)| {
+            let id = definitions?.research_for_definition(entry.definition)?;
+            items?.definitions.get(&id).copied()
+        });
+        let selected_item = research.and_then(|entity| research_items.get(entity).ok());
+        let other_items_changed = entry.is_some_and(|(_, entry)| {
+            items.is_some_and(|items| {
+                items.unlocking(entry.definition).any(|entity| {
+                    research_items
+                        .get(entity)
+                        .is_ok_and(|(item, _, _)| item.is_changed())
+                })
+            })
+        });
+        if !inputs_changed
+            && !hydrated.is_added()
+            && !removed_rows.contains(&owner.0)
+            && !row.as_ref().is_some_and(Ref::is_changed)
+            && !selected_item
+                .as_ref()
+                .is_some_and(|(item, purchase, project)| {
+                    item.is_changed()
+                        || purchase.is_changed()
+                        || project.as_ref().is_some_and(Ref::is_changed)
+                })
+            && !other_items_changed
+            && !research.is_some_and(|entity| finished_projects.contains(&entity))
+        {
             continue;
         }
-        state.projected_row = Some(row);
-        let entry = row.and_then(|id| definitions?.catalogue_entry_for_definition(id));
-        let research =
-            entry.and_then(|(_, entry)| definitions?.research_for_definition(entry.definition));
-        let project = research.and_then(|id| projects.iter().find(|p| p.definition == id));
-        let pending = research.is_some_and(|id| payments.iter().any(|p| p.definition == id));
+        let pending = selected_item
+            .as_ref()
+            .is_some_and(|(_, purchase, _)| **purchase != ResearchPurchaseState::Idle);
+        let project = selected_item.and_then(|(_, _, project)| project);
         let requires_research = entry.is_some_and(|(order, entry)| {
             let definitions = definitions.expect("entry belongs to loaded definitions");
             !catalogue_entry_is_available(
                 definitions,
                 order,
                 entry,
-                world.as_ref().map(|(_, identity, _)| identity.mode),
+                world.as_ref().map(|(identity, _, _)| identity.mode),
                 world
                     .as_ref()
-                    .and_then(|(_, _, scenario)| scenario.as_deref()),
+                    .and_then(|(_, scenario, _)| scenario.as_deref()),
                 &unlocks,
             ) && (project.is_some()
                 || pending
                 || catalogue_entry_can_be_researched(
                     definitions,
                     entry,
-                    availability.iter().map(|item| (item.item, item.available)),
+                    items
+                        .into_iter()
+                        .flat_map(|items| items.unlocking(entry.definition))
+                        .filter_map(|entity| research_items.get(entity).ok())
+                        .map(|(item, _, _)| (item.item, item.available)),
                 ))
         });
         if let Ok((mut visibility, _)) = nodes.get_mut(overlay) {
@@ -221,7 +303,10 @@ pub(crate) fn project_catalogue_research_overlays(
                 Visibility::Hidden
             });
         }
-        for &progress in &state.progress {
+        for progress in children
+            .iter_descendants::<Children>(overlay)
+            .filter(|&entity| progress_bars.contains(entity))
+        {
             if let Ok((mut visibility, value)) = nodes.get_mut(progress) {
                 visibility.set_if_neq(if requires_research && (pending || project.is_some()) {
                     Visibility::Inherited

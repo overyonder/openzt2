@@ -7,7 +7,7 @@ use openzt2_game_assets::world_definitions::world_definition_document_asset_and_
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_zoo_state::feeding::container_quantity::DrinkContainer;
 use openzt2_zoo_state::feeding::container_quantity::FoodContainer;
-use openzt2_zoo_state::maintenance::maintenance_types::FacilityContainedWaste;
+use openzt2_zoo_state::maintenance::maintenance_types::{FacilityContainedWaste, LooseLitterWaste, AnimalHabitatWaste};
 use openzt2_zoo_state::animal_health::types::Dead;
 use openzt2_zoo_state::animal_health::types::Disease;
 use openzt2_zoo_state::animal_health::types::Escaped;
@@ -105,23 +105,15 @@ impl AnimalRequestAttribute {
     }
 }
 
-fn canonical_rows<'a>(
-    active_world_definitions: &'a WorldDefinitions,
-    world_definition_assets: &'a Assets<WorldDefinitionAsset>,
-    definition: AssetId,
-) -> Option<&'a [StaffRequestControllerDefinition]> {
-    active_world_definitions
-        .get(world_definition_assets)?
-        .staff_request_rows(definition)
-}
-
 fn bind_rows(
     definition: AssetId,
     rows: &[StaffRequestControllerDefinition],
+    kind_for_token: impl Fn(AssetId) -> Option<StaffJobKind>,
 ) -> Vec<StaffRequestRuntimeState> {
     rows.iter()
-        .filter(|row| row.id == definition)
-        .scan(std::collections::HashMap::<(Option<AssetId>, Option<AssetId>, Option<AssetId>), u16>::new(), |ordinals, row| {
+        .enumerate()
+        .filter(|(_, row)| row.id == definition)
+        .scan(std::collections::HashMap::<(Option<AssetId>, Option<AssetId>, Option<AssetId>), u16>::new(), |ordinals, (row_index, row)| {
             let key = (row.binder, row.attribute_key, row.request.token);
             let ordinal = ordinals.entry(key).or_insert(0);
             let state = StaffRequestRuntimeState {
@@ -132,6 +124,8 @@ fn bind_rows(
                     token: row.request.token,
                     ordinal: *ordinal,
                 },
+                row_index,
+                job_kind: row.request.token.and_then(&kind_for_token),
                 previous: None,
             };
             *ordinal = ordinal.saturating_add(1);
@@ -144,13 +138,14 @@ fn reconcile_rows(
     definition: AssetId,
     rows: &[StaffRequestControllerDefinition],
     previous: &[StaffRequestRuntimeState],
+    kind_for_token: impl Fn(AssetId) -> Option<StaffJobKind>,
 ) -> Vec<StaffRequestRuntimeState> {
-    bind_rows(definition, rows)
+    bind_rows(definition, rows, kind_for_token)
         .into_iter()
         .map(|mut state| {
             state.previous = previous
                 .iter()
-                .find(|old| old.row == state.row)
+                .find(|old| old.row == state.row && old.job_kind == state.job_kind)
                 .and_then(|old| old.previous);
             state
         })
@@ -161,16 +156,27 @@ pub(super) fn bind_staff_request_rows_on_definition_change(
     active_world_definitions: Res<WorldDefinitions>,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     mut commands: Commands,
+    mut asset_events: MessageReader<AssetEvent<WorldDefinitionAsset>>,
     all_entities: Query<Entity, With<DefinitionId>>,
     changed_entities: Query<Entity, Changed<DefinitionId>>,
     mut entities: Query<(&DefinitionId, Option<&mut StaffRequestRuntimeBinding>)>,
     jobs: Query<(Entity, &StaffJob)>,
     mut cancellations: MessageWriter<CancelStaffJobRequest>,
 ) {
+    let assets_changed = asset_events
+        .read()
+        .filter(|event| {
+            matches!(
+                event,
+                AssetEvent::Added { .. } | AssetEvent::Modified { .. } | AssetEvent::Removed { .. }
+            )
+        })
+        .count()
+        != 0;
     let Some(definitions) = active_world_definitions.get(&world_definition_assets) else {
         return;
     };
-    let definitions_changed = active_world_definitions.is_changed();
+    let definitions_changed = active_world_definitions.is_changed() || assets_changed;
     let candidates = all_entities
         .iter()
         .take(if definitions_changed { usize::MAX } else { 0 })
@@ -179,6 +185,12 @@ pub(super) fn bind_staff_request_rows_on_definition_change(
                 .iter()
                 .take(if definitions_changed { 0 } else { usize::MAX }),
         );
+    let kind_for_token = |token| {
+        definitions
+            .find_staff_job(token)
+            .map(|job| job.kind)
+            .or_else(|| built_in_request_kind(token))
+    };
     for entity in candidates {
         let Ok((definition, binding)) = entities.get_mut(entity) else {
             continue;
@@ -187,12 +199,18 @@ pub(super) fn bind_staff_request_rows_on_definition_change(
             continue;
         };
         if let Some(mut binding) = binding {
-            let next = reconcile_rows(definition.0, rows, &binding.rows);
+            let next = reconcile_rows(definition.0, rows, &binding.rows, kind_for_token);
             cancel_removed_rows(entity, &binding.rows, &next, &jobs, &mut cancellations);
-            binding.rows = next;
+            if next.is_empty() {
+                commands
+                    .entity(entity)
+                    .remove::<StaffRequestRuntimeBinding>();
+            } else if next != binding.rows {
+                binding.rows = next;
+            }
         } else if !rows.is_empty() {
             commands.entity(entity).insert(StaffRequestRuntimeBinding {
-                rows: bind_rows(definition.0, rows),
+                rows: bind_rows(definition.0, rows, kind_for_token),
             });
         }
     }
@@ -210,6 +228,8 @@ pub(super) fn evaluate_staff_request_rows(
         Option<&FoodContainer>,
         Option<&DrinkContainer>,
         Option<&FacilityContainedWaste>,
+        Option<&LooseLitterWaste>,
+        Option<&AnimalHabitatWaste>,
         Option<&openzt2_zoo_state::aquatic::aquatic_simulation_types::WaterFilter>,
         Option<&openzt2_zoo_state::economy::facility_economy_types::MaintenanceScheduleIndex>,
     )>,
@@ -221,12 +241,23 @@ pub(super) fn evaluate_staff_request_rows(
     mut requests: MessageWriter<StaffJobRequest>,
     mut cancellations: MessageWriter<CancelStaffJobRequest>,
 ) {
-    for (entity, definition, mut binding, food, drink, waste, filter, schedule) in &mut entities {
-        let Some(rows) = canonical_rows(
-            &active_world_definitions,
-            &world_definition_assets,
-            definition.0,
-        ) else {
+    let Some(definitions) = active_world_definitions.get(&world_definition_assets) else {
+        return;
+    };
+    for (
+        entity,
+        definition,
+        mut binding,
+        food,
+        drink,
+        waste,
+        litter,
+        animal_waste,
+        filter,
+        schedule,
+    ) in &mut entities
+    {
+        let Some(rows) = definitions.staff_request_rows(definition.0) else {
             continue;
         };
         let sample = match (food, drink) {
@@ -235,7 +266,7 @@ pub(super) fn evaluate_staff_request_rows(
             (None, Some(drink)) => Some(drink.amount_q16),
         };
         for state in &mut binding.rows {
-            let Some(row) = find_row(rows, state.row) else {
+            let Some(row) = rows.get(state.row_index) else {
                 continue;
             };
             let sample = if row.attribute_key == Some(food_level_key()) {
@@ -253,7 +284,13 @@ pub(super) fn evaluate_staff_request_rows(
                 })
             } else if row.attribute_key.is_none() {
                 // A controller without an attribute raises on creation only.
-                Some(StaffRequestControllerSample::NoValue)
+                if litter.is_some_and(|litter| litter.uncontained_waste_units == 0)
+                    || animal_waste.is_some_and(|waste| !waste.is_valid())
+                {
+                    None
+                } else {
+                    Some(StaffRequestControllerSample::NoValue)
+                }
             } else if let Some(attribute) = row.attribute_key.and_then(AnimalRequestAttribute::of) {
                 let Some(sample) = animal_needs
                     .get(entity)
@@ -264,7 +301,7 @@ pub(super) fn evaluate_staff_request_rows(
                     // care work. Resume with a fresh sample if it returns.
                     state.previous = None;
                     if let Some(token) = row.request.token {
-                        if let Some(kind) = job_kind(token) {
+                        if let Some(kind) = state.job_kind {
                             cancel_matching_job(
                                 StaffRequestJobKey {
                                     kind,
@@ -316,20 +353,6 @@ fn filter_schedule_row(
     Some(row)
 }
 
-fn find_row<'a>(
-    rows: &'a [StaffRequestControllerDefinition],
-    identity: StaffRequestRowIdentity,
-) -> Option<&'a StaffRequestControllerDefinition> {
-    rows.iter()
-        .filter(|row| {
-            row.id == identity.definition
-                && row.binder == identity.binder
-                && row.attribute_key == identity.attribute_key
-                && row.request.token == identity.token
-        })
-        .nth(identity.ordinal as usize)
-}
-
 fn cancel_removed_rows(
     target: Entity,
     previous: &[StaffRequestRuntimeState],
@@ -338,13 +361,16 @@ fn cancel_removed_rows(
     cancellations: &mut MessageWriter<CancelStaffJobRequest>,
 ) {
     for old in previous {
-        if next.iter().any(|state| state.row == old.row) {
+        if next
+            .iter()
+            .any(|state| state.row == old.row && state.job_kind == old.job_kind)
+        {
             continue;
         }
         let Some(token) = old.row.token else {
             continue;
         };
-        let Some(kind) = job_kind(token) else {
+        let Some(kind) = old.job_kind else {
             continue;
         };
         cancel_matching_job(
@@ -421,7 +447,7 @@ fn evaluate_staff_request_row(
         return None;
     };
     let key = StaffRequestJobKey {
-        kind: job_kind(token)?,
+        kind: state.job_kind?,
         target,
         token,
     };
@@ -435,7 +461,7 @@ fn evaluate_staff_request_row(
     }
 }
 
-fn job_kind(token: AssetId) -> Option<StaffJobKind> {
+fn built_in_request_kind(token: AssetId) -> Option<StaffJobKind> {
     if token == fill_food_container_token() || token == AssetId::from_key("t_feedanimal") {
         Some(StaffJobKind::Feed)
     } else if token == AssetId::from_key("t_wateranimal") {

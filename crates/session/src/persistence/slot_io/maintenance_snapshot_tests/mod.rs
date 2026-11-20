@@ -33,9 +33,7 @@ use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskFailed;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskFinished;
 use openzt2_zoo_state::maintenance::maintenance_types::AnimalHabitatWaste;
-use openzt2_zoo_state::maintenance::maintenance_types::IncrementalZooCleanlinessTotals;
 use openzt2_zoo_state::staff::staff_employment_types::Staff;
-use openzt2_zoo_state::staff::staff_job_types::CurrentJob;
 use openzt2_zoo_state::staff::staff_job_types::JobClaim;
 use openzt2_zoo_state::staff::staff_job_types::StaffJob;
 use openzt2_zoo_state::staff::staff_job_types::StaffJobBehaviorTask;
@@ -61,38 +59,6 @@ fn fixture() -> (App, Entity) {
         .add_message::<CancelStaffJobRequest>()
         .add_message::<BehaviorTaskFinished>()
         .add_message::<BehaviorTaskFailed>();
-    use openzt2_game_data::world_definitions::{
-        document::WorldDefinitionDocument,
-        staff_management::{
-            StaffRequestControllerDefinition, StaffRequestData, StaffRequestThresholdComparison,
-            StaffRequestThresholdValue,
-        },
-    };
-    let document = WorldDefinitionDocument {
-        staff_requests: vec![StaffRequestControllerDefinition {
-            id: AssetId::from_key("test_waste"),
-            binder: None,
-            attribute_key: None,
-            threshold: StaffRequestThresholdValue::Number(0.0),
-            threshold_comparison: StaffRequestThresholdComparison::ReachesOrAbove,
-            cancel_threshold: StaffRequestThresholdValue::Number(0.0),
-            cancel_comparison: StaffRequestThresholdComparison::FallsBelow,
-            trigger_on_creation: true,
-            trigger_on_destruction: false,
-            request: StaffRequestData {
-                token: Some(AssetId::from_key("t_rakepoo")),
-                ..StaffRequestData::CONSTRUCTED_DEFAULT
-            },
-        }],
-        ..Default::default()
-    };
-    let handle = app
-        .world_mut()
-        .resource_mut::<Assets<WorldDefinitionAsset>>()
-        .add(WorldDefinitionAsset::from_test_document(document.clone()));
-    app.world_mut()
-        .resource_mut::<WorldDefinitions>()
-        .index_test_document(handle, &document);
     add_animal_waste_cleanup_test_systems(&mut app);
     let root = app.world_mut().spawn_empty().id();
     app.insert_resource(PersistentIdAllocator::new(root));
@@ -328,11 +294,12 @@ fn maintained_object_state_compost_and_animal_waste_deadlines_survive_entity_rem
         capture_maintained_object_records(&capture.get(destination.world()).unwrap()),
         snapshot.objects
     );
-    let totals = destination
+    let container = destination
         .world()
-        .resource::<IncrementalZooCleanlinessTotals>();
-    assert_eq!(totals.contained_waste_units, 3);
-    assert_eq!(totals.contained_waste_capacity_units, 10);
+        .get::<FacilityContainedWaste>(facility)
+        .unwrap();
+    assert_eq!(container.contained_waste_units, 3);
+    assert_eq!(container.contained_waste_capacity_units, 10);
 }
 
 #[test]
@@ -400,17 +367,21 @@ fn restored_waste_rebuilds_one_job_and_authored_cleanup_survives_a_second_save()
     assert_eq!(
         destination
             .world()
-            .resource::<IncrementalZooCleanlinessTotals>()
-            .uncontained_waste_units,
-        7
-    );
-    assert_eq!(
-        destination
-            .world()
             .resource::<PersistentIdAllocator>()
             .next(),
         52
     );
+    let restored_waste = destination
+        .world_mut()
+        .query_filtered::<Entity, With<AnimalHabitatWaste>>()
+        .single(destination.world())
+        .unwrap();
+    destination.world_mut().write_message(StaffJobRequest {
+        kind: StaffJobKind::CleanHabitat,
+        target: restored_waste,
+        urgency: 1,
+        token: Some(AssetId::from_key("t_rakepoo")),
+    });
     destination.update();
     destination.update();
     let jobs: Vec<_> = destination
@@ -454,9 +425,10 @@ fn restored_waste_rebuilds_one_job_and_authored_cleanup_survives_a_second_save()
             execution_id: Some(99),
         },
     ));
-    destination.world_mut().entity_mut(staff).insert((
-        CurrentJob { job },
-        BehaviorTaskExecutionState {
+    destination
+        .world_mut()
+        .entity_mut(staff)
+        .insert((BehaviorTaskExecutionState {
             execution_id: 99,
             program: AssetId::from_key("worker:rakepoo"),
             target: Some(work.target),
@@ -469,17 +441,9 @@ fn restored_waste_rebuilds_one_job_and_authored_cleanup_survives_a_second_save()
             object: None,
             interaction_slot: None,
             depth: 0,
-        },
-    ));
+        },));
     destination.update();
     assert!(destination.world().get_entity(work.target).is_err());
-    assert_eq!(
-        destination
-            .world()
-            .resource::<IncrementalZooCleanlinessTotals>()
-            .uncontained_waste_units,
-        0
-    );
     // Save after the kill but before the task's terminal event: consumed waste stays gone.
     let cleaned = round_trip(&capture(destination.world_mut()));
     assert!(cleaned.is_empty());
@@ -519,13 +483,6 @@ fn restored_waste_rebuilds_one_job_and_authored_cleanup_survives_a_second_save()
             .query::<&StaffJob>()
             .iter(reloaded.world())
             .count(),
-        0
-    );
-    assert_eq!(
-        reloaded
-            .world()
-            .resource::<IncrementalZooCleanlinessTotals>()
-            .uncontained_waste_units,
         0
     );
 }
@@ -598,10 +555,4 @@ fn restored_prefab_preserves_saved_root_pose_and_removes_its_children_with_waste
     );
     assert!(app.world_mut().despawn(waste));
     assert!(app.world().get_entity(child).is_err());
-    assert_eq!(
-        app.world()
-            .resource::<IncrementalZooCleanlinessTotals>()
-            .uncontained_waste_units,
-        0
-    );
 }

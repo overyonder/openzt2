@@ -20,6 +20,10 @@ use super::{
     },
 };
 
+pub(super) fn donation_timeout_token_name() -> openzt2_game_data::AssetId {
+    openzt2_game_data::AssetId::from_key("DonationTokenTimeout")
+}
+
 pub(super) fn settle_completed_donation_transactions_and_update_acceptor_totals(
     mut commands: Commands,
     mut completed_transactions: MessageReader<TransactionCompleted>,
@@ -30,7 +34,25 @@ pub(super) fn settle_completed_donation_transactions_and_update_acceptor_totals(
     mut donation_category_totals: Query<&mut DonationCategoryTotals>,
     mut completed_donations: MessageWriter<DonationCompleted>,
     mut rejected_donations: MessageWriter<DonationRejected>,
+    clock: Option<Res<openzt2_world_state::simulation_time::simulation_clock_types::ZooClock>>,
+    definitions: Option<Res<openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions>>,
+    definition_assets: Option<Res<Assets<openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset>>>,
 ) {
+    let timeout = (|| {
+        let clock = clock.as_deref()?;
+        let definitions = definitions.as_deref()?.get(definition_assets.as_deref()?)?;
+        let duration_ns = definitions.show_scheduling()?.donation_token_timeout_ns;
+        let rate = u128::from(definitions.timing().fixed_hz);
+        let ticks = (u128::from(duration_ns) * rate).div_ceil(1_000_000_000);
+        (ticks > 0).then(|| {
+            (
+                clock.tick,
+                clock
+                    .tick
+                    .saturating_add(u64::try_from(ticks).unwrap_or(u64::MAX)),
+            )
+        })
+    })();
     // Missing components are inserted after all payments in this run are counted.
     let mut new_donation_totals: BTreeMap<Entity, DonationTotal> = BTreeMap::new();
     let mut new_category_totals: BTreeMap<Entity, DonationCategoryTotals> = BTreeMap::new();
@@ -132,6 +154,18 @@ pub(super) fn settle_completed_donation_transactions_and_update_acceptor_totals(
             *total = updated_total;
         } else {
             new_donation_totals.insert(pending_payment.acceptor, updated_total);
+        }
+        if let Some((available_at, expires_at)) = timeout {
+            commands.spawn((
+                ChildOf(pending_payment.guest),
+                openzt2_zoo_state::animal_behavior::behavior_token_types::BehaviorSelfToken {
+                    name: donation_timeout_token_name(),
+                    available_at,
+                    expires_at,
+                    payload: Some(pending_payment.acceptor),
+                    retain_on_failure: true,
+                },
+            ));
         }
         clear_guest_donation_payment_state(&mut commands, pending_payment.guest);
         commands.entity(transaction.operation).despawn();

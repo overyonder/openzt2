@@ -10,10 +10,8 @@ fn missing_registry_does_not_retain_a_cleared_or_replaced_preview() {
         .init_resource::<WorldDefinitions>()
         .init_resource::<SelectedCatalogueEntry>()
         .add_systems(Update, project_selected_catalogue_entry_into_preview_scene);
-    let owner = app.world_mut().spawn_empty().id();
     for selection in [None, Some(AssetId([2; 16]))] {
         app.world_mut().resource_mut::<SelectedCatalogueEntry>().0 = selection;
-        let scene = app.world_mut().spawn_empty().id();
         let image = app
             .world_mut()
             .resource_mut::<Assets<Image>>()
@@ -21,19 +19,15 @@ fn missing_registry_does_not_retain_a_cleared_or_replaced_preview() {
         let node = app
             .world_mut()
             .spawn((
-                UiDocumentOwner(owner),
                 UiImageBinding(UiImagePropertyBindingSource::CatalogueEntryPreview),
                 InheritedVisibility::VISIBLE,
                 ImageNode::new(image),
-                CataloguePreviewScene {
-                    definition: AssetId([1; 16]),
-                    scene,
-                },
             ))
             .id();
+        let scene = app.world_mut().spawn(CataloguePreviewOwner(node)).id();
         app.update();
         assert!(app.world().get_entity(scene).is_err());
-        assert!(app.world().get::<CataloguePreviewScene>(node).is_none());
+        assert!(app.world().get::<CataloguePreviewScenes>(node).is_none());
         assert_eq!(
             app.world().get::<ImageNode>(node).unwrap().image,
             Handle::default()
@@ -49,15 +43,8 @@ fn removed_ui_owner_retires_one_portrait_hierarchy_and_preserves_other_camera_ow
     let mut app = App::new();
     app.add_systems(
         Update,
-        (
-            synchronize_catalogue_preview_camera_activity_with_authored_image_visibility,
-            retire_catalogue_preview_scenes_without_ui_owners,
-        )
-            .chain(),
-    )
-    .edit_schedule(Update, |schedule| {
-        schedule.set_executor(bevy::ecs::schedule::SingleThreadedExecutor::new());
-    });
+        synchronize_catalogue_preview_camera_activity_with_authored_image_visibility,
+    );
     let removed_owner = app.world_mut().spawn(InheritedVisibility::VISIBLE).id();
     let retained_owner = app.world_mut().spawn(InheritedVisibility::VISIBLE).id();
     let disabled_owner = app.world_mut().spawn(Disabled).id();
@@ -72,16 +59,9 @@ fn removed_ui_owner_retires_one_portrait_hierarchy_and_preserves_other_camera_ow
                     is_active: false,
                     ..default()
                 },
-                CataloguePreviewOwner(owner),
                 ChildOf(scene),
             ))
             .id();
-        app.world_mut()
-            .entity_mut(owner)
-            .insert(CataloguePreviewScene {
-                definition: AssetId([1; 16]),
-                scene,
-            });
         scenes.push(scene);
         cameras.push(camera);
     }
@@ -100,7 +80,7 @@ fn removed_ui_owner_retires_one_portrait_hierarchy_and_preserves_other_camera_ow
         assert!(app.world().get_entity(scenes[index]).is_ok());
         assert_eq!(
             app.world()
-                .get::<CataloguePreviewOwner>(cameras[index])
+                .get::<CataloguePreviewOwner>(scenes[index])
                 .unwrap()
                 .0,
             [retained_owner, disabled_owner][index - 1]

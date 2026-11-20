@@ -1,340 +1,259 @@
-//! Album-photo capture requests and conversion of completed screenshots into photo entities.
+//! Turn one presented frame into a persistent album exposure.
 
-use openzt2_interface_state::photos::photo_album_types::AlbumMember;
-use openzt2_interface_state::photos::photo_album_types::CameraRollPhoto;
-use openzt2_interface_state::photos::photo_album_types::PhotoAlbum;
-use openzt2_interface_state::photos::photo_capture_types::CapturePhotoRequest;
-use openzt2_interface_state::photos::photo_capture_types::Photo;
-use openzt2_interface_state::photos::photo_capture_types::PhotoMode;
-use openzt2_interface_state::photos::photo_capture_types::PhotoReadback;
-use openzt2_interface_state::photos::photo_capture_types::PhotoSubjects;
+use std::time::Duration;
 
 use bevy::{
     asset::RenderAssetUsages,
     camera::RenderTarget,
+    ecs::lifecycle::Despawn,
+    ecs::relationship::RelationshipTarget,
     prelude::*,
-    render::view::screenshot::{Screenshot, ScreenshotCaptured as BevyScreenshotCaptured},
+    render::view::screenshot::{
+        Captured, Screenshot, ScreenshotCaptured as BevyScreenshotCaptured,
+    },
+    time::Real,
+    window::PrimaryWindow,
 };
 
 use openzt2_interface_state::immersive_modes::immersive_mode_control_types::PhotoControl;
 use openzt2_interface_state::immersive_modes::immersive_mode_state_types::ImmersiveCamera;
-use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentRoot;
+use openzt2_interface_state::photos::photo_album_types::{
+    AlbumMember, AlbumPhotos, CameraRollPhoto, PhotoAlbum,
+};
+use openzt2_interface_state::photos::photo_capture_types::{
+    AlbumPhotoReadbackOf, CapturePhotoRequest, Photo, PhotoMode, PhotoSubjects,
+};
+use openzt2_interface_state::photos::photo_challenge_types::{
+    CurrentPhotoChallengeSet, PhotoChallengeSet,
+};
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
-use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
-use openzt2_game_data::ui_document::document::UiDocumentRole;
-
 use super::{
     photo_album_types::{ActivePhotoAlbum, PhotoCameraRoll, PHOTO_CAMERA_ROLL_CAPACITY},
     photo_capture_types::{
-        CapturedPhotoEvidence, CapturedPhotoSemantics, CapturedPhotoView, PendingPhotoCapture,
-        PendingPhotoEvidence, PendingPhotoScore, PendingPhotoSemantics, PhotoCaptionSubject,
-        PhotoCaptureFailed, PhotoCaptureOwner, PhotoFailure, PhotoSubjectsCollected, PhotoView,
+        CapturedPhotoEvidence, CapturedPhotoView, PendingPhotoCapture, PendingPhotoEvidence,
+        PendingPhotoScore, PhotoCaptionSubject, PhotoCaptureFailed, PhotoFailure,
+        PhotoSubjectsCollected, PhotoView,
     },
     photo_mode_presentation_lifecycle::AuthoredPhotoModeDocumentPresentationOwner,
 };
 
-#[derive(Component, Debug, Clone, Copy)]
-pub(super) struct PhotoModePresentationHiddenDuringCapture {
-    pub(super) root: Entity,
-    pub(super) previous_visibility: Visibility,
-}
+#[derive(Component)]
+#[relationship(relationship_target = PhotoViewfinderSuppressors)]
+pub(super) struct SuppressesPhotoViewfinder(Entity);
+
+#[derive(Component)]
+#[relationship_target(relationship = SuppressesPhotoViewfinder)]
+pub(super) struct PhotoViewfinderSuppressors(Vec<Entity>);
 
 pub(super) fn begin_requested_album_photo_captures(
     mut requests: MessageReader<CapturePhotoRequest>,
     clock: Res<ZooClock>,
-    cameras: Query<
-        (
-            Entity,
-            &Camera,
-            &RenderTarget,
-            &GlobalTransform,
-            &PhotoMode,
-            Option<&PhotoView>,
-        ),
-        Without<PendingPhotoCapture>,
-    >,
-    photo_cameras: Query<(), With<PhotoMode>>,
-    camera_components: Query<(), With<Camera>>,
-    active_photo_mode_controllers: Query<(Entity, &ImmersiveCamera), With<PhotoControl>>,
-    photo_mode_document_presentation_owners: Query<&AuthoredPhotoModeDocumentPresentationOwner>,
-    ui_document_assets: Res<Assets<UiDocumentAsset>>,
-    mut ui_document_roots: Query<(Entity, &UiDocumentRoot, &ChildOf, &mut Visibility)>,
-    mut readback: ResMut<PhotoReadback>,
+    realtime: Res<Time<Real>>,
+    cameras: Query<(&Camera, &RenderTarget, Has<PhotoMode>, Option<&PhotoView>)>,
+    pending_album_captures: Query<(), With<AlbumPhotoReadbackOf>>,
+    screenshots: Query<&Screenshot, Without<Captured>>,
+    primary_window: Query<Entity, With<PrimaryWindow>>,
+    controllers: Query<&ImmersiveCamera, With<PhotoControl>>,
+    viewfinders: Query<(Entity, &AuthoredPhotoModeDocumentPresentationOwner)>,
+    allocator: Res<PersistentIdAllocator>,
+    selected_sets: Query<(&PhotoChallengeSet, &WorldMember), With<CurrentPhotoChallengeSet>>,
     mut commands: Commands,
     mut failed: MessageWriter<PhotoCaptureFailed>,
 ) {
+    let primary_window = primary_window.single().ok();
+    let mut reserved = !pending_album_captures.is_empty();
     for request in requests.read() {
-        let result = if let Some(reason) = photo_capture_request_rejection(
-            readback.busy,
-            camera_components.contains(request.camera),
-            photo_cameras.contains(request.camera),
-            cameras.contains(request.camera),
-        ) {
-            Err(reason)
-        } else {
-            cameras
-                .get(request.camera)
-                .map_err(|_| PhotoFailure::InvalidCamera)
-                .map(|(_, camera, target, transform, _, view)| {
-                    (
-                        target.clone(),
-                        camera,
-                        transform,
-                        view.copied().unwrap_or_default(),
-                    )
-                })
-        };
-        let transform = match result {
-            Ok((target, camera, transform, view)) if camera.is_active => (target, transform, view),
-            Ok(_) => {
-                failed.write(PhotoCaptureFailed {
-                    reason: PhotoFailure::InvalidCamera,
-                });
-                continue;
+        let result = (|| {
+            if reserved {
+                return Err(PhotoFailure::ReadbackBusy);
             }
+            let (camera, target, in_photo_mode, view) = cameras
+                .get(request.camera)
+                .map_err(|_| PhotoFailure::InvalidCamera)?;
+            if !in_photo_mode {
+                return Err(PhotoFailure::NotInPhotoMode);
+            }
+            let normalized = target
+                .normalize(primary_window)
+                .filter(|target| {
+                    !matches!(target, bevy::camera::NormalizedRenderTarget::None { .. })
+                })
+                .ok_or(PhotoFailure::InvalidCamera)?;
+            if !camera.is_active {
+                return Err(PhotoFailure::InvalidCamera);
+            }
+            if screenshots.iter().any(|screenshot| {
+                screenshot.0.normalize(primary_window).as_ref() == Some(&normalized)
+            }) {
+                return Err(PhotoFailure::ReadbackBusy);
+            }
+            Ok((target, view.copied().unwrap_or_default()))
+        })();
+        let (target, view) = match result {
+            Ok(capture) => capture,
             Err(reason) => {
                 failed.write(PhotoCaptureFailed { reason });
                 continue;
             }
         };
-        let (target, transform, view) = transform;
-        let hidden_photo_mode_presentation = active_photo_mode_controllers
+        let challenge_set = selected_sets
             .iter()
-            .find(|(_, camera)| camera.0 == request.camera)
-            .and_then(|(controller, _)| {
-                ui_document_roots
-                    .iter_mut()
-                    .find(|(_, root, parent, _)| {
-                        photo_mode_document_presentation_owners
-                            .get(parent.parent())
-                            .is_ok_and(|owner| owner.controller == controller)
-                            && ui_document_assets
-                                .get(&root.document)
-                                .is_some_and(|document| {
-                                    document.canonical_ui_document().role
-                                        == UiDocumentRole::PhotoMode
-                                })
-                    })
-                    .map(|(root, _, _, mut visibility)| {
-                        let previous_visibility = *visibility;
-                        *visibility = Visibility::Hidden;
-                        PhotoModePresentationHiddenDuringCapture {
-                            root,
-                            previous_visibility,
-                        }
-                    })
-            });
-        let mut camera = commands.entity(request.camera);
-        camera.insert((
+            .find_map(|(set, member)| allocator.owns_world(member.root).then_some(set.id));
+        let mut screenshot = commands.spawn((
+            Screenshot(target.clone()),
+            AlbumPhotoReadbackOf(request.camera),
             PendingPhotoCapture {
                 captured_tick: clock.tick,
-                camera_position: transform.translation(),
-                camera_rotation: transform.rotation(),
-                subjects: PhotoSubjects::default(),
+                camera_position: Vec3::ZERO,
+                camera_rotation: Quat::IDENTITY,
                 view,
+                challenge_set,
+                expires_at: realtime.elapsed() + Duration::from_secs(5),
+                completed: false,
             },
             PendingPhotoEvidence::default(),
-            PendingPhotoSemantics::default(),
         ));
-        if let Some(hidden_photo_mode_presentation) = hidden_photo_mode_presentation {
-            camera.insert(hidden_photo_mode_presentation);
+        screenshot
+            .observe(create_album_photo_from_completed_screenshot_capture)
+            .observe(reject_retired_album_capture);
+        if let Some((viewfinder, _)) = viewfinders.iter().find(|(_, owner)| {
+            controllers
+                .get(owner.controller)
+                .is_ok_and(|camera| camera.0 == request.camera)
+        }) {
+            screenshot.insert(SuppressesPhotoViewfinder(viewfinder));
         }
-        commands
-            .spawn((Screenshot(target), PhotoCaptureOwner(request.camera)))
-            .observe(create_album_photo_from_completed_screenshot_capture);
-        readback.busy = true;
+        reserved = true;
+    }
+}
+
+pub(super) fn expire_pending_album_photo_captures(
+    realtime: Res<Time<Real>>,
+    cameras: Query<(), With<PhotoMode>>,
+    pending: Query<(Entity, &AlbumPhotoReadbackOf, &PendingPhotoCapture)>,
+    mut commands: Commands,
+) {
+    for (entity, camera, capture) in &pending {
+        if !capture.completed
+            && (realtime.elapsed() >= capture.expires_at || !cameras.contains(camera.0))
+        {
+            commands.entity(entity).despawn();
+        }
+    }
+}
+
+fn reject_retired_album_capture(
+    retired: On<Despawn<PendingPhotoCapture>>,
+    pending: Query<&PendingPhotoCapture>,
+    mut failed: MessageWriter<PhotoCaptureFailed>,
+) {
+    if pending
+        .get(retired.entity)
+        .is_ok_and(|capture| !capture.completed)
+    {
+        failed.write(PhotoCaptureFailed {
+            reason: PhotoFailure::Gpu,
+        });
     }
 }
 
 fn create_album_photo_from_completed_screenshot_capture(
     captured: On<BevyScreenshotCaptured>,
-    owners: Query<&PhotoCaptureOwner>,
-    hidden_photo_mode_presentations: Query<&PhotoModePresentationHiddenDuringCapture>,
-    mut readback: ResMut<PhotoReadback>,
-    mut pending: Query<
-        (
-            Entity,
-            &mut PendingPhotoCapture,
-            &mut PendingPhotoEvidence,
-            &mut PendingPhotoSemantics,
-        ),
-        With<PhotoSubjectsCollected>,
-    >,
+    mut pending: Query<(
+        &mut PendingPhotoCapture,
+        &mut PendingPhotoEvidence,
+        Has<PhotoSubjectsCollected>,
+    )>,
     albums: Query<
         (
             Entity,
             &WorldMember,
-            Option<&ActivePhotoAlbum>,
-            Option<&PhotoCameraRoll>,
+            Has<ActivePhotoAlbum>,
+            Has<PhotoCameraRoll>,
         ),
         With<PhotoAlbum>,
     >,
-    photos: Query<&AlbumMember, With<Photo>>,
+    members: Query<&AlbumPhotos>,
     mut allocator: ResMut<PersistentIdAllocator>,
     mut images: ResMut<Assets<Image>>,
     mut commands: Commands,
     mut failed: MessageWriter<PhotoCaptureFailed>,
 ) {
-    let Ok(owner) = owners.get(captured.entity) else {
-        readback.busy = false;
-        failed.write(PhotoCaptureFailed {
-            reason: PhotoFailure::Gpu,
-        });
+    let Ok((mut capture, mut evidence, collected)) = pending.get_mut(captured.entity) else {
         return;
     };
-    let camera = owner.0;
-    let hidden_photo_mode_presentation = hidden_photo_mode_presentations.get(camera).ok().copied();
-    let Ok((_, mut capture, mut evidence, mut semantics)) = pending.get_mut(camera) else {
-        restore_photo_mode_presentation_after_capture(
-            &mut commands,
-            hidden_photo_mode_presentation,
-        );
-        remove_pending_photo_capture_state(&mut commands, camera);
-        readback.busy = false;
-        failed.write(PhotoCaptureFailed {
-            reason: PhotoFailure::Gpu,
-        });
-        return;
-    };
-    let album = albums
-        .iter()
-        .find(|row| row.3.is_some())
-        .or_else(|| albums.iter().find(|row| row.2.is_some()))
-        .or_else(|| albums.iter().next());
-    let Some((album, member, _, camera_roll)) = album else {
-        restore_photo_mode_presentation_after_capture(
-            &mut commands,
-            hidden_photo_mode_presentation,
-        );
-        remove_pending_photo_capture_state(&mut commands, camera);
-        readback.busy = false;
-        failed.write(PhotoCaptureFailed {
-            reason: PhotoFailure::Storage,
-        });
-        return;
-    };
-    if camera_roll.is_some()
-        && photos.iter().filter(|entry| entry.0 == album).count()
-            >= PHOTO_CAMERA_ROLL_CAPACITY as usize
-    {
-        restore_photo_mode_presentation_after_capture(
-            &mut commands,
-            hidden_photo_mode_presentation,
-        );
-        remove_pending_photo_capture_state(&mut commands, camera);
-        readback.busy = false;
-        failed.write(PhotoCaptureFailed {
-            reason: PhotoFailure::CapacityExceeded,
-        });
+    if capture.completed {
         return;
     }
-    let id = match allocator.allocate(member.root) {
-        Ok(id) => id,
-        Err(reason) => {
-            restore_photo_mode_presentation_after_capture(
-                &mut commands,
-                hidden_photo_mode_presentation,
-            );
-            remove_pending_photo_capture_state(&mut commands, camera);
-            readback.busy = false;
-            failed.write(PhotoCaptureFailed {
-                reason: PhotoFailure::PersistentId(reason),
-            });
-            return;
-        }
-    };
-    let Ok(dynamic_image) = captured.image.clone().try_into_dynamic() else {
-        restore_photo_mode_presentation_after_capture(
-            &mut commands,
-            hidden_photo_mode_presentation,
-        );
-        remove_pending_photo_capture_state(&mut commands, camera);
-        readback.busy = false;
-        failed.write(PhotoCaptureFailed {
-            reason: PhotoFailure::Gpu,
-        });
-        return;
-    };
-    // Window targets are commonly BGRA. Normalize once at this explicit
-    // capture boundary so both Bevy UI and persistent export consume one
-    // tightly packed RGBA image without retaining target-format knowledge.
-    let image = images.add(Image::from_dynamic(
-        dynamic_image,
-        true,
-        RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
-    ));
-    let caption = evidence
-        .0
-        .iter()
-        .max_by_key(|item| {
-            u32::from(item.facts.screen_permille) + u32::from(item.facts.center_permille)
-        })
-        .map(|item| PhotoCaptionSubject(item.definition));
-    let mut photo = commands.spawn((
-        id,
-        *member,
-        Photo {
-            image,
-            captured_tick: capture.captured_tick,
-            camera_position: capture.camera_position,
-            camera_rotation: capture.camera_rotation,
-            score_milli: 0,
-        },
-        PhotoSubjects(std::mem::take(&mut capture.subjects.0)),
-        AlbumMember(album),
-        CapturedPhotoEvidence(std::mem::take(&mut evidence.0)),
-        CapturedPhotoSemantics(std::mem::take(&mut semantics.0)),
-        CapturedPhotoView(capture.view),
-        PendingPhotoScore,
-    ));
-    if let Some(caption) = caption {
-        photo.insert(caption);
-    }
-    if camera_roll.is_some() {
-        photo.insert(CameraRollPhoto);
-    }
-    restore_photo_mode_presentation_after_capture(&mut commands, hidden_photo_mode_presentation);
-    remove_pending_photo_capture_state(&mut commands, camera);
-    readback.busy = false;
-}
-
-fn remove_pending_photo_capture_state(commands: &mut Commands, camera: Entity) {
+    capture.completed = true;
     commands
-        .entity(camera)
-        .remove::<PendingPhotoCapture>()
-        .remove::<PendingPhotoEvidence>()
-        .remove::<PendingPhotoSemantics>()
-        .remove::<PhotoSubjectsCollected>()
-        .remove::<PhotoModePresentationHiddenDuringCapture>();
-}
-
-pub(super) fn restore_photo_mode_presentation_after_capture(
-    commands: &mut Commands,
-    hidden_photo_mode_presentation: Option<PhotoModePresentationHiddenDuringCapture>,
-) {
-    if let Some(hidden) = hidden_photo_mode_presentation {
-        commands
-            .entity(hidden.root)
-            .insert(hidden.previous_visibility);
-    }
-}
-
-pub(crate) const fn photo_capture_request_rejection(
-    readback_is_busy: bool,
-    entity_has_camera: bool,
-    entity_is_in_photo_mode: bool,
-    camera_has_no_pending_capture: bool,
-) -> Option<PhotoFailure> {
-    if readback_is_busy || !camera_has_no_pending_capture {
-        Some(PhotoFailure::ReadbackBusy)
-    } else if !entity_has_camera {
-        Some(PhotoFailure::InvalidCamera)
-    } else if !entity_is_in_photo_mode {
-        Some(PhotoFailure::NotInPhotoMode)
-    } else {
-        None
+        .entity(captured.entity)
+        .remove::<SuppressesPhotoViewfinder>();
+    let result = (|| {
+        if !collected {
+            return Err(PhotoFailure::Gpu);
+        }
+        let world_albums = || albums.iter().filter(|row| allocator.owns_world(row.1.root));
+        let (album, member, _, camera_roll) = world_albums()
+            .find(|row| row.3)
+            .or_else(|| world_albums().find(|row| row.2))
+            .or_else(|| world_albums().next())
+            .ok_or(PhotoFailure::Storage)?;
+        if camera_roll
+            && members.get(album).map_or(0, RelationshipTarget::len)
+                >= PHOTO_CAMERA_ROLL_CAPACITY as usize
+        {
+            return Err(PhotoFailure::CapacityExceeded);
+        }
+        let id = allocator
+            .allocate(member.root)
+            .map_err(PhotoFailure::PersistentId)?;
+        let pixels = captured
+            .image
+            .clone()
+            .try_into_dynamic()
+            .map_err(|_| PhotoFailure::Gpu)?;
+        // Normalize target formats once for UI and persistent export.
+        let image = images.add(Image::from_dynamic(
+            pixels,
+            true,
+            RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+        ));
+        let caption = evidence
+            .0
+            .iter()
+            .max_by_key(|item| {
+                u32::from(item.facts.screen_permille) + u32::from(item.facts.center_permille)
+            })
+            .map(|item| PhotoCaptionSubject(item.definition));
+        let mut photo = commands.spawn((
+            id,
+            *member,
+            Photo {
+                image,
+                captured_tick: capture.captured_tick,
+                camera_position: capture.camera_position,
+                camera_rotation: capture.camera_rotation,
+                score_milli: 0,
+            },
+            PhotoSubjects(evidence.0.iter().map(|subject| subject.entity).collect()),
+            AlbumMember(album),
+            CapturedPhotoEvidence(std::mem::take(&mut evidence.0), capture.challenge_set),
+            CapturedPhotoView(capture.view),
+            PendingPhotoScore,
+        ));
+        if let Some(caption) = caption {
+            photo.insert(caption);
+        }
+        if camera_roll {
+            photo.insert(CameraRollPhoto);
+        }
+        Ok(())
+    })();
+    if let Err(reason) = result {
+        failed.write(PhotoCaptureFailed { reason });
     }
 }

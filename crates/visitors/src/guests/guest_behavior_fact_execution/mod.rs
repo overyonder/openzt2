@@ -55,6 +55,8 @@ pub(super) fn apply_authored_guest_behavior_fact_modifications(
         With<Guest>,
     >,
     mut viewing_needs: Query<&mut GuestViewingNeed, With<Guest>>,
+    mut experiences: Query<&mut GuestSurveyExperience>,
+    mut food_purchases: Query<&mut GuestFoodPurchaseCounts>,
     containers: Query<(), With<FacilityContainedWaste>>,
     caffeine_modes: Query<&CaffeineMode>,
     mut trash_changes: MessageWriter<AdjustFacilityContainedWaste>,
@@ -114,8 +116,16 @@ pub(super) fn apply_authored_guest_behavior_fact_modifications(
                     needs.contains(subject)
                         && (modification.modified_fact != BehaviorFact::ViewAnimals
                             || viewing_needs.contains(subject))
-                        && (modification.modified_fact != BehaviorFact::Happiness
-                            || satisfaction.contains(subject))
+                        && match modification.modified_fact {
+                            BehaviorFact::Happiness => satisfaction.contains(subject),
+                            BehaviorFact::Education
+                            | BehaviorFact::FoundDonationBox
+                            | BehaviorFact::MissedDonationBox => experiences.contains(subject),
+                            BehaviorFact::AteFavoriteFood | BehaviorFact::AteNonFavoriteFood => {
+                                food_purchases.contains(subject)
+                            }
+                            _ => true,
+                        }
                 })
                 && price_effect
                     .sample(modification.modification_value, task.target, |_| 0)
@@ -180,23 +190,13 @@ pub(super) fn apply_authored_guest_behavior_fact_modifications(
                 });
                 continue;
             }
-            if matches!(
-                modification.modified_fact,
-                BehaviorFact::Education
-                    | BehaviorFact::FoundDonationBox
-                    | BehaviorFact::MissedDonationBox
-            ) {
-                let fact = modification.modified_fact;
-                commands.queue(move |world: &mut World| {
-                    let Ok(mut entity) = world.get_entity_mut(subject) else {
-                        return;
-                    };
-                    if !entity.contains::<GuestSurveyExperience>() {
-                        entity.insert(GuestSurveyExperience::default());
-                    }
-                    let mut experience = entity
-                        .get_mut::<GuestSurveyExperience>()
-                        .expect("inserted survey experience");
+            match modification.modified_fact {
+                fact @ (BehaviorFact::Education
+                | BehaviorFact::FoundDonationBox
+                | BehaviorFact::MissedDonationBox) => {
+                    let mut experience = experiences
+                        .get_mut(subject)
+                        .expect("validated survey experience");
                     let value = match fact {
                         BehaviorFact::Education => &mut experience.education_points,
                         BehaviorFact::FoundDonationBox => &mut experience.found_donation_box,
@@ -204,32 +204,21 @@ pub(super) fn apply_authored_guest_behavior_fact_modifications(
                         _ => unreachable!(),
                     };
                     *value += authored_delta as f32 / 65_536.0;
-                });
-                continue;
-            }
-            if matches!(
-                modification.modified_fact,
-                BehaviorFact::AteFavoriteFood | BehaviorFact::AteNonFavoriteFood
-            ) {
-                let favorite = modification.modified_fact == BehaviorFact::AteFavoriteFood;
-                commands.queue(move |world: &mut World| {
-                    let Ok(mut entity) = world.get_entity_mut(subject) else {
-                        return;
-                    };
-                    if !entity.contains::<GuestFoodPurchaseCounts>() {
-                        entity.insert(GuestFoodPurchaseCounts::default());
-                    }
-                    let mut counts = entity
-                        .get_mut::<GuestFoodPurchaseCounts>()
-                        .expect("inserted purchase counters");
-                    let value = if favorite {
-                        &mut counts.favorite_q16
+                    continue;
+                }
+                fact @ (BehaviorFact::AteFavoriteFood | BehaviorFact::AteNonFavoriteFood) => {
+                    let mut purchases = food_purchases
+                        .get_mut(subject)
+                        .expect("validated food purchases");
+                    let value = if fact == BehaviorFact::AteFavoriteFood {
+                        &mut purchases.favorite_q16
                     } else {
-                        &mut counts.nonfavorite_q16
+                        &mut purchases.nonfavorite_q16
                     };
                     *value = value.saturating_add(authored_delta);
-                });
-                continue;
+                    continue;
+                }
+                _ => {}
             }
             let Ok((
                 mut hunger,

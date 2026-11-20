@@ -35,8 +35,11 @@ pub struct ScreenshotCaptured {
     pub image: Handle<Image>,
 }
 
-/// Prevents simultaneous captures of the same presented frame.
-#[derive(Resource, Debug, Default)]
-pub struct PhotoReadback {
-    pub busy: bool,
-}
+/// Links Bevy's in-flight album screenshot to its photo camera.
+#[derive(Component)]
+#[relationship(relationship_target = AlbumPhotoReadbacks)]
+pub struct AlbumPhotoReadbackOf(pub Entity);
+
+#[derive(Component)]
+#[relationship_target(relationship = AlbumPhotoReadbackOf, linked_spawn)]
+pub struct AlbumPhotoReadbacks(Vec<Entity>);

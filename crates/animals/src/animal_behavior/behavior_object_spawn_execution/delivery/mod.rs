@@ -101,8 +101,9 @@ pub(super) fn deliver_behavior_object_spawns(
                 Some((handle, prefabs.get(handle)?))
             };
             let id = ids.allocate(world.root).ok()?;
-            let transform = pose_validation.select_spawn_pose(
+            let placement = pose_validation.select_spawn_pose(
                 actor,
+                *world,
                 object.id,
                 transform,
                 pose_validation.actor_pose(actor)?,
@@ -110,8 +111,9 @@ pub(super) fn deliver_behavior_object_spawns(
                 view,
                 &mut random.0,
             );
-            let transform =
-                transform.mul_transform(Transform::from_scale(Vec3::splat(object.prefab_scale)));
+            let transform = placement
+                .transform
+                .mul_transform(Transform::from_scale(Vec3::splat(object.prefab_scale)));
             let spawned = if let Some((handle, prefab)) = presentation {
                 spawn_loaded_scene_prefab_as_world_instance(
                     &mut commands,
@@ -139,6 +141,9 @@ pub(super) fn deliver_behavior_object_spawns(
                     ))
                     .id()
             };
+            for occupant in placement.stomped_objects {
+                commands.entity(occupant).try_despawn();
+            }
             if object
                 .properties
                 .contains_all(WorldObjectPropertyFlags::ANIMAL_WASTE)

@@ -47,9 +47,6 @@ pub(super) struct PhotoPointerDrag;
 #[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) struct PhotoAlbumCapacityPages(pub u32);
 
-#[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(super) struct PresentedPhotoCount(pub u32);
-
 /// Presentation reference from an authored exposure row to its canonical
 /// photo entity.
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]

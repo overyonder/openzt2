@@ -1,4 +1,4 @@
-use bevy::{ecs::entity::EntityHashMap, prelude::*};
+use bevy::prelude::*;
 use openzt2_game_data::AssetId;
 
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
@@ -8,7 +8,6 @@ use openzt2_zoo_state::progression::catalogue_entry_availability::catalogue_entr
 use openzt2_zoo_state::progression::catalogue_entry_availability::catalogue_entry_can_be_researched;
 use openzt2_zoo_state::progression::unlock_types::UnlockedCatalogueDefinitionSet;
 use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::UiListRow;
-use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::UiTypeListPolicy;
 use openzt2_ui::authored_tooltip_presentation::UiDisplayNameKey;
 use openzt2_ui::authored_tooltip_presentation::UiLongTooltipKey;
 use openzt2_ui::authored_tooltip_presentation::UiShortTooltipKey;
@@ -19,14 +18,13 @@ use openzt2_interface_state::ui::authored_ui_visual_types::UiVisualLayer;
 use openzt2_world_state::world_spawn::selected_world_identity::SelectedWorldIdentity;
 use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 
-use super::catalogue_type_list_policy_operations::catalogue_entry_is_included_by_authored_type_list;
+use super::catalogue_type_list_row_count_operations::OrderedCatalogueEntries;
 use super::catalogue_world_availability_context::{
     catalogue_world_session_or_scenario_availability_changed,
     resolve_catalogue_world_session_mode_and_scenario_availability,
 };
 use openzt2_interface_state::information::catalogue_types::CatalogueRowEntry;
 use openzt2_interface_state::information::catalogue_types::SelectedCatalogueEntry;
-use openzt2_interface_state::information::catalogue_types::TypeListFilter;
 
 pub(crate) fn project_catalogue_entries_to_authored_type_list_rows(
     mut commands: Commands,
@@ -46,8 +44,7 @@ pub(crate) fn project_catalogue_entries_to_authored_type_list_rows(
     scenario_disabled: Res<
         openzt2_interface_state::information::catalogue_types::ScenarioDisabledCatalogueDefinitions,
     >,
-    lists: Query<(Ref<UiTypeListPolicy>, Option<Ref<TypeListFilter>>)>,
-    mut removed_filters: RemovedComponents<TypeListFilter>,
+    lists: Query<Ref<OrderedCatalogueEntries>>,
     selected_entry: Res<SelectedCatalogueEntry>,
     children: Query<&Children>,
     mut visual_images: Query<
@@ -58,90 +55,90 @@ pub(crate) fn project_catalogue_entries_to_authored_type_list_rows(
         Entity,
         Ref<UiListRow>,
         Ref<ChildOf>,
-        Option<&CatalogueRowEntry>,
+        Option<&mut CatalogueRowEntry>,
+        Option<&mut UiDisplayNameKey>,
+        Option<&mut UiShortTooltipKey>,
         Option<&mut ImageNode>,
         Option<&mut UiInteractionEnabled>,
         Option<&mut UiSelected>,
         &mut Visibility,
     )>,
 ) {
-    let definitions_changed = active_definitions.is_changed()
+    let definitions_changed = active_definitions.is_changed() || definitions.is_changed();
+    let availability_changed = scenario_disabled.is_changed()
         || research_availability
             .iter()
             .any(|availability| availability.is_changed())
         || unlocks.is_changed()
         || catalogue_world_session_or_scenario_availability_changed(&worlds);
     let details_changed = selected_entry.is_changed();
-    let removed_filters = removed_filters.read().collect::<Vec<_>>();
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };
     let catalog = definitions;
     let (mode, scenario) = resolve_catalogue_world_session_mode_and_scenario_availability(&worlds);
     let selected_definition = selected_entry.0;
-    let mut catalogue_entries_by_type_list = EntityHashMap::default();
-    for (entity, row, parent, bound, image, interaction_enabled, selected, mut visibility) in
-        &mut rows
+    for (
+        entity,
+        row,
+        parent,
+        bound,
+        name_key,
+        tooltip_key,
+        image,
+        interaction_enabled,
+        selected,
+        mut visibility,
+    ) in &mut rows
     {
-        // A row's catalogue binding is immutable until either the reusable row
-        // is assigned a new index/list or the loaded definitions asset is
-        // replaced. Do not rescan the entire catalogue for every row on every
-        // rendered frame.
-        let Ok((policy, filter)) = lists.get(parent.parent()) else {
+        let Ok(entries) = lists.get(parent.parent()) else {
             continue;
         };
-        let presentation_changed = policy.is_changed()
-            || filter.as_ref().is_some_and(Ref::is_changed)
-            || removed_filters.contains(&parent.parent());
         if bound.is_some()
             && !row.is_changed()
             && !parent.is_changed()
             && !definitions_changed
-            && !presentation_changed
-            && !details_changed
+            && !availability_changed
+            && !entries.is_changed()
         {
+            if details_changed {
+                if let (Some(bound), Some(mut selected)) = (bound, selected) {
+                    selected.set_if_neq(UiSelected(selected_definition == Some(bound.definition)));
+                }
+            }
             continue;
         }
-        let filter = filter.as_deref().copied().unwrap_or_default();
-        let included_entries = catalogue_entries_by_type_list
-            .entry(parent.parent())
-            .or_insert_with(|| {
-                catalog
-                    .catalogue_in_authored_purchase_order()
-                    .filter(|(index, entry)| {
-                        catalogue_entry_is_included_by_authored_type_list(
-                            &policy, filter, *index, entry, catalog, mode, scenario, &unlocks,
-                        )
-                    })
-                    .collect::<Vec<_>>()
-            });
-        let Some(&(catalogue_index, entry)) = included_entries.get(usize::from(row.index)) else {
-            commands.entity(entity).remove::<CatalogueRowEntry>();
-            if *visibility != Visibility::Hidden {
-                *visibility = Visibility::Hidden;
+        let Some((catalogue_index, entry)) = entries
+            .0
+            .get(usize::from(row.index))
+            .and_then(|&id| catalog.catalogue_entry_for_definition(id))
+        else {
+            if bound.is_some() {
+                commands.entity(entity).remove::<CatalogueRowEntry>();
             }
+            visibility.set_if_neq(Visibility::Hidden);
             continue;
         };
         if *visibility != Visibility::Inherited {
             *visibility = Visibility::Inherited;
         }
         if let Some(mut interaction_enabled) = interaction_enabled {
-            interaction_enabled.0 = !scenario_disabled.0.contains(&AssetId(entry.definition.0))
-                && catalogue_entry_can_be_researched(
+            let enabled = !scenario_disabled.0.contains(&entry.definition)
+                && (catalogue_entry_can_be_researched(
                     catalog,
                     entry,
                     research_availability
                         .iter()
                         .map(|item| (item.item, item.available)),
-                )
-                || catalogue_entry_is_available(
+                ) || catalogue_entry_is_available(
                     catalog,
                     catalogue_index,
                     entry,
                     mode,
                     scenario,
                     &unlocks,
-                );
+                ));
+            interaction_enabled.set_if_neq(UiInteractionEnabled(enabled));
         }
         let icon = AssetId(entry.icon.0);
         let texture = definitions.texture_image(icon);
@@ -191,24 +188,22 @@ pub(crate) fn project_catalogue_entries_to_authored_type_list_rows(
         if let Some(mut selected) = selected {
             selected.set_if_neq(UiSelected(is_selected));
         }
-        if definitions_changed || bound.is_none_or(|bound| bound.definition != definition) {
-            let name = AssetId(entry.name_key.0);
-            commands.entity(entity).insert((
-                CatalogueRowEntry { definition },
-                UiDisplayNameKey(name),
-                UiShortTooltipKey(name),
-            ));
-            let description = catalog
-                .find_object(definition)
-                .map(|object| AssetId(object.description_key.0))
-                .filter(|key| *key != AssetId::default());
-            if let Some(description) = description {
-                commands
-                    .entity(entity)
-                    .insert(UiLongTooltipKey(description));
-            } else {
-                commands.entity(entity).remove::<UiLongTooltipKey>();
-            }
+        let name = AssetId(entry.name_key.0);
+        let binding = CatalogueRowEntry { definition };
+        if let Some(mut bound) = bound {
+            bound.set_if_neq(binding);
+        } else {
+            commands.entity(entity).insert(binding);
+        }
+        if let Some(mut name_key) = name_key {
+            name_key.set_if_neq(UiDisplayNameKey(name));
+        } else {
+            commands.entity(entity).insert(UiDisplayNameKey(name));
+        }
+        if let Some(mut tooltip_key) = tooltip_key {
+            tooltip_key.set_if_neq(UiShortTooltipKey(name));
+        } else {
+            commands.entity(entity).insert(UiShortTooltipKey(name));
         }
     }
 }

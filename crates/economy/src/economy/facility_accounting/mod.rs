@@ -3,7 +3,7 @@ use bevy::prelude::*;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 
 use super::{
-    account_transaction_types::{Account, TransactionCompleted},
+    account_transaction_types::{Account, TransactionCompleted, TransactionSettlement},
     facility_economy_types::{FacilityProfit, OperatingSinceDay, ServiceFacility},
     money_types::Money,
 };
@@ -25,11 +25,18 @@ pub(super) fn initialize_new_service_facilities_with_operating_age_and_profit(
     }
 }
 
-pub(super) fn record_completed_transaction_results_for_attributed_facilities(
+pub(super) fn record_completed_transaction_results_for_attributed_facilities<const PLAYER: bool>(
     mut completed_transactions: MessageReader<TransactionCompleted>,
+    settlements: Query<&TransactionSettlement>,
     mut facility_profits: Query<&mut FacilityProfit>,
 ) {
     for transaction in completed_transactions.read() {
+        if !settlements
+            .get(transaction.operation)
+            .is_ok_and(|state| state.is_settled_in_domain(PLAYER))
+        {
+            continue;
+        }
         let Some(subject) = transaction.subject else {
             continue;
         };
@@ -37,6 +44,7 @@ pub(super) fn record_completed_transaction_results_for_attributed_facilities(
             continue;
         };
         let zoo_cash_change = match (transaction.debit, transaction.credit) {
+            (Account::Zoo, Account::Zoo) => 0,
             (Account::Zoo, _) => -transaction.amount.0,
             (_, Account::Zoo) => transaction.amount.0,
             _ => continue,

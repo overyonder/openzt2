@@ -34,7 +34,7 @@ fn round_range_start_down(range: Range<u64>, align: u64) -> (Range<u64>, u64) {
 }
 
 /// Index of a row in a [`BufferTable`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct BufferTableId(pub(crate) u32); // TEMP: pub(crate)
 
 impl BufferTableId {

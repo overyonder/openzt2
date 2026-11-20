@@ -62,9 +62,6 @@ pub struct ObjectPlacementPreviewModelPresentation;
 #[derive(Component, Debug, Clone, Copy, Default)]
 pub struct ObjectPlacementPreviewRenderable;
 
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ObjectPlacementPreviewOwner(pub Entity);
-
 #[derive(Component, Debug, Clone, Copy, Default)]
 pub struct ObjectPlacementPreviewDecal;
 

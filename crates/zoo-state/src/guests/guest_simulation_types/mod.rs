@@ -11,6 +11,12 @@ use openzt2_world_state::simulation_time::deterministic_random_stream::Determini
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdError;
 
 #[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[require(
+    super::guest_survey_types::GuestCriticalNeedObservations,
+    super::guest_survey_types::GuestSurveyExperience,
+    GuestFoodPurchaseCounts,
+    crate::donations::donation_guest_decision_types::GuestDonationMeters
+)]
 pub struct Guest;
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
@@ -204,7 +210,7 @@ impl Default for GuestMemories {
     }
 }
 
-#[derive(Resource, Debug, Clone, Copy)]
+#[derive(Component, Debug, Clone, Copy)]
 pub struct GuestArrivalState {
     pub next_tick: u64,
     pub rng: DeterministicRng,
@@ -217,38 +223,11 @@ pub struct AdjustGuestSurveyData {
 
 #[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GuestReaction {
-    pub view_event: Option<GuestViewReactionOrigin>,
     pub guest: Entity,
     pub subject: Entity,
     pub kind: GuestMemoryKind,
     pub satisfaction_delta_permille: i16,
     pub education_delta_permille: i16,
-}
-
-/// Identity captured by recipient delivery, never reconstructed at application.
-/// Delivery and reaction application consume an emission in the same fixed step.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct GuestViewReactionOrigin {
-    pub event_id: u64,
-    pub source_definition: AssetId,
-    pub view_key: AssetId,
-    pub viewing: Viewing,
-}
-
-/// Monotonic emitted-event receipt, retained across viewing-session changes.
-#[derive(Component, Default)]
-pub struct GuestViewReactionReceipt(pub u64);
-
-/// Confirms that one reaction reached and mutated its canonical guest.
-#[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct GuestReactionApplied {
-    pub view_event: Option<GuestViewReactionOrigin>,
-    pub guest: Entity,
-    pub subject: Entity,
-    pub kind: GuestMemoryKind,
-    /// Observation identity at application, so queued reactions cannot authorize
-    /// an opportunity for a replacement viewing session.
-    pub viewing: Option<Viewing>,
 }
 
 #[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]

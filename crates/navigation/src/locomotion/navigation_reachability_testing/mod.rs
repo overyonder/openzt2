@@ -32,8 +32,6 @@ pub(super) fn test_requested_navigation_destination_reachability(
     )>,
     animal_policy: AnimalNavigationPolicy,
     fence_policy: FenceNavigationPolicy,
-    mut reachability_test_route: Local<Option<Route>>,
-    mut pathfinding_scratch: Local<RouteScratch>,
 ) {
     let tank_water = water.single().ok();
     let Some(locomotion_capacity) =
@@ -56,69 +54,98 @@ pub(super) fn test_requested_navigation_destination_reachability(
         }
         return;
     };
+    let locomotion_capacity = *locomotion_capacity;
     let terrain_derived_navigation_graph =
         active_navigation_graph.terrain_derived_navigation_graph();
-    pathfinding_scratch.ensure_capacity(
-        terrain_derived_navigation_graph.navigation_node_count(),
-        locomotion_capacity.max_route_points,
-    );
-    let reachability_test_route = reachability_test_route
-        .get_or_insert_with(|| Route::with_capacity(locomotion_capacity.max_route_points));
-    for reachability_test_request in reachability_test_requests.read() {
-        reachability_test_route.clear();
-        let reachability_result = navigation_agents
-            .get(reachability_test_request.entity)
-            .map_err(|_| NavigationFailure::NoRoute)
-            .and_then(
-                |(
-                    navigation_agent,
-                    locomotion_mode,
-                    navigation_agent_transform,
-                    animal_variant,
-                )| {
-                    let (navigation_agent, maximum_ground_slope_radians) = animal_policy
-                        .agent_with_authored_collision_limits(navigation_agent, animal_variant)?;
-                    plan_route(
-                        terrain_derived_navigation_graph,
-                        tank_water,
-                        |from, to| {
-                            fence_crossing_index
-                                .crossing_fences(from, to)
-                                .iter()
-                                .any(|fence| {
-                                    fence_policy.fence_blocks_actor(
-                                        *fence,
-                                        navigation_agent.capabilities,
-                                        fence_policy
-                                            .actor_types
-                                            .actor_types(reachability_test_request.entity),
+    let requests: Vec<_> = reachability_test_requests.read().collect();
+    if requests.is_empty() {
+        return;
+    }
+    let worker_count = requests.len().min(4);
+    let chunk_size = requests.len().div_ceil(worker_count);
+    let mut results: Vec<_> = bevy::tasks::ComputeTaskPool::get().scope(|scope| {
+        for (chunk_index, chunk) in requests.chunks(chunk_size).enumerate() {
+            let navigation_agents = &navigation_agents;
+            let animal_policy = &animal_policy;
+            let fence_policy = &fence_policy;
+            let fence_crossing_index = &fence_crossing_index;
+            scope.spawn(async move {
+                let mut pathfinding_scratch = RouteScratch::default();
+                pathfinding_scratch.ensure_capacity(
+                    terrain_derived_navigation_graph.navigation_node_count(),
+                    locomotion_capacity.max_route_points,
+                );
+                let mut reachability_test_route =
+                    Route::with_capacity(locomotion_capacity.max_route_points);
+                let results = chunk
+                    .iter()
+                    .map(|reachability_test_request| {
+                        reachability_test_route.clear();
+                        let reachability_result = navigation_agents
+                            .get(reachability_test_request.entity)
+                            .map_err(|_| NavigationFailure::NoRoute)
+                            .and_then(
+                                |(
+                                    navigation_agent,
+                                    locomotion_mode,
+                                    navigation_agent_transform,
+                                    animal_variant,
+                                )| {
+                                    let (navigation_agent, maximum_ground_slope_radians) =
+                                        animal_policy.agent_with_authored_collision_limits(
+                                            navigation_agent,
+                                            animal_variant,
+                                        )?;
+                                    plan_route(
+                                        terrain_derived_navigation_graph,
+                                        tank_water,
+                                        |from, to| {
+                                            fence_crossing_index
+                                                .crossing_fences(from, to)
+                                                .iter()
+                                                .any(|fence| {
+                                                    fence_policy.fence_blocks_actor(
+                                                        *fence,
+                                                        navigation_agent.capabilities,
+                                                        fence_policy.actor_types.actor_types(
+                                                            reachability_test_request.entity,
+                                                        ),
+                                                    )
+                                                })
+                                        },
+                                        |from, to| {
+                                            fence_policy.world_segment_blocks_actor(
+                                                from,
+                                                to,
+                                                navigation_agent.capabilities,
+                                                fence_policy
+                                                    .actor_types
+                                                    .actor_types(reachability_test_request.entity),
+                                            )
+                                        },
+                                        &navigation_agent,
+                                        *locomotion_mode,
+                                        maximum_ground_slope_radians,
+                                        navigation_agent_transform.translation(),
+                                        reachability_test_request.destination,
+                                        &mut reachability_test_route,
+                                        &mut pathfinding_scratch,
+                                        crate::locomotion::pathfinding::SHORT_PATH_ITERATIONS,
                                     )
-                                })
-                        },
-                        |from, to| {
-                            fence_policy.world_segment_blocks_actor(
-                                from,
-                                to,
-                                navigation_agent.capabilities,
-                                fence_policy
-                                    .actor_types
-                                    .actor_types(reachability_test_request.entity),
-                            )
-                        },
-                        &navigation_agent,
-                        *locomotion_mode,
-                        maximum_ground_slope_radians,
-                        navigation_agent_transform.translation(),
-                        reachability_test_request.destination,
-                        reachability_test_route,
-                        &mut pathfinding_scratch,
-                        crate::locomotion::pathfinding::SHORT_PATH_ITERATIONS,
-                    )
-                },
-            );
-        reachability_test_results.write(ReachabilityTested {
-            entity: reachability_test_request.entity,
-            result: reachability_result,
-        });
+                                },
+                            );
+                        ReachabilityTested {
+                            entity: reachability_test_request.entity,
+                            result: reachability_result,
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                (chunk_index, results)
+            });
+        }
+    });
+    results.sort_unstable_by_key(|(index, _)| *index);
+    for (_, results) in results {
+        let _ = reachability_test_results.write_batch(results);
     }
 }

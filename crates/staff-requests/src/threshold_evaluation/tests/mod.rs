@@ -50,7 +50,8 @@ fn finite_thresholds_raise_only_on_entry() {
     let sample = |value| Some(StaffRequestControllerSample::NumberQ16(value * 65_536));
     for (comparison, current, previous, expected) in cases {
         let row = number_row(comparison, false);
-        let mut state = bind_rows(row.id, std::slice::from_ref(&row)).remove(0);
+        let mut state =
+            bind_rows(row.id, std::slice::from_ref(&row), built_in_request_kind).remove(0);
         let _ = evaluate_staff_request_row(&row, &mut state, target, sample(previous));
         assert_eq!(
             matches!(
@@ -74,6 +75,8 @@ fn authored_hysteresis_uses_independent_cancel_threshold() {
             token: row.request.token,
             ordinal: 0,
         },
+        row_index: 0,
+        job_kind: row.request.token.and_then(built_in_request_kind),
         previous: None,
     };
     assert!(evaluate_staff_request_row(
@@ -143,6 +146,8 @@ fn creation_and_edges_emit_one_request_and_one_cancellation() {
             token: row.request.token,
             ordinal: 0,
         },
+        row_index: 0,
+        job_kind: row.request.token.and_then(built_in_request_kind),
         previous: None,
     };
     assert!(matches!(
@@ -238,13 +243,13 @@ fn a_filter_is_cleaned_at_the_thresholds_of_its_chosen_schedule() {
         filter_schedule_row(&row, &filter, Some(&MaintenanceScheduleIndex(0))).unwrap();
     let target = Entity::from_bits(7);
     let rows = std::slice::from_ref(&row);
-    let mut state = bind_rows(row.id, rows).remove(0);
+    let mut state = bind_rows(row.id, rows, built_in_request_kind).remove(0);
     let dirt = |percent| Some(StaffRequestControllerSample::NumberQ16(percent * 65_536));
     assert!(evaluate_staff_request_row(&regular, &mut state, target, dirt(40)).is_none());
     assert!(matches!(
         evaluate_staff_request_row(&preemptive, &mut state, target, dirt(40)),
         Some(StaffRequestJobEvent::Raised { .. })
     ));
-    let mut state = reconcile_rows(row.id, rows, &[state]).remove(0);
+    let mut state = reconcile_rows(row.id, rows, &[state], built_in_request_kind).remove(0);
     assert!(evaluate_staff_request_row(&regular, &mut state, target, dirt(55)).is_none());
 }

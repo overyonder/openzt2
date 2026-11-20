@@ -4,7 +4,7 @@ use std::{
 };
 
 use bevy::{
-    asset::Handle,
+    asset::{AssetId, Handle},
     ecs::{lifecycle::Remove, observer::On, query::Without, system::Commands, world::Mut},
     image::Image,
     log::{error, trace},
@@ -671,11 +671,19 @@ impl PropertyCache {
         property_layout: &PropertyLayout,
         texture_layout: &TextureLayout,
     ) {
-        let properties_min_binding_size = if property_layout.is_empty() {
+        let binding_size = if property_layout.is_empty() {
             0
         } else {
             property_layout.min_binding_size().get() as u32
         };
+        self.ensure_layout_for_binding_size(binding_size, texture_layout);
+    }
+
+    pub(super) fn ensure_layout_for_binding_size(
+        &mut self,
+        properties_min_binding_size: u32,
+        texture_layout: &TextureLayout,
+    ) {
         for with_prefix_sum in [false, true] {
             // Get the base layout that we will clone and modify
             let base_key = BindGroupLayoutKey::base(with_prefix_sum);
@@ -816,6 +824,8 @@ pub struct PropertyBindGroupKey {
     pub binding_size: u32,
     /// Texture layout for the material binding points.
     pub texture_layout: TextureLayout,
+    /// Images used to build the texture bindings.
+    pub textures: Vec<AssetId<Image>>,
 }
 
 // Note: use by HashMap to turn a key reference into an owned key when inserting
@@ -833,6 +843,7 @@ impl PropertyBindGroupKey {
             buffer_index: properties.buffer_index,
             binding_size: properties.property_layout.min_binding_size().get() as u32,
             texture_layout,
+            textures: Vec::new(),
         }
     }
 
@@ -842,6 +853,7 @@ impl PropertyBindGroupKey {
             buffer_index: 0,
             binding_size: 0,
             texture_layout,
+            textures: Vec::new(),
         }
     }
 
@@ -878,6 +890,11 @@ impl PropertyBindGroups {
     /// Clear all cached bind groups.
     pub fn clear(&mut self) {
         self.property_bind_groups.clear();
+    }
+
+    pub(super) fn invalidate_image(&mut self, image: AssetId<Image>) {
+        self.property_bind_groups
+            .retain(|key, _| !key.textures.contains(&image));
     }
 
     fn make_bind_group(
@@ -961,7 +978,11 @@ impl PropertyBindGroups {
                 4,
                 gpu_images,
                 |clamp_linear, sampler| {
-                    if clamp_linear { &property_cache.clamp_linear_sampler } else { sampler }
+                    if clamp_linear {
+                        &property_cache.clamp_linear_sampler
+                    } else {
+                        sampler
+                    }
                 },
                 &mut entries,
             )

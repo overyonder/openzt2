@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use super::transport_track_sale_steps::{TrackSaleStepState, TransportTrackSaleStep};
 use openzt2_zoo_state::construction::construction_interaction_types::PlacementFailure;
 use openzt2_zoo_state::construction::construction_transaction_types::PrepareDeletion;
 use openzt2_zoo_state::economy::money_types::Money;
@@ -18,7 +19,7 @@ pub(crate) fn refresh_selected_transport_sale_quote(
     sales: TransportTrackSaleQueries,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active: Res<WorldDefinitions>,
-    quotes: Query<&openzt2_zoo_state::economy::facility_economy_types::CurrentSellQuote>,
+    mut quotes: Query<&mut openzt2_zoo_state::economy::facility_economy_types::CurrentSellQuote>,
 ) {
     use openzt2_zoo_state::economy::facility_economy_types::CurrentSellQuote;
     let Some(target) = selected
@@ -30,14 +31,17 @@ pub(crate) fn refresh_selected_transport_sale_quote(
     let quote = active
         .get(&definitions)
         .and_then(|definitions| sales.quote(target, definitions));
-    match quote {
-        Some(refund) if quotes.get(target).is_ok_and(|quote| quote.0 == refund) => {}
-        Some(refund) => {
+    match (quote, quotes.get_mut(target)) {
+        (Some(refund), Ok(mut current)) => {
+            current.set_if_neq(CurrentSellQuote(refund));
+        }
+        (Some(refund), Err(_)) => {
             commands.entity(target).insert(CurrentSellQuote(refund));
         }
-        None => {
+        (None, Ok(_)) => {
             commands.entity(target).remove::<CurrentSellQuote>();
         }
+        (None, Err(_)) => {}
     }
 }
 
@@ -143,14 +147,18 @@ fn single_piece_removal_steps(
         }
         edits.push(after);
     }
-    let steps = edits
-        .into_iter()
-        .map(|edit| commands.spawn((edit, world, ChildOf(transaction))).id())
-        .collect();
-    Some(TransportTrackConstructionEditSteps {
-        steps,
-        ..Default::default()
-    })
+    for (ordinal, edit) in edits.into_iter().enumerate() {
+        commands.spawn((
+            edit,
+            world,
+            ChildOf(transaction),
+            TransportTrackSaleStep {
+                ordinal,
+                state: TrackSaleStepState::Queued,
+            },
+        ));
+    }
+    Some(TransportTrackConstructionEditSteps::default())
 }
 
 #[cfg(test)]

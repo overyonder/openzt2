@@ -2,6 +2,7 @@ use bevy::prelude::*;
 use openzt2_game_data::AssetId;
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+#[require(CircuitDirection)]
 pub struct TransportCircuit {
     pub definition: AssetId,
     pub closed: bool,

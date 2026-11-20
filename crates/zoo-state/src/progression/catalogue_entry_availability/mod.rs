@@ -125,9 +125,6 @@ pub fn catalogue_entry_can_be_researched(
                 .is_some_and(|research| research.unlocks.contains(&entry.definition))
         });
     eligible
-        && catalog
-            .research()
-            .any(|research| research.unlocks.contains(&entry.definition))
         && !catalog
             .unlock_definitions_targeting_catalogue_definition(entry.definition)
             .any(|unlock| !matches!(unlock.requirement, UnlockRequirement::Research(_)))

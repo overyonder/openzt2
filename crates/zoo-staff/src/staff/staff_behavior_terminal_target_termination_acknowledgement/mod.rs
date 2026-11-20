@@ -16,8 +16,10 @@ use openzt2_zoo_state::{
 
 use super::{
     staff_employment_types::Staff,
-    staff_job_types::{CurrentJob, JobClaim, StaffJob, StaffJobBehaviorTask},
-    staff_lifecycle_messages::{CancelStaffJobRequest, StaffJobCompleted},
+    staff_job_types::{
+        CurrentJob, JobClaim, StaffJob, StaffJobBehaviorTask, StaffJobCancellationPending,
+    },
+    staff_lifecycle_messages::StaffJobCompleted,
 };
 
 pub(super) fn acknowledge_staff_target_termination_owned_by_terminal_maintenance_systems(
@@ -43,17 +45,11 @@ pub(super) fn acknowledge_staff_target_termination_owned_by_terminal_maintenance
     assignments: Query<&CurrentJob, With<Staff>>,
     mut finished: MessageReader<BehaviorTaskFinished>,
     mut failed: MessageReader<BehaviorTaskFailed>,
-    cancellations: Res<Messages<CancelStaffJobRequest>>,
+    cancelling: Query<(), With<StaffJobCancellationPending>>,
     mut completed: MessageWriter<StaffJobCompleted>,
 ) {
-    let canceled = |job| {
-        cancellations
-            .get_cursor()
-            .read(&cancellations)
-            .any(|request| request.job == job)
-    };
     for (actor, current, task, instruction, action) in &staff {
-        let Ok((job, claim, assigned, applied)) = jobs.get(current.job) else {
+        let Ok((job, claim, assigned, applied)) = jobs.get(current.job()) else {
             continue;
         };
         if job.kind != StaffJobKind::SweepLitter
@@ -67,7 +63,7 @@ pub(super) fn acknowledge_staff_target_termination_owned_by_terminal_maintenance
         if claim.staff != actor
             || assigned.execution_id != Some(task.execution_id)
             || task.target != Some(job.target)
-            || canceled(current.job)
+            || cancelling.contains(current.job())
         {
             mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
             continue;
@@ -80,7 +76,7 @@ pub(super) fn acknowledge_staff_target_termination_owned_by_terminal_maintenance
             mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
             continue;
         };
-        let job_entity = current.job;
+        let job_entity = current.job();
         let killed = BehaviorKilledTarget {
             execution_id: task.execution_id,
             entity: job.target,
@@ -111,18 +107,18 @@ pub(super) fn acknowledge_staff_target_termination_owned_by_terminal_maintenance
         let Ok(current) = assignments.get(actor) else {
             continue;
         };
-        let Ok((job, claim, assigned, Some(applied))) = jobs.get(current.job) else {
+        let Ok((job, claim, assigned, Some(applied))) = jobs.get(current.job()) else {
             continue;
         };
         if job.kind == StaffJobKind::SweepLitter
             && claim.staff == actor
             && assigned.execution_id == Some(execution_id)
             && applied.0 == execution_id
-            && !canceled(current.job)
+            && !cancelling.contains(current.job())
         {
             completed.write(StaffJobCompleted {
                 staff: actor,
-                job: current.job,
+                job: current.job(),
                 kind: job.kind,
                 target: job.target,
             });

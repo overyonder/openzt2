@@ -5,15 +5,11 @@ use bevy::transform::helper::TransformHelper;
 use openzt2_game_assets::{
     application_lifecycle::GamePhase,
     effect::{
-        effect_document_runtime_queries::collect_root_effect_emitter_ids,
         explicit_particle_emission::{AppendParticleEffectPoints, ParticleEffectPointEmitter},
         ParticleEffectDocumentAsset, SpawnParticleEffectEmitter,
     },
     graphics_settings_types::{FourLevelGraphicsDetail, GraphicsSettings},
     terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset,
-};
-use openzt2_game_data::particle::{
-    authored_particle_system::AuthoredParticleSystemModifier, ParticleEffectDocument,
 };
 use openzt2_world_state::simulation_time::native_visual_random_stream::NativeVisualRandomStream;
 use openzt2_zoo_state::terrain::{
@@ -243,47 +239,28 @@ pub(in crate::terrain) fn synchronize_region_underwater_particle_effects(
             let Some(effect) = effects.get(handle) else {
                 continue;
             };
-            if let ParticleEffectDocument::Effect(document) = &effect.particle_document {
-                let root_emitters = collect_root_effect_emitter_ids(&effect.particle_document);
-                for (emission_index, emitter) in document
-                    .emitters
-                    .iter()
-                    .filter(|emitter| root_emitters.contains(&emitter.emitter_id))
-                    .enumerate()
-                {
-                    let particle_radius = emitter
-                        .modifiers
-                        .iter()
-                        .find_map(|modifier| match modifier {
-                            AuthoredParticleSystemModifier::InitialSizeRange { max, .. } => {
-                                Some(*max)
-                            }
-                            _ => None,
-                        })
-                        .unwrap_or(0.0);
-                    commands.spawn((
-                        TerrainWaterSuspensionEmitter {
-                            emission_index,
-                            initial_fill: true,
-                            particle_radius,
-                        },
-                        ParticleEffectPointEmitter::new(handle.clone(), emitter.emitter_id),
-                        Transform::IDENTITY,
-                        Visibility::Inherited,
-                        ChildOf(root),
-                    ));
-                }
+            for (emission_index, (emitter, particle_radius)) in effect
+                .authored_root_emitters_with_initial_size()
+                .enumerate()
+            {
+                commands.spawn((
+                    TerrainWaterSuspensionEmitter {
+                        emission_index,
+                        initial_fill: true,
+                        particle_radius,
+                    },
+                    ParticleEffectPointEmitter::new(handle.clone(), emitter),
+                    Transform::IDENTITY,
+                    Visibility::Inherited,
+                    ChildOf(root),
+                ));
             }
         }
         if let Some(handle) = bubble_effect {
             let Some(effect) = effects.get(handle) else {
                 continue;
             };
-            for (emission_index, emitter) in
-                collect_root_effect_emitter_ids(&effect.particle_document)
-                    .into_iter()
-                    .enumerate()
-            {
+            for (emission_index, &emitter) in effect.root_emitter_ids().iter().enumerate() {
                 commands.spawn((
                     TerrainWaterBubbleEmitter {
                         emitter,

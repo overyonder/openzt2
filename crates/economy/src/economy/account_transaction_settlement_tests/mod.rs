@@ -1,7 +1,9 @@
 use bevy::prelude::*;
 
 use super::{
-    account_transaction_settlement::settle_requested_account_transactions,
+    account_transaction_settlement::{
+        settle_requested_account_transactions, stage_requested_account_transactions,
+    },
     account_transaction_types::{
         Account, TransactionCompleted, TransactionKind, TransactionRejected, TransactionRequest,
     },
@@ -17,7 +19,16 @@ fn create_application_with_account_transaction_settlement() -> App {
         .add_message::<TransactionCompleted>()
         .add_message::<TransactionRejected>()
         .insert_resource(ZooCash(Money(1_000)))
-        .add_systems(Update, settle_requested_account_transactions);
+        .add_systems(
+            Update,
+            (
+                stage_requested_account_transactions::<false>,
+                settle_requested_account_transactions::<false>,
+                stage_requested_account_transactions::<true>,
+                settle_requested_account_transactions::<true>,
+            )
+                .chain(),
+        );
     application
 }
 

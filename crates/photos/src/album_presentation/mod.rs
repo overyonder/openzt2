@@ -1,8 +1,8 @@
 //! Presentation of photo-album availability, images, selection, and text.
 
-use openzt2_interface_state::photos::photo_album_types::AlbumMember;
 use openzt2_interface_state::photos::photo_album_types::PhotoAlbum;
 use openzt2_interface_state::photos::photo_album_types::PhotoAlbumOrder;
+use openzt2_interface_state::photos::photo_album_types::{AlbumMember, AlbumPhotos};
 use openzt2_interface_state::photos::photo_capture_types::Photo;
 
 use openzt2_game_data::ui_document::{
@@ -12,7 +12,7 @@ use openzt2_game_data::ui_document::{
     widget_live_collection::UiWidgetLiveCollectionSource,
 };
 
-use bevy::prelude::*;
+use bevy::{ecs::relationship::RelationshipTarget, prelude::*};
 
 use openzt2_game_assets::localization::localization_asset_types::LocalizationAsset;
 use openzt2_game_assets::localization::localization_precedence_index::LocalizationPrecedenceIndex;
@@ -32,14 +32,12 @@ use openzt2_ui::authored_ui_text_content_binding::UiTextBinding;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
 use super::album_operations::{
-    find_photo_camera_roll_album, ordered_photo_album_entities, ordered_photo_entities_in_album,
-    photo_rank_for_album_display_slot,
+    find_photo_camera_roll_album, ordered_photo_album_entities, photo_rank_for_album_display_slot,
 };
 use super::photo_album_types::{
     ActivePhotoAlbum, EnlargedAlbumPhoto, PhotoAlbumCapacityPages, PhotoAlbumChoiceRow,
     PhotoAlbumPage, PhotoCameraRoll, PhotoCameraRollRow, PhotoMove, PhotoMoveTarget,
-    PresentedPhotoCount, SelectedAlbumPhoto, INITIAL_PHOTO_ALBUM_SPREADS,
-    PHOTO_CAMERA_ROLL_CAPACITY,
+    SelectedAlbumPhoto, INITIAL_PHOTO_ALBUM_SPREADS, PHOTO_CAMERA_ROLL_CAPACITY,
 };
 use super::photo_capture_types::PhotoCaptionSubject;
 use openzt2_interface_state::ui::authored_ui_action_projection_components::UiPhotoActions;
@@ -50,15 +48,15 @@ pub(super) fn request_authored_photo_camera_roll_and_album_choice_row_counts(
     lists: Query<(Entity, &UiListPolicy)>,
     rows: Query<&ChildOf, With<UiListRow>>,
     albums: Query<(Entity, Has<PhotoCameraRoll>), With<PhotoAlbum>>,
-    photos: Query<&AlbumMember, With<Photo>>,
+    members: Query<&AlbumPhotos>,
     mut row_counts: MessageWriter<SetUiListRowCount>,
 ) {
     let camera_roll = albums.iter().find(|row| row.1).map(|row| row.0);
     for (list, policy) in &lists {
         let expected = match policy.source {
-            UiWidgetLiveCollectionSource::PhotoCameraRoll => camera_roll.map_or(0, |album| {
-                photos.iter().filter(|member| member.0 == album).count()
-            }),
+            UiWidgetLiveCollectionSource::PhotoCameraRoll => camera_roll
+                .and_then(|album| members.get(album).ok())
+                .map_or(0, RelationshipTarget::len),
             UiWidgetLiveCollectionSource::PhotoAlbums => albums.iter().filter(|row| !row.1).count(),
             _ => continue,
         }
@@ -98,6 +96,7 @@ pub(super) fn present_photo_camera_roll_and_album_choices_in_authored_rows(
         Has<ActivePhotoAlbum>,
     )>,
     photos: Query<(Entity, &Photo, &AlbumMember, Option<&PhotoAlbumOrder>)>,
+    members: Query<&AlbumPhotos>,
     mut projected_nodes: Query<(
         &UiNodeId,
         Option<&mut ImageNode>,
@@ -107,8 +106,8 @@ pub(super) fn present_photo_camera_roll_and_album_choices_in_authored_rows(
 ) {
     let camera_roll = albums.iter().find(|row| row.6.is_some()).map(|row| row.0);
     let camera_roll_photos = camera_roll
-        .map(|album| ordered_photo_entities_in_album(album, &photos))
-        .unwrap_or_default();
+        .and_then(|album| members.get(album).ok())
+        .map_or(&[][..], |members| members.collection().as_slice());
     let album_choices =
         ordered_photo_album_entities(albums.iter().filter(|row| row.6.is_none()).map(|row| row.0));
     let exposure_image_node = openzt2_game_data::AssetId::from_key("ui/role/fragment/node/button");
@@ -300,7 +299,7 @@ pub(super) fn set_photo_album_control_interaction_availability_from_album_state(
         ),
         With<PhotoAlbum>,
     >,
-    photos: Query<&AlbumMember, With<Photo>>,
+    members: Query<&AlbumPhotos>,
     mut nodes: Query<
         (
             Option<Ref<UiPhotoActions>>,
@@ -315,9 +314,9 @@ pub(super) fn set_photo_album_control_interaction_availability_from_album_state(
     let active = albums.iter().find(|row| row.4);
     let camera = albums.iter().find(|row| row.5);
     let photo_count = |album: Option<Entity>| {
-        album.map_or(0, |album| {
-            photos.iter().filter(|member| member.0 == album).count()
-        })
+        album
+            .and_then(|album| members.get(album).ok())
+            .map_or(0, RelationshipTarget::len)
     };
     let active_count = photo_count(active.map(|row| row.0));
     let camera_count = photo_count(camera.map(|row| row.0));
@@ -460,16 +459,14 @@ pub(super) fn present_active_photo_album_and_camera_roll_image_slots(
     enlarged_albums: Query<&EnlargedAlbumPhoto, With<PhotoAlbum>>,
     move_targets: Query<&PhotoMoveTarget, With<PhotoAlbum>>,
     photos: Query<(Entity, &Photo, &AlbumMember, Option<&PhotoAlbumOrder>)>,
+    members: Query<&AlbumPhotos>,
 ) {
     let active = active_albums
         .iter()
         .next()
         .map(|(entity, _)| entity)
         .or_else(|| albums.iter().next().map(|row| row.0));
-    let ordered_photos_by_album: std::collections::HashMap<_, _> = albums
-        .iter()
-        .map(|row| (row.0, ordered_photo_entities_in_album(row.0, &photos)))
-        .collect();
+
     for (node, range, owner, mut image_node, image_binding, visibility, selected_state) in
         action_nodes
     {
@@ -540,7 +537,7 @@ pub(super) fn present_active_photo_album_and_camera_roll_image_slots(
             let album_state = albums.get(album).ok()?;
             let rank =
                 photo_rank_for_album_display_slot(index, album_state.6.is_some(), album_state.3)?;
-            ordered_photos_by_album.get(&album)?.get(rank).copied()
+            members.get(album).ok()?.collection().get(rank).copied()
         });
         if slot.is_none()
             && album_picture.is_none()
@@ -617,7 +614,7 @@ fn is_ui_node_in_authored_subtree(
 pub(super) fn present_active_photo_album_photo_count(
     documents: Res<Assets<UiDocumentAsset>>,
     roots: Query<&UiDocumentRoot>,
-    albums: Query<&PresentedPhotoCount, (With<PhotoAlbum>, With<ActivePhotoAlbum>)>,
+    albums: Query<Option<&AlbumPhotos>, (With<PhotoAlbum>, With<ActivePhotoAlbum>)>,
     mut nodes: Query<(&UiPhotoActions, &UiDocumentOwner, &mut Text)>,
 ) {
     let Some(count) = albums.iter().next() else {
@@ -636,7 +633,7 @@ pub(super) fn present_active_photo_album_photo_count(
                 UiPhotoAction::RefreshPresentedActivePhotoAlbumPhotoCount
             )
         }) {
-            let next = count.0.to_string();
+            let next = count.map_or(0, RelationshipTarget::len).to_string();
             if text.0 != next {
                 text.0 = next;
             }
@@ -648,15 +645,15 @@ pub(super) fn present_active_photo_album_photo_count(
 pub(super) fn present_photo_album_and_photo_mode_camera_roll_text(
     active_albums: Query<(&PhotoAlbumPage, &Name), (With<PhotoAlbum>, With<ActivePhotoAlbum>)>,
     camera_rolls: Query<Entity, (With<PhotoAlbum>, With<PhotoCameraRoll>)>,
-    photos: Query<&AlbumMember, With<Photo>>,
+    members: Query<&AlbumPhotos>,
     mut nodes: Query<(&UiTextBinding, &mut Text)>,
 ) {
     let active = active_albums.iter().next();
     let page = active.map_or(0, |(page, _)| page.0);
     let roll = camera_rolls.iter().next();
-    let film_count = roll.map_or(0, |roll| {
-        photos.iter().filter(|member| member.0 == roll).count() as u32
-    });
+    let film_count = roll
+        .and_then(|album| members.get(album).ok())
+        .map_or(0, RelationshipTarget::len);
     for (binding, mut text) in &mut nodes {
         let next = match &binding.0 {
             UiTextPropertyBindingSource::PhotoAlbumPageNumber { offset } => {
@@ -695,8 +692,9 @@ pub(super) fn present_default_photo_captions_from_canonical_subjects(
         Option<&PhotoAlbumOrder>,
         Option<&PhotoCaptionSubject>,
     )>,
-    photo_ordering_view: Query<(Entity, &Photo, &AlbumMember, Option<&PhotoAlbumOrder>)>,
-    changed_photo_memberships: Query<(), Changed<AlbumMember>>,
+    album_members: Query<Ref<AlbumPhotos>>,
+    active_changes: Query<(), Added<ActivePhotoAlbum>>,
+    mut removed_memberships: RemovedComponents<AlbumPhotos>,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,
     localization_assets: Res<Assets<LocalizationAsset>>,
@@ -714,9 +712,18 @@ pub(super) fn present_default_photo_captions_from_canonical_subjects(
     let active_album = active_albums.iter().next();
     let active_album_entity = active_album.as_ref().map(|(entity, _)| *entity);
     let page_changed = active_album.is_some_and(|(_, page)| page.is_changed());
-    let ordered_photos = active_album_entity
-        .map(|album| ordered_photo_entities_in_album(album, &photo_ordering_view))
-        .unwrap_or_default();
+    let membership = active_album_entity.and_then(|album| album_members.get(album).ok());
+    let album_changed = !active_changes.is_empty()
+        || membership
+            .as_ref()
+            .is_some_and(|members| members.is_changed())
+        || removed_memberships
+            .read()
+            .any(|entity| Some(entity) == active_album_entity);
+    removed_memberships.clear();
+    let ordered_photos = membership
+        .as_ref()
+        .map_or(&[][..], |members| members.collection().as_slice());
     for (binding, mut caption_text) in &mut caption_nodes {
         let UiTextPropertyBindingSource::PhotoAlbumCaption { slot } = &binding.0 else {
             continue;
@@ -726,7 +733,7 @@ pub(super) fn present_default_photo_captions_from_canonical_subjects(
             && !world_definition_assets.is_changed()
             && !localization_assets.is_changed()
             && !active_localization.is_changed()
-            && changed_photo_memberships.is_empty()
+            && !album_changed
         {
             continue;
         }

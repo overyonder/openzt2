@@ -218,6 +218,7 @@ pub use graph::*;
 pub use modifier::*;
 pub use plugin::{EffectSystems, HanabiPlugin};
 pub use properties::*;
+pub use render::authored_draw::{EffectRenderPass, EffectRenderPassState, EffectRenderPasses};
 pub use render::{DebugSettings, LayoutFlags, ShaderCache};
 pub use spawn::{tick_spawners, CpuValue, EffectSpawner, Random, SpawnerSettings};
 pub use time::{EffectSimulation, EffectSimulationTime};
@@ -1152,6 +1153,7 @@ struct ParticleCountReadback {
     sample: std::sync::atomic::AtomicU64,
     sampled: std::sync::atomic::AtomicBool,
     pending: std::sync::atomic::AtomicBool,
+    drain_sample: std::sync::atomic::AtomicU64,
 }
 
 impl PartialEq for ParticleAliveCount {
@@ -1161,6 +1163,14 @@ impl PartialEq for ParticleAliveCount {
 }
 
 impl ParticleAliveCount {
+    /// Whether this submission has no living particles or queued GPU births.
+    pub fn is_drained_after(&self, submission: u32) -> bool {
+        self.value
+            .drain_sample
+            .load(std::sync::atomic::Ordering::Acquire)
+            == u64::from(submission) + 1
+    }
+
     /// Returns the live count when the latest readback matches this submission.
     pub fn sampled_count_after(&self, submission: u32) -> Option<u32> {
         use std::sync::atomic::Ordering;
@@ -1243,8 +1253,20 @@ impl EffectShaderSources {
             num_event_bindings
         );
 
-        let particle_layout = asset.particle_layout();
+        Self::generate_for_layout(
+            asset,
+            asset.particle_layout(),
+            parent_layout,
+            num_event_bindings,
+        )
+    }
 
+    fn generate_for_layout(
+        asset: &EffectAsset,
+        particle_layout: ParticleLayout,
+        parent_layout: Option<&ParticleLayout>,
+        num_event_bindings: u32,
+    ) -> Result<Self, ShaderGenerateError> {
         // The particle layout cannot be empty currently because we always emit
         // some Particle{} struct and it needs at least one field.
         // There's probably no use case for an empty layout anyway.
@@ -1928,6 +1950,7 @@ impl CompiledParticleEffect {
             // could try to get smarter here, only invalidate what
             // changed, but for now just wipe everything and rebuild
             // from scratch all three shaders together.
+            self.is_ready = false;
             self.effect_shader = None;
         }
 
@@ -2180,6 +2203,7 @@ fn compile_effects(
         Option<Ref<EffectMaterial>>,
         Option<Ref<EffectMesh>>,
         Option<Ref<EffectParent>>,
+        Option<&Children>,
         &mut CompiledParticleEffect,
     )>,
 ) {
@@ -2192,20 +2216,41 @@ fn compile_effects(
     // asset.
     let particle_layouts_and_parents: HashMap<Entity, (ParticleLayout, Option<Entity>)> = q_effects
         .iter()
-        .filter_map(|(entity, effect, _, _, parent, _)| {
+        .filter_map(|(entity, effect, _, _, parent, _, _)| {
             effects
                 .get(&effect.handle)
                 .map(|asset| (entity, (asset.particle_layout(), parent.map(|p| p.entity))))
         })
         .collect();
 
-    // Count children
-    let mut children: HashMap<Entity, Vec<Entity>> =
-        HashMap::with_capacity_and_hasher(particle_layouts_and_parents.len(), Default::default());
-    for (child, (_, parent)) in particle_layouts_and_parents.iter() {
-        if let Some(parent) = parent.as_ref() {
+    let mut children: HashMap<Entity, Vec<Entity>> = HashMap::default();
+    for (child, (_, parent)) in &particle_layouts_and_parents {
+        if let Some(parent) = parent {
             children.entry(*parent).or_default().push(*child);
         }
+    }
+    for (entity, _, _, _, _, hierarchy, _) in &q_effects {
+        let Some(collision_children) = children.get_mut(&entity) else {
+            continue;
+        };
+        let Some(hierarchy) = hierarchy else {
+            collision_children.sort_unstable();
+            continue;
+        };
+        let mut authored_order: Vec<_> = hierarchy
+            .iter()
+            .filter(|child| {
+                particle_layouts_and_parents
+                    .get(child)
+                    .is_some_and(|(_, parent)| *parent == Some(entity))
+            })
+            .collect();
+        if authored_order.len() < collision_children.len() {
+            collision_children.retain(|child| !authored_order.contains(child));
+            collision_children.sort_unstable();
+            authored_order.append(collision_children);
+        }
+        *collision_children = authored_order;
     }
 
     // Loop over all existing effects to update them, including invisible ones
@@ -2219,7 +2264,7 @@ fn compile_effects(
         parent_layout,
         mut compiled_effect,
     ) in q_effects.iter_mut().filter_map(
-        |(entity, effect, material, mesh, parent, compiled_effect)| {
+        |(entity, effect, material, mesh, parent, _, compiled_effect)| {
             // Check if asset is available, otherwise silently ignore as we
             // can't check for changes, and conceptually it makes no
             // sense to render a particle effect whose
@@ -2262,8 +2307,12 @@ fn compile_effects(
         // If the ParticleEffect didn't change, and the compiled one is for the
         // correct asset, then there's nothing to do.
         let material_changed = material.as_ref().is_some_and(|r| r.is_changed());
-        let need_rebuild =
-            effect.is_changed() || material_changed || compiled_effect.children != child_entities;
+        let need_rebuild = effect.is_changed()
+            || material_changed
+            || mesh.as_ref().is_some_and(|mesh| mesh.is_changed())
+            || compiled_effect.children != child_entities
+            || compiled_effect.parent != parent_entity
+            || compiled_effect.parent_particle_layout != parent_layout;
         if need_rebuild || (compiled_effect.asset != effect.handle) {
             if need_rebuild {
                 debug!("Invalidating the compiled cache for effect on entity {:?} due to changes in the ParticleEffect component. If you see this message too much, then performance might be affected. Find why the change detection of the ParticleEffect is triggered.", entity);
@@ -2295,7 +2344,7 @@ fn compile_effects(
     }
 
     // Clear removed effects, to allow them to be released by the asset server
-    for (_, effect, _, _, parent, mut compiled_effect) in q_effects.iter_mut() {
+    for (_, effect, _, _, parent, _, mut compiled_effect) in q_effects.iter_mut() {
         // If the effect has no asset, clear its compilation
         if effects.get(&effect.handle).is_none() {
             compiled_effect.clear();

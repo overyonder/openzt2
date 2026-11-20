@@ -58,10 +58,19 @@ pub(super) fn capture_economy_snapshot_records_from_live_world(
                 service: service.map(|service| ServiceFacilitySnapshot {
                     definition: service.definition,
                     capacity: service.capacity,
-                    occupied: service.occupied,
+                    occupied: 0,
                     payment_trigger: service.payment_trigger,
                 }),
-                inventory: inventory.map(|stock| [stock.available, stock.reserved, stock.capacity]),
+                inventory: inventory.map(|stock| {
+                    [
+                        stock
+                            .available
+                            .saturating_add(stock.reserved)
+                            .min(stock.capacity),
+                        0,
+                        stock.capacity,
+                    ]
+                }),
                 usage: usage.map(EconomyUsage::counts),
             })
         })

@@ -2,6 +2,10 @@ use super::*;
 use crate::transport_tours::topology::apply_transport_station_and_track_topology_mutation_requests;
 use crate::transport_tours::transport_track_construction_transaction::acknowledge_completed_transport_track_topology_applications;
 use crate::transport_tours::transport_track_construction_transaction::apply_prepared_transport_track_construction_edits;
+use crate::transport_tours::transport_track_sale_steps::{
+    begin_requested_transport_track_sales, settle_acknowledged_transport_track_sale_steps,
+    ApplyTransportTrackSaleStep, TransportTrackSaleStepAcknowledged,
+};
 use openzt2_construction::construction::deletion_transaction_preparation::begin_deletion_transaction_preparation;
 use openzt2_game_data::world_definitions::document::WorldDefinitionDocument;
 use openzt2_game_data::world_definitions::economy_transactions::*;
@@ -36,6 +40,8 @@ fn sale_application(refund_percent: f32) -> (App, Entity, [Entity; 2], Entity, E
         .add_message::<TransportTrackConstructionEditPreparationRejected>()
         .add_message::<ApplyPreparedTransportTrackConstructionEditRequest>()
         .add_message::<TransportTrackConstructionEditApplicationAcknowledged>()
+        .add_message::<ApplyTransportTrackSaleStep>()
+        .add_message::<TransportTrackSaleStepAcknowledged>()
         .add_message::<AttachTransportStationRequest>()
         .add_message::<DetachTransportStationRequest>()
         .add_message::<ConnectTransportTrackRequest>()
@@ -50,10 +56,11 @@ fn sale_application(refund_percent: f32) -> (App, Entity, [Entity; 2], Entity, E
                 refresh_selected_transport_sale_quote,
                 begin_deletion_transaction_preparation,
                 prepare_transport_track_sale,
-                crate::transport_tours::transport_track_construction_transaction::apply_stepped_transport_track_construction_edits,
+                begin_requested_transport_track_sales,
                 apply_prepared_transport_track_construction_edits,
                 apply_transport_station_and_track_topology_mutation_requests,
                 acknowledge_completed_transport_track_topology_applications,
+                settle_acknowledged_transport_track_sale_steps,
             )
                 .chain(),
         );

@@ -1,6 +1,6 @@
 //! Destination observations have no authority over a replacement activity.
 
-use bevy::{ecs::query::QueryFilter, prelude::*};
+use bevy::prelude::*;
 use openzt2_game_data::world_definitions::guest_simulation_definitions::GuestVisitPurpose;
 
 use super::guest_simulation_types::{
@@ -28,7 +28,7 @@ pub(super) fn viewing_owned_by_current_view_action(
         && instruction.is_current(task)
 }
 
-pub(super) fn revoke_unowned_guest_observations<Filter: QueryFilter>(
+pub(super) fn revoke_unowned_guest_observations(
     mut commands: Commands,
     guests: Query<
         (
@@ -43,7 +43,6 @@ pub(super) fn revoke_unowned_guest_observations<Filter: QueryFilter>(
         ),
         (
             With<Guest>,
-            Filter,
             Or<(
                 With<Viewing>,
                 With<GuestDestination>,

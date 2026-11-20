@@ -15,11 +15,17 @@ pub struct TopologyChanged {
     pub bounds: IRect,
 }
 
+#[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PathConnectivityChanged(pub IVec3);
+
 #[derive(Component, Debug, Clone, PartialEq)]
 pub struct TopologyEdit {
     pub created: Box<[TopologySnapshot]>,
     pub removed: Box<[TopologySnapshot]>,
 }
+
+#[derive(Component, Debug)]
+pub struct AppliedFenceTopology(pub Box<[Entity]>);
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum TopologySnapshot {

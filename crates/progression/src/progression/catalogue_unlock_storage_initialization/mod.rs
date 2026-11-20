@@ -1,4 +1,4 @@
-use super::research_types::ResearchProjectAvailability;
+use super::research_types::{ResearchProjectAvailability, WorldResearchItems};
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use bevy::prelude::*;
@@ -27,7 +27,7 @@ pub(super) fn initialize_catalogue_unlock_storage_from_active_world_definitions(
     >,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
-    research_availability: Query<&ResearchProjectAvailability>,
+    research_availability: Query<(Entity, &WorldMember, &ResearchProjectAvailability)>,
     profile_variables: Option<
         Res<openzt2_zoo_state::progression::profile_scenario_variables::ProfileScenarioVariables>,
     >,
@@ -69,26 +69,38 @@ pub(super) fn initialize_catalogue_unlock_storage_from_active_world_definitions(
             }
         }
     }
-    for research in definitions.research() {
-        if research_availability
+    let mut items = WorldResearchItems::default();
+    items.definitions.extend(
+        research_availability
             .iter()
-            .any(|availability| availability.item == research.id)
-        {
-            continue;
-        }
-        let Ok(identifier) = identifiers.allocate(root) else {
-            return;
+            .filter(|(_, member, _)| member.root == root)
+            .map(|(entity, _, availability)| (availability.item, entity)),
+    );
+    for research in definitions.research() {
+        let item = if let Some(&item) = items.definitions.get(&research.id) {
+            item
+        } else {
+            let Ok(identifier) = identifiers.allocate(root) else {
+                return;
+            };
+            let item = commands
+                .spawn((
+                    ResearchProjectAvailability {
+                        item: research.id,
+                        available: false,
+                    },
+                    WorldMember { root },
+                    identifier,
+                ))
+                .id();
+            items.definitions.insert(research.id, item);
+            item
         };
-        commands.spawn((
-            ResearchProjectAvailability {
-                item: research.id,
-                available: false,
-            },
-            WorldMember { root },
-            identifier,
-        ));
+        for &target in &research.unlocks {
+            items.unlocks.entry(target).or_default().push(item);
+        }
     }
     commands
         .entity(root)
-        .insert(CatalogueUnlockStorageInitialized);
+        .insert((CatalogueUnlockStorageInitialized, items));
 }

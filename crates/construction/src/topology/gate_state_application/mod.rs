@@ -18,7 +18,11 @@ use openzt2_zoo_state::topology::topology_graph_types::FenceEdge;
 use openzt2_zoo_state::topology::topology_graph_types::TopologyNode;
 use openzt2_zoo_state::topology::topology_grid_geometry::calculate_topology_edge_cell_bounds;
 
+use super::gate_automatic_operation::arm_gate_automatic_close_timer;
+
 pub(super) fn apply_requested_gate_state(
+    mut commands: Commands,
+    time: Res<Time<Fixed>>,
     mut requests: MessageReader<SetGateState>,
     definitions: GateActorTypeQueries,
     mut gates: Query<(&mut Gate, &FenceEdge, Option<&mut GateAutoClose>)>,
@@ -28,8 +32,9 @@ pub(super) fn apply_requested_gate_state(
     let Some(definitions) = definitions.definitions() else {
         return;
     };
+    let mut changed_timers = bevy::ecs::entity::EntityHashMap::default();
     for request in requests.read() {
-        let Ok((mut gate, edge, automatic_close)) = gates.get_mut(request.gate) else {
+        let Ok((mut gate, edge, _)) = gates.get_mut(request.gate) else {
             continue;
         };
         if gate.locked || gate.open == request.open {
@@ -40,15 +45,22 @@ pub(super) fn apply_requested_gate_state(
         };
         gate.open = request.open;
         if let Some(definition) = definitions.find_gate_fence(edge.definition) {
-            let policy = &definition.gate_policy;
-            if let Some(mut automatic_close) = automatic_close {
-                automatic_close.0 = request.open.then_some(policy.auto_close_ticks).unwrap_or(0);
-            }
+            let ticks = if request.open {
+                definition.gate_policy.auto_close_ticks
+            } else {
+                0
+            };
+            changed_timers.insert(request.gate, ticks);
         }
         changed.write(TopologyChanged {
             transaction: None,
             bounds: calculate_topology_edge_cell_bounds(first_node.cell, second_node.cell),
         });
+    }
+    for (gate, ticks) in changed_timers {
+        if let Ok((_, _, timer)) = gates.get_mut(gate) {
+            arm_gate_automatic_close_timer(&mut commands, gate, timer, ticks, &time);
+        }
     }
 }
 

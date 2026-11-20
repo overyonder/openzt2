@@ -3,9 +3,10 @@ use openzt2_game_assets::{
     terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset,
     world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView,
 };
+use openzt2_game_data::world_definitions::object_placement::placement_stomp_rules::PlacementStompAction;
 use openzt2_game_data::{behavior::action::spawn::BehaviorSpawnPosePolicy, AssetId};
 use openzt2_world_state::simulation_time::deterministic_random_stream::DeterministicRng;
-use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
+use openzt2_world_state::world_spawn::world_membership_types::{DefinitionId, WorldMember};
 use openzt2_zoo_state::{
     construction::construction_interaction_types::PlacementValidity,
     habitat::{
@@ -15,8 +16,8 @@ use openzt2_zoo_state::{
     locomotion::locomotion_types::{NavAgent, NavFlags},
     placement::{
         object_placement_validation::{
-            object_placement_cell_is_blocked_by_existing_object,
-            validate_object_placement_footprint_cells, ObjectPlacementAuthoritativeFacts,
+            object_placement_stomp_action, validate_object_placement_footprint_cells,
+            ObjectPlacementAuthoritativeFacts,
         },
         placement_occupancy_index::PlacedObjectFootprintOccupancyIndex,
     },
@@ -27,6 +28,7 @@ use openzt2_zoo_state::{
     },
     topology::topology_graph_types::{FenceEdge, TopologyGrid, TopologyNode},
 };
+use std::collections::BTreeSet;
 
 #[derive(SystemParam)]
 pub(super) struct SpawnPoseValidation<'w, 's> {
@@ -36,12 +38,17 @@ pub(super) struct SpawnPoseValidation<'w, 's> {
     grid: Res<'w, TopologyGrid>,
     habitats: Res<'w, HabitatIndex>,
     occupancy: Res<'w, PlacedObjectFootprintOccupancyIndex>,
-    definitions: Query<'w, 's, &'static DefinitionId>,
+    occupants: Query<'w, 's, (&'static DefinitionId, &'static WorldMember)>,
     agents: Query<'w, 's, &'static NavAgent>,
     transforms: Query<'w, 's, &'static GlobalTransform>,
     terrain_index: Res<'w, TerrainIndex>,
     terrain_assets: Res<'w, Assets<TerrainAsset>>,
     terrain_chunks: Query<'w, 's, (&'static TerrainChunk, Option<&'static EditedTerrainSamples>)>,
+}
+
+pub(super) struct BehaviorSpawnPlacement {
+    pub(super) transform: Transform,
+    pub(super) stomped_objects: BTreeSet<Entity>,
 }
 
 impl SpawnPoseValidation<'_, '_> {
@@ -54,13 +61,14 @@ impl SpawnPoseValidation<'_, '_> {
     pub(super) fn select_spawn_pose(
         &self,
         actor: Entity,
+        world: WorldMember,
         object: AssetId,
         node: Transform,
         actor_pose: Transform,
         policy: BehaviorSpawnPosePolicy,
         catalogue: WorldDefinitionsView<'_>,
         random: &mut DeterministicRng,
-    ) -> Transform {
+    ) -> BehaviorSpawnPlacement {
         for _ in 0..50 {
             let mut candidate = node;
             if policy.random_position_offset_m > 0.0 {
@@ -74,22 +82,31 @@ impl SpawnPoseValidation<'_, '_> {
                     (random.unit_f32() * 2.0 - 1.0) * policy.random_rotation_offset_radians,
                 );
             }
-            if self.pose_is_valid(actor, object, &candidate, catalogue) {
-                return candidate;
+            if let Some(stomped_objects) =
+                self.stomped_objects_for_valid_pose(actor, world, object, &candidate, catalogue)
+            {
+                return BehaviorSpawnPlacement {
+                    transform: candidate,
+                    stomped_objects,
+                };
             }
         }
-        actor_pose
+        BehaviorSpawnPlacement {
+            transform: actor_pose,
+            stomped_objects: BTreeSet::new(),
+        }
     }
 
-    fn pose_is_valid(
+    fn stomped_objects_for_valid_pose(
         &self,
         actor: Entity,
+        world: WorldMember,
         object: AssetId,
         pose: &Transform,
         catalogue: WorldDefinitionsView<'_>,
-    ) -> bool {
+    ) -> Option<BTreeSet<Entity>> {
         if !pose.translation.is_finite() {
-            return false;
+            return None;
         }
         let point = pose.translation.xz();
         // The spawn clearance probe excludes fence segments within two metres.
@@ -104,21 +121,20 @@ impl SpawnPoseValidation<'_, '_> {
                 ((point - a).dot(delta) / delta.length_squared().max(f32::EPSILON)).clamp(0.0, 1.0);
             point.distance_squared(a + delta * along) <= 4.0
         }) {
-            return false;
+            return None;
         }
-        let Some(on_land) = self.surfaces.on_land(point) else {
-            return false;
-        };
+        let on_land = self.surfaces.on_land(point)?;
         if self
             .agents
             .get(actor)
             .is_ok_and(|agent| !agent.capabilities.contains(NavFlags::AMPHIBIOUS))
             && !on_land
         {
-            return false;
+            return None;
         }
+        let mut stomped_objects = BTreeSet::new();
         let Some(placeable) = catalogue.find_placeable(object) else {
-            return true;
+            return Some(stomped_objects);
         };
         let terrain = |world| {
             let (chunk, edited) = self
@@ -131,8 +147,19 @@ impl SpawnPoseValidation<'_, '_> {
             Some(sample)
         };
         matches!(validate_object_placement_footprint_cells(placeable, &placeable.footprint, pose, terrain,
-            |cell| object_placement_cell_is_blocked_by_existing_object(&self.occupancy, cell, Some(actor), placeable, catalogue,
-                |entity| self.definitions.get(entity).ok().map(|definition| definition.0)),
+            |cell| self.occupancy.entities_occupying_cell(cell).filter(|entity| *entity != actor).any(|occupant| {
+                let Ok((definition, member)) = self.occupants.get(occupant) else {
+                    return true;
+                };
+                match object_placement_stomp_action(placeable, catalogue, Some(definition.0)) {
+                    PlacementStompAction::Allow => false,
+                    PlacementStompAction::Delete if member.root == world.root => {
+                        stomped_objects.insert(occupant);
+                        false
+                    }
+                    PlacementStompAction::Delete | PlacementStompAction::Prevent => true,
+                }
+            }),
             ObjectPlacementAuthoritativeFacts {
                 habitat: locate_habitat_at_world_position(&self.habitats, point, *self.grid),
                 unlocked: true, affordable: true,
@@ -141,6 +168,6 @@ impl SpawnPoseValidation<'_, '_> {
                         .with_additional_flags(openzt2_game_data::world_definitions::object_placement::PlacementConstraints::REQUIRE_WALL)),
                 headroom_valid: placeable.minimum_headroom_metres <= 0.0,
                 surface_valid: true,
-            }), PlacementValidity::Valid { .. })
+            }), PlacementValidity::Valid { .. }).then_some(stomped_objects)
     }
 }

@@ -1,4 +1,4 @@
-use bevy::ecs::{relationship::RelationshipTarget, system::SystemParam};
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use openzt2_zoo_state::{
     animal_behavior::behavior_natural_water_target_types::NaturalWaterTargetKind,
@@ -296,7 +296,7 @@ fn capture_behavior_actor_snapshots(
         let staff_job = actor
             .current_job
             .map(|current| {
-                let job_entity = entities.get(current.job).map_err(|_| {
+                let job_entity = entities.get(current.job()).map_err(|_| {
                     WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference
                 })?;
                 let job = job_entity

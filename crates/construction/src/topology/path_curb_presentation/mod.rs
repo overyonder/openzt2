@@ -20,7 +20,7 @@ use openzt2_zoo_state::topology::ground_path_boundary_queries::{
     ground_path_tile_triangles, ground_path_triangle_curb_boundary,
 };
 use openzt2_zoo_state::topology::ground_path_layout_calculation::calculate_snapped_ground_path_layout;
-use openzt2_zoo_state::topology::topology_edit_types::TopologyChanged;
+use openzt2_zoo_state::topology::topology_edit_types::PathConnectivityChanged;
 use openzt2_zoo_state::topology::topology_graph_types::PathTile;
 use openzt2_zoo_state::topology::topology_graph_types::TopologyGrid;
 
@@ -69,7 +69,7 @@ impl PathCurbsHydrated {
 /// rebuilding every path every frame.
 pub(crate) fn invalidate_path_curb_presentations_after_topology_or_terrain_changes(
     mut commands: Commands,
-    mut changed: MessageReader<TopologyChanged>,
+    mut changed: MessageReader<PathConnectivityChanged>,
     mut terrain_changed: MessageReader<TerrainChanged>,
     terrain_chunks: Query<&TerrainChunk>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
@@ -95,8 +95,8 @@ pub(crate) fn invalidate_path_curb_presentations_after_topology_or_terrain_chang
         .max()
         .unwrap_or(1);
     for change in changed.read() {
-        let min = change.bounds.min - IVec2::splat(radius);
-        let max = change.bounds.max + IVec2::splat(radius);
+        let min = change.0.xy() - IVec2::splat(radius);
+        let max = change.0.xy() + IVec2::splat(radius);
         for (entity, path, _, _) in &paths {
             let cell = path.cell.xy();
             if cell.x < min.x || cell.y < min.y || cell.x > max.x || cell.y > max.y {
@@ -155,7 +155,7 @@ pub(crate) fn hydrate_authored_path_curb_prefab_presentations(
     terrain_index: Res<TerrainIndex>,
     paths: Query<(Entity, &PathTile, &Transform, Option<&PathCurbsHydrated>)>,
     paths_awaiting_curb_hydration: Query<(), (With<PathTile>, Without<PathCurbsHydrated>)>,
-    mut topology_changed: MessageReader<TopologyChanged>,
+    mut topology_changed: MessageReader<PathConnectivityChanged>,
 ) {
     let boundary_changed = topology_changed.read().count() != 0;
     if paths_awaiting_curb_hydration.is_empty() && !boundary_changed {

@@ -3,8 +3,9 @@ use openzt2_world_state::world_spawn::prefab_authored_attachment_identifier::Pre
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabPresentation;
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabCausticPolicy;
 use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
-use openzt2_world_state::animation_graph::animation_presentation_relationship_types::AnimationPresentationOwner;
+use openzt2_world_state::animation_graph::animation_presentation_relationship_types::{AnimationPresentationBinder, AnimationPresentationOwner};
 use bevy::prelude::*;
+use bevy::platform::collections::HashSet;
 use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
@@ -12,6 +13,7 @@ use openzt2_game_data::world_definitions::world_objects::{
     WorldObjectFadeRange, WorldObjectNamedPhysicalPresentationDefinition,
 };
 use openzt2_zoo_state::feeding::container_quantity::{DrinkContainer, FoodContainer};
+use openzt2_zoo_state::aquatic::aquatic_simulation_types::WaterFilter;
 use openzt2_game_data::AssetId;
 
 #[cfg(test)]
@@ -24,63 +26,104 @@ pub(super) struct NamedPhysicalPresentationsHydrated;
 
 /// A named physical object retaining its owner after attachment to a model node.
 #[derive(Component)]
+#[relationship(relationship_target = NamedPhysicalPresentations)]
 pub(super) struct NamedPhysicalPresentation(Entity);
+
+#[derive(Component)]
+#[relationship_target(relationship = NamedPhysicalPresentation, linked_spawn)]
+pub(super) struct NamedPhysicalPresentations(Vec<Entity>);
 
 /// Borrows each physical binder's policy without applying it to sibling binders.
 pub(super) fn project_physical_presentation_caustic_policies(
     mut commands: Commands,
     active_definitions: Res<WorldDefinitions>,
     assets: Res<Assets<WorldDefinitionAsset>>,
-    presentations: Query<
+    mut asset_events: MessageReader<AssetEvent<WorldDefinitionAsset>>,
+    mut presentations: Query<
         (
             Entity,
             Option<&DefinitionId>,
             Option<&PrefabAuthoredAttachmentIdentifier>,
-            Option<&PrefabCausticPolicy>,
+            Option<&mut PrefabCausticPolicy>,
         ),
-        Or<(With<DefinitionId>, With<PrefabPresentation>)>,
+        Or<(
+            With<DefinitionId>,
+            With<PrefabPresentation>,
+            With<PrefabCausticPolicy>,
+        )>,
     >,
     parents: Query<&ChildOf>,
+    children: Query<&Children>,
     definitions: Query<&DefinitionId>,
+    changed_hierarchy: Query<Entity, Or<(Changed<DefinitionId>, Changed<ChildOf>)>>,
+    changed_presentations: Query<
+        Entity,
+        Or<(
+            Changed<PrefabAuthoredAttachmentIdentifier>,
+            Changed<PrefabPresentation>,
+        )>,
+    >,
+    mut removed_definitions: RemovedComponents<DefinitionId>,
+    mut removed_parents: RemovedComponents<ChildOf>,
+    mut removed_binder_ids: RemovedComponents<PrefabAuthoredAttachmentIdentifier>,
+    mut removed_presentations: RemovedComponents<PrefabPresentation>,
 ) {
+    let catalogue_changed = asset_events.read().count() != 0 || active_definitions.is_changed();
+    let hierarchy_changes = changed_hierarchy
+        .iter()
+        .chain(removed_definitions.read())
+        .chain(removed_parents.read());
+    let local_changes = changed_presentations
+        .iter()
+        .chain(removed_binder_ids.read())
+        .chain(removed_presentations.read());
+    let mut affected = HashSet::<Entity>::default();
+    if catalogue_changed {
+        affected.extend(presentations.iter().map(|(entity, ..)| entity));
+    }
+    for entity in hierarchy_changes {
+        if affected.insert(entity) {
+            affected.extend(children.iter_descendants::<Children>(entity));
+        }
+    }
+    affected.extend(local_changes);
+    if affected.is_empty() {
+        return;
+    }
     let catalogue = active_definitions.get(&assets);
-    for (entity, own_definition, binder, current) in &presentations {
+    let mut changed = presentations.iter_many_mut(affected).matched();
+    while let Some((entity, own_definition, binder, current)) = changed.fetch_next() {
         let definition = own_definition.or_else(|| {
             parents
                 .iter_ancestors::<ChildOf>(entity)
                 .find_map(|ancestor| definitions.get(ancestor).ok())
         });
-        let Some(object) = definition.and_then(|id| catalogue.as_ref()?.find_object(id.0)) else {
-            if current.is_some() {
-                commands.entity(entity).remove::<PrefabCausticPolicy>();
-            }
-            continue;
-        };
         let binder = if own_definition.is_some() {
-            AssetId::from_key("mainobj")
-        } else if let Some(binder) = binder {
-            binder.0
+            Some(AssetId::from_key("mainobj"))
         } else {
-            if current.is_some() {
-                commands.entity(entity).remove::<PrefabCausticPolicy>();
+            binder.map(|binder| binder.0)
+        };
+        let projected = definition.zip(binder).and_then(|(id, binder)| {
+            let definition = catalogue.as_ref()?.find_object(id.0)?;
+            let policy = definition
+                .presentation_caustic_policies
+                .iter()
+                .find(|policy| policy.binder == binder)?;
+            Some(PrefabCausticPolicy {
+                receives: !policy.no_caustics && !policy.is_decal,
+            })
+        });
+        match (current, projected) {
+            (Some(mut current), Some(projected)) => {
+                current.set_if_neq(projected);
             }
-            continue;
-        };
-        let Some(policy) = object
-            .presentation_caustic_policies
-            .iter()
-            .find(|policy| policy.binder == binder)
-        else {
-            if current.is_some() {
-                commands.entity(entity).remove::<PrefabCausticPolicy>();
+            (Some(_), None) => {
+                commands.entity(entity).try_remove::<PrefabCausticPolicy>();
             }
-            continue;
-        };
-        let projected = PrefabCausticPolicy {
-            receives: !policy.no_caustics && !policy.is_decal,
-        };
-        if current != Some(&projected) {
-            commands.entity(entity).insert(projected);
+            (None, Some(policy)) => {
+                commands.entity(entity).try_insert(policy);
+            }
+            (None, None) => {}
         }
     }
 }
@@ -184,40 +227,69 @@ pub(super) struct NamedPresentationFade(WorldObjectFadeRange);
 /// authored visibility.
 pub(super) fn select_named_presentation_fade_states(
     owners: Query<(
+        &NamedPhysicalPresentations,
         Option<&FoodContainer>,
         Option<&DrinkContainer>,
-        Option<&openzt2_zoo_state::aquatic::aquatic_simulation_types::WaterFilter>,
+        Option<&WaterFilter>,
     )>,
-    mut states: Query<(
-        &NamedPhysicalPresentation,
-        &NamedPresentationFade,
-        &mut Visibility,
+    changed_values: Query<
+        Entity,
+        (
+            With<NamedPhysicalPresentations>,
+            Or<(
+                Changed<FoodContainer>,
+                Changed<DrinkContainer>,
+                Changed<WaterFilter>,
+            )>,
+        ),
+    >,
+    mut removed_food: RemovedComponents<FoodContainer>,
+    mut states: ParamSet<(
+        Query<
+            &NamedPhysicalPresentation,
+            (
+                With<NamedPresentationFade>,
+                Or<(
+                    Changed<NamedPhysicalPresentation>,
+                    Changed<NamedPresentationFade>,
+                    Changed<Visibility>,
+                )>,
+            ),
+        >,
+        Query<(&NamedPresentationFade, &mut Visibility)>,
     )>,
 ) {
     let food_level = AssetId::from_key("f_foodlevel");
     let filter_dirty_level = AssetId::from_key("f_filterdirtylevel");
-    for (owner, fade, mut visibility) in &mut states {
-        let Ok((food, drink, filter)) = owners.get(owner.0) else {
-            continue;
-        };
+    let changed_owners = changed_values
+        .iter()
+        .chain(states.p0().iter().map(|owner| owner.0))
+        .chain(removed_food.read())
+        .collect::<HashSet<_>>();
+    let mut states = states.p1();
+    for (presentations, food, drink, filter) in owners.iter_many(changed_owners).matched() {
         // Container amounts are authored points in Q16.
-        let value = if fade.0.attribute == food_level {
-            food.map(|food| food.amount_q16)
-                .or(drink.map(|drink| drink.amount_q16))
-                .map(|amount| amount as f32 / 65_536.0)
-        } else if fade.0.attribute == filter_dirty_level {
-            filter.map(|filter| filter.dirt_percent)
-        } else {
-            None
-        };
-        let Some(value) = value else {
-            continue;
-        };
-        visibility.set_if_neq(if fade.0.contains(value) {
-            Visibility::Inherited
-        } else {
-            Visibility::Hidden
-        });
+        let food_amount = food
+            .map(|food| food.amount_q16)
+            .or(drink.map(|drink| drink.amount_q16))
+            .map(|amount| amount as f32 / 65_536.0);
+        let mut binders = states.iter_many_mut(&presentations.0).matched();
+        while let Some((fade, mut visibility)) = binders.fetch_next() {
+            let value = if fade.0.attribute == food_level {
+                food_amount
+            } else if fade.0.attribute == filter_dirty_level {
+                filter.map(|filter| filter.dirt_percent)
+            } else {
+                None
+            };
+            if let Some(value) = value {
+                visibility.set_if_neq(if fade.0.contains(value) {
+                    Visibility::Inherited
+                } else {
+                    Visibility::Hidden
+                });
+            }
+        }
     }
 }
 
@@ -272,23 +344,45 @@ pub(super) fn attach_named_presentations_to_model_nodes(
 /// vendor hands over money and food, so its animations belong to the owner.
 /// Runs after animation attachment has given the controller its direct parent.
 pub(super) fn project_named_presentation_animation_owners(
+    mut commands: Commands,
     mut controllers: Query<
-        (Entity, &mut AnimationPresentationOwner),
+        (
+            Entity,
+            &AnimationPresentationOwner,
+            Option<&mut AnimationPresentationBinder>,
+        ),
         Changed<AnimationPresentationOwner>,
     >,
     parents: Query<&ChildOf>,
-    presentations: Query<&NamedPhysicalPresentation>,
+    presentations: Query<(
+        &NamedPhysicalPresentation,
+        &PrefabAuthoredAttachmentIdentifier,
+    )>,
 ) {
-    for (controller, mut owner) in &mut controllers {
-        let Some(presentation_owner) = parents
+    for (controller, owner, current_binder) in &mut controllers {
+        let Some((presentation, identifier)) = parents
             .iter_ancestors::<ChildOf>(controller)
             .find_map(|ancestor| presentations.get(ancestor).ok())
-            .map(|presentation| presentation.0)
         else {
+            if current_binder.is_some() {
+                commands
+                    .entity(controller)
+                    .try_remove::<AnimationPresentationBinder>();
+            }
             continue;
         };
-        if owner.gameplay_entity != presentation_owner {
-            owner.gameplay_entity = presentation_owner;
+        if owner.gameplay_entity != presentation.0 {
+            commands
+                .entity(controller)
+                .try_insert(AnimationPresentationOwner {
+                    gameplay_entity: presentation.0,
+                });
+        }
+        let binder = AnimationPresentationBinder(identifier.0);
+        if let Some(mut current) = current_binder {
+            current.set_if_neq(binder);
+        } else {
+            commands.entity(controller).try_insert(binder);
         }
     }
 }

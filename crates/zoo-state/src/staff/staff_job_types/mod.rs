@@ -1,3 +1,4 @@
+use bevy::ecs::{lifecycle::HookContext, world::DeferredWorld};
 use bevy::prelude::*;
 use openzt2_game_data::{world_definitions::staff_management::StaffJobKind, AssetId};
 
@@ -26,9 +27,15 @@ pub fn authored_staff_request_urgency(priority: f32) -> Option<u32> {
 /// The point in a dirty tank where the water-cleaning manager asks a keeper
 /// to work. It is the job's target: the keeper's own task moves there.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+#[relationship(relationship_target = TankCleaningSite)]
 pub struct TankCleaningRequestSite {
+    #[relationship]
     pub tank: Entity,
 }
+
+#[derive(Component)]
+#[relationship_target(relationship = TankCleaningRequestSite, linked_spawn)]
+pub struct TankCleaningSite(Entity);
 
 /// The winning shipped behavior-task declaration selected when this job is claimed.
 #[derive(Component, Debug, Clone, PartialEq, Eq)]
@@ -43,14 +50,37 @@ pub struct StaffJobBehaviorTask {
 }
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+#[relationship(relationship_target = CurrentJob)]
+#[component(on_remove = clear_ended_staff_claim)]
 pub struct JobClaim {
+    #[relationship]
     pub staff: Entity,
 }
 
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Component, Debug)]
+#[relationship_target(relationship = JobClaim)]
 pub struct CurrentJob {
-    pub job: Entity,
+    job: Entity,
 }
+
+impl CurrentJob {
+    pub const fn job(&self) -> Entity {
+        self.job
+    }
+}
+
+fn clear_ended_staff_claim(mut world: DeferredWorld, context: HookContext) {
+    world.commands().queue_silenced(move |world: &mut World| {
+        if let Ok(mut job) = world.get_entity_mut(context.entity) {
+            if !job.contains::<JobClaim>() {
+                job.remove::<(StaffJobBehaviorTask, JobProgress)>();
+            }
+        }
+    });
+}
+
+#[derive(Component)]
+pub struct StaffJobCancellationPending;
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct JobProgress;

@@ -20,7 +20,10 @@ use openzt2_game_assets::world_definitions::{
 };
 use openzt2_world_state::animation_graph::animation_graph_playback_message_types::AnimationClipPlaybackRequest;
 use openzt2_world_state::animation_graph::animation_graph_playback_message_types::AnimationClipPlaybackRequestRejected;
-use openzt2_world_state::animation_graph::animation_presentation_relationship_types::AnimationPresentationOwner;
+use openzt2_world_state::animation_graph::animation_graph_playback_message_types::AnimationClipPresentationSelection;
+use openzt2_world_state::animation_graph::animation_presentation_relationship_types::{
+    AnimationPresentationOwner, AnimationPresentations,
+};
 use openzt2_world_state::animation_playback::animation_event_message_types::AnimationCompleted;
 use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackRepetitionPolicy;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
@@ -59,6 +62,7 @@ pub(super) fn start_current_behavior_animation_clip_actions(
         ),
     >,
     mut animation_clip_playback_requests: MessageWriter<AnimationClipPlaybackRequest>,
+    mut presentation_selections: MessageWriter<AnimationClipPresentationSelection>,
     definitions: Option<Res<WorldDefinitions>>,
     definition_assets: Option<Res<Assets<WorldDefinitionAsset>>>,
 ) {
@@ -146,6 +150,13 @@ pub(super) fn start_current_behavior_animation_clip_actions(
                 AnimationPlaybackRepetitionPolicy::PlayOnce
             },
         });
+        if let Some(binder) = &animation.physical_object {
+            let binder = openzt2_game_assets::source_document::source_document_semantic_name::canonicalize_source_document_record_key(binder);
+            presentation_selections.write(AnimationClipPresentationSelection {
+                request_id: request_id.id,
+                binder: openzt2_game_data::AssetId::from_key(&binder),
+            });
+        }
         if let Some(until_tick) = play_until_tick {
             commands.entity(actor).insert(TimedBehaviorAnimationClip {
                 request_id: request_id.id,
@@ -264,8 +275,8 @@ pub(super) fn finish_behavior_animation_clip_actions_after_play_time(
     simulation_clock: Res<ZooClock>,
     asset_server: Res<AssetServer>,
     mut animation_sets: ResMut<Assets<AnimationSetAsset>>,
+    owners: Query<&AnimationPresentations>,
     mut presentations: Query<(
-        &AnimationPresentationOwner,
         &mut AnimationPlaybackController,
         &mut AnimationGraphPlaybackState,
     )>,
@@ -293,6 +304,7 @@ pub(super) fn finish_behavior_animation_clip_actions_after_play_time(
         }
     }
     for (actor, mut timed, task, pending, failing) in &mut behavior_tasks {
+        let candidates = || AnimationPresentations::for_subject(actor, owners.get(actor).ok());
         let owns_task = !failing
             && task
                 .as_ref()
@@ -304,13 +316,12 @@ pub(super) fn finish_behavior_animation_clip_actions_after_play_time(
             cancellations.write(openzt2_world_state::animation_graph::animation_graph_playback_message_types::CancelAnimationClipPlaybackRequest {
                 animation_subject_entity: actor, request_id: timed.request_id,
             });
-            for (owner, mut controller, mut graph) in &mut presentations {
-                if owner.gameplay_entity == actor
-                    && graph.route_owner.is_some_and(|owner| {
-                        owner.request_id == timed.request_id
-                            && owner.playback_generation == controller.playback_generation
-                    })
-                {
+            let mut controllers = presentations.iter_many_mut(candidates()).matched();
+            while let Some((mut controller, mut graph)) = controllers.fetch_next() {
+                if graph.route_owner.is_some_and(|owner| {
+                    owner.request_id == timed.request_id
+                        && owner.playback_generation == controller.playback_generation
+                }) {
                     graph.route_owner = None;
                     graph.remaining_transition_nodes.clear();
                     graph.active_animation_graph_transition = None;
@@ -326,10 +337,8 @@ pub(super) fn finish_behavior_animation_clip_actions_after_play_time(
         let mut waiting = false;
         let mut succeeded = false;
         let mut matched = false;
-        for (owner, mut controller, mut graph) in &mut presentations {
-            if owner.gameplay_entity != actor {
-                continue;
-            }
+        let mut controllers = presentations.iter_many_mut(candidates()).matched();
+        while let Some((mut controller, mut graph)) = controllers.fetch_next() {
             if timed.returning {
                 let Some(route_owner) = graph.route_owner.filter(|owner| {
                     owner.request_id == timed.request_id

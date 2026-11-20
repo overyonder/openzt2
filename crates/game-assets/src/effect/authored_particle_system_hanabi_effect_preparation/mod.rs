@@ -35,6 +35,26 @@ pub(super) fn prepare_authored_particle_system_emitter_as_hanabi_effect_asset(
     let mut orient_along_velocity = false;
     let mut orient_to_camera = false;
     let mut spin_rotation = None;
+    if authored_particle_system_emitter
+        .renderers
+        .iter()
+        .any(|renderer| renderer.kind == AuthoredParticleRendererKind::VelocityAligned)
+    {
+        particle_initialization_modifiers.push(Box::new(SetAttributeModifier::new(
+            Attribute::VELOCITY,
+            expression_writer.lit(Vec3::ZERO).expr(),
+        )));
+    }
+    if authored_particle_system_emitter
+        .renderers
+        .iter()
+        .any(|renderer| renderer.columns > 1 || renderer.rows > 1)
+    {
+        particle_initialization_modifiers.push(Box::new(SetAttributeModifier::new(
+            Attribute::SPRITE_INDEX,
+            expression_writer.lit(0_u32).expr(),
+        )));
+    }
     if wave_surface {
         particle_initialization_modifiers.push(Box::new(SetAttributeModifier::new(
             Attribute::F32_0,

@@ -3,7 +3,6 @@
 use bevy::prelude::*;
 use openzt2_game_data::{species::LifeStage, AssetId as DomainAssetId};
 
-use openzt2_interface_state::photos::photo_capture_types::PhotoSubjects;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdError;
 
 #[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -57,6 +56,8 @@ pub(crate) struct PhotoSubjectContainedEntityEvidence {
     /// The definition remains available to scorers after the entity is gone.
     pub entity: Entity,
     pub definition: DomainAssetId,
+    pub guest: bool,
+    pub animal: bool,
 }
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,14 +92,6 @@ pub(crate) struct PhotoCaptured {
 }
 
 #[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct PhotoChallengeCompleted {
-    pub photo: Entity,
-    pub challenge: DomainAssetId,
-    pub subject: DomainAssetId,
-    pub rating_stars: u8,
-}
-
-#[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct PhotoCaptureFailed {
     pub reason: PhotoFailure,
 }
@@ -119,32 +112,33 @@ pub(crate) struct PendingPhotoCapture {
     pub captured_tick: u64,
     pub camera_position: Vec3,
     pub camera_rotation: Quat,
-    pub subjects: PhotoSubjects,
     pub view: PhotoView,
+    pub challenge_set: Option<DomainAssetId>,
+    pub expires_at: std::time::Duration,
+    pub completed: bool,
 }
-
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct PhotoCaptureOwner(pub Entity);
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ScreenshotCaptureOwner(pub Entity);
 
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PhotoEvidence {
     pub entity: Entity,
     pub definition: DomainAssetId,
     pub facts: PhotoSubjectFacts,
+    pub semantics: PhotoSemanticEvidence,
 }
 
 #[derive(Component, Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct PendingPhotoEvidence(pub Vec<PhotoEvidence>);
 
 #[derive(Component, Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct CapturedPhotoEvidence(pub Vec<PhotoEvidence>);
+pub(crate) struct CapturedPhotoEvidence(pub Vec<PhotoEvidence>, pub Option<DomainAssetId>);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PhotoSemanticEvidence {
-    pub entity: Entity,
+    pub guest: bool,
+    pub animal: bool,
     pub position_mm: IVec3,
     /// Photo selectors can match a sex/life-stage variant as well as a species.
     pub animal_variant: Option<DomainAssetId>,
@@ -172,14 +166,8 @@ pub(crate) struct PhotoSemanticEvidence {
     pub contained_entities: PhotoSubjectContainedEntitiesEvidence,
 }
 
-#[derive(Component, Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct CapturedPhotoSemantics(pub Vec<PhotoSemanticEvidence>);
-
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct CapturedPhotoView(pub PhotoView);
-
-#[derive(Component, Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct PendingPhotoSemantics(pub Vec<PhotoSemanticEvidence>);
 
 #[derive(Component, Debug, Clone, Copy, Default)]
 pub(crate) struct PhotoSubjectsCollected;

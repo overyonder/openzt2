@@ -50,8 +50,8 @@ use openzt2_zoo_state::terrain::dry_surface_eligibility::DrySurfaceEligibility;
 use openzt2_zoo_state::topology::topology_graph_types::TopologyGrid;
 
 use super::{
-    staff_employment_types::{AvailableForWork, Staff, StaffRole},
-    staff_job_eligibility::authored_staff_role_subject_names,
+    staff_employment_types::{Staff, StaffRole},
+    staff_job_eligibility::staff_subject_matches,
     staff_job_types::{CurrentJob, StaffJobBehaviorTask},
 };
 
@@ -82,7 +82,6 @@ pub(crate) fn start_authored_idle_staff_tasks(
         ),
         (
             With<Staff>,
-            With<AvailableForWork>,
             With<NavAgent>,
             Without<CurrentJob>,
             Without<BehaviorTaskExecutionState>,
@@ -108,13 +107,7 @@ pub(crate) fn start_authored_idle_staff_tasks(
             continue;
         };
         let position = transform.translation();
-        let subject_types = authored_staff_role_subject_names(role.role);
-        let subject_matches = |required: AssetId| {
-            required == AssetId::from_key("staff")
-                || subject_types
-                    .iter()
-                    .any(|name| required == AssetId::from_key(name))
-        };
+        let subject_matches = |required| staff_subject_matches(catalogue, role, required);
         let mut ranking = BehaviorCandidateRanking::new(policy.minimum_score);
         for (document, declaration, task) in view.behavior_tasks() {
             // Token tasks start from their delivered token, not from idleness.
@@ -341,7 +334,7 @@ pub(crate) fn interrupt_idle_staff_tasks_for_claimed_jobs(
     for (employee, current_job, idle, task) in &staff {
         let still_idle = task.is_some_and(|task| task.execution_id == idle.execution_id);
         let job_unstarted = jobs
-            .get(current_job.job)
+            .get(current_job.job())
             .is_ok_and(|job| job.execution_id.is_none());
         if still_idle && job_unstarted {
             abandon_behavior_task_for_reconsideration(employee, &mut commands);
@@ -496,6 +489,7 @@ pub(crate) fn start_staff_token_tasks(
     clock: Res<ZooClock>,
     mut sequence: ResMut<BehaviorTaskExecutionSequence>,
     surfaces: DrySurfaceEligibility,
+    token_tasks: Res<crate::staff::staff_job_eligibility::StaffTasksByRequestToken>,
     tokens: Query<(Entity, &BehaviorSelfToken, &ChildOf), Without<ClaimedBehaviorSelfToken>>,
     staff: Query<
         (&StaffRole, &GlobalTransform, Option<&LocomotionMode>),
@@ -533,32 +527,33 @@ pub(crate) fn start_staff_token_tasks(
         let Some(role) = catalogue.find_staff(role.0) else {
             continue;
         };
-        let subject_types = authored_staff_role_subject_names(role.role);
         let position = transform.translation();
         let mut chosen = None;
-        for (document, declaration, task) in view.behavior_tasks() {
-            if task.targets.len() != 1
-                || !task.targets[0].eq_ignore_ascii_case("fromtoken")
-                || !task
-                    .objects
-                    .iter()
-                    .any(|object| AssetId::from_key(&object.to_ascii_lowercase()) == token.name)
+        for (document, declaration, task) in token_tasks
+            .candidates(token.name)
+            .filter_map(|id| view.find_behavior_task_location(id))
+        {
+            if !task
+                .targets
+                .iter()
+                .any(|target| target.eq_ignore_ascii_case("fromtoken"))
                 || task.execution.has_unsupported_suffix()
+                || !(task.subjects.is_empty()
+                    || task.subjects.iter().any(|subject| {
+                        staff_subject_matches(
+                            catalogue,
+                            role,
+                            AssetId::from_key(&subject.to_ascii_lowercase()),
+                        )
+                    }))
             {
                 continue;
             }
             let satisfied = candidate_requirements_are_satisfied(
                 &task.candidate_eligibility_requirements,
                 |candidate_role, required| match candidate_role {
-                    // A flag such as `b_FearDinosaur` comes with the role's object.
                     BehaviorCandidateRole::Subject => {
-                        required == AssetId::from_key("staff")
-                            || subject_types
-                                .iter()
-                                .any(|name| required == AssetId::from_key(name))
-                            || catalogue.find_object(role.object).is_some_and(|object| {
-                                object.behavior_type_identifiers.contains(&required)
-                            })
+                        staff_subject_matches(catalogue, role, required)
                     }
                     BehaviorCandidateRole::Target => required == AssetId::from_key("fromtoken"),
                     BehaviorCandidateRole::Object => required == token.name,
@@ -604,7 +599,7 @@ pub(crate) fn start_staff_token_tasks(
                 execution_id,
                 program: task.id,
                 target: Some(payload),
-                document: document.clone(),
+                document,
                 declaration,
                 phase: BehaviorTaskExecutionPhase::Execution,
                 action: 0,

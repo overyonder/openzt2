@@ -8,6 +8,8 @@ use openzt2_game_data::ui_document::action::construction::UiConstructionConfirma
 use openzt2_game_data::ui_document::action::construction::UiFencePlacementMode;
 use openzt2_game_data::ui_document::action::construction::UiTankEditMode;
 use openzt2_game_data::ui_document::action::construction::UiTerrainEditMode;
+use openzt2_game_data::ui_document::action::UiTrigger;
+use openzt2_game_data::AssetId;
 
 use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
@@ -26,6 +28,7 @@ use openzt2_world_state::world_spawn::world_entity_crating::WorldEntityIsCrated;
 use crate::construction::construction_edit_history_operations;
 use crate::topology::topology_construction_preview_types::FencePreview;
 use openzt2_interface_state::ui::authored_ui_action_projection_components::UiConstructionActions;
+use openzt2_interface_state::ui::authored_ui_activation_contracts::ActivateAuthoredUiTool;
 use openzt2_interface_state::ui::authored_ui_activation_contracts::UiNodeActivated;
 use openzt2_zoo_state::construction::construction_edit_history_types::ApplyConstructionTransaction;
 use openzt2_zoo_state::construction::construction_edit_history_types::ConstructionEditDirection;
@@ -43,6 +46,104 @@ use openzt2_zoo_state::construction::construction_tool_and_placement_policy_type
 use openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::TankEditKind;
 use openzt2_zoo_state::construction::construction_transaction_types::EditCommitPhase;
 use openzt2_zoo_state::construction::construction_transaction_types::EditCommitProgress;
+
+pub(super) fn route_authored_construction_tool_activations(
+    mut activations: MessageReader<ActivateAuthoredUiTool>,
+    mut tools: MessageWriter<SelectConstructionTool>,
+    documents: Res<Assets<UiDocumentAsset>>,
+    action_nodes: Query<(&UiConstructionActions, &UiDocumentOwner)>,
+    roots: Query<&UiDocumentRoot>,
+) {
+    for activation in activations.read() {
+        let Some((action, tool)) = [
+            (
+                "mode_selection",
+                UiConstructionAction::SelectInspectionTool,
+                ConstructionTool::Inspect,
+            ),
+            (
+                "mode_placement",
+                UiConstructionAction::EnterPlacementMode,
+                ConstructionTool::Placement,
+            ),
+            (
+                "mode_biome",
+                UiConstructionAction::EnterBiomeEditing,
+                ConstructionTool::Biome,
+            ),
+            (
+                "mode_deformation",
+                UiConstructionAction::EnterTerrainEditing,
+                ConstructionTool::Terrain(TerrainBrushKind::Raise),
+            ),
+            (
+                "mode_deletion",
+                UiConstructionAction::EnterDeletionMode,
+                ConstructionTool::Delete,
+            ),
+            (
+                "mode_tank_manipulation",
+                UiConstructionAction::EnterTankEditing,
+                ConstructionTool::TankEdit,
+            ),
+            (
+                "mode_fence_placement",
+                UiConstructionAction::EnterFencePlacementMode,
+                ConstructionTool::FencePlacement,
+            ),
+            (
+                "mode_path_placement",
+                UiConstructionAction::EnterPathPlacementMode,
+                ConstructionTool::PathPlacement,
+            ),
+            (
+                "mode_elevated_path",
+                UiConstructionAction::EnterElevatedPathPlacementMode,
+                ConstructionTool::ElevatedPathPlacement,
+            ),
+            (
+                "mode_elevated_curb",
+                UiConstructionAction::EnterElevatedCurbPlacementMode,
+                ConstructionTool::ElevatedCurbPlacement,
+            ),
+            (
+                "mode_sky_track_placement",
+                UiConstructionAction::EnterSkyTrackPlacementMode,
+                ConstructionTool::SkyTrackPlacement(None),
+            ),
+            (
+                "mode_ground_track_placement",
+                UiConstructionAction::EnterGroundTrackPlacementMode,
+                ConstructionTool::GroundTrackPlacement(None),
+            ),
+        ]
+        .into_iter()
+        .find_map(|(key, action, tool)| {
+            (AssetId::from_key(key) == activation.command).then_some((action, tool))
+        }) else {
+            continue;
+        };
+        let press_already_selects_tool =
+            action_nodes
+                .get(activation.control)
+                .is_ok_and(|(actions, owner)| {
+                    roots
+                        .get(owner.0)
+                        .ok()
+                        .and_then(|root| documents.get(&root.document))
+                        .is_some_and(|document| {
+                            actions.authored_action_records(document).any(|record| {
+                                record.trigger == UiTrigger::Press
+                                    && std::mem::discriminant(&record.action)
+                                        == std::mem::discriminant(&action)
+                            })
+                        })
+                });
+        if !press_already_selects_tool {
+            tools.write(SelectConstructionTool(tool));
+        }
+    }
+}
 
 #[derive(SystemParam)]
 pub(super) struct ConstructionUiIntents<'w, 's> {

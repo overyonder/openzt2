@@ -2,7 +2,7 @@ use super::{
     money_types::Money,
     monthly_finance_types::{MonthlyFinance, MonthlyFinanceHistory},
 };
-use bevy::prelude::*;
+use bevy::{ecs::relationship::RelationshipTarget, prelude::*};
 use openzt2_game_assets::{
     localization::{
         localization_asset_types::LocalizationAsset,
@@ -13,13 +13,13 @@ use openzt2_game_assets::{
 use openzt2_game_data::{
     localization::LocalizationFormatArgument,
     ui_document::{
-        finance_table::UiFinanceTableValueSource,
+        finance_table::{UiFinanceTableCategoryDefinition, UiFinanceTableValueSource},
         node_property_binding::UiTextPropertyBindingSource,
         widget_live_collection::UiWidgetLiveCollectionSource,
     },
     AssetId,
 };
-use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::SetUiListRowCount;
+use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::RequestedUiListRowCount;
 use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::UiListPolicy;
 use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::UiListRow;
 use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::UiTablePolicy;
@@ -33,22 +33,22 @@ use openzt2_interface_state::information::entity_selection_types::Inspectable;
 use openzt2_zoo_state::donations::donation_opportunity_types::DonationAcceptor;
 use openzt2_zoo_state::economy::facility_economy_types::ServiceFacility;
 
-/// Sizes the native-created management report lists and binds building rows
-/// directly to their canonical world entities. The report component in the
-/// original executable created these rows imperatively; their Bevy equivalent
-/// remains an ordinary typed live collection.
+#[derive(Default)]
+pub(super) struct OrderedFinanceReportSubjects {
+    buildings: Vec<Entity>,
+    donation_boxes: Vec<Entity>,
+}
+
 pub(super) fn request_authored_finance_report_list_row_counts_and_bind_world_subjects(
     mut commands: Commands,
     history: Res<MonthlyFinanceHistory>,
     documents: Res<Assets<UiDocumentAsset>>,
     roots: Query<&UiDocumentRoot>,
-    lists: Query<(Entity, &UiListPolicy, &UiDocumentOwner)>,
-    rows: Query<(
-        Entity,
-        &UiListRow,
-        &ChildOf,
-        Option<&InformationEntitySource>,
-    )>,
+    owners: Query<&UiDocumentOwner>,
+    parents: Query<&ChildOf>,
+    lists: Query<(Entity, Ref<UiListPolicy>, Option<Ref<Children>>)>,
+    mut counts: Query<&mut RequestedUiListRowCount>,
+    mut rows: Query<(Ref<UiListRow>, Option<&mut InformationEntitySource>)>,
     buildings: Query<
         Entity,
         (
@@ -58,73 +58,184 @@ pub(super) fn request_authored_finance_report_list_row_counts_and_bind_world_sub
         ),
     >,
     donation_boxes: Query<Entity, (With<Inspectable>, With<DonationAcceptor>)>,
-    mut row_count_requests: MessageWriter<SetUiListRowCount>,
+    added: Query<
+        (),
+        Or<(
+            Added<Inspectable>,
+            Added<ServiceFacility>,
+            Added<DonationAcceptor>,
+        )>,
+    >,
+    mut removed: (
+        RemovedComponents<Inspectable>,
+        RemovedComponents<ServiceFacility>,
+        RemovedComponents<DonationAcceptor>,
+    ),
+    mut subjects: Local<OrderedFinanceReportSubjects>,
 ) {
-    for (list_entity, policy, owner) in &lists {
-        let category_count = || {
-            roots
-                .get(owner.0)
-                .ok()
-                .and_then(|root| documents.get(&root.document))
-                .and_then(|document| {
-                    document
-                        .canonical_ui_document()
-                        .nodes
-                        .iter()
-                        .find(|node| !node.finance_categories.is_empty())
-                })
-                .map_or(0, |node| node.finance_categories.len())
-        };
-        let row_subjects = match policy.source {
-            UiWidgetLiveCollectionSource::FinanceBuildings => {
-                Some(buildings.iter().collect::<Vec<_>>())
-            }
-            UiWidgetLiveCollectionSource::FinanceDonationBoxes => {
-                Some(donation_boxes.iter().collect::<Vec<_>>())
-            }
+    let membership_changed = !added.is_empty()
+        || !removed.0.is_empty()
+        || !removed.1.is_empty()
+        || !removed.2.is_empty();
+    removed.0.clear();
+    removed.1.clear();
+    removed.2.clear();
+    if membership_changed {
+        subjects.buildings.clear();
+        subjects.buildings.extend(buildings.iter());
+        subjects
+            .buildings
+            .sort_unstable_by_key(|entity| entity.to_bits());
+        subjects.donation_boxes.clear();
+        subjects.donation_boxes.extend(donation_boxes.iter());
+        subjects
+            .donation_boxes
+            .sort_unstable_by_key(|entity| entity.to_bits());
+    }
+    for (list, policy, children) in &lists {
+        use UiWidgetLiveCollectionSource::*;
+        let Some(subjects) = (match policy.source {
+            FinanceBuildings => Some(&subjects.buildings),
+            FinanceDonationBoxes => Some(&subjects.donation_boxes),
             _ => None,
-        };
-        let count = match policy.source {
-            UiWidgetLiveCollectionSource::FinanceBalanceSheetCategories
-            | UiWidgetLiveCollectionSource::FinanceBalanceSheetMonthValues => category_count(),
-            UiWidgetLiveCollectionSource::FinanceBalanceSheetMonths
-            | UiWidgetLiveCollectionSource::FinanceBalanceSheetMonthColumns => {
-                history.retained_month_finance_records().len()
+        }) else {
+            let count = match policy.source {
+                FinanceBalanceSheetCategories | FinanceBalanceSheetMonthValues
+                    if policy.is_changed() || documents.is_changed() =>
+                {
+                    finance_categories_for(list, &parents, &owners, &roots, &documents)
+                        .map_or(0, <[_]>::len)
+                }
+                FinanceBalanceSheetMonths | FinanceBalanceSheetMonthColumns
+                    if policy.is_changed() || history.is_changed() =>
+                {
+                    history.retained_month_finance_records().len()
+                }
+                FinanceDonationsBySpecies | FinanceTourDonations | FinanceShowDonations
+                    if policy.is_changed() =>
+                {
+                    0
+                }
+                _ => continue,
+            };
+            if let Ok(mut count_field) = counts.get_mut(list) {
+                count_field.set_if_neq(RequestedUiListRowCount(Some(
+                    count.min(usize::from(u16::MAX)) as u16,
+                )));
             }
-            UiWidgetLiveCollectionSource::FinanceBuildings
-            | UiWidgetLiveCollectionSource::FinanceDonationBoxes => {
-                row_subjects.as_ref().map_or(0, Vec::len)
-            }
-            UiWidgetLiveCollectionSource::FinanceDonationsBySpecies
-            | UiWidgetLiveCollectionSource::FinanceTourDonations
-            | UiWidgetLiveCollectionSource::FinanceShowDonations => 0,
-            _ => continue,
-        };
-        row_count_requests.write(SetUiListRowCount {
-            list: list_entity,
-            count: count.min(usize::from(u16::MAX)) as u16,
-        });
-        let Some(mut row_subjects) = row_subjects else {
             continue;
         };
-        row_subjects.sort_unstable_by_key(|entity| entity.to_bits());
-        for (row_entity, row, parent, current_source) in &rows {
-            if parent.parent() != list_entity {
-                continue;
+        if membership_changed || policy.is_changed() {
+            if let Ok(mut count) = counts.get_mut(list) {
+                count.set_if_neq(RequestedUiListRowCount(Some(
+                    subjects.len().min(usize::from(u16::MAX)) as u16,
+                )));
             }
-            if let Some(subject) = row_subjects.get(usize::from(row.index)).copied() {
-                if current_source.is_none_or(|current| current.0 != subject) {
-                    commands
-                        .entity(row_entity)
-                        .insert(InformationEntitySource(subject));
+        }
+        if let Some(children) = children {
+            for entity in RelationshipTarget::iter(&*children) {
+                let Ok((row, source)) = rows.get_mut(entity) else {
+                    continue;
+                };
+                if !membership_changed
+                    && !policy.is_changed()
+                    && !row.is_changed()
+                    && source.is_some()
+                {
+                    continue;
                 }
-            } else if current_source.is_some() {
-                commands
-                    .entity(row_entity)
-                    .remove::<InformationEntitySource>();
+                match (subjects.get(usize::from(row.index)), source) {
+                    (Some(&subject), Some(mut source)) => {
+                        source.set_if_neq(InformationEntitySource(subject));
+                    }
+                    (Some(&subject), None) => {
+                        commands
+                            .entity(entity)
+                            .insert(InformationEntitySource(subject));
+                    }
+                    (None, Some(_)) => {
+                        commands.entity(entity).remove::<InformationEntitySource>();
+                    }
+                    (None, None) => {}
+                }
             }
         }
     }
+}
+
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct FinanceBalanceSheetCell {
+    list: Entity,
+    category_index: Option<usize>,
+    month_index: Option<usize>,
+}
+
+pub(super) fn bind_owning_balance_sheet_cells(
+    mut commands: Commands,
+    parents: Query<&ChildOf>,
+    rows: Query<&UiListRow>,
+    lists: Query<&UiListPolicy>,
+    fields: Query<(Entity, &UiTextBinding), (With<Text>, Without<FinanceBalanceSheetCell>)>,
+) {
+    use UiTextPropertyBindingSource::*;
+    use UiWidgetLiveCollectionSource::*;
+
+    for (entity, binding) in &fields {
+        if !matches!(
+            binding.0,
+            FinanceBalanceSheetCategoryLabel
+                | FinanceBalanceSheetCategoryValue
+                | FinanceBalanceSheetMonthName
+        ) {
+            continue;
+        }
+        let mut category = None;
+        let mut month = None;
+        let mut current = entity;
+        for parent in parents.iter_ancestors(entity) {
+            if let (Ok(row), Ok(list)) = (rows.get(current), lists.get(parent)) {
+                match list.source {
+                    FinanceBalanceSheetCategories | FinanceBalanceSheetMonthValues => {
+                        category.get_or_insert((parent, usize::from(row.index)));
+                    }
+                    FinanceBalanceSheetMonths | FinanceBalanceSheetMonthColumns => {
+                        month.get_or_insert((parent, usize::from(row.index)));
+                    }
+                    _ => {}
+                }
+            }
+            current = parent;
+        }
+        if let Some((list, _)) = category.or(month) {
+            commands.entity(entity).insert(FinanceBalanceSheetCell {
+                list,
+                category_index: category.map(|(_, index)| index),
+                month_index: month.map(|(_, index)| index),
+            });
+        }
+    }
+}
+
+fn finance_categories_for<'a>(
+    entity: Entity,
+    parents: &Query<&ChildOf>,
+    owners: &Query<&UiDocumentOwner>,
+    roots: &Query<&UiDocumentRoot>,
+    documents: &'a Assets<UiDocumentAsset>,
+) -> Option<&'a [UiFinanceTableCategoryDefinition]> {
+    std::iter::once(entity)
+        .chain(parents.iter_ancestors(entity))
+        .find_map(|entity| {
+            let owner = owners.get(entity).ok()?;
+            let root = roots.get(owner.0).ok()?;
+            let document = documents.get(&root.document)?;
+            document
+                .canonical_ui_document()
+                .nodes
+                .iter()
+                .find(|node| !node.finance_categories.is_empty())
+                .map(|node| node.finance_categories.as_slice())
+        })
 }
 
 /// Projects category labels, month headings, and per-month category values
@@ -136,56 +247,36 @@ pub(super) fn project_monthly_finance_values_into_native_balance_sheet_lists(
     active_localization: Res<LocalizationPrecedenceIndex>,
     localizations: Res<Assets<LocalizationAsset>>,
     parents: Query<&ChildOf>,
-    rows: Query<&UiListRow>,
-    lists: Query<&UiListPolicy>,
-    mut texts: Query<(Entity, &UiTextBinding, &mut Text)>,
+    owners: Query<&UiDocumentOwner>,
+    roots: Query<&UiDocumentRoot>,
+    mut texts: Query<(Ref<FinanceBalanceSheetCell>, Ref<UiTextBinding>, &mut Text)>,
 ) {
+    let refresh = history.is_changed()
+        || active_localization.is_changed()
+        || localizations.is_changed()
+        || documents.is_changed();
     let Some(localization) = active_localization.borrow_loaded_localization_view(&localizations)
     else {
         return;
     };
-    for (text_entity, binding, mut text) in &mut texts {
-        if !matches!(
-            &binding.0,
-            UiTextPropertyBindingSource::FinanceBalanceSheetCategoryLabel
-                | UiTextPropertyBindingSource::FinanceBalanceSheetCategoryValue
-                | UiTextPropertyBindingSource::FinanceBalanceSheetMonthName
-        ) {
+    let mut categories = std::collections::HashMap::new();
+    for (cell, binding, mut text) in &mut texts {
+        if !refresh && !cell.is_changed() && !binding.is_changed() && !text.is_added() {
             continue;
         }
-        let Some(categories) = documents.iter().find_map(|(_, document)| {
-            document
-                .canonical_ui_document()
-                .nodes
-                .iter()
-                .find(|node| !node.finance_categories.is_empty())
-                .map(|node| node.finance_categories.as_slice())
-        }) else {
-            continue;
-        };
-        let row_contexts = find_ui_list_rows_in_ancestors(text_entity, &rows, &lists, &parents);
-        let category_index = row_contexts.iter().find_map(|(row, source)| {
-            matches!(
-                source,
-                UiWidgetLiveCollectionSource::FinanceBalanceSheetCategories
-                    | UiWidgetLiveCollectionSource::FinanceBalanceSheetMonthValues
-            )
-            .then_some(usize::from(row.index))
+        let categories = categories.entry(cell.list).or_insert_with(|| {
+            finance_categories_for(cell.list, &parents, &owners, &roots, &documents)
         });
-        let month_index = row_contexts.iter().find_map(|(row, source)| {
-            matches!(
-                source,
-                UiWidgetLiveCollectionSource::FinanceBalanceSheetMonths
-                    | UiWidgetLiveCollectionSource::FinanceBalanceSheetMonthColumns
-            )
-            .then_some(usize::from(row.index))
-        });
-        let month =
-            month_index.and_then(|index| history.retained_month_finance_records().nth(index));
+        let category = cell
+            .category_index
+            .and_then(|index| (*categories)?.get(index));
+        let month = cell
+            .month_index
+            .and_then(|index| history.retained_month_finance_records().nth(index));
         let mut next = String::new();
         match &binding.0 {
             UiTextPropertyBindingSource::FinanceBalanceSheetCategoryLabel => {
-                let Some(category) = category_index.and_then(|index| categories.get(index)) else {
+                let Some(category) = category else {
                     continue;
                 };
                 next.push_str(
@@ -195,7 +286,7 @@ pub(super) fn project_monthly_finance_values_into_native_balance_sheet_lists(
                 );
             }
             UiTextPropertyBindingSource::FinanceBalanceSheetCategoryValue => {
-                let Some(category) = category_index.and_then(|index| categories.get(index)) else {
+                let Some(category) = category else {
                     continue;
                 };
                 let (amount, currency) =
@@ -226,37 +317,20 @@ pub(super) fn project_monthly_finance_values_into_native_balance_sheet_lists(
     }
 }
 
-fn find_ui_list_rows_in_ancestors<'a>(
-    descendant: Entity,
-    rows: &'a Query<&UiListRow>,
-    lists: &Query<&UiListPolicy>,
-    parents: &Query<&ChildOf>,
-) -> Vec<(&'a UiListRow, UiWidgetLiveCollectionSource)> {
-    let mut output = Vec::with_capacity(2);
-    let mut candidate = descendant;
-    for _ in 0..64 {
-        let Ok(parent) = parents.get(candidate) else {
-            break;
-        };
-        if let (Ok(row), Ok(policy)) = (rows.get(candidate), lists.get(parent.parent())) {
-            output.push((row, policy.source));
-        }
-        candidate = parent.parent();
-    }
-    output
-}
-
 pub(super) fn request_authored_finance_table_row_counts(
     documents: Res<Assets<UiDocumentAsset>>,
     roots: Query<&UiDocumentRoot>,
-    lists: Query<(Entity, &UiDocumentOwner, Ref<UiTablePolicy>)>,
-    mut row_count_requests: MessageWriter<SetUiListRowCount>,
+    lists: Query<(
+        &UiDocumentOwner,
+        Ref<UiTablePolicy>,
+        &mut RequestedUiListRowCount,
+    )>,
 ) {
-    for (list, owner, policy) in &lists {
+    for (owner, policy, mut count) in lists {
         if !matches!(
             *policy,
             UiTablePolicy::FinanceLabels | UiTablePolicy::FinanceValues
-        ) || (!policy.is_added() && !policy.is_changed() && !documents.is_changed())
+        ) || (!policy.is_changed() && !documents.is_changed())
         {
             continue;
         }
@@ -266,17 +340,15 @@ pub(super) fn request_authored_finance_table_row_counts(
         let Some(document) = documents.get(&root.document) else {
             continue;
         };
-        row_count_requests.write(SetUiListRowCount {
-            list,
-            count: document
-                .canonical_ui_document()
-                .nodes
-                .iter()
-                .find(|node| !node.finance_categories.is_empty())
-                .map(|node| node.finance_categories.len())
-                .unwrap_or_default()
-                .min(u16::MAX as usize) as u16,
-        });
+        let rows = document
+            .canonical_ui_document()
+            .nodes
+            .iter()
+            .find(|node| !node.finance_categories.is_empty())
+            .map(|node| node.finance_categories.len())
+            .unwrap_or_default()
+            .min(u16::MAX as usize) as u16;
+        count.set_if_neq(RequestedUiListRowCount(Some(rows)));
     }
 }
 
@@ -303,6 +375,7 @@ pub(super) fn project_monthly_finance_values_into_authored_table_rows(
         if !row.is_changed()
             && !parent.is_changed()
             && !history.is_changed()
+            && !documents.is_changed()
             && !localization_changed
         {
             continue;

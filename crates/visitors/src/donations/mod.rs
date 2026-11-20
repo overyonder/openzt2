@@ -25,9 +25,8 @@ use self::{
         reject_donation_candidates_after_navigation_failure,
     },
     donation_opportunity_observation::{
-        hydrate_animal_donation_opportunities,
-        observe_donation_opportunities_after_applied_viewing_reactions,
-        remove_guest_donation_observation_after_viewing_ends,
+        clear_donation_observations_for_ended_views, hydrate_animal_donation_opportunities,
+        observe_donation_opportunities_after_applied_viewing_reactions, PendingDonationObservation,
     },
     donation_payment_settlement::{
         settle_completed_donation_transactions_and_update_acceptor_totals,
@@ -42,19 +41,23 @@ use self::{
         hydrate_authored_donation_acceptors_and_docking_points,
         initialize_new_donation_acceptors_with_operating_age_and_profit,
     },
-    zoo_donation_summary_presentation::project_zoo_donation_category_totals_into_authored_summary,
+    zoo_donation_summary_presentation::{
+        aggregate_zoo_donations_by_category, project_zoo_donation_summary, ZooDonationSummary,
+    },
 };
 
 pub struct GuestDonationDecisionAndPaymentPlugin;
 
 impl Plugin for GuestDonationDecisionAndPaymentPlugin {
     fn build(&self, app: &mut App) {
-        app.add_message::<DonationRequest>()
+        app.register_required_components::<openzt2_zoo_state::guests::guest_simulation_types::Guest, PendingDonationObservation>()
+            .add_message::<DonationRequest>()
             .add_message::<DonationCompleted>()
             .add_message::<DonationRejected>()
+            .init_resource::<ZooDonationSummary>()
             .add_systems(
                 Update,
-                project_zoo_donation_category_totals_into_authored_summary,
+                (aggregate_zoo_donations_by_category, project_zoo_donation_summary.after_ignore_deferred(aggregate_zoo_donations_by_category)),
             )
             .add_systems(
                 Update,
@@ -78,7 +81,7 @@ impl Plugin for GuestDonationDecisionAndPaymentPlugin {
                 FixedUpdate,
                 observe_donation_opportunities_after_applied_viewing_reactions
                     .after(
-                        crate::guests::guest_lifecycle_and_memory_execution::apply_guest_reactions,
+                        crate::guests::view_event_execution::apply_guest_reactions,
                     )
                     .in_set(FixedGameSet::Act),
             )
@@ -107,7 +110,7 @@ impl Plugin for GuestDonationDecisionAndPaymentPlugin {
                     settle_rejected_donation_transactions_and_clear_guest_payment_state,
                     reject_donation_candidates_after_navigation_failure,
                     cancel_donation_interactions_with_missing_subjects_or_acceptors,
-                    remove_guest_donation_observation_after_viewing_ends,
+                    clear_donation_observations_for_ended_views,
                 )
                     .chain()
                     .in_set(FixedGameSet::Cleanup),

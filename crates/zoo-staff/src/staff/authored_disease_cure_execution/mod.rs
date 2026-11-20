@@ -1,4 +1,4 @@
-use bevy::{platform::collections::HashSet, prelude::*};
+use bevy::prelude::*;
 use openzt2_game_data::{world_definitions::staff_management::StaffJobKind, AssetId};
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
     RunBehaviorCureDisease, RunningBehaviorInstruction,
@@ -15,7 +15,7 @@ use openzt2_zoo_state::staff::staff_job_types::CurrentJob;
 use openzt2_zoo_state::staff::staff_job_types::JobClaim;
 use openzt2_zoo_state::staff::staff_job_types::StaffJob;
 use openzt2_zoo_state::staff::staff_job_types::StaffJobBehaviorTask;
-use openzt2_zoo_state::staff::staff_lifecycle_messages::CancelStaffJobRequest;
+use openzt2_zoo_state::staff::staff_job_types::StaffJobCancellationPending;
 
 use openzt2_zoo_state::animal_health::types::Dead;
 use openzt2_zoo_state::animal_health::types::Disease;
@@ -37,20 +37,18 @@ pub(crate) fn apply_authored_disease_cures_for_live_staff_claims(
         ),
         (With<Staff>, Without<PendingBehaviorTaskFailure>),
     >,
-    jobs: Query<(&StaffJob, &JobClaim, &StaffJobBehaviorTask)>,
+    jobs: Query<
+        (&StaffJob, &JobClaim, &StaffJobBehaviorTask),
+        Without<StaffJobCancellationPending>,
+    >,
     animals: Query<&Vitality, (With<Animal>, With<WorldMember>, Without<Dead>)>,
-    mut cancellations: MessageReader<CancelStaffJobRequest>,
-    mut cancelled_jobs: Local<HashSet<Entity>>,
 ) {
-    cancelled_jobs.clear();
-    cancelled_jobs.extend(cancellations.read().map(|request| request.job));
     for (actor, current, task, instruction, _) in &staff {
         if task.next_action_tick > clock.tick || !instruction.is_current(task) {
             continue;
         }
         let target = current
-            .filter(|current| !cancelled_jobs.contains(&current.job))
-            .and_then(|current| jobs.get(current.job).ok())
+            .and_then(|current| jobs.get(current.job()).ok())
             .filter(|(job, claim, behavior)| {
                 job.kind == StaffJobKind::Treat
                     && job.token == Some(AssetId::from_key("t_cureanimal"))

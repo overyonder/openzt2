@@ -5,7 +5,10 @@ use openzt2_zoo_state::guests::guest_favourite_animal_trend_types::GuestFavourit
 use openzt2_zoo_state::{
     behavior_task_execution_types::BehaviorTaskExecutionSequence,
     economy::service_types::ServiceRequestSequence,
-    guests::{guest_simulation_types::GuestArrivalState, guest_survey_types::GuestSurvey},
+    guests::{
+        guest_simulation_types::GuestArrivalState,
+        guest_survey_types::{GuestSurvey, GuestSurveyNeedCadence},
+    },
     locomotion::locomotion_types::NavigationRequestSequence,
 };
 
@@ -21,8 +24,9 @@ pub(in crate::persistence) struct RuntimeContinuationSnapshotCapture<'w, 's> {
     navigation: Res<'w, NavigationRequestSequence>,
     behavior: Res<'w, BehaviorTaskExecutionSequence>,
     service: Option<Res<'w, ServiceRequestSequence>>,
-    arrivals: Option<Res<'w, GuestArrivalState>>,
+    arrivals: Query<'w, 's, &'static GuestArrivalState, With<WorldRoot>>,
     survey: Option<Res<'w, GuestSurvey>>,
+    survey_cadence: Query<'w, 's, &'static GuestSurveyNeedCadence, With<WorldRoot>>,
     general_economy:
         Option<Res<'w, openzt2_zoo_state::economy::general_economy_types::GeneralEconomyLedger>>,
     audio_assets:
@@ -111,8 +115,13 @@ impl RuntimeContinuationSnapshotCapture<'_, '_> {
                 .service
                 .as_ref()
                 .map(|sequence| sequence.next_sequence()),
-            guest_arrivals: self.arrivals.as_deref().copied(),
-            guest_survey: self.survey.as_deref().copied(),
+            guest_arrivals: self.arrivals.get(world_root).ok().copied(),
+            guest_survey: self
+                .survey_cadence
+                .get(world_root)
+                .ok()
+                .copied()
+                .zip(self.survey.as_deref().copied()),
             guest_favourite_animal_trend: self.favourite_trends.get(world_root).ok().copied(),
         };
         validate_runtime_continuation_snapshot(&record)?;

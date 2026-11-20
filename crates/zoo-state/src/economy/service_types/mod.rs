@@ -2,17 +2,34 @@ use bevy::prelude::*;
 use openzt2_game_data::AssetId;
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ServiceReservation {
-    pub facility: Entity,
+pub struct ServiceOperation {
     pub service: AssetId,
     pub inventory_units: u16,
+    pub phase: ServicePhase,
 }
 
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ServiceProgress {
-    pub facility: Entity,
-    pub remaining_ticks: u32,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ServicePhase {
+    Timing(u32),
+    AwaitingPayment,
+    Completed,
 }
+
+#[derive(Component)]
+#[relationship(relationship_target = ServiceReservation)]
+pub struct ServiceCustomer(pub Entity);
+
+#[derive(Component)]
+#[relationship_target(relationship = ServiceCustomer, linked_spawn)]
+pub struct ServiceReservation(Entity);
+
+#[derive(Component)]
+#[relationship(relationship_target = FacilityReservations)]
+pub struct ReservationFacility(pub Entity);
+
+#[derive(Component)]
+#[relationship_target(relationship = ReservationFacility, linked_spawn)]
+pub struct FacilityReservations(Vec<Entity>);
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PendingServiceRequest {
@@ -27,16 +44,6 @@ pub struct ServiceCompleted {
     pub facility: Entity,
     pub service: AssetId,
 }
-
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ServicePaymentPending {
-    pub customer: Entity,
-    pub facility: Entity,
-    pub service: AssetId,
-}
-
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ServicePaymentInFlight(pub Entity);
 
 #[derive(Resource, Debug, Default)]
 pub struct ServiceRequestSequence {

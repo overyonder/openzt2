@@ -1,6 +1,6 @@
 //! Creation of default photo storage and deletion of stored photo entities.
 
-use openzt2_interface_state::photos::photo_album_types::AlbumMember;
+use openzt2_interface_state::photos::photo_album_types::DefaultPhotoAlbum;
 use openzt2_interface_state::photos::photo_album_types::DefaultPhotoAlbumStorageInitializedForWorld;
 use openzt2_interface_state::photos::photo_album_types::PhotoAlbum;
 use openzt2_interface_state::photos::photo_album_types::DEFAULT_PHOTO_ALBUM_NAME_KEY;
@@ -54,16 +54,16 @@ pub(super) fn initialize_default_photo_album_and_camera_roll_for_loaded_worlds(
     // Allocate at the post-import boundary; pending text must not move this ID.
     for root in &roots {
         let member = WorldMember { root };
-        let album = if let Some((album, ..)) = albums
+        if let Some((album, ..)) = albums
             .iter()
             .find(|row| row.1.root == root && row.2.is_some() && row.3.is_none())
         {
             commands.entity(album).insert((
+                DefaultPhotoAlbum,
                 ActivePhotoAlbum,
                 PhotoAlbumPage::default(),
                 PhotoAlbumCapacityPages(INITIAL_PHOTO_ALBUM_SPREADS),
             ));
-            album
         } else {
             let id = match allocator.allocate(root) {
                 Ok(id) => id,
@@ -74,19 +74,18 @@ pub(super) fn initialize_default_photo_album_and_camera_roll_for_loaded_worlds(
                     continue;
                 }
             };
-            commands
-                .spawn((
-                    PhotoAlbum {
-                        profile: profile.profile_identifier,
-                    },
-                    member,
-                    id,
-                    ActivePhotoAlbum,
-                    PhotoAlbumPage::default(),
-                    PhotoAlbumCapacityPages(INITIAL_PHOTO_ALBUM_SPREADS),
-                ))
-                .id()
-        };
+            commands.spawn((
+                PhotoAlbum {
+                    profile: profile.profile_identifier,
+                },
+                member,
+                id,
+                ActivePhotoAlbum,
+                DefaultPhotoAlbum,
+                PhotoAlbumPage::default(),
+                PhotoAlbumCapacityPages(INITIAL_PHOTO_ALBUM_SPREADS),
+            ));
+        }
         if !albums
             .iter()
             .any(|row| row.1.root == root && row.3.is_some())
@@ -101,15 +100,14 @@ pub(super) fn initialize_default_photo_album_and_camera_roll_for_loaded_worlds(
         }
         commands
             .entity(root)
-            .insert(DefaultPhotoAlbumStorageInitializedForWorld { album });
+            .insert(DefaultPhotoAlbumStorageInitializedForWorld);
     }
 }
 
 pub(super) fn initialize_localized_default_photo_album_names(
     active_localization: Res<LocalizationPrecedenceIndex>,
     localizations: Res<Assets<LocalizationAsset>>,
-    roots: Query<(Entity, &DefaultPhotoAlbumStorageInitializedForWorld), With<WorldRoot>>,
-    unnamed_albums: Query<&WorldMember, (With<PhotoAlbum>, Without<Name>)>,
+    unnamed_albums: Query<Entity, (With<DefaultPhotoAlbum>, Without<Name>)>,
     mut commands: Commands,
 ) {
     if unnamed_albums.is_empty() {
@@ -125,29 +123,24 @@ pub(super) fn initialize_localized_default_photo_album_names(
     else {
         return;
     };
-    for (root, storage) in &roots {
-        if unnamed_albums
-            .get(storage.album)
-            .is_ok_and(|member| member.root == root)
-        {
-            commands
-                .entity(storage.album)
-                .insert(Name::new(default_name.to_owned()));
-        }
+    for album in &unnamed_albums {
+        commands
+            .entity(album)
+            .insert(Name::new(default_name.to_owned()));
     }
 }
 
 pub(super) fn delete_requested_photos_and_release_unpersisted_images(
     mut commands: Commands,
     mut requests: MessageReader<DeletePhotoRequest>,
-    photos: Query<(Entity, &Photo, &AlbumMember, Option<&PersistentId>)>,
+    photos: Query<(Entity, &Photo, Option<&PersistentId>)>,
     mut images: ResMut<Assets<Image>>,
     mut generated_photo_deletion_requests: MessageWriter<
         DeleteGeneratedPhotoImageAndChallengeCopies,
     >,
 ) {
     for request in requests.read() {
-        let Ok((entity, photo, _, persistent)) = photos.get(request.photo) else {
+        let Ok((entity, photo, persistent)) = photos.get(request.photo) else {
             continue;
         };
         generated_photo_deletion_requests.write(DeleteGeneratedPhotoImageAndChallengeCopies {

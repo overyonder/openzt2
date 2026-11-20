@@ -34,6 +34,8 @@ pub(super) fn disembark_transport_riders_and_request_service_fare_transactions(
     transport_riders: Query<(Entity, &TransportRider, &TourScore, &WorldMember), With<Guest>>,
     transport_circuits: Query<&Price, With<TransportCircuit>>,
     pending_transport_fares: Query<&PendingTransportFare>,
+    mut ratings: Query<&mut StationRatingPermille>,
+    mut locomotion_modes: Query<&mut LocomotionMode>,
     mut transaction_requests: MessageWriter<TransactionRequest>,
     mut commands: Commands,
 ) {
@@ -58,6 +60,7 @@ pub(super) fn disembark_transport_riders_and_request_service_fare_transactions(
         let Ok(admission_price) = transport_circuits.get(vehicle_circuit_member.0) else {
             continue;
         };
+        let mut last_rating = None;
         for (guest_entity, transport_rider, tour_score, world_member) in &transport_riders {
             if transport_vehicle.occupied == 0 {
                 break;
@@ -75,11 +78,9 @@ pub(super) fn disembark_transport_riders_and_request_service_fare_transactions(
                 world_definitions,
                 tour_score.value,
             );
-            commands
-                .entity(station_entity)
-                .insert(StationRatingPermille(
-                    (tour_rating.clamp(0.0, 1.0) * 1000.0).round() as u16,
-                ));
+            last_rating = Some(StationRatingPermille(
+                (tour_rating.clamp(0.0, 1.0) * 1000.0).round() as u16,
+            ));
             let fare_operation = commands
                 .spawn((
                     *world_member,
@@ -100,16 +101,25 @@ pub(super) fn disembark_transport_riders_and_request_service_fare_transactions(
                 kind: TransactionKind::Service,
                 subject: Some(vehicle_circuit_member.0),
             });
-            commands
-                .entity(guest_entity)
-                .remove::<(
-                    TransportRider,
-                    TourScore,
-                    TourObservationMemory,
-                    TourObservationCadence,
-                    PlayerRidingSeatIndex,
-                )>()
-                .insert(LocomotionMode::Ground);
+            commands.entity(guest_entity).remove::<(
+                TransportRider,
+                TourScore,
+                TourObservationMemory,
+                TourObservationCadence,
+                PlayerRidingSeatIndex,
+            )>();
+            if let Ok(mut mode) = locomotion_modes.get_mut(guest_entity) {
+                mode.set_if_neq(LocomotionMode::Ground);
+            } else {
+                commands.entity(guest_entity).insert(LocomotionMode::Ground);
+            }
+        }
+        if let Some(rating) = last_rating {
+            if let Ok(mut current) = ratings.get_mut(station_entity) {
+                current.set_if_neq(rating);
+            } else {
+                commands.entity(station_entity).insert(rating);
+            }
         }
     }
 }

@@ -28,11 +28,14 @@ pub struct InformationPlugin;
 
 impl Plugin for InformationPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<projection::information_list_row_identity_projection::InformationRowStructure>()
-            .add_observer(projection::information_list_row_identity_projection::invalidate_row_structure)
-            .init_resource::<projection::entity_editor_data_root_projection::InspectableMembership>()
-            .add_observer(projection::entity_editor_data_root_projection::inspectable_added)
-            .add_observer(projection::entity_editor_data_root_projection::inspectable_removed)
+        app.add_observer(overview::overview_map_marker_operations::retire_overview_markers_when_subject_loses_inspectability);
+        app.add_observer(projection::entity_editor_data_root_projection::unlink_retired_inspectable_world_subjects)
+            .add_systems(
+                Update,
+                projection::entity_editor_data_root_projection::link_inspectable_world_subjects
+                    .before(projection::entity_editor_data_root_projection::project_inspectable_entities_to_visible_entity_editor_data_roots)
+                    .before(projection::information_list_projection::project_live_world_entities_to_visible_information_list_rows),
+            )
             .init_resource::<SelectedCatalogueEntry>()
             .init_resource::<SelectedCareAnimal>()
             .init_resource::<InformationViewFilters>()
@@ -48,7 +51,7 @@ impl Plugin for InformationPlugin {
             .add_systems(
                 Update,
                 (
-                    catalogue::catalogue_type_list_row_count_operations::populate_activated_authored_catalogue_type_list_row_counts,
+                    catalogue::catalogue_type_list_row_count_operations::initialize_authored_catalogue_type_list_state,
                     catalogue::catalogue_filter_menu::populate_catalogue_filter_menu,
                     catalogue::catalogue_filter_menu::select_catalogue_filter_row,
                     catalogue::catalogue_type_list_activation::choose_catalogue_entry_from_activated_type_list_row,
@@ -68,16 +71,33 @@ impl Plugin for InformationPlugin {
                 (
                     (
                         information_view_class_hydration::hydrate_information_view_classes_from_canonical_world_definitions,
-                        information_view_filter_operations::project_information_view_filters_to_world_entities_and_authored_controls,
-                        catalogue::animal_care_subject_projection::project_care_animal_name_and_icon,
+                        information_view_filter_operations::project_information_view_filters_to_world_entities,
                     )
                         .chain(),
-                    catalogue::catalogue_type_list_row_count_operations::request_visible_catalogue_type_list_row_counts,
-                    catalogue::catalogue_type_list_row_projection::project_catalogue_entries_to_authored_type_list_rows.in_set(openzt2_interface_state::information::catalogue_types::CatalogueTypeListRowProjection),
+                    (
+                        information_view_filter_operations::hydrate_authored_world_view_filter_toggle_bindings
+                            .run_if(resource_changed::<Assets<openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset>>.or_else(any_match_filter::<(
+                                With<openzt2_interface_state::ui::authored_ui_selection_state::UiSelected>,
+                                Or<(
+                                    Changed<openzt2_interface_state::ui::authored_ui_action_projection_components::UiInformationActions>,
+                                    Changed<openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner>,
+                                    Added<openzt2_interface_state::ui::authored_ui_selection_state::UiSelected>,
+                                )>,
+                            )>)),
+                        information_view_filter_operations::project_information_view_filters_to_authored_controls,
+                    ).chain().after(openzt2_interface_state::ui::UiSet::Projection),
+                    catalogue::animal_care_subject_projection::project_care_animal_name_and_icon,
+                    (
+                        catalogue::catalogue_type_list_row_count_operations::reconcile_authored_catalogue_type_lists,
+                        catalogue::catalogue_type_list_row_projection::project_catalogue_entries_to_authored_type_list_rows
+                            .in_set(openzt2_interface_state::information::catalogue_types::CatalogueTypeListRowProjection),
+                    ).chain(),
                     (
                         catalogue::catalogue_research_overlay::attach_authored_catalogue_research_overlays,
+                        catalogue::catalogue_research_overlay::hydrate_authored_catalogue_research_overlay_controls,
                         catalogue::catalogue_research_overlay::project_catalogue_research_overlays
-                            .before(openzt2_interface_state::ui::UiSet::Interaction),
+                            .before(openzt2_interface_state::ui::UiSet::Interaction)
+                            .after(openzt2_interface_state::information::catalogue_types::CatalogueTypeListRowProjection),
                     )
                         .chain(),
                     catalogue::catalogue_filter_menu::label_catalogue_filter_rows,
@@ -104,27 +124,30 @@ impl Plugin for InformationPlugin {
                         catalogue::catalogue_preview_scene_projection::synchronize_catalogue_preview_camera_activity_with_authored_image_visibility
                             .after(catalogue::catalogue_preview_scene_projection::project_selected_catalogue_entry_into_preview_scene),
                     ),
-                    catalogue::catalogue_preview_scene_projection::hydrate_catalogue_preview_scene_prefab_render_trees,
-                    catalogue::catalogue_preview_scene_projection::attach_loaded_species_animation_to_catalogue_preview_renderables,
-                    catalogue::catalogue_preview_scene_projection::apply_authored_catalogue_preview_initial_animation_repetition_policy_after_attachment,
-                    catalogue::catalogue_preview_scene_projection::retire_catalogue_preview_scenes_without_ui_owners,
-                    catalogue::catalogue_page_projection::project_catalogue_page,
                     (
-                        projection::selected_entity_identity_projection::project_authored_definition_name_to_selected_entity_panel,
-                        projection::selected_entity_identity_projection::project_live_name_to_selected_entity_panel,
-                        projection::selected_entity_identity_projection::project_selected_entity_name_to_authored_editable_fields,
-                        projection::selected_entity_identity_projection::project_live_zoo_name_to_authored_editable_fields,
-                    )
-                        .chain(),
+                        catalogue::catalogue_preview_scene_projection::hydrate_catalogue_preview_scene_prefab_render_trees
+                            .after(catalogue::catalogue_preview_scene_projection::project_selected_catalogue_entry_into_preview_scene),
+                        catalogue::catalogue_preview_scene_projection::attach_loaded_species_animation_to_catalogue_preview_renderables,
+                        catalogue::catalogue_preview_scene_projection::apply_authored_catalogue_preview_initial_animation_repetition_policy_after_attachment,
+                    ).chain(),
+                    catalogue::catalogue_page_projection::project_catalogue_page,
+                    projection::selected_entity_identity_projection::project_selected_entity_identity_to_authored_panel_members,
+                    projection::selected_entity_identity_projection::project_selected_entity_name_to_authored_editable_fields,
+                    projection::selected_entity_identity_projection::project_live_zoo_name_to_authored_editable_fields,
                     projection::selected_animal_need_list_projection::request_selected_animal_need_list_row_counts,
                     projection::selected_animal_need_list_projection::project_selected_animal_needs_to_authored_list_rows,
                     projection::animal_need_and_health_projection::project_live_animal_needs_to_visible_information_panels,
                     projection::animal_need_and_health_projection::project_live_animal_health_to_visible_information_panels,
-                    selected_entity_ui_broadcasts::dispatch_selected_entity_ui_broadcasts
-                        .before(openzt2_interface_state::ui::UiSet::Behavior),
+                    (
+                        (
+                            selected_entity_ui_broadcasts::index_projected_selected_entity_ui_broadcast_targets,
+                            selected_entity_ui_broadcasts::begin_selected_entity_ui_broadcasts,
+                        ),
+                        selected_entity_ui_broadcasts::dispatch_selected_entity_ui_broadcasts,
+                    ).chain().before(openzt2_interface_state::ui::UiSet::Commands),
                 )
-                    .chain()
                     .after(openzt2_interface_state::ui::UiSet::Projection)
+                    .before(openzt2_interface_state::ui::UiSet::Behavior)
                     .in_set(GameSet::Ui)
                     .run_if(in_state(GamePhase::InGame)),
             )
@@ -141,12 +164,14 @@ impl Plugin for InformationPlugin {
                     projection::animal_alert_button_projection::project_animal_alerts_to_find_animal_buttons,
                     (
                         projection::information_list_projection::project_live_world_entities_to_visible_information_list_rows,
-                        projection::information_list_row_identity_projection::project_world_subject_identity_to_information_list_rows,
-                        projection::information_list_row_value_projection::project_live_world_subject_values_to_information_list_rows,
                         projection::entity_editor_data_root_projection::project_inspectable_entities_to_visible_entity_editor_data_roots,
-                    ).chain(),
+                    ).before(projection::information_list_row_identity_projection::project_world_subject_identity_to_information_list_rows)
+                     .before(projection::information_list_row_value_projection::project_live_world_subject_values_to_information_list_rows),
+                    projection::information_list_row_identity_projection::project_world_subject_identity_to_information_list_rows,
+                    projection::information_list_row_value_projection::project_live_world_subject_values_to_information_list_rows,
                 )
-                    .after(projection::animal_need_and_health_projection::project_live_animal_health_to_visible_information_panels)
+                    .after(openzt2_interface_state::ui::UiSet::Projection)
+                    .before(openzt2_interface_state::ui::UiSet::Behavior)
                     .in_set(GameSet::Ui)
                     .run_if(in_state(GamePhase::InGame)),
             )
@@ -156,9 +181,8 @@ impl Plugin for InformationPlugin {
                     zoopedia::zoopedia_page_hydration::hydrate_zoopedia_pages_from_authored_root_entry,
                     zoopedia::zoopedia_table_of_contents_projection::project_zoopedia_table_of_contents_for_hydrated_pages,
                     zoopedia::zoopedia_table_of_contents_projection::apply_authored_zoopedia_table_of_contents_expansion_changes,
-                    zoopedia::zoopedia_table_of_contents_projection::request_zoopedia_table_of_contents_row_counts,
+                    zoopedia::zoopedia_table_of_contents_projection::reconcile_visible_zoopedia_entries,
                     zoopedia::zoopedia_table_of_contents_projection::project_zoopedia_table_of_contents_rows,
-                    zoopedia::zoopedia_navigation_operations::apply_pending_zoopedia_entries_to_hydrated_pages,
                     zoopedia::zoopedia_navigation_control_interaction_projection::project_zoopedia_history_availability_to_authored_navigation_controls,
                     zoopedia::zoopedia_page_projection::project_localized_zoopedia_page_to_authored_information_document,
                 )
@@ -170,16 +194,40 @@ impl Plugin for InformationPlugin {
             .add_systems(
                 Update,
                 (
-                    overview::canvas_hydration_operations::create_missing_authored_overview_map_canvas_entities,
-                    overview::overview_map_legend_operations::request_authored_overview_map_legend_row_entities,
-                    overview::overview_map_legend_operations::bind_authored_overview_map_layer_data_to_legend_rows,
-                    overview::map_rasterization_operations::rebuild_changed_overview_map_canvas_images_from_world_state,
-                    overview::overview_map_legend_operations::toggle_overview_map_layers_from_pressed_legend_rows,
-                    overview::overview_map_marker_operations::create_missing_authored_overview_map_marker_entities,
-                    overview::overview_map_marker_operations::project_world_subject_positions_to_overview_map_markers,
+                    (
+                        overview::canvas_hydration_operations::create_missing_authored_overview_map_canvas_entities,
+                        (
+                            overview::map_rasterization_operations::refresh_overview_map_canvas_policies,
+                            overview::map_rasterization_operations::invalidate_changed_overview_map_sources,
+                        ),
+                        (
+                            overview::map_rasterization_operations::rasterize_dirty_overview_topology_canvases,
+                            overview::terrain_rasterization_operations::rasterize_dirty_overview_terrain_and_water_canvases,
+                        ),
+                        overview::map_rasterization_operations::publish_pending_overview_map_images,
+                    ).chain().after(openzt2_interface_state::ui::UiSet::Projection),
+                    overview::overview_map_legend_operations::size_authored_overview_map_legends
+                        .after(openzt2_interface_state::ui::UiSet::Projection),
+                    (
+                        overview::overview_map_legend_operations::bind_authored_overview_map_legend_controls,
+                        overview::overview_map_legend_operations::toggle_overview_map_layers_from_pressed_legend_rows,
+                        overview::overview_map_legend_operations::project_overview_legend_checkbox_selection,
+                    ).chain().after(openzt2_interface_state::ui::UiSet::Projection),
+                    (
+                        overview::overview_map_marker_operations::hydrate_authored_overview_marker_layers
+                            .run_if(
+                                resource_changed::<Assets<openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset>>
+                                    .or_else(any_match_filter::<Or<(
+                                        Changed<openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::UiTablePolicy>,
+                                        Changed<openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentMembers>,
+                                    )>>),
+                            ),
+                        overview::overview_map_marker_operations::reconcile_changed_overview_subject_markers
+                            .after(information_view_class_hydration::hydrate_information_view_classes_from_canonical_world_definitions),
+                        overview::overview_map_marker_operations::project_world_subject_positions_to_overview_map_markers,
+                    ).chain().after(openzt2_interface_state::ui::UiSet::Projection),
                     overview::overview_map_marker_operations::project_overhead_camera_position_to_overview_map_marker,
                     overview::overview_map_marker_operations::request_entity_selection_from_pressed_overview_map_markers,
-                    overview::overview_map_marker_operations::remove_overview_map_markers_for_retired_subjects,
                     projection::maintenance_status_projection::project_live_maintenance_status_to_visible_information_panels,
                     projection::facility_status_projection::project_selected_facility_status_to_visible_information_panels,
                     projection::habitat_and_tank_status_projection::project_selected_habitat_and_tank_status_to_visible_information_panels,

@@ -44,17 +44,18 @@ impl Default for TourObservationMemory {
 }
 
 impl TourObservationMemory {
+    pub fn can_observe_with_limit(&self, subject: Entity, authored_subject_limit: u16) -> bool {
+        let capacity = self.subjects.len().min(usize::from(authored_subject_limit));
+        capacity != 0 && !self.subjects[..usize::from(self.len).min(capacity)].contains(&subject)
+    }
+
     pub fn observe_with_limit(
         &mut self,
         observed_subject: Entity,
         authored_subject_limit: u16,
     ) -> bool {
         let subject_capacity = self.subjects.len().min(usize::from(authored_subject_limit));
-        if subject_capacity == 0 {
-            return false;
-        }
-        let active_subject_count = usize::from(self.len).min(subject_capacity);
-        if self.subjects[..active_subject_count].contains(&observed_subject) {
+        if !self.can_observe_with_limit(observed_subject, authored_subject_limit) {
             return false;
         }
         if usize::from(self.len) > subject_capacity {

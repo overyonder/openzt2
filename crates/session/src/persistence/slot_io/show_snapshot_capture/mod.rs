@@ -1,3 +1,13 @@
+use bevy::{
+    ecs::{relationship::RelationshipTarget, system::SystemParam},
+    prelude::*,
+};
+use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
+use openzt2_zoo_state::shows::show_schedule_types::{
+    ScheduledShowBreakRow, ScheduledShowPerformancePlan, ScheduledShowRow,
+    ScheduledShowTrickPerformance, ScheduledTrickPerformer, ShowScheduleRowOrder, ShowTrickSlots,
+};
+
 use openzt2_zoo_state::shows::show_platform_upgrade_types::ShowPlatformUpgradeKind;
 use openzt2_zoo_state::shows::show_schedule_types::ScheduledShowRowActivationState;
 use openzt2_zoo_state::shows::show_stage_types::ShowStageOpenState;
@@ -11,8 +21,34 @@ use super::{
     world_snapshot_capture_system_parameters::WorldSnapshotCaptureQueries,
 };
 
+#[derive(SystemParam)]
+pub(super) struct ShowScheduleSnapshotQueries<'w, 's> {
+    rows: Query<
+        'w,
+        's,
+        (
+            &'static PersistentId,
+            &'static ScheduledShowRow,
+            &'static ShowScheduleRowOrder,
+            Option<&'static ScheduledShowBreakRow>,
+            Option<&'static ScheduledShowPerformancePlan>,
+            Option<&'static ScheduledShowRowActivationState>,
+            Option<&'static ShowTrickSlots>,
+        ),
+    >,
+    slots: Query<
+        'w,
+        's,
+        (
+            &'static ScheduledShowTrickPerformance,
+            &'static ScheduledTrickPerformer,
+        ),
+    >,
+}
+
 pub(super) fn capture_sorted_show_snapshot_records_from_live_world(
     world_snapshot_capture_queries: &WorldSnapshotCaptureQueries,
+    schedule: &ShowScheduleSnapshotQueries,
 ) -> Result<
     (
         Vec<ShowStageSnapshotRecord>,
@@ -87,68 +123,58 @@ pub(super) fn capture_sorted_show_snapshot_records_from_live_world(
             .ok()
             .copied()
     };
-    let mut scheduled_show_snapshot_records = Vec::with_capacity(
-        world_snapshot_capture_queries
-            .scheduled_show_rows_with_snapshot_state
-            .iter()
-            .len(),
-    );
-    for (
-        persistent_identifier,
-        scheduled_show_row,
-        schedule_row_order,
-        stored_performance_plan,
-        optional_activation_state,
-    ) in &world_snapshot_capture_queries.scheduled_show_rows_with_snapshot_state
-    {
-        let performance_plan = stored_performance_plan;
-        if !performance_plan.is_valid()
-            || u16::try_from(performance_plan.trick_performances.len()).is_err()
+    let mut scheduled_show_snapshot_records = Vec::new();
+    let mut scheduled_show_break_snapshot_records = Vec::new();
+    for (id, row, order, interval, plan, activation, slots) in &schedule.rows {
+        let stage_persistent_identifier = entity_persistent_identifier(row.stage)
+            .ok_or(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference)?;
+        if !world_snapshot_capture_queries
+            .show_stages_with_snapshot_state
+            .contains(row.stage)
         {
             return Err(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference);
         }
-        let stage_persistent_identifier = entity_persistent_identifier(scheduled_show_row.stage)
-            .ok_or(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference)?;
-        let mut performance_snapshot_records =
-            Vec::with_capacity(performance_plan.trick_performances.len());
-        for trick_performance in &performance_plan.trick_performances {
-            let performer_persistent_identifier =
-                entity_persistent_identifier(trick_performance.performer)
-                    .ok_or(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference)?;
-            performance_snapshot_records.push(ScheduledShowPerformanceSnapshotRecord {
+        if let Some(interval) = interval {
+            scheduled_show_break_snapshot_records.push(ScheduledShowBreakSnapshotRecord {
+                persistent_identifier: *id,
+                stage_persistent_identifier,
+                schedule_row_order: order.0,
+                is_active: true,
+                duration_simulation_ticks: interval.duration_ticks,
+            });
+            continue;
+        }
+        let Some(plan) = plan else {
+            return Err(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference);
+        };
+        let slot_count = slots.map_or(0, RelationshipTarget::len);
+        if slot_count > usize::from(plan.trick_performance_capacity) {
+            return Err(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference);
+        }
+        let mut performance_records = Vec::with_capacity(slot_count);
+        for slot in slots.into_iter().flat_map(RelationshipTarget::iter) {
+            let (performance, performer) = schedule
+                .slots
+                .get(slot)
+                .ok()
+                .filter(|(performance, _)| performance.duration_ticks > 0)
+                .ok_or(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference)?;
+            let performer_persistent_identifier = entity_persistent_identifier(performer.0)
+                .ok_or(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference)?;
+            performance_records.push(ScheduledShowPerformanceSnapshotRecord {
                 performer_persistent_identifier,
-                trick_definition_identifier: trick_performance.trick,
-                duration_simulation_ticks: trick_performance.duration_ticks,
+                trick_definition_identifier: performance.trick,
+                duration_simulation_ticks: performance.duration_ticks,
             });
         }
         scheduled_show_snapshot_records.push(ScheduledShowSnapshotRecord {
-            persistent_identifier: *persistent_identifier,
+            persistent_identifier: *id,
             stage_persistent_identifier,
-            schedule_row_order: schedule_row_order.0,
-            is_active: optional_activation_state.is_none_or(|activation_state| {
-                *activation_state == ScheduledShowRowActivationState::Enabled
-            }),
-            performance_capacity: performance_plan.trick_performance_capacity,
-            performance_records: performance_snapshot_records,
-        });
-    }
-    let mut scheduled_show_break_snapshot_records = Vec::with_capacity(
-        world_snapshot_capture_queries
-            .scheduled_show_break_rows
-            .iter()
-            .len(),
-    );
-    for (persistent_identifier, scheduled_show_break, schedule_row_order) in
-        &world_snapshot_capture_queries.scheduled_show_break_rows
-    {
-        let stage_persistent_identifier = entity_persistent_identifier(scheduled_show_break.stage)
-            .ok_or(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference)?;
-        scheduled_show_break_snapshot_records.push(ScheduledShowBreakSnapshotRecord {
-            persistent_identifier: *persistent_identifier,
-            stage_persistent_identifier,
-            schedule_row_order: schedule_row_order.0,
-            is_active: true,
-            duration_simulation_ticks: scheduled_show_break.duration_ticks,
+            schedule_row_order: order.0,
+            is_active: activation
+                .is_none_or(|activation| *activation == ScheduledShowRowActivationState::Enabled),
+            performance_capacity: plan.trick_performance_capacity,
+            performance_records,
         });
     }
 

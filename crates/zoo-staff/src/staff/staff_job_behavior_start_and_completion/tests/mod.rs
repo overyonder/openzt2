@@ -42,9 +42,6 @@ fn claimed_task_waits_for_its_asset_and_does_not_restart_after_terminal_executio
             },
         ))
         .id();
-    app.world_mut()
-        .entity_mut(worker)
-        .insert(CurrentJob { job });
     for _ in 0..2 {
         app.update();
         assert!(app
@@ -154,15 +151,11 @@ fn removed_source_task_releases_assignment_without_cancelling_live_request() {
             },
         ))
         .id();
-    app.world_mut()
-        .entity_mut(worker)
-        .insert(CurrentJob { job });
     app.update();
     assert!(app.world().get::<StaffJob>(job).is_some());
     assert!(app.world().get::<JobClaim>(job).is_none());
     assert!(app.world().get::<StaffJobBehaviorTask>(job).is_none());
     assert!(app.world().get::<CurrentJob>(worker).is_none());
-    assert!(app.world().get::<AvailableForWork>(worker).is_some());
     assert!(app
         .world()
         .get::<BehaviorTaskExecutionState>(worker)
@@ -208,9 +201,6 @@ fn failed_assignment_preserves_request_until_its_owner_cancels_it() {
             },
         ))
         .id();
-    app.world_mut()
-        .entity_mut(worker)
-        .insert(CurrentJob { job: request });
     app.world_mut().write_message(BehaviorTaskFailed {
         actor: worker,
         execution_id: 1,
@@ -219,7 +209,6 @@ fn failed_assignment_preserves_request_until_its_owner_cancels_it() {
     assert!(app.world().get::<StaffJob>(request).is_some());
     assert!(app.world().get::<JobClaim>(request).is_none());
     assert!(app.world().get::<CurrentJob>(worker).is_none());
-    assert!(app.world().get::<AvailableForWork>(worker).is_some());
     assert!(app
         .world()
         .get::<UnsuccessfulStaffJobCandidates>(request)
@@ -268,9 +257,6 @@ fn replaced_assignment_ignores_previous_execution_success_and_failure() {
             },
         ))
         .id();
-    app.world_mut()
-        .entity_mut(worker)
-        .insert(CurrentJob { job });
     app.world_mut().write_message(BehaviorTaskFailed {
         actor: worker,
         execution_id: 1,
@@ -286,8 +272,8 @@ fn replaced_assignment_ignores_previous_execution_success_and_failure() {
         .get::<UnsuccessfulStaffJobCandidates>(job)
         .is_none());
     assert_eq!(
-        app.world().get::<CurrentJob>(worker),
-        Some(&CurrentJob { job })
+        app.world().get::<CurrentJob>(worker).map(CurrentJob::job),
+        Some(job)
     );
     assert_eq!(
         app.world().get::<JobClaim>(job),
@@ -328,9 +314,6 @@ fn successful_container_refill_releases_worker_and_preserves_controller_request(
             },
         ))
         .id();
-    app.world_mut()
-        .entity_mut(worker)
-        .insert(CurrentJob { job });
     app.world_mut().write_message(BehaviorTaskFinished {
         actor: worker,
         execution_id: 1,
@@ -341,7 +324,6 @@ fn successful_container_refill_releases_worker_and_preserves_controller_request(
     assert!(app.world().get::<StaffJobBehaviorTask>(job).is_none());
     assert!(app.world().get::<JobProgress>(job).is_none());
     assert!(app.world().get::<CurrentJob>(worker).is_none());
-    assert!(app.world().get::<AvailableForWork>(worker).is_some());
 }
 
 #[test]
@@ -381,9 +363,6 @@ fn completed_water_placement_releases_keeper_without_a_second_service_effect() {
             },
         ))
         .id();
-    app.world_mut()
-        .entity_mut(worker)
-        .insert(CurrentJob { job });
     app.world_mut().write_message(BehaviorTaskFinished {
         actor: worker,
         execution_id: 1,
@@ -391,6 +370,5 @@ fn completed_water_placement_releases_keeper_without_a_second_service_effect() {
     app.update();
     assert!(app.world().get_entity(job).is_err());
     assert!(app.world().get::<CurrentJob>(worker).is_none());
-    assert!(app.world().get::<AvailableForWork>(worker).is_some());
     assert!(app.world().get::<Animal>(target).is_some());
 }

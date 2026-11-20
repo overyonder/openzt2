@@ -13,19 +13,23 @@ use openzt2_zoo_state::{
     guests::{
         guest_simulation_types::{AdjustGuestSurveyData, GuestArchetype, GuestFoodPurchaseCounts},
         guest_survey_types::{
-            GuestCriticalNeedObservations, GuestSurvey, GuestSurveyExperience, GuestSurveyRating,
+            GuestCriticalNeedObservations, GuestSurvey, GuestSurveyExperience,
+            GuestSurveyNeedCadence, GuestSurveyRating,
         },
     },
 };
 
 pub(super) fn initialize_guest_survey(
-    roots: Query<(), With<WorldLoadCompleted>>,
+    roots: Query<(Entity, Has<GuestSurveyNeedCadence>), With<WorldLoadCompleted>>,
     survey: Option<Res<GuestSurvey>>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active: Res<WorldDefinitions>,
     mut commands: Commands,
 ) {
-    if survey.is_some() || roots.is_empty() {
+    let Ok((root, has_cadence)) = roots.single() else {
+        return;
+    };
+    if survey.is_some() && has_cadence {
         return;
     }
     let Some(policy) = active
@@ -34,10 +38,14 @@ pub(super) fn initialize_guest_survey(
     else {
         return;
     };
-    commands.insert_resource(GuestSurvey {
-        critical_need_countdown_seconds: policy.need_survey.check_interval_ns as f32 * 1e-9,
-        ..Default::default()
-    });
+    if survey.is_none() {
+        commands.init_resource::<GuestSurvey>();
+    }
+    if !has_cadence {
+        commands.entity(root).insert(GuestSurveyNeedCadence(
+            policy.need_survey.check_interval_ns as f32 * 1e-9,
+        ));
+    }
 }
 
 pub(super) fn advance_guest_survey_day(
@@ -128,7 +136,6 @@ mod tests {
         let mut app = App::new();
         app.init_resource::<Assets<WorldDefinitionAsset>>()
             .insert_resource(GuestSurvey {
-                critical_need_countdown_seconds: 5.0,
                 previous_day_of_month: 9,
                 current_day_of_month: 1,
                 ..Default::default()
@@ -181,7 +188,6 @@ mod tests {
             survey.ratings[GuestSurveyRating::Happiness as usize].daily_ratings[0],
             50.0
         );
-        assert_eq!(survey.critical_need_countdown_seconds, 5.0);
         app.world_mut().entity_mut(guest).despawn();
         app.update();
         assert!(app

@@ -1,14 +1,23 @@
 use bevy::prelude::*;
 use openzt2_game_data::ui_document::action::staff_management::UiWorkerDuty;
 
-#[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct StaffAssignment {
-    pub area: Option<Entity>,
-    pub target: Option<Entity>,
-}
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+#[relationship(relationship_target = StaffAssignedToArea)]
+pub struct StaffAssignmentArea(pub Entity);
+
+#[derive(Component, Default)]
+#[relationship_target(relationship = StaffAssignmentArea)]
+pub struct StaffAssignedToArea(Vec<Entity>);
+
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+#[relationship(relationship_target = StaffAssignedToTarget)]
+pub struct StaffAssignmentTarget(pub Entity);
+
+#[derive(Component, Default)]
+#[relationship_target(relationship = StaffAssignmentTarget)]
+pub struct StaffAssignedToTarget(Vec<Entity>);
 
 /// A world entity that the player has placed in a keeper's assignment set.
-/// The relationship remains on the assigned staff entity in [`StaffAssignment`].
 #[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct KeeperAssignmentTarget;
 

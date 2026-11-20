@@ -1,5 +1,7 @@
+use super::world_navigation_installation::NavigationGraphReplaced;
 use avian3d::prelude::{Collider, RigidBody};
 use bevy::prelude::*;
+use openzt2_game_assets::application_lifecycle::GamePhase;
 use openzt2_game_assets::{
     terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset,
     world_definitions::{
@@ -7,12 +9,15 @@ use openzt2_game_assets::{
         world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
     },
 };
+use openzt2_zoo_state::terrain::terrain_navigation_change_types::{
+    TerrainNavigationChanged, TerrainNavigationRestored,
+};
 
 #[derive(Component)]
 pub(super) struct NavigationPathSurfaceCollider;
 use openzt2_zoo_state::{
     locomotion::{
-        locomotion_types::{ActiveTerrainDerivedNavigationGraph, Destination, Route},
+        locomotion_types::ActiveTerrainDerivedNavigationGraph,
         terrain_derived_navigation_graph_types::NavigationPathSurface,
     },
     terrain::{
@@ -24,7 +29,6 @@ use openzt2_zoo_state::{
 
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(super) fn project_path_surfaces_into_navigation_graph(
-    mut commands: Commands,
     mut graph: Option<ResMut<ActiveTerrainDerivedNavigationGraph>>,
     mut capacity: Option<
         ResMut<openzt2_zoo_state::locomotion::locomotion_types::LocomotionCapacity>,
@@ -43,18 +47,28 @@ pub(super) fn project_path_surfaces_into_navigation_graph(
             )>,
         ),
     >,
-    mut removed_paths: RemovedComponents<PathTile>,
+    (mut removed_paths, mut removed_surfaces): (
+        RemovedComponents<PathTile>,
+        RemovedComponents<TileSurface>,
+    ),
     terrain_index: Res<TerrainIndex>,
     terrain_assets: Res<Assets<TerrainAsset>>,
     terrain_chunks: Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
-    mut routes: Query<(&mut Route, &mut Destination)>,
-    colliders: Query<Entity, With<NavigationPathSurfaceCollider>>,
+    mut path_changes: MessageWriter<NavigationPathGraphChanged>,
+    mut installations: MessageReader<NavigationGraphReplaced>,
+    mut terrain_changes: MessageReader<TerrainNavigationChanged>,
+    mut restored_terrain: MessageReader<TerrainNavigationRestored>,
+    phase: Res<State<GamePhase>>,
 ) {
-    let removed = removed_paths.read().count() != 0;
+    let removed = removed_paths.read().chain(removed_surfaces.read()).count() != 0;
+    let graph_replaced = installations.read().count() != 0;
+    let terrain_changed =
+        (terrain_changes.read().count() != 0) | (restored_terrain.read().count() != 0);
     let Some(graph) = graph.as_mut() else {
         return;
     };
-    if !graph.is_changed()
+    if !graph_replaced
+        && !terrain_changed
         && !definitions.is_changed()
         && !assets.is_changed()
         && changes.is_empty()
@@ -62,11 +76,6 @@ pub(super) fn project_path_surfaces_into_navigation_graph(
     {
         return;
     }
-    let rebuild_colliders = !changes.is_empty()
-        || removed
-        || definitions.is_changed()
-        || assets.is_changed()
-        || graph.is_added();
     let Some(definitions) = definitions.get(&assets) else {
         return;
     };
@@ -104,42 +113,6 @@ pub(super) fn project_path_surfaces_into_navigation_graph(
         return;
     }
     graph.set_changed();
-    if rebuild_colliders {
-        for collider in &colliders {
-            commands.entity(collider).despawn();
-        }
-        for (entity, path, surface, transform) in &paths {
-            let Some(definition) = definitions
-                .find_path(path.definition)
-                .filter(|definition| definition.elevated)
-            else {
-                continue;
-            };
-            if NavigationPathSurface::new(
-                entity,
-                *transform,
-                f32::from(definition.width_cm) * 0.01,
-                surface.height_cm,
-            )
-            .is_none()
-            {
-                continue;
-            }
-            let half = f32::from(definition.width_cm) * 0.005;
-            let mut vertices = [(-half, -half), (half, -half), (half, half), (-half, half)]
-                .into_iter()
-                .enumerate()
-                .map(|(index, (x, z))| Vec3::new(x, f32::from(surface.height_cm[index]) * 0.01, z))
-                .collect::<Vec<_>>();
-            vertices.push(Vec3::Y * (f32::from(surface.height_cm[4]) * 0.01));
-            commands.entity(entity).with_child((
-                NavigationPathSurfaceCollider,
-                RigidBody::Static,
-                Collider::trimesh(vertices, vec![[0, 4, 1], [1, 4, 2], [2, 4, 3], [3, 4, 0]]),
-                Transform::IDENTITY,
-            ));
-        }
-    }
     let point_capacity = graph
         .terrain_derived_navigation_graph()
         .navigation_node_count()
@@ -147,11 +120,105 @@ pub(super) fn project_path_surfaces_into_navigation_graph(
     if let Some(capacity) = capacity.as_mut() {
         capacity.max_route_points = point_capacity;
     }
-    for (mut route, mut destination) in &mut routes {
-        route.clear();
-        if route.points.capacity() < point_capacity {
-            route.points.reserve_exact(point_capacity);
+    if *phase.get() == GamePhase::InGame {
+        path_changes.write(NavigationPathGraphChanged {
+            elevated: changes.elevated,
+        });
+    }
+}
+
+#[derive(Message)]
+pub(super) struct NavigationPathGraphChanged {
+    pub(super) elevated: bool,
+}
+
+#[allow(clippy::type_complexity)]
+pub(super) fn project_elevated_path_colliders(
+    mut commands: Commands,
+    definitions: Res<WorldDefinitions>,
+    assets: Res<Assets<WorldDefinitionAsset>>,
+    paths: Query<(
+        Entity,
+        Ref<PathTile>,
+        Ref<TileSurface>,
+        Ref<GlobalTransform>,
+        Option<&Children>,
+    )>,
+    mut colliders: Query<&mut Collider, With<NavigationPathSurfaceCollider>>,
+    detached: Query<
+        Entity,
+        (
+            With<Children>,
+            Or<(Without<PathTile>, Without<TileSurface>)>,
+        ),
+    >,
+    mut removed_paths: RemovedComponents<PathTile>,
+    mut removed_surfaces: RemovedComponents<TileSurface>,
+    children: Query<&Children>,
+) {
+    let refresh_all = definitions.is_changed() || assets.is_changed();
+    let Some(definitions) = definitions.get(&assets) else {
+        return;
+    };
+    for entity in removed_paths.read().chain(removed_surfaces.read()) {
+        if !detached.contains(entity) {
+            continue;
         }
-        destination.set_changed();
+        if let Ok(children) = children.get(entity) {
+            for child in children.iter() {
+                if colliders.contains(child) {
+                    commands.entity(child).try_despawn();
+                }
+            }
+        }
+    }
+    for (entity, path, surface, transform, children) in &paths {
+        if !refresh_all && !path.is_changed() && !surface.is_changed() && !transform.is_changed() {
+            continue;
+        }
+        let collider = children
+            .into_iter()
+            .flat_map(|children| children.iter())
+            .find(|&child| colliders.contains(child));
+        let definition = definitions.find_path(path.definition).filter(|definition| {
+            definition.elevated
+                && NavigationPathSurface::new(
+                    entity,
+                    *transform,
+                    f32::from(definition.width_cm) * 0.01,
+                    surface.height_cm,
+                )
+                .is_some()
+        });
+        let Some(definition) = definition else {
+            if let Some(collider) = collider {
+                commands.entity(collider).try_despawn();
+            }
+            continue;
+        };
+        if !refresh_all && !path.is_changed() && !surface.is_changed() && collider.is_some() {
+            // Child transforms already track movement of their path.
+            continue;
+        }
+        let half = f32::from(definition.width_cm) * 0.005;
+        let mut vertices = [(-half, -half), (half, -half), (half, half), (-half, half)]
+            .into_iter()
+            .enumerate()
+            .map(|(index, (x, z))| Vec3::new(x, f32::from(surface.height_cm[index]) * 0.01, z))
+            .collect::<Vec<_>>();
+        vertices.push(Vec3::Y * (f32::from(surface.height_cm[4]) * 0.01));
+        let next = Collider::trimesh(vertices, vec![[0, 4, 1], [1, 4, 2], [2, 4, 3], [3, 4, 0]]);
+        if let Some(collider) = collider {
+            if let Ok(mut current) = colliders.get_mut(collider) {
+                *current = next;
+            }
+        } else {
+            commands.entity(entity).with_child((
+                NavigationPathSurfaceCollider,
+                RigidBody::Static,
+                next,
+                Transform::IDENTITY,
+            ));
+        }
     }
 }

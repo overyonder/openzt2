@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use bevy::{platform::collections::HashSet, utils::Parallel};
 
 use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
 use openzt2_game_assets::behavior::behavior_asset_types::LoadedBehaviorDocumentCollection;
@@ -8,8 +9,7 @@ use openzt2_zoo_state::animal_health::types::Rampaging;
 use openzt2_zoo_state::feeding::container_quantity::{DrinkContainer, FoodContainer};
 use openzt2_zoo_state::habitat::habitat_types::HabitatMember;
 use openzt2_zoo_state::locomotion::locomotion_types::NavAgent;
-use openzt2_zoo_state::locomotion::locomotion_types::SpatialCell;
-use openzt2_zoo_state::locomotion::locomotion_types::SpatialGrid;
+use openzt2_zoo_state::locomotion::locomotion_types::{SpatialGrid, SpatialGridMembership};
 use openzt2_zoo_state::maintenance::maintenance_types::FacilityContainedWaste;
 use openzt2_zoo_state::terrain::dry_surface_eligibility::DrySurfaceEligibility;
 use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
@@ -17,20 +17,18 @@ use openzt2_zoo_state::animal_behavior::behavior_target_retry_delays::BehaviorTa
 
 use super::{
     staff_assignment_types::{
-        CleansFilters, CleansRecycling, EmptiesTrash, StaffAssignment, SweepsTrash,
+        CleansFilters, CleansRecycling, EmptiesTrash, StaffAssignmentArea, StaffAssignmentTarget,
+        SweepsTrash,
     },
-    staff_employment_types::{AvailableForWork, Staff, StaffRole},
-    staff_job_claim_ranking::{
-        insert_candidate_into_ranked_staff_job_claim_candidates, RankedStaffJobClaimCandidate,
-        MAXIMUM_RANKED_STAFF_JOB_CANDIDATES,
-    },
+    staff_employment_types::{Staff, StaffRole},
+    staff_job_claim_ranking::RankedStaffJobClaimCandidate,
     staff_job_eligibility::{
         find_highest_priority_compatible_staff_behavior_task, staff_assignment_accepts_job_target,
-        StaffCandidateEligibilityFacts,
+        StaffCandidateEligibilityFacts, StaffTasksByRequestToken,
     },
     staff_job_types::{
-        CurrentJob, JobClaim, StaffJob, StaffJobBehaviorTask, TankCleaningRequestSite,
-        UnsuccessfulStaffJobCandidates,
+        CurrentJob, JobClaim, StaffJob, StaffJobBehaviorTask, StaffJobCancellationPending,
+        TankCleaningRequestSite, UnsuccessfulStaffJobCandidates,
     },
     worker_duty_assignment::maintenance_worker_duties_accept_staff_job,
 };
@@ -42,28 +40,28 @@ pub(crate) fn claim_highest_ranked_compatible_jobs_for_available_staff(
     target_retry_delays: BehaviorTargetRejections,
     behavior_document_assets: Res<Assets<BehaviorDocumentAsset>>,
     loaded_behavior_documents: Res<LoadedBehaviorDocumentCollection>,
+    token_tasks: Res<StaffTasksByRequestToken>,
     spatial_grid: Res<SpatialGrid>,
+    spatial_membership: SpatialGridMembership,
     terrain_surfaces: DrySurfaceEligibility,
     staff: Query<
         (
             Entity,
             &StaffRole,
             &GlobalTransform,
-            &SpatialCell,
-            &StaffAssignment,
+            Option<&StaffAssignmentArea>,
+            Option<&StaffAssignmentTarget>,
             Has<CleansFilters>,
             Has<CleansRecycling>,
             Has<EmptiesTrash>,
             Has<SweepsTrash>,
         ),
-        (
-            With<Staff>,
-            With<AvailableForWork>,
-            With<NavAgent>,
-            Without<CurrentJob>,
-        ),
+        (With<Staff>, With<NavAgent>, Without<CurrentJob>),
     >,
-    jobs: Query<(Entity, &StaffJob, Option<&UnsuccessfulStaffJobCandidates>), Without<JobClaim>>,
+    jobs: Query<
+        (Entity, &StaffJob, Option<&UnsuccessfulStaffJobCandidates>),
+        (Without<JobClaim>, Without<StaffJobCancellationPending>),
+    >,
     targets: Query<(
         &GlobalTransform,
         Option<&ChildOf>,
@@ -85,16 +83,15 @@ pub(crate) fn claim_highest_ranked_compatible_jobs_for_available_staff(
     else {
         return;
     };
-    let mut available_staff = None;
-    // Rebuild this scratch list every run so an unavailable pairing can be
-    // reconsidered as soon as its eligibility facts change.
-    let mut nearest_staff = Vec::new();
-    let mut candidates = [None; MAXIMUM_RANKED_STAFF_JOB_CANDIDATES];
-    for (job_entity, job, unsuccessful) in &jobs {
-        // Token-less requests cannot select an authored behavior task.
-        if job.token.is_none() {
-            continue;
-        }
+    if staff.is_empty() {
+        return;
+    }
+    let mut evaluated =
+        Parallel::<Vec<(RankedStaffJobClaimCandidate, StaffJobBehaviorTask)>>::default();
+    jobs.par_iter().for_each(|(job_entity, job, unsuccessful)| {
+        let Some(token) = job.token else {
+            return;
+        };
         let Ok((
             target_transform,
             parent,
@@ -105,30 +102,21 @@ pub(crate) fn claim_highest_ranked_compatible_jobs_for_available_staff(
             drink,
         )) = targets.get(job.target)
         else {
-            continue;
+            return;
         };
         let target_position = target_transform.translation();
         let Some(target_cell) = spatial_grid.cell_of(target_position.xz()) else {
-            continue;
+            return;
         };
         let Some(target_cell_coordinates) = spatial_grid.cell_xy(target_cell) else {
-            continue;
+            return;
         };
-        let available_staff = available_staff.get_or_insert_with(|| {
-            let mut available_staff_entities = Vec::new();
-            for (candidate_entity, _, _, staff_cell, _, _, _, _, _) in &staff {
-                // The range check preserves membership in the prior grid snapshot.
-                if spatial_grid.range(staff_cell.0).contains(&candidate_entity) {
-                    available_staff_entities.push(candidate_entity);
-                }
-            }
-            available_staff_entities
-        });
         let target_parent = parent.map(ChildOf::parent);
         let target_area = habitat.map(|habitat| habitat.habitat_entity);
         let target_rampaging = target_rampaging.is_some();
         let target_on_land = terrain_surfaces.on_land_at_position(target_position);
         let candidate_facts = StaffCandidateEligibilityFacts {
+            target_definition: target_definition.map(|definition| definition.0),
             target_food_level_q16: food
                 .map(|container| container.amount_q16)
                 .or_else(|| drink.map(|container| container.amount_q16)),
@@ -149,173 +137,134 @@ pub(crate) fn claim_highest_ranked_compatible_jobs_for_available_staff(
             target_is_request_site: request_sites.contains(job.target),
         };
 
-        nearest_staff.clear();
-        let mut nearest_distance = None;
-        // Keep the whole nearest compatible ring. The former row-major search
-        // stopped after the first compatible row, biasing that row's candidates.
-        for &candidate_entity in available_staff.iter() {
-            if target_retry_delays.rejects(candidate_entity, job.target) {
-                continue;
-            }
-            if unsuccessful.is_some_and(|candidates| candidates.contains(candidate_entity)) {
-                continue;
-            }
-            let Ok((
-                staff_entity,
-                staff_role,
-                staff_transform,
-                staff_cell,
-                staff_assignment,
-                cleans_filters,
-                cleans_recycling,
-                empties_trash,
-                sweeps_trash,
-            )) = staff.get(candidate_entity)
-            else {
-                continue;
-            };
-            // SpatialCell is navigation membership only; it is not a surface or show fact.
-            let Some(staff_cell_coordinates) = spatial_grid.cell_xy(staff_cell.0) else {
-                continue;
-            };
-            let distance = staff_cell_coordinates
-                .x
-                .abs_diff(target_cell_coordinates.x)
-                .max(staff_cell_coordinates.y.abs_diff(target_cell_coordinates.y));
-            if nearest_distance.is_some_and(|nearest| distance > nearest) {
-                continue;
-            }
-            let Some(role_definition) = catalogue.find_staff(staff_role.0) else {
-                continue;
-            };
-            if !maintenance_worker_duties_accept_staff_job(
-                role_definition.role,
-                job.kind,
-                cleans_filters,
-                cleans_recycling,
-                empties_trash,
-                sweeps_trash,
-            ) {
-                continue;
-            }
-            let Some(behavior_task) = find_highest_priority_compatible_staff_behavior_task(
-                behavior_declarations,
-                role_definition,
-                job.kind,
-                job.token,
-                candidate_facts,
-            ) else {
-                continue;
-            };
-            if !staff_assignment_accepts_job_target(
-                staff_assignment,
-                job.target,
-                target_parent,
-                target_area,
-            ) {
-                continue;
-            }
-
-            match nearest_distance {
-                Some(current) if distance == current => {}
-                Some(_) => {
-                    nearest_staff.clear();
-                    nearest_distance = Some(distance);
+        evaluated.scope(|candidates| {
+            let initial_count = candidates.len();
+            let UVec2 {
+                x: center_x,
+                y: center_y,
+            } = target_cell_coordinates;
+            let edge = center_x
+                .max(center_y)
+                .max(spatial_grid.width - 1 - center_x)
+                .max(spatial_grid.height - 1 - center_y);
+            for ring in 0..=edge {
+                let left = center_x.saturating_sub(ring);
+                let right = center_x.saturating_add(ring).min(spatial_grid.width - 1);
+                let top = center_y.saturating_sub(ring);
+                let bottom = center_y.saturating_add(ring).min(spatial_grid.height - 1);
+                let mut visit_cell = |x, y| {
+                    let cell = y * spatial_grid.width + x;
+                    for candidate_entity in spatial_membership.members(cell) {
+                        let Ok((
+                            staff_entity,
+                            staff_role,
+                            staff_transform,
+                            assigned_area,
+                            assigned_target,
+                            cleans_filters,
+                            cleans_recycling,
+                            empties_trash,
+                            sweeps_trash,
+                        )) = staff.get(candidate_entity)
+                        else {
+                            continue;
+                        };
+                        if target_retry_delays.rejects(staff_entity, job.target)
+                            || unsuccessful
+                                .is_some_and(|candidates| candidates.contains(staff_entity))
+                            || !staff_assignment_accepts_job_target(
+                                assigned_area,
+                                assigned_target,
+                                job.target,
+                                target_parent,
+                                target_area,
+                            )
+                        {
+                            continue;
+                        }
+                        let Some(role_definition) = catalogue.find_staff(staff_role.0) else {
+                            continue;
+                        };
+                        if !maintenance_worker_duties_accept_staff_job(
+                            role_definition.role,
+                            job.kind,
+                            Some(token),
+                            cleans_filters,
+                            cleans_recycling,
+                            empties_trash,
+                            sweeps_trash,
+                        ) {
+                            continue;
+                        }
+                        let Some(behavior) = find_highest_priority_compatible_staff_behavior_task(
+                            behavior_declarations,
+                            &token_tasks,
+                            catalogue,
+                            role_definition,
+                            token,
+                            candidate_facts,
+                        ) else {
+                            continue;
+                        };
+                        candidates.push((
+                            RankedStaffJobClaimCandidate {
+                                job: job_entity,
+                                staff: staff_entity,
+                                urgency: job.urgency,
+                                authored_priority: behavior.definition.priority.unwrap_or_default(),
+                                distance_squared: staff_transform
+                                    .translation()
+                                    .distance_squared(target_position),
+                            },
+                            StaffJobBehaviorTask {
+                                execution_id: None,
+                                document: behavior.document,
+                                task: behavior.definition.id,
+                                declaration_index: behavior.declaration_index,
+                            },
+                        ));
+                    }
+                };
+                for y in top..=bottom {
+                    if y.abs_diff(center_y) == ring {
+                        for x in left..=right {
+                            visit_cell(x, y);
+                        }
+                    } else {
+                        if center_x >= ring {
+                            visit_cell(left, y);
+                        }
+                        if right != left && right.abs_diff(center_x) == ring {
+                            visit_cell(right, y);
+                        }
+                    }
                 }
-                None => nearest_distance = Some(distance),
+                if candidates.len() != initial_count {
+                    break;
+                }
             }
-            nearest_staff.push((
-                staff_entity,
-                staff_transform
-                    .translation()
-                    .distance_squared(target_position),
-                behavior_task.definition.priority.unwrap_or_default(),
-            ));
-        }
+        });
+    });
 
-        for (staff_entity, distance_squared, authored_priority) in nearest_staff.drain(..) {
-            insert_candidate_into_ranked_staff_job_claim_candidates(
-                &mut candidates,
-                RankedStaffJobClaimCandidate {
-                    job: job_entity,
-                    staff: staff_entity,
-                    urgency: job.urgency,
-                    authored_priority,
-                    distance_squared,
-                },
-            );
-        }
-    }
-
-    let mut claimed_jobs = [None; MAXIMUM_RANKED_STAFF_JOB_CANDIDATES];
-    let mut claimed_staff = [None; MAXIMUM_RANKED_STAFF_JOB_CANDIDATES];
-    let mut claim_count = 0;
-    for candidate in candidates.iter().flatten().copied() {
-        if claimed_jobs[..claim_count].contains(&Some(candidate.job))
-            || claimed_staff[..claim_count].contains(&Some(candidate.staff))
+    let mut candidates: Vec<_> = evaluated.drain().flatten().collect();
+    candidates.sort_unstable_by(|(left, _), (right, _)| left.claim_order(right));
+    let mut claimed_jobs = HashSet::new();
+    let mut claimed_staff = HashSet::new();
+    for (candidate, behavior) in candidates {
+        if claimed_jobs.contains(&candidate.job)
+            || claimed_staff.contains(&candidate.staff)
+            || !jobs.contains(candidate.job)
+            || !staff.contains(candidate.staff)
         {
             continue;
         }
-        let (Ok((_, job, _)), Ok((_, staff_role, _, _, _, _, _, _, _))) =
-            (jobs.get(candidate.job), staff.get(candidate.staff))
-        else {
-            continue;
-        };
-        let Ok((target_transform, _, _, rampaging, definition, food, drink)) =
-            targets.get(job.target)
-        else {
-            continue;
-        };
-        let target_in_show = definition
-            .and_then(|definition| catalogue.find_object(definition.0))
-            .and_then(|definition| (!definition.supports_show_tricks).then_some(false));
-        let target_on_land = terrain_surfaces.on_land_at_position(target_transform.translation());
-        let Some(behavior_task) = catalogue.find_staff(staff_role.0).and_then(|role| {
-            find_highest_priority_compatible_staff_behavior_task(
-                behavior_declarations,
-                role,
-                job.kind,
-                job.token,
-                StaffCandidateEligibilityFacts {
-                    target_food_level_q16: food
-                        .map(|container| container.amount_q16)
-                        .or_else(|| drink.map(|container| container.amount_q16)),
-                    target_in_water: target_on_land.map(|on_land| !on_land),
-                    target_on_land,
-                    target_rampaging: Some(rampaging.is_some()),
-                    target_in_show,
-                    target_trash_level_q16: waste
-                        .get(job.target)
-                        .ok()
-                        .map(|waste| i32::from(waste.contained_waste_units) << 16),
-                    target_filter_dirtiness_q16: filters
-                        .get(job.target)
-                        .ok()
-                        .map(|filter| (filter.dirt_percent * 65536.0) as i32),
-                    target_is_request_site: request_sites.contains(job.target),
-                },
-            )
-        }) else {
-            continue;
-        };
-        // Commit the reciprocal assignment only with its resolved authored task.
         commands.entity(candidate.job).insert((
             JobClaim {
                 staff: candidate.staff,
             },
-            StaffJobBehaviorTask {
-                execution_id: None,
-                document: behavior_task.document,
-                task: behavior_task.definition.id,
-                declaration_index: behavior_task.declaration_index,
-            },
+            behavior,
         ));
-        commands
-            .entity(candidate.staff)
-            .insert(CurrentJob { job: candidate.job })
-            .remove::<AvailableForWork>();
-        claimed_jobs[claim_count] = Some(candidate.job);
-        claimed_staff[claim_count] = Some(candidate.staff);
-        claim_count += 1;
+        claimed_jobs.insert(candidate.job);
+        claimed_staff.insert(candidate.staff);
     }
 }

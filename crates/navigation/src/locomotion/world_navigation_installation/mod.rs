@@ -12,14 +12,15 @@ use openzt2_zoo_state::aquatic::tank_navigation_water::TankNavigationWater;
 use openzt2_zoo_state::locomotion::locomotion_types::ActiveTerrainDerivedNavigationGraph;
 use openzt2_zoo_state::locomotion::locomotion_types::Destination;
 use openzt2_zoo_state::locomotion::locomotion_types::LocomotionCapacity;
-use openzt2_zoo_state::locomotion::locomotion_types::NavAgent;
 use openzt2_zoo_state::locomotion::locomotion_types::Route;
-use openzt2_zoo_state::locomotion::locomotion_types::SpatialCell;
-use openzt2_zoo_state::locomotion::locomotion_types::SpatialGrid;
+use openzt2_zoo_state::locomotion::locomotion_types::{SpatialCellIndex, SpatialGrid};
 use openzt2_zoo_state::locomotion::terrain_derived_navigation_graph_types::TerrainDerivedNavigationGraph;
 
 #[derive(Component, Debug, Clone, Copy)]
 pub(super) struct TerrainDerivedNavigationGraphInstalled;
+
+#[derive(Message)]
+pub(super) struct NavigationGraphReplaced;
 
 /// Derives the pathfinding index from the selected terrain after the terrain
 /// asset and authored world bounds are available.
@@ -28,7 +29,9 @@ pub(super) struct TerrainDerivedNavigationGraphInstalled;
 pub(super) fn install_terrain_derived_navigation_graph_for_loaded_world(
     mut commands: Commands,
     mut terrain_asset_events: MessageReader<AssetEvent<TerrainAsset>>,
+    mut installations: MessageWriter<NavigationGraphReplaced>,
     terrain_assets: Res<Assets<TerrainAsset>>,
+    previous_grid: Res<SpatialGrid>,
     mut loaded_world_terrain_sources: Query<
         (
             Entity,
@@ -39,7 +42,6 @@ pub(super) fn install_terrain_derived_navigation_graph_for_loaded_world(
         ),
         With<WorldRoot>,
     >,
-    navigation_agents: Query<(Entity, &GlobalTransform), With<NavAgent>>,
     terrain_chunks: Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
     mut active_routes: Query<(&mut Route, &mut Destination)>,
 ) {
@@ -89,7 +91,6 @@ pub(super) fn install_terrain_derived_navigation_graph_for_loaded_world(
     if !locomotion_capacity.is_valid() {
         return;
     }
-    let mut navigation_spatial_grid = SpatialGrid::default();
     let terrain_tile_grid_dimensions =
         terrain_derived_navigation_graph.terrain_tile_grid_dimensions();
     // Terrain-derived graph construction bounds this centimetre value to u32.
@@ -97,26 +98,26 @@ pub(super) fn install_terrain_derived_navigation_graph_for_loaded_world(
     #[allow(clippy::cast_precision_loss)]
     let terrain_tile_size_metres =
         terrain_derived_navigation_graph.terrain_tile_size_centimetres() as f32 * 0.01;
-    if !navigation_spatial_grid.reserve_layout(
-        world_bounds.min,
-        terrain_tile_size_metres,
-        terrain_tile_grid_dimensions[0],
-        terrain_tile_grid_dimensions[1],
-        locomotion_capacity.max_agents,
-    ) {
+    let [width, height] = terrain_tile_grid_dimensions;
+    let Some(cell_count) = width.checked_mul(height).filter(|&count| count != 0) else {
         return;
+    };
+    for &cell in &previous_grid.cells {
+        commands.entity(cell).try_despawn();
     }
-    for (navigation_agent_entity, navigation_agent_transform) in &navigation_agents {
-        let navigation_agent_world_position = navigation_agent_transform.translation();
-        commands.entity(navigation_agent_entity).insert(
-            navigation_spatial_grid
-                .cell_of(Vec2::new(
-                    navigation_agent_world_position.x,
-                    navigation_agent_world_position.z,
-                ))
-                .map_or(SpatialCell::OUTSIDE, SpatialCell),
-        );
-    }
+    let navigation_spatial_grid = SpatialGrid {
+        origin: world_bounds.min,
+        cell_size_m: terrain_tile_size_metres,
+        width,
+        height,
+        cells: (0..cell_count)
+            .map(|index| {
+                commands
+                    .spawn((ChildOf(world_root_entity), SpatialCellIndex(index)))
+                    .id()
+            })
+            .collect::<Vec<_>>(),
+    };
     if navigation_graph_installed {
         for (mut route, mut destination) in &mut active_routes {
             route.clear();
@@ -133,6 +134,7 @@ pub(super) fn install_terrain_derived_navigation_graph_for_loaded_world(
     commands.insert_resource(ActiveTerrainDerivedNavigationGraph::new(
         terrain_derived_navigation_graph,
     ));
+    installations.write(NavigationGraphReplaced);
     commands.insert_resource(locomotion_capacity);
     commands.insert_resource(navigation_spatial_grid);
     commands

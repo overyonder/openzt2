@@ -22,8 +22,7 @@ use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 
 use super::{
-    staff_assignment_types::StaffAssignment,
-    staff_employment_types::{AvailableForWork, Employment, PendingStaffHire, Staff, StaffRole},
+    staff_employment_types::{Employment, PendingStaffHire, Staff, StaffRole},
     staff_lifecycle_messages::{HireStaffRequest, StaffHired},
     staff_presentation_variant_selection::{
         attach_staff_presentation_variant, staff_presentation_variant,
@@ -210,8 +209,6 @@ pub(crate) fn spawn_paid_staff_hires_from_ready_prefabs(
                     .saturating_mul(12)
                     .saturating_add(u32::from(calendar.month.saturating_sub(1))),
             },
-            StaffAssignment::default(),
-            AvailableForWork,
         ));
         if let Some(name) = name {
             staff_commands.insert(name);

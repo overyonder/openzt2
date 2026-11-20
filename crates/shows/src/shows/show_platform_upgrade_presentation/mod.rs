@@ -13,9 +13,10 @@ use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocum
 use openzt2_interface_state::ui::authored_ui_selection_state::UiSelected;
 
 use super::{
+    show_platform_upgrade_lifecycle::find_stage_platform_upgrade,
     show_platform_upgrade_types::{
-        InstalledShowPlatformUpgrade, InstalledShowPlatformUpgradeStage,
-        SelectedShowPlatformUpgrade, ShowPlatformUpgradeKind,
+        InstalledShowPlatformUpgrade, SelectedShowPlatformUpgrade, ShowPlatformUpgradeKind,
+        ShowPlatformUpgrades,
     },
     show_stage_types::ShowStage,
 };
@@ -32,10 +33,10 @@ pub(super) fn project_show_platform_upgrade_selection_and_purchase_availability_
     roots: Query<(Ref<UiDocumentRoot>, Option<Ref<ChildOf>>)>,
     controllers: Query<Ref<SelectedShowPlatformUpgrade>>,
     stages: Query<Ref<ShowStage>>,
-    installed: Query<(
-        Ref<InstalledShowPlatformUpgrade>,
-        Ref<InstalledShowPlatformUpgradeStage>,
-    )>,
+    installed: Query<&InstalledShowPlatformUpgrade>,
+    stage_upgrades: Query<&ShowPlatformUpgrades>,
+    changed_upgrades: Query<(), Changed<ShowPlatformUpgrades>>,
+    mut removed_upgrades: RemovedComponents<ShowPlatformUpgrades>,
     mut nodes: Query<(
         &UiShowActions,
         &UiDocumentOwner,
@@ -45,6 +46,11 @@ pub(super) fn project_show_platform_upgrade_selection_and_purchase_availability_
     )>,
 ) {
     let selection_changed = selection_changes.read().count() != 0;
+    let stage = selected_entity
+        .subject()
+        .filter(|entity| stages.contains(*entity));
+    let upgrades_removed = removed_upgrades.read().any(|entity| Some(entity) == stage);
+    removed_upgrades.clear();
     let projection_inputs_changed = documents.is_changed()
         || world_definition_assets.is_changed()
         || active_world_definitions.is_changed()
@@ -58,9 +64,8 @@ pub(super) fn project_show_platform_upgrade_selection_and_purchase_availability_
         })
         || controllers.iter().any(|controller| controller.is_changed())
         || stages.iter().any(|stage| stage.is_changed())
-        || installed
-            .iter()
-            .any(|(upgrade, stage)| upgrade.is_changed() || stage.is_changed());
+        || stage.is_some_and(|entity| changed_upgrades.contains(entity))
+        || upgrades_removed;
     if !projection_inputs_changed {
         return;
     }
@@ -73,9 +78,6 @@ pub(super) fn project_show_platform_upgrade_selection_and_purchase_availability_
         };
         let controller = parent.as_deref().map_or(owner.0, ChildOf::parent);
         let selected_upgrade = controllers.get(controller).ok().map(|value| *value);
-        let stage = selected_entity
-            .subject()
-            .filter(|entity| stages.contains(*entity));
         let records = range.authored_action_records(document);
         for record in records {
             match &record.action {
@@ -85,14 +87,20 @@ pub(super) fn project_show_platform_upgrade_selection_and_purchase_availability_
                         UiShowPlatformUpgrade::Television => ShowPlatformUpgradeKind::Television,
                     };
                     if let Some(selected) = selected.as_deref_mut() {
-                        selected.0 = selected_upgrade.is_some_and(|chosen| chosen.0 == kind);
+                        if selected.0 != selected_upgrade.is_some_and(|chosen| chosen.0 == kind) {
+                            selected.0 = selected_upgrade.is_some_and(|chosen| chosen.0 == kind);
+                        }
                     }
                 }
                 UiShowAction::PurchaseSelectedPlatformUpgrade => {
                     let enabled = stage.zip(selected_upgrade).is_some_and(|(stage, chosen)| {
-                        let already_installed = installed
-                            .iter()
-                            .any(|(kind, owner)| kind.0 == chosen.0 && owner.0 == stage);
+                        let already_installed = find_stage_platform_upgrade(
+                            stage,
+                            chosen.0,
+                            &stage_upgrades,
+                            &installed,
+                        )
+                        .is_some();
                         let purchase_cost_cents = active_world_definitions
                             .get(&world_definition_assets)
                             .and_then(|world_definitions| {
@@ -113,10 +121,14 @@ pub(super) fn project_show_platform_upgrade_selection_and_purchase_availability_
                                 }))
                     });
                     if let Some(interaction_enabled) = interaction_enabled.as_deref_mut() {
-                        interaction_enabled.0 = enabled;
+                        if interaction_enabled.0 != enabled {
+                            interaction_enabled.0 = enabled;
+                        }
                     }
                     if let Some(focusable) = focusable.as_deref_mut() {
-                        focusable.enabled = enabled;
+                        if focusable.enabled != enabled {
+                            focusable.enabled = enabled;
+                        }
                     }
                 }
                 UiShowAction::ToggleSelectedEnabled

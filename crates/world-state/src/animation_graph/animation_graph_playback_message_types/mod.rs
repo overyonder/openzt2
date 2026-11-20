@@ -51,6 +51,12 @@ pub struct AnimationClipPlaybackRequest {
     pub playback_repetition_policy: AnimationPlaybackRepetitionPolicy,
 }
 
+#[derive(Message, Clone, Copy, Debug)]
+pub struct AnimationClipPresentationSelection {
+    pub request_id: usize,
+    pub binder: openzt2_game_data::AssetId,
+}
+
 #[derive(Message, Clone, Debug, PartialEq, Eq)]
 pub struct AnimationGraphNodePlaybackRequestRejected {
     pub animation_subject_entity: Entity,

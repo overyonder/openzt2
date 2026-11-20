@@ -13,16 +13,14 @@ mod photo_challenge_lua_scoring;
 mod photo_challenge_lua_scoring_types;
 mod photo_challenge_lua_virtual_machine_invalidation;
 mod photo_challenge_scoring;
-mod photo_challenge_types;
-mod photo_evidence_operations;
 mod photo_mode_presentation_lifecycle;
 mod photo_subject_evidence_collection;
 mod screenshot_capture;
 
 use openzt2_interface_state::photos::photo_capture_types::CapturePhotoRequest;
 use openzt2_interface_state::photos::photo_capture_types::CaptureScreenshotRequest;
-use openzt2_interface_state::photos::photo_capture_types::PhotoReadback;
 use openzt2_interface_state::photos::photo_capture_types::ScreenshotCaptured;
+use openzt2_interface_state::photos::photo_challenge_types::PhotoChallengeCompleted;
 
 use photo_album_storage::{
     delete_requested_photos_and_release_unpersisted_images,
@@ -30,14 +28,9 @@ use photo_album_storage::{
 };
 use photo_album_types::DeletePhotoRequest;
 use photo_capture::begin_requested_album_photo_captures;
-use photo_capture_types::{
-    PhotoCaptureFailed, PhotoCaptured, PhotoChallengeCompleted, ScreenshotCaptureFailed,
-};
+use photo_capture_types::{PhotoCaptureFailed, PhotoCaptured, ScreenshotCaptureFailed};
 use photo_challenge_hydration::hydrate_photo_challenges_and_sets_from_active_scenario_catalogue;
-use photo_challenge_scoring::{
-    score_pending_photos_against_incomplete_lua_challenges,
-    update_photo_challenge_set_progress_from_completed_challenges,
-};
+use photo_challenge_scoring::score_pending_photos_against_incomplete_lua_challenges;
 use photo_subject_evidence_collection::collect_visible_photo_subjects_and_semantic_evidence_for_pending_captures;
 use screenshot_capture::begin_requested_camera_screenshot_captures;
 
@@ -51,14 +44,10 @@ pub struct PhotosPlugin;
 
 impl Plugin for PhotosPlugin {
     fn build(&self, app: &mut App) {
-        app.init_non_send::<
-            photo_challenge_lua_scoring_types::PhotoChallengeLuaScoringVirtualMachineContexts,
-        >()
-            .add_message::<CapturePhotoRequest>()
+        app.add_message::<CapturePhotoRequest>()
             .add_message::<CaptureScreenshotRequest>()
             .add_message::<ScreenshotCaptured>()
             .add_message::<ScreenshotCaptureFailed>()
-            .init_resource::<PhotoReadback>()
             .add_message::<PhotoCaptured>()
             .add_message::<PhotoChallengeCompleted>()
             .add_message::<PhotoCaptureFailed>()
@@ -77,9 +66,14 @@ impl Plugin for PhotosPlugin {
             .add_systems(
                 Update,
                 (
-                    begin_requested_album_photo_captures
-                        .after(initialize_default_photo_album_and_camera_roll_for_loaded_worlds),
-                    begin_requested_camera_screenshot_captures,
+                    (
+                        begin_requested_album_photo_captures
+                            .after(initialize_default_photo_album_and_camera_roll_for_loaded_worlds)
+                            .after(photo_mode_presentation_lifecycle::show_authored_photo_mode_document_for_entered_photo_mode),
+                        begin_requested_camera_screenshot_captures,
+                    ).chain(),
+                    photo_capture::expire_pending_album_photo_captures
+                        .before(begin_requested_album_photo_captures),
                     delete_requested_photos_and_release_unpersisted_images,
                     photo_mode_presentation_lifecycle::
                         show_authored_photo_mode_document_for_entered_photo_mode,
@@ -98,7 +92,10 @@ impl Plugin for PhotosPlugin {
             .add_systems(
                 Update,
                 (
-                    collect_visible_photo_subjects_and_semantic_evidence_for_pending_captures,
+                    album_operations::sort_changed_album_photo_memberships
+                        .before(album_presentation::present_photo_camera_roll_and_album_choices_in_authored_rows)
+                        .before(album_presentation::present_active_photo_album_and_camera_roll_image_slots)
+                        .before(album_presentation::present_default_photo_captions_from_canonical_subjects),
                     album_presentation::request_authored_photo_camera_roll_and_album_choice_row_counts,
                     album_presentation::present_photo_camera_roll_and_album_choices_in_authored_rows,
                     album_presentation::present_active_photo_album_and_camera_roll_image_slots,
@@ -107,8 +104,11 @@ impl Plugin for PhotosPlugin {
                     album_presentation::present_default_photo_captions_from_canonical_subjects,
                     photo_mode_presentation_lifecycle::
                         show_newly_captured_photo_in_authored_photo_mode_preview,
-                    photo_mode_presentation_lifecycle::
-                        initialize_authored_photo_mode_transient_surface_visibility_after_document_projection,
+                    (
+                        photo_mode_presentation_lifecycle::
+                            initialize_authored_photo_mode_transient_surface_visibility_after_document_projection,
+                        photo_mode_presentation_lifecycle::project_selected_photo_challenge_goals,
+                    ).chain(),
                     photo_mode_presentation_lifecycle::
                         advance_and_retire_authored_last_captured_photo_preview,
                 )
@@ -116,9 +116,15 @@ impl Plugin for PhotosPlugin {
                     .run_if(in_state(GamePhase::InGame)),
             );
         app.add_systems(
-            Update,
-            photo_challenge_lua_virtual_machine_invalidation::
-                invalidate_photo_challenge_scoring_virtual_machines_affected_by_changed_assets,
+            PostUpdate,
+            (
+                photo_mode_presentation_lifecycle::project_photo_viewfinder_capture_visibility
+                    .before(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate),
+                collect_visible_photo_subjects_and_semantic_evidence_for_pending_captures
+                    .after(bevy::transform::TransformSystems::Propagate)
+                    .after(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate),
+            )
+                .run_if(in_state(GamePhase::InGame)),
         );
         app.add_systems(
             Update,
@@ -141,8 +147,8 @@ impl Plugin for PhotosPlugin {
         app.add_systems(
             Update,
             (
+                photo_challenge_lua_virtual_machine_invalidation::invalidate_changed_photo_challenge_scorers,
                 score_pending_photos_against_incomplete_lua_challenges,
-                update_photo_challenge_set_progress_from_completed_challenges,
             )
                 .chain()
                 .after(hydrate_photo_challenges_and_sets_from_active_scenario_catalogue)

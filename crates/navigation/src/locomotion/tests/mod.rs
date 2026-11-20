@@ -203,8 +203,13 @@ fn surface_docking_aligns_vertical_offsets_but_flight_requires_vertical_arrival(
 
 #[test]
 fn cell_mapping_rejects_world_exterior() {
-    let mut grid = SpatialGrid::default();
-    assert!(grid.reserve_layout(Vec2::new(-10.0, -10.0), 5.0, 4, 4, 0));
+    let grid = SpatialGrid {
+        origin: Vec2::new(-10.0, -10.0),
+        cell_size_m: 5.0,
+        width: 4,
+        height: 4,
+        ..Default::default()
+    };
     assert_eq!(grid.cell_of(Vec2::new(-9.0, -9.0)), Some(0));
     assert_eq!(grid.cell_of(Vec2::new(9.9, 9.9)), Some(15));
     assert_eq!(grid.cell_of(Vec2::new(10.0, 0.0)), None);

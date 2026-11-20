@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests;
-use bevy::{platform::collections::HashSet, prelude::*};
+use bevy::prelude::*;
 use openzt2_game_data::{world_definitions::staff_management::StaffJobKind, AssetId};
 
 use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
@@ -17,12 +17,12 @@ use openzt2_zoo_state::locomotion::locomotion_types::Destination;
 use openzt2_zoo_state::maintenance::maintenance_types::AppliedHabitatWasteCleanup;
 
 use super::{
-    staff_employment_types::{AvailableForWork, Staff},
+    staff_employment_types::Staff,
     staff_job_types::{
         CurrentJob, JobClaim, JobProgress, StaffJob, StaffJobBehaviorTask,
-        UnsuccessfulStaffJobCandidates,
+        StaffJobCancellationPending, UnsuccessfulStaffJobCandidates,
     },
-    staff_lifecycle_messages::{CancelStaffJobRequest, StaffJobCompleted},
+    staff_lifecycle_messages::StaffJobCompleted,
 };
 
 pub(crate) fn start_unstarted_authored_behavior_tasks_for_claimed_staff_jobs(
@@ -39,23 +39,12 @@ pub(crate) fn start_unstarted_authored_behavior_tasks_for_claimed_staff_jobs(
             >,
         ),
     >,
-    mut jobs: Query<(&StaffJob, &mut StaffJobBehaviorTask, &JobClaim)>,
+    mut jobs: Query<(&StaffJob, &mut StaffJobBehaviorTask)>,
 ) {
     for (staff_entity, current_job) in &staff {
-        let Ok((job, mut behavior_task, claim)) = jobs.get_mut(current_job.job) else {
-            commands
-                .entity(staff_entity)
-                .remove::<CurrentJob>()
-                .insert(AvailableForWork);
+        let Ok((job, mut behavior_task)) = jobs.get_mut(current_job.job()) else {
             continue;
         };
-        if claim.staff != staff_entity {
-            commands
-                .entity(staff_entity)
-                .remove::<CurrentJob>()
-                .insert(AvailableForWork);
-            continue;
-        }
         if behavior_task.execution_id.is_some() {
             continue;
         }
@@ -78,13 +67,8 @@ pub(crate) fn start_unstarted_authored_behavior_tasks_for_claimed_staff_jobs(
         let Some((declaration_index, behavior_task_definition)) = selected_task else {
             // Removed source data invalidates this assignment, not the care
             // request. Its controller remains the owner of request lifetime.
-            commands
-                .entity(current_job.job)
-                .remove::<(JobClaim, StaffJobBehaviorTask, JobProgress)>();
-            commands
-                .entity(staff_entity)
-                .remove::<CurrentJob>()
-                .insert(AvailableForWork);
+            commands.entity(current_job.job()).remove::<JobClaim>();
+
             continue;
         };
         behavior_task.declaration_index = declaration_index;
@@ -137,7 +121,7 @@ pub(super) fn release_staff_assignment_after_authored_behavior_failure_finishes(
         let Ok(current_job) = staff.get(failed_behavior_task.actor) else {
             continue;
         };
-        let Ok((claim, behavior_task, unsuccessful)) = jobs.get_mut(current_job.job) else {
+        let Ok((claim, behavior_task, unsuccessful)) = jobs.get_mut(current_job.job()) else {
             continue;
         };
         if claim.staff != failed_behavior_task.actor
@@ -150,15 +134,9 @@ pub(super) fn release_staff_assignment_after_authored_behavior_failure_finishes(
         } else {
             let mut unsuccessful = UnsuccessfulStaffJobCandidates::default();
             unsuccessful.record(claim.staff);
-            commands.entity(current_job.job).insert(unsuccessful);
+            commands.entity(current_job.job()).insert(unsuccessful);
         }
-        commands
-            .entity(current_job.job)
-            .remove::<(JobClaim, StaffJobBehaviorTask, JobProgress)>();
-        commands
-            .entity(claim.staff)
-            .remove::<CurrentJob>()
-            .insert(AvailableForWork);
+        commands.entity(current_job.job()).remove::<JobClaim>();
     }
 }
 
@@ -169,16 +147,13 @@ pub(crate) fn settle_staff_jobs_after_authored_behavior_finishes(
     jobs: Query<(&StaffJob, &JobClaim, &StaffJobBehaviorTask), Without<AppliedHabitatWasteCleanup>>,
     mut completed_jobs: MessageWriter<StaffJobCompleted>,
     live_animals: Query<(), (With<Animal>, With<WorldMember>, Without<Dead>)>,
-    mut cancellations: MessageReader<CancelStaffJobRequest>,
-    mut cancelled_jobs: Local<HashSet<Entity>>,
+    cancelling: Query<(), With<StaffJobCancellationPending>>,
 ) {
-    cancelled_jobs.clear();
-    cancelled_jobs.extend(cancellations.read().map(|request| request.job));
     for finished_behavior_task in finished_behavior_tasks.read() {
         let Ok(current_job) = staff.get(finished_behavior_task.actor) else {
             continue;
         };
-        let Ok((job, claim, behavior_task)) = jobs.get(current_job.job) else {
+        let Ok((job, claim, behavior_task)) = jobs.get(current_job.job()) else {
             continue;
         };
         if claim.staff != finished_behavior_task.actor
@@ -202,7 +177,7 @@ pub(crate) fn settle_staff_jobs_after_authored_behavior_finishes(
             || (job.kind == StaffJobKind::Capture
                 && job.token == Some(AssetId::from_key("t_crateanimal")))
         {
-            if cancelled_jobs.contains(&current_job.job) || !live_animals.contains(job.target) {
+            if cancelling.contains(current_job.job()) || !live_animals.contains(job.target) {
                 continue;
             }
             // The authored cure, heal, food placement or dart already applied
@@ -211,7 +186,7 @@ pub(crate) fn settle_staff_jobs_after_authored_behavior_finishes(
             // a new request needs a fresh threshold crossing.
             completed_jobs.write(StaffJobCompleted {
                 staff: claim.staff,
-                job: current_job.job,
+                job: current_job.job(),
                 kind: job.kind,
                 target: job.target,
             });
@@ -224,15 +199,9 @@ pub(crate) fn settle_staff_jobs_after_authored_behavior_finishes(
             // authored task already applied the refill, so there is no second
             // quantity write or terminal feeding transaction here. A cleanup
             // task without an applied kill likewise cannot manufacture an effect.
-            commands
-                .entity(current_job.job)
-                .remove::<(JobClaim, StaffJobBehaviorTask, JobProgress)>();
-            commands
-                .entity(claim.staff)
-                .remove::<CurrentJob>()
-                .insert(AvailableForWork);
+            commands.entity(current_job.job()).remove::<JobClaim>();
         } else {
-            commands.entity(current_job.job).insert(JobProgress);
+            commands.entity(current_job.job()).insert(JobProgress);
         }
     }
 }

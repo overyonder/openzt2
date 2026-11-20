@@ -1,13 +1,13 @@
 use std::io;
 
 use openzt2_game_assets::source_document::ordered_source_document_types::OrderedSourceDocumentNode;
-use openzt2_zoo_state::guests::guest_survey_types::GuestSurvey;
+use openzt2_zoo_state::guests::guest_survey_types::{GuestSurvey, GuestSurveyNeedCadence};
 
 pub(super) fn read_original_saved_guest_survey(
     manager: &OrderedSourceDocumentNode,
-) -> io::Result<GuestSurvey> {
+) -> io::Result<(GuestSurveyNeedCadence, GuestSurvey)> {
+    let cadence = GuestSurveyNeedCadence(scalar(manager, "CriticalNeedCountdown")?);
     let mut survey = GuestSurvey {
-        critical_need_countdown_seconds: scalar(manager, "CriticalNeedCountdown")?,
         previous_day_of_month: integer(manager, "PreviousDayOfMonth")?,
         current_day_of_month: integer(manager, "CurrentDayOfMonth")?,
         ..Default::default()
@@ -35,7 +35,7 @@ pub(super) fn read_original_saved_guest_survey(
             history.daily_counts[day] = unsigned(counts, &key)?;
         }
     }
-    Ok(survey)
+    Ok((cadence, survey))
 }
 
 fn child<'a>(

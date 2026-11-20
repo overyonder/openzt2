@@ -1,80 +1,104 @@
 use bevy::prelude::*;
-use openzt2_game_data::ui_document::overview_map_presentation::UiMapColorsRecord;
+use openzt2_game_data::ui_document::overview_map_presentation::UiOverviewCanvas;
 
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
-use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
-use openzt2_zoo_state::terrain::terrain_chunk_types::EditedTerrainSamples;
-use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainChunk;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_interface_state::information::overview::overview_types::OverviewMapCanvas;
 use openzt2_world_state::world_spawn::world_terrain_hydration::WorldTerrainHorizontalBounds;
+use openzt2_zoo_state::terrain::{
+    terrain_chunk_types::{EditedTerrainSamples, TerrainChunk},
+    terrain_world_sampling::sample_authored_terrain,
+};
 
-use super::overview_map_pixel_operations::rasterize_world_sample_area_into_overview_map_pixels;
+use super::{
+    map_rasterization_operations::{
+        blank_overview_map_pixels, OverviewTerrainWaterRaster, PendingOverviewMapPixels,
+    },
+    overview_map_pixel_operations::rasterize_world_sample_area_into_overview_map_pixels,
+};
 
-pub(super) fn rasterize_terrain_or_water_into_overview_map_pixels(
-    overview_map_pixels: &mut [u8],
-    world_bounds: &WorldTerrainHorizontalBounds,
-    terrain_chunks: &Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
-    terrain_assets: &Assets<TerrainAsset>,
-    world_definitions: WorldDefinitionsView<'_>,
-    rasterize_only_water: bool,
-    rasterization_palette: &UiMapColorsRecord,
+pub(crate) fn rasterize_dirty_overview_terrain_and_water_canvases(
+    mut canvases: Query<
+        (
+            Entity,
+            &mut OverviewMapCanvas,
+            &mut PendingOverviewMapPixels,
+        ),
+        With<OverviewTerrainWaterRaster>,
+    >,
+    bounds: Query<&WorldTerrainHorizontalBounds>,
+    chunks: Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
+    terrain_assets: Res<Assets<TerrainAsset>>,
+    definitions: Res<WorldDefinitions>,
+    world_assets: Res<Assets<WorldDefinitionAsset>>,
 ) {
-    for (terrain_chunk, edited_terrain_samples) in terrain_chunks {
-        let Some(terrain_asset) = terrain_assets.get(&terrain_chunk.asset) else {
-            continue;
-        };
-        for sample_z_index in 0..usize::from(terrain_chunk.side) {
-            for sample_x_index in 0..usize::from(terrain_chunk.side) {
-                let world_sample_position = terrain_chunk.origin
-                    + Vec2::new(
-                        sample_x_index as f32 * terrain_chunk.spacing_m,
-                        sample_z_index as f32 * terrain_chunk.spacing_m,
-                    );
-                if rasterize_only_water {
-                    let authored_terrain_sample =
-                        openzt2_zoo_state::terrain::terrain_world_sampling::sample_authored_terrain(
-                            terrain_chunk,
-                            terrain_asset,
-                            edited_terrain_samples,
-                            world_sample_position,
-                        );
-                    if authored_terrain_sample.is_some_and(|sample| sample.water.is_some()) {
-                        rasterize_world_sample_area_into_overview_map_pixels(
-                            overview_map_pixels,
-                            world_bounds,
-                            world_sample_position,
-                            terrain_chunk.spacing_m,
-                            rasterization_palette.water,
-                        );
-                    }
-                    continue;
-                }
-                let biome_definition_id =
-                    openzt2_zoo_state::terrain::terrain_world_sampling::sample_authored_terrain(
-                        terrain_chunk,
-                        terrain_asset,
-                        edited_terrain_samples,
-                        world_sample_position,
-                    )
-                    .and_then(|terrain_sample| {
-                        terrain_sample
-                            .biome
-                            .map(|biome_assignment| biome_assignment.id)
-                    });
-                let terrain_pixel_color = biome_definition_id
-                    .and_then(|biome_definition_id| {
-                        world_definitions.find_biome(biome_definition_id)
+    let dirty = canvases
+        .iter()
+        .filter_map(|(id, canvas, _)| {
+            (!canvas.painted).then_some((id, canvas.source, canvas.palette))
+        })
+        .collect::<Vec<_>>();
+    if dirty.is_empty() {
+        return;
+    }
+    let (Ok(bounds), Some(definitions)) = (bounds.single(), definitions.get(&world_assets)) else {
+        return;
+    };
+    let size = bounds.max - bounds.min;
+    if !size.is_finite() || size.min_element() <= 0.0 || chunks.is_empty() {
+        return;
+    }
+    let Some(chunks) = chunks
+        .iter()
+        .map(|(chunk, edits)| Some((chunk, edits, terrain_assets.get(&chunk.asset)?)))
+        .collect::<Option<Vec<_>>>()
+    else {
+        return;
+    };
+    let mut outputs = dirty
+        .into_iter()
+        .map(|(id, source, palette)| (id, source, palette, blank_overview_map_pixels()))
+        .collect::<Vec<_>>();
+    let render_terrain = outputs
+        .iter()
+        .any(|(_, source, _, _)| *source == UiOverviewCanvas::Terrain);
+    for (chunk, edits, terrain) in chunks {
+        for z in 0..chunk.side {
+            for x in 0..chunk.side {
+                let position =
+                    chunk.origin + Vec2::new(f32::from(x), f32::from(z)) * chunk.spacing_m;
+                let sample = sample_authored_terrain(chunk, terrain, edits, position);
+                let water = sample.as_ref().is_some_and(|sample| sample.water.is_some());
+                let color = render_terrain
+                    .then(|| {
+                        sample
+                            .and_then(|sample| sample.biome)
+                            .and_then(|biome| definitions.find_biome(biome.id))
+                            .map(|biome| biome.overview_colors.covered_ground)
                     })
-                    .map_or(rasterization_palette.terrain, |biome_definition| {
-                        biome_definition.overview_colors.covered_ground
-                    });
-                rasterize_world_sample_area_into_overview_map_pixels(
-                    overview_map_pixels,
-                    world_bounds,
-                    world_sample_position,
-                    terrain_chunk.spacing_m,
-                    terrain_pixel_color,
-                );
+                    .flatten();
+                for (_, source, palette, pixels) in &mut outputs {
+                    let color = match source {
+                        UiOverviewCanvas::Terrain => color.unwrap_or(palette.terrain),
+                        UiOverviewCanvas::Water if water => palette.water,
+                        _ => continue,
+                    };
+                    rasterize_world_sample_area_into_overview_map_pixels(
+                        pixels,
+                        bounds,
+                        position,
+                        chunk.spacing_m,
+                        color,
+                    );
+                }
             }
+        }
+    }
+    for (id, _, _, pixels) in outputs {
+        if let Ok((_, mut canvas, mut output)) = canvases.get_mut(id) {
+            output.0 = Some(pixels);
+            canvas.painted = true;
         }
     }
 }

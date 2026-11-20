@@ -1,3 +1,4 @@
+use bevy::ecs::system::SystemParam;
 use bevy::picking::pointer::{PointerButton, PointerInput};
 use bevy::prelude::*;
 use openzt2_interface_state::input::input_types::MousePointer;
@@ -20,7 +21,6 @@ use openzt2_zoo_state::construction::construction_transaction_types::EditCommitP
 use openzt2_zoo_state::terrain::terrain_chunk_types::EditedTerrainSamples;
 use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainChunk;
 use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainIndex;
-use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 
@@ -36,12 +36,13 @@ use crate::topology::topology_construction_preview_types::PathPreview;
 use crate::topology::topology_construction_preview_types::PlaceFence;
 use crate::topology::topology_construction_preview_types::PlacePath;
 use openzt2_game_data::AssetId;
-use openzt2_zoo_state::topology::topology_edit_types::TopologyEdit;
+use openzt2_zoo_state::topology::gate_operation_types::Gate;
 use openzt2_zoo_state::topology::topology_edit_types::TopologySnapshot;
-use openzt2_zoo_state::topology::topology_graph_types::EdgeKey;
+use openzt2_zoo_state::topology::topology_edit_types::{AppliedFenceTopology, TopologyEdit};
 use openzt2_zoo_state::topology::topology_graph_types::TopologyGrid;
 use openzt2_zoo_state::topology::topology_graph_types::TopologyIndex;
 use openzt2_zoo_state::topology::topology_graph_types::TopologyNode;
+use openzt2_zoo_state::topology::topology_graph_types::{EdgeKey, FenceEdge};
 
 #[cfg(test)]
 mod tests {
@@ -59,26 +60,23 @@ mod tests {
             .insert_resource(ConstructionTool::Fence(definition))
             .init_resource::<TopologyGrid>()
             .add_systems(Update, restart_fence_preview_from_committed_endpoint);
-        app.world_mut().spawn((
-            PersistentId(2),
-            TopologyNode {
+        let endpoint = app
+            .world_mut()
+            .spawn(TopologyNode {
                 cell: accepted_endpoint,
-            },
-        ));
+            })
+            .id();
+        let wall = app
+            .world_mut()
+            .spawn(FenceEdge {
+                definition,
+                a: Entity::PLACEHOLDER,
+                b: endpoint,
+            })
+            .id();
         let transaction = app
             .world_mut()
-            .spawn(TopologyEdit {
-                created: vec![TopologySnapshot::Fence {
-                    id: PersistentId(3),
-                    definition,
-                    a: PersistentId(1),
-                    b: PersistentId(2),
-                    gate: None,
-                    wall_top: None,
-                }]
-                .into_boxed_slice(),
-                removed: Box::default(),
-            })
+            .spawn(AppliedFenceTopology(vec![wall].into_boxed_slice()))
             .id();
         let preview = app
             .world_mut()
@@ -143,13 +141,12 @@ mod tests {
             hovered_fence_edge(&index, grid, above(IVec3::new(20, 20, 0), Vec3::ZERO)),
             None
         );
-        let prompt = RectangularEnclosureGatePrompt { edges: vec![far] };
         assert_eq!(
-            nearest_prompted_enclosure_edge(
-                &prompt,
-                &index,
+            nearest_fence_edge(
+                std::iter::once(far),
                 grid,
-                above(IVec3::new(20, 20, 0), Vec3::ZERO)
+                above(IVec3::new(20, 20, 0), Vec3::ZERO),
+                f32::INFINITY,
             ),
             Some((far.lo, far.hi))
         );
@@ -201,7 +198,7 @@ pub(super) fn apply_path_placement_requests_to_construction_previews(
 /// Owns the authored fence and ground-path click-anchor/click-commit transition.
 /// The topology messages remain the only preview mutation input;
 /// the construction transaction performs final validation.
-pub fn drive_selected_topology_placement_pointer_sequence(
+pub(super) fn drive_selected_topology_placement_pointer_sequence(
     mut commands: Commands,
     (pointer, mut pointer_inputs): (MousePointer, MessageReader<PointerInput>),
     ui_capture: Res<openzt2_interface_state::ui::pointer_capture_types::UiPointerCapture>,
@@ -222,7 +219,7 @@ pub fn drive_selected_topology_placement_pointer_sequence(
     mut commits: MessageWriter<CommitConstruction>,
     (mut anchor_diagnostics, gate_prompt): (
         Option<ResMut<InitialFenceAnchorPressDiagnosticState>>,
-        Option<Res<RectangularEnclosureGatePrompt>>,
+        GatePromptQueries,
     ),
 ) {
     let mut primary_just_released = false;
@@ -324,8 +321,7 @@ pub fn drive_selected_topology_placement_pointer_sequence(
     };
     if let (Some(fence), true) = (fence, gate) {
         let (from, to) = gate_prompt
-            .as_deref()
-            .and_then(|prompt| nearest_prompted_enclosure_edge(prompt, &index, *grid, cursor.world))
+            .nearest_wall(*grid, cursor.world)
             .or_else(|| hovered_fence_edge(&index, *grid, cursor.world))
             .unwrap_or((cell, cell));
         if !ui_capture.over_ui && (fence.from, fence.to) != (from, to) {
@@ -372,26 +368,63 @@ pub fn drive_selected_topology_placement_pointer_sequence(
     }
 }
 
-/// The walls of the enclosure that rectangular placement last closed. While
-/// they stand, its prompted gate snaps to whichever is nearest the pointer
-/// however far away it is, so the entrance is always offered on that enclosure.
-#[derive(Resource, Default)]
-pub struct RectangularEnclosureGatePrompt {
-    edges: Vec<EdgeKey>,
+#[derive(Component)]
+pub(super) struct RectangularEnclosureGatePrompt;
+
+#[derive(Component)]
+#[relationship(relationship_target = GatePromptWallCandidates)]
+pub(super) struct GatePromptCandidateWall(Entity);
+
+#[derive(Component)]
+#[relationship_target(relationship = GatePromptCandidateWall, linked_spawn)]
+pub(super) struct GatePromptWallCandidates(Vec<Entity>);
+
+#[derive(SystemParam)]
+pub(super) struct GatePromptQueries<'w, 's> {
+    prompts: Query<'w, 's, &'static Children, With<RectangularEnclosureGatePrompt>>,
+    candidates: Query<'w, 's, &'static GatePromptCandidateWall>,
+    walls: Query<'w, 's, &'static FenceEdge>,
+    nodes: Query<'w, 's, &'static TopologyNode>,
 }
 
-/// Records the gate-capable walls of a closed rectangular run and forgets them
-/// once a gate is placed or another tool replaces the prompted gate.
-#[allow(clippy::too_many_arguments)]
+impl GatePromptQueries<'_, '_> {
+    fn nearest_wall(&self, grid: TopologyGrid, world: Vec3) -> Option<(IVec3, IVec3)> {
+        let children = self.prompts.single().ok()?;
+        let keys = children.iter().filter_map(|candidate| {
+            let wall = self
+                .walls
+                .get(self.candidates.get(candidate).ok()?.0)
+                .ok()?;
+            let first = self.nodes.get(wall.a).ok()?;
+            let second = self.nodes.get(wall.b).ok()?;
+            EdgeKey::new(first.cell, second.cell)
+        });
+        nearest_fence_edge(keys, grid, world, f32::INFINITY)
+    }
+}
+
+pub(super) fn drop_prompt_candidates_when_fence_component_is_removed(
+    removed: On<Remove<FenceEdge>>,
+    walls: Query<&GatePromptWallCandidates>,
+    mut commands: Commands,
+) {
+    if let Ok(candidates) = walls.get(removed.entity) {
+        for candidate in candidates.iter() {
+            commands.entity(candidate).try_despawn();
+        }
+    }
+}
+
 pub(super) fn track_rectangular_enclosure_gate_prompt(
+    mut commands: Commands,
     mut committed: MessageReader<ConstructionCommitted>,
     tool: Res<ConstructionTool>,
     mut policy: ResMut<ConstructionPlacementPolicy>,
     active_definitions: Res<WorldDefinitions>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
-    edits: Query<&TopologyEdit>,
-    nodes: Query<(&PersistentId, &TopologyNode)>,
-    mut prompt: ResMut<RectangularEnclosureGatePrompt>,
+    applied: Query<&AppliedFenceTopology>,
+    walls: Query<(&FenceEdge, &WorldMember, Has<Gate>)>,
+    prompts: Query<Entity, With<RectangularEnclosureGatePrompt>>,
     mut purchases: MessageWriter<PurchaseChoice>,
 ) {
     let Some(definitions) = active_definitions.get(&definitions) else {
@@ -400,52 +433,62 @@ pub(super) fn track_rectangular_enclosure_gate_prompt(
     };
     let gate_tool = matches!(*tool, ConstructionTool::Fence(definition)
         if fence_definition_is_gate(definitions, definition));
-    if tool.is_changed() && !gate_tool && !prompt.edges.is_empty() {
-        prompt.edges.clear();
+    let mut prompt = prompts.single().ok();
+    if tool.is_changed() && !gate_tool {
+        if let Some(entity) = prompt.take() {
+            commands.entity(entity).despawn();
+        }
     }
     for commit in committed.read() {
-        if gate_tool {
-            // The mode's `wizard/gate` events follow the prompted entrance
-            // with a single placement of their object (a donation box).
-            let wizard = definitions
-                .fence_placement_mode_policy()
-                .and_then(|mode| mode.gate_wizard_placement_object)
-                .filter(|object| definitions.find_placeable(*object).is_some());
-            if let (false, Some(object)) = (prompt.edges.is_empty(), wizard) {
-                purchases.write(PurchaseChoice { definition: object });
-                policy.repeat_placement = false;
-            }
-            prompt.edges.clear();
-            continue;
-        }
-        if policy.fence_shape == FencePlacementShape::Freeform {
-            continue;
-        }
-        let Ok(edit) = edits.get(commit.transaction) else {
+        let Ok(applied) = applied.get(commit.transaction) else {
             continue;
         };
-        let cell = |id: PersistentId| {
-            nodes
+        if gate_tool
+            && applied
+                .0
                 .iter()
-                .find_map(|(node_id, node)| (*node_id == id).then_some(node.cell))
-        };
-        let edges = edit
-            .created
-            .iter()
-            .filter_map(|snapshot| match snapshot {
-                TopologySnapshot::Fence {
-                    definition, a, b, ..
-                } if definitions
-                    .find_fence(*definition)
-                    .is_some_and(|fence| fence.gate != AssetId::default()) =>
-                {
-                    EdgeKey::new(cell(*a)?, cell(*b)?)
+                .any(|entity| walls.get(*entity).is_ok_and(|(_, _, gate)| gate))
+        {
+            if let Some(entity) = prompt.take() {
+                commands.entity(entity).despawn();
+                let wizard = definitions
+                    .fence_placement_mode_policy()
+                    .and_then(|mode| mode.gate_wizard_placement_object)
+                    .filter(|object| definitions.find_placeable(*object).is_some());
+                if let Some(definition) = wizard {
+                    purchases.write(PurchaseChoice { definition });
+                    policy.repeat_placement = false;
                 }
-                _ => None,
+            }
+            continue;
+        }
+        if gate_tool || policy.fence_shape == FencePlacementShape::Freeform {
+            continue;
+        }
+        let candidates = applied
+            .0
+            .iter()
+            .copied()
+            .filter_map(|entity| {
+                let (wall, membership, is_gate) = walls.get(entity).ok()?;
+                (!is_gate
+                    && definitions
+                        .find_fence(wall.definition)
+                        .is_some_and(|fence| fence.gate != AssetId::default()))
+                .then_some((entity, *membership))
             })
             .collect::<Vec<_>>();
-        if !edges.is_empty() {
-            prompt.edges = edges;
+        if let Some((_, membership)) = candidates.first() {
+            if let Some(previous) = prompt {
+                commands.entity(previous).despawn();
+            }
+            let entity = commands
+                .spawn((RectangularEnclosureGatePrompt, *membership))
+                .id();
+            prompt = Some(entity);
+            for (wall, _) in candidates {
+                commands.spawn((ChildOf(entity), GatePromptCandidateWall(wall)));
+            }
         }
     }
 }
@@ -456,25 +499,11 @@ fn hovered_fence_edge(
     grid: TopologyGrid,
     world: Vec3,
 ) -> Option<(IVec3, IVec3)> {
-    nearest_fence_edge(index.edges.keys(), grid, world, 1.5)
+    nearest_fence_edge(index.edges.keys().copied(), grid, world, 1.5)
 }
 
-/// The prompted enclosure wall nearest the pointer, at any distance.
-fn nearest_prompted_enclosure_edge(
-    prompt: &RectangularEnclosureGatePrompt,
-    index: &TopologyIndex,
-    grid: TopologyGrid,
-    world: Vec3,
-) -> Option<(IVec3, IVec3)> {
-    let standing = prompt
-        .edges
-        .iter()
-        .filter(|edge| index.edges.contains_key(*edge));
-    nearest_fence_edge(standing, grid, world, f32::INFINITY)
-}
-
-fn nearest_fence_edge<'a>(
-    edges: impl Iterator<Item = &'a EdgeKey>,
+fn nearest_fence_edge(
+    edges: impl Iterator<Item = EdgeKey>,
     grid: TopologyGrid,
     world: Vec3,
     reach_m: f32,
@@ -547,8 +576,9 @@ pub(super) fn restart_fence_preview_from_committed_endpoint(
     mut committed: MessageReader<ConstructionCommitted>,
     tool: Res<ConstructionTool>,
     grid: Res<TopologyGrid>,
-    edits: Query<&TopologyEdit>,
-    nodes: Query<(&PersistentId, &TopologyNode)>,
+    applied: Query<&AppliedFenceTopology>,
+    walls: Query<&FenceEdge>,
+    nodes: Query<&TopologyNode>,
     mut previews: Query<(
         Entity,
         &mut ConstructionPreview,
@@ -572,28 +602,16 @@ pub(super) fn restart_fence_preview_from_committed_endpoint(
         return;
     }
     for commit in committed.read() {
-        let Ok(edit) = edits.get(commit.transaction) else {
-            continue;
-        };
-        let Some(endpoint_id) = edit
-            .created
-            .iter()
-            .rev()
-            .find_map(|snapshot| match snapshot {
-                TopologySnapshot::Fence {
-                    definition: created_definition,
-                    b,
-                    ..
-                } if *created_definition == definition => Some(*b),
-                _ => None,
-            })
-        else {
-            continue;
-        };
-        let Some(endpoint) = nodes
-            .iter()
-            .find_map(|(id, node)| (*id == endpoint_id).then_some(node.cell))
-        else {
+        let Some(endpoint) = applied.get(commit.transaction).ok().and_then(|applied| {
+            applied
+                .0
+                .iter()
+                .rev()
+                .filter_map(|wall| walls.get(*wall).ok())
+                .find(|wall| wall.definition == definition)
+                .and_then(|wall| nodes.get(wall.b).ok())
+                .map(|node| node.cell)
+        }) else {
             continue;
         };
         // The pointer endpoint can lie beyond the final full-length segment.

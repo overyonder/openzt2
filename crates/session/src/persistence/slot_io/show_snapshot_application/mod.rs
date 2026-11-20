@@ -9,8 +9,10 @@ use openzt2_zoo_state::shows::show_schedule_types::ScheduledShowBreakRow;
 use openzt2_zoo_state::shows::show_schedule_types::ScheduledShowPerformancePlan;
 use openzt2_zoo_state::shows::show_schedule_types::ScheduledShowRow;
 use openzt2_zoo_state::shows::show_schedule_types::ScheduledShowRowActivationState;
-use openzt2_zoo_state::shows::show_schedule_types::ScheduledShowTrickPerformance;
 use openzt2_zoo_state::shows::show_schedule_types::ShowScheduleRowOrder;
+use openzt2_zoo_state::shows::show_schedule_types::{
+    ScheduledShowTrickPerformance, ScheduledTrickPerformer, ShowTrickSlotOf,
+};
 use openzt2_zoo_state::shows::show_stage_types::ShowName;
 use openzt2_zoo_state::shows::show_stage_types::ShowStage;
 use openzt2_zoo_state::shows::show_stage_types::ShowStageOpenState;
@@ -130,10 +132,15 @@ pub(super) fn apply_show_snapshot_records_to_live_show_stages_and_schedule(
                             },
                         )
                     })
-                    .map(|performer_entity| ScheduledShowTrickPerformance {
-                        performer: performer_entity,
-                        trick: performance_snapshot_record.trick_definition_identifier,
-                        duration_ticks: performance_snapshot_record.duration_simulation_ticks,
+                    .map(|performer| {
+                        (
+                            ScheduledTrickPerformer(performer),
+                            ScheduledShowTrickPerformance {
+                                trick: performance_snapshot_record.trick_definition_identifier,
+                                duration_ticks: performance_snapshot_record
+                                    .duration_simulation_ticks,
+                            },
+                        )
                     })
                     .ok_or(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference)
             })
@@ -145,25 +152,29 @@ pub(super) fn apply_show_snapshot_records_to_live_show_stages_and_schedule(
                 scheduled_show_snapshot_record.persistent_identifier,
             )
             .map_err(|_| WorldSnapshotPersistenceFailure::CorruptSnapshotSection)?;
-        commands.spawn((
-            scheduled_show_snapshot_record.persistent_identifier,
-            ScheduledShowRow {
-                stage: show_stage_entity,
-            },
-            ShowScheduleRowOrder(scheduled_show_snapshot_record.schedule_row_order),
-            ScheduledShowPerformancePlan {
-                trick_performances: scheduled_trick_performances,
-                trick_performance_capacity: scheduled_show_snapshot_record.performance_capacity,
-            },
-            if scheduled_show_snapshot_record.is_active {
-                ScheduledShowRowActivationState::Enabled
-            } else {
-                ScheduledShowRowActivationState::Disabled
-            },
-            WorldMember {
-                root: world_root_entity,
-            },
-        ));
+        let row = commands
+            .spawn((
+                scheduled_show_snapshot_record.persistent_identifier,
+                ScheduledShowRow {
+                    stage: show_stage_entity,
+                },
+                ShowScheduleRowOrder(scheduled_show_snapshot_record.schedule_row_order),
+                ScheduledShowPerformancePlan {
+                    trick_performance_capacity: scheduled_show_snapshot_record.performance_capacity,
+                },
+                if scheduled_show_snapshot_record.is_active {
+                    ScheduledShowRowActivationState::Enabled
+                } else {
+                    ScheduledShowRowActivationState::Disabled
+                },
+                WorldMember {
+                    root: world_root_entity,
+                },
+            ))
+            .id();
+        for (performer, trick) in scheduled_trick_performances {
+            commands.spawn((ShowTrickSlotOf(row), performer, trick));
+        }
     }
 
     for scheduled_break_snapshot_record in show_snapshot_records.scheduled_break_records {
@@ -192,8 +203,10 @@ pub(super) fn apply_show_snapshot_records_to_live_show_stages_and_schedule(
             .map_err(|_| WorldSnapshotPersistenceFailure::CorruptSnapshotSection)?;
         commands.spawn((
             scheduled_break_snapshot_record.persistent_identifier,
-            ScheduledShowBreakRow {
+            ScheduledShowRow {
                 stage: show_stage_entity,
+            },
+            ScheduledShowBreakRow {
                 duration_ticks: scheduled_break_snapshot_record.duration_simulation_ticks,
             },
             ShowScheduleRowOrder(scheduled_break_snapshot_record.schedule_row_order),

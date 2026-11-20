@@ -10,7 +10,7 @@ use openzt2_world_state::animation_graph::animation_graph_playback_state_types::
 use openzt2_world_state::animation_graph::animation_graph_playback_state_types::AnimationGraphPlaybackState;
 use openzt2_world_state::animation_graph::animation_graph_transition_operations::begin_requested_animation_graph_node_transition;
 use openzt2_world_state::animation_graph::animation_graph_transition_operations::enter_animation_graph_node_playback;
-use openzt2_world_state::animation_graph::animation_presentation_relationship_types::AnimationPresentationOwner;
+use openzt2_world_state::animation_graph::animation_presentation_relationship_types::AnimationPresentations;
 use openzt2_world_state::animation_graph::model_animation_asset_binding_types::ModelAnimationAssetLibrary;
 
 pub(crate) fn execute_animation_graph_node_playback_requests(
@@ -19,9 +19,8 @@ pub(crate) fn execute_animation_graph_node_playback_requests(
     mut rejected_animation_graph_node_playback_requests: MessageWriter<
         AnimationGraphNodePlaybackRequestRejected,
     >,
+    presentations: Query<&AnimationPresentations>,
     mut animation_playback_controllers: Query<(
-        Entity,
-        &AnimationPresentationOwner,
         &ModelAnimationAssetLibrary,
         &mut AnimationPlaybackController,
         &mut AnimationGraphPlaybackState,
@@ -31,22 +30,20 @@ pub(crate) fn execute_animation_graph_node_playback_requests(
     for animation_graph_node_playback_request in animation_graph_node_playback_requests.read() {
         let mut matching_animation_playback_controller_was_found = false;
         let mut rejection_reason = None;
-        for (
-            animation_playback_controller_entity,
-            animation_presentation_owner,
+        let subject = animation_graph_node_playback_request.animation_subject_entity;
+        let mut controllers = animation_playback_controllers
+            .iter_many_mut(AnimationPresentations::for_subject(
+                subject,
+                presentations.get(subject).ok(),
+            ))
+            .matched();
+        while let Some((
             animation_library,
             mut animation_playback_controller,
             mut animation_graph_playback_state,
             animation_graph_enabled,
-        ) in &mut animation_playback_controllers
+        )) = controllers.fetch_next()
         {
-            if animation_playback_controller_entity
-                != animation_graph_node_playback_request.animation_subject_entity
-                && animation_presentation_owner.gameplay_entity
-                    != animation_graph_node_playback_request.animation_subject_entity
-            {
-                continue;
-            }
             matching_animation_playback_controller_was_found = true;
             if animation_graph_enabled
                 .is_some_and(|animation_graph_enabled| !animation_graph_enabled.0)

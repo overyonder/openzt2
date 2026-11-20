@@ -1,5 +1,5 @@
 use avian3d::prelude::RigidBody;
-use bevy::{gltf::Gltf, prelude::*};
+use bevy::{ecs::relationship::RelationshipTarget, gltf::Gltf, prelude::*};
 
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
@@ -13,8 +13,9 @@ use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
 use super::show_platform_upgrade_types::{
     CommitShowPlatformUpgradeEdit, InstalledShowPlatformUpgrade, InstalledShowPlatformUpgradeStage,
-    PendingShowPlatformUpgradeRestore, RestoreShowPlatformUpgrade, ShowPlatformUpgradeEdit,
-    ShowPlatformUpgradeEditAcknowledged, ShowPlatformUpgradeEditOperation, ShowPlatformUpgradeKind,
+    PendingShowPlatformUpgradeRestore, RestoreShowPlatformUpgrade, RestoreShowPlatformUpgradeOf,
+    ShowPlatformUpgradeEdit, ShowPlatformUpgradeEditAcknowledged, ShowPlatformUpgradeEditOperation,
+    ShowPlatformUpgradeKind, ShowPlatformUpgrades,
 };
 use super::show_stage_types::ShowStage;
 
@@ -23,22 +24,15 @@ pub(super) fn apply_show_platform_upgrade_edits(
     mut requests: MessageReader<CommitShowPlatformUpgradeEdit>,
     edits: Query<&ShowPlatformUpgradeEdit>,
     stages: Query<&WorldMember, With<ShowStage>>,
-    installed: Query<(
-        Entity,
-        &InstalledShowPlatformUpgrade,
-        &InstalledShowPlatformUpgradeStage,
-    )>,
-    sockets: Query<(
-        Entity,
-        &PrefabAuthoredAttachmentIdentifier,
-        Option<&ChildOf>,
-    )>,
+    installed: Query<&InstalledShowPlatformUpgrade>,
+    stage_upgrades: Query<&ShowPlatformUpgrades>,
+    sockets: Query<&PrefabAuthoredAttachmentIdentifier>,
+    children: Query<&Children>,
     prefabs: Res<Assets<openzt2_game_assets::scene_prefab::ScenePrefabAsset>>,
     models: Res<Assets<Gltf>>,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,
     mut ids: ResMut<PersistentIdAllocator>,
-    mut acknowledged: MessageWriter<ShowPlatformUpgradeEditAcknowledged>,
 ) {
     let world_definitions = active_world_definitions.get(&world_definition_assets);
     for request in requests.read() {
@@ -46,16 +40,15 @@ pub(super) fn apply_show_platform_upgrade_edits(
             continue;
         };
         let Ok(member) = stages.get(upgrade.stage) else {
-            publish_show_platform_upgrade_edit_acknowledgement(&mut acknowledged, request, false);
+            publish_show_platform_upgrade_edit_acknowledgement(&mut commands, request, false);
             continue;
         };
         let Some(world_definitions) = world_definitions else {
-            publish_show_platform_upgrade_edit_acknowledgement(&mut acknowledged, request, false);
+            publish_show_platform_upgrade_edit_acknowledgement(&mut commands, request, false);
             continue;
         };
-        let existing = installed.iter().find_map(|(entity, kind, owner)| {
-            (kind.0 == upgrade.kind && owner.0 == upgrade.stage).then_some(entity)
-        });
+        let existing =
+            find_stage_platform_upgrade(upgrade.stage, upgrade.kind, &stage_upgrades, &installed);
         let application_moves_edit_forward = matches!(
             request.application,
             EditApplication::InitialCommit | EditApplication::Redo
@@ -69,14 +62,15 @@ pub(super) fn apply_show_platform_upgrade_edits(
             if let Some(existing) = existing {
                 commands.entity(existing).despawn();
             }
-            publish_show_platform_upgrade_edit_acknowledgement(&mut acknowledged, request, true);
+            publish_show_platform_upgrade_edit_acknowledgement(&mut commands, request, true);
             continue;
         }
         if existing.is_some() {
-            publish_show_platform_upgrade_edit_acknowledgement(&mut acknowledged, request, true);
+            publish_show_platform_upgrade_edit_acknowledgement(&mut commands, request, true);
             continue;
         }
         let Ok(persistent_id) = ids.allocate(member.root) else {
+            publish_show_platform_upgrade_edit_acknowledgement(&mut commands, request, false);
             continue;
         };
         if spawn_show_platform_upgrade_prefab_at_authored_stage_attachment(
@@ -89,13 +83,14 @@ pub(super) fn apply_show_platform_upgrade_edits(
             &prefabs,
             &models,
             &sockets,
+            &children,
         )
         .is_none()
         {
-            publish_show_platform_upgrade_edit_acknowledgement(&mut acknowledged, request, false);
+            publish_show_platform_upgrade_edit_acknowledgement(&mut commands, request, false);
             continue;
         }
-        publish_show_platform_upgrade_edit_acknowledgement(&mut acknowledged, request, true);
+        publish_show_platform_upgrade_edit_acknowledgement(&mut commands, request, true);
     }
 }
 
@@ -104,27 +99,28 @@ pub(super) fn queue_show_platform_upgrade_restores(
     mut requests: MessageReader<RestoreShowPlatformUpgrade>,
 ) {
     for request in requests.read() {
-        commands.spawn(PendingShowPlatformUpgradeRestore {
-            stage: request.stage,
-            kind: request.kind,
-            persistent_id: request.persistent_id,
-        });
+        commands.spawn((
+            RestoreShowPlatformUpgradeOf(request.stage),
+            PendingShowPlatformUpgradeRestore {
+                kind: request.kind,
+                persistent_id: request.persistent_id,
+            },
+        ));
     }
 }
 
 pub(super) fn restore_show_platform_upgrades(
     mut commands: Commands,
-    pending: Query<(Entity, &PendingShowPlatformUpgradeRestore)>,
-    stages: Query<&WorldMember, With<ShowStage>>,
-    installed: Query<(
-        &InstalledShowPlatformUpgrade,
-        &InstalledShowPlatformUpgradeStage,
-    )>,
-    sockets: Query<(
+    pending: Query<(
         Entity,
-        &PrefabAuthoredAttachmentIdentifier,
-        Option<&ChildOf>,
+        &RestoreShowPlatformUpgradeOf,
+        &PendingShowPlatformUpgradeRestore,
     )>,
+    stages: Query<&WorldMember, With<ShowStage>>,
+    installed: Query<&InstalledShowPlatformUpgrade>,
+    stage_upgrades: Query<&ShowPlatformUpgrades>,
+    sockets: Query<&PrefabAuthoredAttachmentIdentifier>,
+    children: Query<&Children>,
     prefabs: Res<Assets<openzt2_game_assets::scene_prefab::ScenePrefabAsset>>,
     models: Res<Assets<Gltf>>,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
@@ -133,21 +129,18 @@ pub(super) fn restore_show_platform_upgrades(
     let Some(world_definitions) = active_world_definitions.get(&world_definition_assets) else {
         return;
     };
-    for (operation, request) in &pending {
-        if installed
-            .iter()
-            .any(|(kind, owner)| kind.0 == request.kind && owner.0 == request.stage)
-        {
+    for (operation, owner, request) in &pending {
+        let stage = owner.0;
+        if find_stage_platform_upgrade(stage, request.kind, &stage_upgrades, &installed).is_some() {
             commands.entity(operation).despawn();
             continue;
         }
-        let Ok(member) = stages.get(request.stage) else {
+        let Ok(member) = stages.get(stage) else {
             continue;
         };
-        commands.entity(operation).insert(ChildOf(request.stage));
         if spawn_show_platform_upgrade_prefab_at_authored_stage_attachment(
             &mut commands,
-            request.stage,
+            stage,
             request.kind,
             world_definitions,
             member.root,
@@ -155,6 +148,7 @@ pub(super) fn restore_show_platform_upgrades(
             &prefabs,
             &models,
             &sockets,
+            &children,
         )
         .is_some()
         {
@@ -173,11 +167,8 @@ fn spawn_show_platform_upgrade_prefab_at_authored_stage_attachment(
     persistent_id: openzt2_world_state::world_spawn::persistent_id_types::PersistentId,
     prefabs: &Assets<openzt2_game_assets::scene_prefab::ScenePrefabAsset>,
     models: &Assets<Gltf>,
-    sockets: &Query<(
-        Entity,
-        &PrefabAuthoredAttachmentIdentifier,
-        Option<&ChildOf>,
-    )>,
+    sockets: &Query<&PrefabAuthoredAttachmentIdentifier>,
+    children: &Query<&Children>,
 ) -> Option<Entity> {
     let platform_upgrade_policy = world_definitions.show_platform_upgrades()?;
     let (object_definition, stage_attachment) = match kind {
@@ -199,11 +190,13 @@ fn spawn_show_platform_upgrade_prefab_at_authored_stage_attachment(
     let parent = if stage_attachment == openzt2_game_data::AssetId::default() {
         stage
     } else {
-        sockets.iter().find_map(|(entity, socket, _)| {
-            (socket.0 == stage_attachment
-                && prefab_attachment_is_descendant_of_show_stage(entity, stage, sockets))
-            .then_some(entity)
-        })?
+        children
+            .iter_descendants::<Children>(stage)
+            .find(|&entity| {
+                sockets
+                    .get(entity)
+                    .is_ok_and(|socket| socket.0 == stage_attachment)
+            })?
     };
     let child = spawn_loaded_scene_prefab_as_world_instance(
         commands,
@@ -224,32 +217,25 @@ fn spawn_show_platform_upgrade_prefab_at_authored_stage_attachment(
     Some(child)
 }
 
-fn prefab_attachment_is_descendant_of_show_stage(
-    mut entity: Entity,
-    ancestor: Entity,
-    hierarchy: &Query<(
-        Entity,
-        &PrefabAuthoredAttachmentIdentifier,
-        Option<&ChildOf>,
-    )>,
-) -> bool {
-    loop {
-        if entity == ancestor {
-            return true;
-        }
-        let Ok((_, _, Some(parent))) = hierarchy.get(entity) else {
-            return false;
-        };
-        entity = parent.parent();
-    }
+pub(super) fn find_stage_platform_upgrade(
+    stage: Entity,
+    kind: ShowPlatformUpgradeKind,
+    stages: &Query<&ShowPlatformUpgrades>,
+    installed: &Query<&InstalledShowPlatformUpgrade>,
+) -> Option<Entity> {
+    stages.get(stage).ok()?.iter().find(|&entity| {
+        installed
+            .get(entity)
+            .is_ok_and(|installed| installed.0 == kind)
+    })
 }
 
 fn publish_show_platform_upgrade_edit_acknowledgement(
-    acknowledged: &mut MessageWriter<ShowPlatformUpgradeEditAcknowledged>,
+    commands: &mut Commands,
     request: &CommitShowPlatformUpgradeEdit,
     accepted: bool,
 ) {
-    acknowledged.write(ShowPlatformUpgradeEditAcknowledged {
+    commands.write_message(ShowPlatformUpgradeEditAcknowledged {
         transaction: request.transaction,
         application: request.application,
         accepted,

@@ -28,6 +28,9 @@ pub(super) fn route_selected_facility_economy_ui_actions(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     transport_sales: openzt2_zoo_state::transport_tours::transport_track_sale::TransportTrackSaleQueries,
+    mut prices: Query<&mut FacilityPriceIndex>,
+    mut schedules: Query<&mut MaintenanceScheduleIndex>,
+    mut quotes: Query<&mut CurrentSellQuote>,
 ) {
     for activation in activations.read() {
         let Ok((action_source, document_owner)) = action_nodes.get(activation.node) else {
@@ -39,48 +42,56 @@ pub(super) fn route_selected_facility_economy_ui_actions(
         let Some(document) = documents.get(&document_root.document) else {
             continue;
         };
-        let Some(selected_entity) = selected_entity.subject() else {
+        let Some(subject) = selected_entity.subject() else {
             continue;
         };
-        for action_record in action_source.authored_action_records(document) {
-            if activation.trigger != action_record.trigger {
+        for record in action_source.authored_action_records(document) {
+            if activation.trigger != record.trigger {
                 continue;
             }
-            match &action_record.action {
+            match &record.action {
                 UiEconomyAction::SetSelectedFacilityPriceIndex { price_index } => {
-                    commands
-                        .entity(selected_entity)
-                        .insert(FacilityPriceIndex(*price_index));
+                    let value = FacilityPriceIndex(*price_index);
+                    if let Ok(mut current) = prices.get_mut(subject) {
+                        current.set_if_neq(value);
+                    } else {
+                        commands.entity(subject).insert(value);
+                    }
                 }
                 UiEconomyAction::SetSelectedMaintenanceSchedule {
                     maintenance_schedule_index,
                 } => {
-                    commands
-                        .entity(selected_entity)
-                        .insert(MaintenanceScheduleIndex(*maintenance_schedule_index));
+                    let value = MaintenanceScheduleIndex(*maintenance_schedule_index);
+                    if let Ok(mut current) = schedules.get_mut(subject) {
+                        current.set_if_neq(value);
+                    } else {
+                        commands.entity(subject).insert(value);
+                    }
                 }
                 UiEconomyAction::RefreshSelectedEntitySellQuote => {
-                    if transport_sales.requires_transport_sale(selected_entity) {
-                        // The transport owner refreshes the aggregate quote from live topology.
+                    if transport_sales.requires_transport_sale(subject) {
                         continue;
                     }
-                    if let Some(refund) = objects
-                        .get(selected_entity)
+                    let refund = objects
+                        .get(subject)
                         .ok()
                         .and_then(|definition| {
                             active_definitions
                                 .get(&definitions)?
                                 .find_object(definition.0)
                         })
-                        .and_then(super::object_sale_refund::calculate_authored_object_sale_refund)
-                    {
-                        commands
-                            .entity(selected_entity)
-                            .insert(CurrentSellQuote(refund));
-                    } else {
-                        commands
-                            .entity(selected_entity)
-                            .remove::<CurrentSellQuote>();
+                        .and_then(super::object_sale_refund::calculate_authored_object_sale_refund);
+                    match (quotes.get_mut(subject), refund) {
+                        (Ok(mut current), Some(refund)) => {
+                            current.set_if_neq(CurrentSellQuote(refund));
+                        }
+                        (Err(_), Some(refund)) => {
+                            commands.entity(subject).insert(CurrentSellQuote(refund));
+                        }
+                        (Ok(_), None) => {
+                            commands.entity(subject).remove::<CurrentSellQuote>();
+                        }
+                        (Err(_), None) => {}
                     }
                 }
                 UiEconomyAction::SetZooAdmissionPriceBand { .. }

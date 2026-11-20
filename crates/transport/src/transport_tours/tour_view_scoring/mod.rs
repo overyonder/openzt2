@@ -1,7 +1,9 @@
 use avian3d::prelude::SpatialQuery;
 use avian3d::prelude::SpatialQueryFilter;
+use bevy::ecs::entity::EntityHashMap;
 use bevy::prelude::*;
 use openzt2_game_data::world_definitions::guest_simulation_definitions::GuestMemoryKind;
+use openzt2_game_data::world_definitions::transportation_and_tours::TourViewDefinition;
 use openzt2_game_data::AssetId;
 
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
@@ -14,7 +16,6 @@ use openzt2_zoo_state::guests::guest_simulation_types::GuestReaction;
 use openzt2_zoo_state::locomotion::locomotion_types::SpatialGrid;
 
 use crate::transport_tours::tour_score_calculations::add_observation_value_to_tour_score;
-use crate::transport_tours::transport_hierarchy_queries::entity_is_descendant_of_transport_owner;
 use openzt2_zoo_state::transport_tours::tour_scoring_types::TourObservationCadence;
 use openzt2_zoo_state::transport_tours::tour_scoring_types::TourObservationMemory;
 use openzt2_zoo_state::transport_tours::tour_scoring_types::TourScore;
@@ -62,34 +63,77 @@ fn calculate_deterministic_tour_score_factor(
     minimum + (bounds[1] - minimum) * unit
 }
 
-fn tour_subject_is_visible_from_transport_vehicle(
+struct TourVehicleViewCandidate<'a> {
+    entity: Entity,
+    target: Vec3,
+    definition: &'a TourViewDefinition,
+    is_animal: bool,
+    shared_occluder: Option<Option<Entity>>,
+}
+
+fn first_tour_view_occluder(
     spatial_query: &SpatialQuery,
     parents: &Query<&ChildOf>,
     origin: Vec3,
     target: Vec3,
-    guest: Entity,
-    vehicle: Entity,
-    subject: Entity,
-) -> bool {
+    excluded_owners: &[Entity],
+) -> Option<Entity> {
     let offset = target - origin;
-    let distance = offset.length();
-    let Ok(direction) = Dir3::new(offset) else {
-        return true;
-    };
+    let direction = Dir3::new(offset).ok()?;
     spatial_query
         .cast_ray_predicate(
             origin,
             direction,
-            distance,
+            offset.length(),
             false,
             &SpatialQueryFilter::DEFAULT,
             &|hit| {
-                !entity_is_descendant_of_transport_owner(hit, guest, parents)
-                    && !entity_is_descendant_of_transport_owner(hit, vehicle, parents)
-                    && !entity_is_descendant_of_transport_owner(hit, subject, parents)
+                !excluded_owners.contains(&hit)
+                    && !parents
+                        .iter_ancestors::<ChildOf>(hit)
+                        .any(|ancestor| excluded_owners.contains(&ancestor))
             },
         )
-        .is_none()
+        .map(|hit| hit.entity)
+}
+
+fn gather_tour_view_candidates<'a>(
+    grid: &SpatialGrid,
+    center: UVec2,
+    cell_radius: u32,
+    origin: Vec3,
+    definitions: WorldDefinitionsView<'a>,
+    viewables: &Query<(&TourViewable, &GlobalTransform, Has<Animal>)>,
+) -> Vec<TourVehicleViewCandidate<'a>> {
+    let mut candidates = Vec::new();
+    let minimum = center.saturating_sub(UVec2::splat(cell_radius));
+    let maximum = center
+        .saturating_add(UVec2::splat(cell_radius))
+        .min(UVec2::new(grid.width - 1, grid.height - 1));
+    for y in minimum.y..=maximum.y {
+        for x in minimum.x..=maximum.x {
+            for &entity in grid.range(y * grid.width + x) {
+                let Ok((viewable, transform, is_animal)) = viewables.get(entity) else {
+                    continue;
+                };
+                let Some(definition) = definitions.find_tour_view(viewable.definition) else {
+                    continue;
+                };
+                let target = transform.translation();
+                let radius = definition.radius_cm as f32 * 0.01;
+                if origin.distance_squared(target) <= radius * radius {
+                    candidates.push(TourVehicleViewCandidate {
+                        entity,
+                        target,
+                        definition,
+                        is_animal,
+                        shared_occluder: None,
+                    });
+                }
+            }
+        }
+    }
+    candidates
 }
 
 pub(super) fn calculate_tour_rating_from_authored_score_ranges(
@@ -136,7 +180,7 @@ pub(super) fn observe_visible_tour_subjects_and_accumulate_rider_scores(
         With<Guest>,
     >,
     vehicles: Query<(&TransportVehicle, &GlobalTransform)>,
-    viewables: Query<(Entity, &TourViewable, &GlobalTransform, Option<&Animal>)>,
+    viewables: Query<(&TourViewable, &GlobalTransform, Has<Animal>)>,
     parents: Query<&ChildOf>,
     mut reactions: MessageWriter<GuestReaction>,
     mut behavior: MessageWriter<StartBehaviorSet>,
@@ -152,6 +196,9 @@ pub(super) fn observe_visible_tour_subjects_and_accumulate_rider_scores(
         .tour_views()
         .map(|definition| definition.radius_cm as f32 * 0.01)
         .fold(0.0f32, f32::max);
+    let cell_radius = (maximum_radius_m / grid.cell_size_m).ceil() as u32;
+    let memory_limit = policy.map_or(u16::MAX, |policy| policy.view_target_memory);
+    let mut candidates_by_vehicle = EntityHashMap::default();
     for (guest, rider, mut score, mut memory, mut cadence) in &mut riders {
         if cadence.ticks_until_next > 0 {
             cadence.ticks_until_next -= 1;
@@ -161,119 +208,128 @@ pub(super) fn observe_visible_tour_subjects_and_accumulate_rider_scores(
             continue;
         };
         let origin = vehicle_transform.translation();
-        let Some(center) = grid.cell_of(origin.xz()) else {
+        let Some(center) = grid
+            .cell_of(origin.xz())
+            .and_then(|center| grid.cell_xy(center))
+        else {
             continue;
         };
-        let Some(center_xy) = grid.cell_xy(center) else {
-            continue;
-        };
-        let cell_radius = (maximum_radius_m / grid.cell_size_m).ceil() as u32;
-        let mut next_observation = 0u32;
-        for y in center_xy.y.saturating_sub(cell_radius)
-            ..=(center_xy.y + cell_radius).min(grid.height - 1)
-        {
-            for x in center_xy.x.saturating_sub(cell_radius)
-                ..=(center_xy.x + cell_radius).min(grid.width - 1)
-            {
-                for &subject in grid.range(y * grid.width + x) {
-                    let Ok((_, viewable, transform, animal)) = viewables.get(subject) else {
-                        continue;
-                    };
-                    let Some(definition) = definitions.find_tour_view(viewable.definition) else {
-                        continue;
-                    };
-                    if definition.occlusion_required
-                        && !tour_subject_is_visible_from_transport_vehicle(
+        let candidates = candidates_by_vehicle
+            .entry(rider.vehicle)
+            .or_insert_with(|| {
+                gather_tour_view_candidates(
+                    &grid,
+                    center,
+                    cell_radius,
+                    origin,
+                    definitions,
+                    &viewables,
+                )
+            });
+        let mut next_observation = 0;
+        for candidate in candidates {
+            if policy.is_some_and(|policy| score.observations >= u32::from(policy.tour_history)) {
+                break;
+            }
+            let subject = candidate.entity;
+            if !memory.can_observe_with_limit(subject, memory_limit) {
+                continue;
+            }
+            let definition = candidate.definition;
+            let is_animal = candidate.is_animal;
+            if definition.occlusion_required {
+                let occluder = candidate.shared_occluder.get_or_insert_with(|| {
+                    first_tour_view_occluder(
+                        &spatial_query,
+                        &parents,
+                        origin,
+                        candidate.target,
+                        &[rider.vehicle, subject],
+                    )
+                });
+                if let Some(hit) = *occluder {
+                    let rider_owns_hit = hit == guest
+                        || parents
+                            .iter_ancestors::<ChildOf>(hit)
+                            .any(|ancestor| ancestor == guest);
+                    if !rider_owns_hit
+                        || first_tour_view_occluder(
                             &spatial_query,
                             &parents,
                             origin,
-                            transform.translation(),
-                            guest,
-                            rider.vehicle,
-                            subject,
+                            candidate.target,
+                            &[guest, rider.vehicle, subject],
                         )
+                        .is_some()
                     {
                         continue;
                     }
-                    let radius_m = definition.radius_cm as f32 * 0.01;
-                    if policy
-                        .is_some_and(|policy| score.observations >= u32::from(policy.tour_history))
-                    {
-                        continue;
-                    }
-                    let memory_limit = policy.map_or(u16::MAX, |policy| policy.view_target_memory);
-                    if origin.distance_squared(transform.translation()) > radius_m * radius_m
-                        || !memory.observe_with_limit(subject, memory_limit)
-                    {
-                        continue;
-                    }
-                    let raw_score = f32::from(definition.base_score);
-                    let observation_score = policy.map_or(raw_score, |policy| {
-                        let event_score =
-                            calculate_curved_tour_score(raw_score, &policy.view_event_curve);
-                        let subject_score = if animal.is_some() {
-                            calculate_curved_tour_score(
-                                raw_score + policy.species_base_inducement,
-                                &policy.animal_curve,
-                            )
-                        } else {
-                            calculate_curved_tour_score(raw_score, &policy.static_object_curve)
-                        };
-                        let category_bonus = {
-                            policy
-                                .categories
-                                .iter()
-                                .find(|row| row.category == definition.subject)
-                                .map_or(0.0, |row| row.value as f32)
-                        };
-                        (event_score + subject_score + category_bonus)
-                            * calculate_deterministic_tour_score_factor(
-                                guest,
-                                subject,
-                                &policy.inducement_random_factor,
-                            )
-                    });
-                    add_observation_value_to_tour_score(&mut score, observation_score);
-                    next_observation = next_observation.max(definition.dwell_ticks);
-                    let feedback = policy.is_none_or(|policy| {
-                        if score.value < policy.score_threshold {
-                            return false;
-                        }
-                        if animal.is_some() {
-                            observation_score >= policy.animal_feedback_threshold
-                                && calculate_deterministic_unit_value_for_guest_and_subject(
-                                    guest, subject,
-                                ) <= policy.animal_feedback_probability
-                        } else {
-                            observation_score <= policy.object_feedback_thresholds[0]
-                                || observation_score >= policy.object_feedback_thresholds[1]
-                        }
-                    });
-                    if !feedback {
-                        continue;
-                    }
-                    if let Some(program) = find_vehicle_seat_emote_behavior_for_tour_score(
-                        definitions,
-                        vehicle.definition,
-                        rider.seat_index,
-                        observation_score,
-                    ) {
-                        behavior.write(StartBehaviorSet {
-                            actor: guest,
-                            program,
-                            target: Some(subject),
-                        });
-                    }
-                    reactions.write(GuestReaction {
-                        view_event: None,
-                        guest,
-                        subject,
-                        kind: GuestMemoryKind::Tour,
-                        satisfaction_delta_permille: 0,
-                        education_delta_permille: 0,
-                    });
                 }
             }
+            memory.observe_with_limit(subject, memory_limit);
+            let raw_score = f32::from(definition.base_score);
+            let observation_score = policy.map_or(raw_score, |policy| {
+                let event_score = calculate_curved_tour_score(raw_score, &policy.view_event_curve);
+                let subject_score = if is_animal {
+                    calculate_curved_tour_score(
+                        raw_score + policy.species_base_inducement,
+                        &policy.animal_curve,
+                    )
+                } else {
+                    calculate_curved_tour_score(raw_score, &policy.static_object_curve)
+                };
+                let category_bonus = {
+                    policy
+                        .categories
+                        .iter()
+                        .find(|row| row.category == definition.subject)
+                        .map_or(0.0, |row| row.value as f32)
+                };
+                (event_score + subject_score + category_bonus)
+                    * calculate_deterministic_tour_score_factor(
+                        guest,
+                        subject,
+                        &policy.inducement_random_factor,
+                    )
+            });
+            add_observation_value_to_tour_score(&mut score, observation_score);
+            next_observation = next_observation.max(definition.dwell_ticks);
+            let feedback = policy.is_none_or(|policy| {
+                if score.value < policy.score_threshold {
+                    return false;
+                }
+                if is_animal {
+                    observation_score >= policy.animal_feedback_threshold
+                        && calculate_deterministic_unit_value_for_guest_and_subject(guest, subject)
+                            <= policy.animal_feedback_probability
+                } else {
+                    observation_score <= policy.object_feedback_thresholds[0]
+                        || observation_score >= policy.object_feedback_thresholds[1]
+                }
+            });
+            if !feedback {
+                continue;
+            }
+            if let Some(program) = find_vehicle_seat_emote_behavior_for_tour_score(
+                definitions,
+                vehicle.definition,
+                rider.seat_index,
+                observation_score,
+            ) {
+                behavior.write(StartBehaviorSet {
+                    actor: guest,
+                    program,
+                    target: Some(subject),
+                });
+            }
+            reactions.write(GuestReaction {
+                view_event: None,
+                guest,
+                subject,
+                kind: GuestMemoryKind::Tour,
+                satisfaction_delta_permille: 0,
+                education_delta_permille: 0,
+            });
         }
         cadence.ticks_until_next = next_observation;
     }

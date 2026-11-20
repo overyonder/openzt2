@@ -64,6 +64,21 @@ pub enum TransactionRejection {
     Overflow,
 }
 
-/// Suppresses replay of a caller-owned operation after first settlement.
+/// Settlement belongs to the operation that requested the transfer.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TransactionSettled;
+pub enum TransactionSettlement {
+    Pending {
+        request: TransactionRequest,
+        sequence: usize,
+        player_operation: bool,
+    },
+    Settled {
+        player_operation: bool,
+    },
+}
+
+impl TransactionSettlement {
+    pub const fn is_settled_in_domain(&self, player: bool) -> bool {
+        matches!(self, Self::Settled { player_operation } if *player_operation == player)
+    }
+}

@@ -1,4 +1,7 @@
 use bevy::prelude::*;
+use openzt2_game_data::ui_document::overview_map_presentation::{
+    UiMapColorsRecord, UiOverviewCanvas,
+};
 use openzt2_game_data::AssetId;
 
 /// One authored overview-map layer and its Bevy image projection.
@@ -6,6 +9,8 @@ use openzt2_game_data::AssetId;
 pub struct OverviewMapCanvas {
     pub surface: Entity,
     pub layer: u32,
+    pub source: UiOverviewCanvas,
+    pub palette: UiMapColorsRecord,
     pub painted: bool,
 }
 
@@ -17,21 +22,22 @@ pub struct ExportOverviewMap {
 }
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct OverviewLegendRow {
-    pub owner: Entity,
-    pub layer: u32,
-    pub visible: bool,
-}
+#[relationship(relationship_target = OverviewLegendControls)]
+pub struct OverviewLegendLayer(pub Entity);
 
-#[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct OverviewLegendListState {
-    pub rows: u16,
-}
+#[derive(Component)]
+#[relationship_target(relationship = OverviewLegendLayer)]
+pub struct OverviewLegendControls(Vec<Entity>);
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+#[relationship(relationship_target = OverviewSubjectMarkers)]
 pub struct OverviewMarker {
     pub subject: Entity,
 }
+
+#[derive(Component)]
+#[relationship_target(relationship = OverviewMarker, linked_spawn)]
+pub struct OverviewSubjectMarkers(Vec<Entity>);
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OverviewCameraMarker;

@@ -12,8 +12,7 @@ use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
 use super::maintenance_types::{
-    AuthoredMaintenanceFactsResolutionMarker, FacilityContainedWaste,
-    IncrementalZooCleanlinessTotals, LooseLitterWaste,
+    AuthoredMaintenanceFactsResolutionMarker, FacilityContainedWaste, LooseLitterWaste,
 };
 
 pub(super) fn initialize_authored_maintenance_facts_for_world_objects(
@@ -64,7 +63,6 @@ pub(super) fn apply_completed_service_maintenance_effects_to_facilities(
         &WorldMember,
         Option<&mut FacilityContainedWaste>,
     )>,
-    mut cleanliness_totals: ResMut<IncrementalZooCleanlinessTotals>,
 ) {
     let Some(world_definitions) = active_world_definitions.get(&world_definition_assets) else {
         return;
@@ -116,14 +114,14 @@ pub(super) fn apply_completed_service_maintenance_effects_to_facilities(
             ))
         };
 
-        if let Some(mut waste_container) = waste_container {
-            let previous_waste_container = *waste_container;
-            waste_container.contained_waste_units = waste_container
+        if let Some(waste_container) = waste_container {
+            let units = waste_container
                 .contained_waste_units
                 .saturating_add(service_effect.contained_waste_units)
                 .min(waste_container.contained_waste_capacity_units);
-            cleanliness_totals
-                .replace_facility_contained_waste(previous_waste_container, *waste_container);
+            waste_container
+                .map_unchanged(|waste| &mut waste.contained_waste_units)
+                .set_if_neq(units);
         }
         if let Some(spawned_litter) = spawned_litter {
             commands.spawn(spawned_litter);

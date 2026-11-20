@@ -22,19 +22,6 @@ use openzt2_interface_state::information::entity_selection_types::InformationEnt
 use openzt2_interface_state::information::entity_selection_types::Inspectable;
 use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::UiListRow;
 
-#[derive(Resource, Default)]
-pub(crate) struct InformationRowStructure;
-
-pub(crate) fn invalidate_row_structure(
-    event: On<Insert<(ChildOf, UiTextBinding, UiImageBinding, UiListRow)>>,
-    nodes: Query<(), With<Node>>,
-    mut structure: ResMut<InformationRowStructure>,
-) {
-    if nodes.contains(event.entity) {
-        structure.set_changed();
-    }
-}
-
 pub(crate) fn project_world_subject_identity_to_information_list_rows(
     mut commands: Commands,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
@@ -53,7 +40,18 @@ pub(crate) fn project_world_subject_identity_to_information_list_rows(
     mut text_nodes: Query<(&UiTextBinding, &mut Text)>,
     mut image_nodes: Query<(&UiImageBinding, Option<&mut ImageNode>)>,
     mut scratch: Local<(Vec<Entity>, String)>,
-    structure: Res<InformationRowStructure>,
+    parents: Query<&ChildOf>,
+    new_bindings: Query<
+        Entity,
+        (
+            Or<(With<UiTextBinding>, With<UiImageBinding>)>,
+            Or<(
+                Changed<ChildOf>,
+                Changed<UiTextBinding>,
+                Changed<UiImageBinding>,
+            )>,
+        ),
+    >,
     mut removed: (
         RemovedComponents<InformationEntitySource>,
         RemovedComponents<UiListRow>,
@@ -64,19 +62,27 @@ pub(crate) fn project_world_subject_identity_to_information_list_rows(
     if sources.is_empty() {
         return;
     }
-    let refresh_rows = structure.is_changed()
-        || active_world_definitions.is_changed()
+    let refresh_rows = active_world_definitions.is_changed()
         || world_definition_assets.is_changed()
         || active_localization.is_changed()
         || localization_assets.is_changed()
         || species_assets.is_changed()
         || active_species.is_changed()
-        || !removed.0.is_empty()
-        || !removed.1.is_empty()
         || !removed.2.is_empty()
         || !removed.3.is_empty();
-    removed.0.clear();
-    removed.1.clear();
+    let mut rebound_rows = std::collections::HashSet::new();
+    for node in new_bindings
+        .iter()
+        .chain(removed.0.read())
+        .chain(removed.1.read())
+    {
+        if let Some(row) = std::iter::once(node)
+            .chain(parents.iter_ancestors::<ChildOf>(node))
+            .find(|&candidate| sources.contains(candidate))
+        {
+            rebound_rows.insert(row);
+        }
+    }
     removed.2.clear();
     removed.3.clear();
     let Some(definitions) = active_world_definitions.get(&world_definition_assets) else {
@@ -96,6 +102,7 @@ pub(crate) fn project_world_subject_identity_to_information_list_rows(
             continue;
         };
         if !refresh_rows
+            && !rebound_rows.contains(&row)
             && !source.is_changed()
             && !inspectable.is_changed()
             && !species_handle.as_ref().is_some_and(Ref::is_changed)

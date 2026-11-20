@@ -126,6 +126,7 @@ impl AnimationClipRecord {
             animation_clip_handle,
             duration_milliseconds: animation_duration_milliseconds,
             authored_animation_clip_metadata: None,
+            text_key_times_milliseconds: Default::default(),
             authored_animation_policy: AuthoredAnimationPlaybackPolicy::default(),
         }
     }

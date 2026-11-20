@@ -19,6 +19,7 @@ use crate::animation_graph::embedded_gltf_animation_asset_resolution::resolve_lo
 use crate::animation_graph::model_animation_asset_attachment::attach_loaded_animation_set_assets_to_animation_subject_entities;
 use openzt2_world_state::animation_graph::animation_graph_playback_message_types::AnimationClipPlaybackRequest;
 use openzt2_world_state::animation_graph::animation_graph_playback_message_types::AnimationClipPlaybackRequestRejected;
+use openzt2_world_state::animation_graph::animation_graph_playback_message_types::AnimationClipPresentationSelection;
 use openzt2_world_state::animation_graph::animation_graph_playback_message_types::AnimationGraphNodePlaybackRequest;
 use openzt2_world_state::animation_graph::animation_graph_playback_message_types::AnimationGraphNodePlaybackRequestRejected;
 use openzt2_world_state::animation_graph::model_animation_asset_binding_types::EmbeddedModelAnimationSetAssetHandlesByGltfAsset;
@@ -31,6 +32,7 @@ impl Plugin for AnimationGraphPlugin {
             .init_resource::<EmbeddedModelAnimationSetAssetHandlesByGltfAsset>()
             .add_message::<AnimationGraphNodePlaybackRequest>()
             .add_message::<AnimationClipPlaybackRequest>()
+            .add_message::<AnimationClipPresentationSelection>()
             .add_message::<openzt2_world_state::animation_graph::animation_graph_playback_message_types::CancelAnimationClipPlaybackRequest>()
             .add_message::<AnimationClipPlaybackRequestRejected>()
             .add_message::<openzt2_world_state::animation_graph::animation_graph_playback_message_types::AnimationClipPlaybackRequestStarted>()

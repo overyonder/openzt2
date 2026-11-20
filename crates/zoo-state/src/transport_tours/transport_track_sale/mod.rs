@@ -58,9 +58,19 @@ pub struct TransportTrackSaleQueries<'w, 's> {
     >,
 }
 
+struct TerminalTrackSale<'a> {
+    route: &'a TrackSegment,
+    profile: &'a TrackProfile,
+    circuit: Entity,
+    destination_junction: Option<PersistentId>,
+    destination_endpoint: Option<Entity>,
+    pieces: Vec<(Entity, PersistentId)>,
+}
+
 impl TransportTrackSaleQueries<'_, '_> {
     pub fn definition(&self, target: Entity) -> Option<openzt2_game_data::AssetId> {
-        self.terminal_route_edit(target).map(|edit| edit.definition)
+        self.terminal_route_sale(target)
+            .map(|sale| sale.route.definition)
     }
     pub fn requires_transport_sale(&self, target: Entity) -> bool {
         self.transport.contains(target)
@@ -73,10 +83,7 @@ impl TransportTrackSaleQueries<'_, '_> {
     // A terminal route owns its destination junction and every projected piece.
     // A route with more road beyond it keeps its destination, so removing it
     // leaves a gap with a free road end on each side, as in the original.
-    pub fn terminal_route_edit(
-        &self,
-        target: Entity,
-    ) -> Option<PreparedTransportTrackConstructionEdit> {
+    fn terminal_route_sale(&self, target: Entity) -> Option<TerminalTrackSale<'_>> {
         let route_entity = self
             .pieces
             .get(target)
@@ -156,21 +163,44 @@ impl TransportTrackSaleQueries<'_, '_> {
         {
             return None;
         }
+        Some(TerminalTrackSale {
+            route,
+            profile,
+            circuit: member.0,
+            destination_junction: destination.0,
+            destination_endpoint: destination.1,
+            pieces: pieces
+                .into_iter()
+                .map(|(entity, id, ..)| (entity, *id))
+                .collect(),
+        })
+    }
+
+    pub fn can_sell_track_at(&self, target: Entity) -> bool {
+        self.terminal_route_sale(target).is_some()
+    }
+
+    pub fn terminal_route_edit(
+        &self,
+        target: Entity,
+    ) -> Option<PreparedTransportTrackConstructionEdit> {
+        let sale = self.terminal_route_sale(target)?;
+        let route = sale.route;
         Some(PreparedTransportTrackConstructionEdit {
             removes_track: true,
-            piece_entities: pieces.iter().map(|(_, id, _, _, _)| **id).collect(),
-            destination_junction_entity: destination.0,
+            piece_entities: sale.pieces.iter().map(|(_, id)| *id).collect(),
+            destination_junction_entity: sale.destination_junction,
             source_junction_entity: None,
             definition: route.definition,
-            kind: profile.kind,
-            maximum_grade_permille: profile.maximum_grade_permille,
-            circuit: member.0,
+            kind: sale.profile.kind,
+            maximum_grade_permille: sale.profile.maximum_grade_permille,
+            circuit: sale.circuit,
             from_endpoint: route.from,
             from_endpoint_index: route.from_endpoint_index,
-            to_endpoint: destination.1,
+            to_endpoint: sale.destination_endpoint,
             to_endpoint_index: route.to_endpoint_index,
             path_points: route.path_points.clone(),
-            applied_entities: pieces.iter().map(|(entity, _, _, _, _)| *entity).collect(),
+            applied_entities: sale.pieces.into_iter().map(|(entity, _)| entity).collect(),
             preview: None,
             application_in_flight: None,
         })
@@ -186,13 +216,13 @@ impl TransportTrackSaleQueries<'_, '_> {
     }
 
     pub fn quote(&self, target: Entity, definitions: WorldDefinitionsView<'_>) -> Option<Money> {
-        let edit = self.terminal_route_edit(target)?;
+        let sale = self.terminal_route_sale(target)?;
         let removed_pieces = if self.single_piece(target).is_some() {
             1
         } else {
-            edit.piece_entities.len()
+            sale.pieces.len()
         };
-        let track = definitions.find_track(edit.definition)?;
+        let track = definitions.find_track(sale.route.definition)?;
         let object = definitions.find_object(track.object)?;
         if !object
             .properties

@@ -2,17 +2,13 @@
 
 use bevy::{asset::AssetApp, prelude::*};
 use openzt2_game_data::{
-    particle::{
-        authored_particle_system::ParticleEffectSimulationClock,
-        ParticleEffectDocument as ParticleDocument,
-    },
-    AssetId,
+    particle::authored_particle_system::ParticleEffectSimulationClock, AssetId,
 };
 use std::collections::BTreeMap;
 
 pub mod authored_particle_system_hanabi_effect_preparation;
 pub mod effect_asset_loading;
-pub mod effect_document_runtime_queries;
+mod effect_document_runtime_queries;
 pub mod effect_instance_runtime_systems;
 pub mod effect_instance_spawning_and_preparation;
 pub mod effect_runtime_types;
@@ -20,7 +16,7 @@ pub mod explicit_particle_emission;
 pub mod hanabi_custom_particle_modifiers;
 pub mod legacy_nif_hanabi_effect_preparation;
 pub mod particle_plane_binding;
-pub mod particle_renderer_materials;
+mod particle_renderer_materials;
 pub mod particle_system_emitter_graph_validation;
 pub mod particle_system_emitter_lowering;
 pub mod particle_system_modifier_lowering;
@@ -47,7 +43,6 @@ use effect_instance_spawning_and_preparation::{
 
 #[derive(Asset, TypePath, Clone, Debug)]
 pub struct ParticleEffectDocumentAsset {
-    pub particle_document: ParticleDocument,
     roots: Vec<AssetId>,
     decal_emitter: Option<(AssetId, bool)>,
     #[dependency]
@@ -57,6 +52,18 @@ pub struct ParticleEffectDocumentAsset {
 impl ParticleEffectDocumentAsset {
     pub fn root_emitter_ids(&self) -> &[AssetId] {
         &self.roots
+    }
+
+    /// Authored PSYS roots and the maximum initial particle size of each root.
+    pub fn authored_root_emitters_with_initial_size(
+        &self,
+    ) -> impl Iterator<Item = (AssetId, f32)> + '_ {
+        self.roots.iter().filter_map(|&id| {
+            self.prepared_emitters
+                .get(&id)?
+                .authored_initial_size
+                .map(|size| (id, size))
+        })
     }
 
     /// The first decal emitter in authored order and whether it has a wave shader.
@@ -157,7 +164,8 @@ impl Plugin for ParticleEffectAssetAndRuntimePlugin {
             .add_systems(
                 PostUpdate,
                 (
-                    explicit_particle_emission::upload_explicit_particle_emission_points,
+                    explicit_particle_emission::upload_explicit_particle_emission_points
+                        .before(confirm_particle_readbacks_before_draining_collision_children),
                     (
                         apply_authored_particle_emission_and_close_finished_spawners,
                         confirm_particle_readbacks_before_draining_collision_children,

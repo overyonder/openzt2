@@ -258,24 +258,39 @@ fn ground_route_points_with_joined_neighbours(
 #[derive(Component)]
 pub(super) struct GroundTrackPieceDecal;
 
+#[derive(Message)]
+pub(super) struct DiscardedTrackJointEndpoints([Entity; 2]);
+
+pub(super) fn capture_discarded_track_joint_endpoints(
+    discarded: On<Discard<TrackSegment>>,
+    routes: Query<&TrackSegment>,
+    mut joints: MessageWriter<DiscardedTrackJointEndpoints>,
+) {
+    if let Ok(route) = routes.get(discarded.entity) {
+        joints.write(DiscardedTrackJointEndpoints([route.from, route.to]));
+    }
+}
+
 /// Redraws the road pieces next to a joint a route was added to or removed
 /// from, so they turn towards (or no longer towards) the road there.
 pub(super) fn invalidate_ground_track_pieces_at_changed_joints(
     mut commands: Commands,
-    added: Query<(Entity, &TrackSegment), Added<TrackSegment>>,
-    mut removed: RemovedComponents<TrackSegment>,
-    mut joints: Local<bevy::platform::collections::HashMap<Entity, [Entity; 2]>>,
+    changed_routes: Query<&TrackSegment, Changed<TrackSegment>>,
+    mut discarded: MessageReader<DiscardedTrackJointEndpoints>,
     routes: Query<(Entity, &TrackSegment)>,
-    pieces: Query<(Entity, &TransportTrackConstructionPiece, &Children)>,
+    pieces: Query<(
+        Entity,
+        &TransportTrackConstructionPiece,
+        &TrackProfile,
+        &Children,
+    )>,
     decals: Query<(), With<GroundTrackPieceDecal>>,
 ) {
-    let mut changed = removed
+    let mut changed = discarded
         .read()
-        .filter_map(|route| joints.remove(&route))
-        .flatten()
+        .flat_map(|endpoints| endpoints.0)
         .collect::<HashSet<_>>();
-    for (entity, route) in &added {
-        joints.insert(entity, [route.from, route.to]);
+    for route in &changed_routes {
         changed.extend([route.from, route.to]);
     }
     if changed.is_empty() {
@@ -283,14 +298,13 @@ pub(super) fn invalidate_ground_track_pieces_at_changed_joints(
     }
     let neighbours = routes
         .iter()
-        .filter(|(entity, route)| {
-            !added.contains(*entity)
-                && (changed.contains(&route.from) || changed.contains(&route.to))
-        })
+        .filter(|(_, route)| changed.contains(&route.from) || changed.contains(&route.to))
         .map(|(entity, _)| entity)
         .collect::<HashSet<_>>();
-    for (piece, construction, children) in &pieces {
-        if !neighbours.contains(&construction.route_segment) {
+    for (piece, construction, profile, children) in &pieces {
+        if profile.kind != TransportationTrackKind::Ground
+            || !neighbours.contains(&construction.route_segment)
+        {
             continue;
         }
         for child in children.iter().filter(|child| decals.contains(*child)) {

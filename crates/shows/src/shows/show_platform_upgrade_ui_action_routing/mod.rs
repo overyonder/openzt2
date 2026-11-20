@@ -19,10 +19,10 @@ use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
 use super::{
     show_editor_interaction_types::ShowPlatformDeletionPending,
+    show_platform_upgrade_lifecycle::find_stage_platform_upgrade,
     show_platform_upgrade_types::{
-        InstalledShowPlatformUpgrade, InstalledShowPlatformUpgradeStage,
-        SelectedShowPlatformUpgrade, ShowPlatformUpgradeEdit, ShowPlatformUpgradeEditOperation,
-        ShowPlatformUpgradeKind,
+        InstalledShowPlatformUpgrade, SelectedShowPlatformUpgrade, ShowPlatformUpgradeEdit,
+        ShowPlatformUpgradeEditOperation, ShowPlatformUpgradeKind, ShowPlatformUpgrades,
     },
     show_stage_types::ShowStage,
 };
@@ -40,12 +40,9 @@ pub(super) fn route_authored_show_platform_upgrade_actions_into_selection_edits_
     action_nodes: Query<(&UiShowActions, &UiDocumentOwner)>,
     document_roots: Query<(&UiDocumentRoot, Option<&ChildOf>)>,
     stages: Query<Option<&WorldMember>, With<ShowStage>>,
-    installed_upgrades: Query<(
-        Entity,
-        &InstalledShowPlatformUpgrade,
-        &InstalledShowPlatformUpgradeStage,
-    )>,
-    selected_upgrades: Query<&SelectedShowPlatformUpgrade>,
+    installed_upgrades: Query<&InstalledShowPlatformUpgrade>,
+    stage_upgrades: Query<&ShowPlatformUpgrades>,
+    mut selected_upgrades: Query<&mut SelectedShowPlatformUpgrade>,
     pending_deletions: Query<&ShowPlatformDeletionPending>,
     mut edit_history: ResMut<ConstructionEditHistory>,
 ) {
@@ -78,12 +75,12 @@ pub(super) fn route_authored_show_platform_upgrade_actions_into_selection_edits_
                     else {
                         continue;
                     };
-                    let installed_upgrade = installed_upgrades
-                        .iter()
-                        .find(|(_, installed_upgrade, owning_stage)| {
-                            owning_stage.0 == stage && installed_upgrade.0 == selected_upgrade.0
-                        })
-                        .map(|(entity, _, _)| entity);
+                    let installed_upgrade = find_stage_platform_upgrade(
+                        stage,
+                        selected_upgrade.0,
+                        &stage_upgrades,
+                        &installed_upgrades,
+                    );
                     let Some(platform_upgrade_policy) = active_world_definitions
                         .get(&world_definition_assets)
                         .and_then(|world_definitions| world_definitions.show_platform_upgrades())
@@ -149,9 +146,12 @@ pub(super) fn route_authored_show_platform_upgrade_actions_into_selection_edits_
                         UiShowPlatformUpgrade::Television => ShowPlatformUpgradeKind::Television,
                         UiShowPlatformUpgrade::Canopy => ShowPlatformUpgradeKind::Canopy,
                     };
-                    commands
-                        .entity(controller)
-                        .insert(SelectedShowPlatformUpgrade(selected_upgrade));
+                    let selection = SelectedShowPlatformUpgrade(selected_upgrade);
+                    if let Ok(mut current) = selected_upgrades.get_mut(controller) {
+                        current.set_if_neq(selection);
+                    } else {
+                        commands.entity(controller).insert(selection);
+                    }
                 }
                 UiShowAction::ResolvePlatformDeletion { confirmed } => {
                     if let Ok(pending_deletion) = pending_deletions.get(controller) {

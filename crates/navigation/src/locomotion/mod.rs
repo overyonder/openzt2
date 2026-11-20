@@ -66,11 +66,14 @@ impl Plugin for LocomotionPlugin {
             .init_resource::<SpatialGrid>()
             .add_message::<NavigateTo>()
             .add_message::<TestReachability>()
+            .add_message::<terrain_edit_navigation_refresh::NavigationTerrainGraphChanged>()
+            .add_message::<path_surface_navigation_projection::NavigationPathGraphChanged>()
             .add_message::<ReachabilityTested>()
             .add_message::<DockAt>()
             .add_message::<PursueEntity>()
             .add_message::<Arrived>()
             .add_message::<NavigationFailed>()
+            .add_message::<world_navigation_installation::NavigationGraphReplaced>()
             .add_message::<openzt2_zoo_state::terrain::terrain_navigation_change_types::TerrainNavigationRestored>()
             .add_systems(
                 Update,
@@ -100,6 +103,12 @@ impl Plugin for LocomotionPlugin {
                     .run_if(in_state(GamePhase::Loading)),
             )
             .add_systems(
+                Update,
+                path_surface_navigation_projection::project_elevated_path_colliders
+                    .in_set(openzt2_world_state::application_schedule::GameSet::Intent)
+                    .run_if(in_state(GamePhase::Loading)),
+            )
+            .add_systems(
                 FixedUpdate,
                 animal_water_contact::project_animal_water_contact.in_set(FixedGameSet::Clock),
             )
@@ -110,27 +119,40 @@ impl Plugin for LocomotionPlugin {
                         .in_set(AnimalAnimationNavigationProjection),
                     person_walk_animation::project_person_motion_to_walk_animation
                         .in_set(AnimalAnimationNavigationProjection),
-                    terrain_edit_navigation_refresh::
-                        refresh_navigation_graph_and_invalidate_routes_after_terrain_edits,
-                    path_surface_navigation_projection::project_path_surfaces_into_navigation_graph,
+                    terrain_edit_navigation_refresh::refresh_navigation_graph_after_terrain_edits,
+                    path_surface_navigation_projection::project_elevated_path_colliders,
+                    terrain_edit_navigation_refresh::invalidate_routes_after_navigation_geometry_changes
+                        .after_ignore_deferred(path_surface_navigation_projection::project_path_surfaces_into_navigation_graph),
+                    path_surface_navigation_projection::project_path_surfaces_into_navigation_graph
+                        .after(terrain_edit_navigation_refresh::refresh_navigation_graph_after_terrain_edits),
+                    topology_navigation_edge_invalidation::synchronize_fence_navigation_crossings
+                        .after_ignore_deferred(path_surface_navigation_projection::project_path_surfaces_into_navigation_graph),
                     tank_water_navigation_overlay::project_tank_water_onto_navigation_cells
+                        .after(path_surface_navigation_projection::project_path_surfaces_into_navigation_graph)
                         .run_if(in_state(GamePhase::InGame)),
-                    navigation_agent_initialization::
-                        initialize_navigation_agents_with_bounded_runtime_state,
-                    navigation_reachability_testing::
-                        test_requested_navigation_destination_reachability,
-                    // A refused pursuit requests its route for acceptance below.
+                    navigation_agent_initialization::initialize_navigation_agents_with_bounded_runtime_state
+                        .after(AnimalAnimationNavigationProjection),
+                    navigation_reachability_testing::test_requested_navigation_destination_reachability
+                        .after(navigation_agent_initialization::initialize_navigation_agents_with_bounded_runtime_state)
+                        .after_ignore_deferred(tank_water_navigation_overlay::project_tank_water_onto_navigation_cells)
+                        .after(topology_navigation_edge_invalidation::synchronize_fence_navigation_crossings)
+                        .run_if(on_message::<TestReachability>),
                     entity_pursuit_execution::accept_entity_pursuit_requests
-                        .in_set(NavigationRequestAcceptance),
-                    navigation_destination_request_execution::
-                        accept_navigation_destination_requests
-                        .in_set(NavigationRequestAcceptance),
-                    crate::locomotion::direct_docking_request_execution::accept_direct_docking_requests
-                        .in_set(NavigationRequestAcceptance),
-                    direct_locomotion_execution::
-                        clear_planned_navigation_state_for_direct_locomotion,
+                        .after(navigation_agent_initialization::initialize_navigation_agents_with_bounded_runtime_state)
+                        .after_ignore_deferred(tank_water_navigation_overlay::project_tank_water_onto_navigation_cells)
+                        .in_set(NavigationRequestAcceptance)
+                        .run_if(on_message::<PursueEntity>),
+                    navigation_destination_request_execution::accept_navigation_destination_requests
+                        .after(entity_pursuit_execution::accept_entity_pursuit_requests)
+                        .in_set(NavigationRequestAcceptance)
+                        .run_if(on_message::<NavigateTo>),
+                    direct_docking_request_execution::accept_direct_docking_requests
+                        .after(navigation_destination_request_execution::accept_navigation_destination_requests)
+                        .in_set(NavigationRequestAcceptance)
+                        .run_if(on_message::<DockAt>),
+                    direct_locomotion_execution::clear_planned_navigation_state_for_direct_locomotion
+                        .after(NavigationRequestAcceptance),
                 )
-                    .chain()
                     .in_set(FixedGameSet::Think),
             )
             .add_systems(
@@ -146,17 +168,25 @@ impl Plugin for LocomotionPlugin {
                 FixedUpdate,
                 (
                     entity_pursuit_execution::steer_entity_pursuits_toward_live_targets,
-                    crate::locomotion::animal_navigation_policy::invalidate_animal_routes_after_policy_changes,
+                    animal_navigation_policy::invalidate_animal_routes_after_policy_changes
+                        .after(entity_pursuit_execution::steer_entity_pursuits_toward_live_targets),
                     staff_tank_gate_navigation::receive_staff_tank_gate_events,
                     staff_tank_gate_navigation::resume_completed_staff_tank_gate_journeys,
-                    staff_tank_gate_navigation::begin_staff_tank_gate_journeys,
-                    changed_destination_route_planning::
-                        plan_routes_for_changed_navigation_destinations,
-                    behavior_evasion_steering::project_behavior_evasion_steering,
-                    local_steering_calculation::
-                        calculate_route_following_and_separation_steering,
+                    staff_tank_gate_navigation::begin_staff_tank_gate_journeys
+                        .after(staff_tank_gate_navigation::resume_completed_staff_tank_gate_journeys),
+                    changed_destination_route_planning::prepare_changed_navigation_destinations
+                        .after(animal_navigation_policy::invalidate_animal_routes_after_policy_changes)
+                        .after(staff_tank_gate_navigation::begin_staff_tank_gate_journeys),
+                    changed_destination_route_planning::admit_pending_route_searches
+                        .after(changed_destination_route_planning::prepare_changed_navigation_destinations),
+                    changed_destination_route_planning::advance_active_navigation_searches
+                        .after_ignore_deferred(changed_destination_route_planning::admit_pending_route_searches),
+                    behavior_evasion_steering::project_behavior_evasion_steering
+                        .after(entity_pursuit_execution::steer_entity_pursuits_toward_live_targets),
+                    local_steering_calculation::calculate_route_following_and_separation_steering
+                        .after(changed_destination_route_planning::advance_active_navigation_searches)
+                        .after_ignore_deferred(behavior_evasion_steering::project_behavior_evasion_steering),
                 )
-                    .chain()
                     .in_set(FixedGameSet::Navigate),
             )
             .add_systems(
@@ -178,14 +208,17 @@ impl Plugin for LocomotionPlugin {
             .add_systems(
                 FixedUpdate,
                 (
-                    topology_navigation_edge_invalidation::
-                        invalidate_routes_after_topology_changes,
-                    topology_navigation_edge_invalidation::synchronize_fence_navigation_crossings,
-                    crate::locomotion::spatial_index_and_docking_operations::rebuild_spatial_grid,
-                    crate::locomotion::spatial_index_and_docking_operations::detect_stuck_agents,
-                    crate::locomotion::spatial_index_and_docking_operations::complete_docking,
+                    topology_navigation_edge_invalidation::invalidate_routes_after_topology_changes,
+
+                    spatial_index_and_docking_operations::project_agent_spatial_membership,
+                    spatial_index_and_docking_operations::order_changed_spatial_cell_members
+                        .after(spatial_index_and_docking_operations::project_agent_spatial_membership),
+                    spatial_index_and_docking_operations::detect_stuck_agents
+                        .after_ignore_deferred(topology_navigation_edge_invalidation::invalidate_routes_after_topology_changes),
+                    spatial_index_and_docking_operations::complete_docking
+                        .after_ignore_deferred(spatial_index_and_docking_operations::detect_stuck_agents)
+                        .after_ignore_deferred(spatial_index_and_docking_operations::order_changed_spatial_cell_members),
                 )
-                    .chain()
                     .in_set(FixedGameSet::Cleanup),
             )
             .add_systems(

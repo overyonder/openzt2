@@ -18,12 +18,16 @@ pub struct PendingTransportVehiclePurchase {
 }
 
 #[derive(Component, Debug, Clone, Copy, PartialEq)]
+#[require(TransportVehicleArrival)]
 pub struct TransportVehicle {
     pub definition: AssetId,
     pub seats: u16,
     pub occupied: u16,
     pub maximum_speed_metres_per_second: f32,
 }
+
+#[derive(Component, Debug, Default)]
+pub struct TransportVehicleArrival(pub Option<Entity>);
 
 #[derive(Component, Debug, Clone, Copy, PartialEq)]
 pub struct RoutePosition {

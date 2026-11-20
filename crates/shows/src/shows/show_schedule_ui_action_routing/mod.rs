@@ -8,21 +8,17 @@ use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and
 use openzt2_interface_state::information::entity_selection_types::WorldUiSelection;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentRoot;
-use openzt2_world_state::world_spawn::persistent_id_assignment::AssignPersistentId;
-use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
 use super::{
-    show_editor_interaction_types::{AddShowConfirmationPending, DeleteShowConfirmationPending},
-    show_schedule_types::{
-        ScheduledShowBreakRow, ScheduledShowRow, SelectedShowScheduleRow, ShowScheduleRowOrder,
+    show_editor_interaction_types::{
+        AddShowConfirmationPending, DeleteShowConfirmationPending, EditedShow, ShowEditing,
     },
+    show_schedule_types::{SelectedShowScheduleRow, ShowStageRows},
     show_schedule_ui_mutation_operations::{
         create_scheduled_show_row_after_authored_confirmation,
         create_show_schedule_break_row_for_selected_stage,
         delete_confirmed_show_schedule_row_and_close_editor_selection,
-        move_selected_show_schedule_row_by_one_position,
-        request_authored_confirmation_for_selected_show_schedule_row_deletion,
-        show_selected_scheduled_show_in_read_only_editor,
+        move_show_schedule_row_by_one_position, AuthoredShowScheduleRowQuery,
     },
     show_stage_types::ShowStage,
 };
@@ -37,18 +33,8 @@ pub(super) struct AuthoredShowScheduleActionRoutingInputs<'w, 's> {
     scheduler_selection: Query<'w, 's, &'static SelectedShowScheduleRow>,
     add_confirmations: Query<'w, 's, &'static AddShowConfirmationPending>,
     delete_confirmations: Query<'w, 's, &'static DeleteShowConfirmationPending>,
-    scheduled: Query<
-        'w,
-        's,
-        (
-            Entity,
-            Option<&'static ScheduledShowRow>,
-            Option<&'static ScheduledShowBreakRow>,
-            Option<&'static ShowScheduleRowOrder>,
-        ),
-        Or<(With<ScheduledShowRow>, With<ScheduledShowBreakRow>)>,
-    >,
-    stage_members: Query<'w, 's, &'static WorldMember, With<ShowStage>>,
+    scheduled: AuthoredShowScheduleRowQuery<'w, 's>,
+    stage_rows: Query<'w, 's, &'static ShowStageRows>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -60,7 +46,6 @@ pub(super) fn route_authored_show_schedule_actions_into_rows_and_editor_selectio
     active_world_definitions: Res<WorldDefinitions>,
     selected: WorldUiSelection,
     inputs: AuthoredShowScheduleActionRoutingInputs,
-    mut persistent_ids: MessageWriter<AssignPersistentId>,
 ) {
     let AuthoredShowScheduleActionRoutingInputs {
         action_nodes,
@@ -69,8 +54,8 @@ pub(super) fn route_authored_show_schedule_actions_into_rows_and_editor_selectio
         scheduler_selection,
         add_confirmations,
         delete_confirmations,
-        scheduled,
-        stage_members,
+        mut scheduled,
+        stage_rows,
     } = inputs;
     for activation in activations.read() {
         let Ok((range, owner)) = action_nodes.get(activation.node) else {
@@ -92,6 +77,12 @@ pub(super) fn route_authored_show_schedule_actions_into_rows_and_editor_selectio
                 .entity(controller)
                 .insert(SelectedShowScheduleRow(entry));
         }
+        let schedule_selection = selected_schedule.or_else(|| {
+            scheduler_selection
+                .get(controller)
+                .ok()
+                .map(|selection| selection.0)
+        });
         let records = range.authored_action_records(document);
         for record in records {
             if activation.trigger != record.trigger {
@@ -114,37 +105,35 @@ pub(super) fn route_authored_show_schedule_actions_into_rows_and_editor_selectio
                             &add_confirmations,
                             &stages,
                             world_definitions,
-                            &scheduled,
-                            &stage_members,
                             &mut commands,
-                            &mut persistent_ids,
                         );
                     }
                 }
                 UiShowAction::RequestDeleteSelected => {
-                    request_authored_confirmation_for_selected_show_schedule_row_deletion(
-                        controller,
-                        selected_schedule,
-                        &scheduler_selection,
-                        &mut commands,
-                    );
+                    if let Some(entry) = schedule_selection {
+                        commands
+                            .entity(controller)
+                            .insert(DeleteShowConfirmationPending { entry });
+                    }
                 }
                 UiShowAction::DeleteSelected => {
                     delete_confirmed_show_schedule_row_and_close_editor_selection(
                         controller,
                         &delete_confirmations,
-                        &scheduled,
+                        &mut scheduled,
+                        &stage_rows,
                         &mut commands,
                     );
                 }
                 UiShowAction::ViewSelected => {
-                    show_selected_scheduled_show_in_read_only_editor(
-                        controller,
-                        selected_schedule,
-                        &scheduler_selection,
-                        &scheduled,
-                        &mut commands,
-                    );
+                    if let Some(row) = schedule_selection
+                        .filter(|&row| scheduled.get(row).is_ok_and(|(_, _, is_show)| is_show))
+                    {
+                        commands
+                            .entity(controller)
+                            .insert(EditedShow(row))
+                            .remove::<ShowEditing>();
+                    }
                 }
                 UiShowAction::AddBreak => {
                     if let Some(stage) = selected_stage {
@@ -153,32 +142,26 @@ pub(super) fn route_authored_show_schedule_actions_into_rows_and_editor_selectio
                         {
                             create_show_schedule_break_row_for_selected_stage(
                                 stage,
-                                &scheduled,
                                 world_definitions,
-                                &stage_members,
                                 &mut commands,
-                                &mut persistent_ids,
                             );
                         }
                     }
                 }
-                UiShowAction::MoveSelectedUp => {
-                    move_selected_show_schedule_row_by_one_position(
-                        controller,
-                        -1,
-                        &scheduler_selection,
-                        &scheduled,
-                        &mut commands,
-                    );
-                }
-                UiShowAction::MoveSelectedDown => {
-                    move_selected_show_schedule_row_by_one_position(
-                        controller,
-                        1,
-                        &scheduler_selection,
-                        &scheduled,
-                        &mut commands,
-                    );
+                UiShowAction::MoveSelectedUp | UiShowAction::MoveSelectedDown => {
+                    if let Some(row) = schedule_selection {
+                        let direction = if matches!(record.action, UiShowAction::MoveSelectedUp) {
+                            -1
+                        } else {
+                            1
+                        };
+                        move_show_schedule_row_by_one_position(
+                            row,
+                            direction,
+                            &mut scheduled,
+                            &stage_rows,
+                        );
+                    }
                 }
                 UiShowAction::ToggleSelectedEnabled
                 | UiShowAction::EditSelected

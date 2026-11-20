@@ -13,8 +13,8 @@ use super::{
         create_completed_staff_job_message, staff_member_owns_active_job,
     },
     maintenance_types::{
-        FacilityContainedWaste, IncrementalZooCleanlinessTotals,
-        LooseLitterSweepingStaffJobKindMarker, WasteContainerEmptyingStaffJobKindMarker,
+        FacilityContainedWaste, LooseLitterSweepingStaffJobKindMarker,
+        WasteContainerEmptyingStaffJobKindMarker,
     },
 };
 
@@ -28,7 +28,6 @@ pub(super) fn advance_active_staff_waste_container_emptying_jobs(
     >,
     staff_current_jobs: Query<&CurrentJob>,
     mut waste_container_targets: Query<&mut FacilityContainedWaste>,
-    mut cleanliness_totals: ResMut<IncrementalZooCleanlinessTotals>,
     mut completed_staff_jobs: MessageWriter<StaffJobCompleted>,
     mut cancelled_staff_job_requests: MessageWriter<CancelStaffJobRequest>,
 ) {
@@ -42,16 +41,15 @@ pub(super) fn advance_active_staff_waste_container_emptying_jobs(
         ) {
             continue;
         }
-        let Ok(mut waste_container) = waste_container_targets.get_mut(staff_job.target) else {
+        let Ok(waste_container) = waste_container_targets.get_mut(staff_job.target) else {
             cancelled_staff_job_requests.write(CancelStaffJobRequest {
                 job: staff_job_entity,
             });
             continue;
         };
-        let previous_waste_container = *waste_container;
-        waste_container.contained_waste_units = 0;
-        cleanliness_totals
-            .replace_facility_contained_waste(previous_waste_container, *waste_container);
+        waste_container
+            .map_unchanged(|waste| &mut waste.contained_waste_units)
+            .set_if_neq(0);
         completed_staff_jobs.write(create_completed_staff_job_message(
             staff_job_entity,
             staff_job,

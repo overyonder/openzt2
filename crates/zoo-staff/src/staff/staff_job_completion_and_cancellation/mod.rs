@@ -7,32 +7,37 @@ use openzt2_zoo_state::behavior_task_execution_types::abandon_behavior_task_for_
 use openzt2_zoo_state::maintenance::maintenance_types::AppliedHabitatWasteCleanup;
 
 use super::{
-    staff_employment_types::{AvailableForWork, Staff},
-    staff_job_types::{CurrentJob, JobClaim, JobProgress, StaffJob, StaffJobBehaviorTask},
+    staff_job_types::{JobClaim, StaffJob, StaffJobBehaviorTask, StaffJobCancellationPending},
     staff_lifecycle_messages::{CancelStaffJobRequest, StaffJobCancelled, StaffJobCompleted},
 };
 use openzt2_zoo_state::behavior_task_execution_types::AppliedBehaviorLitterKill;
 
+pub(super) fn mark_explicit_staff_job_cancellations(
+    mut commands: Commands,
+    mut requests: MessageReader<CancelStaffJobRequest>,
+    jobs: Query<(), With<StaffJob>>,
+) {
+    for request in requests.read() {
+        if jobs.contains(request.job) {
+            commands
+                .entity(request.job)
+                .insert_if_new(StaffJobCancellationPending);
+        }
+    }
+}
+
 pub(crate) fn release_staff_and_despawn_completed_jobs(
     mut commands: Commands,
     mut completed_jobs: MessageReader<StaffJobCompleted>,
-    staff: Query<&CurrentJob, With<Staff>>,
-    claims: Query<&JobClaim>,
+    claims: Query<&JobClaim, Without<StaffJobCancellationPending>>,
 ) {
     for completed_job in completed_jobs.read() {
         if claims
             .get(completed_job.job)
             .map_or(true, |claim| claim.staff != completed_job.staff)
-            || staff
-                .get(completed_job.staff)
-                .map_or(true, |current_job| current_job.job != completed_job.job)
         {
             continue;
         }
-        commands.entity(completed_job.staff).remove::<CurrentJob>();
-        commands
-            .entity(completed_job.staff)
-            .insert(AvailableForWork);
         commands.entity(completed_job.job).despawn();
     }
 }
@@ -47,8 +52,8 @@ pub fn cancel_requested_jobs_and_jobs_with_invalid_world_relations(
         Option<&StaffJobBehaviorTask>,
         Option<&AppliedHabitatWasteCleanup>,
         Option<&AppliedBehaviorLitterKill>,
+        Has<StaffJobCancellationPending>,
     )>,
-    staff: Query<(Entity, Option<&CurrentJob>), With<Staff>>,
     world_members: Query<(), With<WorldMember>>,
     dead_animals: Query<(), With<Dead>>,
     mut cancelled_jobs: MessageWriter<StaffJobCancelled>,
@@ -56,7 +61,7 @@ pub fn cancel_requested_jobs_and_jobs_with_invalid_world_relations(
 ) {
     explicitly_requested_jobs.clear();
     explicitly_requested_jobs.extend(cancellation_requests.read().map(|request| request.job));
-    for (job_entity, job, claim, behavior, applied_cleanup, applied_litter) in &jobs {
+    for (job_entity, job, claim, behavior, applied_cleanup, applied_litter, cancelling) in &jobs {
         let target_is_live = world_members.get(job.target).is_ok()
             && !(job.kind == StaffJobKind::Treat && dead_animals.contains(job.target));
         let target_was_consumed = claim.is_some()
@@ -68,22 +73,8 @@ pub fn cancel_requested_jobs_and_jobs_with_invalid_world_relations(
                 }
                 _ => false,
             });
-        let claimed_staff_is_valid = claim.is_none_or(|claim| {
-            staff.get(claim.staff).is_ok_and(|(_, current_job)| {
-                current_job.is_some_and(|current_job| current_job.job == job_entity)
-            })
-        });
-        if target_is_live
-            && !claimed_staff_is_valid
-            && !explicitly_requested_jobs.contains(&job_entity)
-        {
-            commands
-                .entity(job_entity)
-                .remove::<(JobClaim, StaffJobBehaviorTask, JobProgress)>();
-            continue;
-        }
         if (target_is_live || target_was_consumed)
-            && claimed_staff_is_valid
+            && !cancelling
             && !explicitly_requested_jobs.contains(&job_entity)
         {
             continue;
@@ -96,26 +87,8 @@ pub fn cancel_requested_jobs_and_jobs_with_invalid_world_relations(
             });
         }
         if let Some(claim) = claim {
-            if staff
-                .get(claim.staff)
-                .is_ok_and(|(_, current)| current.is_some_and(|current| current.job == job_entity))
-            {
-                abandon_behavior_task_for_reconsideration(claim.staff, &mut commands);
-                commands.entity(claim.staff).remove::<CurrentJob>();
-                commands.entity(claim.staff).insert(AvailableForWork);
-            }
+            abandon_behavior_task_for_reconsideration(claim.staff, &mut commands);
         }
-        commands.entity(job_entity).despawn();
-    }
-    for (staff_entity, current_job) in &staff {
-        let Some(current_job) = current_job else {
-            continue;
-        };
-        if jobs.get(current_job.job).is_ok() {
-            continue;
-        }
-        abandon_behavior_task_for_reconsideration(staff_entity, &mut commands);
-        commands.entity(staff_entity).remove::<CurrentJob>();
-        commands.entity(staff_entity).insert(AvailableForWork);
+        commands.entity(job_entity).try_despawn();
     }
 }

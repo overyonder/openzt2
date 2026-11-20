@@ -20,7 +20,7 @@ mod placed_object_removal_edit_application;
 mod placed_object_removal_edit_preparation;
 mod placed_object_terrain_support_reconciliation;
 mod scene_placement_footprint_indexing;
-mod stomped_object_edit_preparation;
+pub(crate) mod stomped_object_edit_preparation;
 
 use crate::placement::object_placement_edit_application::apply_prepared_object_placement_edits;
 use crate::placement::object_placement_or_relocation_edit_preparation::prepare_object_placement_or_relocation_edit;
@@ -84,9 +84,22 @@ impl Plugin for ObjectPlacementPlugin {
         app.add_message::<openzt2_zoo_state::placement::placement_transaction_types::DestroyPlacedObject>()
             .add_systems(
                 FixedUpdate,
-                placed_object_destruction::ruin_destroyed_placed_objects
+                (
+                    placed_object_destruction::mark_buildings_requested_for_destruction,
+                    placed_object_destruction::resolve_requested_building_destruction_assets
+                        .after(placed_object_destruction::mark_buildings_requested_for_destruction),
+                    placed_object_destruction::ruin_destroyed_placed_objects
+                        .after(placed_object_destruction::resolve_requested_building_destruction_assets),
+                )
                     .in_set(FixedGameSet::Act)
-                        .before(FixedConstructionSet::Apply)
+                    .before(FixedConstructionSet::Apply)
+                    .run_if(in_state(GamePhase::InGame)),
+            )
+            .add_systems(
+                PreUpdate,
+                placed_object_destruction::mark_waiting_building_destruction_assets_ready
+                    .after(WorldDefinitionPublicationSet)
+                    .after(scene_placement_footprint_indexing::index_scene_placement_footprints)
                     .run_if(in_state(GamePhase::InGame)),
             )
             .add_systems(

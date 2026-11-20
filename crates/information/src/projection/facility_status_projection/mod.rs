@@ -1,4 +1,4 @@
-use bevy::prelude::*;
+use bevy::{ecs::relationship::RelationshipTarget, prelude::*};
 use openzt2_game_data::ui_document::node_property_binding::UiIntegerPropertyBindingSource;
 
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner;
@@ -12,6 +12,7 @@ use openzt2_zoo_state::economy::facility_economy_types::MonthlyUpkeep;
 use openzt2_zoo_state::economy::facility_economy_types::OperatingSinceDay;
 use openzt2_zoo_state::economy::facility_economy_types::Price;
 use openzt2_zoo_state::economy::facility_economy_types::ServiceFacility;
+use openzt2_zoo_state::economy::service_types::FacilityReservations;
 
 use openzt2_interface_state::information::entity_selection_types::{InfoPanel, SelectedSubject};
 
@@ -22,6 +23,7 @@ pub(crate) fn project_selected_facility_status_to_visible_information_panels(
     facility_subjects: Query<(
         Option<&Price>,
         Option<&ServiceFacility>,
+        Option<&FacilityReservations>,
         Option<&Inventory>,
         Option<&MonthlyUpkeep>,
         Option<&FacilityProfit>,
@@ -42,7 +44,7 @@ pub(crate) fn project_selected_facility_status_to_visible_information_panels(
         if !inherited_visibility.get() {
             continue;
         }
-        let Ok((price, facility, inventory, upkeep, profit, opened, donations)) =
+        let Ok((price, facility, reservations, inventory, upkeep, profit, opened, donations)) =
             facility_subjects.get(selection.0)
         else {
             continue;
@@ -56,9 +58,10 @@ pub(crate) fn project_selected_facility_status_to_visible_information_panels(
             }
             let Some(next_value) = (match &property_binding.0 {
                 UiIntegerPropertyBindingSource::FacilityPriceCents => price.map(|price| price.0 .0),
-                UiIntegerPropertyBindingSource::FacilityCapacityUsed => {
-                    facility.map(|facility| i64::from(facility.occupied))
-                }
+                UiIntegerPropertyBindingSource::FacilityCapacityUsed => facility.map(|_| {
+                    i64::try_from(reservations.map_or(0, RelationshipTarget::len))
+                        .unwrap_or(i64::MAX)
+                }),
                 UiIntegerPropertyBindingSource::FacilityCapacityTotal => {
                     facility.map(|facility| i64::from(facility.capacity))
                 }

@@ -86,23 +86,38 @@ use super::fence_navigation_crossing_types::FenceNavigationCrossingIndex;
 
 pub(super) fn resume_completed_staff_tank_gate_journeys(
     mut commands: Commands,
-    actors: Query<(
+    mut actors: Query<(
         Entity,
         &TankGateResume,
         Option<(&BehaviorTaskExecutionState, &RunningBehaviorInstruction)>,
+        Option<&mut Destination>,
+        Option<&mut Docking>,
+        Option<&mut RigidBody>,
     )>,
 ) {
-    for (actor, resume, task) in &actors {
+    for (actor, resume, task, destination, docking, body) in &mut actors {
         commands.entity(actor).remove::<TankGateResume>();
         if task.is_some_and(|(task, step)| resume.instruction == step.id() && step.is_current(task))
         {
-            commands.entity(actor).insert(resume.goal);
-            if let Some(docking) = resume.docking {
-                commands.entity(actor).insert(docking);
+            if let Some(mut destination) = destination {
+                destination.set_if_neq(resume.goal);
+            } else {
+                commands.entity(actor).insert(resume.goal);
+            }
+            if let Some(saved_docking) = resume.docking {
+                if let Some(mut docking) = docking {
+                    docking.set_if_neq(saved_docking);
+                } else {
+                    commands.entity(actor).insert(saved_docking);
+                }
             }
         }
-        if let Some(body) = resume.body {
-            commands.entity(actor).insert(body);
+        if let Some(original) = resume.body {
+            if let Some(mut body) = body {
+                body.set_if_neq(original);
+            } else {
+                commands.entity(actor).insert(original);
+            }
         }
     }
 }
@@ -121,11 +136,17 @@ pub(super) fn begin_staff_tank_gate_journeys(
     surfaces: DrySurfaceEligibility,
     habitats: Res<HabitatIndex>,
     grid: Res<TopologyGrid>,
-    tanks: Query<(&TankGeometry, &HabitatRegion, &WorldMember), With<Tank>>,
     gates: Query<(&FenceEdge, &Gate)>,
-    nodes: Query<&TopologyNode>,
     mut sequence: ResMut<NavigationRequestSequence>,
-    mut scratch: Local<RouteScratch>,
+    (mut scratch, mut candidate_route): (Local<RouteScratch>, Local<Option<Route>>),
+    (terrain_index, terrain_assets, terrain_chunks, tanks, nodes): (
+        Res<openzt2_zoo_state::terrain::terrain_chunk_types::TerrainIndex>,
+        Res<Assets<openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset>>,
+        Query<(&openzt2_zoo_state::terrain::terrain_chunk_types::TerrainChunk,
+            Option<&openzt2_zoo_state::terrain::terrain_chunk_types::EditedTerrainSamples>)>,
+        Query<(&TankGeometry, &HabitatRegion, &WorldMember), With<Tank>>,
+        Query<&TopologyNode>,
+    ),
     mut actors: Query<
         (
             Entity,
@@ -157,6 +178,15 @@ pub(super) fn begin_staff_tank_gate_journeys(
         navigation.navigation_node_count(),
         capacity.max_route_points,
     );
+    let candidate_route =
+        candidate_route.get_or_insert_with(|| Route::with_capacity(capacity.max_route_points));
+    if candidate_route.points.capacity() < capacity.max_route_points {
+        candidate_route.points.reserve(
+            capacity
+                .max_route_points
+                .saturating_sub(candidate_route.points.len()),
+        );
+    }
     for (actor, transform, agent, mode, (task, step), world, mut destination, mut route, docking) in
         &mut actors
     {
@@ -197,7 +227,7 @@ pub(super) fn begin_staff_tank_gate_journeys(
         }
         let leaving = source_tank.is_some();
         let mut selected: Option<(Entity, Vec3, Vec3, f32)> = None;
-        let mut candidate_route = Route::with_capacity(capacity.max_route_points);
+
         for &gate_entity in &region.boundary_fence_entities {
             let Ok((edge, gate)) = gates.get(gate_entity) else {
                 continue;
@@ -252,6 +282,13 @@ pub(super) fn begin_staff_tank_gate_journeys(
             };
             first.y = first_y;
             second.y = second_y;
+            let distance = position.distance_squared(first);
+            if selected
+                .as_ref()
+                .is_some_and(|(_, _, _, best)| distance >= *best)
+            {
+                continue;
+            }
             if plan_route(
                 navigation,
                 tank_water,
@@ -280,7 +317,7 @@ pub(super) fn begin_staff_tank_gate_journeys(
                 None,
                 position,
                 first,
-                &mut candidate_route,
+                candidate_route,
                 &mut scratch,
                 crate::locomotion::pathfinding::PRIORITY_PATH_ITERATIONS,
             )
@@ -288,13 +325,8 @@ pub(super) fn begin_staff_tank_gate_journeys(
             {
                 continue;
             }
-            let distance = position.distance_squared(first);
-            if selected
-                .as_ref()
-                .is_none_or(|(_, _, _, best)| distance < *best)
-            {
-                selected = Some((gate_entity, first, second, distance));
-            }
+            selected = Some((gate_entity, first, second, distance));
+            route.clone_from(candidate_route);
         }
         let Some((gate, entry, exit, _)) = selected else {
             failures.write(NavigationFailed {
@@ -313,9 +345,27 @@ pub(super) fn begin_staff_tank_gate_journeys(
             world: entry,
             arrival_radius_m: agent.radius_m.max(0.1),
         };
-        route.clear();
+        if agent
+            .capabilities
+            .contains(openzt2_zoo_state::locomotion::locomotion_types::NavFlags::AMPHIBIOUS)
+        {
+            for point in &mut route.points {
+                super::spatial_index_and_docking_operations::fit_to_terrain(
+                    LocomotionMode::Swim,
+                    point,
+                    &terrain_index,
+                    &terrain_assets,
+                    &terrain_chunks,
+                );
+            }
+        }
         commands
             .entity(actor)
+            .insert(
+                openzt2_zoo_state::locomotion::locomotion_types::RestoredNavigationRoute {
+                    request_id: request,
+                },
+            )
             .insert(TankGateJourney {
                 instruction: step.id(),
                 gate,
@@ -399,7 +449,7 @@ pub(super) fn execute_staff_tank_gate_journeys(
         Option<&Destination>,
         Has<PendingBehaviorTaskFailure>,
         &mut TankGateJourney,
-        Option<&RigidBody>,
+        Option<&mut RigidBody>,
         Option<&mut LinearVelocity>,
     )>,
     mut controllers: Query<(
@@ -447,8 +497,12 @@ pub(super) fn execute_staff_tank_gate_journeys(
                 StaffClimbingTankGate,
                 BehaviorHeldAnimationClip,
             )>();
-            if let Some(body) = journey.previous_body {
-                commands.entity(actor).insert(body);
+            if let Some(original) = journey.previous_body {
+                if let Some(mut body) = body {
+                    body.set_if_neq(original);
+                } else {
+                    commands.entity(actor).insert(original);
+                }
             }
             for (controller, owner, playback, _) in &mut controllers {
                 if owner.gameplay_entity == actor
@@ -476,9 +530,9 @@ pub(super) fn execute_staff_tank_gate_journeys(
             continue;
         };
         if journey.previous_body.is_none() {
-            if let Some(body) = body {
+            if let Some(mut body) = body {
                 journey.previous_body = Some(*body);
-                commands.entity(actor).insert(RigidBody::Kinematic);
+                body.set_if_neq(RigidBody::Kinematic);
             }
         }
         if let Some(mut velocity) = velocity {

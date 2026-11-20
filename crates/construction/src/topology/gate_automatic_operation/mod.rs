@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use bevy::prelude::*;
 
 use openzt2_zoo_state::locomotion::locomotion_types::SpatialGrid;
@@ -9,16 +11,39 @@ use openzt2_zoo_state::topology::gate_operation_types::GateMechanism;
 use openzt2_zoo_state::topology::gate_operation_types::SetGateState;
 use openzt2_zoo_state::topology::topology_graph_types::FenceEdge;
 
-pub(super) fn advance_gate_automatic_close_countdowns(
+pub(super) fn arm_gate_automatic_close_timer(
+    commands: &mut Commands,
+    gate: Entity,
+    timer: Option<Mut<GateAutoClose>>,
+    ticks: u32,
+    time: &Time<Fixed>,
+) {
+    if ticks == 0 {
+        if timer.is_some() {
+            commands.entity(gate).remove::<GateAutoClose>();
+        }
+        return;
+    }
+    let duration = time.timestep().saturating_mul(ticks);
+    if let Some(mut timer) = timer {
+        timer.0.set_duration(duration);
+        timer.0.reset();
+    } else {
+        commands
+            .entity(gate)
+            .insert(GateAutoClose(Timer::new(duration, TimerMode::Once)));
+    }
+}
+
+pub(super) fn tick_armed_gate_automatic_close_timers(
+    mut commands: Commands,
+    time: Res<Time<Fixed>>,
     mut gates: Query<(Entity, &Gate, &mut GateAutoClose)>,
     mut requests: MessageWriter<SetGateState>,
 ) {
-    for (gate_entity, gate, mut automatic_close) in &mut gates {
-        if !gate.open || automatic_close.0 == 0 {
-            continue;
-        }
-        automatic_close.0 -= 1;
-        if automatic_close.0 == 0 {
+    for (gate_entity, gate, mut timer) in &mut gates {
+        if gate.open && timer.0.tick(time.delta()).just_finished() {
+            commands.entity(gate_entity).remove::<GateAutoClose>();
             requests.write(SetGateState {
                 gate: gate_entity,
                 open: false,
@@ -30,6 +55,7 @@ pub(super) fn advance_gate_automatic_close_countdowns(
 /// Polls eligible authored actor types, opening at the inner radius and closing
 /// only after those actors have left the outer radius.
 pub(super) fn request_open_gates_for_agents_within_authored_trigger_distance(
+    mut commands: Commands,
     time: Res<Time<Fixed>>,
     spatial_grid: Res<SpatialGrid>,
     actor_types: GateActorTypeQueries,
@@ -74,19 +100,13 @@ pub(super) fn request_open_gates_for_agents_within_authored_trigger_distance(
             continue;
         }
         if policy.poll_interval_ns != 0 {
-            let interval = std::time::Duration::from_nanos(policy.poll_interval_ns);
-            mechanism.elapsed_poll_time = mechanism.elapsed_poll_time.saturating_add(time.delta());
-            if mechanism.elapsed_poll_time < interval {
+            let interval = Duration::from_nanos(policy.poll_interval_ns);
+            if mechanism.0.duration() != interval {
+                mechanism.0.set_duration(interval);
+            }
+            if !mechanism.0.tick(time.delta()).just_finished() {
                 continue;
             }
-            // Fixed ticks can span several polls, but one observation of live
-            // positions is sufficient. Retain the sub-interval remainder.
-            mechanism.elapsed_poll_time = std::time::Duration::from_nanos(
-                u64::try_from(
-                    mechanism.elapsed_poll_time.as_nanos() % u128::from(policy.poll_interval_ns),
-                )
-                .expect("poll remainder fits authored interval"),
-            );
         }
         let position = transform.translation();
         let center = Vec2::new(position.x, position.z);
@@ -138,9 +158,13 @@ pub(super) fn request_open_gates_for_agents_within_authored_trigger_distance(
             continue;
         }
         if gate.open {
-            if let Some(mut automatic_close) = automatic_close {
-                automatic_close.0 = policy.auto_close_ticks;
-            }
+            arm_gate_automatic_close_timer(
+                &mut commands,
+                gate_entity,
+                automatic_close,
+                policy.auto_close_ticks,
+                &time,
+            );
         } else {
             requests.write(SetGateState {
                 gate: gate_entity,

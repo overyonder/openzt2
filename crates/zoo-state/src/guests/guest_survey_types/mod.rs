@@ -27,9 +27,23 @@ pub struct GuestSurveyRatingHistory {
     pub daily_counts: [u32; GUEST_SURVEY_DAYS],
 }
 
+#[derive(Component, Debug, Clone, Copy, Default, PartialEq)]
+pub struct GuestSurveyNeedCadence(pub f32);
+
+impl GuestSurveyNeedCadence {
+    pub fn sample_after_thinker(&mut self, delta_seconds: f32, interval_seconds: f32) -> bool {
+        if self.0 > 0.0 {
+            self.0 -= delta_seconds;
+            false
+        } else {
+            self.0 = interval_seconds;
+            true
+        }
+    }
+}
+
 #[derive(Resource, Debug, Clone, Copy, PartialEq)]
 pub struct GuestSurvey {
-    pub critical_need_countdown_seconds: f32,
     pub previous_day_of_month: i32,
     pub current_day_of_month: i32,
     pub ratings: [GuestSurveyRatingHistory; GUEST_SURVEY_RATINGS],
@@ -38,7 +52,6 @@ pub struct GuestSurvey {
 impl Default for GuestSurvey {
     fn default() -> Self {
         Self {
-            critical_need_countdown_seconds: 0.0,
             previous_day_of_month: -1,
             current_day_of_month: -1,
             ratings: [GuestSurveyRatingHistory::default(); GUEST_SURVEY_RATINGS],
@@ -47,17 +60,6 @@ impl Default for GuestSurvey {
 }
 
 impl GuestSurvey {
-    /// Called once for the guest whose thinker is executing.
-    pub fn sample_guest_needs_now(&mut self, delta_seconds: f32, interval_seconds: f32) -> bool {
-        if self.critical_need_countdown_seconds > 0.0 {
-            self.critical_need_countdown_seconds -= delta_seconds;
-            false
-        } else {
-            self.critical_need_countdown_seconds = interval_seconds;
-            true
-        }
-    }
-
     pub fn advance_day_of_month(&mut self, day: u8) {
         let Some(index) = day
             .checked_sub(1)
@@ -211,14 +213,11 @@ mod tests {
 
     #[test]
     fn shared_countdown_samples_only_on_a_later_guest_call_after_crossing_zero() {
-        let mut survey = GuestSurvey {
-            critical_need_countdown_seconds: 0.1,
-            ..Default::default()
-        };
-        assert!(!survey.sample_guest_needs_now(0.2, 5.0));
-        assert_eq!(survey.critical_need_countdown_seconds, -0.1);
-        assert!(survey.sample_guest_needs_now(0.2, 5.0));
-        assert_eq!(survey.critical_need_countdown_seconds, 5.0);
+        let mut cadence = GuestSurveyNeedCadence(0.1);
+        assert!(!cadence.sample_after_thinker(0.2, 5.0));
+        assert_eq!(cadence.0, -0.1);
+        assert!(cadence.sample_after_thinker(0.2, 5.0));
+        assert_eq!(cadence.0, 5.0);
     }
 
     #[test]
@@ -226,7 +225,6 @@ mod tests {
         let mut survey = GuestSurvey {
             previous_day_of_month: 9,
             current_day_of_month: 1,
-            critical_need_countdown_seconds: 5.0,
             ..Default::default()
         };
         let history = &mut survey.ratings[GuestSurveyRating::Food as usize];
@@ -249,7 +247,6 @@ mod tests {
         assert_eq!(history.cumulative_count, 3);
         assert_eq!(survey.previous_day_of_month, 1);
         assert_eq!(survey.current_day_of_month, 2);
-        assert_eq!(survey.critical_need_countdown_seconds, 5.0);
         survey.record_rating(GuestSurveyRating::Food, 25.0);
         assert_eq!(
             survey.ratings[GuestSurveyRating::Food as usize].cumulative_rating,

@@ -1,29 +1,22 @@
 use bevy::prelude::*;
-
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
-use super::{staff_assignment_types::StaffAssignment, staff_employment_types::Staff};
+use super::staff_assignment_types::{StaffAssignedToArea, StaffAssignedToTarget};
 
-/// Removes dead world relationships from the canonical assignment component.
-///
-/// Assignment targets are restrictions, not ownership handles. Deleting an
-/// area or target makes the worker generally available again.
-pub(crate) fn clear_assignments_to_despawned_world_entities(
-    mut staff_assignments: Query<&mut StaffAssignment, With<Staff>>,
-    world_entities: Query<(), With<WorldMember>>,
+pub(super) fn release_staff_restrictions_when_target_leaves_world(
+    removed: On<Remove<WorldMember>>,
+    areas: Query<(), With<StaffAssignedToArea>>,
+    targets: Query<(), With<StaffAssignedToTarget>>,
+    mut commands: Commands,
 ) {
-    for mut staff_assignment in &mut staff_assignments {
-        if staff_assignment
-            .area
-            .is_some_and(|area| world_entities.get(area).is_err())
-        {
-            staff_assignment.area = None;
-        }
-        if staff_assignment
-            .target
-            .is_some_and(|target| world_entities.get(target).is_err())
-        {
-            staff_assignment.target = None;
-        }
+    if areas.contains(removed.entity) {
+        commands
+            .entity(removed.entity)
+            .try_remove::<StaffAssignedToArea>();
+    }
+    if targets.contains(removed.entity) {
+        commands
+            .entity(removed.entity)
+            .try_remove::<StaffAssignedToTarget>();
     }
 }

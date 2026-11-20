@@ -103,8 +103,9 @@ pub(crate) fn project_selected_animal_identity_health_and_action_summary(
         ),
         With<Animal>,
     >,
-    mut text_nodes: Query<(&UiTextBinding, &mut Text)>,
-    mut visibility_nodes: Query<(&UiVisibleBinding, &mut Visibility)>,
+    panels: Query<(), With<InfoPanel>>,
+    mut text_nodes: Query<(&UiDocumentOwner, &UiTextBinding, &mut Text)>,
+    mut visibility_nodes: Query<(&UiDocumentOwner, &UiVisibleBinding, &mut Visibility)>,
     mut interaction_nodes: Query<(
         &UiEnabledBinding,
         &mut UiInteractionEnabled,
@@ -135,12 +136,16 @@ pub(crate) fn project_selected_animal_identity_health_and_action_summary(
         })
     };
 
-    for (text_binding, mut text) in &mut text_nodes {
+    for (owner, text_binding, mut text) in &mut text_nodes {
         let projected_text = match &text_binding.0 {
-            UiTextPropertyBindingSource::SelectedEntityName => {
+            UiTextPropertyBindingSource::SelectedEntityName if !panels.contains(owner.0) => {
                 name.map(Name::as_str).or(selected_definition_name)
             }
-            UiTextPropertyBindingSource::SelectedEntityDefinitionName => selected_definition_name,
+            UiTextPropertyBindingSource::SelectedEntityDefinitionName
+                if !panels.contains(owner.0) =>
+            {
+                selected_definition_name
+            }
             UiTextPropertyBindingSource::AnimalDiseaseName => {
                 disease.and_then(|disease| localized_definition_name(disease.definition))
             }
@@ -154,7 +159,10 @@ pub(crate) fn project_selected_animal_identity_health_and_action_summary(
         }
     }
 
-    for (visibility_binding, mut visibility) in &mut visibility_nodes {
+    for (owner, visibility_binding, mut visibility) in &mut visibility_nodes {
+        if panels.contains(owner.0) {
+            continue;
+        }
         let should_be_visible = match &visibility_binding.0 {
             UiBooleanPropertyBindingSource::AnimalDiseased => disease.is_some(),
             UiBooleanPropertyBindingSource::AnimalUnderTreatment => treatment.is_some(),
@@ -164,11 +172,11 @@ pub(crate) fn project_selected_animal_identity_health_and_action_summary(
             UiBooleanPropertyBindingSource::AnimalDead => dead,
             _ => continue,
         };
-        *visibility = if should_be_visible {
+        visibility.set_if_neq(if should_be_visible {
             Visibility::Inherited
         } else {
             Visibility::Hidden
-        };
+        });
     }
 
     for (enabled_binding, mut interaction_enabled, focusable, mut pickable) in
@@ -182,7 +190,7 @@ pub(crate) fn project_selected_animal_identity_health_and_action_summary(
             UiBooleanPropertyBindingSource::AnimalDead => !dead,
             _ => continue,
         };
-        interaction_enabled.0 = should_be_enabled;
+        interaction_enabled.set_if_neq(UiInteractionEnabled(should_be_enabled));
         if let Some(mut focusable) = focusable {
             focusable.enabled = should_be_enabled;
         }

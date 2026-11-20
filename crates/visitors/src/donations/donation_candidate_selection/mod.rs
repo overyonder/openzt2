@@ -20,6 +20,7 @@ use super::{
     donation_guest_decision_calculations::{
         calculate_eligible_donation_amount, create_donation_candidate_from_observation,
     },
+    donation_opportunity_observation::PendingDonationObservation,
     donation_opportunity_types::{DonationAcceptor, DonationOpportunity, DonationUsePoint},
     donation_payment_types::DonationPaymentRequested,
 };
@@ -32,7 +33,8 @@ pub(super) fn choose_donation_candidates_from_new_guest_observations(
             &GlobalTransform,
             &Wallet,
             &NavAgent,
-            &DonationObservation,
+            &mut PendingDonationObservation,
+            Option<&Children>,
             &Viewing,
             &GuestPhase,
             &WorldMember,
@@ -56,12 +58,26 @@ pub(super) fn choose_donation_candidates_from_new_guest_observations(
         &WorldMember,
     )>,
     subjects: Query<&WorldMember, With<DonationOpportunity>>,
+    clock: Res<openzt2_world_state::simulation_time::simulation_clock_types::ZooClock>,
+    tokens: Query<&openzt2_zoo_state::animal_behavior::behavior_token_types::BehaviorSelfToken>,
     mut navigation_request_sequence: ResMut<NavigationRequestSequence>,
     mut docking_requests: MessageWriter<DockAt>,
 ) {
-    for (guest, guest_transform, wallet, navigation_agent, observation, viewing, phase, world) in
-        &mut guests
+    for (
+        guest,
+        guest_transform,
+        wallet,
+        navigation_agent,
+        mut pending,
+        tokens_owned,
+        viewing,
+        phase,
+        world,
+    ) in &mut guests
     {
+        let Some(observation) = pending.0 else {
+            continue;
+        };
         if *phase != GuestPhase::Visiting
             || *viewing != observation.viewing
             || !subjects
@@ -72,23 +88,36 @@ pub(super) fn choose_donation_candidates_from_new_guest_observations(
         }
         let Some((acceptor, use_point)) = find_nearest_matching_donation_acceptor(
             guest_transform.translation(),
-            *observation,
+            observation,
             world.root,
             &acceptors,
+            |acceptor| {
+                tokens_owned.is_some_and(|children| {
+                    children.iter().any(|child| {
+                        tokens.get(child).is_ok_and(|token| {
+                            token.name
+                                == super::donation_payment_settlement::donation_timeout_token_name()
+                                && token.payload == Some(acceptor)
+                                && token.available_at <= clock.tick
+                                && token.expires_at > clock.tick
+                        })
+                    })
+                })
+            },
         ) else {
             continue;
         };
 
-        let Some(amount) = calculate_eligible_donation_amount(wallet.0, *observation) else {
+        let Some(amount) = calculate_eligible_donation_amount(wallet.0, observation) else {
             continue;
         };
 
         let navigation_request_id = navigation_request_sequence.next();
+        pending.0 = None;
         commands
             .entity(guest)
-            .remove::<DonationObservation>()
             .insert(create_donation_candidate_from_observation(
-                *observation,
+                observation,
                 acceptor,
                 amount,
                 navigation_request_id,
@@ -115,6 +144,7 @@ fn find_nearest_matching_donation_acceptor(
         &GlobalTransform,
         &WorldMember,
     )>,
+    has_donation_timeout: impl Fn(Entity) -> bool,
 ) -> Option<(Entity, DonationUsePoint)> {
     let maximum_distance = observation.acceptor_radius_cm as f32 / 100.0;
     let maximum_distance_squared = maximum_distance * maximum_distance;
@@ -133,7 +163,10 @@ fn find_nearest_matching_donation_acceptor(
         {
             continue;
         }
-        if !use_point.local_point.is_finite() || !use_point.local_forward.is_finite() {
+        if has_donation_timeout(acceptor_entity)
+            || !use_point.local_point.is_finite()
+            || !use_point.local_forward.is_finite()
+        {
             continue;
         }
 

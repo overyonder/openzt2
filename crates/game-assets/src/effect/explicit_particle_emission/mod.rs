@@ -3,7 +3,9 @@ use bevy_hanabi::{ParticleAliveCount, ParticleSpawnBatch, ParticleSpawnPoint};
 use openzt2_game_data::{particle::particle_emission_point::ParticleEmissionPoint, AssetId};
 
 use super::{
-    effect_runtime_types::{ParticleEffectGraphReady, PendingEffectInstance},
+    effect_runtime_types::{
+        EffectRetirementReadback, ParticleEffectGraphReady, PendingEffectInstance,
+    },
     ParticleEffectDocumentAsset,
 };
 
@@ -85,8 +87,10 @@ pub(crate) fn prepare_explicit_particle_emitters(
 }
 
 pub(super) fn upload_explicit_particle_emission_points(
+    mut commands: Commands,
     mut requests: MessageReader<AppendParticleEffectPoints>,
     mut emitters: Query<(
+        Entity,
         &mut ParticleEffectPointEmitter,
         Has<ParticleEffectGraphReady>,
         Option<&mut ParticleSpawnBatch>,
@@ -95,11 +99,11 @@ pub(super) fn upload_explicit_particle_emission_points(
     )>,
 ) {
     for request in requests.read() {
-        if let Ok((mut emitter, ..)) = emitters.get_mut(request.emitter) {
+        if let Ok((_, mut emitter, ..)) = emitters.get_mut(request.emitter) {
             emitter.queued_points.extend_from_slice(&request.points);
         }
     }
-    for (mut emitter, ready, batch, spawner, size_scale) in &mut emitters {
+    for (entity, mut emitter, ready, batch, spawner, size_scale) in &mut emitters {
         if let Some(mut size_scale) = size_scale {
             size_scale.0 = emitter.size_scale;
         }
@@ -125,8 +129,12 @@ pub(super) fn upload_explicit_particle_emission_points(
                 }),
         );
         spawner.spawn_count = u32::try_from(batch.points.len()).expect("particle batch fits u32");
-        spawner.spawn_count = spawner
-            .spawn_count
-            .max(std::mem::take(&mut emitter.pending_manual_count));
+        let single_mesh_particle = std::mem::take(&mut emitter.pending_manual_count);
+        spawner.spawn_count = spawner.spawn_count.max(single_mesh_particle);
+        if single_mesh_particle > 0 {
+            commands
+                .entity(entity)
+                .insert(EffectRetirementReadback::WaitingForParticles);
+        }
     }
 }

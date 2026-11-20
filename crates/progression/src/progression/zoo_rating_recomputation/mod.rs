@@ -1,28 +1,17 @@
 use std::collections::BTreeSet;
-use openzt2_game_data::world_definitions::catalogue_and_progression::zoo_rating_fame_and_award_definition_types::RatingInputKind;
 
 use bevy::prelude::*;
+use openzt2_game_data::world_definitions::catalogue_and_progression::zoo_rating_fame_and_award_definition_types::RatingInputKind;
 
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
-use openzt2_zoo_state::animal_health::types::AnimalDied;
 use openzt2_zoo_state::animal_health::types::Dead;
-use openzt2_zoo_state::animal_lifecycle::animal_adoption_contracts::AnimalAdopted;
-use openzt2_zoo_state::animal_lifecycle::animal_birth_and_release_contracts::AnimalBorn;
-use openzt2_zoo_state::animal_lifecycle::animal_birth_and_release_contracts::AnimalReleased;
-use openzt2_zoo_state::animal_lifecycle::types::Animal;
-use openzt2_zoo_state::animal_lifecycle::types::SpeciesHandle;
+use openzt2_zoo_state::animal_lifecycle::types::{Animal, SpeciesHandle};
 use openzt2_zoo_state::animal_welfare::types::AnimalWelfare;
 use openzt2_zoo_state::economy::zoo_cash_types::ZooCash;
-use openzt2_zoo_state::guests::guest_simulation_types::Guest;
-use openzt2_zoo_state::guests::guest_simulation_types::GuestArrived;
-use openzt2_zoo_state::guests::guest_simulation_types::GuestDeparted;
-use openzt2_zoo_state::guests::guest_simulation_types::GuestEducation;
-use openzt2_zoo_state::guests::guest_simulation_types::GuestReaction;
-use openzt2_zoo_state::guests::guest_simulation_types::GuestSatisfaction;
+use openzt2_zoo_state::guests::guest_simulation_types::{Guest, GuestEducation, GuestSatisfaction};
 use openzt2_zoo_state::maintenance::maintenance_types::ZooCleanlinessPermille;
 use openzt2_zoo_state::placement::placed_object_types::PlacedObjectDefinitionReference;
-use openzt2_zoo_state::placement::placement_transaction_types::ObjectPlacementCommitted;
 
 use super::{
     award_and_progression_fact_types::ProgressionFactChanged,
@@ -32,236 +21,257 @@ use super::{
         normalize_zoo_rating_input_for_kind, select_zoo_rating_input,
         smooth_zoo_rating_toward_target,
     },
+    zoo_rating_input_types::{
+        AnimalWelfareRating, GuestRatingFacts, LivingAnimalPopulation, ZooFinanceRating,
+        ZooOverallRatingTarget, ZooSceneryRating,
+    },
 };
 
-fn message_reader_contains_any_unread_message<T: Message>(
-    message_reader: &mut MessageReader<T>,
-) -> bool {
-    let mut contains_unread_message = false;
-    for _ in message_reader.read() {
-        contains_unread_message = true;
-    }
-    contains_unread_message
-}
-
-fn update_zoo_rating_field_and_publish_change(
-    rating_field: &mut u16,
-    next_value: u16,
-    changed_progression_facts: &mut MessageWriter<ProgressionFactChanged>,
+pub(super) fn reduce_living_animal_population(
+    living: Query<&SpeciesHandle, (With<Animal>, Without<Dead>)>,
+    changed: Query<
+        (),
+        (
+            With<Animal>,
+            Or<(Added<Animal>, Changed<SpeciesHandle>, Added<Dead>)>,
+        ),
+    >,
+    mut removed_animals: RemovedComponents<Animal>,
+    mut removed_species: RemovedComponents<SpeciesHandle>,
+    mut removed_dead: RemovedComponents<Dead>,
+    mut population: ResMut<LivingAnimalPopulation>,
 ) {
-    if *rating_field != next_value {
-        *rating_field = next_value;
-        changed_progression_facts.write(ProgressionFactChanged::Rating);
-    }
-}
-
-pub(super) fn recompute_animal_welfare_rating(
-    changed_welfare: Query<(), (With<Animal>, Without<Dead>, Changed<AnimalWelfare>)>,
-    mut removed_welfare: RemovedComponents<AnimalWelfare>,
-    mut released: MessageReader<AnimalReleased>,
-    mut died: MessageReader<AnimalDied>,
-    animals: Query<&AnimalWelfare, (With<Animal>, Without<Dead>)>,
-    mut rating: ResMut<ZooRating>,
-    mut changed: MessageWriter<ProgressionFactChanged>,
-) {
-    let removed = removed_welfare.read().count() != 0;
-    let released = message_reader_contains_any_unread_message(&mut released);
-    let died = message_reader_contains_any_unread_message(&mut died);
-    if changed_welfare.is_empty() && !removed && !released && !died {
-        return;
-    }
-    update_zoo_rating_field_and_publish_change(
-        &mut rating.animal_welfare_permille,
-        calculate_mean_permille(animals.iter().map(|value| value.0)),
-        &mut changed,
-    );
-}
-
-pub(super) fn recompute_guest_ratings(
-    mut arrived: MessageReader<GuestArrived>,
-    mut departed: MessageReader<GuestDeparted>,
-    mut reactions: MessageReader<GuestReaction>,
-    satisfaction: Query<&GuestSatisfaction, With<Guest>>,
-    education: Query<&GuestEducation, With<Guest>>,
-    mut rating: ResMut<ZooRating>,
-    mut changed: MessageWriter<ProgressionFactChanged>,
-) {
-    if arrived.is_empty() && departed.is_empty() && reactions.is_empty() {
-        return;
-    }
-    arrived.clear();
-    departed.clear();
-    reactions.clear();
-    update_zoo_rating_field_and_publish_change(
-        &mut rating.guest_satisfaction_permille,
-        calculate_mean_permille(satisfaction.iter().map(|value| value.0)),
-        &mut changed,
-    );
-    update_zoo_rating_field_and_publish_change(
-        &mut rating.education_permille,
-        calculate_mean_permille(education.iter().map(|value| value.0)),
-        &mut changed,
-    );
-}
-
-pub(super) fn recompute_variety_rating(
-    mut adopted: MessageReader<AnimalAdopted>,
-    mut born: MessageReader<AnimalBorn>,
-    mut released: MessageReader<AnimalReleased>,
-    mut died: MessageReader<AnimalDied>,
-    definitions: Res<Assets<WorldDefinitionAsset>>,
-    active_definitions: Res<WorldDefinitions>,
-    animals: Query<&SpeciesHandle, (With<Animal>, Without<Dead>)>,
-    mut rating: ResMut<ZooRating>,
-    mut changed: MessageWriter<ProgressionFactChanged>,
-) {
-    if !message_reader_contains_any_unread_message(&mut adopted)
-        && !message_reader_contains_any_unread_message(&mut born)
-        && !message_reader_contains_any_unread_message(&mut released)
-        && !message_reader_contains_any_unread_message(&mut died)
+    let animals_removed = removed_animals.read().count() != 0;
+    let species_removed = removed_species.read().count() != 0;
+    let deaths_removed = removed_dead.read().count() != 0;
+    if !population.is_added()
+        && changed.is_empty()
+        && !animals_removed
+        && !species_removed
+        && !deaths_removed
     {
         return;
     }
-    let Some(definitions) = active_definitions.get(&definitions) else {
+    let mut species = BTreeSet::new();
+    let mut animals = 0_u32;
+    for animal in &living {
+        animals = animals.saturating_add(1);
+        species.insert(animal.species);
+    }
+    population.set_if_neq(LivingAnimalPopulation {
+        animals,
+        species: u32::try_from(species.len()).unwrap_or(u32::MAX),
+    });
+}
+
+pub(super) fn recompute_animal_welfare_rating(
+    animals: Query<&AnimalWelfare, (With<Animal>, Without<Dead>)>,
+    changed: Query<
+        (),
+        (
+            With<Animal>,
+            Or<(Changed<AnimalWelfare>, Added<Animal>, Added<Dead>)>,
+        ),
+    >,
+    mut removed_welfare: RemovedComponents<AnimalWelfare>,
+    mut removed_animals: RemovedComponents<Animal>,
+    mut removed_dead: RemovedComponents<Dead>,
+    mut welfare: ResMut<AnimalWelfareRating>,
+) {
+    let welfare_removed = removed_welfare.read().count() != 0;
+    let animals_removed = removed_animals.read().count() != 0;
+    let deaths_removed = removed_dead.read().count() != 0;
+    if welfare.is_added()
+        || !changed.is_empty()
+        || welfare_removed
+        || animals_removed
+        || deaths_removed
+    {
+        welfare.set_if_neq(AnimalWelfareRating(calculate_mean_permille(
+            animals.iter().map(|value| value.0),
+        )));
+    }
+}
+
+pub(super) fn recompute_guest_ratings(
+    guests: Query<(Option<&GuestSatisfaction>, Option<&GuestEducation>), With<Guest>>,
+    changed: Query<
+        (),
+        (
+            With<Guest>,
+            Or<(
+                Added<Guest>,
+                Changed<GuestSatisfaction>,
+                Changed<GuestEducation>,
+            )>,
+        ),
+    >,
+    mut removed_guests: RemovedComponents<Guest>,
+    mut removed_satisfaction: RemovedComponents<GuestSatisfaction>,
+    mut removed_education: RemovedComponents<GuestEducation>,
+    mut facts: ResMut<GuestRatingFacts>,
+) {
+    let guest_removed = removed_guests.read().count() != 0;
+    let satisfaction_removed = removed_satisfaction.read().count() != 0;
+    let education_removed = removed_education.read().count() != 0;
+    if !facts.is_added()
+        && changed.is_empty()
+        && !guest_removed
+        && !satisfaction_removed
+        && !education_removed
+    {
         return;
-    };
-    let unique = animals
-        .iter()
-        .map(|animal| animal.species)
-        .collect::<BTreeSet<_>>()
-        .len() as u32;
-    let value = normalize_zoo_rating_input_for_kind(
-        definitions,
-        &RatingInputKind::Variety,
-        i64::from(unique),
-    );
-    update_zoo_rating_field_and_publish_change(&mut rating.variety_permille, value, &mut changed);
+    }
+    facts.set_if_neq(GuestRatingFacts {
+        count: u32::try_from(guests.iter().len()).unwrap_or(u32::MAX),
+        satisfaction: calculate_mean_permille(
+            guests
+                .iter()
+                .filter_map(|(value, _)| value.map(|value| value.0)),
+        ),
+        education: calculate_mean_permille(
+            guests
+                .iter()
+                .filter_map(|(_, value)| value.map(|value| value.0)),
+        ),
+    });
 }
 
 pub(super) fn recompute_scenery_rating(
-    mut placed: MessageReader<ObjectPlacementCommitted>,
     mut removed: RemovedComponents<PlacedObjectDefinitionReference>,
-    definitions: Res<Assets<WorldDefinitionAsset>>,
-    active_definitions: Res<WorldDefinitions>,
-    scenery: Query<&PlacedObjectDefinitionReference>,
-    mut rating: ResMut<ZooRating>,
-    mut changed: MessageWriter<ProgressionFactChanged>,
+    added: Query<(), Added<PlacedObjectDefinitionReference>>,
+    assets: Res<Assets<WorldDefinitionAsset>>,
+    definitions: Res<WorldDefinitions>,
+    scenery: Query<(), With<PlacedObjectDefinitionReference>>,
+    mut rating: ResMut<ZooSceneryRating>,
 ) {
-    let placement_changed =
-        message_reader_contains_any_unread_message(&mut placed) || removed.read().next().is_some();
-    if !placement_changed {
+    let removed = removed.read().count() != 0;
+    if !assets.is_changed() && !definitions.is_changed() && added.is_empty() && !removed {
         return;
     }
-    let Some(definitions) = active_definitions.get(&definitions) else {
-        return;
-    };
-    let value = normalize_zoo_rating_input_for_kind(
-        definitions,
-        &RatingInputKind::Scenery,
-        scenery.iter().count() as i64,
-    );
-    update_zoo_rating_field_and_publish_change(&mut rating.scenery_permille, value, &mut changed);
+    if let Some(definitions) = definitions.get(&assets) {
+        let count = i64::try_from(scenery.iter().len()).unwrap_or(i64::MAX);
+        rating.set_if_neq(ZooSceneryRating(normalize_zoo_rating_input_for_kind(
+            definitions,
+            &RatingInputKind::Scenery,
+            count,
+        )));
+    }
 }
 
 pub(super) fn recompute_finance_rating(
     cash: Res<ZooCash>,
-    definitions: Res<Assets<WorldDefinitionAsset>>,
-    active_definitions: Res<WorldDefinitions>,
-    mut rating: ResMut<ZooRating>,
-    mut changed: MessageWriter<ProgressionFactChanged>,
+    assets: Res<Assets<WorldDefinitionAsset>>,
+    definitions: Res<WorldDefinitions>,
+    mut rating: ResMut<ZooFinanceRating>,
 ) {
-    if !cash.is_changed() {
+    if !cash.is_changed() && !assets.is_changed() && !definitions.is_changed() {
         return;
     }
-    let Some(definitions) = active_definitions.get(&definitions) else {
-        return;
-    };
-    let value =
-        normalize_zoo_rating_input_for_kind(definitions, &RatingInputKind::Finance, cash.0 .0);
-    update_zoo_rating_field_and_publish_change(&mut rating.finance_permille, value, &mut changed);
+    if let Some(definitions) = definitions.get(&assets) {
+        rating.set_if_neq(ZooFinanceRating(normalize_zoo_rating_input_for_kind(
+            definitions,
+            &RatingInputKind::Finance,
+            cash.0 .0,
+        )));
+    }
 }
 
-pub(super) fn recompute_cleanliness_rating(
+pub(super) fn reconcile_zoo_rating_and_weighted_target(
+    assets: Res<Assets<WorldDefinitionAsset>>,
+    definitions: Res<WorldDefinitions>,
+    animals: Res<LivingAnimalPopulation>,
+    welfare: Res<AnimalWelfareRating>,
+    guests: Res<GuestRatingFacts>,
+    scenery: Res<ZooSceneryRating>,
+    finance: Res<ZooFinanceRating>,
     cleanliness: Res<ZooCleanlinessPermille>,
     mut rating: ResMut<ZooRating>,
-    mut changed: MessageWriter<ProgressionFactChanged>,
+    mut target: ResMut<ZooOverallRatingTarget>,
 ) {
-    if !cleanliness.is_changed() && !rating.is_changed() {
-        return;
-    }
-    let available = cleanliness.0.is_some();
-    if rating.cleanliness_available != available {
-        rating.cleanliness_available = available;
-        changed.write(ProgressionFactChanged::Rating);
-    }
-    if let Some(value) = cleanliness.0 {
-        update_zoo_rating_field_and_publish_change(
-            &mut rating.cleanliness_permille,
-            value.min(1000),
-            &mut changed,
-        );
-    }
-}
-
-pub(super) fn recompute_overall_rating(
-    definitions: Res<Assets<WorldDefinitionAsset>>,
-    active_definitions: Res<WorldDefinitions>,
-    simulation_control: Option<
-        Res<openzt2_world_state::simulation_time::simulation_control_types::SimulationControl>,
-    >,
-    mut rating: ResMut<ZooRating>,
-    mut changed: MessageWriter<ProgressionFactChanged>,
-) {
-    if !rating.is_changed()
-        && !active_definitions.is_changed()
+    if !assets.is_changed()
         && !definitions.is_changed()
-        && !simulation_control
-            .as_ref()
-            .is_some_and(|control| control.is_changed())
+        && !animals.is_changed()
+        && !welfare.is_changed()
+        && !guests.is_changed()
+        && !scenery.is_changed()
+        && !finance.is_changed()
+        && !cleanliness.is_changed()
     {
         return;
     }
-    let definitions = active_definitions.get(&definitions);
-    let definition = definitions
-        .as_ref()
-        .and_then(|definitions| definitions.rating_definitions().next());
-    let available = definition.is_some_and(|definition| {
-        definition
-            .inputs
-            .iter()
-            .filter(|input| input.weight > 0)
-            .all(|input| select_zoo_rating_input(&rating, &input.kind).is_some())
-    });
-    if rating.overall_available != available {
-        rating.overall_available = available;
-        changed.write(ProgressionFactChanged::Rating);
+    let view = definitions.get(&assets);
+    let mut next = *rating;
+    next.animal_welfare_permille = welfare.0;
+    next.guest_satisfaction_permille = guests.satisfaction;
+    next.education_permille = guests.education;
+    if let Some(view) = view {
+        next.variety_permille = normalize_zoo_rating_input_for_kind(
+            view,
+            &RatingInputKind::Variety,
+            i64::from(animals.species),
+        );
     }
-    let Some(definition) = definition.filter(|_| available) else {
-        return;
-    };
-    if !openzt2_world_state::simulation_time::simulation_control_queries::simulation_is_running(
-        simulation_control,
-    ) {
-        return;
+    next.scenery_permille = scenery.0;
+    next.finance_permille = finance.0;
+    next.cleanliness_available = cleanliness.0.is_some();
+    if let Some(value) = cleanliness.0 {
+        next.cleanliness_permille = value.min(1000);
     }
-    let target = calculate_weighted_zoo_rating(
-        definition
-            .inputs
-            .iter()
-            .filter(|input| input.weight > 0)
-            .filter_map(|input| {
-                select_zoo_rating_input(&rating, &input.kind).map(|value| (value, input.weight))
-            }),
-        definition.minimum,
-        definition.maximum,
-    );
-    let next = smooth_zoo_rating_toward_target(
-        rating.overall_permille,
-        target,
-        definition.smoothing_ticks,
-    );
-    if rating.overall_permille != next {
-        rating.overall_permille = next;
-        changed.write(ProgressionFactChanged::Rating);
+    let weighted_target = view
+        .and_then(|view| view.rating_definitions().next())
+        .and_then(|definition| {
+            let active_inputs = || definition.inputs.iter().filter(|input| input.weight > 0);
+            if !active_inputs().all(|input| select_zoo_rating_input(&next, &input.kind).is_some()) {
+                return None;
+            }
+            let value = calculate_weighted_zoo_rating(
+                active_inputs().filter_map(|input| {
+                    select_zoo_rating_input(&next, &input.kind).map(|value| (value, input.weight))
+                }),
+                definition.minimum,
+                definition.maximum,
+            );
+            Some((value, definition.smoothing_ticks))
+        });
+    next.overall_available = weighted_target.is_some();
+    target.set_if_neq(ZooOverallRatingTarget(weighted_target));
+    rating.set_if_neq(next);
+}
+
+pub(super) fn advance_zoo_rating_smoothing(
+    target: Res<ZooOverallRatingTarget>,
+    mut rating: ResMut<ZooRating>,
+) {
+    if let Some((target, steps)) = target.0 {
+        let next = smooth_zoo_rating_toward_target(rating.overall_permille, target, steps);
+        if rating.overall_permille != next {
+            rating.overall_permille = next;
+        }
     }
+}
+
+pub(super) fn publish_zoo_rating_changes(
+    rating: Res<ZooRating>,
+    mut changes: MessageWriter<ProgressionFactChanged>,
+) {
+    if rating.is_changed() {
+        changes.write(ProgressionFactChanged::Rating);
+    }
+}
+
+pub(super) fn reset_rating_inputs_after_leaving_game(
+    mut animals: ResMut<LivingAnimalPopulation>,
+    mut welfare: ResMut<AnimalWelfareRating>,
+    mut guests: ResMut<GuestRatingFacts>,
+    mut scenery: ResMut<ZooSceneryRating>,
+    mut finance: ResMut<ZooFinanceRating>,
+    mut target: ResMut<ZooOverallRatingTarget>,
+) {
+    animals.set_if_neq(default());
+    welfare.set_if_neq(default());
+    guests.set_if_neq(default());
+    scenery.set_if_neq(default());
+    finance.set_if_neq(default());
+    target.set_if_neq(default());
 }

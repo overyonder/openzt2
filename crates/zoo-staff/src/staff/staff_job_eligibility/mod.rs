@@ -1,3 +1,4 @@
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
 use bevy::prelude::*;
 use openzt2_game_data::{
     behavior::{
@@ -10,15 +11,15 @@ use openzt2_game_data::{
             BehaviorEntityStateEligibilityFact, BehaviorSpatialEligibilityFact,
         },
     },
-    world_definitions::staff_management::{StaffJobKind, StaffRoleDefinition, StaffRoleKind},
+    world_definitions::staff_management::StaffRoleDefinition,
     AssetId,
 };
 
 use openzt2_game_assets::behavior::behavior_asset_types::{
-    BehaviorDeclarationIndexView, BehaviorDocumentAsset,
+    BehaviorDeclarationIndexView, BehaviorDocumentAsset, LoadedBehaviorDocumentCollection,
 };
 
-use super::staff_assignment_types::StaffAssignment;
+use super::staff_assignment_types::{StaffAssignmentArea, StaffAssignmentTarget};
 
 pub(super) struct CompatibleStaffBehaviorTask<'a> {
     pub(super) document: Handle<BehaviorDocumentAsset>,
@@ -31,6 +32,7 @@ pub(super) struct CompatibleStaffBehaviorTask<'a> {
 /// turning an unavailable native predicate into an implicit pass.
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct StaffCandidateEligibilityFacts {
+    pub(super) target_definition: Option<AssetId>,
     pub(super) target_in_water: Option<bool>,
     pub(super) target_on_land: Option<bool>,
     pub(super) target_rampaging: Option<bool>,
@@ -43,44 +45,131 @@ pub(super) struct StaffCandidateEligibilityFacts {
     pub(super) target_is_request_site: bool,
 }
 
-pub(super) fn find_highest_priority_compatible_staff_behavior_task<'a>(
-    behavior_documents: BehaviorDeclarationIndexView<'a>,
-    role: &StaffRoleDefinition,
-    job_kind: StaffJobKind,
-    request_token: Option<AssetId>,
-    candidate_facts: StaffCandidateEligibilityFacts,
-) -> Option<CompatibleStaffBehaviorTask<'a>> {
-    let request_token = request_token?;
-    select_highest_priority_authored_staff_behavior_task_with_candidate_eligibility(
-        role.role,
-        authored_staff_behavior_task_unique_identifiers(job_kind)
-            .iter()
-            .filter_map(|unique_identifier| {
-                behavior_documents
-                    .find_behavior_task_location(AssetId::from_key(unique_identifier))
-                    .map(
-                        |(document, declaration_index, definition)| CompatibleStaffBehaviorTask {
-                            document,
-                            declaration_index,
-                            definition,
-                        },
-                    )
-            }),
-        Some(request_token),
-        candidate_facts,
-    )
+#[derive(Resource, Default)]
+pub(super) struct StaffTasksByRequestToken(std::collections::BTreeMap<AssetId, Vec<AssetId>>);
+
+impl StaffTasksByRequestToken {
+    pub(super) fn candidates(&self, token: AssetId) -> impl Iterator<Item = AssetId> + '_ {
+        self.0.get(&token).into_iter().flatten().copied()
+    }
 }
 
+pub(super) fn index_winning_staff_token_tasks(
+    documents: Res<LoadedBehaviorDocumentCollection>,
+    assets: Res<Assets<BehaviorDocumentAsset>>,
+    mut index: ResMut<StaffTasksByRequestToken>,
+) {
+    if !documents.is_changed() && !assets.is_changed() {
+        return;
+    }
+    let Some(declarations) = documents.create_declaration_index_view(&assets) else {
+        index.0.clear();
+        return;
+    };
+    index.0.clear();
+    for (_, _, task) in declarations.behavior_tasks() {
+        for object in &task.objects {
+            let candidates = index
+                .0
+                .entry(AssetId::from_key(&object.to_ascii_lowercase()))
+                .or_default();
+            if candidates.last() != Some(&task.id) {
+                candidates.push(task.id);
+            }
+        }
+    }
+}
+
+pub(super) fn staff_subject_matches(
+    definitions: WorldDefinitionsView<'_>,
+    role: &StaffRoleDefinition,
+    required: AssetId,
+) -> bool {
+    required == role.id
+        || required == role.object
+        || required == AssetId::from_key("staff")
+        || definitions
+            .find_object(role.object)
+            .is_some_and(|object| object.behavior_type_identifiers.contains(&required))
+}
+
+pub(super) fn find_highest_priority_compatible_staff_behavior_task<'a>(
+    behavior_documents: BehaviorDeclarationIndexView<'a>,
+    index: &StaffTasksByRequestToken,
+    definitions: WorldDefinitionsView<'_>,
+    role: &StaffRoleDefinition,
+    request_token: AssetId,
+    candidate_facts: StaffCandidateEligibilityFacts,
+) -> Option<CompatibleStaffBehaviorTask<'a>> {
+    let target_definition = candidate_facts
+        .target_definition
+        .and_then(|id| definitions.find_object(id));
+    let accepts_type = |candidate_role, required| match candidate_role {
+        BehaviorCandidateRole::Subject => staff_subject_matches(definitions, role, required),
+        BehaviorCandidateRole::Target => {
+            required == AssetId::from_key("fromtoken")
+                || (candidate_facts.target_is_request_site && required == AssetId::from_key("self"))
+                || target_definition.is_some_and(|object| {
+                    object.id == required || object.behavior_type_identifiers.contains(&required)
+                })
+        }
+        BehaviorCandidateRole::Object => required == request_token,
+    };
+    index
+        .candidates(request_token)
+        .filter_map(|id| behavior_documents.find_behavior_task_location(id))
+        .filter(|(_, _, task)| {
+            (task.subjects.is_empty()
+                || task.subjects.iter().any(|subject| {
+                    accepts_type(
+                        BehaviorCandidateRole::Subject,
+                        AssetId::from_key(&subject.to_ascii_lowercase()),
+                    )
+                }))
+                && (task.targets.is_empty()
+                    || task.targets.iter().any(|target| {
+                        accepts_type(
+                            BehaviorCandidateRole::Target,
+                            AssetId::from_key(&target.to_ascii_lowercase()),
+                        )
+                    }))
+                && staff_behavior_task_satisfies_candidate_eligibility(
+                    task,
+                    candidate_facts,
+                    accepts_type,
+                )
+        })
+        .max_by(|(_, _, left), (_, _, right)| {
+            left.priority
+                .unwrap_or_default()
+                .total_cmp(&right.priority.unwrap_or_default())
+        })
+        .map(
+            |(document, declaration_index, definition)| CompatibleStaffBehaviorTask {
+                document,
+                declaration_index,
+                definition,
+            },
+        )
+}
+
+#[cfg(test)]
 pub(super) fn select_highest_priority_authored_staff_behavior_task_with_candidate_eligibility<
     'a,
 >(
-    role: StaffRoleKind,
+    role: openzt2_game_data::world_definitions::staff_management::StaffRoleKind,
     candidates: impl Iterator<Item = CompatibleStaffBehaviorTask<'a>>,
     request_token: Option<AssetId>,
     candidate_facts: StaffCandidateEligibilityFacts,
 ) -> Option<CompatibleStaffBehaviorTask<'a>> {
     candidates
-        .filter(|candidate| staff_role_accepts_behavior_task(role, candidate.definition))
+        .filter(|candidate| {
+            candidate.definition.subjects.iter().any(|subject| {
+                authored_staff_role_subject_names(role)
+                    .iter()
+                    .any(|role| subject.eq_ignore_ascii_case(role))
+            })
+        })
         .filter(|candidate| {
             staff_behavior_task_satisfies_authored_request_token(
                 candidate.definition,
@@ -89,9 +178,19 @@ pub(super) fn select_highest_priority_authored_staff_behavior_task_with_candidat
         })
         .filter(|candidate| {
             staff_behavior_task_satisfies_candidate_eligibility(
-                role,
                 candidate.definition,
                 candidate_facts,
+                |candidate_role, candidate| match candidate_role {
+                    BehaviorCandidateRole::Subject => authored_staff_role_subject_names(role)
+                        .iter()
+                        .any(|name| candidate == AssetId::from_key(name)),
+                    BehaviorCandidateRole::Target => {
+                        candidate == AssetId::from_key("fromtoken")
+                            || (candidate_facts.target_is_request_site
+                                && candidate == AssetId::from_key("self"))
+                    }
+                    BehaviorCandidateRole::Object => true,
+                },
             )
         })
         .max_by(|left, right| {
@@ -103,24 +202,24 @@ pub(super) fn select_highest_priority_authored_staff_behavior_task_with_candidat
 }
 
 fn staff_behavior_task_satisfies_candidate_eligibility(
-    role: StaffRoleKind,
     behavior_task: &BehaviorTask,
     candidate_facts: StaffCandidateEligibilityFacts,
+    type_matches: impl Fn(BehaviorCandidateRole, AssetId) -> bool,
 ) -> bool {
     behavior_task
         .candidate_eligibility_requirements
         .iter()
         .all(|requirements| {
-            candidate_requirement_group_is_satisfied(role, requirements, candidate_facts)
+            candidate_requirement_group_is_satisfied(requirements, candidate_facts, &type_matches)
         })
 }
 
 fn candidate_requirement_group_is_satisfied(
-    role: StaffRoleKind,
     requirements: &BehaviorCandidateEligibilityRequirements,
     candidate_facts: StaffCandidateEligibilityFacts,
+    type_matches: impl Fn(BehaviorCandidateRole, AssetId) -> bool,
 ) -> bool {
-    if !candidate_type_identifiers_match(role, requirements, candidate_facts) {
+    if !candidate_type_identifiers_match(requirements, type_matches) {
         return false;
     }
     let mut results = requirements.eligibility_facts.iter().map(|fact| {
@@ -137,9 +236,8 @@ fn candidate_requirement_group_is_satisfied(
 }
 
 fn candidate_type_identifiers_match(
-    role: StaffRoleKind,
     requirements: &BehaviorCandidateEligibilityRequirements,
-    candidate_facts: StaffCandidateEligibilityFacts,
+    type_matches: impl Fn(BehaviorCandidateRole, AssetId) -> bool,
 ) -> bool {
     if requirements.candidate_type_identifiers.is_empty() {
         return true;
@@ -147,17 +245,7 @@ fn candidate_type_identifiers_match(
     let mut matches = requirements
         .candidate_type_identifiers
         .iter()
-        .map(|candidate| match requirements.candidate_role {
-            BehaviorCandidateRole::Subject => authored_staff_role_subject_names(role)
-                .iter()
-                .any(|name| *candidate == AssetId::from_key(name)),
-            BehaviorCandidateRole::Target => {
-                *candidate == AssetId::from_key("fromtoken")
-                    || (candidate_facts.target_is_request_site
-                        && *candidate == AssetId::from_key("self"))
-            }
-            BehaviorCandidateRole::Object => true,
-        });
+        .map(|&candidate| type_matches(requirements.candidate_role, candidate));
     match requirements.candidate_type_junction {
         BehaviorEligibilityFactJunction::All => matches.all(|matches| matches),
         BehaviorEligibilityFactJunction::Any => matches.any(|matches| matches),
@@ -240,36 +328,11 @@ pub(super) fn staff_behavior_task_satisfies_authored_request_token(
         .any(|authored_object_name| AssetId::from_key(authored_object_name) == request_token)
 }
 
-/// Duty-capability inquiry for worker-duty assignment: asks only whether the
-/// role has any authored behavior task for the job kind.  This is a separate
-/// availability question from claim-time selection and deliberately applies
-/// no request-token semantics, because no request token exists in that UI
-/// context.
-pub(super) fn staff_role_has_compatible_authored_behavior_task(
-    behavior_documents: BehaviorDeclarationIndexView<'_>,
-    role: &StaffRoleDefinition,
-    job_kind: StaffJobKind,
-) -> bool {
-    authored_staff_behavior_task_unique_identifiers(job_kind)
-        .iter()
-        .filter_map(|unique_identifier| {
-            behavior_documents.find_behavior_task_location(AssetId::from_key(unique_identifier))
-        })
-        .any(|(_, _, behavior_task)| staff_role_accepts_behavior_task(role.role, behavior_task))
-}
-
-fn staff_role_accepts_behavior_task(role: StaffRoleKind, behavior_task: &BehaviorTask) -> bool {
-    authored_staff_role_subject_names(role)
-        .iter()
-        .any(|role_name| {
-            behavior_task
-                .subjects
-                .iter()
-                .any(|subject_name| subject_name.eq_ignore_ascii_case(role_name))
-        })
-}
-
-pub(super) fn authored_staff_role_subject_names(role: StaffRoleKind) -> &'static [&'static str] {
+#[cfg(test)]
+fn authored_staff_role_subject_names(
+    role: openzt2_game_data::world_definitions::staff_management::StaffRoleKind,
+) -> &'static [&'static str] {
+    use openzt2_game_data::world_definitions::staff_management::StaffRoleKind;
     match role {
         StaffRoleKind::Keeper => &["keeper"],
         StaffRoleKind::Maintenance => &["worker"],
@@ -287,48 +350,15 @@ pub(super) fn authored_staff_role_subject_names(role: StaffRoleKind) -> &'static
     }
 }
 
-fn authored_staff_behavior_task_unique_identifiers(
-    job_kind: StaffJobKind,
-) -> &'static [&'static str] {
-    match job_kind {
-        StaffJobKind::Feed => &["keeper:fillfoodcontainer", "keeper:feedanimal"],
-        StaffJobKind::RefillWater => &["keeper:wateranimal"],
-        StaffJobKind::CleanHabitat => &["worker:rakepoo"],
-        StaffJobKind::EmptyBin => &["worker:emptytrash", "worker:emptyrecycling"],
-        StaffJobKind::SweepLitter => &["worker:sweeptrash"],
-        StaffJobKind::Treat => &[
-            "keeper:healanimal_land",
-            "keeper:healanimal_water",
-            "keeper:cureanimal_land",
-            "keeper:cureanimal_water",
-        ],
-        StaffJobKind::Educate => &[
-            "educator:educatepodium",
-            "educator:educatefossileducationcenter",
-        ],
-        StaffJobKind::Entertain => &[
-            "entertainer:entertainboredguest",
-            "entertainer:entertainboredyoungguest",
-        ],
-        StaffJobKind::Tranquilize => &["dinorecoverytranqteam:tranqdinosaur"],
-        StaffJobKind::Capture => &["dinorecoverycrateteam:cratedinosaur", "keeper:crateanimal"],
-        StaffJobKind::MaintainTank => &["worker:cleanwaterfilter", "worker:cleantank"],
-        StaffJobKind::OperateShow => &[
-            "trainer:performshow",
-            "mc:performshow",
-            "entertainer:putonshow",
-        ],
-    }
-}
-
 pub(crate) fn staff_assignment_accepts_job_target(
-    assignment: &StaffAssignment,
+    assigned_area: Option<&StaffAssignmentArea>,
+    assigned_target: Option<&StaffAssignmentTarget>,
     target: Entity,
     target_parent: Option<Entity>,
     target_area: Option<Entity>,
 ) -> bool {
-    assignment.target.is_none_or(|assigned| assigned == target)
-        && assignment.area.is_none_or(|area| {
-            area == target || Some(area) == target_parent || Some(area) == target_area
+    assigned_target.is_none_or(|assigned| assigned.0 == target)
+        && assigned_area.is_none_or(|area| {
+            area.0 == target || Some(area.0) == target_parent || Some(area.0) == target_area
         })
 }

@@ -1,4 +1,4 @@
-//! Queries derived from particle-effect documents for live execution.
+//! Root and collision descriptors derived during particle-effect loading.
 
 use super::hanabi_custom_particle_modifiers::CollisionSpawnParticleInitialization;
 use bevy::prelude::Vec3;
@@ -11,7 +11,9 @@ use openzt2_game_data::{
     AssetId,
 };
 
-pub fn collect_root_effect_emitter_ids(particle_document: &ParticleDocument) -> Vec<AssetId> {
+pub(super) fn collect_root_effect_emitter_ids(
+    particle_document: &ParticleDocument,
+) -> Vec<AssetId> {
     match particle_document {
         ParticleDocument::LegacyNif(legacy_nif_effect) => vec![legacy_nif_effect.emitter_id],
         ParticleDocument::Effect(effect_document) => {

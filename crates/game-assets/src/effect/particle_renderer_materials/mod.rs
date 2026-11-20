@@ -1,5 +1,5 @@
-use bevy::prelude::*;
-use bevy_hanabi::{EffectAsset, EffectMaterial};
+use bevy::{platform::collections::HashSet, prelude::*};
+use bevy_hanabi::{EffectMaterial, EffectRenderPass, EffectRenderPassState, EffectRenderPasses};
 
 use crate::{
     graphics_settings_types::{GraphicsEffectQuality, GraphicsSettings},
@@ -8,19 +8,10 @@ use crate::{
     },
 };
 
-use super::{particle_wave_surface::ParticleEffectWaveSurface, ParticleEffectDocumentAsset};
-
-/// Draw-only assets for an emitter. Every renderer uses the emitter's one
-/// particle population. The first shader also supplies the built-in draw.
-#[derive(Component, Debug, PartialEq)]
-pub struct AuthoredParticleRenderers(pub Box<[AuthoredParticleDraw]>);
-
-#[derive(Debug, PartialEq)]
-pub struct AuthoredParticleDraw {
-    pub effect: Handle<EffectAsset>,
-    pub passes: Box<[Handle<EffectPassMaterial>]>,
-    pub sort_by_distance: bool,
-}
+use super::{
+    particle_wave_surface::ParticleEffectWaveSurface, LiveParticleEffectInstance,
+    ParticleEffectDocumentAsset,
+};
 
 pub(super) fn project_particle_renderer_materials(
     mut commands: Commands,
@@ -32,81 +23,141 @@ pub(super) fn project_particle_renderer_materials(
     mut pass_events: MessageReader<AssetEvent<EffectPassMaterial>>,
     mut emitters: Query<(
         Entity,
-        Ref<super::LiveParticleEffectInstance>,
+        Ref<LiveParticleEffectInstance>,
         Has<ParticleEffectWaveSurface>,
-        Option<&mut AuthoredParticleRenderers>,
+        Option<&mut EffectRenderPasses>,
         Option<&mut EffectMaterial>,
     )>,
 ) {
-    let refresh_all = graphics
+    let quality_changed = graphics
         .as_ref()
-        .is_some_and(|graphics| graphics.is_changed())
-        | (material_events.read().count() != 0)
-        | (pass_events.read().count() != 0);
+        .is_some_and(|settings| settings.is_changed());
+    let changed_materials: HashSet<_> = material_events.read().filter_map(changed_asset).collect();
+    let changed_passes: HashSet<_> = pass_events.read().filter_map(changed_asset).collect();
     let quality = graphics
         .as_ref()
-        .map_or(GraphicsEffectQuality::High, |graphics| graphics.effects);
-    for (entity, emitter, wave, existing_draws, existing_images) in &mut emitters {
-        if !refresh_all && !emitter.is_changed() {
+        .map_or(GraphicsEffectQuality::High, |settings| settings.effects);
+    for (entity, emitter, wave, existing_draws, existing_material) in &mut emitters {
+        let refresh = quality_changed || emitter.is_changed();
+        if !refresh && changed_materials.is_empty() && changed_passes.is_empty() {
             continue;
         }
         let Some(prepared) = documents
             .get(&emitter.effect_asset)
-            .and_then(|doc| doc.prepared_emitters.get(&emitter.emitter_id))
+            .and_then(|document| document.prepared_emitters.get(&emitter.emitter_id))
         else {
             continue;
         };
-        if prepared.renderers.is_empty() {
+        if !refresh
+            && !prepared.renderers.iter().any(|renderer| {
+                changed_materials.contains(&renderer.material.id())
+                    || (!changed_passes.is_empty()
+                        && materials.get(&renderer.material).is_some_and(|material| {
+                            material
+                                .evaluated_pass_material_assets_for_effect_quality(quality)
+                                .iter()
+                                .any(|pass| changed_passes.contains(&pass.id()))
+                        }))
+            })
+        {
             continue;
         }
-        let mut images = Vec::new();
-        let mut draws = Vec::with_capacity(prepared.renderers.len());
+        if prepared.renderers.is_empty() {
+            if existing_draws.is_some() {
+                commands
+                    .entity(entity)
+                    .remove::<(EffectRenderPasses, EffectMaterial)>();
+            }
+            continue;
+        }
+
+        let mut draws = Vec::new();
+        let mut simulation_textures = Vec::new();
         for (ordinal, renderer) in prepared.renderers.iter().enumerate() {
             let Some(material) = materials.get(&renderer.material) else {
                 continue;
             };
-            let pass_handles = material.evaluated_pass_material_assets_for_effect_quality(quality);
-            if ordinal == 0 {
-                if wave {
-                    if let (Some(ripple), Some(mask)) = (
-                        material.bound_texture_asset("Texture0"),
-                        material.bound_texture_asset("Texture1"),
-                    ) {
-                        images.extend([ripple.clone(), mask.clone()]);
-                    }
-                } else {
-                    let texture = pass_handles
-                        .first()
-                        .and_then(|handle| passes.get(handle))
-                        .and_then(EffectPassMaterial::bound_particle_texture)
-                        .or_else(|| material.bound_texture_asset("Texture0"))
-                        .or_else(|| material.first_bound_texture_asset());
-                    images.push(texture.cloned().unwrap_or_default());
-                }
-            }
-            let effect = if ordinal == 0 && wave {
+            let is_wave = ordinal == 0 && wave;
+            let effect = if is_wave {
                 prepared.wave_effect.as_ref().unwrap_or(&renderer.effect)
             } else {
                 &renderer.effect
             };
-            draws.push(AuthoredParticleDraw {
-                effect: effect.clone(),
-                passes: pass_handles.into(),
-                sort_by_distance: renderer.sort_by_distance,
-            });
+            let pass_handles = material.evaluated_pass_material_assets_for_effect_quality(quality);
+            for pass in pass_handles
+                .iter()
+                .map(Some)
+                .chain(pass_handles.is_empty().then_some(None))
+            {
+                let pass = match pass {
+                    Some(handle) => {
+                        let Some(pass) = passes.get(handle) else {
+                            continue;
+                        };
+                        Some(pass)
+                    }
+                    None => None,
+                };
+                let textures = if is_wave {
+                    ["Texture0", "Texture1"]
+                        .map(|name| {
+                            material
+                                .bound_texture_asset(name)
+                                .cloned()
+                                .unwrap_or_default()
+                        })
+                        .to_vec()
+                } else {
+                    vec![pass
+                        .and_then(EffectPassMaterial::bound_particle_texture)
+                        .or_else(|| material.bound_texture_asset("Texture0"))
+                        .or_else(|| material.first_bound_texture_asset())
+                        .cloned()
+                        .unwrap_or_default()]
+                };
+                if ordinal == 0 && simulation_textures.is_empty() {
+                    simulation_textures.clone_from(&textures);
+                }
+                draws.push(EffectRenderPass {
+                    effect: effect.clone(),
+                    textures,
+                    sort_by_distance: renderer.sort_by_distance,
+                    state: pass.map(|pass| {
+                        let state = pass.draw_state();
+                        EffectRenderPassState {
+                            blend: state.blend,
+                            depth_write_enabled: state.depth_write_enabled,
+                            depth_compare: state.depth_compare,
+                            color_writes: state.color_writes,
+                        }
+                    }),
+                });
+            }
         }
-        let draws = AuthoredParticleRenderers(draws.into_boxed_slice());
+        let draws = EffectRenderPasses(draws);
         if let Some(mut existing) = existing_draws {
             existing.set_if_neq(draws);
         } else {
             commands.entity(entity).insert(draws);
         }
-        if let Some(mut existing) = existing_images {
-            if existing.images != images {
-                existing.images = images;
+        if let Some(mut existing) = existing_material {
+            if existing.images != simulation_textures {
+                existing.images = simulation_textures;
             }
-        } else if !images.is_empty() {
-            commands.entity(entity).insert(EffectMaterial { images });
+        } else if !simulation_textures.is_empty() {
+            commands.entity(entity).insert(EffectMaterial {
+                images: simulation_textures,
+            });
         }
+    }
+}
+
+fn changed_asset<A: Asset>(event: &AssetEvent<A>) -> Option<bevy::asset::AssetId<A>> {
+    match *event {
+        AssetEvent::Added { id }
+        | AssetEvent::Modified { id }
+        | AssetEvent::Removed { id }
+        | AssetEvent::LoadedWithDependencies { id } => Some(id),
+        AssetEvent::Unused { .. } => None,
     }
 }

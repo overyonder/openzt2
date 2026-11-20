@@ -35,7 +35,7 @@ pub(super) struct GroundPathPlacementStomp<'w, 's> {
 pub(super) enum GroundPathPlacementAction {
     Allow,
     Prevent,
-    Delete(TopologySnapshot),
+    Delete(Entity, TopologySnapshot),
 }
 
 pub(super) struct GroundPathFootprintOverlaps<'a, 'w, 's> {
@@ -111,11 +111,14 @@ impl GroundPathFootprintOverlaps<'_, '_, '_> {
                 Some(match (action, id, protected) {
                     (PlacementStompAction::Allow, _, _) => GroundPathPlacementAction::Allow,
                     (PlacementStompAction::Delete, Some(id), false) => {
-                        GroundPathPlacementAction::Delete(TopologySnapshot::Path {
-                            id: *id,
-                            definition: tile.definition,
-                            cell: tile.cell,
-                        })
+                        GroundPathPlacementAction::Delete(
+                            entity,
+                            TopologySnapshot::Path {
+                                id: *id,
+                                definition: tile.definition,
+                                cell: tile.cell,
+                            },
+                        )
                     }
                     _ => GroundPathPlacementAction::Prevent,
                 })
@@ -142,7 +145,7 @@ impl GroundPathStompRemovals {
                 .iter()
                 .flat_map(|cell| overlaps.actions_at(*cell))
                 .filter_map(|action| match action {
-                    GroundPathPlacementAction::Delete(snapshot) => {
+                    GroundPathPlacementAction::Delete(_, snapshot) => {
                         Some((snapshot.id().0, snapshot))
                     }
                     GroundPathPlacementAction::Allow | GroundPathPlacementAction::Prevent => None,

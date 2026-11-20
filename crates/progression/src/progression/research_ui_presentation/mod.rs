@@ -21,20 +21,29 @@ use super::adoption_and_content_availability_types::ScenarioContentAvailability;
 use super::catalogue_entry_availability::{
     catalogue_entry_can_be_researched, catalogue_entry_is_available,
 };
-use super::research_types::{PendingResearchProjectPayment, ResearchProject};
+use super::research_types::{
+    ResearchProject, ResearchProjectAvailability, ResearchPurchaseState, WorldResearchItems,
+};
 use super::unlock_types::UnlockedCatalogueDefinitionSet;
 
 pub(super) fn project_selected_catalogue_research_panels(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     selected: Res<SelectedCatalogueEntry>,
-    research_availability: Query<
-        &openzt2_zoo_state::progression::research_types::ResearchProjectAvailability,
-    >,
+    research: Query<(
+        &ResearchProjectAvailability,
+        &ResearchPurchaseState,
+        Has<ResearchProject>,
+    )>,
     unlocks: Res<UnlockedCatalogueDefinitionSet>,
-    roots: Query<(&SelectedWorldIdentity, Option<&ScenarioContentAvailability>), With<WorldRoot>>,
-    projects: Query<&ResearchProject>,
-    payments: Query<&PendingResearchProjectPayment>,
+    roots: Query<
+        (
+            &SelectedWorldIdentity,
+            Option<&ScenarioContentAvailability>,
+            Option<&WorldResearchItems>,
+        ),
+        With<WorldRoot>,
+    >,
     mut buttons: Query<(&mut UiSelected, &mut UiInteractionEnabled), With<UiResearchActions>>,
     mut panels: Query<(&UiVisibleBinding, &mut Visibility)>,
 ) {
@@ -50,32 +59,30 @@ pub(super) fn project_selected_catalogue_research_panels(
             definitions,
             index,
             entry,
-            world.map(|(identity, _)| identity.mode),
-            world.and_then(|(_, scenario)| scenario),
+            world.map(|(identity, _, _)| identity.mode),
+            world.and_then(|(_, scenario, _)| scenario),
             &unlocks,
         )
     });
+    let items = world.and_then(|(_, _, items)| items);
     let research_required = !available
         && entry.is_some_and(|(_, entry)| {
             catalogue_entry_can_be_researched(
                 definitions,
                 entry,
-                research_availability
-                    .iter()
-                    .map(|item| (item.item, item.available)),
+                items
+                    .into_iter()
+                    .flat_map(|items| items.unlocking(entry.definition))
+                    .filter_map(|entity| research.get(entity).ok())
+                    .map(|(item, _, _)| (item.item, item.available)),
             )
         });
-    let research_definition = selected
+    let started = selected
         .0
-        .and_then(|id| definitions.research_for_definition(id));
-    let started = research_definition.is_some_and(|definition| {
-        projects
-            .iter()
-            .any(|project| project.definition == definition)
-            || payments
-                .iter()
-                .any(|payment| payment.definition == definition)
-    });
+        .and_then(|id| definitions.research_for_definition(id))
+        .and_then(|id| items?.definitions.get(&id))
+        .and_then(|&entity| research.get(entity).ok())
+        .is_some_and(|(_, purchase, active)| active || *purchase != ResearchPurchaseState::Idle);
     for (mut selected, mut enabled) in &mut buttons {
         // Rejected payments and catalogue changes must release the sticky toggle.
         selected.set_if_neq(UiSelected(started));
@@ -99,8 +106,7 @@ pub(super) fn project_selected_catalogue_research_panels(
 
 pub(super) fn project_selected_catalogue_research_progress(
     selected: Res<SelectedCatalogueEntry>,
-    definitions: Res<Assets<WorldDefinitionAsset>>,
-    active_definitions: Res<WorldDefinitions>,
+    world_items: Query<&WorldResearchItems>,
     projects: Query<&ResearchProject>,
     mut sliders: Query<(
         &UiValueBinding,
@@ -110,14 +116,17 @@ pub(super) fn project_selected_catalogue_research_progress(
         Option<&mut UiInteractionEnabled>,
     )>,
 ) {
-    let definitions = active_definitions.get(&definitions);
-    let project = projects.iter().find(|project| {
-        selected.0.is_some_and(|selected| {
-            project.definition == selected
-                || definitions
-                    .and_then(|definitions| definitions.find_research(project.definition))
-                    .is_some_and(|research| research.unlocks.contains(&selected))
-        })
+    let project = selected.0.and_then(|selected| {
+        let items = world_items.iter().next()?;
+        items
+            .definitions
+            .get(&selected)
+            .and_then(|&entity| projects.get(entity).ok())
+            .or_else(|| {
+                items
+                    .unlocking(selected)
+                    .find_map(|entity| projects.get(entity).ok())
+            })
     });
     for (binding, mut value, mut minimum, mut maximum, enabled) in &mut sliders {
         if !matches!(

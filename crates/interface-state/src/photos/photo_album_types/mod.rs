@@ -6,9 +6,10 @@ use openzt2_game_data::AssetId as DomainAssetId;
 pub const DEFAULT_PHOTO_ALBUM_NAME_KEY: &str = "ztphotomode:default_album_name";
 
 #[derive(Component)]
-pub struct DefaultPhotoAlbumStorageInitializedForWorld {
-    pub album: Entity,
-}
+pub struct DefaultPhotoAlbumStorageInitializedForWorld;
+
+#[derive(Component)]
+pub struct DefaultPhotoAlbum;
 
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct DefaultPhotoStorageInitializationSet;
@@ -19,7 +20,12 @@ pub struct PhotoAlbum {
 }
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+#[relationship(relationship_target = AlbumPhotos)]
 pub struct AlbumMember(pub Entity);
+
+#[derive(Component)]
+#[relationship_target(relationship = AlbumMember)]
+pub struct AlbumPhotos(Vec<Entity>);
 
 /// Marks a captured photo as transient camera-roll content until the player
 /// moves it into a persistent album.

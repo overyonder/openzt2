@@ -12,7 +12,7 @@ use openzt2_zoo_state::habitat::habitat_types::HabitatIndex;
 use openzt2_zoo_state::topology::topology_graph_types::TopologyGrid;
 
 use super::{
-    staff_assignment_types::{StaffAssignment, StaffAssignmentMode},
+    staff_assignment_types::{StaffAssignmentArea, StaffAssignmentMode, StaffAssignmentTarget},
     staff_employment_types::Staff,
 };
 
@@ -30,7 +30,8 @@ pub(crate) fn assign_selected_staff_to_habitat_under_world_pointer(
     topology_grid: Res<TopologyGrid>,
     assignment_modes: Query<(), (With<UiDocumentRoot>, With<StaffAssignmentMode>)>,
     selected_entity: WorldUiSelection,
-    mut staff_assignments: Query<&mut StaffAssignment, With<Staff>>,
+    staff_assignments: Query<Option<&StaffAssignmentArea>, With<Staff>>,
+    mut commands: Commands,
 ) {
     let primary_just_pressed = pointer_inputs.read().any(|input| {
         input.pointer_id.is_mouse() && input.button_just_pressed(PointerButton::Primary)
@@ -49,7 +50,7 @@ pub(crate) fn assign_selected_staff_to_habitat_under_world_pointer(
     let Some(selected_worker) = selected_entity.subject() else {
         return;
     };
-    let Ok(mut staff_assignment) = staff_assignments.get_mut(selected_worker) else {
+    let Ok(area) = staff_assignments.get(selected_worker) else {
         return;
     };
     let Some(world_hit) = spatial_query.cast_ray(
@@ -68,10 +69,12 @@ pub(crate) fn assign_selected_staff_to_habitat_under_world_pointer(
     else {
         return;
     };
-    if staff_assignment.area != Some(habitat) || staff_assignment.target.is_some() {
-        staff_assignment.area = Some(habitat);
-        staff_assignment.target = None;
+
+    let mut worker = commands.entity(selected_worker);
+    if area.is_none_or(|area| area.0 != habitat) {
+        worker.insert(StaffAssignmentArea(habitat));
     }
+    worker.remove::<StaffAssignmentTarget>();
 }
 
 /// Cancel leaves the staff-assignment tool without mutating any staff relationship.

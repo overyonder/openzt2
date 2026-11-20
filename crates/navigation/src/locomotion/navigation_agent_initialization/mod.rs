@@ -10,7 +10,6 @@ use openzt2_zoo_state::locomotion::locomotion_types::NavAgent;
 use openzt2_zoo_state::locomotion::locomotion_types::NavigationFailed;
 use openzt2_zoo_state::locomotion::locomotion_types::NavigationFailure;
 use openzt2_zoo_state::locomotion::locomotion_types::Route;
-use openzt2_zoo_state::locomotion::locomotion_types::SpatialCell;
 use openzt2_zoo_state::locomotion::locomotion_types::Steering;
 use openzt2_zoo_state::locomotion::locomotion_types::Velocity;
 
@@ -47,7 +46,6 @@ pub(super) fn initialize_navigation_agents_with_bounded_runtime_state(
             Steering::default(),
             ContactSteering::default(),
             Route::with_capacity(locomotion_capacity.max_route_points),
-            SpatialCell::OUTSIDE,
             MotionProgress {
                 last_position: navigation_agent_transform.translation(),
                 stationary_ticks: 0,

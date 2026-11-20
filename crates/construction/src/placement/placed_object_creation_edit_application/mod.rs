@@ -16,13 +16,14 @@ use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::ConstructionTool;
 use openzt2_zoo_state::habitat::habitat_types::HabitatLocatable;
 
+use openzt2_game_data::world_definitions::object_placement::placement_stomp_rules::PlacementStompAction;
 use openzt2_zoo_state::placement::object_placement_definition_queries::authored_object_entrance_definitions;
 use openzt2_zoo_state::placement::object_placement_definition_queries::collect_occupied_placement_cells_for_transform;
 use openzt2_zoo_state::placement::object_placement_definition_queries::project_authored_object_entrance_definition_to_component;
 use openzt2_zoo_state::placement::object_placement_definition_queries::resolve_object_placeable_definition;
 use openzt2_zoo_state::placement::object_placement_validation::calculate_authored_object_placement_eighth_turns;
 use openzt2_zoo_state::placement::object_placement_validation::calculate_object_placement_footprint_origin;
-use openzt2_zoo_state::placement::object_placement_validation::object_placement_cell_is_blocked_by_existing_object;
+use openzt2_zoo_state::placement::object_placement_validation::object_placement_stomp_action;
 use openzt2_zoo_state::placement::placed_object_types::PhysicsMovedPlacedObjectFootprint;
 use openzt2_zoo_state::placement::placed_object_types::PlacedObjectDefinitionReference;
 use openzt2_zoo_state::placement::placed_object_types::PlacedObjectFootprintOccupancy;
@@ -46,10 +47,11 @@ pub(super) fn apply_prepared_placed_object_creation_edit(
     placed: &Query<(
         &PersistentId,
         &PlacedObjectDefinitionReference,
-        &mut Transform,
-        &mut PlacedObjectFootprintOccupancy,
+        &Transform,
+        &PlacedObjectFootprintOccupancy,
     )>,
     pending_created_definitions: &HashMap<Entity, AssetId>,
+    stomped_occupants: &[Entity],
     repeat_placement: bool,
     tool: &mut ConstructionTool,
     object_placed: &mut MessageWriter<ObjectPlacementCommitted>,
@@ -69,20 +71,18 @@ pub(super) fn apply_prepared_placed_object_creation_edit(
     };
     if !exact_cells
         || edit.cells.iter().any(|cell| {
-            object_placement_cell_is_blocked_by_existing_object(
-                placement,
-                *cell,
-                None,
-                definition,
-                catalogue,
-                |entity| {
-                    placed
+            placement
+                .entities_occupying_cell(*cell)
+                .filter(|occupant| !stomped_occupants.contains(occupant))
+                .any(|entity| {
+                    let occupant = placed
                         .get(entity)
                         .ok()
                         .map(|(_, placeable, _, _)| placeable.definition)
-                        .or_else(|| pending_created_definitions.get(&entity).copied())
-                },
-            )
+                        .or_else(|| pending_created_definitions.get(&entity).copied());
+                    object_placement_stomp_action(definition, catalogue, occupant)
+                        != PlacementStompAction::Allow
+                })
         })
     {
         return false;

@@ -6,7 +6,7 @@ use bevy::{
 };
 
 use super::{
-    animation_set_asset_types::AnimationSetAsset,
+    animation_set_asset_types::{AnimationClipSourceAsset, AnimationSetAsset},
     bfm_animation_set_lowering::lower_bfm_source_to_animation_set_document,
     kfm_animation_set_lowering::lower_kfm_source_to_animation_set_document,
 };
@@ -52,6 +52,18 @@ impl AssetLoader for AnimationSetSourceAssetLoader {
                 &animation_set_source_bytes,
             )?
         };
+        let pending_animation_clip_source_asset_handles = animation_set_document
+            .animation_clips
+            .iter()
+            .filter(|reference| {
+                reference.playback_policy.load_during_animation_set_load == Some(true)
+            })
+            .map(|reference| {
+                let source = animation_set_load_context
+                    .load::<AnimationClipSourceAsset>(reference.animation_clip_asset_path.clone());
+                (reference.animation_clip_asset_key.clone(), source)
+            })
+            .collect::<Vec<_>>();
         Ok(AnimationSetAsset {
             model_asset_path: animation_set_document.model_asset_path,
             skeleton_asset_path: animation_set_document.skeleton_asset_path,
@@ -61,7 +73,7 @@ impl AssetLoader for AnimationSetSourceAssetLoader {
             animation_graph_edges: animation_set_document.animation_graph_edges,
             animation_graph_metadata: animation_set_document.animation_graph_metadata,
             animation_clip_source_references: animation_set_document.animation_clips,
-            pending_animation_clip_source_asset_handles: Vec::new(),
+            pending_animation_clip_source_asset_handles,
             failed_animation_clip_asset_keys: Vec::new(),
         })
     }

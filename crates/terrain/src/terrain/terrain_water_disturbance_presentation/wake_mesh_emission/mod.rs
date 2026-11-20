@@ -8,8 +8,6 @@ use openzt2_game_assets::effect::particle_wave_surface::ParticleEffectWaveSurfac
 use openzt2_game_assets::effect::ParticleEffectDocumentAsset;
 use openzt2_game_assets::graphics_settings_types::{FourLevelGraphicsDetail, GraphicsSettings};
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
-use openzt2_game_data::particle::authored_particle_system::AuthoredParticleEmitterShape;
-use openzt2_game_data::particle::ParticleEffectDocument;
 use openzt2_world_state::simulation_time::native_visual_random_stream::NativeVisualRandomStream;
 use openzt2_zoo_state::terrain::terrain_water_geometric_wave_shader_state::{
     NativeTerrainWaterGeometricWaveShaderState, WaterSurfaceWakeSample, WaterWakePresentationPath,
@@ -61,13 +59,7 @@ pub(crate) fn advance_water_wake_mesh_lifetimes(
     time: Res<Time>,
     regions: TerrainWaterRegionQuery,
     mut emissions: Query<(Entity, &mut WaterWakeEmission, &ChildOf, Option<&Children>)>,
-    particles: Query<(Entity, &ParticleEffectPointEmitter), With<WaterWakeMeshParticle>>,
 ) {
-    for (entity, particle) in &particles {
-        if particle.sampled_live_count() == Some(0) {
-            commands.entity(entity).despawn();
-        }
-    }
     for (entity, mut emission, parent, children) in &mut emissions {
         if regions.get(parent.parent()).is_none() {
             commands.entity(entity).despawn();
@@ -226,14 +218,7 @@ fn present_routed_water_wake_samples<const HIGH: bool>(
         let Some(effect) = effects.get(effect_handle) else {
             continue;
         };
-        let ParticleEffectDocument::Effect(document) = &effect.particle_document else {
-            continue;
-        };
-        let Some(emitter) = document
-            .emitters
-            .iter()
-            .find(|emitter| matches!(emitter.shape, AuthoredParticleEmitterShape::Decal))
-        else {
+        let Some((emitter, _)) = effect.decal_emitter() else {
             continue;
         };
         let Some(membership) = memberships
@@ -314,7 +299,7 @@ fn present_routed_water_wake_samples<const HIGH: bool>(
             );
             let mut particle = commands.spawn((
                 WaterWakeMeshParticle,
-                ParticleEffectPointEmitter::new(effect_handle.clone(), emitter.emitter_id)
+                ParticleEffectPointEmitter::new(effect_handle.clone(), emitter)
                     .with_single_particle_mesh(meshes.add(mesh)),
                 Transform::default(),
                 Visibility::Inherited,

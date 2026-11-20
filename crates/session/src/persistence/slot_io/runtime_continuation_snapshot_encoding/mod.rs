@@ -6,7 +6,7 @@ use openzt2_game_data::AssetId;
 use openzt2_world_state::simulation_time::deterministic_random_stream::DeterministicRng;
 use openzt2_zoo_state::guests::guest_favourite_animal_trend_types::GuestFavouriteAnimalTrend;
 use openzt2_zoo_state::guests::guest_simulation_types::GuestArrivalState;
-use openzt2_zoo_state::guests::guest_survey_types::GuestSurvey;
+use openzt2_zoo_state::guests::guest_survey_types::{GuestSurvey, GuestSurveyNeedCadence};
 
 pub(super) fn append_runtime_continuation_snapshot(
     bytes: &mut Vec<u8>,
@@ -45,8 +45,8 @@ pub(super) fn append_runtime_continuation_snapshot(
             bytes.extend_from_slice(&value.to_le_bytes());
         }
     }
-    if let Some(survey) = record.guest_survey {
-        bytes.extend_from_slice(&survey.critical_need_countdown_seconds.to_le_bytes());
+    if let Some((cadence, survey)) = record.guest_survey {
+        bytes.extend_from_slice(&cadence.0.to_le_bytes());
         bytes.extend_from_slice(&survey.previous_day_of_month.to_le_bytes());
         bytes.extend_from_slice(&survey.current_day_of_month.to_le_bytes());
         for history in survey.ratings {
@@ -151,8 +151,8 @@ pub(super) fn decode_runtime_continuation_snapshot(
         None
     };
     let guest_survey = if flags & 4 != 0 {
+        let cadence = GuestSurveyNeedCadence(f32::from_le_bytes(take(&mut bytes)?));
         let mut survey = GuestSurvey {
-            critical_need_countdown_seconds: f32::from_le_bytes(take(&mut bytes)?),
             previous_day_of_month: i32::from_le_bytes(take(&mut bytes)?),
             current_day_of_month: i32::from_le_bytes(take(&mut bytes)?),
             ..Default::default()
@@ -167,7 +167,7 @@ pub(super) fn decode_runtime_continuation_snapshot(
                 *value = u32::from_le_bytes(take(&mut bytes)?);
             }
         }
-        Some(survey)
+        Some((cadence, survey))
     } else {
         None
     };
@@ -310,8 +310,8 @@ pub(super) fn validate_runtime_continuation_snapshot(
                     || ids.windows(2).any(|pair| pair[0] >= pair[1])
             })
         || record.next_persistent_identifier == 0
-        || record.guest_survey.is_some_and(|survey| {
-            !survey.critical_need_countdown_seconds.is_finite()
+        || record.guest_survey.is_some_and(|(cadence, survey)| {
+            !cadence.0.is_finite()
                 || survey.ratings.iter().any(|history| {
                     !history.cumulative_rating.is_finite()
                         || history.daily_ratings.iter().any(|value| !value.is_finite())
@@ -370,12 +370,14 @@ mod tests {
                     next_tick: 1234,
                     rng: DeterministicRng::from_raw([123456, 789]),
                 }),
-                guest_survey: (flags & 4 != 0).then_some(GuestSurvey {
-                    critical_need_countdown_seconds: -0.125,
-                    previous_day_of_month: 9,
-                    current_day_of_month: 1,
-                    ..Default::default()
-                }),
+                guest_survey: (flags & 4 != 0).then_some((
+                    GuestSurveyNeedCadence(-0.125),
+                    GuestSurvey {
+                        previous_day_of_month: 9,
+                        current_day_of_month: 1,
+                        ..Default::default()
+                    },
+                )),
                 guest_favourite_animal_trend: (flags & 8 != 0).then_some(
                     GuestFavouriteAnimalTrend::from_saved_state(
                         [
@@ -388,7 +390,7 @@ mod tests {
                     .unwrap(),
                 ),
             };
-            if let Some(survey) = &mut record.guest_survey {
+            if let Some((_, survey)) = &mut record.guest_survey {
                 for (index, history) in survey.ratings.iter_mut().enumerate() {
                     history.cumulative_rating = index as f32 + 0.25;
                     history.cumulative_count = index as u32 + 97;

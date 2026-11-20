@@ -192,9 +192,24 @@ pub(crate) struct EffectBatch {
     /// Alpha mode.
     pub alpha_mode: AlphaMode,
     pub cached_effect_events: Option<CachedEffectEvents>,
+    pub(super) authored_passes: Option<Vec<super::authored_draw::CompiledEffectRenderPass>>,
 }
 
 impl EffectBatch {
+    pub(super) fn init_metadata_bind_group_slot(&self) -> (SlabId, Option<BufferTableId>) {
+        let instance = self
+            .cached_effect_events
+            .as_ref()
+            .map(|_| self.effect_data[0].metadata_table_id);
+        (self.slab_id, instance)
+    }
+
+    pub(super) fn update_metadata_bind_group_slot(&self) -> (SlabId, Option<BufferTableId>) {
+        let instance =
+            (!self.child_event_buffers.is_empty()).then(|| self.effect_data[0].metadata_table_id);
+        (self.slab_id, instance)
+    }
+
     /// Try to merge another batch into this one.
     ///
     /// # Returns
@@ -205,7 +220,9 @@ impl EffectBatch {
     pub fn try_merge(&mut self, input: EffectBatch) -> Result<(), EffectBatch> {
         // Keep merging conservative; parent/child/event-linked effects require
         // additional per-effect bindings and aren't safe to merge yet.
-        if self.handle != input.handle
+        if self.authored_passes.is_some()
+            || input.authored_passes.is_some()
+            || self.handle != input.handle
             || self.slab_id != input.slab_id
             || self.init_and_update_pipeline_ids != input.init_and_update_pipeline_ids
             || self.mesh != input.mesh
@@ -728,6 +745,8 @@ pub(crate) struct EffectDrawBatch {
     pub effect_batch_index: EffectBatchIndex,
     /// Position of the emitter so we can compute distance to camera.
     pub translation: Vec3,
+    /// Transform used for distance sorting particles in local simulation space.
+    pub transform: GlobalTransform,
     /// The main-world entity that contains this effect.
     #[allow(dead_code)]
     pub main_entity: MainEntity,
@@ -796,6 +815,7 @@ impl EffectBatch {
             textures: extracted_effect.textures.clone(),
             alpha_mode: extracted_effect.alpha_mode,
             cached_effect_events: cached_effect_events.cloned(),
+            authored_passes: None,
         }
     }
 }

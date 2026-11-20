@@ -3,8 +3,7 @@ use openzt2_game_data::ui_document::document::UiDocumentRole;
 use openzt2_game_data::AssetId;
 
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
-use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner;
-use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentRoot;
+use openzt2_interface_state::ui::ui_document_lifecycle_contracts::ShowUiRole;
 
 use openzt2_interface_state::information::catalogue_types::SelectedCatalogueEntry;
 use openzt2_interface_state::information::entity_selection_types::Inspectable;
@@ -20,18 +19,11 @@ pub(crate) struct ZoopediaNavigationActionContext<'a, 'world, 'state> {
     pub(crate) selected_catalogue_entry: &'a SelectedCatalogueEntry,
     pub(crate) world_definitions: Option<WorldDefinitionsView<'a>>,
     pub(crate) inspectable_world_entities: &'a Query<'world, 'state, &'static Inspectable>,
-    pub(crate) document_roots:
-        &'a Query<'world, 'state, (&'static UiDocumentRoot, &'static ChildOf)>,
-    pub(crate) zoopedia_pages: &'a mut Query<
-        'world,
-        'state,
-        (
-            Entity,
-            &'static UiDocumentOwner,
-            &'static mut ZoopediaPage,
-            Option<&'static mut ZoopediaHistory>,
-        ),
-    >,
+    pub(crate) document_children: &'a Query<'world, 'state, &'static Children>,
+    pub(crate) zoopedia_pages:
+        &'a mut Query<'world, 'state, (&'static mut ZoopediaPage, &'static mut ZoopediaHistory)>,
+    pub(crate) pending: &'a mut Query<'world, 'state, &'static mut PendingZoopediaEntry>,
+    pub(crate) show_roles: &'a mut MessageWriter<'world, ShowUiRole>,
     pub(crate) commands: &'a mut Commands<'world, 'state>,
 }
 

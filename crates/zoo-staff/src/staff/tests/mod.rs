@@ -14,13 +14,9 @@ use openzt2_game_data::{
 };
 
 use super::{
-    staff_assignment_cleanup::clear_assignments_to_despawned_world_entities,
-    staff_assignment_types::StaffAssignment,
-    staff_employment_types::{AvailableForWork, Staff},
-    staff_job_claim_ranking::{
-        insert_candidate_into_ranked_staff_job_claim_candidates, RankedStaffJobClaimCandidate,
-        MAXIMUM_RANKED_STAFF_JOB_CANDIDATES,
-    },
+    staff_assignment_types::{StaffAssignmentArea, StaffAssignmentTarget},
+    staff_employment_types::Staff,
+    staff_job_claim_ranking::RankedStaffJobClaimCandidate,
     staff_job_completion_and_cancellation::{
         cancel_requested_jobs_and_jobs_with_invalid_world_relations,
         release_staff_and_despawn_completed_jobs,
@@ -63,13 +59,9 @@ fn claim_order_is_urgency_priority_distance_then_entity() {
         authored_priority: 4.0,
         distance_squared: 100.0,
     };
-    let mut candidates = [None; MAXIMUM_RANKED_STAFF_JOB_CANDIDATES];
-    insert_candidate_into_ranked_staff_job_claim_candidates(&mut candidates, low);
-    insert_candidate_into_ranked_staff_job_claim_candidates(&mut candidates, urgent);
-    insert_candidate_into_ranked_staff_job_claim_candidates(&mut candidates, priority);
-    assert_eq!(candidates[0], Some(urgent));
-    assert_eq!(candidates[1], Some(priority));
-    assert_eq!(candidates[2], Some(low));
+    let mut candidates = [low, urgent, priority];
+    candidates.sort_unstable_by(RankedStaffJobClaimCandidate::claim_order);
+    assert_eq!(candidates, [urgent, priority, low]);
 }
 
 #[test]
@@ -107,21 +99,20 @@ fn deleted_assignment_relationships_are_cleared() {
         .world_mut()
         .spawn((
             Staff,
-            StaffAssignment {
-                area: Some(area),
-                target: Some(target),
-            },
+            StaffAssignmentArea(area),
+            StaffAssignmentTarget(target),
             WorldMember { root },
         ))
         .id();
-    app.add_systems(Update, clear_assignments_to_despawned_world_entities);
-    app.world_mut().despawn(area);
-    app.world_mut().despawn(target);
-    app.update();
-    assert_eq!(
-        app.world().get::<StaffAssignment>(staff),
-        Some(&StaffAssignment::default())
+    app.add_observer(
+        super::staff_assignment_cleanup::release_staff_restrictions_when_target_leaves_world,
     );
+    app.world_mut().despawn(area);
+    app.world_mut().entity_mut(target).remove::<WorldMember>();
+    app.update();
+    assert!(app.world().get_entity(staff).is_ok());
+    assert!(app.world().get::<StaffAssignmentArea>(staff).is_none());
+    assert!(app.world().get::<StaffAssignmentTarget>(staff).is_none());
 }
 
 #[test]
@@ -143,7 +134,6 @@ fn completion_clears_reciprocal_facts_and_releases_staff() {
             JobClaim { staff },
         ))
         .id();
-    app.world_mut().entity_mut(staff).insert(CurrentJob { job });
     app.world_mut().write_message(StaffJobCompleted {
         staff,
         job,
@@ -153,7 +143,6 @@ fn completion_clears_reciprocal_facts_and_releases_staff() {
     app.update();
     assert!(app.world().get_entity(job).is_err());
     assert!(app.world().get::<CurrentJob>(staff).is_none());
-    assert!(app.world().get::<AvailableForWork>(staff).is_some());
 }
 
 #[test]

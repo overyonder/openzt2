@@ -27,6 +27,7 @@ pub(super) fn select_authored_transport_vehicle_for_selected_compatible_circuit(
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,
     transport_circuits: Query<&TransportCircuit>,
+    mut selected_vehicle_definitions: Query<&mut CircuitVehicleDefinition>,
     transport_circuit_members: Query<&CircuitMember>,
     mut commands: Commands,
 ) {
@@ -60,15 +61,22 @@ pub(super) fn select_authored_transport_vehicle_for_selected_compatible_circuit(
     else {
         return;
     };
-    for purchase_choice in purchase_choices.read() {
-        if world_definitions
-            .find_vehicle(purchase_choice.definition)
-            .is_some_and(|vehicle| vehicle.kind == transport_kind)
-        {
-            commands
-                .entity(circuit_entity)
-                .insert(CircuitVehicleDefinition(purchase_choice.definition));
-        }
+    let Some(definition) = purchase_choices
+        .read()
+        .filter(|choice| {
+            world_definitions
+                .find_vehicle(choice.definition)
+                .is_some_and(|vehicle| vehicle.kind == transport_kind)
+        })
+        .last()
+        .map(|choice| CircuitVehicleDefinition(choice.definition))
+    else {
+        return;
+    };
+    if let Ok(mut current) = selected_vehicle_definitions.get_mut(circuit_entity) {
+        current.set_if_neq(definition);
+    } else {
+        commands.entity(circuit_entity).insert(definition);
     }
 }
 
@@ -79,7 +87,7 @@ pub(super) fn route_authored_transport_ui_actions_to_selected_circuit_and_path_d
     action_nodes: Query<(&UiTransportActions, &UiDocumentOwner)>,
     roots: Query<&UiDocumentRoot>,
     selected_entity: WorldUiSelection,
-    circuits: Query<(&TransportCircuit, Option<&CircuitDirection>)>,
+    mut circuits: Query<&mut CircuitDirection, With<TransportCircuit>>,
     circuit_members: Query<&CircuitMember>,
     vehicle_definitions: Query<&CircuitVehicleDefinition>,
     pending_deletions: Query<&TransportPathDeletionPending>,
@@ -132,16 +140,13 @@ pub(super) fn route_authored_transport_ui_actions_to_selected_circuit_and_path_d
                     let Some(circuit) = selected_transport_circuit else {
                         continue;
                     };
-                    let direction = circuits
-                        .get(circuit)
-                        .ok()
-                        .and_then(|(_, direction)| direction)
-                        .copied()
-                        .unwrap_or_default();
-                    commands.entity(circuit).insert(match direction {
+                    let Ok(mut direction) = circuits.get_mut(circuit) else {
+                        continue;
+                    };
+                    *direction = match *direction {
                         CircuitDirection::Forward => CircuitDirection::Reverse,
                         CircuitDirection::Reverse => CircuitDirection::Forward,
-                    });
+                    };
                 }
                 UiTransportAction::GenerateVehicleForSelectedTransportCircuit => {
                     let Some(circuit) = selected_transport_circuit else {

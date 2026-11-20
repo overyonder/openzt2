@@ -219,7 +219,11 @@ impl Plugin for HanabiPlugin {
                 PostUpdate,
                 (
                     tick_spawners.in_set(EffectSystems::TickSpawners),
-                    compile_effects.in_set(EffectSystems::CompileEffects),
+                    (
+                        compile_effects,
+                        crate::render::authored_draw::compile_effect_render_passes,
+                    )
+                        .in_set(EffectSystems::CompileEffects),
                     update_properties_from_asset.in_set(EffectSystems::UpdatePropertiesFromAsset),
                 ),
             );
@@ -305,6 +309,15 @@ impl Plugin for HanabiPlugin {
             let sort_shader = assets.add(sort_shader);
             let sort_merge_shader = assets.add(sort_merge_shader);
             let sort_copy_shader = assets.add(sort_copy_shader);
+            assets
+                .insert(
+                    &crate::render::distance_sort::DISTANCE_SORT_SHADER,
+                    Shader::from_wgsl(
+                        include_str!("render/vfx_distance_sort.wgsl"),
+                        "hanabi/distance_sort.wgsl",
+                    ),
+                )
+                .unwrap();
 
             (
                 indirect_shader_noevent,
@@ -361,6 +374,8 @@ impl Plugin for HanabiPlugin {
             .init_resource::<ParticlesUpdatePipeline>()
             .init_resource::<SpecializedComputePipelines<ParticlesUpdatePipeline>>()
             .init_resource::<ParticlesRenderPipeline>()
+            .init_resource::<crate::render::authored_draw::AuthoredParticleDrawQueue>()
+            .init_resource::<crate::render::distance_sort::ParticleDistanceSortPipeline>()
             .init_resource::<SpecializedRenderPipelines<ParticlesRenderPipeline>>()
             .init_resource::<EffectAssetEvents>()
             .init_resource::<SimParams>()
@@ -523,6 +538,7 @@ impl Plugin for HanabiPlugin {
             world.add_observer(on_remove_cached_metadata);
             world.add_observer(on_remove_cached_draw_indirect_args);
             world.add_observer(on_remove_cached_effect_events);
+            world.add_observer(crate::render::on_remove_cached_parent_info);
             world.add_observer(on_remove_cached_properties);
         }
 

@@ -16,7 +16,20 @@ pub struct InstalledShowPlatformUpgrade(pub ShowPlatformUpgradeKind);
 /// Gameplay ownership relation for an installed upgrade whose visual parent
 /// may be a named socket entity beneath the stage prefab.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+#[relationship(relationship_target = ShowPlatformUpgrades)]
 pub struct InstalledShowPlatformUpgradeStage(pub Entity);
+
+#[derive(Component)]
+#[relationship_target(relationship = InstalledShowPlatformUpgradeStage, linked_spawn)]
+pub struct ShowPlatformUpgrades(Vec<Entity>);
+
+#[derive(Component)]
+#[relationship(relationship_target = PendingShowPlatformRestores)]
+pub struct RestoreShowPlatformUpgradeOf(pub Entity);
+
+#[derive(Component)]
+#[relationship_target(relationship = RestoreShowPlatformUpgradeOf, linked_spawn)]
+pub struct PendingShowPlatformRestores(Vec<Entity>);
 
 #[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RestoreShowPlatformUpgrade {
@@ -28,7 +41,6 @@ pub struct RestoreShowPlatformUpgrade {
 /// A saved upgrade waiting for its stage, prefab and socket to load.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PendingShowPlatformUpgradeRestore {
-    pub stage: Entity,
     pub kind: ShowPlatformUpgradeKind,
     pub persistent_id: openzt2_world_state::world_spawn::persistent_id_types::PersistentId,
 }

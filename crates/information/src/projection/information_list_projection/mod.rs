@@ -1,11 +1,15 @@
-use bevy::prelude::*;
+use bevy::{
+    ecs::{relationship::RelationshipTarget, system::SystemParam},
+    prelude::*,
+};
 use openzt2_game_data::ui_document::action::information::{
     InformationListCategory, InformationViewCategory,
 };
 
-use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::SetUiListRowCount;
+use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::RequestedUiListRowCount;
 use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::UiListRow;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
+use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 use openzt2_zoo_state::animal_lifecycle::types::Animal;
 use openzt2_zoo_state::animal_lifecycle::types::Pregnancy;
 use openzt2_zoo_state::animal_welfare::types::AnimalWelfare;
@@ -14,6 +18,7 @@ use openzt2_zoo_state::donations::donation_payment_types::DonationTotal;
 use openzt2_zoo_state::economy::facility_economy_types::FacilityProfit;
 use openzt2_zoo_state::economy::facility_economy_types::OperatingSinceDay;
 use openzt2_zoo_state::economy::facility_economy_types::ServiceFacility;
+use openzt2_zoo_state::economy::service_types::FacilityReservations;
 use openzt2_zoo_state::guests::guest_simulation_types::Guest;
 use openzt2_zoo_state::guests::guest_simulation_types::GuestFavouriteAnimal;
 use openzt2_zoo_state::guests::guest_simulation_types::GuestSatisfaction;
@@ -25,21 +30,176 @@ use openzt2_interface_state::information::entity_selection_types::Inspectable;
 
 use super::super::{
     information_list_types::{
-        InformationEntityListPanel, InformationEntityListSort,
+        InformationEntityListPanel, InformationEntityListSort, InformationListOrder,
         InformationListRowProjectionCandidate,
     },
     information_view_types::InformationViewClass,
 };
 
+use super::entity_editor_data_root_projection::InspectableWorldSubjects;
+
+#[derive(SystemParam)]
+pub(crate) struct InformationListSortInputs<'w, 's> {
+    membership: Query<
+        'w,
+        's,
+        (),
+        (
+            With<Inspectable>,
+            Or<(
+                Added<Animal>,
+                Added<Guest>,
+                Added<Staff>,
+                Added<DonationAcceptor>,
+                Changed<InformationViewClass>,
+                Added<TransportVehicle>,
+            )>,
+        ),
+    >,
+    definition: Query<'w, 's, (), Changed<Inspectable>>,
+    names: Query<'w, 's, (), (With<Inspectable>, Changed<Name>)>,
+    happiness: Query<
+        'w,
+        's,
+        (),
+        (
+            With<Inspectable>,
+            Or<(Changed<AnimalWelfare>, Changed<GuestSatisfaction>)>,
+        ),
+    >,
+    pregnancy: Query<'w, 's, (), (With<Inspectable>, Added<Pregnancy>)>,
+    favourites: Query<'w, 's, (), (With<Inspectable>, Changed<GuestFavouriteAnimal>)>,
+    opened: Query<'w, 's, (), (With<Inspectable>, Changed<OperatingSinceDay>)>,
+    profit: Query<
+        'w,
+        's,
+        (),
+        (
+            With<Inspectable>,
+            Or<(Changed<FacilityProfit>, Changed<DonationTotal>)>,
+        ),
+    >,
+    capacity: Query<
+        'w,
+        's,
+        (),
+        (
+            With<Inspectable>,
+            Or<(
+                Changed<ServiceFacility>,
+                Changed<FacilityReservations>,
+                Changed<TransportVehicle>,
+            )>,
+        ),
+    >,
+    removed: (
+        RemovedComponents<'w, 's, InspectableWorldSubjects>,
+        RemovedComponents<'w, 's, InformationViewClass>,
+        RemovedComponents<'w, 's, Animal>,
+        RemovedComponents<'w, 's, Guest>,
+        RemovedComponents<'w, 's, Staff>,
+        RemovedComponents<'w, 's, DonationAcceptor>,
+        RemovedComponents<'w, 's, TransportVehicle>,
+        RemovedComponents<'w, 's, Name>,
+        RemovedComponents<'w, 's, Pregnancy>,
+        RemovedComponents<'w, 's, FacilityReservations>,
+        RemovedComponents<'w, 's, AnimalWelfare>,
+        RemovedComponents<'w, 's, GuestSatisfaction>,
+        RemovedComponents<'w, 's, GuestFavouriteAnimal>,
+        RemovedComponents<'w, 's, FacilityProfit>,
+        RemovedComponents<'w, 's, DonationTotal>,
+        RemovedComponents<'w, 's, OperatingSinceDay>,
+    ),
+}
+
+impl InformationListSortInputs<'_, '_> {
+    fn take_dirty_removals(&mut self) -> bool {
+        let (
+            worlds,
+            classes,
+            animals,
+            guests,
+            staff,
+            donations,
+            vehicles,
+            names,
+            pregnancies,
+            reservations,
+            welfare,
+            satisfaction,
+            favourites,
+            profit,
+            totals,
+            opened,
+        ) = &mut self.removed;
+        let dirty = !worlds.is_empty()
+            || !classes.is_empty()
+            || !animals.is_empty()
+            || !guests.is_empty()
+            || !staff.is_empty()
+            || !donations.is_empty()
+            || !vehicles.is_empty()
+            || !names.is_empty()
+            || !pregnancies.is_empty()
+            || !reservations.is_empty()
+            || !welfare.is_empty()
+            || !satisfaction.is_empty()
+            || !favourites.is_empty()
+            || !profit.is_empty()
+            || !totals.is_empty()
+            || !opened.is_empty();
+        worlds.clear();
+        classes.clear();
+        animals.clear();
+        guests.clear();
+        staff.clear();
+        donations.clear();
+        vehicles.clear();
+        names.clear();
+        pregnancies.clear();
+        reservations.clear();
+        welfare.clear();
+        satisfaction.clear();
+        favourites.clear();
+        profit.clear();
+        totals.clear();
+        opened.clear();
+        dirty
+    }
+
+    fn active_sort_key_changed(&self, sort: InformationEntityListSort, day_changed: bool) -> bool {
+        use InformationEntityListSort::*;
+        match sort {
+            SourceOrder => false,
+            Type { .. } => !self.definition.is_empty(),
+            Name { .. } => !self.names.is_empty(),
+            Need { .. } | AnimalHappiness { .. } => !self.happiness.is_empty(),
+            AnimalPregnancy { .. } => !self.pregnancy.is_empty(),
+            GuestFavouriteAnimal => !self.favourites.is_empty(),
+            MonthsOpen { .. } => day_changed || !self.opened.is_empty(),
+            Profit { .. } | AverageProfit { .. } => !self.profit.is_empty(),
+            CurrentCapacity { .. } | TotalCapacity { .. } => !self.capacity.is_empty(),
+        }
+    }
+}
+
 /// Populates visible rows after sorting the eligible world entities.
 pub(crate) fn project_live_world_entities_to_visible_information_list_rows(
-    information_list_panels: Query<(Entity, &InformationEntityListPanel, &InheritedVisibility)>,
-    reusable_information_list_rows: Query<(
+    mut information_list_panels: Query<(
         Entity,
-        &UiListRow,
-        &ChildOf,
-        Option<&InformationEntitySource>,
+        Ref<InformationEntityListPanel>,
+        Ref<InheritedVisibility>,
+        Option<Ref<Children>>,
+        &mut InformationListOrder,
+        &mut RequestedUiListRowCount,
     )>,
+    mut reusable_information_list_rows: Query<(
+        Ref<UiListRow>,
+        Option<&mut InformationEntitySource>,
+    )>,
+    world_subjects: Query<Ref<InspectableWorldSubjects>, With<WorldRoot>>,
+    changed_rows: Query<&ChildOf, Changed<UiListRow>>,
+    mut inputs: InformationListSortInputs,
     animals: Query<
         (
             Entity,
@@ -64,6 +224,7 @@ pub(crate) fn project_live_world_entities_to_visible_information_list_rows(
         &Inspectable,
         &InformationViewClass,
         Option<&ServiceFacility>,
+        Option<&FacilityReservations>,
         Option<&OperatingSinceDay>,
         Option<&FacilityProfit>,
     )>,
@@ -80,45 +241,59 @@ pub(crate) fn project_live_world_entities_to_visible_information_list_rows(
     vehicles: Query<(Entity, &Inspectable, &TransportVehicle)>,
     entity_names: Query<&Name>,
     zoo_clock: Res<ZooClock>,
-    mut information_list_row_count_requests: MessageWriter<SetUiListRowCount>,
+    mut previous_day: Local<u32>,
     mut commands: Commands,
 ) {
-    for (panel_entity, information_list_panel, inherited_visibility) in &information_list_panels {
-        if !inherited_visibility.get() {
+    let memberships_dirty = inputs.take_dirty_removals()
+        || !inputs.membership.is_empty()
+        || world_subjects.iter().any(|subjects| subjects.is_changed());
+    let day_changed = *previous_day != zoo_clock.absolute_day;
+    *previous_day = zoo_clock.absolute_day;
+    let dirty_lists = changed_rows
+        .iter()
+        .map(ChildOf::parent)
+        .collect::<std::collections::HashSet<_>>();
+    for (list, information_list_panel, visibility, children, mut order, mut requested_count) in
+        &mut information_list_panels
+    {
+        let rebuild_order = information_list_panel.is_changed()
+            || (visibility.is_changed() && visibility.get())
+            || memberships_dirty
+            || inputs.active_sort_key_changed(information_list_panel.sort, day_changed);
+        if !visibility.get() {
             continue;
         }
-        let mut projection_candidates = Vec::new();
-        let create_projection_candidate =
-            |entity: Entity, inspectable: &Inspectable| InformationListRowProjectionCandidate {
-                entity,
-                definition: inspectable.definition.0,
-                name: entity_names.get(entity).map_or("", Name::as_str),
-                welfare: 0,
-                pregnant: false,
-                satisfaction: 0,
-                favourite_animal: None,
-                months_open: 0,
-                profit_cents: 0,
-                average_profit_cents: 0,
-                current_capacity: 0,
-                total_capacity: 0,
-            };
-        match information_list_panel.category {
-            InformationListCategory::Animals => {
-                animals
-                    .iter()
-                    .for_each(|(entity, inspectable, welfare, pregnancy)| {
-                        let mut projection_candidate =
-                            create_projection_candidate(entity, inspectable);
-                        projection_candidate.welfare = welfare.map_or(0, |welfare| welfare.0);
-                        projection_candidate.pregnant = pregnancy.is_some();
-                        projection_candidates.push(projection_candidate);
-                    })
-            }
-            InformationListCategory::Guests => {
-                guests
-                    .iter()
-                    .for_each(|(entity, inspectable, satisfaction, favourite_animal)| {
+        if rebuild_order {
+            let mut projection_candidates = Vec::new();
+            let create_projection_candidate =
+                |entity: Entity, inspectable: &Inspectable| InformationListRowProjectionCandidate {
+                    entity,
+                    definition: inspectable.definition.0,
+                    name: entity_names.get(entity).map_or("", Name::as_str),
+                    welfare: 0,
+                    pregnant: false,
+                    satisfaction: 0,
+                    favourite_animal: None,
+                    months_open: 0,
+                    profit_cents: 0,
+                    average_profit_cents: 0,
+                    current_capacity: 0,
+                    total_capacity: 0,
+                };
+            match information_list_panel.category {
+                InformationListCategory::Animals => {
+                    animals
+                        .iter()
+                        .for_each(|(entity, inspectable, welfare, pregnancy)| {
+                            let mut projection_candidate =
+                                create_projection_candidate(entity, inspectable);
+                            projection_candidate.welfare = welfare.map_or(0, |welfare| welfare.0);
+                            projection_candidate.pregnant = pregnancy.is_some();
+                            projection_candidates.push(projection_candidate);
+                        })
+                }
+                InformationListCategory::Guests => guests.iter().for_each(
+                    |(entity, inspectable, satisfaction, favourite_animal)| {
                         let mut projection_candidate =
                             create_projection_candidate(entity, inspectable);
                         projection_candidate.satisfaction =
@@ -127,92 +302,125 @@ pub(crate) fn project_live_world_entities_to_visible_information_list_rows(
                             .and_then(|favourite_animal| favourite_animal.0)
                             .map(|favourite_animal_identifier| favourite_animal_identifier.0);
                         projection_candidates.push(projection_candidate);
-                    })
-            }
-            InformationListCategory::Staff => staff.iter().for_each(|(entity, inspectable)| {
-                projection_candidates.push(create_projection_candidate(entity, inspectable));
-            }),
-            InformationListCategory::Buildings => buildings
-                .iter()
-                .filter(|(_, _, class, _, _, _)| class.0 == InformationViewCategory::Buildings)
-                .for_each(|(entity, inspectable, _, facility, opened, profit)| {
-                    let mut projection_candidate = create_projection_candidate(entity, inspectable);
-                    if let Some(facility) = facility {
-                        projection_candidate.current_capacity = facility.occupied;
-                        projection_candidate.total_capacity = facility.capacity;
-                    }
-                    projection_candidate.months_open = opened.map_or(0, |opened| {
-                        zoo_clock.absolute_day.saturating_sub(opened.0) / 30
-                    });
-                    if let Some(profit) = profit {
-                        projection_candidate.profit_cents = profit.total.0;
-                        projection_candidate.average_profit_cents = profit.average().0;
-                    }
-                    projection_candidates.push(projection_candidate);
+                    },
+                ),
+                InformationListCategory::Staff => staff.iter().for_each(|(entity, inspectable)| {
+                    projection_candidates.push(create_projection_candidate(entity, inspectable));
                 }),
-            InformationListCategory::DonationBoxes => donation_boxes.iter().for_each(
-                |(entity, inspectable, donation_total, opened, profit)| {
-                    let mut projection_candidate = create_projection_candidate(entity, inspectable);
-                    projection_candidate.months_open = opened.map_or(0, |opened| {
-                        zoo_clock.absolute_day.saturating_sub(opened.0) / 30
-                    });
-                    if let Some(donation_total) = donation_total {
-                        projection_candidate.profit_cents = donation_total.amount.0;
-                        projection_candidate.average_profit_cents = (donation_total.count != 0)
-                            .then(|| donation_total.amount.0 / i64::from(donation_total.count))
-                            .unwrap_or(0);
-                    }
-                    if let Some(profit) = profit {
-                        projection_candidate.profit_cents = profit.total.0;
-                        projection_candidate.average_profit_cents = profit.average().0;
-                    }
-                    projection_candidates.push(projection_candidate);
-                },
-            ),
-            InformationListCategory::Vehicles => {
-                vehicles.iter().for_each(|(entity, inspectable, vehicle)| {
-                    let mut projection_candidate = create_projection_candidate(entity, inspectable);
-                    projection_candidate.current_capacity = vehicle.occupied;
-                    projection_candidate.total_capacity = vehicle.seats;
-                    projection_candidates.push(projection_candidate);
-                })
-            }
-        }
-        // Sort the bounded references used by this projection directly. This
-        // is the sole multilist ordering point; no copied source container or
-        // independently maintained sorting model survives the frame.
-        projection_candidates.sort_unstable_by(|left_candidate, right_candidate| {
-            compare_information_list_row_projection_candidates(
-                left_candidate,
-                right_candidate,
-                information_list_panel.sort,
-            )
-        });
-        information_list_row_count_requests.write(SetUiListRowCount {
-            list: panel_entity,
-            count: projection_candidates.len().min(usize::from(u16::MAX)) as u16,
-        });
-        for (row_entity, reusable_row, parent, current_information_entity_source) in
-            &reusable_information_list_rows
-        {
-            if parent.parent() != panel_entity {
-                continue;
-            }
-            if let Some(projection_candidate) =
-                projection_candidates.get(usize::from(reusable_row.index))
-            {
-                if current_information_entity_source
-                    .is_none_or(|current_source| current_source.0 != projection_candidate.entity)
-                {
-                    commands
-                        .entity(row_entity)
-                        .insert(InformationEntitySource(projection_candidate.entity));
+                InformationListCategory::Buildings => buildings
+                    .iter()
+                    .filter(|(_, _, class, _, _, _, _)| {
+                        class.0 == InformationViewCategory::Buildings
+                    })
+                    .for_each(
+                        |(entity, inspectable, _, facility, reservations, opened, profit)| {
+                            let mut projection_candidate =
+                                create_projection_candidate(entity, inspectable);
+                            if let Some(facility) = facility {
+                                projection_candidate.current_capacity =
+                                    u16::try_from(reservations.map_or(0, RelationshipTarget::len))
+                                        .unwrap_or(u16::MAX);
+                                projection_candidate.total_capacity = facility.capacity;
+                            }
+                            projection_candidate.months_open = opened.map_or(0, |opened| {
+                                zoo_clock.absolute_day.saturating_sub(opened.0) / 30
+                            });
+                            if let Some(profit) = profit {
+                                projection_candidate.profit_cents = profit.total.0;
+                                projection_candidate.average_profit_cents = profit.average().0;
+                            }
+                            projection_candidates.push(projection_candidate);
+                        },
+                    ),
+                InformationListCategory::DonationBoxes => donation_boxes.iter().for_each(
+                    |(entity, inspectable, donation_total, opened, profit)| {
+                        let mut projection_candidate =
+                            create_projection_candidate(entity, inspectable);
+                        projection_candidate.months_open = opened.map_or(0, |opened| {
+                            zoo_clock.absolute_day.saturating_sub(opened.0) / 30
+                        });
+                        if let Some(donation_total) = donation_total {
+                            projection_candidate.profit_cents = donation_total.amount.0;
+                            projection_candidate.average_profit_cents = (donation_total.count != 0)
+                                .then(|| donation_total.amount.0 / i64::from(donation_total.count))
+                                .unwrap_or(0);
+                        }
+                        if let Some(profit) = profit {
+                            projection_candidate.profit_cents = profit.total.0;
+                            projection_candidate.average_profit_cents = profit.average().0;
+                        }
+                        projection_candidates.push(projection_candidate);
+                    },
+                ),
+                InformationListCategory::Vehicles => {
+                    vehicles.iter().for_each(|(entity, inspectable, vehicle)| {
+                        let mut projection_candidate =
+                            create_projection_candidate(entity, inspectable);
+                        projection_candidate.current_capacity = vehicle.occupied;
+                        projection_candidate.total_capacity = vehicle.seats;
+                        projection_candidates.push(projection_candidate);
+                    })
                 }
-            } else if current_information_entity_source.is_some() {
+            }
+            // Sort the bounded references used by this projection directly. This
+            // is the sole multilist ordering point; no copied source container or
+            // independently maintained sorting model survives the frame.
+            projection_candidates.sort_unstable_by(|left_candidate, right_candidate| {
+                compare_information_list_row_projection_candidates(
+                    left_candidate,
+                    right_candidate,
+                    information_list_panel.sort,
+                )
+            });
+            order.0.clear();
+            order.0.extend(
+                projection_candidates
+                    .iter()
+                    .map(|candidate| candidate.entity),
+            );
+            requested_count.set_if_neq(RequestedUiListRowCount(Some(
+                order.0.len().min(usize::from(u16::MAX)) as u16,
+            )));
+        }
+        if rebuild_order
+            || dirty_lists.contains(&list)
+            || children.as_ref().is_some_and(Ref::is_changed)
+        {
+            bind_information_list_rows(
+                children.as_deref(),
+                &order.0,
+                &mut reusable_information_list_rows,
+                &mut commands,
+            );
+        }
+    }
+}
+
+pub(super) fn bind_information_list_rows(
+    children: Option<&Children>,
+    subjects: &[Entity],
+    rows: &mut Query<(Ref<UiListRow>, Option<&mut InformationEntitySource>)>,
+    commands: &mut Commands,
+) {
+    for row_entity in children.into_iter().flat_map(RelationshipTarget::iter) {
+        let Ok((row, source)) = rows.get_mut(row_entity) else {
+            continue;
+        };
+        match (subjects.get(usize::from(row.index)), source) {
+            (Some(&subject), Some(mut source)) => {
+                source.set_if_neq(InformationEntitySource(subject));
+            }
+            (Some(&subject), None) => {
+                commands
+                    .entity(row_entity)
+                    .insert(InformationEntitySource(subject));
+            }
+            (None, Some(_)) => {
                 commands
                     .entity(row_entity)
                     .remove::<InformationEntitySource>();
             }
+            (None, None) => {}
         }
     }
 }

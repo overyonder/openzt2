@@ -41,7 +41,8 @@ pub(super) struct PreparedParticleEmitter {
     pub(super) clock: ParticleEffectSimulationClock,
     pub(super) retires_when_empty: bool,
     pub(super) emission_window: Option<ParticleEmissionWindow>,
-    pub(super) birth_rate_curve: Option<ParticleBirthRateCurve>,
+    pub(super) birth_rate_curve: Option<(Box<[AuthoredParticleCurvePoint]>, bool)>,
+    pub(super) authored_initial_size: Option<f32>,
     pub(super) manually_driven: bool,
     pub(super) uses_plane: bool,
 }
@@ -79,34 +80,6 @@ impl ParticleEmissionWindow {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-pub(super) struct ParticleBirthRateCurve {
-    emitter_index: usize,
-    modifier_index: usize,
-}
-
-impl ParticleBirthRateCurve {
-    pub(super) fn points(
-        self,
-        document: &ParticleEffectDocument,
-    ) -> Option<(&[AuthoredParticleCurvePoint], bool)> {
-        let ParticleEffectDocument::Effect(effect) = document else {
-            return None;
-        };
-        match effect
-            .emitters
-            .get(self.emitter_index)?
-            .modifiers
-            .get(self.modifier_index)?
-        {
-            AuthoredParticleSystemModifier::BirthRateCurve { points, looped } => {
-                Some((points, *looped))
-            }
-            _ => None,
-        }
-    }
-}
-
 #[derive(Clone, Debug, VisitAssetDependencies)]
 pub(super) struct PreparedCollisionParticleEmitter {
     pub(super) emitter: AssetId,
@@ -133,7 +106,7 @@ pub(crate) fn prepare_particle_effect_document(
                 .map(|emitter| (emitter.emitter_id, emitter))
                 .collect();
             let mut retiring_emitters = BTreeMap::new();
-            for (emitter_index, emitter) in effect.emitters.iter().enumerate() {
+            for emitter in &effect.emitters {
                 let id = emitter.emitter_id;
                 let label = format!("{label_prefix}/{}", id.to_lowercase_hexadecimal_string());
                 let apply_blend = |effect: EffectAsset, renderer: Option<&openzt2_game_data::particle::authored_particle_system::AuthoredParticleRenderer>| {
@@ -260,19 +233,28 @@ pub(crate) fn prepare_particle_effect_document(
                                 _ => None,
                             },
                         ),
-                        birth_rate_curve: emitter
-                            .modifiers
-                            .iter()
-                            .position(|modifier| {
-                                matches!(
-                                    modifier,
-                                    AuthoredParticleSystemModifier::BirthRateCurve { .. }
-                                )
-                            })
-                            .map(|modifier_index| ParticleBirthRateCurve {
-                                emitter_index,
-                                modifier_index,
-                            }),
+                        birth_rate_curve: emitter.modifiers.iter().find_map(|modifier| {
+                            match modifier {
+                                AuthoredParticleSystemModifier::BirthRateCurve {
+                                    points,
+                                    looped,
+                                } => Some((points.clone().into_boxed_slice(), *looped)),
+                                _ => None,
+                            }
+                        }),
+                        authored_initial_size: Some(
+                            emitter
+                                .modifiers
+                                .iter()
+                                .find_map(|modifier| match modifier {
+                                    AuthoredParticleSystemModifier::InitialSizeRange {
+                                        max,
+                                        ..
+                                    } => Some(*max),
+                                    _ => None,
+                                })
+                                .unwrap_or_default(),
+                        ),
                         manually_driven: matches!(
                             emitter.spawn,
                             AuthoredParticleSpawnPolicy::Manual
@@ -318,6 +300,7 @@ pub(crate) fn prepare_particle_effect_document(
                         phase: 0.0,
                     }),
                     birth_rate_curve: None,
+                    authored_initial_size: None,
                     manually_driven: false,
                     uses_plane: false,
                 },
@@ -325,7 +308,6 @@ pub(crate) fn prepare_particle_effect_document(
         }
     }
     ParticleEffectDocumentAsset {
-        particle_document: document,
         roots,
         decal_emitter,
         prepared_emitters,

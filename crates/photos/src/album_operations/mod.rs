@@ -1,11 +1,11 @@
 //! Queries and mutations used to operate on photo albums and their photos.
 
-use openzt2_interface_state::photos::photo_album_types::AlbumMember;
 use openzt2_interface_state::photos::photo_album_types::PhotoAlbum;
 use openzt2_interface_state::photos::photo_album_types::PhotoAlbumOrder;
+use openzt2_interface_state::photos::photo_album_types::{AlbumMember, AlbumPhotos};
 use openzt2_interface_state::photos::photo_capture_types::Photo;
 
-use bevy::prelude::*;
+use bevy::{ecs::relationship::RelationshipTarget, prelude::*};
 
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
@@ -32,7 +32,7 @@ pub(super) fn find_photo_camera_roll_album(
         .map(|row| row.0)
 }
 
-pub(super) fn change_active_photo_album_page_by_signed_offset(
+pub(super) fn calculate_active_photo_album_page_offset(
     album: Option<Entity>,
     delta: i32,
     albums: &Query<(
@@ -45,28 +45,21 @@ pub(super) fn change_active_photo_album_page_by_signed_offset(
         Option<&PhotoCameraRoll>,
     )>,
     capacities: &Query<&PhotoAlbumCapacityPages, With<PhotoAlbum>>,
-    photos: &Query<(Entity, &Photo, &AlbumMember, Option<&PhotoAlbumOrder>)>,
-    commands: &mut Commands,
-) {
-    if let Some(album) = album {
-        let page = albums
-            .get(album)
-            .ok()
-            .and_then(|row| row.3)
-            .map_or(0, |page| page.0);
-        let count = photos
-            .iter()
-            .filter(|(_, _, member, _)| member.0 == album)
-            .count() as u32;
-        let content_last = count.saturating_sub(1) / PHOTO_ALBUM_PAGE_SIZE;
-        let capacity_last = capacities
-            .get(album)
-            .map_or(0, |capacity| capacity.0.saturating_sub(1));
-        let last = content_last.max(capacity_last);
-        commands
-            .entity(album)
-            .insert(PhotoAlbumPage(page.saturating_add_signed(delta).min(last)));
-    }
+    members: &Query<&AlbumPhotos>,
+) -> Option<(Entity, PhotoAlbumPage)> {
+    let album = album?;
+    let page = albums.get(album).ok()?.3.map_or(0, |page| page.0);
+    let count =
+        u32::try_from(members.get(album).map_or(0, RelationshipTarget::len)).unwrap_or(u32::MAX);
+    let content_last = count.saturating_sub(1) / PHOTO_ALBUM_PAGE_SIZE;
+    let capacity_last = capacities
+        .get(album)
+        .map_or(0, |capacity| capacity.0.saturating_sub(1));
+    let last = content_last.max(capacity_last);
+    Some((
+        album,
+        PhotoAlbumPage(page.saturating_add_signed(delta).min(last)),
+    ))
 }
 
 pub(super) fn find_photo_in_album_display_slot(
@@ -81,14 +74,12 @@ pub(super) fn find_photo_in_album_display_slot(
         Option<&PhotoMove>,
         Option<&PhotoCameraRoll>,
     )>,
-    photos: &Query<(Entity, &Photo, &AlbumMember, Option<&PhotoAlbumOrder>)>,
+    members: &Query<&AlbumPhotos>,
 ) -> Option<Entity> {
     let album = album?;
     let album_state = albums.get(album).ok()?;
     let rank = photo_rank_for_album_display_slot(slot, album_state.6.is_some(), album_state.3)?;
-    ordered_photo_entities_in_album(album, photos)
-        .get(rank)
-        .copied()
+    members.get(album).ok()?.collection().get(rank).copied()
 }
 
 pub(super) fn photo_rank_for_album_display_slot(
@@ -115,25 +106,39 @@ pub(super) fn photo_rank_for_album_display_slot(
         .map(|rank| rank as usize)
 }
 
-pub(super) fn ordered_photo_entities_in_album(
-    album: Entity,
-    photos: &Query<(Entity, &Photo, &AlbumMember, Option<&PhotoAlbumOrder>)>,
-) -> Vec<Entity> {
-    let mut entries: Vec<_> = photos
+pub(super) fn sort_changed_album_photo_memberships(
+    changed_memberships: Query<Entity, Changed<AlbumPhotos>>,
+    changed_orders: Query<&AlbumMember, Or<(Added<Photo>, Changed<PhotoAlbumOrder>)>>,
+    mut removed_orders: RemovedComponents<PhotoAlbumOrder>,
+    memberships: Query<&AlbumMember>,
+    photo_order: Query<(&Photo, Option<&PhotoAlbumOrder>)>,
+    mut albums: Query<&mut AlbumPhotos>,
+) {
+    let changed = changed_memberships
         .iter()
-        .filter(|(_, _, member, _)| member.0 == album)
-        .map(|(entity, photo, _, order)| {
-            (
-                (
-                    order.map_or(photo.captured_tick, |order| order.0),
-                    entity.to_bits(),
-                ),
-                entity,
-            )
-        })
-        .collect();
-    entries.sort_unstable_by_key(|entry| entry.0);
-    entries.into_iter().map(|entry| entry.1).collect()
+        .chain(changed_orders.iter().map(|member| member.0))
+        .chain(
+            removed_orders
+                .read()
+                .filter_map(|photo| memberships.get(photo).ok().map(|member| member.0)),
+        )
+        .collect::<std::collections::BTreeSet<_>>();
+    let key = |entity: &Entity| {
+        (
+            photo_order.get(*entity).map_or(0, |(photo, order)| {
+                order.map_or(photo.captured_tick, |order| order.0)
+            }),
+            entity.to_bits(),
+        )
+    };
+    for album in changed {
+        if let Ok(mut members) = albums.get_mut(album) {
+            if !members.collection().is_sorted_by_key(&key) {
+                // Reorder the relationship's existing membership in place.
+                members.collection_mut_risky().sort_unstable_by_key(&key);
+            }
+        }
+    }
 }
 
 pub(super) fn ordered_photo_album_entities(albums: impl Iterator<Item = Entity>) -> Vec<Entity> {
@@ -183,7 +188,7 @@ mod camera_roll_slot_tests {
                 Option<&PhotoMove>,
                 Option<&PhotoCameraRoll>,
             )>,
-            Query<(Entity, &Photo, &AlbumMember, Option<&PhotoAlbumOrder>)>,
+            Query<&AlbumPhotos>,
         )>::new(&mut world);
         let (albums, entries) = state.get(&world).unwrap();
         assert_eq!(
@@ -213,12 +218,12 @@ pub(super) fn select_photo_in_album_display_slot(
         Option<&PhotoMove>,
         Option<&PhotoCameraRoll>,
     )>,
-    photos: &Query<(Entity, &Photo, &AlbumMember, Option<&PhotoAlbumOrder>)>,
+    members: &Query<&AlbumPhotos>,
     commands: &mut Commands,
 ) {
     if let (Some(album), Some(photo)) = (
         album,
-        find_photo_in_album_display_slot(album, slot, albums, photos),
+        find_photo_in_album_display_slot(album, slot, albums, members),
     ) {
         for row in albums {
             if row.0 != album {
@@ -241,12 +246,12 @@ pub(super) fn deselect_photo_in_album_display_slot(
         Option<&PhotoMove>,
         Option<&PhotoCameraRoll>,
     )>,
-    photos: &Query<(Entity, &Photo, &AlbumMember, Option<&PhotoAlbumOrder>)>,
+    members: &Query<&AlbumPhotos>,
     commands: &mut Commands,
 ) {
     if let (Some(album), Some(photo)) = (
         album,
-        find_photo_in_album_display_slot(album, slot, albums, photos),
+        find_photo_in_album_display_slot(album, slot, albums, members),
     ) {
         if albums
             .get(album)
@@ -330,21 +335,24 @@ pub(super) fn reorder_photos_for_insertion_at_album_position(
     album: Entity,
     moving: Entity,
     target: u32,
-    photos: &Query<(Entity, &Photo, &AlbumMember, Option<&PhotoAlbumOrder>)>,
+    members: &Query<&AlbumPhotos>,
+    orders: &mut Query<&mut PhotoAlbumOrder>,
     commands: &mut Commands,
 ) {
-    for (rank, entity) in ordered_photo_entities_in_album(album, photos)
-        .into_iter()
-        .filter(|entity| *entity != moving)
-        .enumerate()
-    {
+    let Ok(photos) = members.get(album) else {
+        return;
+    };
+    for (rank, entity) in photos.iter().filter(|entity| *entity != moving).enumerate() {
         let rank = rank as u64;
-        commands
-            .entity(entity)
-            .insert(PhotoAlbumOrder(if rank >= u64::from(target) {
-                rank + 1
-            } else {
-                rank
-            }));
+        let order = PhotoAlbumOrder(if rank >= u64::from(target) {
+            rank + 1
+        } else {
+            rank
+        });
+        if let Ok(mut current) = orders.get_mut(entity) {
+            current.set_if_neq(order);
+        } else {
+            commands.entity(entity).insert(order);
+        }
     }
 }

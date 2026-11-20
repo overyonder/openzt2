@@ -23,7 +23,6 @@ use openzt2_zoo_state::placement::object_placement_validation::calculate_authore
 use openzt2_zoo_state::placement::object_placement_validation::rotate_object_placement_point_by_quarter_turns;
 use openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementPreviewDecal;
 use openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementPreviewMaterials;
-use openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementPreviewOwner;
 use openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementPreviewRenderable;
 use openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementPreviewVisualState;
 use openzt2_zoo_state::terrain::terrain_fitted_surface_mesh_construction::construct_rectangular_surface_mesh_fitted_to_canonical_terrain_samples;
@@ -261,8 +260,9 @@ pub(super) fn rebuild_object_placement_preview_footprint_and_grid_decals(
         Option<Ref<ObjectPlacementPrefabSource>>,
         Ref<Visibility>,
         Option<&mut ObjectPlacementPreviewVisualState>,
+        Option<&Children>,
     )>,
-    decals: Query<(Entity, &ObjectPlacementPreviewOwner), With<ObjectPlacementPreviewDecal>>,
+    decals: Query<(), With<ObjectPlacementPreviewDecal>>,
     mut terrain: PreviewDecalTerrain,
     arrow_nodes: DockArrowNodes,
 ) {
@@ -276,7 +276,7 @@ pub(super) fn rebuild_object_placement_preview_footprint_and_grid_decals(
     let edited = terrain.edits.read().count() != 0;
     let restored = terrain.restores.read().count() != 0;
     let terrain_changed = edited || restored;
-    for (entity, preview, materials, prefab, visibility, state) in &mut previews {
+    for (entity, preview, materials, prefab, visibility, state, children) in &mut previews {
         if *visibility == Visibility::Hidden {
             if terrain_changed && state.is_some() {
                 commands
@@ -375,9 +375,9 @@ pub(super) fn rebuild_object_placement_preview_footprint_and_grid_decals(
         let plane = plane
             .get_or_insert_with(|| meshes.add(Plane3d::default().mesh().size(1.0, 1.0)))
             .clone();
-        for (decal, owner) in &decals {
-            if owner.0 == entity {
-                commands.entity(decal).despawn();
+        if let Some(children) = children {
+            for child in children.iter().filter(|child| decals.contains(*child)) {
+                commands.entity(child).despawn();
             }
         }
         let decals = PreviewDecals {
@@ -479,27 +479,27 @@ pub(super) fn rebuild_object_placement_preview_footprint_and_grid_decals(
 }
 
 pub(super) fn project_object_placement_validity_onto_preview_model_tint(
-    previews: Query<Ref<ConstructionPreview>>,
-    materials: Query<&ObjectPlacementPreviewMaterials>,
-    mut renderables: Query<
-        (&ObjectPlacementPreviewOwner, &mut PrefabModelTint),
-        With<ObjectPlacementPreviewRenderable>,
-    >,
+    previews: Query<(
+        Entity,
+        &ConstructionPreview,
+        &ObjectPlacementPreviewMaterials,
+    )>,
+    children: Query<&Children>,
+    mut renderables: Query<&mut PrefabModelTint, With<ObjectPlacementPreviewRenderable>>,
 ) {
-    for (owner, mut tint) in &mut renderables {
-        let (Ok(preview), Ok(materials)) = (previews.get(owner.0), materials.get(owner.0)) else {
-            continue;
-        };
-        if !preview.is_changed() && !tint.is_added() {
-            continue;
-        }
+    for (entity, preview, materials) in &previews {
         let next = if matches!(preview.validity, PlacementValidity::Valid { .. }) {
             materials.model_valid
         } else {
             materials.model_invalid
         };
-        if tint.0 != next {
-            tint.0 = next;
+        for descendant in children.iter_descendants_depth_first::<Children>(entity) {
+            let Ok(mut tint) = renderables.get_mut(descendant) else {
+                continue;
+            };
+            if tint.0 != next {
+                tint.0 = next;
+            }
         }
     }
 }
@@ -692,7 +692,6 @@ impl PreviewDecals<'_> {
                     .with_rotation(self.rotation)
                     .with_scale(scale),
                 ObjectPlacementPreviewDecal,
-                ObjectPlacementPreviewOwner(self.owner),
                 ChildOf(self.owner),
                 // Drawn with the terrain, as the fence grid is; otherwise the
                 // terrain pass covers it.

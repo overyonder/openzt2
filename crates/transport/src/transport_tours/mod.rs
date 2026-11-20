@@ -14,7 +14,6 @@ mod transport_fact_validation;
 mod transport_fare_settlement;
 mod transport_fare_types;
 mod transport_guest_arrival;
-mod transport_hierarchy_queries;
 mod transport_relationship_cleanup;
 mod transport_rider_boarding;
 mod transport_rider_disembarkation;
@@ -23,6 +22,7 @@ mod transport_track_construction_preview;
 mod transport_track_construction_transaction;
 mod transport_track_piece_presentation;
 mod transport_track_sale;
+mod transport_track_sale_steps;
 mod transport_ui_action_routing;
 mod transport_vehicle_movement;
 mod vehicle_generation;
@@ -75,16 +75,20 @@ impl Plugin for TransportToursPlugin {
             .add_message::<TransportTrackConstructionEditPreparationRejected>()
             .add_message::<ApplyPreparedTransportTrackConstructionEditRequest>()
             .add_message::<TransportTrackConstructionEditApplicationAcknowledged>()
+            .add_message::<transport_track_sale_steps::ApplyTransportTrackSaleStep>()
+            .add_message::<transport_track_sale_steps::TransportTrackSaleStepAcknowledged>()
             .add_message::<GenerateTransportVehicleForCircuitRequest>()
             .add_message::<BoardTransportRequest>()
             .add_message::<SkyTowerTransitionRequest>()
             .add_message::<TransportTripCompleted>()
+            .add_message::<transport_track_piece_presentation::DiscardedTrackJointEndpoints>()
+            .add_observer(transport_track_piece_presentation::capture_discarded_track_joint_endpoints)
             .add_systems(
                 Update,
                 (
+                    crate::transport_tours::transport_track_construction_preview::continue_track_preview_from_committed_junction,
                     crate::transport_tours::transport_track_construction_preview::update_transport_track_construction_preview_from_pointer_and_station_endpoints,
                     crate::transport_tours::transport_track_construction_preview::begin_or_commit_transport_track_construction_from_primary_pointer_action,
-                    crate::transport_tours::transport_track_construction_preview::highlight_transport_track_connection_stations,
                 )
                     .chain()
                     .after(openzt2_zoo_state::construction::ConstructionCursorUpdateSet)
@@ -96,12 +100,24 @@ impl Plugin for TransportToursPlugin {
                 (
                     crate::transport_tours::transport_track_piece_presentation::invalidate_sky_tower_presentations_after_connection_topology_changes,
                     crate::transport_tours::transport_track_piece_presentation::invalidate_ground_track_pieces_at_changed_joints,
-crate::transport_tours::transport_track_piece_presentation::show_construction_markers_at_open_sky_towers,
-                    crate::transport_tours::transport_track_preview_presentation::project_transport_track_construction_preview_authored_prefabs,
-                    crate::transport_tours::transport_track_piece_presentation::project_committed_transport_track_piece_authored_prefabs,
+                    crate::transport_tours::transport_track_piece_presentation::show_construction_markers_at_open_sky_towers,
+                    crate::transport_tours::transport_track_preview_presentation::project_transport_track_construction_preview_authored_prefabs
+                        .after(openzt2_zoo_state::placement::ObjectPlacementPreviewUpdateSet),
+                    crate::transport_tours::transport_track_piece_presentation::project_committed_transport_track_piece_authored_prefabs
+                        .after(crate::transport_tours::transport_track_piece_presentation::invalidate_sky_tower_presentations_after_connection_topology_changes)
+                        .after(crate::transport_tours::transport_track_piece_presentation::invalidate_ground_track_pieces_at_changed_joints),
                     crate::transport_tours::transport_track_piece_presentation::show_construction_markers_at_unconnected_road_ends,
                     crate::transport_tours::transport_track_piece_presentation::show_construction_markers_at_unconnected_station_ends,
                 )
+                    .in_set(GameSet::Presentation)
+                    .run_if(in_state(GamePhase::InGame)),
+            )
+            .add_systems(
+                Update,
+                crate::transport_tours::transport_track_construction_preview::highlight_transport_track_connection_stations
+                    .in_set(GameSet::Presentation)
+                    .after(crate::transport_tours::transport_track_preview_presentation::project_transport_track_construction_preview_authored_prefabs)
+                    .after(crate::transport_tours::transport_track_piece_presentation::project_committed_transport_track_piece_authored_prefabs)
                     .run_if(in_state(GamePhase::InGame)),
             )
             .add_systems(
@@ -121,17 +137,23 @@ crate::transport_tours::transport_track_piece_presentation::show_construction_ma
             .add_systems(
                 FixedUpdate,
                 (
-                    crate::transport_tours::transport_track_construction_transaction::apply_stepped_transport_track_construction_edits,
+                    transport_track_sale_steps::begin_requested_transport_track_sales,
                     crate::transport_tours::transport_track_construction_transaction::apply_prepared_transport_track_construction_edits,
+                    crate::transport_tours::topology::apply_transport_station_and_track_topology_mutation_requests,
                 )
                     .chain()
                     .in_set(FixedConstructionSet::Apply)
                     .after(openzt2_zoo_state::construction::ConstructionDomainApplicationDispatchSet)
+                    .after(openzt2_zoo_state::construction::ConstructionFailureRollbackDispatchSet)
                     .run_if(in_state(GamePhase::InGame)),
             )
             .add_systems(
                 FixedUpdate,
-                crate::transport_tours::transport_track_construction_transaction::acknowledge_completed_transport_track_topology_applications
+                (
+                    crate::transport_tours::transport_track_construction_transaction::acknowledge_completed_transport_track_topology_applications,
+                    transport_track_sale_steps::settle_acknowledged_transport_track_sale_steps,
+                )
+                    .chain()
                     .in_set(FixedConstructionSet::Cleanup)
                     .before(openzt2_zoo_state::construction::ConstructionDomainAcknowledgementCollectionSet)
                     .run_if(in_state(GamePhase::InGame)),
@@ -168,7 +190,6 @@ crate::transport_tours::transport_track_piece_presentation::show_construction_ma
                 (
                     crate::transport_tours::transport_definition_hydration::hydrate_transport_entities_from_authored_world_definitions,
                     crate::transport_tours::transport_construction_intent_routing::attach_committed_transport_stations_to_compatible_or_new_circuits,
-                    crate::transport_tours::topology::apply_transport_station_and_track_topology_mutation_requests,
                     crate::transport_tours::transport_definition_hydration::initialize_transport_vehicle_routes_from_first_stable_circuit_edge,
                 )
                     .chain()
@@ -177,7 +198,11 @@ crate::transport_tours::transport_track_piece_presentation::show_construction_ma
             .add_systems(
                 FixedUpdate,
                 (
-                    crate::transport_tours::transport_vehicle_movement::advance_transport_vehicles_along_canonical_track_segments,
+                    crate::transport_tours::transport_route_position_calculations::refresh_transport_track_travel_distances,
+                    crate::transport_tours::transport_vehicle_movement::advance_transport_vehicles_along_canonical_track_segments
+                        .after(crate::transport_tours::transport_route_position_calculations::refresh_transport_track_travel_distances),
+                    crate::transport_tours::transport_vehicle_movement::publish_transport_vehicle_arrivals
+                        .after(crate::transport_tours::transport_vehicle_movement::advance_transport_vehicles_along_canonical_track_segments),
                     crate::transport_tours::transport_vehicle_movement::project_consumed_transport_vehicle_movement_into_animation_speed
                         .after(crate::transport_tours::transport_vehicle_movement::advance_transport_vehicles_along_canonical_track_segments),
                 )

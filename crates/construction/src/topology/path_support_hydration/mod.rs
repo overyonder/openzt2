@@ -124,7 +124,6 @@ pub(super) fn hydrate_authored_path_supports_at_sampled_terrain_height(
         let support_entity = commands
             .spawn((
                 PathSupport {
-                    path: path_entity,
                     ground_height_m: ground_height_metres,
                 },
                 Transform::from_translation(Vec3::new(
@@ -181,33 +180,34 @@ fn lowest_ground_height_within_fit_radius(
         .reduce(f32::min)
 }
 
-pub(super) fn remove_path_supports_after_their_owning_path_is_removed(
+pub(super) fn remove_supports_when_path_tile_is_removed(
+    removed: On<Remove<PathTile>>,
+    children: Query<&Children>,
+    supports: Query<(), With<PathSupport>>,
     mut commands: Commands,
-    supports: Query<(Entity, &PathSupport)>,
-    paths: Query<(), With<PathTile>>,
-    mut removed_paths: RemovedComponents<PathTile>,
 ) {
-    for removed_path in removed_paths.read() {
-        for (support_entity, support) in &supports {
-            if support.path == removed_path && paths.get(support.path).is_err() {
-                commands.entity(support_entity).despawn();
-            }
+    if let Ok(children) = children.get(removed.entity) {
+        for child in children.iter().filter(|child| supports.contains(*child)) {
+            commands.entity(child).try_despawn();
         }
     }
+    commands
+        .entity(removed.entity)
+        .try_remove::<PathSupportHydrated>();
 }
 
 pub(super) fn invalidate_path_supports_after_topology_or_terrain_changes(
     mut commands: Commands,
     mut topology_changes: MessageReader<
-        openzt2_zoo_state::topology::topology_edit_types::TopologyChanged,
+        openzt2_zoo_state::topology::topology_edit_types::PathConnectivityChanged,
     >,
     mut terrain_changes: MessageReader<
         openzt2_zoo_state::terrain::terrain_edit_types::TerrainChanged,
     >,
     terrain_chunks: Query<&TerrainChunk>,
-    paths: Query<(Entity, &PathTile), With<PathSupportHydrated>>,
+    paths: Query<(Entity, &PathTile, Option<&Children>), With<PathSupportHydrated>>,
     changed_paths: Query<Entity, (Changed<PathTile>, With<PathSupportHydrated>)>,
-    supports: Query<(Entity, &PathSupport)>,
+    supports: Query<(), With<PathSupport>>,
     grid: Res<TopologyGrid>,
 ) {
     let topology_changed = !topology_changes.is_empty();
@@ -225,8 +225,7 @@ pub(super) fn invalidate_path_supports_after_topology_or_terrain_changes(
     if !topology_changed && terrain_regions.is_empty() && changed_paths.is_empty() {
         return;
     }
-    let mut invalidated = std::collections::HashSet::new();
-    for (entity, path) in &paths {
+    for (entity, path, children) in &paths {
         let point = grid.cell_translation(path.cell).xz();
         if topology_changed
             || changed_paths.contains(entity)
@@ -235,12 +234,11 @@ pub(super) fn invalidate_path_supports_after_topology_or_terrain_changes(
                 .any(|(min, max)| point.cmpge(*min).all() && point.cmple(*max).all())
         {
             commands.entity(entity).remove::<PathSupportHydrated>();
-            invalidated.insert(entity);
-        }
-    }
-    for (entity, support) in &supports {
-        if invalidated.contains(&support.path) {
-            commands.entity(entity).despawn();
+            if let Some(children) = children {
+                for child in children.iter().filter(|child| supports.contains(*child)) {
+                    commands.entity(child).try_despawn();
+                }
+            }
         }
     }
 }

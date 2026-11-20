@@ -1,4 +1,5 @@
 use bevy::camera::primitives::Aabb;
+use bevy::ecs::system::SystemParam;
 use bevy::picking::mesh_picking::ray_cast::MeshRayCast;
 use bevy::picking::mesh_picking::ray_cast::MeshRayCastSettings;
 use bevy::picking::mesh_picking::ray_cast::RayCastVisibility;
@@ -11,17 +12,39 @@ use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 use openzt2_zoo_state::terrain::terrain_chunk_presentation_types::TerrainRenderChunk;
 use openzt2_zoo_state::terrain::terrain_water_presentation_types::{
-    TerrainWaterMembershipIndex, TerrainWaterRegionQuery,
+    TerrainWaterMembershipIndex, TerrainWaterRegionEdit, TerrainWaterRegionQuery,
+    TerrainWaterRegionRetired, TerrainWaterRegionSource,
 };
 
 use openzt2_zoo_state::construction::construction_interaction_types::ConstructionCursor;
 use openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::ConstructionTool;
 
-#[derive(Default)]
-pub(crate) struct TerrainCursorHit {
-    ray: Option<Ray3d>,
-    chunks: usize,
-    hit: Option<(Vec3, Vec3)>,
+#[derive(Component, Default)]
+pub(crate) struct ConstructionSurfaceRay(Option<Ray3d>);
+
+#[derive(SystemParam)]
+pub(crate) struct RemovedConstructionSurfaces<'w, 's> {
+    terrain: RemovedComponents<'w, 's, TerrainRenderChunk>,
+    terrain_meshes: RemovedComponents<'w, 's, Mesh3d>,
+    water_membership: RemovedComponents<'w, 's, TerrainWaterMembershipIndex>,
+    water_sources: RemovedComponents<'w, 's, TerrainWaterRegionSource>,
+    water_edits: RemovedComponents<'w, 's, TerrainWaterRegionEdit>,
+    water_retired: RemovedComponents<'w, 's, TerrainWaterRegionRetired>,
+}
+
+impl RemovedConstructionSurfaces<'_, '_> {
+    fn changed(&mut self, terrain_chunks: &Query<(), With<TerrainRenderChunk>>) -> bool {
+        let terrain = self.terrain.read().count() != 0;
+        let meshes = self
+            .terrain_meshes
+            .read()
+            .any(|entity| terrain_chunks.contains(entity));
+        let membership = self.water_membership.read().count() != 0;
+        let sources = self.water_sources.read().count() != 0;
+        let edits = self.water_edits.read().count() != 0;
+        let retired = self.water_retired.read().count() != 0;
+        terrain || meshes || membership || sources || edits || retired
+    }
 }
 
 pub(super) fn ensure_construction_cursor(
@@ -39,6 +62,8 @@ pub(super) fn ensure_construction_cursor(
             normal: Vec3::Y,
             over_terrain: false,
         },
+        ConstructionSurfaceRay::default(),
+        super::construction_delete_hover_target_resolution::DeleteHoverProbe::default(),
         WorldMember { root },
     ));
 }
@@ -51,18 +76,8 @@ pub(crate) fn update_construction_cursor(
     terrains: Res<Assets<TerrainAsset>>,
     water_memberships: Query<&TerrainWaterMembershipIndex>,
     water_regions: TerrainWaterRegionQuery,
-    mut cursors: Query<&mut ConstructionCursor>,
+    mut cursors: Query<(&mut ConstructionCursor, &mut ConstructionSurfaceRay)>,
     tool: Res<ConstructionTool>,
-    pickable_chunks: Query<
-        (),
-        (
-            With<TerrainRenderChunk>,
-            With<Mesh3d>,
-            With<Aabb>,
-            With<InheritedVisibility>,
-            With<GlobalTransform>,
-        ),
-    >,
     changed_chunks: Query<
         (),
         (
@@ -77,31 +92,45 @@ pub(crate) fn update_construction_cursor(
             )>,
         ),
     >,
-    mut cached: Local<TerrainCursorHit>,
+    changed_water: Query<
+        (),
+        Or<(
+            Changed<TerrainWaterMembershipIndex>,
+            Changed<TerrainWaterRegionSource>,
+            Changed<TerrainWaterRegionEdit>,
+            Added<TerrainWaterRegionRetired>,
+        )>,
+    >,
+    mut removed: RemovedConstructionSurfaces,
 ) {
-    if cursors.is_empty() {
-        cached.ray = None;
+    let removed = removed.changed(&terrain_chunks);
+    let Ok((mut cursor, mut previous_ray)) = cursors.single_mut() else {
+        return;
+    };
+    let pointer = ray.0.filter(|_| !ui_pointer_capture.over_ui);
+    if pointer == previous_ray.0
+        && !tool.is_changed()
+        && !removed
+        && !terrains.is_changed()
+        && changed_chunks.is_empty()
+        && changed_water.is_empty()
+    {
         return;
     }
-    let pointer = ray.0.filter(|_| !ui_pointer_capture.over_ui);
-    let chunks = pickable_chunks.iter().len();
-    if pointer != cached.ray
-        || chunks != cached.chunks
-        || tool.is_changed()
-        || !changed_chunks.is_empty()
-    {
-        cached.ray = pointer;
-        cached.chunks = chunks;
-        cached.hit = pointer.and_then(|ray| {
-            raycast_rendered_terrain_surface(
-                ray,
-                &mut terrain_surface_mesh_ray_cast,
-                &terrain_chunks,
-            )
-        });
-    }
+    previous_ray.0 = pointer;
     let hit = pointer.and_then(|ray| {
-        let mut nearest = cached.hit;
+        let mut nearest = raycast_rendered_terrain_surface(
+            ray,
+            &mut terrain_surface_mesh_ray_cast,
+            &terrain_chunks,
+        );
+        if ray.direction.y.abs() <= 0.0001 {
+            return nearest;
+        }
+        let mut indexes = bevy::platform::collections::HashMap::<_, Vec<_>>::new();
+        for index in &water_memberships {
+            indexes.entry(index.terrain()).or_default().push(index);
+        }
         for (owner, region) in water_regions.iter() {
             let Some(terrain) = terrains.get(region.terrain()) else {
                 continue;
@@ -111,17 +140,15 @@ pub(crate) fn update_construction_cursor(
             };
             // The surface shader consumes source coordinates and displacement
             // weights, so its input mesh is not a world-space picking mesh.
-            if ray.direction.y.abs() <= 0.0001 {
-                continue;
-            }
             let distance = (height - ray.origin.y) / ray.direction.y;
             if distance < 0.0 {
                 continue;
             }
             let world = ray.get_point(distance);
-            if !water_memberships.iter().any(|index| {
-                index.terrain() == region.terrain().id()
-                    && index.owner_at_world_xz(world.xz(), terrain) == Some(Some(owner))
+            if !indexes.get(&region.terrain().id()).is_some_and(|matches| {
+                matches
+                    .iter()
+                    .any(|index| index.owner_at_world_xz(world.xz(), terrain) == Some(Some(owner)))
             }) {
                 continue;
             }
@@ -131,18 +158,16 @@ pub(crate) fn update_construction_cursor(
         }
         nearest
     });
-    for mut cursor in &mut cursors {
-        let over_terrain = hit.is_some();
-        if cursor.over_terrain != over_terrain {
-            cursor.over_terrain = over_terrain;
+    let over_terrain = hit.is_some();
+    if cursor.over_terrain != over_terrain {
+        cursor.over_terrain = over_terrain;
+    }
+    if let Some((world, normal)) = hit {
+        if cursor.world != world {
+            cursor.world = world;
         }
-        if let Some((world, normal)) = hit {
-            if cursor.world != world {
-                cursor.world = world;
-            }
-            if cursor.normal != normal {
-                cursor.normal = normal;
-            }
+        if cursor.normal != normal {
+            cursor.normal = normal;
         }
     }
 }

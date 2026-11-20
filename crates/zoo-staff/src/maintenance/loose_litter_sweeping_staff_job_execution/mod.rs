@@ -13,7 +13,7 @@ use super::{
         create_completed_staff_job_message, staff_member_owns_active_job,
     },
     maintenance_types::{
-        IncrementalZooCleanlinessTotals, LooseLitterSweepingStaffJobKindMarker, LooseLitterWaste,
+        LooseLitterSweepingStaffJobKindMarker, LooseLitterWaste,
         WasteContainerEmptyingStaffJobKindMarker,
     },
 };
@@ -28,8 +28,7 @@ pub(super) fn advance_active_staff_litter_sweeping_jobs(
         ),
     >,
     staff_current_jobs: Query<&CurrentJob>,
-    mut litter_targets: Query<&mut LooseLitterWaste>,
-    mut cleanliness_totals: ResMut<IncrementalZooCleanlinessTotals>,
+    litter_targets: Query<(), With<LooseLitterWaste>>,
     mut completed_staff_jobs: MessageWriter<StaffJobCompleted>,
     mut cancelled_staff_job_requests: MessageWriter<CancelStaffJobRequest>,
 ) {
@@ -43,23 +42,13 @@ pub(super) fn advance_active_staff_litter_sweeping_jobs(
         ) {
             continue;
         }
-        let Ok(mut loose_litter_waste) = litter_targets.get_mut(staff_job.target) else {
+        if !litter_targets.contains(staff_job.target) {
             cancelled_staff_job_requests.write(CancelStaffJobRequest {
                 job: staff_job_entity,
             });
             continue;
-        };
-        let previous_litter_units = loose_litter_waste.uncontained_waste_units;
-        loose_litter_waste.uncontained_waste_units = 0;
-        cleanliness_totals.replace_uncontained_waste_units(
-            previous_litter_units,
-            loose_litter_waste.uncontained_waste_units,
-        );
-        let litter_is_exhausted = loose_litter_waste.uncontained_waste_units == 0;
-        drop(loose_litter_waste);
-        if litter_is_exhausted {
-            commands.entity(staff_job.target).despawn();
         }
+        commands.entity(staff_job.target).try_despawn();
         completed_staff_jobs.write(create_completed_staff_job_message(
             staff_job_entity,
             staff_job,

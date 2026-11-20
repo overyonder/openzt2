@@ -34,12 +34,11 @@ pub(super) fn initialize_loaded_world_guest_favourite_animal_trends(
     mut commands: Commands,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active: Res<WorldDefinitions>,
-    arrivals: Option<ResMut<GuestArrivalState>>,
     mut failed: MessageWriter<
         openzt2_zoo_state::guests::guest_simulation_types::GuestArrivalFailed,
     >,
-    roots: Query<
-        Entity,
+    mut roots: Query<
+        (Entity, &mut GuestArrivalState),
         (
             With<WorldRoot>,
             With<WorldLoadCompleted>,
@@ -47,10 +46,10 @@ pub(super) fn initialize_loaded_world_guest_favourite_animal_trends(
         ),
     >,
 ) {
-    let (Some(mut arrivals), Some(definitions)) = (arrivals, active.get(&definitions)) else {
+    let Some(definitions) = active.get(&definitions) else {
         return;
     };
-    if definitions.has_pending_assets() {
+    if roots.is_empty() || definitions.has_pending_assets() {
         return;
     }
     if definitions.guest_favourite_animal_trend().is_none() {
@@ -59,7 +58,7 @@ pub(super) fn initialize_loaded_world_guest_favourite_animal_trends(
         });
         return;
     }
-    for root in &roots {
+    for (root, mut arrivals) in &mut roots {
         let trend = create_guest_favourite_animal_trend(
             definitions.animal_adoption_species_eligibility(),
             &mut arrivals.rng,

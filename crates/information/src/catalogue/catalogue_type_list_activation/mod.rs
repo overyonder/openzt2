@@ -19,10 +19,12 @@ use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 
 use crate::catalogue::catalogue_type_list_policy_operations::choose_remembered_or_first_included_catalogue_entry;
 use crate::catalogue::catalogue_world_availability_context::resolve_catalogue_world_session_mode_and_scenario_availability;
-use openzt2_interface_state::information::catalogue_types::CatalogueRowEntry;
 use openzt2_interface_state::information::catalogue_types::PurchaseChoice;
 use openzt2_interface_state::information::catalogue_types::RememberedCatalogueEntry;
 use openzt2_interface_state::information::catalogue_types::TypeListFilter;
+use openzt2_interface_state::information::catalogue_types::{
+    CatalogueRowEntry, ScenarioDisabledCatalogueDefinitions,
+};
 use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::UiTypeListPolicy;
 use openzt2_interface_state::ui::authored_ui_activation_contracts::UiNodeActivated;
 
@@ -51,6 +53,7 @@ pub(crate) fn choose_catalogue_entry_from_activated_type_list_row(
         ),
         With<WorldRoot>,
     >,
+    scenario_disabled: Option<Res<ScenarioDisabledCatalogueDefinitions>>,
     mut purchase_choices: MessageWriter<PurchaseChoice>,
     mut adoption_placement_requests: MessageWriter<BeginAnimalAdoptionPlacement>,
 ) {
@@ -71,8 +74,7 @@ pub(crate) fn choose_catalogue_entry_from_activated_type_list_row(
 
         let selected_entry_is_unavailable = world_definitions.is_some_and(|world_definitions| {
             world_definitions
-                .catalogue_in_authored_purchase_order()
-                .find(|(_, entry)| AssetId(entry.definition.0) == catalogue_row.definition)
+                .catalogue_entry_for_definition(catalogue_row.definition)
                 .is_none_or(|(catalogue_index, catalogue_entry)| {
                     !catalogue_entry_can_be_researched(
                         world_definitions,
@@ -90,7 +92,11 @@ pub(crate) fn choose_catalogue_entry_from_activated_type_list_row(
                     )
                 })
         });
-        if selected_entry_is_unavailable {
+        if selected_entry_is_unavailable
+            || scenario_disabled
+                .as_ref()
+                .is_some_and(|disabled| disabled.0.contains(&catalogue_row.definition))
+        {
             continue;
         }
 
@@ -344,6 +350,7 @@ pub(crate) fn choose_catalogue_entry_from_activated_type_list(
         With<WorldRoot>,
     >,
     visibilities: Query<&Visibility>,
+    scenario_disabled: Option<Res<ScenarioDisabledCatalogueDefinitions>>,
     mut purchase_choices: MessageWriter<PurchaseChoice>,
     document_owners: Query<&UiDocumentOwner>,
     selected_genders: Query<&AnimalCatalogueGender>,
@@ -401,6 +408,7 @@ pub(crate) fn choose_catalogue_entry_from_activated_type_list(
             world_session_mode,
             scenario_availability,
             &unlocked_catalogue_definitions,
+            scenario_disabled.as_deref(),
         ) else {
             continue;
         };

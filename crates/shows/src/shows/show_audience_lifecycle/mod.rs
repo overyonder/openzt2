@@ -30,7 +30,7 @@ pub(super) fn synchronize_authored_show_attendance(
             Option<&BehaviorTaskExecutionState>,
             Option<&GuestShowAttendance>,
         ),
-        Or<(With<Guest>, With<GuestShowAttendance>)>,
+        Or<(With<RunBehaviorWatchShow>, With<GuestShowAttendance>)>,
     >,
     watching: Query<&RunningBehaviorInstruction, With<RunBehaviorWatchShow>>,
     interruptions: Query<

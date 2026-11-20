@@ -4,7 +4,7 @@ use bevy::{
         visibility::RenderLayers, ClearColorConfig, PerspectiveProjection, RenderTarget,
         SubCameraView,
     },
-    ecs::{entity_disabling::Disabled, query::Allow},
+    ecs::{entity_disabling::Disabled, query::Allow, relationship::RelationshipTarget},
     prelude::*,
     render::render_resource::{TextureFormat, TextureUsages},
 };
@@ -25,7 +25,6 @@ use openzt2_world_state::animation_graph::model_animation_asset_binding_types::P
 use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackController;
 use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackRepetitionPolicy;
 use openzt2_ui::authored_ui_image_content_binding::UiImageBinding;
-use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner;
 use openzt2_world_state::world_spawn::prefab_object_presentation_attachment_projection::PrefabObjectPresentationAttachmentProjection;
 use openzt2_world::world_spawn::prefab_presentation_render_tree::spawn_prefab_render_tree;
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabModel;
@@ -45,22 +44,6 @@ const AUTHORED_BUY_INFORMATION_PREVIEW_SIZE: UVec2 = UVec2::new(97, 85);
 const AUTHORED_BUY_PANEL_CAMERA_RELATIVE_ANCHOR: Vec3 = Vec3::new(19.5, -7.85, 6.37);
 
 #[derive(Component)]
-pub struct CataloguePreviewScene {
-    definition: AssetId,
-    scene: Entity,
-}
-
-impl CataloguePreviewScene {
-    pub fn definition(&self) -> AssetId {
-        self.definition
-    }
-
-    pub fn scene(&self) -> Entity {
-        self.scene
-    }
-}
-
-#[derive(Component)]
 pub(crate) struct CataloguePreviewPrefab(Handle<ScenePrefabAsset>);
 
 impl CataloguePreviewPrefab {
@@ -70,7 +53,12 @@ impl CataloguePreviewPrefab {
 }
 
 #[derive(Component)]
-pub struct CataloguePreviewOwner(Entity);
+#[relationship(relationship_target = CataloguePreviewScenes)]
+pub(crate) struct CataloguePreviewOwner(Entity);
+
+#[derive(Component)]
+#[relationship_target(relationship = CataloguePreviewOwner, linked_spawn)]
+pub(crate) struct CataloguePreviewScenes(Entity);
 
 #[derive(Component)]
 pub(crate) struct CataloguePreviewRenderable;
@@ -90,55 +78,61 @@ pub(crate) fn project_selected_catalogue_entry_into_preview_scene(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     selected_entry: Res<SelectedCatalogueEntry>,
+    mut asset_changes: Option<MessageReader<AssetEvent<WorldDefinitionAsset>>>,
     mut nodes: Query<(
         Entity,
-        &UiDocumentOwner,
-        &UiImageBinding,
+        Ref<UiImageBinding>,
         &InheritedVisibility,
-        Option<&CataloguePreviewScene>,
+        Option<&CataloguePreviewScenes>,
         Option<&mut ImageNode>,
     )>,
 ) {
+    let assets_changed = asset_changes.as_mut().is_some_and(|events| {
+        events
+            .read()
+            .filter(|event| {
+                matches!(
+                    event,
+                    AssetEvent::Added { .. }
+                        | AssetEvent::Modified { .. }
+                        | AssetEvent::Removed { .. }
+                )
+            })
+            .count()
+            != 0
+    });
+    let refresh = selected_entry.is_changed()
+        || active_definitions.is_changed()
+        || definitions.is_changed()
+        || assets_changed;
     let definitions = active_definitions.get(&definitions);
-    for (node, _owner, binding, inherited_visibility, current, image_node) in &mut nodes {
+    for (node, binding, inherited_visibility, scenes, mut image_node) in &mut nodes {
         if !matches!(
             &binding.0,
             UiImagePropertyBindingSource::CatalogueEntryPreview
-        ) {
-            continue;
-        }
-        let mut image_node = image_node;
-        let definition = selected_entry.0;
-        let Some(definition) = definition else {
-            if let Some(current) = current {
-                commands.entity(current.scene).despawn();
-                commands.entity(node).remove::<CataloguePreviewScene>();
-            }
-            if let Some(image_node) = image_node.as_deref_mut() {
-                image_node.image = Handle::default();
-            }
-            continue;
-        };
-        if definitions.is_some()
-            && current.is_some_and(|current| {
-                current.definition == definition && !active_definitions.is_changed()
-            })
+        ) || (!refresh && !binding.is_changed())
         {
             continue;
         }
-        if let Some(current) = current {
-            commands.entity(current.scene).despawn();
-            commands.entity(node).remove::<CataloguePreviewScene>();
+        if let Some(scene) = scenes.and_then(|scenes| scenes.iter().next()) {
+            commands.entity(scene).try_despawn();
         }
-        if let Some(image_node) = image_node.as_deref_mut() {
-            image_node.image = Handle::default();
-        }
-        let Some(definitions) = definitions else {
-            continue;
-        };
-        let Some(object) = definitions.find_object(definition) else {
+        let Some((definition, definitions, object)) =
+            selected_entry
+                .0
+                .zip(definitions)
+                .and_then(|(definition, definitions)| {
+                    Some((
+                        definition,
+                        definitions,
+                        definitions.find_object(definition)?,
+                    ))
+                })
+        else {
             if let Some(image_node) = image_node.as_deref_mut() {
-                image_node.image = Handle::default();
+                if image_node.image != Handle::default() {
+                    image_node.image = Handle::default();
+                }
             }
             continue;
         };
@@ -149,9 +143,15 @@ pub(crate) fn project_selected_catalogue_entry_into_preview_scene(
             let icon = definitions.texture_image(object.icon).unwrap_or_default();
             let rect = Some(Rect::new(3.0, 5.0, 60.0, 53.0));
             if let Some(image_node) = image_node.as_deref_mut() {
-                image_node.image = icon;
-                image_node.rect = rect;
-                image_node.image_mode = NodeImageMode::Stretch;
+                if image_node.image != icon {
+                    image_node.image = icon;
+                }
+                if image_node.rect != rect {
+                    image_node.rect = rect;
+                }
+                if image_node.image_mode != NodeImageMode::Stretch {
+                    image_node.image_mode = NodeImageMode::Stretch;
+                }
             } else {
                 commands.entity(node).insert(ImageNode {
                     rect,
@@ -190,7 +190,9 @@ pub(crate) fn project_selected_catalogue_entry_into_preview_scene(
         let prefab = prefab.and_then(|prefab| definitions.scene(prefab));
         if prefab.is_none() && path_texture.is_none() {
             if let Some(image_node) = image_node.as_deref_mut() {
-                image_node.image = Handle::default();
+                if image_node.image != Handle::default() {
+                    image_node.image = Handle::default();
+                }
             }
             continue;
         }
@@ -298,7 +300,6 @@ pub(crate) fn project_selected_catalogue_entry_into_preview_scene(
                 Transform::IDENTITY.looking_to(Vec3::X, Vec3::Y)
             },
             RenderLayers::layer(CATALOGUE_PREVIEW_SCENE_RENDER_LAYER),
-            CataloguePreviewOwner(node),
             ChildOf(scene),
         ));
         if let Some(mut image_node) = image_node {
@@ -310,20 +311,45 @@ pub(crate) fn project_selected_catalogue_entry_into_preview_scene(
             image_node.image_mode = NodeImageMode::Stretch;
             commands.entity(node).insert(image_node);
         }
-        commands
-            .entity(node)
-            .insert(CataloguePreviewScene { definition, scene });
     }
 }
 
 pub(crate) fn synchronize_catalogue_preview_camera_activity_with_authored_image_visibility(
-    owners: Query<&InheritedVisibility>,
-    mut cameras: Query<(&CataloguePreviewOwner, &mut Camera)>,
+    owners: Query<
+        (
+            Entity,
+            Option<Ref<InheritedVisibility>>,
+            Ref<CataloguePreviewScenes>,
+            Option<Ref<Disabled>>,
+        ),
+        Allow<Disabled>,
+    >,
+    children: Query<&Children>,
+    mut cameras: Query<&mut Camera>,
+    mut enabled_owners: RemovedComponents<Disabled>,
 ) {
-    for (owner, mut camera) in &mut cameras {
-        let is_active = owners.get(owner.0).is_ok_and(|visibility| visibility.get());
-        if camera.is_active != is_active {
-            camera.is_active = is_active;
+    let enabled = enabled_owners
+        .read()
+        .collect::<std::collections::BTreeSet<_>>();
+    for (node, visibility, scenes, disabled) in &owners {
+        let changed = scenes.is_changed()
+            || visibility.as_ref().is_some_and(Ref::is_changed)
+            || disabled.as_ref().is_some_and(Ref::is_changed)
+            || enabled.contains(&node);
+        if !changed {
+            continue;
+        }
+        let active = disabled.is_none() && visibility.is_some_and(|visibility| visibility.get());
+        for scene in scenes.iter() {
+            if let Ok(children) = children.get(scene) {
+                for child in children.iter() {
+                    if let Ok(mut camera) = cameras.get_mut(child) {
+                        if camera.is_active != active {
+                            camera.is_active = active;
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -421,19 +447,5 @@ pub(crate) fn apply_authored_catalogue_preview_initial_animation_repetition_poli
                 AnimationPlaybackRepetitionPolicy::UseAuthoredClipPolicy
             },
         });
-    }
-}
-
-pub(crate) fn retire_catalogue_preview_scenes_without_ui_owners(
-    mut commands: Commands,
-    scenes: Query<(Entity, &CataloguePreviewOwner), (Without<Camera>, Allow<Disabled>)>,
-    owners: Query<(), (With<CataloguePreviewScene>, Allow<Disabled>)>,
-) {
-    // Cameras keep the same owner marker for activity and diagnostics. The
-    // scene root alone retires their linked hierarchy.
-    for (scene, owner) in &scenes {
-        if owners.get(owner.0).is_err() {
-            commands.entity(scene).despawn();
-        }
     }
 }

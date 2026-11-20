@@ -118,7 +118,7 @@ pub(super) struct PreparedParticleInstanceProjection<'w, 's> {
             &'static mut LiveParticleEffectInstance,
             &'static mut ParticleEffect,
             Option<&'static mut EffectSpawner>,
-            Has<EffectRetirementReadback>,
+            Option<&'static mut EffectRetirementReadback>,
             Option<&'static mut EffectMesh>,
             Has<UsesParticleEffectPlane>,
             Has<ParticleEffectPointEmitter>,
@@ -406,8 +406,12 @@ impl PreparedParticleInstanceProjection<'_, '_> {
                     target.remove::<UsesParticleEffectPlane>();
                 }
             }
-            if draining && !explicit {
-                target.remove::<(EffectRetirementReadback, bevy_hanabi::ParticleAliveCount)>();
+            if let Some(mut retirement) = draining {
+                if explicit {
+                    retirement.set_if_neq(EffectRetirementReadback::WaitingForParticles);
+                } else {
+                    target.remove::<(EffectRetirementReadback, bevy_hanabi::ParticleAliveCount)>();
+                }
             }
             if !explicit {
                 match (prototype, mesh) {

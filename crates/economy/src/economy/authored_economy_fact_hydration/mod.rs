@@ -83,7 +83,6 @@ pub(super) fn hydrate_authored_service_facility_facts_for_new_world_objects(
             entity_commands.insert(ServiceFacility {
                 definition: AssetId(facility_definition.id.0),
                 capacity: facility_definition.capacity,
-                occupied: 0,
                 payment_trigger: facility_definition.payment_trigger,
             });
         }
@@ -196,7 +195,6 @@ mod authored_service_facility_hydration_tests {
             .get::<ServiceFacility>(cart)
             .expect("commerce cart is a live service facility");
         assert_eq!(facility.capacity, 1);
-        assert_eq!(facility.occupied, 0);
         assert_eq!(
             facility.payment_trigger,
             FacilityPaymentTrigger::AuthoredBehavior,
@@ -209,7 +207,6 @@ mod authored_service_facility_hydration_tests {
         let facility = ServiceFacility {
             definition: AssetId::from_key("facility/snackcart_fruitcup_df"),
             capacity: 3,
-            occupied: 2,
             payment_trigger: FacilityPaymentTrigger::AuthoredBehavior,
         };
         let stock = Inventory {

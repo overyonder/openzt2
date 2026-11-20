@@ -5,18 +5,21 @@ use openzt2_game_data::ui_document::action::information::UiInformationAction;
 use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
-use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner;
+use openzt2_interface_state::ui::authored_ui_node_projection_components::{UiDocumentMembers, UiDocumentOwner};
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentRoot;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiNodeId;
 
-use openzt2_interface_state::information::catalogue_types::SelectedCatalogueEntry;
+use openzt2_interface_state::information::catalogue_types::{
+    SelectedCatalogueEntry, TypeListFilter,
+};
 use openzt2_interface_state::information::entity_selection_types::Inspectable;
 use openzt2_interface_state::information::information_graph_types::InformationGraph;
+use openzt2_interface_state::ui::ui_document_lifecycle_contracts::ShowUiRole;
 
 use super::{
     information_list_types::InformationEntityListPanel,
     information_view_types::{EntityEditorDataRootSurface, InformationViewFilters},
-    zoopedia::zoopedia_navigation_types::{ZoopediaHistory, ZoopediaPage},
+    zoopedia::zoopedia_navigation_types::{PendingZoopediaEntry, ZoopediaHistory, ZoopediaPage},
 };
 use openzt2_interface_state::ui::authored_ui_action_projection_components::UiInformationActions;
 use openzt2_interface_state::ui::authored_ui_activation_contracts::UiNodeActivated;
@@ -36,18 +39,14 @@ pub(super) struct InformationActionParams<'w, 's> {
     selection: super::information_selection_action_types::InformationSelectionActionTargets<'w, 's>,
     lists: Query<'w, 's, (Entity, &'static mut InformationEntityListPanel)>,
     ui_nodes: Query<'w, 's, (Entity, &'static UiDocumentOwner, &'static UiNodeId)>,
+    document_members: Query<'w, 's, &'static UiDocumentMembers>,
+    type_list_filters: Query<'w, 's, (&'static UiNodeId, &'static mut TypeListFilter)>,
     selected_catalogue: Res<'w, SelectedCatalogueEntry>,
     inspectables: Query<'w, 's, &'static Inspectable>,
-    zoopedia_pages: Query<
-        'w,
-        's,
-        (
-            Entity,
-            &'static UiDocumentOwner,
-            &'static mut ZoopediaPage,
-            Option<&'static mut ZoopediaHistory>,
-        ),
-    >,
+    zoopedia_pages: Query<'w, 's, (&'static mut ZoopediaPage, &'static mut ZoopediaHistory)>,
+    document_children: Query<'w, 's, &'static Children>,
+    pending_zoopedia_entries: Query<'w, 's, &'static mut PendingZoopediaEntry>,
+    show_roles: MessageWriter<'w, ShowUiRole>,
     graphs: Query<'w, 's, (&'static UiDocumentOwner, &'static mut InformationGraph)>,
     view_filters: ResMut<'w, InformationViewFilters>,
     overview_exports: MessageWriter<
@@ -70,9 +69,14 @@ pub(super) fn route_authored_information_actions_from_activated_ui_nodes(
         mut selection,
         mut lists,
         ui_nodes,
+        document_members,
+        mut type_list_filters,
         selected_catalogue,
         inspectables,
         mut zoopedia_pages,
+        document_children,
+        mut pending_zoopedia_entries,
+        mut show_roles,
         mut graphs,
         mut view_filters,
         mut overview_exports,
@@ -151,8 +155,10 @@ pub(super) fn route_authored_information_actions_from_activated_ui_nodes(
                             world_definitions: active_world_definitions
                                 .get(&world_definition_assets),
                             inspectable_world_entities: &inspectables,
-                            document_roots: &roots,
+                            document_children: &document_children,
                             zoopedia_pages: &mut zoopedia_pages,
+                            pending: &mut pending_zoopedia_entries,
+                            show_roles: &mut show_roles,
                             commands: &mut commands,
                         },
                     );
@@ -163,8 +169,8 @@ pub(super) fn route_authored_information_actions_from_activated_ui_nodes(
                     super::catalogue::type_list_filter_operations::apply_authored_catalogue_type_list_filter_action(
                         &record.action,
                         owner.0,
-                        &ui_nodes,
-                        &mut commands,
+                        &document_members,
+                        &mut type_list_filters,
                     );
                 }
                 UiInformationAction::PopulateEntityEditorDataRoots => {

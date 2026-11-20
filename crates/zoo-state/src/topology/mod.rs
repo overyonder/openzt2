@@ -7,5 +7,6 @@ pub mod ground_path_layout_calculation;
 pub mod topology_edit_types;
 pub mod topology_graph_types;
 pub mod topology_grid_geometry;
+mod topology_spatial_index_lifecycle;
 
 pub mod gate_actor_type_queries;

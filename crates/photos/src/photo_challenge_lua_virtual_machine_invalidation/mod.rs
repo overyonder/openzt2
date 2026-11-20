@@ -1,65 +1,41 @@
 use std::collections::BTreeSet;
 
 use bevy::prelude::*;
-
 use openzt2_game_assets::lua_script::lua_script_asset_loading::LuaScriptAsset;
 use openzt2_game_assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset;
+use openzt2_interface_state::photos::photo_challenge_types::PhotoChallenge;
 
-use super::photo_challenge_lua_scoring_types::PhotoChallengeLuaScoringVirtualMachineContexts;
+use super::photo_challenge_lua_scoring_types::PhotoChallengeScorer;
 
-impl PhotoChallengeLuaScoringVirtualMachineContexts {
-    fn invalidate_virtual_machines_affected_by_changed_assets(
-        &mut self,
-        changed_scenario_document_asset_identifiers: &BTreeSet<
-            bevy::asset::AssetId<WorldScenarioDocumentAsset>,
-        >,
-        changed_lua_script_asset_identifiers: &BTreeSet<bevy::asset::AssetId<LuaScriptAsset>>,
-    ) {
-        self.virtual_machines_by_challenge_identifier
-            .retain(|_, lua_scoring_virtual_machine| {
-                !changed_scenario_document_asset_identifiers
-                    .contains(&lua_scoring_virtual_machine.scenario_document_asset_identifier)
-                    && lua_scoring_virtual_machine
-                        .loaded_lua_script_asset_identifiers
-                        .is_disjoint(changed_lua_script_asset_identifiers)
-            });
-    }
-}
-
-pub(super) fn invalidate_photo_challenge_scoring_virtual_machines_affected_by_changed_assets(
-    mut photo_challenge_lua_scoring_virtual_machine_contexts: NonSendMut<
-        PhotoChallengeLuaScoringVirtualMachineContexts,
-    >,
-    mut changed_scenario_document_assets: MessageReader<AssetEvent<WorldScenarioDocumentAsset>>,
-    mut changed_lua_script_assets: MessageReader<AssetEvent<LuaScriptAsset>>,
+pub(super) fn invalidate_changed_photo_challenge_scorers(
+    mut documents: MessageReader<AssetEvent<WorldScenarioDocumentAsset>>,
+    mut scripts: MessageReader<AssetEvent<LuaScriptAsset>>,
+    mut scorers: Query<(Ref<PhotoChallenge>, &mut PhotoChallengeScorer)>,
 ) {
-    let changed_scenario_document_asset_identifiers = changed_scenario_document_assets
+    let documents = documents
         .read()
-        .map(asset_identifier_from_asset_event)
+        .filter_map(changed_asset)
         .collect::<BTreeSet<_>>();
-    let changed_lua_script_asset_identifiers = changed_lua_script_assets
+    let scripts = scripts
         .read()
-        .map(asset_identifier_from_asset_event)
+        .filter_map(changed_asset)
         .collect::<BTreeSet<_>>();
-    if !changed_scenario_document_asset_identifiers.is_empty()
-        || !changed_lua_script_asset_identifiers.is_empty()
-    {
-        photo_challenge_lua_scoring_virtual_machine_contexts
-            .invalidate_virtual_machines_affected_by_changed_assets(
-                &changed_scenario_document_asset_identifiers,
-                &changed_lua_script_asset_identifiers,
-            );
+    for (challenge, mut scorer) in &mut scorers {
+        if scorer.lua.is_some()
+            && (challenge.is_changed()
+                || documents.contains(&challenge.source.id())
+                || !scorer.modules.is_disjoint(&scripts))
+        {
+            *scorer = PhotoChallengeScorer::default();
+        }
     }
 }
 
-fn asset_identifier_from_asset_event<A: Asset>(
-    asset_event: &AssetEvent<A>,
-) -> bevy::asset::AssetId<A> {
-    match asset_event {
-        AssetEvent::Added { id }
-        | AssetEvent::Modified { id }
-        | AssetEvent::Removed { id }
-        | AssetEvent::LoadedWithDependencies { id }
-        | AssetEvent::Unused { id } => *id,
+fn changed_asset<A: Asset>(event: &AssetEvent<A>) -> Option<bevy::asset::AssetId<A>> {
+    match *event {
+        AssetEvent::Added { id } | AssetEvent::Modified { id } | AssetEvent::Removed { id } => {
+            Some(id)
+        }
+        AssetEvent::LoadedWithDependencies { .. } | AssetEvent::Unused { .. } => None,
     }
 }

@@ -4,7 +4,7 @@ use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
 };
 
 use openzt2_zoo_state::maintenance::maintenance_types::{
-    AdjustFacilityContainedWaste, FacilityContainedWaste, IncrementalZooCleanlinessTotals,
+    AdjustFacilityContainedWaste, FacilityContainedWaste,
 };
 
 pub(super) fn request_authored_trash_level_changes(
@@ -95,21 +95,20 @@ pub(super) fn request_authored_trash_level_changes(
 pub(super) fn apply_authored_trash_level_changes(
     mut changes: MessageReader<AdjustFacilityContainedWaste>,
     mut containers: Query<&mut FacilityContainedWaste>,
-    mut cleanliness_totals: ResMut<IncrementalZooCleanlinessTotals>,
 ) {
     for change in changes.read() {
-        let Ok(mut container) = containers.get_mut(change.facility) else {
+        let Ok(container) = containers.get_mut(change.facility) else {
             continue;
         };
-        let previous = *container;
         let delta_units = (f64::from(change.delta_q16) / 65_536.0).round() as i64;
         let units = match change.operation {
             openzt2_game_data::behavior::action::modification::BehaviorFactModificationOperation::Clear => 0,
             openzt2_game_data::behavior::action::modification::BehaviorFactModificationOperation::Add =>
-                (i64::from(previous.contained_waste_units) + delta_units)
-                    .clamp(0, i64::from(previous.contained_waste_capacity_units)),
+                (i64::from(container.contained_waste_units) + delta_units)
+                    .clamp(0, i64::from(container.contained_waste_capacity_units)),
         };
-        container.contained_waste_units = units as u16;
-        cleanliness_totals.replace_facility_contained_waste(previous, *container);
+        container
+            .map_unchanged(|waste| &mut waste.contained_waste_units)
+            .set_if_neq(units as u16);
     }
 }

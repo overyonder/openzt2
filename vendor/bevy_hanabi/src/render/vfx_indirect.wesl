@@ -31,17 +31,17 @@ fn main(@builtin(global_invocation_id) global_invocation_id: vec3<u32>) {
         return;
     }
 
-    // Clear any GPU event. The indexing is inconsistent here (indexing child info buffer with an
-    // effect instance), but is safe because there are always less child effects than there are effects
-    // in total, so the index will always cover the entire child info array. And we're only resetting
-    // a value so don't read anything, so only need to visit each entry once but the order doesn't matter.
-    @if(HAS_GPU_SPAWN_EVENTS)
-    if (global_effect_index < arrayLength(&child_info_buffer.rows)) {
-        child_info_buffer.rows[global_effect_index].event_count = 0;
-    }
-
     let spawner = &spawner_buffer[global_effect_index];
     let effect_metadata_index = (*spawner).effect_metadata_index;
+
+    // Each active child has consumed its own event slot in the init pass.
+    @if(HAS_GPU_SPAWN_EVENTS)
+    {
+        let slot = effect_metadatas[effect_metadata_index].global_child_index;
+        if (slot < arrayLength(&child_info_buffer.rows)) {
+            child_info_buffer.rows[slot].event_count = 0;
+        }
+    }
 
     // Clear the rendering instance count, which will be upgraded by the update pass
     // with the particles actually alive at the end of their update (after aged).

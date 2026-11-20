@@ -11,10 +11,19 @@ use openzt2_zoo_state::placement::object_placement_definition_queries::collect_o
 use openzt2_zoo_state::placement::object_placement_definition_queries::resolve_object_placeable_definition;
 use openzt2_zoo_state::placement::object_placement_geometry::ScenePlacementFootprints;
 use openzt2_zoo_state::placement::object_placement_validation::calculate_authored_object_placement_eighth_turns;
-use openzt2_zoo_state::placement::object_placement_validation::object_placement_cell_is_blocked_by_existing_object;
+use openzt2_zoo_state::placement::object_placement_validation::object_placement_stomp_action;
 use openzt2_zoo_state::placement::object_placement_validation::validate_object_placement_footprint_cells;
 use openzt2_zoo_state::placement::object_placement_validation::ObjectPlacementAuthoritativeFacts;
 use crate::placement::placed_object_creation_edit_application::apply_prepared_placed_object_creation_edit;
+use crate::placement::placed_object_removal_edit_application::despawn_indexed_placed_object;
+use crate::placement::stomped_object_edit_preparation::{
+    object_stomp_prevents_placement_at_cell, prepare_stomped_object_removals,
+    StompablePlacedObject,
+};
+use openzt2_game_data::world_definitions::object_placement::placement_stomp_rules::PlacementStompAction;
+use openzt2_zoo_state::topology::topology_edit_types::{TopologyChanged, TopologySnapshot};
+use openzt2_zoo_state::topology::topology_graph_types::topology_cell_rectangle;
+use openzt2_zoo_state::topology::topology_grid_geometry::merge_topology_changed_cell_bounds;
 use openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementCellCollectionScratch;
 use openzt2_zoo_state::placement::placement_transaction_types::ObjectPlacementCommitted;
 use openzt2_zoo_state::placement::placed_object_types::PlacedObjectDefinitionReference;
@@ -137,10 +146,11 @@ pub(super) struct BehaviorTargetPlacementCreation<'w, 's> {
         (
             &'static PersistentId,
             &'static PlacedObjectDefinitionReference,
-            &'static mut Transform,
-            &'static mut PlacedObjectFootprintOccupancy,
+            &'static Transform,
+            &'static PlacedObjectFootprintOccupancy,
         ),
     >,
+    stomp_targets: Query<'w, 's, StompablePlacedObject>,
     scratch: ResMut<'w, ObjectPlacementCellCollectionScratch>,
     allocator: ResMut<'w, PersistentIdAllocator>,
     committed: MessageWriter<'w, ObjectPlacementCommitted>,
@@ -688,24 +698,23 @@ fn site_is_still_valid(
             .filter(|_| world.surfaces.on_land(position) == Some(true))
         },
         |cell| {
-            paths
-                .actions_at(cell)
-                .any(|action| !matches!(action, GroundPathPlacementAction::Allow))
-                || object_placement_cell_is_blocked_by_existing_object(
-                    &creation.placement,
+            paths.prevents_placement(cell)
+                || object_stomp_prevents_placement_at_cell(
                     cell,
-                    None,
                     definition,
                     catalogue,
-                    |entity| {
-                        creation
-                            .placed
-                            .get(entity)
-                            .ok()
-                            .map(|(_, definition, _, _)| definition.definition)
-                            .or_else(|| created.get(&entity).copied())
-                    },
+                    &creation.placement,
+                    &creation.stomp_targets,
+                    |entity| created.contains_key(&entity),
                 )
+                || creation
+                    .placement
+                    .entities_occupying_cell(cell)
+                    .filter_map(|entity| created.get(&entity))
+                    .any(|target| {
+                        object_placement_stomp_action(definition, catalogue, Some(*target))
+                            != PlacementStompAction::Allow
+                    })
         },
         ObjectPlacementAuthoritativeFacts {
             habitat: habitat.map(|member| member.habitat_entity),
@@ -781,6 +790,29 @@ fn create_behavior_target_placement_object(
     )?
     .to_vec()
     .into_boxed_slice();
+    let removals = prepare_stomped_object_removals(
+        &cells,
+        definition,
+        catalogue,
+        &creation.placement,
+        &creation.stomp_targets,
+        |entity| created.contains_key(&entity),
+    )?;
+    let stomped = removals
+        .iter()
+        .filter_map(|removal| removal.applied_entity)
+        .collect::<Vec<_>>();
+    let paths = world.ground_paths.overlaps(definition, catalogue);
+    let path_removals = cells
+        .iter()
+        .flat_map(|cell| paths.actions_at(*cell))
+        .filter_map(|action| match action {
+            GroundPathPlacementAction::Delete(entity, TopologySnapshot::Path { cell, .. }) => {
+                Some((entity, cell))
+            }
+            _ => None,
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
     let id = creation.allocator.allocate(root).ok()?;
     let mut edit = PreparedObjectPlacementMutation {
         entity: id,
@@ -807,11 +839,34 @@ fn create_behavior_target_placement_object(
         &world.models,
         &creation.placed,
         created,
+        &stomped,
         false,
         &mut ConstructionTool::Inspect,
         &mut creation.committed,
     );
     let entity = edit.applied_entity.filter(|_| accepted)?;
+    for removal in removals {
+        if let Some(target) = removal.applied_entity {
+            despawn_indexed_placed_object(
+                commands,
+                &mut creation.placement,
+                target,
+                &removal.cells,
+            );
+        }
+    }
+    let mut changed_path_bounds = None;
+    for (path, cell) in path_removals {
+        commands.entity(path).try_despawn();
+        changed_path_bounds =
+            merge_topology_changed_cell_bounds(changed_path_bounds, topology_cell_rectangle(cell));
+    }
+    if let Some(bounds) = changed_path_bounds {
+        commands.write_message(TopologyChanged {
+            transaction: None,
+            bounds,
+        });
+    }
     created.insert(entity, pending.definition);
     Some(entity)
 }

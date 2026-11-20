@@ -1,8 +1,10 @@
-use bevy::prelude::*;
+use bevy::{ecs::system::SystemParam, prelude::*};
 use openzt2_game_data::ui_document::document::*;
 
 use openzt2_game_assets::localization::localization_asset_types::LocalizationAsset;
 use openzt2_game_assets::localization::localization_precedence_index::LocalizationPrecedenceIndex;
+use openzt2_interface_state::information::zoo_message_types::{ZooMessage, ZooMessages};
+use openzt2_zoo_state::animal_behavior::behavior_birth_notice_types::BehaviorBirthNotice;
 
 use super::ui_document_asset_load_failure::UiDocumentAssetLoadFailed;
 
@@ -29,6 +31,18 @@ pub(super) struct NotificationBodyRequested;
 #[derive(Component)]
 pub(super) struct PresentedNotification;
 
+#[derive(Component)]
+struct PendingBirthNotification(String);
+
+#[derive(SystemParam)]
+pub(super) struct BirthNotifications<'w, 's> {
+    notices: Option<MessageReader<'w, 's, BehaviorBirthNotice>>,
+    names: Query<'w, 's, &'static Name>,
+    pending: Query<'w, 's, (Entity, &'static PendingBirthNotification)>,
+    messages: Option<ResMut<'w, ZooMessages>>,
+    time: Option<Res<'w, Time<Real>>>,
+}
+
 pub(super) fn request_notifications(
     mut commands: Commands,
     mut requests: MessageReader<ShowNotification>,
@@ -37,6 +51,7 @@ pub(super) fn request_notifications(
     pending: Query<(Entity, &PendingNotification), Without<NotificationProjectionRequested>>,
     mut show: MessageWriter<ShowUiRole>,
     mut rejected: MessageWriter<NotificationRejected>,
+    mut births: BirthNotifications,
 ) {
     for request in requests.read() {
         commands.spawn(PendingNotification {
@@ -46,6 +61,33 @@ pub(super) fn request_notifications(
     }
 
     let localization = active_localization.borrow_loaded_localization_view(&localizations);
+    if let Some(notices) = &mut births.notices {
+        for notice in notices.read() {
+            let name = notice
+                .mother_name
+                .as_deref()
+                .or_else(|| births.names.get(notice.subject).ok().map(Name::as_str));
+            if let Some(name) = name {
+                commands.spawn(PendingBirthNotification(name.to_owned()));
+            }
+        }
+    }
+    if !births.pending.is_empty() {
+        let birth_key = openzt2_game_data::AssetId::from_key("zoomessages:AnimalBirth");
+        if let (Some(format), Some(messages), Some(time)) = (
+            localization.and_then(|view| localized(view, birth_key)),
+            births.messages.as_deref_mut(),
+            births.time.as_deref(),
+        ) {
+            for (entity, notice) in &births.pending {
+                messages.messages.push(ZooMessage {
+                    text: format.replacen("%s", &notice.0, 1),
+                    expires_at_seconds: time.elapsed_secs_f64() + 10.0,
+                });
+                commands.entity(entity).despawn();
+            }
+        }
+    }
     // Every request becomes a durable ECS owner before localization or the
     // modal document is consulted. Asset latency therefore cannot make a
     // one-frame gameplay notification disappear.

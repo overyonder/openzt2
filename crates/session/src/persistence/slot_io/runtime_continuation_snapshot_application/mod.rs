@@ -6,7 +6,10 @@ use openzt2_zoo_state::guests::guest_favourite_animal_trend_types::GuestFavourit
 use openzt2_zoo_state::{
     behavior_task_execution_types::BehaviorTaskExecutionSequence,
     economy::service_types::ServiceRequestSequence,
-    guests::{guest_simulation_types::GuestArrivalState, guest_survey_types::GuestSurvey},
+    guests::{
+        guest_simulation_types::GuestArrivalState,
+        guest_survey_types::{GuestSurvey, GuestSurveyNeedCadence},
+    },
     locomotion::locomotion_types::NavigationRequestSequence,
 };
 
@@ -79,8 +82,20 @@ pub(super) fn apply_runtime_continuation_snapshot(
             .map(ServiceRequestSequence::from_snapshot),
     );
     apply_optional_resource(commands, record.general_economy);
-    apply_optional_resource::<GuestArrivalState>(commands, record.guest_arrivals);
-    apply_optional_resource::<GuestSurvey>(commands, record.guest_survey);
+    if let Some(arrivals) = record.guest_arrivals {
+        commands.entity(world_root).insert(arrivals);
+    } else {
+        commands.entity(world_root).remove::<GuestArrivalState>();
+    }
+    if let Some((cadence, survey)) = record.guest_survey {
+        commands.entity(world_root).insert(cadence);
+        commands.insert_resource(survey);
+    } else {
+        commands
+            .entity(world_root)
+            .remove::<GuestSurveyNeedCadence>();
+        commands.remove_resource::<GuestSurvey>();
+    }
     if let Some(counters) = &record.entity_name_counters {
         commands.entity(world_root).insert(counters.clone());
     } else {
@@ -228,12 +243,14 @@ mod tests {
                 next_tick: 444,
                 rng: DeterministicRng::from_raw([1234, 789]),
             }),
-            guest_survey: Some(GuestSurvey {
-                critical_need_countdown_seconds: 5.0,
-                previous_day_of_month: 9,
-                current_day_of_month: 1,
-                ..Default::default()
-            }),
+            guest_survey: Some((
+                GuestSurveyNeedCadence(5.0),
+                GuestSurvey {
+                    previous_day_of_month: 9,
+                    current_day_of_month: 1,
+                    ..Default::default()
+                },
+            )),
             guest_favourite_animal_trend: Some(
                 GuestFavouriteAnimalTrend::from_saved_state(
                     [Some(openzt2_game_data::AssetId::from_key("first")), None],
@@ -297,7 +314,11 @@ mod tests {
             Some(700)
         );
         assert_eq!(
-            world.resource_mut::<GuestArrivalState>().rng.next_u32(),
+            world
+                .get_mut::<GuestArrivalState>(root)
+                .unwrap()
+                .rng
+                .next_u32(),
             saved.guest_arrivals.unwrap().rng.next_u32()
         );
         let mut absent = saved;
@@ -314,7 +335,7 @@ mod tests {
         .unwrap();
         queue.apply(&mut world);
         assert!(!world.contains_resource::<ServiceRequestSequence>());
-        assert!(!world.contains_resource::<GuestArrivalState>());
+        assert!(world.get::<GuestArrivalState>(root).is_none());
         assert!(!world.contains_resource::<GuestSurvey>());
         assert!(world.get::<GuestFavouriteAnimalTrend>(root).is_none());
         assert_eq!(

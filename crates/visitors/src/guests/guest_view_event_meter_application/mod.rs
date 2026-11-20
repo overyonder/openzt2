@@ -1,3 +1,4 @@
+use crate::guests::view_event_execution::AppliedAnimalView;
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::RunningBehaviorInstruction;
 use openzt2_zoo_state::guests::guest_simulation_types::GuestSpeciesViewCounts;
 use openzt2_zoo_state::guests::guest_survey_types::GuestSurveyExperience;
@@ -5,10 +6,9 @@ use bevy::prelude::*;
 use openzt2_game_assets::species::species_asset_types::{SpeciesAsset, SpeciesAssets};
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use openzt2_game_data::world_definitions::guest_simulation_definitions::GuestMemoryKind;
 use openzt2_zoo_state::animal_lifecycle::types::SpeciesHandle;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
-use openzt2_zoo_state::guests::guest_simulation_types::{Guest, GuestArchetype, GuestFavouriteAnimal, GuestReactionApplied};
+use openzt2_zoo_state::guests::guest_simulation_types::{Guest, GuestArchetype, GuestFavouriteAnimal};
 
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::BehaviorViewingProgress;
 
@@ -37,7 +37,7 @@ pub(super) fn initialize_guest_species_view_counts(
     reason = "view scoring updates each guest's species counters and task-owned meter together"
 )]
 pub(super) fn apply_accepted_view_events_to_view_meters(
-    mut reactions: MessageReader<GuestReactionApplied>,
+    mut reactions: MessageReader<AppliedAnimalView>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     mut guests: Query<(
@@ -60,23 +60,6 @@ pub(super) fn apply_accepted_view_events_to_view_meters(
         return;
     };
     for reaction in reactions.read() {
-        if reaction.kind != GuestMemoryKind::AnimalView {
-            continue;
-        }
-        let Some(origin) = reaction.view_event else {
-            continue;
-        };
-        let Some(row) = definitions
-            .find_object(origin.source_definition)
-            .and_then(|object| {
-                object
-                    .view_data
-                    .iter()
-                    .find(|row| row.name == origin.view_key)
-            })
-        else {
-            continue;
-        };
         let Ok((archetype, favourite, position, mut counts, mut experience, task, meter)) =
             guests.get_mut(reaction.guest)
         else {
@@ -126,15 +109,15 @@ pub(super) fn apply_accepted_view_events_to_view_meters(
         } else {
             1.0
         };
-        let score = row.view_score * preferred * discount * distance_factor;
+        let score = reaction.view_score * preferred * discount * distance_factor;
         if let (Some((task, instruction)), Some(mut meter)) = (task, meter) {
             if meter.instruction == instruction.id() && instruction.is_current(task) {
                 meter.apply_view_score(score);
             }
         }
         experience.saw_favorite_animal |= favourite.0 == Some(species.species);
-        experience.observe_entertainment(row.entertainment_score * distance_factor);
-        if row.entertainment_score * distance_factor != 0.0 {
+        experience.observe_entertainment(reaction.entertainment_score * distance_factor);
+        if reaction.entertainment_score * distance_factor != 0.0 {
             *count = count.saturating_add(1);
         }
     }

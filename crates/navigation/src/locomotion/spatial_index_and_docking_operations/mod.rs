@@ -19,60 +19,68 @@ use openzt2_zoo_state::locomotion::locomotion_types::NavAgent;
 use openzt2_zoo_state::locomotion::locomotion_types::NavigationFailed;
 use openzt2_zoo_state::locomotion::locomotion_types::NavigationFailure;
 use openzt2_zoo_state::locomotion::locomotion_types::Route;
-use openzt2_zoo_state::locomotion::locomotion_types::SpatialCell;
 use openzt2_zoo_state::locomotion::locomotion_types::SpatialGrid;
 use openzt2_zoo_state::locomotion::locomotion_types::Steering;
 use openzt2_zoo_state::locomotion::locomotion_types::Velocity;
 use openzt2_zoo_state::locomotion::locomotion_types::STUCK_TICKS;
+use openzt2_zoo_state::locomotion::locomotion_types::{SpatialCell, SpatialCellMembers};
 
-pub(super) fn rebuild_spatial_grid(
-    mut grid: ResMut<SpatialGrid>,
-    mut agents: Query<(Entity, &GlobalTransform, &mut SpatialCell), With<NavAgent>>,
-    mut failed: MessageWriter<NavigationFailed>,
+type SpatialAgentData = (
+    Entity,
+    &'static GlobalTransform,
+    Option<&'static SpatialCell>,
+);
+
+#[allow(clippy::type_complexity)]
+pub(super) fn project_agent_spatial_membership(
+    mut commands: Commands,
+    parallel: ParallelCommands,
+    grid: Res<SpatialGrid>,
+    agents: Query<SpatialAgentData, With<NavAgent>>,
+    moved_agents: Query<
+        SpatialAgentData,
+        (
+            With<NavAgent>,
+            Or<(Changed<GlobalTransform>, Added<NavAgent>)>,
+        ),
+    >,
+    mut removed: RemovedComponents<NavAgent>,
 ) {
-    if grid.width == 0 || grid.height == 0 {
-        return;
-    }
-    grid.cell_offsets.fill(0);
-    for (_, transform, _) in &agents {
-        let position = transform.translation();
-        if let Some(cell) = grid.cell_of(Vec2::new(position.x, position.z)) {
-            grid.cell_offsets[cell as usize + 1] += 1;
+    for entity in removed.read() {
+        if !agents.contains(entity) {
+            commands.entity(entity).try_remove::<SpatialCell>();
         }
     }
-    for index in 1..grid.cell_offsets.len() {
-        grid.cell_offsets[index] += grid.cell_offsets[index - 1];
-    }
-    let count = *grid.cell_offsets.last().unwrap_or(&0) as usize;
-    if count > grid.entities.capacity() {
-        for (entity, _, _) in &agents {
-            failed.write(NavigationFailed {
-                entity,
-                request_id: 0,
-                reason: NavigationFailure::NoRoute,
-            });
-        }
-        return;
-    }
-    grid.entities.clear();
-    grid.entities.resize(count, Entity::PLACEHOLDER);
-    let SpatialGrid {
-        cell_offsets,
-        write_cursors,
-        ..
-    } = &mut *grid;
-    write_cursors.copy_from_slice(&cell_offsets[..write_cursors.len()]);
-    for (entity, transform, mut spatial_cell) in &mut agents {
-        let position = transform.translation();
-        let Some(cell) = grid.cell_of(Vec2::new(position.x, position.z)) else {
-            *spatial_cell = SpatialCell::OUTSIDE;
-            continue;
+    let project =
+        |(entity, transform, current): (Entity, &GlobalTransform, Option<&SpatialCell>)| {
+            let next = grid
+                .cell_of(transform.translation().xz())
+                .and_then(|index| grid.cells.get(index as usize).copied());
+            if current.map(|cell| cell.0) != next {
+                parallel.command_scope(|mut commands| {
+                    if let Some(next) = next {
+                        commands.entity(entity).insert(SpatialCell(next));
+                    } else {
+                        commands.entity(entity).remove::<SpatialCell>();
+                    }
+                });
+            }
         };
-        let cursor = grid.write_cursors[cell as usize];
-        grid.entities[cursor as usize] = entity;
-        grid.write_cursors[cell as usize] = cursor + 1;
-        spatial_cell.0 = cell;
+    if grid.is_changed() {
+        agents.par_iter().for_each(project);
+    } else {
+        moved_agents.par_iter().for_each(project);
     }
+}
+
+pub(super) fn order_changed_spatial_cell_members(
+    mut cells: Query<&mut SpatialCellMembers, Changed<SpatialCellMembers>>,
+) {
+    cells.par_iter_mut().for_each(|mut members| {
+        members
+            .collection_mut_risky()
+            .sort_unstable_by_key(|entity| entity.to_bits());
+    });
 }
 
 pub(crate) fn detect_stuck_agents(

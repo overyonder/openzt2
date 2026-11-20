@@ -1,3 +1,4 @@
+use openzt2_game_data::animation::animation_text_key::AuthoredAnimationTextKey;
 use std::{io, sync::Arc};
 
 use bevy::{
@@ -92,8 +93,21 @@ impl AssetLoader for AnimationClipSourceAssetLoader {
                 )
             })?;
 
+        let text_key_times_milliseconds = authored_animation_clip_metadata
+            .authored_animation_text_keys
+            .iter()
+            .map(|key| {
+                text_key_time_milliseconds(
+                    key,
+                    authored_animation_clip_metadata
+                        .duration_milliseconds
+                        .max(1),
+                )
+            })
+            .collect::<Arc<[u32]>>();
         Ok(AnimationClipSourceAsset {
             authored_animation_clip_metadata: Arc::new(authored_animation_clip_metadata),
+            text_key_times_milliseconds,
             animation_clip_handle,
         })
     }
@@ -101,4 +115,24 @@ impl AssetLoader for AnimationClipSourceAssetLoader {
     fn extensions(&self) -> &[&str] {
         &["bf", "kf"]
     }
+}
+
+fn text_key_time_milliseconds(key: &AuthoredAnimationTextKey, duration_milliseconds: u32) -> u32 {
+    key.authored_time_seconds
+        .map(|seconds| (seconds.max(0.0) * 1000.0).round() as u32)
+        .or_else(|| {
+            key.authored_frame_number
+                .map(|frame| (frame.max(0.0) * 1000.0 / 30.0).round() as u32)
+        })
+        .or_else(|| {
+            key.authored_playback_percentage.map(|percent| {
+                let fraction = if percent > 1.0 {
+                    percent / 100.0
+                } else {
+                    percent
+                };
+                (fraction.clamp(0.0, 1.0) * duration_milliseconds as f32).round() as u32
+            })
+        })
+        .unwrap_or(0)
 }

@@ -15,7 +15,7 @@ use super::{
         ShowMixerDropdown,
     },
     show_schedule_types::{
-        ScheduledShowBreakRow, ScheduledShowRow, ScheduledShowRowActivationState,
+        ScheduledShowPerformancePlan, ScheduledShowRow, ScheduledShowRowActivationState,
     },
     show_stage_types::{ShowName, ShowStage, ShowStageOpenState},
 };
@@ -35,11 +35,12 @@ pub(super) struct AuthoredShowEditorActionRoutingInputs<'w, 's> {
     >,
     document_roots: Query<'w, 's, (&'static UiDocumentRoot, Option<&'static ChildOf>)>,
     stages: Query<'w, 's, (), With<ShowStage>>,
-    stage_open_states: Query<'w, 's, &'static ShowStageOpenState>,
+    stage_open_states: Query<'w, 's, &'static mut ShowStageOpenState>,
+    row_activation: Query<'w, 's, &'static mut ScheduledShowRowActivationState>,
+    names: Query<'w, 's, &'static mut ShowName>,
     edited_shows: Query<'w, 's, &'static EditedShow>,
     editing: Query<'w, 's, Has<ShowEditing>>,
-    schedule_rows: Query<'w, 's, (), Or<(With<ScheduledShowRow>, With<ScheduledShowBreakRow>)>>,
-    scheduled_show_rows: Query<'w, 's, (), With<ScheduledShowRow>>,
+    schedule_rows: Query<'w, 's, &'static ScheduledShowRow, With<ScheduledShowPerformancePlan>>,
 }
 
 pub(super) fn route_authored_show_editor_actions_into_selection_and_immersive_mode_state(
@@ -54,11 +55,12 @@ pub(super) fn route_authored_show_editor_actions_into_selection_and_immersive_mo
         action_nodes,
         document_roots,
         stages,
-        stage_open_states,
+        mut stage_open_states,
+        mut row_activation,
+        mut names,
         edited_shows,
         editing,
         schedule_rows,
-        scheduled_show_rows,
     } = inputs;
 
     for activation in activations.read() {
@@ -86,25 +88,30 @@ pub(super) fn route_authored_show_editor_actions_into_selection_and_immersive_mo
             match &authored_action.action {
                 UiShowAction::ToggleSelectedEnabled => {
                     if let Some(stage) = selected_stage {
-                        let next_open_state = stage_open_states.get(stage).map_or(
-                            ShowStageOpenState::Open,
-                            |open_state| match open_state {
+                        if let Ok(mut state) = stage_open_states.get_mut(stage) {
+                            *state = match *state {
                                 ShowStageOpenState::Open => ShowStageOpenState::Closed,
                                 ShowStageOpenState::Closed => ShowStageOpenState::Open,
-                            },
-                        );
-                        commands.entity(stage).insert(next_open_state);
+                            };
+                        } else {
+                            commands.entity(stage).insert(ShowStageOpenState::Open);
+                        }
                     }
                 }
                 UiShowAction::EditSelected => {
-                    if let Some(show) = selected_schedule_row.or(selected_stage) {
+                    let stage = selected_schedule_row
+                        .and_then(|row| schedule_rows.get(row).ok().map(|row| row.stage))
+                        .or(selected_stage);
+                    if let (Some(stage), Some(subject)) =
+                        (stage, selected_schedule_row.or(selected_stage))
+                    {
                         commands
                             .entity(controller)
-                            .insert((EditedShow(show), ShowEditing));
+                            .insert((EditedShow(subject), ShowEditing));
                         enter_show_edit.write(EnterImmersiveMode {
                             mode: ImmersiveMode::ShowEdit,
                             controller,
-                            subject: Some(show),
+                            subject: Some(stage),
                         });
                     }
                 }
@@ -126,7 +133,14 @@ pub(super) fn route_authored_show_editor_actions_into_selection_and_immersive_mo
                         .map(|text| text.0.trim())
                         .filter(|name| !name.is_empty());
                     if let (Some(stage), Some(name)) = (edited_stage, submitted_name) {
-                        commands.entity(stage).insert(ShowName(name.to_owned()));
+                        if let Ok(mut current) = names.get_mut(stage) {
+                            if current.0 != name {
+                                current.0.clear();
+                                current.0.push_str(name);
+                            }
+                        } else {
+                            commands.entity(stage).insert(ShowName(name.to_owned()));
+                        }
                     }
                 }
                 UiShowAction::ShowMixerPanel => {
@@ -147,17 +161,27 @@ pub(super) fn route_authored_show_editor_actions_into_selection_and_immersive_mo
                 UiShowAction::SetSelectedOpen { open } => {
                     if let Some(show) = selected_schedule_row.or(selected_stage) {
                         if stages.contains(show) {
-                            commands.entity(show).insert(if *open {
+                            let next = if *open {
                                 ShowStageOpenState::Open
                             } else {
                                 ShowStageOpenState::Closed
-                            });
-                        } else if scheduled_show_rows.contains(show) {
-                            commands.entity(show).insert(if *open {
+                            };
+                            if let Ok(mut state) = stage_open_states.get_mut(show) {
+                                state.set_if_neq(next);
+                            } else {
+                                commands.entity(show).insert(next);
+                            }
+                        } else if schedule_rows.contains(show) {
+                            let next = if *open {
                                 ScheduledShowRowActivationState::Enabled
                             } else {
                                 ScheduledShowRowActivationState::Disabled
-                            });
+                            };
+                            if let Ok(mut state) = row_activation.get_mut(show) {
+                                state.set_if_neq(next);
+                            } else {
+                                commands.entity(show).insert(next);
+                            }
                         }
                     }
                 }

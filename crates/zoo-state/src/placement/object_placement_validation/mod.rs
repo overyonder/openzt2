@@ -78,8 +78,8 @@ pub fn validate_object_placement_footprint_cells<'a>(
     geometry: impl Into<ObjectPlacementGeometry<'a>>,
     footprint: &[FootprintCell],
     transform: &Transform,
-    terrain: impl Fn(Vec2) -> Option<TerrainPoint>,
-    occupied: impl Fn(IVec2) -> bool,
+    terrain: impl FnMut(Vec2) -> Option<TerrainPoint>,
+    occupied: impl FnMut(IVec2) -> bool,
     facts: ObjectPlacementAuthoritativeFacts,
 ) -> PlacementValidity {
     let geometry = geometry.into();
@@ -105,8 +105,8 @@ pub fn validate_object_placement_footprint_cells<'a>(
 pub fn validate_object_placement_over_terrain_samples(
     definition: &PlaceableDefinition,
     cells: impl Iterator<Item = IVec2>,
-    terrain: impl Fn(Vec2) -> Option<TerrainPoint>,
-    occupied: impl Fn(IVec2) -> bool,
+    mut terrain: impl FnMut(Vec2) -> Option<TerrainPoint>,
+    mut occupied: impl FnMut(IVec2) -> bool,
     facts: ObjectPlacementAuthoritativeFacts,
 ) -> PlacementValidity {
     // The order is observable: source affordability and research checks precede

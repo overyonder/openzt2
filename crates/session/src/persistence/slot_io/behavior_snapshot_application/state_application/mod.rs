@@ -19,13 +19,9 @@ use openzt2_zoo_state::{
         PendingBehaviorMoveCompletion, PendingBehaviorTaskFailure,
     },
     locomotion::locomotion_types::{
-        Destination, Docking, EntityPursuit, MotionProgress, Route, SpatialCell, Steering,
-        SwimLayer,
+        Destination, Docking, EntityPursuit, MotionProgress, Route, Steering, SwimLayer,
     },
-    staff::{
-        staff_employment_types::AvailableForWork,
-        staff_job_types::{CurrentJob, JobClaim, JobProgress, StaffJob, StaffJobBehaviorTask},
-    },
+    staff::staff_job_types::{JobClaim, JobProgress, StaffJob, StaffJobBehaviorTask},
 };
 use std::collections::BTreeMap;
 
@@ -116,7 +112,6 @@ pub(super) fn apply_prepared_behavior_actor(
             nav.mode,
             route,
             Steering::default(),
-            SpatialCell::OUTSIDE,
             nav.contact_steering.unwrap_or_default(),
             nav.progress.unwrap_or(MotionProgress {
                 last_position: application
@@ -322,10 +317,6 @@ pub(super) fn apply_prepared_behavior_actor(
         if job.progressing {
             commands.entity(job_entity).insert(JobProgress);
         }
-        commands
-            .entity(actor)
-            .insert(CurrentJob { job: job_entity })
-            .remove::<AvailableForWork>();
     }
 }
 

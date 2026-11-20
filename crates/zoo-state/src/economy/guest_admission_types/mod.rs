@@ -15,6 +15,11 @@ pub struct ZooAdmissionsOpen(pub bool);
 
 /// Correlates one gate arrival with its authoritative admission transfer.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+#[relationship(relationship_target = PendingGuestAdmission)]
 pub struct AdmissionPaymentPending {
     pub guest: Entity,
 }
+
+#[derive(Component)]
+#[relationship_target(relationship = AdmissionPaymentPending, linked_spawn)]
+pub struct PendingGuestAdmission(Entity);

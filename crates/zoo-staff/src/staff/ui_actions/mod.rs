@@ -1,7 +1,8 @@
 use super::{
     staff_assignment_types::{
         KeeperAssignmentSelection, KeeperAssignmentTarget, SetStaffWorkerDutyAssignment,
-        StaffAssignment, StaffAssignmentMode, TrainerAssignmentSelection,
+        StaffAssignedToTarget, StaffAssignmentMode, StaffAssignmentTarget,
+        TrainerAssignmentSelection,
     },
     staff_employment_types::Staff,
     staff_lifecycle_messages::FireStaffRequest,
@@ -23,7 +24,7 @@ pub(super) fn route_staff_assignment_selection_and_firing_ui_actions(
     nodes: Query<(&UiStaffActions, &UiDocumentOwner)>,
     roots: Query<&UiDocumentRoot>,
     selected: WorldUiSelection,
-    staff: Query<(), (With<Staff>, With<StaffAssignment>)>,
+    staff: Query<(), With<Staff>>,
     mut firing: MessageWriter<FireStaffRequest>,
 ) {
     for activation in activations.read() {
@@ -79,7 +80,7 @@ pub(super) fn route_staff_assignment_ui_actions(
     sources: Query<&InformationEntitySource>,
     parents: Query<&ChildOf>,
     staff: Query<(), With<Staff>>,
-    assignments: Query<(Entity, &StaffAssignment), With<Staff>>,
+    assignments: Query<&StaffAssignedToTarget>,
     mut worker_duty_assignments: MessageWriter<SetStaffWorkerDutyAssignment>,
 ) {
     for activation in activations.read() {
@@ -106,12 +107,10 @@ pub(super) fn route_staff_assignment_ui_actions(
                 UiStaffAction::ClearSelectedKeeperAssignmentTarget => {
                     if let Some(target) = selected.subject() {
                         commands.entity(target).remove::<KeeperAssignmentTarget>();
-                        for (worker, assignment) in &assignments {
-                            if assignment.target == Some(target) {
-                                commands.entity(worker).insert(StaffAssignment {
-                                    target: None,
-                                    ..*assignment
-                                });
+
+                        if let Ok(workers) = assignments.get(target) {
+                            for worker in workers.iter() {
+                                commands.entity(worker).remove::<StaffAssignmentTarget>();
                             }
                         }
                     }

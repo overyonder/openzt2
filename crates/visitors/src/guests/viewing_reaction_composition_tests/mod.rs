@@ -1,5 +1,5 @@
 use super::{
-    guest_lifecycle_and_memory_execution::apply_guest_reactions, guest_simulation_types::*,
+    guest_simulation_types::*, view_event_execution::apply_guest_reactions,
     view_event_execution::BehaviorViewEventEmitted,
 };
 use bevy::prelude::*;
@@ -154,7 +154,7 @@ fn fixture() -> (App, Entity, Entity, Entity) {
     app.init_resource::<Assets<WorldDefinitionAsset>>()
         .init_resource::<Assets<openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset>>()
         .add_message::<GuestReaction>()
-        .add_message::<GuestReactionApplied>()
+        .add_message::<super::view_event_execution::AppliedAnimalView>()
         .add_message::<BehaviorViewEventEmitted>()
         .add_systems(Update, apply_guest_reactions);
     install_policy(&mut app, &policy_document());
@@ -196,28 +196,9 @@ fn fixture() -> (App, Entity, Entity, Entity) {
     (app, subject, first, second)
 }
 
-// Synthetic recipient delivery: no production visibility/meter execution is asserted.
-fn request(app: &App, guest: Entity, event_id: u64) -> GuestReaction {
-    let viewing = *app.world().get::<Viewing>(guest).unwrap();
-    GuestReaction {
-        view_event: Some(GuestViewReactionOrigin {
-            event_id,
-            source_definition: AssetId::from_key("viewing-test"),
-            view_key: AssetId::from_key("viewing-test"),
-            viewing,
-        }),
-        guest,
-        subject: viewing.subject,
-        kind: GuestMemoryKind::AnimalView,
-        satisfaction_delta_permille: 999,
-        education_delta_permille: 999,
-    }
-}
-
-fn emit(app: &mut App, subject: Entity, event_id: u64) {
+fn emit(app: &mut App, subject: Entity) {
     let id = AssetId::from_key("viewing-test");
     app.world_mut().write_message(BehaviorViewEventEmitted {
-        event_id,
         source: subject,
         source_definition: id,
         view_key: id,
@@ -225,14 +206,11 @@ fn emit(app: &mut App, subject: Entity, event_id: u64) {
 }
 
 #[test]
-fn reversed_reaction_delivery_preserves_distinct_event_effects() {
+fn repeated_emissions_apply_once_each_in_message_order() {
     let (mut app, subject, guest, _) = fixture();
-    emit(&mut app, subject, 1);
-    emit(&mut app, subject, 2);
-    let first = request(&app, guest, 1);
-    let second = request(&app, guest, 2);
-    app.world_mut().write_message(second);
-    app.world_mut().write_message(first);
+    emit(&mut app, subject);
+    emit(&mut app, subject);
+    app.update();
     app.update();
     assert_eq!(app.world().get::<GuestEducation>(guest).unwrap().0, 60);
     assert_eq!(
@@ -242,34 +220,18 @@ fn reversed_reaction_delivery_preserves_distinct_event_effects() {
             .education_points,
         6.0
     );
-    // Starting another observation does not make an already applied event new.
-    {
-        let mut viewing = *app.world().get::<Viewing>(guest).unwrap();
-        viewing.started_tick += 1;
-        app.world_mut().entity_mut(guest).insert(viewing);
-    };
-    emit(&mut app, subject, 2);
-    let replay = request(&app, guest, 2);
-    app.world_mut().write_message(replay);
-    app.update();
-    assert_eq!(app.world().get::<GuestEducation>(guest).unwrap().0, 60);
 }
 
 #[test]
 fn an_emitted_view_event_reaches_every_current_viewer_once() {
     let (mut app, subject, first, second) = fixture();
-    app.add_systems(
-        Update,
-        super::view_event_execution::deliver_view_events_to_current_viewers
-            .before(apply_guest_reactions),
-    );
-    emit(&mut app, subject, 1);
+    emit(&mut app, subject);
     app.update();
     assert_eq!(app.world().get::<GuestEducation>(first).unwrap().0, 30);
     assert_eq!(app.world().get::<GuestEducation>(second).unwrap().0, 30);
     // A guest who stopped watching is not reached by the next event.
     app.world_mut().entity_mut(second).remove::<Viewing>();
-    emit(&mut app, subject, 2);
+    emit(&mut app, subject);
     app.update();
     assert_eq!(app.world().get::<GuestEducation>(first).unwrap().0, 60);
     assert_eq!(app.world().get::<GuestEducation>(second).unwrap().0, 30);
@@ -288,11 +250,6 @@ fn a_guest_watching_through_its_view_task_receives_the_event() {
     };
 
     let (mut app, subject, guest, _) = fixture();
-    app.add_systems(
-        Update,
-        super::view_event_execution::deliver_view_events_to_current_viewers
-            .before(apply_guest_reactions),
-    );
     let area = app.world().get::<Viewing>(guest).unwrap().area;
     let document = app
         .world_mut()
@@ -334,7 +291,7 @@ fn a_guest_watching_through_its_view_task_receives_the_event() {
     let mut viewing = *app.world().get::<Viewing>(guest).unwrap();
     viewing.task_execution_id = Some(1);
     app.world_mut().entity_mut(guest).insert(viewing);
-    emit(&mut app, subject, 1);
+    emit(&mut app, subject);
     app.update();
     assert_eq!(app.world().get::<GuestEducation>(guest).unwrap().0, 30);
     app.world_mut()
@@ -343,13 +300,13 @@ fn a_guest_watching_through_its_view_task_receives_the_event() {
             execution_id: 2,
             ..task
         });
-    emit(&mut app, subject, 2);
+    emit(&mut app, subject);
     app.update();
     assert_eq!(app.world().get::<GuestEducation>(guest).unwrap().0, 30);
     let mut viewing = *app.world().get::<Viewing>(guest).unwrap();
     viewing.task_execution_id = Some(2);
     app.world_mut().entity_mut(guest).insert(viewing);
-    emit(&mut app, subject, 3);
+    emit(&mut app, subject);
     app.update();
     assert_eq!(app.world().get::<GuestEducation>(guest).unwrap().0, 60);
 }

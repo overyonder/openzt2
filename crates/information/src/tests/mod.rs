@@ -74,25 +74,28 @@ fn reopening_editor_rebinds_rows_after_hidden_membership_changes() {
     use crate::information_view_types::EntityEditorDataRootSurface;
     use crate::projection::entity_editor_data_root_projection::*;
     use openzt2_interface_state::information::entity_selection_types::InformationEntitySource;
-    use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::{
-        SetUiListRowCount, UiListRow,
-    };
+    use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::UiListRow;
+    use openzt2_world_state::world_spawn::world_membership_types::{WorldMember, WorldRoot};
 
     let mut app = App::new();
-    app.init_resource::<InspectableMembership>()
-        .add_message::<SetUiListRowCount>()
-        .add_observer(inspectable_added)
-        .add_observer(inspectable_removed)
+    app.add_observer(unlink_retired_inspectable_world_subjects)
         .add_systems(
             Update,
-            project_inspectable_entities_to_visible_entity_editor_data_roots,
+            (
+                link_inspectable_world_subjects,
+                project_inspectable_entities_to_visible_entity_editor_data_roots,
+            )
+                .chain(),
         );
     let world = app.world_mut();
+    let root = world.spawn(WorldRoot { scenario: id(0) }).id();
     let editor = world
         .spawn((EntityEditorDataRootSurface, InheritedVisibility::VISIBLE))
         .id();
     let row = world.spawn((UiListRow { index: 0 }, ChildOf(editor))).id();
-    let original = world.spawn(Inspectable { definition: id(1) }).id();
+    let original = world
+        .spawn((Inspectable { definition: id(1) }, WorldMember { root }))
+        .id();
     app.update();
     assert_eq!(
         app.world().get::<InformationEntitySource>(row).unwrap().0,
@@ -101,7 +104,9 @@ fn reopening_editor_rebinds_rows_after_hidden_membership_changes() {
     let world = app.world_mut();
     world.entity_mut(editor).insert(InheritedVisibility::HIDDEN);
     world.entity_mut(original).remove::<Inspectable>();
-    let replacement = world.spawn(Inspectable { definition: id(2) }).id();
+    let replacement = world
+        .spawn((Inspectable { definition: id(2) }, WorldMember { root }))
+        .id();
     app.update();
     app.world_mut()
         .entity_mut(editor)

@@ -23,7 +23,8 @@ pub(crate) fn project_staff_water_locomotion(
             Entity,
             &StaffRole,
             &mut Transform,
-            Option<&LocomotionMode>,
+            Option<&mut LocomotionMode>,
+            Option<&mut SwimLayer>,
             Option<&StaffSubmergedDepth>,
         ),
         (
@@ -35,7 +36,7 @@ pub(crate) fn project_staff_water_locomotion(
     let Some(catalogue) = active_definitions.get(&definitions) else {
         return;
     };
-    for (employee, role, mut transform, mode, held_depth) in &mut staff {
+    for (employee, role, transform, mode, swim_layer, held_depth) in &mut staff {
         let Some(depths) = catalogue.find_staff(role.0).and_then(|role| role.swimming) else {
             continue;
         };
@@ -44,22 +45,29 @@ pub(crate) fn project_staff_water_locomotion(
         let water_depth = surface
             .zip(surfaces.ground_height(position))
             .map_or(0.0, |(surface, ground)| surface - ground);
-        let swimming = mode == Some(&LocomotionMode::Swim);
+        let swimming = mode.as_deref() == Some(&LocomotionMode::Swim);
         let swims = if swimming {
             water_depth >= depths.exit_depth_m
         } else {
             water_depth > depths.entry_depth_m
         };
         if swims != swimming || mode.is_none() {
-            if swims {
-                commands
-                    .entity(employee)
-                    .insert((LocomotionMode::Swim, SwimLayer::Surface));
+            let next = if swims {
+                LocomotionMode::Swim
             } else {
+                LocomotionMode::Ground
+            };
+            if let Some(mut mode) = mode {
+                mode.set_if_neq(next);
+            } else {
+                commands.entity(employee).insert(next);
+            }
+            if !swims {
                 commands
                     .entity(employee)
-                    .insert(LocomotionMode::Ground)
                     .remove::<(SwimLayer, StaffSubmergedDepth)>();
+            } else if surface.is_none() && swim_layer.is_none() {
+                commands.entity(employee).insert(SwimLayer::Surface);
             }
         }
         let Some(surface) = surface.filter(|_| swims) else {
@@ -71,7 +79,13 @@ pub(crate) fn project_staff_water_locomotion(
         } else {
             SwimLayer::Surface
         };
-        commands.entity(employee).insert(layer);
-        transform.translation.y = surface - held;
+        if let Some(mut swim_layer) = swim_layer {
+            swim_layer.set_if_neq(layer);
+        } else {
+            commands.entity(employee).insert(layer);
+        }
+        transform
+            .map_unchanged(|transform| &mut transform.translation.y)
+            .set_if_neq(surface - held);
     }
 }

@@ -1,6 +1,6 @@
 use openzt2_zoo_state::guests::guest_favourite_animal_trend_types::GuestFavouriteAnimalTrend;
 use openzt2_zoo_state::guests::guest_simulation_types::GuestArrivalState;
-use openzt2_zoo_state::guests::guest_survey_types::GuestSurvey;
+use openzt2_zoo_state::guests::guest_survey_types::{GuestSurvey, GuestSurveyNeedCadence};
 
 #[derive(Debug, Clone)]
 pub(super) struct RuntimeContinuationSnapshot {
@@ -17,7 +17,7 @@ pub(super) struct RuntimeContinuationSnapshot {
     pub behavior_execution_sequence: u64,
     pub service_request_sequence: Option<u64>,
     pub guest_arrivals: Option<GuestArrivalState>,
-    pub guest_survey: Option<GuestSurvey>,
+    pub guest_survey: Option<(GuestSurveyNeedCadence, GuestSurvey)>,
     pub guest_favourite_animal_trend: Option<GuestFavouriteAnimalTrend>,
 }
 

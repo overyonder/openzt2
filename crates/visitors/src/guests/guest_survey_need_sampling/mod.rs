@@ -1,4 +1,4 @@
-use bevy::prelude::*;
+use bevy::{platform::collections::HashSet, prelude::*};
 use openzt2_game_assets::world_definitions::{
     world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions,
     world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
@@ -9,7 +9,9 @@ use openzt2_world_state::world_spawn::{
 };
 use openzt2_zoo_state::guests::{
     guest_simulation_types::*,
-    guest_survey_types::{GuestCriticalNeedObservations, GuestSurvey, GuestSurveyExperience},
+    guest_survey_types::{
+        GuestCriticalNeedObservations, GuestSurveyExperience, GuestSurveyNeedCadence,
+    },
 };
 use openzt2_zoo_state::{
     animal_behavior::behavior_set_start_request_types::PendingBehaviorSet,
@@ -20,45 +22,18 @@ use openzt2_zoo_state::{
     },
 };
 
-pub(super) fn initialize_guest_survey_observations(
-    mut commands: Commands,
-    guests: Query<
-        (
-            Entity,
-            Has<GuestCriticalNeedObservations>,
-            Has<GuestSurveyExperience>,
-        ),
-        (
-            With<Guest>,
-            Or<(
-                Without<GuestCriticalNeedObservations>,
-                Without<GuestSurveyExperience>,
-            )>,
-        ),
-    >,
-) {
-    for (guest, counters, experience) in &guests {
-        let mut guest = commands.entity(guest);
-        if !counters {
-            guest.insert(GuestCriticalNeedObservations::default());
-        }
-        if !experience {
-            guest.insert(GuestSurveyExperience::default());
-        }
-    }
-}
-
 #[allow(clippy::type_complexity)]
 pub(super) fn sample_current_guest_need_observations(
     time: Res<Time<Fixed>>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active: Res<WorldDefinitions>,
-    survey: Option<ResMut<GuestSurvey>>,
+    mut cadences: Query<&mut GuestSurveyNeedCadence>,
     thinking_guests: Query<
         (
             Option<&BehaviorTaskExecutionState>,
             Option<&RunningBehaviorInstruction>,
             Has<PendingBehaviorTaskFailure>,
+            &WorldMember,
         ),
         (
             With<WorldMember>,
@@ -90,9 +65,6 @@ pub(super) fn sample_current_guest_need_observations(
         With<Guest>,
     >,
 ) {
-    let Some(mut survey) = survey else {
-        return;
-    };
     let Some(definitions) = active.get(&definitions) else {
         return;
     };
@@ -106,38 +78,56 @@ pub(super) fn sample_current_guest_need_observations(
         return;
     }
     let interval = generation.need_survey.check_interval_ns as f32 * 1e-9;
-    for (
-        entity,
-        archetype,
-        hunger,
-        thirst,
-        dessert,
-        gift,
-        rest,
-        bathroom,
-        social,
-        amusement,
-        happiness,
-        viewing,
-        mut counters,
-        mut experience,
-    ) in &mut guests
-    {
-        let Ok((task, instruction, pending_failure)) = thinking_guests.get(entity) else {
+    let mut eligible = HashSet::new();
+    let mut due = Vec::new();
+    for (entity, archetype, ..) in &guests {
+        let Ok((task, instruction, pending_failure, world)) = thinking_guests.get(entity) else {
             continue;
         };
         if task.is_some_and(|task| {
             pending_failure || instruction.is_none_or(|instruction| !instruction.is_current(task))
-        }) {
+        }) || definitions.find_guest(archetype.0).is_none()
+        {
             continue;
         }
+        let Ok(mut cadence) = cadences.get_mut(world.root) else {
+            continue;
+        };
+        eligible.insert(entity);
+        if cadence.sample_after_thinker(time.timestep().as_secs_f32(), interval) {
+            due.push(entity);
+        }
+    }
+    guests.par_iter_mut().for_each(
+        |(entity, _, _, _, _, _, _, _, _, _, happiness, _, _, mut experience)| {
+            if eligible.contains(&entity) {
+                experience.observe_happiness(happiness.source_q16() as f32 / 65_536.0);
+            }
+        },
+    );
+    for entity in due {
+        let Ok((
+            _,
+            archetype,
+            hunger,
+            thirst,
+            dessert,
+            gift,
+            rest,
+            bathroom,
+            social,
+            amusement,
+            happiness,
+            viewing,
+            mut counters,
+            _,
+        )) = guests.get_mut(entity)
+        else {
+            continue;
+        };
         let Some(definition) = definitions.find_guest(archetype.0) else {
             continue;
         };
-        experience.observe_happiness(happiness.source_q16() as f32 / 65_536.0);
-        if !survey.sample_guest_needs_now(time.timestep().as_secs_f32(), interval) {
-            continue;
-        }
         let values = [
             (hunger.value, hunger.residual_q16),
             (thirst.value, thirst.residual_q16),
@@ -198,7 +188,8 @@ mod tests {
     };
     use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 
-    fn fixture() -> App {
+    fn fixture() -> (App, Entity) {
+        use openzt2_zoo_state::guests::guest_survey_types::GuestSurvey;
         let mut app = App::new();
         let mut document = super::super::viewing_reaction_composition_tests::policy_document();
         document.behavior_selection_policy = Some(openzt2_game_data::world_definitions::behavior_selection_policy::BehaviorSelectionPolicy {
@@ -241,7 +232,6 @@ mod tests {
         app.init_resource::<Assets<WorldDefinitionAsset>>()
             .insert_resource(Time::<Fixed>::from_hz(10.0))
             .insert_resource(GuestSurvey {
-                critical_need_countdown_seconds: 5.0,
                 previous_day_of_month: 9,
                 current_day_of_month: 1,
                 ..Default::default()
@@ -252,14 +242,7 @@ mod tests {
                 tick_in_day: 1,
                 fractional_tick: Default::default(),
             })
-            .add_systems(
-                Update,
-                (
-                    initialize_guest_survey_observations,
-                    sample_current_guest_need_observations,
-                )
-                    .chain(),
-            );
+            .add_systems(Update, sample_current_guest_need_observations);
         let handle = app
             .world_mut()
             .resource_mut::<Assets<WorldDefinitionAsset>>()
@@ -267,35 +250,40 @@ mod tests {
         let mut active = WorldDefinitions::default();
         active.index_test_document(handle, &document);
         app.insert_resource(active);
-        app
+        let root = app.world_mut().spawn(GuestSurveyNeedCadence(5.0)).id();
+        (app, root)
     }
 
     #[test]
     fn empty_zoo_preserves_loaded_countdown_when_the_world_clock_advances() {
-        let mut app = fixture();
+        let (mut app, root) = fixture();
         for _ in 0..20 {
             app.world_mut().resource_mut::<ZooClock>().tick += 1_000;
             app.update();
         }
-        let survey = app.world().resource::<GuestSurvey>();
-        assert_eq!(survey.critical_need_countdown_seconds, 5.0);
+        let survey = app
+            .world()
+            .resource::<openzt2_zoo_state::guests::guest_survey_types::GuestSurvey>();
+        assert_eq!(
+            app.world().get::<GuestSurveyNeedCadence>(root).unwrap().0,
+            5.0
+        );
         assert_eq!(survey.previous_day_of_month, 9);
         assert_eq!(survey.current_day_of_month, 1);
     }
 
     #[test]
     fn a_guest_samples_individual_needs_with_a_strict_fractional_threshold() {
-        let mut app = fixture();
+        let (mut app, root) = fixture();
         app.world_mut()
-            .resource_mut::<GuestSurvey>()
-            .critical_need_countdown_seconds = 0.0;
+            .get_mut::<GuestSurveyNeedCadence>(root)
+            .unwrap()
+            .0 = 0.0;
         let guest = app
             .world_mut()
             .spawn((
                 Guest,
-                WorldMember {
-                    root: Entity::PLACEHOLDER,
-                },
+                WorldMember { root },
                 GuestArchetype(AssetId::from_key("viewing-test")),
                 GuestHunger {
                     value: 500,
@@ -340,9 +328,7 @@ mod tests {
         assert_eq!(observations.observations(AssetId::from_key("hunger")), 0.0);
         assert_eq!(observations.observations(AssetId::from_key("thirst")), 1.0);
         assert_eq!(
-            app.world()
-                .resource::<GuestSurvey>()
-                .critical_need_countdown_seconds,
+            app.world().get::<GuestSurveyNeedCadence>(root).unwrap().0,
             5.0
         );
         app.update();
@@ -354,10 +340,13 @@ mod tests {
             1.0
         );
         app.world_mut().entity_mut(guest).insert(Frozen);
-        let before = *app.world().resource::<GuestSurvey>();
+        let before = *app.world().get::<GuestSurveyNeedCadence>(root).unwrap();
         let experience = *app.world().get::<GuestSurveyExperience>(guest).unwrap();
         app.update();
-        assert_eq!(*app.world().resource::<GuestSurvey>(), before);
+        assert_eq!(
+            *app.world().get::<GuestSurveyNeedCadence>(root).unwrap(),
+            before
+        );
         assert_eq!(
             *app.world().get::<GuestSurveyExperience>(guest).unwrap(),
             experience

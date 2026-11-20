@@ -239,9 +239,8 @@ impl<T: Pod + ShaderSize> AlignedBufferVec<T> {
 
     /// Reserve some capacity into the buffer.
     ///
-    /// If the buffer is reallocated, the old content (on the GPU) is lost, and
-    /// needs to be re-uploaded to the newly-created buffer. This is done with
-    /// [`write_buffer()`].
+    /// Call [`Self::write_ranges()`] when existing GPU contents must survive a
+    /// reallocation.
     ///
     /// # Returns
     ///
@@ -282,7 +281,6 @@ impl<T: Pod + ShaderSize> AlignedBufferVec<T> {
                 new_buffer.id(),
             );
             self.buffer = Some(new_buffer);
-            // FIXME - this discards the old content if any!!!
             true
         } else {
             false
@@ -404,8 +402,6 @@ pub struct HybridAlignedBufferVec {
     /// Free ranges available for re-allocation. Those are row ranges; byte
     /// ranges are obtained by multiplying these by `item_align`.
     free_rows: Vec<FreeRow>,
-    /// Is the GPU buffer stale and the CPU one need to be re-uploaded?
-    is_stale: bool,
 }
 
 impl HybridAlignedBufferVec {
@@ -427,7 +423,6 @@ impl HybridAlignedBufferVec {
             buffer_usage,
             label,
             free_rows: vec![],
-            is_stale: true,
         }
     }
 
@@ -601,8 +596,6 @@ impl HybridAlignedBufferVec {
     }
 
     pub fn push_raw(&mut self, src: &[u8]) -> Range<u32> {
-        self.is_stale = true;
-
         // Calculate the number of (aligned) rows to allocate
         let num_rows = src.len().div_ceil(self.item_align) as u32;
 
@@ -807,7 +800,6 @@ impl HybridAlignedBufferVec {
                 return false;
             }
         }
-        self.is_stale = true;
         true
     }
 
@@ -837,15 +829,12 @@ impl HybridAlignedBufferVec {
 
         let dst: &mut [u8] = &mut self.values[offset as usize..data_end as usize];
         dst.copy_from_slice(data);
-
-        self.is_stale = true;
     }
 
     /// Reserve some capacity into the buffer.
     ///
-    /// If the buffer is reallocated, the old content (on the GPU) is lost, and
-    /// needs to be re-uploaded to the newly-created buffer. This is done with
-    /// [`write_buffer()`].
+    /// Call [`Self::write_ranges()`] when existing GPU contents must survive a
+    /// reallocation.
     ///
     /// # Returns
     ///
@@ -872,44 +861,43 @@ impl HybridAlignedBufferVec {
                 usage: BufferUsages::COPY_DST | self.buffer_usage,
                 mapped_at_creation: false,
             }));
-            self.is_stale = !self.values.is_empty();
-            // FIXME - this discards the old content if any!!!
             true
         } else {
             false
         }
     }
 
-    /// Schedule the buffer write to GPU.
-    ///
-    /// # Returns
-    ///
-    /// `true` if the buffer was (re)allocated, `false` otherwise. If the buffer
-    /// was reallocated, all bind groups referencing the old buffer should be
-    /// destroyed.
-    pub fn write_buffer(&mut self, device: &RenderDevice, queue: &RenderQueue) -> bool {
-        if self.values.is_empty() || !self.is_stale {
-            return false;
+    /// Upload new CPU records while retaining the GPU values at other offsets.
+    pub fn write_ranges(
+        &mut self,
+        device: &RenderDevice,
+        queue: &RenderQueue,
+        ranges: &[Range<u32>],
+    ) {
+        if self.values.is_empty() || ranges.is_empty() {
+            return;
         }
-        let size = self.values.len();
-        trace!(
-            "hybrid abv: write_buffer: size={}B item_align={}B",
-            size,
-            self.item_align,
-        );
-        let buffer_changed = self.reserve(size, device);
-        if let Some(buffer) = &self.buffer {
-            queue.write_buffer(buffer, 0, self.values.as_slice());
-            self.is_stale = false;
+        let previous = self.buffer.clone();
+        let resized = self.reserve(self.values.len(), device);
+        let Some(buffer) = &self.buffer else {
+            return;
+        };
+        if let Some(previous) = previous.filter(|_| resized) {
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("hanabi:resize_child_infos"),
+            });
+            encoder.copy_buffer_to_buffer(&previous, 0, buffer, 0, previous.size());
+            queue.submit([encoder.finish()]);
         }
-        buffer_changed
+        for range in ranges {
+            if let Some(values) = self.values.get(range.start as usize..range.end as usize) {
+                queue.write_buffer(buffer, u64::from(range.start), values);
+            }
+        }
     }
 
     #[allow(dead_code)]
     pub fn clear(&mut self) {
-        if !self.values.is_empty() {
-            self.is_stale = true;
-        }
         self.values.clear();
     }
 }

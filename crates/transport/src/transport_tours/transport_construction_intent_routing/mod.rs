@@ -4,6 +4,8 @@ use openzt2_game_assets::world_definitions::world_definition_document_asset_and_
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_zoo_state::placement::placement_transaction_types::ObjectPlacementCommitted;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
+use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
+use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator;
 
 use openzt2_zoo_state::transport_tours::transport_circuit_types::CircuitMember;
 use openzt2_zoo_state::transport_tours::transport_circuit_types::TransportCircuit;
@@ -21,6 +23,7 @@ pub(super) fn attach_committed_transport_stations_to_compatible_or_new_circuits(
     transport_circuits: Query<(Entity, &WorldMember), With<TransportCircuit>>,
     existing_station_members: Query<(&TransportStation, &CircuitMember)>,
     mut station_attachments: MessageWriter<AttachTransportStationRequest>,
+    mut ids: ResMut<PersistentIdAllocator>,
     mut commands: Commands,
 ) {
     let Some(world_definitions) = active_world_definitions.get(&world_definition_assets) else {
@@ -52,9 +55,16 @@ pub(super) fn attach_committed_transport_stations_to_compatible_or_new_circuits(
                 .then_some(transport_circuit_entity)
             },
         );
-        let circuit = compatible_circuit.unwrap_or_else(|| {
+        let circuit = if let Some(circuit) = compatible_circuit {
+            circuit
+        } else {
+            let Ok(id) = ids.allocate(station_world_member.root) else {
+                continue;
+            };
             commands
                 .spawn((
+                    id,
+                    DefinitionId(transport_station.definition),
                     TransportCircuit {
                         definition: transport_station.definition,
                         closed: true,
@@ -62,7 +72,7 @@ pub(super) fn attach_committed_transport_stations_to_compatible_or_new_circuits(
                     *station_world_member,
                 ))
                 .id()
-        });
+        };
         station_attachments.write(AttachTransportStationRequest {
             station: committed_object.entity,
             circuit,

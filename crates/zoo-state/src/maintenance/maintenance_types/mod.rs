@@ -105,15 +105,6 @@ pub struct AnimalWasteProductionSchedule {
 #[repr(transparent)]
 pub struct ZooCleanlinessPermille(pub Option<u16>);
 
-#[derive(Resource, Debug, Clone, Copy, Default, PartialEq, Eq)]
-/// Incremental source totals used to project whole-zoo cleanliness.
-pub struct IncrementalZooCleanlinessTotals {
-    pub contained_waste_units: u64,
-    pub contained_waste_capacity_units: u64,
-    pub uncontained_waste_units: u64,
-    pub requires_recalculation: bool,
-}
-
 #[derive(Component)]
 pub struct WasteContainerEmptyingStaffJobKindMarker;
 
@@ -132,71 +123,3 @@ pub struct AuthoredMaintenanceFactsResolutionMarker;
 
 #[derive(Component)]
 pub struct AnimalWasteProductionScheduleResolutionMarker;
-
-impl IncrementalZooCleanlinessTotals {
-    pub fn add_facility_contained_waste(&mut self, contained_waste: FacilityContainedWaste) {
-        self.contained_waste_units = self
-            .contained_waste_units
-            .saturating_add(u64::from(contained_waste.contained_waste_units));
-        self.contained_waste_capacity_units = self
-            .contained_waste_capacity_units
-            .saturating_add(u64::from(contained_waste.contained_waste_capacity_units));
-        self.requires_recalculation = true;
-    }
-
-    pub fn remove_facility_contained_waste(&mut self, contained_waste: FacilityContainedWaste) {
-        self.contained_waste_units = self
-            .contained_waste_units
-            .saturating_sub(u64::from(contained_waste.contained_waste_units));
-        self.contained_waste_capacity_units = self
-            .contained_waste_capacity_units
-            .saturating_sub(u64::from(contained_waste.contained_waste_capacity_units));
-        self.requires_recalculation = true;
-    }
-
-    pub fn replace_facility_contained_waste(
-        &mut self,
-        previous_contained_waste: FacilityContainedWaste,
-        current_contained_waste: FacilityContainedWaste,
-    ) {
-        self.contained_waste_units = self
-            .contained_waste_units
-            .saturating_sub(u64::from(previous_contained_waste.contained_waste_units))
-            .saturating_add(u64::from(current_contained_waste.contained_waste_units));
-        self.contained_waste_capacity_units = self
-            .contained_waste_capacity_units
-            .saturating_sub(u64::from(
-                previous_contained_waste.contained_waste_capacity_units,
-            ))
-            .saturating_add(u64::from(
-                current_contained_waste.contained_waste_capacity_units,
-            ));
-        self.requires_recalculation |= previous_contained_waste != current_contained_waste;
-    }
-
-    pub fn add_uncontained_waste_units(&mut self, added_waste_units: u16) {
-        self.uncontained_waste_units = self
-            .uncontained_waste_units
-            .saturating_add(u64::from(added_waste_units));
-        self.requires_recalculation = true;
-    }
-
-    pub fn remove_uncontained_waste_units(&mut self, removed_waste_units: u16) {
-        self.uncontained_waste_units = self
-            .uncontained_waste_units
-            .saturating_sub(u64::from(removed_waste_units));
-        self.requires_recalculation = true;
-    }
-
-    pub fn replace_uncontained_waste_units(
-        &mut self,
-        previous_waste_units: u16,
-        current_waste_units: u16,
-    ) {
-        self.uncontained_waste_units = self
-            .uncontained_waste_units
-            .saturating_sub(u64::from(previous_waste_units))
-            .saturating_add(u64::from(current_waste_units));
-        self.requires_recalculation |= previous_waste_units != current_waste_units;
-    }
-}

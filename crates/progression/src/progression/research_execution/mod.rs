@@ -1,6 +1,5 @@
 use super::research_duration_calculation::resolve_research_duration_to_simulation_ticks;
 use bevy::prelude::*;
-use openzt2_game_data::AssetId;
 use openzt2_world_state::simulation_time::deterministic_random_stream::ZooSeed;
 
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
@@ -24,9 +23,11 @@ use super::{
     },
     research_progress_calculations::advance_research_project_by_one_tick,
     research_types::{
-        PendingResearchProjectPayment, ResearchAvailabilityUnlockCountdown, ResearchProject,
-        ResearchProjectAvailability, ResearchProjectCompleted, ResearchProjectCompletionReady,
-        ResearchProjectPaused, StartResearchProjectRequest,
+        PendingResearchProjectPayment, ResearchAvailabilityUnlockCountdown,
+        ResearchDurationOverride, ResearchProject, ResearchProjectAvailability,
+        ResearchProjectCompleted, ResearchProjectCompletionReady, ResearchProjectPaused,
+        ResearchProjectPersistentId, ResearchPurchaseState, SetResearchDuration,
+        StartResearchProjectRequest, WorldResearchItems,
     },
     unlock_types::UnlockedCatalogueDefinitionSet,
 };
@@ -36,13 +37,14 @@ pub(super) fn validate_start_research_requests_and_request_payments(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     unlocks: Res<UnlockedCatalogueDefinitionSet>,
-    projects: Query<&ResearchProject>,
-    availability: Query<&ResearchProjectAvailability>,
-    pending: Query<&PendingResearchProjectPayment>,
-    roots: Query<(Entity, &WorldRoot)>,
+    mut items: Query<(
+        &WorldMember,
+        &ResearchProjectAvailability,
+        &mut ResearchPurchaseState,
+        Has<ResearchProject>,
+    )>,
     mut commands: Commands,
     mut transactions: MessageWriter<TransactionRequest>,
-    mut accepted: Local<Vec<AssetId>>,
 ) {
     if requests.is_empty() {
         return;
@@ -50,17 +52,15 @@ pub(super) fn validate_start_research_requests_and_request_payments(
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };
-    let Some((root, _)) = roots.iter().next() else {
-        return;
-    };
-    accepted.clear();
-    let definition_count = definitions.research().count();
-    if accepted.capacity() < definition_count {
-        let additional = definition_count - accepted.capacity();
-        accepted.reserve_exact(additional);
-    }
     for request in requests.read() {
-        let Some(research) = definitions.find_research(request.definition) else {
+        let Ok((member, availability, mut purchase, has_project)) = items.get_mut(request.item)
+        else {
+            continue;
+        };
+        if !availability.available || has_project || *purchase != ResearchPurchaseState::Idle {
+            continue;
+        }
+        let Some(research) = definitions.find_research(availability.item) else {
             continue;
         };
         let targets = &research.unlocks;
@@ -73,36 +73,24 @@ pub(super) fn validate_start_research_requests_and_request_payments(
                 find_catalogue_definition_index(definitions, *target)
                     .is_some_and(|index| catalogue_definition_is_unlocked_at_index(&unlocks, index))
             });
-        if accepted.contains(&request.definition)
-            || availability
-                .iter()
-                .find(|available| available.item == request.definition)
-                .is_none_or(|available| !available.available)
-            || projects
-                .iter()
-                .any(|active| active.definition == request.definition)
-            || pending
-                .iter()
-                .any(|active| active.definition == request.definition)
-            || !research.prerequisites.iter().all(|id| {
-                find_catalogue_definition_index(definitions, *id)
-                    .is_some_and(|index| catalogue_definition_is_unlocked_at_index(&unlocks, index))
-            })
-            || invalid_target
+        if !research.prerequisites.iter().all(|id| {
+            find_catalogue_definition_index(definitions, *id)
+                .is_some_and(|index| catalogue_definition_is_unlocked_at_index(&unlocks, index))
+        }) || invalid_target
             || already_completed
         {
             continue;
         }
-        accepted.push(request.definition);
         let operation = commands
             .spawn((
                 PendingResearchProjectPayment {
-                    definition: request.definition,
+                    item: request.item,
                 },
-                WorldMember { root },
+                *member,
                 openzt2_zoo_state::economy::general_economy_types::GeneralEconomyTransaction::Research,
             ))
             .id();
+        *purchase = ResearchPurchaseState::AwaitingPayment(operation);
         transactions.write(TransactionRequest {
             operation,
             debit: Account::Zoo,
@@ -117,69 +105,108 @@ pub(super) fn start_paid_research_projects(
     mut completed: MessageReader<TransactionCompleted>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
-    pending: Query<(Entity, &PendingResearchProjectPayment, &WorldMember)>,
+    pending: Query<&PendingResearchProjectPayment>,
+    mut items: Query<(
+        &WorldMember,
+        &ResearchProjectAvailability,
+        &ResearchDurationOverride,
+        &mut ResearchPurchaseState,
+    )>,
     mut ids: ResMut<PersistentIdAllocator>,
     seed: Res<ZooSeed>,
-    duration_overrides: Res<
-        openzt2_zoo_state::progression::research_types::ResearchDurationOverrides,
-    >,
     mut commands: Commands,
 ) {
-    if completed.is_empty() {
-        return;
-    }
-    let Some(definitions) = active_definitions.get(&definitions) else {
-        return;
-    };
+    let definitions = active_definitions.get(&definitions);
     for result in completed.read() {
-        let Ok((operation, payment, member)) = pending.get(result.operation) else {
+        let Ok(payment) = pending.get(result.operation) else {
             continue;
         };
-        let Some(definition) = definitions.find_research(payment.definition) else {
-            // The transaction is already committed. Never retain a dead
-            // payment operation that could be mistaken for an in-flight
-            // purchase if the loaded catalogue was replaced unexpectedly.
-            commands.entity(operation).despawn();
+        commands.entity(result.operation).try_despawn();
+        let Ok((member, availability, duration, mut purchase)) = items.get_mut(payment.item) else {
+            continue;
+        };
+        if *purchase != ResearchPurchaseState::AwaitingPayment(result.operation) {
+            continue;
+        }
+        *purchase = ResearchPurchaseState::Idle;
+        let Some(definitions) = definitions else {
+            continue;
+        };
+        let Some(definition) = definitions.find_research(availability.item) else {
             continue;
         };
         let Ok(id) = ids.allocate(member.root) else {
-            commands.entity(operation).despawn();
             continue;
         };
-        commands.spawn((
+        let hz = definitions.timing().fixed_hz;
+        commands.entity(payment.item).insert((
             ResearchProject {
-                definition: payment.definition,
+                definition: availability.item,
                 elapsed_ticks: 0,
-                required_ticks: duration_overrides
-                    .0
-                    .get(&payment.definition)
-                    .map(|seconds| {
-                        (*seconds * definitions.timing().fixed_hz as f32).max(1.0) as u64
-                    })
-                    .unwrap_or_else(|| {
+                required_ticks: duration.0.map_or_else(
+                    || {
                         resolve_research_duration_to_simulation_ticks(
                             definition.duration,
-                            definitions.timing().fixed_hz,
+                            hz,
                             *seed,
                             id,
                         )
-                    }),
+                    },
+                    |seconds| (seconds * hz as f32).max(1.0) as u64,
+                ),
             },
-            *member,
-            id,
+            ResearchProjectPersistentId(id),
         ));
-        commands.entity(operation).despawn();
     }
 }
 
 pub(super) fn discard_rejected_research_payment_operations(
     mut rejected: MessageReader<TransactionRejected>,
-    pending: Query<(), With<PendingResearchProjectPayment>>,
+    pending: Query<&PendingResearchProjectPayment>,
+    mut items: Query<&mut ResearchPurchaseState>,
     mut commands: Commands,
 ) {
     for result in rejected.read() {
-        if pending.get(result.operation).is_ok() {
-            commands.entity(result.operation).despawn();
+        let Ok(payment) = pending.get(result.operation) else {
+            continue;
+        };
+        if let Ok(mut purchase) = items.get_mut(payment.item) {
+            if *purchase == ResearchPurchaseState::AwaitingPayment(result.operation) {
+                *purchase = ResearchPurchaseState::Idle;
+            }
+        }
+        commands.entity(result.operation).try_despawn();
+    }
+}
+
+pub(super) fn release_retired_research_payment(
+    retired: On<Despawn<PendingResearchProjectPayment>>,
+    payments: Query<&PendingResearchProjectPayment>,
+    mut items: Query<&mut ResearchPurchaseState>,
+) {
+    let Ok(payment) = payments.get(retired.entity) else {
+        return;
+    };
+    if let Ok(mut purchase) = items.get_mut(payment.item) {
+        if *purchase == ResearchPurchaseState::AwaitingPayment(retired.entity) {
+            *purchase = ResearchPurchaseState::Idle;
+        }
+    }
+}
+
+pub(super) fn apply_research_duration_overrides(
+    mut requests: MessageReader<SetResearchDuration>,
+    worlds: Query<&WorldResearchItems, With<WorldRoot>>,
+    mut durations: Query<&mut ResearchDurationOverride>,
+) {
+    let Some(items) = worlds.iter().next() else {
+        return;
+    };
+    for request in requests.read() {
+        if let Some(&item) = items.definitions.get(&request.definition) {
+            if let Ok(mut duration) = durations.get_mut(item) {
+                duration.set_if_neq(ResearchDurationOverride(Some(request.seconds)));
+            }
         }
     }
 }
@@ -262,7 +289,11 @@ pub(super) fn complete_research_projects_and_apply_authored_unlocks(
             definition: completion.definition,
         });
         changed.write(ProgressionFactChanged::Research(completion.definition));
-        commands.entity(completion.project).despawn();
+        commands.entity(completion.project).remove::<(
+            ResearchProject,
+            ResearchProjectPaused,
+            ResearchProjectPersistentId,
+        )>();
     }
 }
 
@@ -271,25 +302,46 @@ pub(super) fn refresh_authored_research_availability(
     active_definitions: Res<WorldDefinitions>,
     fame: Res<super::fame_types::Fame>,
     roots: Query<
-        &openzt2_world_state::world_spawn::selected_world_identity::SelectedWorldIdentity,
+        Ref<openzt2_world_state::world_spawn::selected_world_identity::SelectedWorldIdentity>,
         With<WorldRoot>,
     >,
     mut availability: Query<(
         &mut ResearchProjectAvailability,
         Option<&ResearchAvailabilityUnlockCountdown>,
     )>,
+    added: Query<
+        (),
+        Or<(
+            Added<ResearchProjectAvailability>,
+            Added<ResearchAvailabilityUnlockCountdown>,
+        )>,
+    >,
+    mut expired: RemovedComponents<ResearchAvailabilityUnlockCountdown>,
+    mut last_maximum: Local<Option<f32>>,
     mut changed: MessageWriter<ProgressionFactChanged>,
 ) {
+    let asset_changed = active_definitions.is_changed() || definitions.is_changed();
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };
-    let research_mode = roots.iter().next().is_some_and(|identity| {
-        matches!(
-            identity.mode,
-            openzt2_world_state::game_session_types::WorldSessionMode::Campaign
-                | openzt2_world_state::game_session_types::WorldSessionMode::Challenge
-        )
-    });
+    let Some(identity) = roots.iter().next() else {
+        return;
+    };
+    if !asset_changed
+        && !identity.is_changed()
+        && *last_maximum == fame.maximum_percent_reached
+        && added.is_empty()
+        && expired.is_empty()
+    {
+        return;
+    }
+    *last_maximum = fame.maximum_percent_reached;
+    expired.clear();
+    let research_mode = matches!(
+        identity.mode,
+        openzt2_world_state::game_session_types::WorldSessionMode::Campaign
+            | openzt2_world_state::game_session_types::WorldSessionMode::Challenge
+    );
     for (mut availability, countdown) in &mut availability {
         let available = research_mode
             && countdown.is_none()

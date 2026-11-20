@@ -1,6 +1,5 @@
 //! Animal show stages, authored schedules, editor state, and platform upgrades.
 
-mod cleanup;
 mod show_audience_lifecycle;
 mod show_audience_types;
 mod show_donation_summary_presentation;
@@ -14,9 +13,9 @@ mod show_platform_upgrade_presentation;
 use openzt2_zoo_state::shows::show_platform_upgrade_types;
 mod show_platform_upgrade_ui_action_routing;
 use openzt2_zoo_state::shows::show_schedule_types;
+mod show_schedule_retirement;
 mod show_schedule_ui_action_routing;
 mod show_schedule_ui_mutation_operations;
-mod show_scheduler_link_cleanup;
 mod show_stage_identification_and_hydration;
 use openzt2_zoo_state::shows::show_stage_types;
 mod show_timing_operations;
@@ -37,11 +36,24 @@ impl Plugin for ShowsPlugin {
         app.add_message::<CommitShowPlatformUpgradeEdit>()
             .add_message::<ShowPlatformUpgradeEditAcknowledged>()
             .add_message::<RestoreShowPlatformUpgrade>()
+            .add_observer(show_schedule_retirement::retire_schedule_and_editor_links_when_stage_is_removed)
+            .add_observer(show_schedule_retirement::remove_trick_slots_when_animal_is_removed)
+            .add_observer(show_schedule_retirement::clear_editor_after_schedule_selection_is_removed)
+            .add_observer(show_schedule_retirement::clear_editing_after_edited_show_is_removed)
             .add_systems(
                 Update,
                 (
                     show_platform_upgrade_lifecycle::queue_show_platform_upgrade_restores,
-                    show_platform_upgrade_lifecycle::restore_show_platform_upgrades,
+                    show_platform_upgrade_lifecycle::restore_show_platform_upgrades
+                        .run_if(
+                            any_match_filter::<Or<(
+                                Added<show_platform_upgrade_types::PendingShowPlatformUpgradeRestore>,
+                                Added<show_stage_types::ShowStage>,
+                                Added<openzt2_world_state::world_spawn::prefab_authored_attachment_identifier::PrefabAuthoredAttachmentIdentifier>,
+                            )>>.or_else(resource_changed::<Assets<openzt2_game_assets::scene_prefab::ScenePrefabAsset>>)
+                            .or_else(resource_changed::<Assets<bevy::gltf::Gltf>>)
+                            .or_else(resource_changed::<openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions>),
+                        ),
                 )
                     .chain(),
             )
@@ -73,27 +85,27 @@ impl Plugin for ShowsPlugin {
             )
             .add_systems(
                 FixedUpdate,
-                (
-                    show_stage_identification_and_hydration::
-                        identify_and_hydrate_spawned_show_stage_world_objects,
-                    show_platform_upgrade_lifecycle::apply_show_platform_upgrade_edits,
-                )
-                    .chain()
+                show_stage_identification_and_hydration::hydrate_show_stages_from_active_world_definitions
+                    .run_if(show_stage_identification_and_hydration::show_stage_definitions_are_available)
                     .in_set(FixedGameSet::Act)
                     .run_if(in_state(GamePhase::InGame)),
             )
             .add_systems(
                 FixedUpdate,
+                show_platform_upgrade_lifecycle::apply_show_platform_upgrade_edits
+                    .in_set(openzt2_zoo_state::construction::FixedConstructionSet::Apply)
+                    .after(openzt2_zoo_state::construction::ConstructionDomainApplicationDispatchSet)
+                    .after(openzt2_zoo_state::construction::ConstructionFailureRollbackDispatchSet)
+                    .before(openzt2_zoo_state::construction::ConstructionDomainAcknowledgementCollectionSet),
+            )
+            .add_systems(
+                FixedUpdate,
                 (
-                    show_scheduler_link_cleanup::
-                        remove_show_schedule_entries_and_editor_links_with_missing_owners,
-                    cleanup::remove_departed_animals_from_scheduled_show_performances,
                     show_event_lifecycle::remove_expired_animal_show_events,
                     show_audience_lifecycle::synchronize_authored_show_attendance.after(
                         openzt2_zoo_state::guests::GuestLifecycleAdvance,
                     ),
                 )
-                    .chain()
                     .in_set(FixedGameSet::Cleanup)
                     .run_if(in_state(GamePhase::InGame)),
             );

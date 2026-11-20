@@ -40,6 +40,9 @@ pub(super) fn hydrate_animation_sets_after_requested_clip_assets_load(
                         authored_animation_clip_metadata: Some(Arc::clone(
                             &loaded_animation_clip_source_asset.authored_animation_clip_metadata,
                         )),
+                        text_key_times_milliseconds: Arc::clone(
+                            &loaded_animation_clip_source_asset.text_key_times_milliseconds,
+                        ),
                         authored_animation_policy,
                     },
                 ));

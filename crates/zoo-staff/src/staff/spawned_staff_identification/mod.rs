@@ -13,8 +13,7 @@ use openzt2_world_state::world_spawn::prefab_source_asset_handle::PrefabSourceAs
 use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 
 use super::{
-    staff_assignment_types::StaffAssignment,
-    staff_employment_types::{AvailableForWork, Employment, Staff, StaffRole},
+    staff_employment_types::{Employment, Staff, StaffRole},
     staff_presentation_variant_selection::{
         attach_staff_presentation_variant, staff_presentation_variant, staff_role_for_definition,
         StaffModelAnimationSet,
@@ -88,12 +87,7 @@ pub(crate) fn identify_spawned_staff_from_world_definition(
             });
         let mut staff_commands = commands.entity(entity);
         staff_commands
-            .insert((
-                Staff,
-                StaffRole(role_identifier),
-                StaffAssignment::default(),
-                AvailableForWork,
-            ))
+            .insert((Staff, StaffRole(role_identifier)))
             .insert_if_new(Employment {
                 wage: Money(i64::from(role.wage_cents_per_month)),
                 hired_tick: clock.tick,

@@ -4,10 +4,14 @@ use openzt2_game_data::ui_document::action::information::InformationListCategory
 /// View-local state for an entity multilist. Rows refer directly to canonical
 /// world entities through `InformationEntitySource`.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+#[require(InformationListOrder)]
 pub(super) struct InformationEntityListPanel {
     pub(super) category: InformationListCategory,
     pub(super) sort: InformationEntityListSort,
 }
+
+#[derive(Component, Default)]
+pub(super) struct InformationListOrder(pub Vec<Entity>);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum InformationEntityListSort {

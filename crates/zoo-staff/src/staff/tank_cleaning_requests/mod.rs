@@ -12,7 +12,9 @@ use openzt2_zoo_state::terrain::dry_surface_eligibility::DrySurfaceEligibility;
 use openzt2_zoo_state::topology::topology_graph_types::TopologyGrid;
 
 use super::{
-    staff_job_types::{authored_staff_request_urgency, StaffJob, TankCleaningRequestSite},
+    staff_job_types::{
+        authored_staff_request_urgency, StaffJob, TankCleaningRequestSite, TankCleaningSite,
+    },
     staff_lifecycle_messages::{CancelStaffJobRequest, StaffJobRequest},
 };
 
@@ -38,25 +40,21 @@ pub(crate) fn request_keeper_cleaning_for_dirty_tanks(
             Ref<TankGeometry>,
             Ref<HabitatRegion>,
             Option<&WorldMember>,
+            Option<&TankCleaningSite>,
         ),
         With<Tank>,
     >,
-    sites: Query<(Entity, &TankCleaningRequestSite)>,
+    mut sites: Query<&mut Transform, With<TankCleaningRequestSite>>,
     worlds: Query<Ref<SelectedWorldIdentity>>,
     jobs: Query<(Entity, &StaffJob)>,
     mut requests: MessageWriter<StaffJobRequest>,
     mut cancellations: MessageWriter<CancelStaffJobRequest>,
 ) {
-    for (site, request) in &sites {
-        if tanks.get(request.tank).is_err() {
-            commands.entity(site).despawn();
-        }
-    }
     let Some(catalogue) = active_definitions.get(&definitions) else {
         return;
     };
     let policy_changed = definitions.is_changed() || active_definitions.is_changed();
-    for (tank, quality, geometry, region, world) in &tanks {
+    for (tank, quality, geometry, region, world, site) in &tanks {
         let identity = world.and_then(|world| worlds.get(world.root).ok());
         let policy = identity.as_ref().and_then(|identity| {
             let path = match identity.mode {
@@ -76,10 +74,7 @@ pub(crate) fn request_keeper_cleaning_for_dirty_tanks(
         {
             continue;
         }
-        let site = sites
-            .iter()
-            .find(|(_, request)| request.tank == tank)
-            .map(|(site, _)| site);
+        let site = site.and_then(|site| site.iter().next());
         let dirtiness = 1.0 - f32::from(quality.0.min(1000)) / 1000.0;
         let requested = policy.and_then(|policy| {
             let token = policy.request.token?;
@@ -96,9 +91,11 @@ pub(crate) fn request_keeper_cleaning_for_dirty_tanks(
             };
             let site = match site {
                 Some(site) => {
-                    commands
-                        .entity(site)
-                        .insert(Transform::from_translation(point));
+                    if let Ok(transform) = sites.get_mut(site) {
+                        transform
+                            .map_unchanged(|transform| &mut transform.translation)
+                            .set_if_neq(point);
+                    }
                     site
                 }
                 None => {

@@ -43,16 +43,15 @@ pub(super) fn refresh_navigation_graph_after_terrain_restoration(
 /// Refreshes edited cells before the next route-planning pass.
 // Bevy system parameters are consumed by value when the system is registered.
 #[allow(clippy::needless_pass_by_value)]
-pub(super) fn refresh_navigation_graph_and_invalidate_routes_after_terrain_edits(
+pub(super) fn refresh_navigation_graph_after_terrain_edits(
     mut terrain_navigation_changes: MessageReader<TerrainNavigationChanged>,
     mut active_navigation_graph: Option<ResMut<ActiveTerrainDerivedNavigationGraph>>,
     terrain_assets: Res<Assets<TerrainAsset>>,
     terrain_chunks: Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
-    mut active_routes: Query<(&mut Route, &mut Destination)>,
+    mut changed: MessageWriter<NavigationTerrainGraphChanged>,
 ) {
     let mut received_terrain_change = false;
     for terrain_change in terrain_navigation_changes.read() {
-        received_terrain_change = true;
         let Some(active_navigation_graph) = active_navigation_graph.as_mut() else {
             continue;
         };
@@ -63,6 +62,7 @@ pub(super) fn refresh_navigation_graph_and_invalidate_routes_after_terrain_edits
         let Some(terrain_asset) = terrain_assets.get(&terrain_chunk.asset) else {
             continue;
         };
+        received_terrain_change = true;
         refresh_terrain_derived_navigation_graph_cells_from_changed_terrain_samples(
             active_navigation_graph.terrain_derived_navigation_graph_mut(),
             terrain_chunk,
@@ -72,13 +72,36 @@ pub(super) fn refresh_navigation_graph_and_invalidate_routes_after_terrain_edits
             terrain_change.max,
         );
     }
-    if !received_terrain_change {
+    if received_terrain_change {
+        changed.write(NavigationTerrainGraphChanged);
+    }
+}
+
+#[derive(Message)]
+pub(super) struct NavigationTerrainGraphChanged;
+
+pub(super) fn invalidate_routes_after_navigation_geometry_changes(
+    mut terrain_changes: MessageReader<NavigationTerrainGraphChanged>,
+    mut path_changes: MessageReader<
+        super::path_surface_navigation_projection::NavigationPathGraphChanged,
+    >,
+    capacity: Option<Res<openzt2_zoo_state::locomotion::locomotion_types::LocomotionCapacity>>,
+    mut routes: Query<(&mut Route, &mut Destination)>,
+) {
+    let changed = (terrain_changes.read().count() != 0) | (path_changes.read().count() != 0);
+    if !changed {
         return;
     }
-    for (mut route, mut destination) in &mut active_routes {
-        route.clear();
-        destination.set_changed();
-    }
+    let point_capacity = capacity.map_or(0, |capacity| capacity.max_route_points);
+    routes
+        .par_iter_mut()
+        .for_each(|(mut route, mut destination)| {
+            route.clear();
+            if route.points.capacity() < point_capacity {
+                route.points.reserve_exact(point_capacity);
+            }
+            destination.set_changed();
+        });
 }
 
 pub(super) fn refresh_terrain_derived_navigation_graph_cells_from_changed_terrain_samples(

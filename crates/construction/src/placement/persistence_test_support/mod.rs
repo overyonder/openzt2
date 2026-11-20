@@ -50,8 +50,8 @@ pub fn apply_settled_placement_purchase_for_test(
         Query<(
             &PersistentId,
             &PlacedObjectDefinitionReference,
-            &mut Transform,
-            &mut PlacedObjectFootprintOccupancy,
+            &Transform,
+            &PlacedObjectFootprintOccupancy,
         )>,
         ResMut<ConstructionTool>,
         MessageWriter<ObjectPlacementCommitted>,
@@ -82,6 +82,7 @@ pub fn apply_settled_placement_purchase_for_test(
             &models,
             &placed,
             &default(),
+            &[],
             false,
             &mut tool,
             &mut events,

@@ -1,4 +1,4 @@
-use bevy::{platform::collections::HashSet, prelude::*};
+use bevy::prelude::*;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooCalendar;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
 use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorTaskFailure;
@@ -13,8 +13,8 @@ use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
 
 use super::{
     account_transaction_types::{
-        Account, TransactionCompleted, TransactionRejected, TransactionRejection,
-        TransactionRequest, TransactionSettled,
+        Account, TransactionCompleted, TransactionKind, TransactionRejected, TransactionRejection,
+        TransactionRequest, TransactionSettlement,
     },
     behavior_transaction_state::BehaviorTransactionPayment,
     facility_economy_types::Wallet,
@@ -28,6 +28,9 @@ struct TransactionBalanceChanges {
     debit_account_balance: Option<Money>,
     credit_account_balance: Option<Money>,
 }
+
+#[derive(Component)]
+pub(super) struct AwaitingAccountSettlement;
 
 fn calculate_transaction_balance_changes(
     amount: Money,
@@ -101,9 +104,32 @@ fn transaction_accounts_are_same(left_account: Account, right_account: Account) 
     }
 }
 
-pub(super) fn settle_requested_account_transactions(
+pub(super) fn stage_requested_account_transactions<const PLAYER: bool>(
     mut commands: Commands,
-    mut transaction_requests: MessageReader<TransactionRequest>,
+    mut requests: MessageReader<TransactionRequest>,
+    ui_cash_grants: Query<(), With<super::zoo_cash_ui::UiCashGrantPendingTransaction>>,
+    settlements: Query<(), With<TransactionSettlement>>,
+) {
+    for (request, message) in requests.read_with_id() {
+        let player_operation = matches!(
+            request.kind,
+            TransactionKind::Construction | TransactionKind::Research
+        ) || ui_cash_grants.contains(request.operation);
+        if player_operation == PLAYER && !settlements.contains(request.operation) {
+            commands.entity(request.operation).try_insert_if_new((
+                AwaitingAccountSettlement,
+                TransactionSettlement::Pending {
+                    request: *request,
+                    sequence: message.id,
+                    player_operation,
+                },
+            ));
+        }
+    }
+}
+
+pub(super) fn settle_requested_account_transactions<const PLAYER: bool>(
+    mut commands: Commands,
     mut zoo_cash: ResMut<ZooCash>,
     unlimited_zoo_cash: Option<Res<UnlimitedZooCash>>,
     mut general_ledger: Option<ResMut<GeneralEconomyLedger>>,
@@ -111,12 +137,16 @@ pub(super) fn settle_requested_account_transactions(
     mut wallets: Query<&mut Wallet>,
     mut completed_transactions: MessageWriter<TransactionCompleted>,
     mut rejected_transactions: MessageWriter<TransactionRejected>,
-    transaction_operations: Query<(
-        Option<&TransactionSettled>,
-        Option<&BehaviorTransactionPayment>,
-        Option<&StagedBehaviorRefill>,
-        Option<&GeneralEconomyTransaction>,
-    )>,
+    mut transaction_operations: Query<
+        (
+            Entity,
+            &mut TransactionSettlement,
+            Option<&BehaviorTransactionPayment>,
+            Option<&StagedBehaviorRefill>,
+            Option<&GeneralEconomyTransaction>,
+        ),
+        With<AwaitingAccountSettlement>,
+    >,
     behavior_tasks: Query<
         (
             &BehaviorTaskExecutionState,
@@ -125,35 +155,46 @@ pub(super) fn settle_requested_account_transactions(
         ),
         Without<PendingBehaviorTaskFailure>,
     >,
-    mut operations_settled_this_tick: Local<HashSet<Entity>>,
     mut keeper_refills: KeeperRefillSettlement,
     clock: Option<Res<ZooClock>>,
 ) {
-    operations_settled_this_tick.clear();
     if let (Some(ledger), Some(calendar)) = (general_ledger.as_deref_mut(), calendar.as_deref()) {
         ledger.enter_calendar_month(
             u32::from(calendar.year) * 12 + u32::from(calendar.month.saturating_sub(1)),
         );
     }
-    for request in transaction_requests.read() {
-        // Completed behavior operations are despawned by their owner. A late
-        // replay must not become an unowned payment after that cleanup.
-        if transaction_operations.get(request.operation).is_err() {
+    let mut pending = transaction_operations
+        .iter()
+        .filter_map(|(operation, state, ..)| match *state {
+            TransactionSettlement::Pending {
+                sequence,
+                player_operation,
+                ..
+            } if player_operation == PLAYER => Some((sequence, operation)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    pending.sort_unstable();
+    for (_, operation) in pending {
+        let Ok((_, mut state, behavior_payment, refill, provenance)) =
+            transaction_operations.get_mut(operation)
+        else {
             continue;
-        }
-        if transaction_operations
-            .get(request.operation)
-            .is_ok_and(|(settled, _, _, _)| settled.is_some())
-            || !operations_settled_this_tick.insert(request.operation)
-        {
+        };
+        let TransactionSettlement::Pending {
+            request,
+            player_operation,
+            ..
+        } = *state
+        else {
             continue;
-        }
+        };
 
         let settlement = (|| {
             // Authored payments are valid only while the originating instruction
             // still owns the request. Act -> Economy may cross a failure/restart.
             // Other producers retain their existing settlement contracts.
-            if let Ok((_, Some(owner), _, _)) = transaction_operations.get(request.operation) {
+            if let Some(owner) = behavior_payment {
                 let valid =
                     behavior_tasks
                         .get(owner.actor)
@@ -183,9 +224,7 @@ pub(super) fn settle_requested_account_transactions(
                 credit_account_balance,
             )?;
 
-            let general_cash_change = if transaction_operations
-                .get(request.operation)
-                .is_ok_and(|(_, _, _, provenance)| provenance.is_some())
+            let general_cash_change = if provenance.is_some()
                 && general_ledger
                     .as_deref()
                     .is_some_and(|ledger| ledger.cash().is_some())
@@ -205,9 +244,7 @@ pub(super) fn settle_requested_account_transactions(
                 None
             };
 
-            if let Ok((_, Some(owner), Some(refill), _)) =
-                transaction_operations.get(request.operation)
-            {
+            if let (Some(owner), Some(refill)) = (behavior_payment, refill) {
                 let (task, instruction, _) = behavior_tasks
                     .get(owner.actor)
                     .map_err(|_| TransactionRejection::Cancelled)?;
@@ -261,6 +298,10 @@ pub(super) fn settle_requested_account_transactions(
             Ok::<(), TransactionRejection>(())
         })();
 
+        *state = TransactionSettlement::Settled { player_operation };
+        commands
+            .entity(operation)
+            .try_remove::<AwaitingAccountSettlement>();
         match settlement {
             Ok(()) => {
                 completed_transactions.write(TransactionCompleted {
@@ -283,13 +324,6 @@ pub(super) fn settle_requested_account_transactions(
                     reason,
                 });
             }
-        }
-
-        // The local set suppresses duplicates before this deferred marker lands.
-        if transaction_operations.get(request.operation).is_ok() {
-            commands
-                .entity(request.operation)
-                .insert(TransactionSettled);
         }
     }
 }

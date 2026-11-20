@@ -16,6 +16,7 @@ use openzt2_zoo_state::transport_tours::transport_circuit_types::TransportCircui
 use openzt2_zoo_state::transport_tours::transport_topology_types::TrackProfile;
 use openzt2_zoo_state::transport_tours::transport_topology_types::TrackSegment;
 use openzt2_zoo_state::transport_tours::transport_topology_types::TransportStation;
+use openzt2_zoo_state::transport_tours::transport_topology_types::TransportTrackJunction;
 use openzt2_zoo_state::transport_tours::transport_vehicle_types::RoutePosition;
 use openzt2_zoo_state::transport_tours::transport_vehicle_types::StationDestination;
 use openzt2_zoo_state::transport_tours::transport_vehicle_types::TransportVehicle;
@@ -31,7 +32,11 @@ pub(super) fn hydrate_transport_entities_from_authored_world_definitions(
     active_world_definitions: Res<WorldDefinitions>,
     unresolved_transport_entities: Query<
         (Entity, &DefinitionId),
-        Without<TransportDefinitionResolved>,
+        (
+            Without<TransportDefinitionResolved>,
+            Without<TransportCircuit>,
+            Without<TransportTrackJunction>,
+        ),
     >,
     mut commands: Commands,
 ) {

@@ -16,9 +16,6 @@ pub struct Employment {
     pub hired_month_ordinal: u32,
 }
 
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct AvailableForWork;
-
 #[derive(Component, Debug, Clone, Copy, PartialEq)]
 pub struct PendingStaffHire {
     pub role: AssetId,

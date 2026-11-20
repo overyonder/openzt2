@@ -69,7 +69,7 @@ impl Plugin for AnimationPlaybackPlugin {
                 FixedUpdate,
                 (
                     advance_simulation_clock_animation_playback_controllers,
-                    execute_crossed_authored_animation_events,
+                    execute_crossed_authored_animation_events::<false>,
                 ).chain()
                     .in_set(openzt2_world_state::animation_playback::locomotion_root_motion::AnimationLocomotionMotionSampling)
                     .before(openzt2_world_state::animation_playback::animation_event_message_types::AnimationObjectCommandDelivery)
@@ -79,7 +79,7 @@ impl Plugin for AnimationPlaybackPlugin {
                 Update,
                 (
                     advance_real_time_clock_animation_playback_controllers,
-                    execute_crossed_authored_animation_events,
+                    execute_crossed_authored_animation_events::<true>,
                     project_authored_animation_traversal_transitions_to_graph_node_playback_requests,
                     invalidate_standard_bevy_animation_graphs_and_player_bindings_after_asset_changes,
                     crate::animation_playback::model_joint_attachment_binding::bind_model_joint_attachments,

@@ -116,8 +116,7 @@ fn restored_challenges_with_the_same_local_row_keep_distinct_photo_completions()
 
     let mut scenario_assets = Assets::<WorldScenarioDocumentAsset>::default();
     let mut challenges = Vec::new();
-    // Reverse live entity order so the first row-0 receiver is the wrong one
-    // for the first wire record.
+    // Restore by identifier even when live entities are in reverse order.
     for id in [SECOND_CHALLENGE, FIRST_CHALLENGE] {
         let source = scenario_assets.add(WorldScenarioDocumentAsset::from_test_document(
             WorldScenarioDocument {
@@ -132,7 +131,7 @@ fn restored_challenges_with_the_same_local_row_keep_distinct_photo_completions()
         ));
         let entity = world
             .spawn((
-                PhotoChallenge { id, source, row: 0 },
+                PhotoChallenge { id, source },
                 PhotoChallengeProgress::default(),
                 WorldMember { root },
             ))
@@ -191,7 +190,6 @@ fn restored_challenges_with_the_same_local_row_keep_distinct_photo_completions()
     ] {
         let challenge = world.get::<PhotoChallenge>(entity).unwrap();
         assert_eq!(challenge.id, expected_id);
-        assert_eq!(challenge.row, 0);
         assert_eq!(
             scenario_assets
                 .get(&challenge.source)

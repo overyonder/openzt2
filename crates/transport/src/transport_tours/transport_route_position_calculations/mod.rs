@@ -4,6 +4,98 @@ use crate::transport_tours::transport_fact_validation::transport_track_segment_i
 use openzt2_zoo_state::transport_tours::transport_topology_types::TrackSegment;
 use openzt2_zoo_state::transport_tours::transport_vehicle_types::RoutePosition;
 
+#[derive(Component)]
+pub(super) struct TrackTravelDistances(Box<[[f32; 2]]>);
+
+impl TrackTravelDistances {
+    pub(super) fn from_validated_segment(segment: &TrackSegment) -> Option<Self> {
+        if !transport_track_segment_is_valid(segment) {
+            return None;
+        }
+        let mut cumulative = 0.0;
+        Some(Self(
+            segment
+                .travel_path_points
+                .windows(2)
+                .map(|points| {
+                    let span = points[0].distance(points[1]);
+                    let start_distance = cumulative;
+                    cumulative += span;
+                    [start_distance, span]
+                })
+                .collect(),
+        ))
+    }
+
+    pub(super) fn translation_and_tangent(
+        &self,
+        segment: &TrackSegment,
+        distance: f32,
+    ) -> (Vec3, Vec3) {
+        let distance = distance.clamp(0.0, segment.length);
+        let span_index = self
+            .0
+            .partition_point(|&[start, length]| start + length < distance);
+        if let Some(&[start, length]) = self.0.get(span_index) {
+            let from = segment.travel_path_points[span_index];
+            let to = segment.travel_path_points[span_index + 1];
+            (
+                from.lerp(to, ((distance - start) / length).clamp(0.0, 1.0)),
+                to - from,
+            )
+        } else {
+            let points = &segment.travel_path_points;
+            (
+                segment.to_position,
+                points[points.len() - 1] - points[points.len() - 2],
+            )
+        }
+    }
+}
+
+pub(super) fn refresh_transport_track_travel_distances(
+    mut commands: Commands,
+    mut track: Query<
+        (Entity, &TrackSegment, Option<&mut TrackTravelDistances>),
+        Changed<TrackSegment>,
+    >,
+) {
+    for (entity, segment, cached) in &mut track {
+        match (
+            TrackTravelDistances::from_validated_segment(segment),
+            cached,
+        ) {
+            (Some(distances), Some(mut cached)) => *cached = distances,
+            (Some(distances), None) => {
+                commands.entity(entity).insert(distances);
+            }
+            (None, Some(_)) => {
+                commands.entity(entity).remove::<TrackTravelDistances>();
+            }
+            (None, None) => {}
+        }
+    }
+}
+
+pub(super) fn step_transport_route_position(
+    route_position: &mut RoutePosition,
+    length: f32,
+    travel_distance: f32,
+    reverse: bool,
+) -> bool {
+    if !travel_distance.is_finite() || travel_distance < 0.0 {
+        return false;
+    }
+    if reverse {
+        route_position.distance =
+            (route_position.distance.min(length).max(0.0) - travel_distance).max(0.0);
+        route_position.distance <= 0.0
+    } else {
+        route_position.distance = (route_position.distance.max(0.0) + travel_distance).min(length);
+        route_position.distance >= length
+    }
+}
+
 pub(super) fn construct_native_ground_transport_track_travel_path_points(
     construction_points: &[Vec3],
 ) -> Box<[Vec3]> {
@@ -45,73 +137,4 @@ pub(super) fn construct_native_ground_transport_track_travel_path_points(
         }
     }
     result.into_boxed_slice()
-}
-
-pub(crate) fn advance_route_position_toward_segment_end(
-    route_position: &mut RoutePosition,
-    track_segment: &TrackSegment,
-    travel_distance: f32,
-) -> bool {
-    if !travel_distance.is_finite()
-        || travel_distance < 0.0
-        || !transport_track_segment_is_valid(track_segment)
-    {
-        return false;
-    }
-    route_position.distance =
-        (route_position.distance.max(0.0) + travel_distance).min(track_segment.length);
-    route_position.distance >= track_segment.length
-}
-
-pub(crate) fn retreat_route_position_toward_segment_start(
-    route_position: &mut RoutePosition,
-    track_segment: &TrackSegment,
-    travel_distance: f32,
-) -> bool {
-    if !travel_distance.is_finite()
-        || travel_distance < 0.0
-        || !transport_track_segment_is_valid(track_segment)
-    {
-        return false;
-    }
-    route_position.distance =
-        (route_position.distance.min(track_segment.length).max(0.0) - travel_distance).max(0.0);
-    route_position.distance <= 0.0
-}
-
-pub(crate) fn calculate_translation_along_transport_track_segment(
-    track_segment: &TrackSegment,
-    distance_along_segment: f32,
-) -> Vec3 {
-    let mut remaining_distance = distance_along_segment.clamp(0.0, track_segment.length);
-    for points in track_segment.travel_path_points.windows(2) {
-        let piece_length = points[0].distance(points[1]);
-        if remaining_distance <= piece_length {
-            return points[0].lerp(
-                points[1],
-                (remaining_distance / piece_length).clamp(0.0, 1.0),
-            );
-        }
-        remaining_distance -= piece_length;
-    }
-    track_segment.to_position
-}
-
-pub(crate) fn calculate_forward_displacement_along_transport_track_segment(
-    track_segment: &TrackSegment,
-    distance_along_segment: f32,
-) -> Vec3 {
-    let mut remaining_distance = distance_along_segment.clamp(0.0, track_segment.length);
-    for points in track_segment.travel_path_points.windows(2) {
-        let piece_length = points[0].distance(points[1]);
-        if remaining_distance <= piece_length {
-            return points[1] - points[0];
-        }
-        remaining_distance -= piece_length;
-    }
-    track_segment
-        .travel_path_points
-        .windows(2)
-        .next_back()
-        .map_or(Vec3::ZERO, |points| points[1] - points[0])
 }

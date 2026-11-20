@@ -19,7 +19,7 @@ use openzt2_zoo_state::locomotion::locomotion_types::NavAgent;
 use openzt2_zoo_state::locomotion::locomotion_types::NavigateTo;
 use openzt2_zoo_state::locomotion::locomotion_types::NavigationFailed;
 use openzt2_zoo_state::locomotion::locomotion_types::NavigationRequestSequence;
-use openzt2_zoo_state::locomotion::locomotion_types::SpatialGrid;
+use openzt2_zoo_state::locomotion::locomotion_types::{SpatialGrid, SpatialGridMembership};
 use openzt2_zoo_state::maintenance::maintenance_types::AnimalHabitatWaste;
 use openzt2_zoo_state::maintenance::maintenance_types::LooseLitterWaste;
 use openzt2_world_state::simulation_time::deterministic_random_stream::DeterministicRng;
@@ -73,11 +73,9 @@ pub(crate) fn choose_guest_destination(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     grid: Res<SpatialGrid>,
+    spatial_membership: SpatialGridMembership,
     spatial_query: SpatialQuery,
     parents: Query<&ChildOf>,
-    terrain_index: Res<TerrainIndex>,
-    terrain_assets: Res<Assets<TerrainAsset>>,
-    terrain_chunks: Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
     mut guests: Query<
         (
             Entity,
@@ -94,6 +92,7 @@ pub(crate) fn choose_guest_destination(
             &GuestFavouriteAnimal,
             &mut GuestRng,
             &GuestPhase,
+            &WorldMember,
         ),
         (
             With<Guest>,
@@ -110,10 +109,11 @@ pub(crate) fn choose_guest_destination(
         &GlobalTransform,
         &Inspectable,
         Option<&ServiceFacility>,
+        &WorldMember,
     )>,
     transport_stations: Query<&TransportStation>,
-    viewing_areas: Query<(Entity, &GlobalTransform, &Inspectable), With<ViewingOpportunity>>,
-    animals: Query<(&GlobalTransform, &Visibility, &SpeciesHandle), With<Animal>>,
+    viewing_areas: Query<(Entity, &GlobalTransform, &ViewingGroundSlots, &WorldMember)>,
+    animals: Query<(&GlobalTransform, &Visibility, &SpeciesHandle, &WorldMember), With<Animal>>,
     mut commands: Commands,
     mut navigation_request_sequence: ResMut<NavigationRequestSequence>,
     mut navigate: MessageWriter<NavigateTo>,
@@ -136,6 +136,7 @@ pub(crate) fn choose_guest_destination(
         favourite,
         mut rng,
         phase,
+        world,
     ) in &mut guests
     {
         // Admission and departure own navigation until the guest is visiting.
@@ -181,7 +182,7 @@ pub(crate) fn choose_guest_destination(
                 continue;
             }
             let radius_m = weight.radius_cm as f32 * 0.01;
-            let cells = (radius_m / grid.cell_size_m).ceil() as i32;
+            let cells = (radius_m / grid.cell_size_m).ceil() as u32;
             let purpose = weight.purpose;
             if purpose == GuestVisitPurpose::View {
                 if let Some((choice, viewing_weight)) = choose_viewing_opportunity(
@@ -191,9 +192,9 @@ pub(crate) fn choose_guest_destination(
                     &grid,
                     &spatial_query,
                     &parents,
-                    &terrain_index,
-                    &terrain_assets,
-                    &terrain_chunks,
+                    &spatial_membership,
+                    world.root,
+                    radius_m,
                     &viewing_areas,
                     &animals,
                     favourite.0,
@@ -215,66 +216,60 @@ pub(crate) fn choose_guest_destination(
                 }
                 continue;
             }
-            for y in -cells..=cells {
-                for x in -cells..=cells {
-                    let cx = cell_xy.x as i32 + x;
-                    let cy = cell_xy.y as i32 + y;
-                    if cx < 0 || cy < 0 || cx >= grid.width as i32 || cy >= grid.height as i32 {
+            let mut candidates: Vec<_> = inspectables
+                .iter()
+                .filter_map(|candidate| {
+                    let (entity, transform, _, _, member) = candidate;
+                    if entity == guest || member.root != world.root {
+                        return None;
+                    }
+                    let cell = grid.cell_xy(grid.cell_of(transform.translation().xz())?)?;
+                    (cell.x.abs_diff(cell_xy.x) <= cells && cell.y.abs_diff(cell_xy.y) <= cells)
+                        .then_some((cell.y, cell.x, entity.to_bits(), candidate))
+                })
+                .collect();
+            candidates.sort_unstable_by_key(|(row, column, id, _)| (*row, *column, *id));
+            for (_, _, _, (entity, transform, inspectable, facility, _)) in candidates {
+                if !supports_purpose(asset, inspectable.definition, purpose)
+                    || facility.is_some_and(|facility| {
+                        facility.capacity == 0 || facility.occupied >= facility.capacity
+                    })
+                    || transform.translation().xz().distance_squared(origin.xz())
+                        > radius_m * radius_m
+                {
+                    continue;
+                }
+                let destination = if purpose == GuestVisitPurpose::Tour {
+                    let Ok(station) = transport_stations.get(entity) else {
                         continue;
-                    }
-                    let cell = cy as u32 * grid.width + cx as u32;
-                    for candidate in grid.range(cell) {
-                        if *candidate == guest {
-                            continue;
-                        }
-                        let Ok((entity, transform, inspectable, facility)) =
-                            inspectables.get(*candidate)
-                        else {
-                            continue;
-                        };
-                        if !supports_purpose(asset, inspectable.definition, purpose)
-                            || facility.is_some_and(|facility| {
-                                facility.capacity == 0 || facility.occupied >= facility.capacity
-                            })
-                            || transform.translation().xz().distance_squared(origin.xz())
-                                > radius_m * radius_m
-                        {
-                            continue;
-                        }
-                        let destination = if purpose == GuestVisitPurpose::Tour {
-                            let Ok(station) = transport_stations.get(entity) else {
-                                continue;
-                            };
-                            let Some(station_definition) = asset.find_station(station.definition)
-                            else {
-                                continue;
-                            };
-                            let Some(entry) = station_definition
-                                .passenger_entry_offsets_cm
-                                .into_iter()
-                                .map(|[x, z]| Vec3::new(f32::from(x), 0.0, f32::from(z)) * 0.01)
-                                .map(|offset| transform.transform_point(offset))
-                                .min_by(|left, right| {
-                                    left.distance_squared(origin)
-                                        .total_cmp(&right.distance_squared(origin))
-                                })
-                            else {
-                                continue;
-                            };
-                            entry
-                        } else {
-                            transform.translation()
-                        };
-                        let candidate_weight = u64::from(base as u16)
-                            * u64::from(pressure.saturating_sub(threshold).saturating_add(1));
-                        total_weight = total_weight.saturating_add(candidate_weight);
-                        if total_weight != 0
-                            && u64::from(rng.0.next_u32()) % total_weight < candidate_weight
-                        {
-                            selected = Some((entity, destination, purpose));
-                            viewing_target = None;
-                        }
-                    }
+                    };
+                    let Some(station_definition) = asset.find_station(station.definition) else {
+                        continue;
+                    };
+                    let Some(entry) = station_definition
+                        .passenger_entry_offsets_cm
+                        .into_iter()
+                        .map(|[x, z]| Vec3::new(f32::from(x), 0.0, f32::from(z)) * 0.01)
+                        .map(|offset| transform.transform_point(offset))
+                        .min_by(|left, right| {
+                            left.distance_squared(origin)
+                                .total_cmp(&right.distance_squared(origin))
+                        })
+                    else {
+                        continue;
+                    };
+                    entry
+                } else {
+                    transform.translation()
+                };
+                let candidate_weight = u64::from(base as u16)
+                    * u64::from(pressure.saturating_sub(threshold).saturating_add(1));
+                total_weight = total_weight.saturating_add(candidate_weight);
+                if total_weight != 0
+                    && u64::from(rng.0.next_u32()) % total_weight < candidate_weight
+                {
+                    selected = Some((entity, destination, purpose));
+                    viewing_target = None;
                 }
             }
         }
@@ -313,18 +308,18 @@ fn choose_viewing_opportunity(
     grid: &SpatialGrid,
     spatial_query: &SpatialQuery,
     parents: &Query<&ChildOf>,
-    terrain_index: &TerrainIndex,
-    terrain_assets: &Assets<TerrainAsset>,
-    terrain_chunks: &Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
-    viewing_areas: &Query<(Entity, &GlobalTransform, &Inspectable), With<ViewingOpportunity>>,
-    animals: &Query<(&GlobalTransform, &Visibility, &SpeciesHandle), With<Animal>>,
+    spatial_membership: &SpatialGridMembership,
+    world: Entity,
+    authored_radius: f32,
+    viewing_areas: &Query<(Entity, &GlobalTransform, &ViewingGroundSlots, &WorldMember)>,
+    animals: &Query<(&GlobalTransform, &Visibility, &SpeciesHandle, &WorldMember), With<Animal>>,
     favourite: Option<AssetId>,
     preferred_animal_view_factor_q16: u32,
     rng: &mut DeterministicRng,
     base_weight: u64,
 ) -> Option<(ViewingChoice, u64)> {
     let policy = asset.guest_viewing()?;
-    let maximum_range = policy.ground_range_m;
+    let maximum_range = policy.ground_range_m.min(authored_radius);
     let animal_range = policy.ground_range_m;
     let eye_height = policy.guest_eye_height_m;
     let mut selected = None;
@@ -332,104 +327,75 @@ fn choose_viewing_opportunity(
 
     let guest_cell = grid.cell_of(guest_position.xz())?;
     let guest_cell_xy = grid.cell_xy(guest_cell)?;
-    let area_cells = (maximum_range / grid.cell_size_m).ceil() as i32;
-    for area_y in -area_cells..=area_cells {
-        for area_x in -area_cells..=area_cells {
-            let column = guest_cell_xy.x as i32 + area_x;
-            let row = guest_cell_xy.y as i32 + area_y;
-            if column < 0 || row < 0 || column >= grid.width as i32 || row >= grid.height as i32 {
+    let area_cells = (maximum_range / grid.cell_size_m).ceil() as u32;
+    let mut areas: Vec<_> = viewing_areas
+        .iter()
+        .filter_map(|(area, transform, slots, member)| {
+            if member.root != world {
+                return None;
+            }
+            let cell = grid.cell_xy(grid.cell_of(transform.translation().xz())?)?;
+            (cell.x.abs_diff(guest_cell_xy.x) <= area_cells
+                && cell.y.abs_diff(guest_cell_xy.y) <= area_cells)
+                .then_some((cell.y, cell.x, area.to_bits(), area, slots))
+        })
+        .collect();
+    areas.sort_unstable_by_key(|(row, column, id, ..)| (*row, *column, *id));
+    for (_, _, _, area, slots) in areas {
+        for &stand in &slots.positions {
+            if stand.xz().distance_squared(guest_position.xz()) > maximum_range * maximum_range {
                 continue;
             }
-            let area_cell = row as u32 * grid.width + column as u32;
-            for area_entity in grid.range(area_cell) {
-                let Ok((area, transform, inspectable)) = viewing_areas.get(*area_entity) else {
-                    continue;
-                };
-                let Some(definition) = asset.find_viewing_opportunity(inspectable.definition)
-                else {
-                    continue;
-                };
-                let priority = u64::from(definition.priority.max(1) as u16);
-                for slot in &definition.slots {
-                    let local = Vec3::new(
-                        slot.local_position_m[0],
-                        slot.local_position_m[1],
-                        slot.local_position_m[2],
-                    );
-                    let stand = transform.transform_point(local);
-                    if stand.xz().distance_squared(guest_position.xz())
-                        > maximum_range * maximum_range
-                        || !valid_viewing_ground(
-                            stand.xz(),
-                            policy.minimum_open_cells,
-                            policy.maximum_slope_cos,
-                            policy.ground_distance_m,
-                            terrain_index,
-                            terrain_assets,
-                            terrain_chunks,
-                        )
-                    {
+            let Some(cell) = grid.cell_of(stand.xz()) else {
+                continue;
+            };
+            let Some(cell_xy) = grid.cell_xy(cell) else {
+                continue;
+            };
+            let cells = (animal_range / grid.cell_size_m).ceil() as i32;
+            for y in -cells..=cells {
+                for x in -cells..=cells {
+                    let cx = cell_xy.x as i32 + x;
+                    let cy = cell_xy.y as i32 + y;
+                    if cx < 0 || cy < 0 || cx >= grid.width as i32 || cy >= grid.height as i32 {
                         continue;
                     }
-                    let Some(cell) = grid.cell_of(stand.xz()) else {
-                        continue;
-                    };
-                    let Some(cell_xy) = grid.cell_xy(cell) else {
-                        continue;
-                    };
-                    let cells = (animal_range / grid.cell_size_m).ceil() as i32;
-                    for y in -cells..=cells {
-                        for x in -cells..=cells {
-                            let cx = cell_xy.x as i32 + x;
-                            let cy = cell_xy.y as i32 + y;
-                            if cx < 0
-                                || cy < 0
-                                || cx >= grid.width as i32
-                                || cy >= grid.height as i32
-                            {
-                                continue;
-                            }
-                            for subject in grid.range(cy as u32 * grid.width + cx as u32) {
-                                let Ok((subject_transform, visibility, species)) =
-                                    animals.get(*subject)
-                                else {
-                                    continue;
-                                };
-                                if *visibility == Visibility::Hidden {
-                                    continue;
-                                }
-                                let target = subject_transform.translation();
-                                if target.xz().distance_squared(stand.xz())
-                                    > animal_range * animal_range
-                                    || !view_is_clear(
-                                        spatial_query,
-                                        parents,
-                                        stand + Vec3::Y * eye_height,
-                                        target,
-                                        guest,
-                                        area,
-                                        *subject,
-                                    )
-                                {
-                                    continue;
-                                }
-                                let weight = base_weight.saturating_mul(priority);
-                                let weight = if favourite == Some(species.species) {
-                                    scale_weight_q16(weight, preferred_animal_view_factor_q16)
-                                } else {
-                                    weight
-                                };
-                                total_weight = total_weight.saturating_add(weight);
-                                if total_weight != 0
-                                    && u64::from(rng.next_u32()) % total_weight < weight
-                                {
-                                    selected = Some(ViewingChoice {
-                                        area,
-                                        subject: *subject,
-                                        stand_position: stand,
-                                    });
-                                }
-                            }
+                    for subject in spatial_membership.members(cy as u32 * grid.width + cx as u32) {
+                        let Ok((subject_transform, visibility, species, member)) =
+                            animals.get(subject)
+                        else {
+                            continue;
+                        };
+                        if member.root != world || *visibility == Visibility::Hidden {
+                            continue;
+                        }
+                        let target = subject_transform.translation();
+                        if target.xz().distance_squared(stand.xz()) > animal_range * animal_range
+                            || !view_is_clear(
+                                spatial_query,
+                                parents,
+                                stand + Vec3::Y * eye_height,
+                                target,
+                                guest,
+                                area,
+                                subject,
+                            )
+                        {
+                            continue;
+                        }
+                        let weight = base_weight.saturating_mul(slots.priority);
+                        let weight = if favourite == Some(species.species) {
+                            scale_weight_q16(weight, preferred_animal_view_factor_q16)
+                        } else {
+                            weight
+                        };
+                        total_weight = total_weight.saturating_add(weight);
+                        if total_weight != 0 && u64::from(rng.next_u32()) % total_weight < weight {
+                            selected = Some(ViewingChoice {
+                                area,
+                                subject,
+                                stand_position: stand,
+                            });
                         }
                     }
                 }
@@ -441,6 +407,81 @@ fn choose_viewing_opportunity(
 
 fn scale_weight_q16(weight: u64, factor_q16: u32) -> u64 {
     ((u128::from(weight) * u128::from(factor_q16)) >> 16).min(u128::from(u64::MAX)) as u64
+}
+
+#[derive(Component, Default, PartialEq)]
+pub(crate) struct ViewingGroundSlots {
+    pub(crate) positions: Vec<Vec3>,
+    priority: u64,
+}
+
+pub(super) fn project_authored_viewing_ground_slots(
+    mut commands: Commands,
+    definitions: Res<Assets<WorldDefinitionAsset>>,
+    active_definitions: Res<WorldDefinitions>,
+    terrain_index: Res<TerrainIndex>,
+    terrain_assets: Res<Assets<TerrainAsset>>,
+    terrain_chunks: Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
+    changed_terrain: Query<(), Or<(Changed<TerrainChunk>, Changed<EditedTerrainSamples>)>>,
+    mut removed_terrain_edits: RemovedComponents<EditedTerrainSamples>,
+    mut areas: Query<
+        (
+            Entity,
+            Ref<GlobalTransform>,
+            Ref<Inspectable>,
+            Option<&mut ViewingGroundSlots>,
+        ),
+        With<ViewingOpportunity>,
+    >,
+) {
+    let edits_removed = removed_terrain_edits.read().count() != 0;
+    let refresh_all = active_definitions.is_changed()
+        || definitions.is_changed()
+        || terrain_index.is_changed()
+        || terrain_assets.is_changed()
+        || edits_removed
+        || !changed_terrain.is_empty();
+    let Some(asset) = active_definitions.get(&definitions) else {
+        return;
+    };
+    let Some(policy) = asset.guest_viewing() else {
+        return;
+    };
+    for (area, transform, inspectable, current) in &mut areas {
+        if current.is_some() && !refresh_all && !transform.is_changed() && !inspectable.is_changed()
+        {
+            continue;
+        }
+        let next = asset
+            .find_viewing_opportunity(inspectable.definition)
+            .map_or_else(ViewingGroundSlots::default, |definition| {
+                let positions = definition
+                    .slots
+                    .iter()
+                    .map(|slot| transform.transform_point(Vec3::from_array(slot.local_position_m)))
+                    .filter(|stand| {
+                        valid_viewing_ground(
+                            stand.xz(),
+                            policy.minimum_open_cells,
+                            policy.maximum_slope_cos,
+                            policy.ground_distance_m,
+                            &terrain_index,
+                            &terrain_assets,
+                            &terrain_chunks,
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                ViewingGroundSlots {
+                    positions,
+                    priority: u64::from(definition.priority.max(1) as u16),
+                }
+            });
+        if let Some(mut current) = current {
+            current.set_if_neq(next);
+        } else {
+            commands.entity(area).insert(next);
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -585,10 +626,25 @@ pub(crate) fn begin_viewing(
             &GuestPhase,
             &mut GuestNavigationRequest,
             Option<&GuestViewingTarget>,
+            Option<&WorldMember>,
         ),
         (With<Guest>, Without<Viewing>),
     >,
     targets: Query<(&Visibility, Option<&ServiceFacility>), With<Inspectable>>,
+    areas: Query<&WorldMember, With<ViewingOpportunity>>,
+    animals: Query<
+        &WorldMember,
+        (
+            With<Animal>,
+            Without<openzt2_zoo_state::animal_health::types::Dead>,
+        ),
+    >,
+    interruptions: Query<(), Or<(
+        With<BehaviorTaskExecutionState>,
+        With<openzt2_zoo_state::animal_behavior::behavior_set_start_request_types::PendingBehaviorSet>,
+        With<ServiceReservation>,
+        With<openzt2_zoo_state::locomotion::locomotion_types::Destination>,
+    )>>,
     mut commands: Commands,
     clock: Res<ZooClock>,
 ) {
@@ -602,7 +658,7 @@ pub(crate) fn begin_viewing(
         if failed_requests.contains(&(arrival.entity, arrival.request_id)) {
             continue;
         }
-        let Ok((guest, destination, phase, mut request, viewing_target)) =
+        let Ok((guest, destination, phase, mut request, viewing_target, world)) =
             guests.get_mut(arrival.entity)
         else {
             continue;
@@ -636,7 +692,23 @@ pub(crate) fn begin_viewing(
         };
         match reached_action(destination.purpose, *visibility != Visibility::Hidden) {
             ReachedAction::BeginViewing => {
-                let subject = viewing_target.map_or(destination.entity, |target| target.subject);
+                let subject = viewing_target
+                    .expect("viewing destination has a selected subject")
+                    .subject;
+                let eligible = world.is_some_and(|world| {
+                    areas
+                        .get(destination.entity)
+                        .is_ok_and(|area| area.root == world.root)
+                        && animals
+                            .get(subject)
+                            .is_ok_and(|animal| animal.root == world.root)
+                });
+                if !eligible || interruptions.contains(guest) {
+                    commands
+                        .entity(guest)
+                        .remove::<(GuestDestination, GuestViewingTarget)>();
+                    continue;
+                }
                 commands.entity(guest).insert(Viewing {
                     subject,
                     area: Some(destination.entity),
@@ -746,6 +818,7 @@ pub(crate) fn advance_viewing(
 
 pub(crate) fn react_to_visible_litter(
     grid: Res<SpatialGrid>,
+    spatial_membership: SpatialGridMembership,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     waste: Query<
@@ -762,8 +835,8 @@ pub(crate) fn react_to_visible_litter(
         let Some(cell) = grid.cell_of(transform.translation().xz()) else {
             continue;
         };
-        for guest in grid.range(cell) {
-            let Ok((_, archetype, _)) = guests.get_mut(*guest) else {
+        for guest in spatial_membership.members(cell) {
+            let Ok((_, archetype, _)) = guests.get_mut(guest) else {
                 continue;
             };
             let Some((_, definition)) = find_guest_definition(definitions, archetype.0) else {
@@ -773,8 +846,7 @@ pub(crate) fn react_to_visible_litter(
                 continue;
             };
             reactions.write(GuestReaction {
-                view_event: None,
-                guest: *guest,
+                guest,
                 subject,
                 kind: GuestMemoryKind::Litter,
                 satisfaction_delta_permille: reaction.satisfaction_delta,

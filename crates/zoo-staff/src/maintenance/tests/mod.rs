@@ -1,13 +1,12 @@
 use super::{
-    cleanliness_aggregation_operations::{
-        calculate_weighted_zoo_cleanliness_permille_from_explicit_weights,
-        divide_unsigned_ratio_with_half_up_rounding,
-    },
     maintenance_types::{
-        FacilityContainedWaste, FacilityContainedWastePresentationLevel,
-        IncrementalZooCleanlinessTotals, LooseLitterWaste,
+        FacilityContainedWaste, FacilityContainedWastePresentationLevel, LooseLitterWaste,
     },
-    MaintenancePlugin,
+    zoo_cleanliness_projection::{
+        aggregate_changed_waste_into_zoo_cleanliness_totals,
+        calculate_weighted_zoo_cleanliness_permille_from_explicit_weights,
+        divide_unsigned_ratio_with_half_up_rounding, ZooCleanlinessTotals,
+    },
 };
 use bevy::prelude::*;
 
@@ -48,9 +47,10 @@ fn trash_level_is_derived_from_authoritative_container_thirds() {
 }
 
 #[test]
-fn component_hooks_track_spawn_and_despawn_without_an_entity_registry() {
+fn cleanliness_reduction_tracks_spawn_and_despawn() {
     let mut app = App::new();
-    app.add_plugins(MaintenancePlugin);
+    app.init_resource::<ZooCleanlinessTotals>()
+        .add_systems(Update, aggregate_changed_waste_into_zoo_cleanliness_totals);
     let entity = app
         .world_mut()
         .spawn((
@@ -63,28 +63,26 @@ fn component_hooks_track_spawn_and_despawn_without_an_entity_registry() {
             },
         ))
         .id();
-    let totals = *app.world().resource::<IncrementalZooCleanlinessTotals>();
+    app.update();
+    let totals = *app.world().resource::<ZooCleanlinessTotals>();
     assert_eq!(totals.contained_waste_units, 2);
     assert_eq!(totals.contained_waste_capacity_units, 8);
     assert_eq!(totals.uncontained_waste_units, 3);
 
     app.world_mut().despawn(entity);
+    app.update();
     assert_eq!(
-        *app.world().resource::<IncrementalZooCleanlinessTotals>(),
-        IncrementalZooCleanlinessTotals {
-            requires_recalculation: true,
-            ..Default::default()
-        }
+        *app.world().resource::<ZooCleanlinessTotals>(),
+        ZooCleanlinessTotals::default()
     );
 }
 
 #[test]
 fn cleanliness_uses_nearest_integer_weighting() {
-    let totals = IncrementalZooCleanlinessTotals {
+    let totals = ZooCleanlinessTotals {
         contained_waste_units: 1,
         contained_waste_capacity_units: 3,
         uncontained_waste_units: 1,
-        requires_recalculation: true,
     };
     assert_eq!(divide_unsigned_ratio_with_half_up_rounding(1_501, 2), 751);
     assert_eq!(
@@ -93,7 +91,7 @@ fn cleanliness_uses_nearest_integer_weighting() {
     );
     assert_eq!(
         calculate_weighted_zoo_cleanliness_permille_from_explicit_weights(
-            IncrementalZooCleanlinessTotals::default(),
+            ZooCleanlinessTotals::default(),
             1,
             1,
             10,

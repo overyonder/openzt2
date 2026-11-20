@@ -35,25 +35,10 @@ pub struct RequiredFacilityStaff(pub StaffRoleKind);
 pub struct ServiceFacility {
     pub definition: AssetId,
     pub capacity: u16,
-    pub occupied: u16,
     /// Payment details carried from the facility
     /// definition; the live service path authenticates against this instead
     /// of re-reading sources.
     pub payment_trigger: FacilityPaymentTrigger,
-}
-
-impl ServiceFacility {
-    pub fn try_acquire(&mut self) -> bool {
-        if self.occupied >= self.capacity {
-            return false;
-        }
-        self.occupied += 1;
-        true
-    }
-
-    pub fn release(&mut self) {
-        self.occupied = self.occupied.saturating_sub(1);
-    }
 }
 
 #[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]

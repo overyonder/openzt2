@@ -64,45 +64,21 @@ fn memory_is_inline_bounded_and_replaces_by_evidence_policy() {
 }
 
 #[test]
-fn entrance_displacement_follows_the_gate_and_stops_inside_the_map() {
+fn entrance_displacement_preserves_authored_distance_and_gate_rotation() {
     use super::guest_arrival_calculations::displaced_from_entrance_gate;
-    use bevy::prelude::{Quat, Vec2, Vec3};
-    use openzt2_zoo_state::locomotion::locomotion_types::SpatialGrid;
 
-    // A 100 m by 50 m map spanning Bevy x 0..100 and z -50..0, in 2 m cells.
-    let grid = SpatialGrid {
-        origin: Vec2::new(0.0, -50.0),
-        cell_size_m: 2.0,
-        width: 50,
-        height: 25,
-        ..SpatialGrid::default()
-    };
     let gate = Vec3::new(70.0, 3.0, -13.0);
-    // guestMgr.xml: 100 m along the gate's source -y, which is Bevy +z, stops
-    // half a cell inside the map edge.
     assert_eq!(
-        displaced_from_entrance_gate(gate, Quat::IDENTITY, [0.0, -100.0], &grid),
-        Some(Vec3::new(70.0, 3.0, -1.0))
+        displaced_from_entrance_gate(gate, Quat::IDENTITY, [0.0, -100.0]),
+        Vec3::new(70.0, 3.0, 87.0)
     );
-    // A gate turned a quarter turn sends the same displacement along -x.
     let turned = displaced_from_entrance_gate(
         gate,
         Quat::from_rotation_y(-std::f32::consts::FRAC_PI_2),
         [0.0, -100.0],
-        &grid,
-    )
-    .unwrap();
+    );
     assert!(
-        (turned - Vec3::new(1.0, 3.0, -13.0)).length() < 1e-3,
+        (turned - Vec3::new(-30.0, 3.0, -13.0)).length() < 1e-3,
         "{turned}"
-    );
-    // A displacement that stays on the map is used as authored.
-    assert_eq!(
-        displaced_from_entrance_gate(gate, Quat::IDENTITY, [-2.0, -10.0], &grid),
-        Some(Vec3::new(68.0, 3.0, -3.0))
-    );
-    assert_eq!(
-        displaced_from_entrance_gate(gate, Quat::IDENTITY, [0.0, -100.0], &SpatialGrid::default()),
-        None
     );
 }

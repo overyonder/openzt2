@@ -14,6 +14,7 @@ use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainIndex;
 use openzt2_zoo_state::terrain::terrain_fitted_surface_mesh_construction::construct_square_surface_mesh_fitted_to_canonical_terrain_samples_with_rotated_texture_coordinates;
 use openzt2_zoo_state::transport_tours::transport_track_construction_types::TransportTrackConstructionPreview;
 use openzt2_zoo_state::transport_tours::transport_track_construction_types::TransportTrackConstructionPreviewAuthoredPrefab;
+use openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementPreviewMaterials;
 
 pub(super) fn project_transport_track_construction_preview_authored_prefabs(
     mut commands: Commands,
@@ -30,52 +31,73 @@ pub(super) fn project_transport_track_construction_preview_authored_prefabs(
         Entity,
         Ref<ConstructionPreview>,
         Ref<TransportTrackConstructionPreview>,
-        Option<
-            &openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementPreviewMaterials,
-        >,
+        Option<Ref<ObjectPlacementPreviewMaterials>>,
+        Option<&Children>,
     )>,
-    projected_prefabs: Query<(Entity, &TransportTrackConstructionPreviewAuthoredPrefab)>,
+    projected_prefabs: Query<(), With<TransportTrackConstructionPreviewAuthoredPrefab>>,
+    mut material_events: MessageReader<AssetEvent<MaterialAsset>>,
+    mut effect_events: MessageReader<AssetEvent<EffectPassMaterial>>,
+    mut decal_material_handle: Local<Option<Handle<MaterialAsset>>>,
     (rope_anchors, mut standard_materials): (
         crate::transport_tours::transport_track_piece_presentation::SkyRopeAnchors,
         ResMut<Assets<StandardMaterial>>,
     ),
-    mut last_drawn: Local<bevy::platform::collections::HashMap<Entity, DrawnTrackPreview>>,
 ) {
+    let definitions_changed = active_definitions.is_changed()
+        || definition_assets.is_changed()
+        || graphics_settings.is_changed();
     let Some(definitions) = active_definitions.get(&definition_assets) else {
         return;
     };
-    let terrain_decal_material = asset_server.load::<MaterialAsset>(
+    let terrain_decal_material = decal_material_handle.get_or_insert_with(|| asset_server.load::<MaterialAsset>(
         crate::transport_tours::transport_track_piece_presentation::AUTHORED_TERRAIN_DECAL_MATERIAL_PATH,
-    );
-    let terrain_decal_pass = authored_materials
-        .get(&terrain_decal_material)
+    ));
+    let material_changed = material_events
+        .read()
+        .filter(|event| {
+            event.is_added(terrain_decal_material.id())
+                || event.is_modified(terrain_decal_material.id())
+                || event.is_loaded_with_dependencies(terrain_decal_material.id())
+        })
+        .count()
+        != 0;
+    let pass_handle = authored_materials
+        .get(&*terrain_decal_material)
         .and_then(|material| {
             material
                 .evaluated_pass_material_assets_for_effect_quality(graphics_settings.effects)
                 .first()
+        });
+    let pass_changed = effect_events
+        .read()
+        .filter(|event| {
+            pass_handle.is_some_and(|pass| {
+                event.is_added(pass.id())
+                    || event.is_modified(pass.id())
+                    || event.is_loaded_with_dependencies(pass.id())
+            })
         })
+        .count()
+        != 0;
+    let terrain_decal_pass = pass_handle
         .and_then(|material| effect_pass_materials.get(material))
         .cloned();
-    for (preview_entity, preview, track_preview, grid) in &previews {
-        if !preview.is_changed() && !track_preview.is_changed() {
+    for (preview_entity, preview, track_preview, grid, children) in &previews {
+        if !preview.is_changed()
+            && !track_preview.is_changed()
+            && !grid.as_ref().is_some_and(|grid| grid.is_changed())
+            && !material_changed
+            && !pass_changed
+            && !definitions_changed
+        {
             continue;
         }
-        // The preview is rewritten every frame. Rebuilding it then would
-        // respawn a sky tower before its column pieces ever line up, so only
-        // a different preview is drawn again.
-        let drawn = (
-            track_preview.path_points.clone(),
-            preview.validity,
-            track_preview.to_station,
-            grid.is_some(),
-        );
-        if last_drawn.get(&preview_entity) == Some(&drawn) {
-            continue;
-        }
-        last_drawn.insert(preview_entity, drawn);
-        for (entity, projected) in &projected_prefabs {
-            if projected.owner == preview_entity {
-                commands.entity(entity).despawn();
+        if let Some(children) = children {
+            for child in children
+                .iter()
+                .filter(|child| projected_prefabs.contains(*child))
+            {
+                commands.entity(child).despawn();
             }
         }
         let Some(track) = definitions.find_track(preview.definition) else {
@@ -89,7 +111,7 @@ pub(super) fn project_transport_track_construction_preview_authored_prefabs(
                 preview_entity,
                 &preview,
                 &track_preview,
-                grid,
+                grid.as_deref(),
                 terrain_decal_pass.as_ref(),
                 &mut SkyPreviewAssets {
                     meshes: &mut meshes,
@@ -162,9 +184,7 @@ pub(super) fn project_transport_track_construction_preview_authored_prefabs(
                     ChildOf(preview_entity),
                     Mesh3d(meshes.add(mesh)),
                     MeshMaterial3d(effect_pass_materials.add(material)),
-                    TransportTrackConstructionPreviewAuthoredPrefab {
-                        owner: preview_entity,
-                    },
+                    TransportTrackConstructionPreviewAuthoredPrefab,
                 ));
                 continue;
             }
@@ -198,9 +218,7 @@ pub(super) fn project_transport_track_construction_preview_authored_prefabs(
                     ),
                 )),
                 MeshMaterial3d(effect_pass_materials.add(material)),
-                TransportTrackConstructionPreviewAuthoredPrefab {
-                    owner: preview_entity,
-                },
+                TransportTrackConstructionPreviewAuthoredPrefab,
             ));
         }
     }
@@ -241,13 +259,6 @@ pub(super) struct PreviewTerrain<'w, 's> {
     chunks: Query<'w, 's, (&'static TerrainChunk, Option<&'static EditedTerrainSamples>)>,
 }
 
-type DrawnTrackPreview = (
-    Vec<Vec3>,
-    openzt2_zoo_state::construction::construction_interaction_types::PlacementValidity,
-    Option<Entity>,
-    bool,
-);
-
 /// The tower being placed, its footprint and grid, and the line to its top.
 #[allow(clippy::too_many_arguments)]
 fn spawn_sky_track_preview(
@@ -276,9 +287,7 @@ fn spawn_sky_track_preview(
             Transform::IDENTITY,
             Visibility::Inherited,
             ChildOf(preview_entity),
-            TransportTrackConstructionPreviewAuthoredPrefab {
-                owner: preview_entity,
-            },
+            TransportTrackConstructionPreviewAuthoredPrefab,
         ))
         .id();
     crate::transport_tours::transport_track_piece_presentation::spawn_authored_sky_tower(

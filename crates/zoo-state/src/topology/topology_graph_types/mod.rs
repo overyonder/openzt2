@@ -1,13 +1,20 @@
-use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
+use bevy::{ecs::entity::EntityHashMap, platform::collections::HashMap};
 use openzt2_game_data::AssetId;
 
+use super::topology_spatial_index_lifecycle::{
+    discard_indexed_fence_edge, discard_indexed_path_tile, discard_indexed_topology_node,
+    index_inserted_fence_edge, index_inserted_path_tile, index_inserted_topology_node,
+};
+
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+#[component(immutable, on_insert = index_inserted_topology_node, on_discard = discard_indexed_topology_node)]
 pub struct TopologyNode {
     pub cell: IVec3,
 }
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+#[component(on_insert = index_inserted_fence_edge, on_discard = discard_indexed_fence_edge)]
 pub struct FenceEdge {
     pub definition: AssetId,
     pub a: Entity,
@@ -20,6 +27,7 @@ pub struct FenceEdge {
 pub struct TopologyProtected;
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+#[component(immutable, on_insert = index_inserted_path_tile, on_discard = discard_indexed_path_tile)]
 pub struct PathTile {
     pub definition: AssetId,
     pub cell: IVec3,
@@ -33,7 +41,6 @@ pub struct Portal {
 
 #[derive(Component, Debug, Clone, Copy, PartialEq)]
 pub struct PathSupport {
-    pub path: Entity,
     pub ground_height_m: f32,
 }
 
@@ -50,6 +57,7 @@ pub struct TopologyIndex {
     pub nodes: HashMap<IVec3, Entity>,
     pub paths: HashMap<IVec3, Entity>,
     pub edges: HashMap<EdgeKey, Entity>,
+    pub(super) edge_keys: EntityHashMap<EdgeKey>,
 }
 
 /// Spatial projection of integer topology cells for the active terrain.

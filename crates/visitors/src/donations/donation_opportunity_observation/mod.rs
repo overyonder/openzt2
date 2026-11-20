@@ -1,17 +1,17 @@
+use crate::guests::view_event_execution::AppliedAnimalView;
 use openzt2_zoo_state::donations::donation_guest_decision_types::GuestDonationMeters;
 use openzt2_zoo_state::donations::donation_guest_decision_types::{DonationObservation, DonationCandidate, DonationProgress};
-use std::collections::HashMap;
 use bevy::prelude::*;
 use openzt2_game_assets::species::species_asset_types::{SpeciesAsset, SpeciesAssets};
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use openzt2_game_data::{AssetId, world_definitions::guest_simulation_definitions::GuestMemoryKind};
+use openzt2_game_data::{AssetId};
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_world_state::world_spawn::world_entity_crating::WorldEntityIsCrated;
 use openzt2_zoo_state::animal_health::types::Dead;
 use openzt2_zoo_state::animal_lifecycle::types::{Animal, SpeciesHandle, AnimalVariant};
 use openzt2_zoo_state::economy::money_types::Money;
-use openzt2_zoo_state::guests::guest_simulation_types::{Guest, GuestArchetype, GuestFavouriteAnimal, GuestPhase, GuestReactionApplied, Viewing};
+use openzt2_zoo_state::guests::guest_simulation_types::{Guest, GuestArchetype, GuestFavouriteAnimal, GuestPhase, Viewing};
 use super::{donation_opportunity_types::DonationOpportunity};
 use openzt2_zoo_state::donations::donation_payment_types::DonationPaymentRequested;
 
@@ -63,21 +63,20 @@ pub(super) fn hydrate_animal_donation_opportunities(
 
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(super) fn observe_donation_opportunities_after_applied_viewing_reactions(
-    mut commands: Commands,
-    mut reactions: MessageReader<GuestReactionApplied>,
+    mut reactions: MessageReader<AppliedAnimalView>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     species_assets: Res<Assets<SpeciesAsset>>,
     active_species: Res<SpeciesAssets>,
-    guests: Query<
+    mut guests: Query<
         (
             &Viewing,
             &GuestPhase,
             &WorldMember,
             &GuestArchetype,
             &GuestFavouriteAnimal,
-            Option<&DonationObservation>,
-            Option<&GuestDonationMeters>,
+            &mut PendingDonationObservation,
+            &mut GuestDonationMeters,
             &GlobalTransform,
         ),
         (
@@ -102,39 +101,30 @@ pub(super) fn observe_donation_opportunities_after_applied_viewing_reactions(
         reactions.clear();
         return;
     };
-    let mut changed_meters = HashMap::<Entity, GuestDonationMeters>::new();
-    let mut issued = std::collections::HashSet::new();
     for reaction in reactions.read() {
-        if reaction.kind != GuestMemoryKind::AnimalView || issued.contains(&reaction.guest) {
-            continue;
-        }
-        let Ok((viewing, phase, world, archetype, favourite, observation, stored_meters, position)) =
-            guests.get(reaction.guest)
+        let Ok((
+            viewing,
+            phase,
+            world,
+            archetype,
+            favourite,
+            mut observation,
+            mut meters,
+            position,
+        )) = guests.get_mut(reaction.guest)
         else {
             continue;
         };
         if *phase != GuestPhase::Visiting
-            || reaction.viewing != Some(*viewing)
+            || reaction.viewing != *viewing
             || viewing.subject != reaction.subject
             || viewing.area.is_none()
-            || observation.is_some_and(|observation| observation.viewing == *viewing)
+            || observation
+                .0
+                .is_some_and(|observation| observation.viewing == *viewing)
         {
             continue;
         }
-        let Some(origin) = reaction.view_event else {
-            continue;
-        };
-        let Some(row) = definitions
-            .find_object(origin.source_definition)
-            .and_then(|object| {
-                object
-                    .view_data
-                    .iter()
-                    .find(|row| row.name == origin.view_key)
-            })
-        else {
-            continue;
-        };
         let Some((guest_definition, guest_policy, viewing_policy)) = definitions
             .find_guest(archetype.0)
             .and_then(|guest| Some((guest, guest.donation?, definitions.guest_viewing()?)))
@@ -168,15 +158,12 @@ pub(super) fn observe_donation_opportunities_after_applied_viewing_reactions(
                     .distance(subject_position.translation()),
                 viewing_policy.ground_range_m,
             );
-        let meters = changed_meters
-            .entry(reaction.guest)
-            .or_insert_with(|| stored_meters.cloned().unwrap_or_default());
         let meter = meters.0.entry(opportunity.category).or_default();
         // Signed authored viewing scores accumulate per species. The preferred
         // animal factor scales the score; a threshold funds one donation attempt.
         let Some(amount) = advance_species_donation_meter(
             meter,
-            row.donation_score * distance_factor,
+            reaction.donation_score * distance_factor,
             factor,
             guest_policy.threshold,
             animal_policy.maximum_species_factor,
@@ -184,15 +171,11 @@ pub(super) fn observe_donation_opportunities_after_applied_viewing_reactions(
         ) else {
             continue;
         };
-        issued.insert(reaction.guest);
-        commands.entity(reaction.guest).insert(DonationObservation {
+        observation.0 = Some(DonationObservation {
             viewing: *viewing,
             amount,
             acceptor_radius_cm: (guest_policy.search_radius_m * 100.0).min(u32::MAX as f32) as u32,
         });
-    }
-    for (guest, meters) in changed_meters {
-        commands.entity(guest).insert(meters);
     }
 }
 
@@ -233,14 +216,26 @@ fn advance_species_donation_meter(
 #[cfg(test)]
 mod tests;
 
-pub(super) fn remove_guest_donation_observation_after_viewing_ends(
-    mut commands: Commands,
+#[derive(Component, Default)]
+pub(super) struct PendingDonationObservation(pub(super) Option<DonationObservation>);
+
+pub(super) fn clear_donation_observations_for_ended_views(
     mut removed_viewing_components: RemovedComponents<Viewing>,
-    guests: Query<(), With<Guest>>,
+    changed_views: Query<Entity, Changed<Viewing>>,
+    mut guests: Query<(Option<&Viewing>, &mut PendingDonationObservation), With<Guest>>,
 ) {
-    for guest in removed_viewing_components.read() {
-        if guests.get(guest).is_ok() {
-            commands.entity(guest).remove::<DonationObservation>();
+    for guest in removed_viewing_components
+        .read()
+        .chain(changed_views.iter())
+    {
+        let Ok((viewing, mut observation)) = guests.get_mut(guest) else {
+            continue;
+        };
+        if observation
+            .0
+            .is_some_and(|observation| Some(&observation.viewing) != viewing)
+        {
+            observation.0 = None;
         }
     }
 }
