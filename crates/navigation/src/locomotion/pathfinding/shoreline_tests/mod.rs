@@ -180,3 +180,49 @@ fn sliced_search_resumes_across_tile_boundaries_and_reuses_dirty_scratch() {
         assert_eq!(route.points.last(), Some(&to));
     }
 }
+
+#[test]
+fn a_route_never_turns_back_to_its_start_or_goal_cell_centre() {
+    let nodes = vec![
+        TerrainDerivedNavigationGraphNode {
+            height_centimetres: 0,
+            minimum_triangle_normal_y: 1.0,
+            clearance_centimetres: 100,
+            water_depth_centimetres: 0,
+            eligibility_flags: NavFlags::GUEST,
+        };
+        16
+    ];
+    let graph =
+        TerrainDerivedNavigationGraph::from_terrain_nodes(100, 4, [1, 1], nodes.into_boxed_slice());
+    let agent = NavAgent {
+        radius_m: 0.25,
+        max_speed_mps: 1.0,
+        acceleration_mps2: 1.0,
+        capabilities: NavFlags::GUEST,
+    };
+    let mut scratch = RouteScratch::default();
+    scratch.ensure_capacity(16, 17);
+    let mut route = Route::with_capacity(17);
+    let (start, destination) = (Vec3::new(0.8, 0.0, -0.5), Vec3::new(3.2, 0.0, -0.5));
+    plan_route(
+        &graph,
+        |_, _| false,
+        |_, _| false,
+        &agent,
+        LocomotionMode::Ground,
+        None,
+        start,
+        destination,
+        &mut route,
+        &mut scratch,
+        crate::locomotion::pathfinding::LONG_PATH_ITERATIONS,
+    )
+    .unwrap();
+    let mut previous = start;
+    for point in &route.points {
+        assert!(point.x >= previous.x, "{start:?} -> {:?}", route.points);
+        previous = *point;
+    }
+    assert_eq!(route.points.last(), Some(&destination));
+}
