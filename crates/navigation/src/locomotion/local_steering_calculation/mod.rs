@@ -22,6 +22,10 @@ fn spacing_radius(agent: &NavAgent) -> f32 {
     agent.radius_m.max(MINIMUM_SPACING_RADIUS_M)
 }
 
+/// Within this many spacing radii of a destination someone stands on, an
+/// approaching agent counts as arrived.
+const OCCUPIED_ARRIVAL_SPACINGS: f32 = 4.0;
+
 /// How many touching distances ahead a walker starts stepping aside.
 const AVOIDANCE_LOOK_AHEAD: f32 = 3.0;
 /// The sideways step's share of walking speed when about to touch.
@@ -35,7 +39,7 @@ pub(super) fn calculate_route_following_and_separation_steering(
             &NavAgent,
             &GlobalTransform,
             &SpatialCell,
-            &Route,
+            &mut Route,
             &Destination,
             Option<&LocomotionMode>,
             &ContactSteering,
@@ -43,15 +47,15 @@ pub(super) fn calculate_route_following_and_separation_steering(
         ),
         Without<DirectLocomotion>,
     >,
-    neighboring_navigation_agents: Query<(&GlobalTransform, &NavAgent)>,
+    neighboring_navigation_agents: Query<(&GlobalTransform, &NavAgent, Has<Destination>)>,
 ) {
     for (
         navigation_agent_entity,
         navigation_agent,
         global_transform,
         spatial_cell,
-        planned_route,
-        _destination,
+        mut planned_route,
+        destination,
         locomotion_mode,
         contact_steering,
         mut steering,
@@ -70,6 +74,12 @@ pub(super) fn calculate_route_following_and_separation_steering(
         let mut desired_velocity = route_direction * navigation_agent.max_speed_mps;
         desired_velocity +=
             contact_steering.direction * navigation_agent.max_speed_mps * contact_steering.factor;
+        let final_approach = planned_route.cursor + 1 == planned_route.points.len()
+            && navigation_agent_position
+                .xz()
+                .distance(destination.world.xz())
+                < spacing_radius(navigation_agent) * OCCUPIED_ARRIVAL_SPACINGS;
+        let mut destination_occupied = false;
         let mut visited_neighbor_count = 0;
         // Reach far enough to see a large neighbour, such as an elephant,
         // before walking into it.
@@ -91,11 +101,25 @@ pub(super) fn calculate_route_following_and_separation_steering(
                         if *neighboring_agent_entity == navigation_agent_entity {
                             continue;
                         }
-                        let Ok((neighboring_global_transform, neighboring_navigation_agent)) =
-                            neighboring_navigation_agents.get(*neighboring_agent_entity)
+                        let Ok((
+                            neighboring_global_transform,
+                            neighboring_navigation_agent,
+                            neighbor_moving,
+                        )) = neighboring_navigation_agents.get(*neighboring_agent_entity)
                         else {
                             continue;
                         };
+                        // Someone already standing on the spot, such as a
+                        // guest at the one viewpoint of an exhibit, leaves
+                        // the next one to stop beside them, not push in.
+                        destination_occupied |= final_approach
+                            && !neighbor_moving
+                            && neighboring_global_transform
+                                .translation()
+                                .xz()
+                                .distance(destination.world.xz())
+                                < spacing_radius(navigation_agent)
+                                    + spacing_radius(neighboring_navigation_agent);
                         let neighboring_agent_offset =
                             navigation_agent_position - neighboring_global_transform.translation();
                         let neighboring_agent_distance_squared =
@@ -139,6 +163,11 @@ pub(super) fn calculate_route_following_and_separation_steering(
                     }
                 }
             }
+        }
+        if destination_occupied {
+            planned_route.cursor = planned_route.points.len();
+            steering.desired_velocity = Vec3::ZERO;
+            continue;
         }
         steering.desired_velocity =
             desired_velocity.clamp_length_max(navigation_agent.max_speed_mps);
@@ -323,5 +352,58 @@ mod avoidance_tests {
         system.run((), &mut world).unwrap();
         assert!(world.get::<Transform>(left).unwrap().translation.x < 0.0);
         assert!(world.get::<Transform>(right).unwrap().translation.x > 0.25);
+    }
+
+    #[test]
+    fn a_walker_stops_beside_someone_standing_on_its_destination() {
+        let mut world = World::new();
+        let agent = NavAgent {
+            radius_m: 0.1,
+            max_speed_mps: 1.0,
+            acceleration_mps2: 1.0,
+            capabilities: openzt2_zoo_state::locomotion::locomotion_types::NavFlags::GUEST,
+        };
+        let spot = Vec3::new(2.0, 0.0, 0.0);
+        let mut route = Route::with_capacity(1);
+        route.points.push(spot);
+        let walker = world
+            .spawn((
+                agent,
+                GlobalTransform::from_translation(Vec3::new(1.0, 0.0, 0.0)),
+                SpatialCell(0),
+                route,
+                Destination {
+                    request_id: 1,
+                    world: spot,
+                    arrival_radius_m: 0.1,
+                },
+                ContactSteering {
+                    direction: Vec3::ZERO,
+                    factor: 0.0,
+                    recovery_delay_s: 0.0,
+                },
+                Steering::default(),
+            ))
+            .id();
+        let stander = world
+            .spawn((
+                agent,
+                GlobalTransform::from_translation(spot),
+                SpatialCell(0),
+            ))
+            .id();
+        world.insert_resource(SpatialGrid {
+            width: 1,
+            height: 1,
+            cell_offsets: Box::new([0, 2]),
+            write_cursors: Box::new([2]),
+            entities: vec![walker, stander],
+            ..SpatialGrid::default()
+        });
+        let mut system = IntoSystem::into_system(calculate_route_following_and_separation_steering);
+        system.initialize(&mut world);
+        system.run((), &mut world).unwrap();
+        let route = world.get::<Route>(walker).unwrap();
+        assert_eq!(route.cursor, route.points.len());
     }
 }
