@@ -458,6 +458,8 @@ pub struct ExtractedView {
     /// reasons, [`Hdr`](bevy_camera::Hdr) sets an the internal render target format
     /// override to ensure sufficient precision is present for lighting calculations.
     pub target_format: TextureFormat,
+    /// The depth-stencil attachment format for the main 3D pass.
+    pub depth_stencil_format: TextureFormat,
     // uvec4(origin.x, origin.y, width, height)
     pub viewport: UVec4,
     pub color_grading: ColorGrading,

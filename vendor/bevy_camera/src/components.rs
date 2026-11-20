@@ -1,0 +1,152 @@
+use crate::{Camera, CameraProjection, OrthographicProjection, Projection, primitives::Frustum};
+use bevy_ecs::prelude::*;
+use bevy_reflect::{Reflect, ReflectDeserialize, ReflectSerialize, std_traits::ReflectDefault};
+use bevy_transform::prelude::{GlobalTransform, Transform};
+use serde::{Deserialize, Serialize};
+use wgpu_types::{LoadOp, TextureFormat, TextureUsages};
+
+/// A 2D camera component. Enables the 2D render graph for a [`Camera`].
+#[derive(Component, Default, Reflect, Clone)]
+#[reflect(Component, Default, Clone)]
+#[require(
+    Camera,
+    Projection::Orthographic(OrthographicProjection::default_2d()),
+    Frustum = OrthographicProjection::default_2d().compute_frustum(&GlobalTransform::from(Transform::default())),
+)]
+pub struct Camera2d;
+
+/// A 3D camera component. Enables the main 3D render graph for a [`Camera`].
+///
+/// The camera coordinate space is right-handed X-right, Y-up, Z-back.
+/// This means "forward" is -Z.
+#[derive(Component, Reflect, Clone)]
+#[reflect(Component, Default, Clone)]
+#[require(Camera, Projection)]
+pub struct Camera3d {
+    /// The depth clear operation to perform for the main 3d pass.
+    pub depth_load_op: Camera3dDepthLoadOp,
+    /// The texture usages for the depth texture created for the main 3d pass.
+    pub depth_texture_usages: Camera3dDepthTextureUsage,
+}
+
+impl Default for Camera3d {
+    fn default() -> Self {
+        Self {
+            depth_load_op: Default::default(),
+            depth_texture_usages: TextureUsages::RENDER_ATTACHMENT.into(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Reflect, Serialize, Deserialize)]
+#[reflect(Serialize, Deserialize, Clone)]
+pub struct Camera3dDepthTextureUsage(pub u32);
+
+impl From<TextureUsages> for Camera3dDepthTextureUsage {
+    fn from(value: TextureUsages) -> Self {
+        Self(value.bits())
+    }
+}
+
+impl From<Camera3dDepthTextureUsage> for TextureUsages {
+    fn from(value: Camera3dDepthTextureUsage) -> Self {
+        Self::from_bits_truncate(value.0)
+    }
+}
+
+/// The depth clear operation to perform for the main 3d pass.
+#[derive(Reflect, Serialize, Deserialize, Clone, Debug)]
+#[reflect(Serialize, Deserialize, Clone, Default)]
+pub enum Camera3dDepthLoadOp {
+    /// Clear with a specified value.
+    /// Note that 0.0 is the far plane due to bevy's use of reverse-z projections.
+    Clear(f32),
+    /// Load from memory.
+    Load,
+}
+
+impl Default for Camera3dDepthLoadOp {
+    fn default() -> Self {
+        Camera3dDepthLoadOp::Clear(0.0)
+    }
+}
+
+impl From<Camera3dDepthLoadOp> for LoadOp<f32> {
+    fn from(config: Camera3dDepthLoadOp) -> Self {
+        match config {
+            Camera3dDepthLoadOp::Clear(x) => LoadOp::Clear(x),
+            Camera3dDepthLoadOp::Load => LoadOp::Load,
+        }
+    }
+}
+
+/// If this component is added to a camera, the camera will use an intermediate "high dynamic range" render texture.
+/// This allows rendering with a wider range of lighting values. However, this does *not* affect
+/// whether the camera will render with hdr display output (which bevy does not support currently)
+/// and only affects the intermediate render texture.
+#[derive(Component, Default, Copy, Clone, Reflect, PartialEq, Eq, Hash, Debug)]
+#[reflect(Component, Default, PartialEq, Hash, Debug)]
+pub struct Hdr;
+
+/// Moves a camera's tonemapping from its material shader to a separate tonemapping pass.
+///
+/// This adds an `Rgba16Float` main texture and one fullscreen pass. That is generally
+/// cheap on desktop, but expensive on mobile. In return, the pass also tonemaps gizmos
+/// and custom materials that don't tonemap themselves, and effects that read the main
+/// texture before tonemapping get values that aren't tonemapped yet. Depth of field and
+/// motion blur require this component. Cameras that share a render target ignore it.
+#[derive(Component, Default, Copy, Clone, Reflect, PartialEq, Eq, Hash, Debug)]
+#[reflect(Component, Default, PartialEq, Hash, Debug)]
+pub struct TonemappingPass;
+
+/// Color space for alpha compositing. Affects how overlapping semi-transparent layers blend.
+#[derive(Component, Copy, Clone, Reflect, PartialEq, Eq, Hash, Debug, Default)]
+#[reflect(Component, PartialEq, Hash, Debug, Default)]
+pub enum CompositingSpace {
+    /// Gamma-encoded blending. Matches most image editors. Uses default sRGB target.
+    #[default]
+    Srgb,
+    /// Linear light blending. Physically correct.
+    Linear,
+    /// Perceptually uniform blending. Often smoother gradients. Requires [`Hdr`] because its value can be outside [0, 1].
+    Oklab,
+}
+
+impl CompositingSpace {
+    /// Whether this is the linear space, which needs no encode step.
+    #[inline]
+    pub fn is_linear(self) -> bool {
+        matches!(self, CompositingSpace::Linear)
+    }
+}
+
+/// Depth-stencil attachment format for the camera's main 3D view.
+#[derive(
+    Component, Reflect, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq,
+)]
+#[reflect(Component, Serialize, Deserialize, Clone, Default)]
+pub enum DepthStencilFormat {
+    /// A 16-bit unsigned normalized depth component.
+    Depth16Unorm,
+    /// At least 24 bits of depth precision.
+    Depth24Plus,
+    /// At least 24 bits of depth precision and an 8-bit stencil component.
+    Depth24PlusStencil8,
+    /// A 32-bit floating-point depth component.
+    #[default]
+    Depth32Float,
+    /// A 32-bit floating-point depth component and an 8-bit stencil component.
+    Depth32FloatStencil8,
+}
+
+impl From<DepthStencilFormat> for TextureFormat {
+    fn from(format: DepthStencilFormat) -> Self {
+        match format {
+            DepthStencilFormat::Depth16Unorm => Self::Depth16Unorm,
+            DepthStencilFormat::Depth24Plus => Self::Depth24Plus,
+            DepthStencilFormat::Depth24PlusStencil8 => Self::Depth24PlusStencil8,
+            DepthStencilFormat::Depth32Float => Self::Depth32Float,
+            DepthStencilFormat::Depth32FloatStencil8 => Self::Depth32FloatStencil8,
+        }
+    }
+}

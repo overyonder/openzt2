@@ -194,9 +194,9 @@ bevy = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57
 bevy_a11y = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
 bevy_app = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
 bevy_asset = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
-bevy_camera = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
+bevy_camera = { path = "vendor/bevy_camera" }
 bevy_color = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
-bevy_core_pipeline = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
+bevy_core_pipeline = { path = "vendor/bevy_core_pipeline" }
 bevy_curve = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
 bevy_derive = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
 bevy_diagnostic = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
@@ -204,32 +204,47 @@ bevy_ecs = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61f
 bevy_encase_derive = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
 bevy_extract = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
 bevy_extract_macros = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
-bevy_gizmos = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
+bevy_gizmos = { path = "vendor/bevy_gizmos" }
+bevy_gizmos_macros = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
+bevy_gizmos_render = { path = "vendor/bevy_gizmos_render" }
+bevy_gltf = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
 bevy_image = { path = "vendor/bevy_image" }
 bevy_input = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
+bevy_input_focus = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
 bevy_light = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
 bevy_log = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
 bevy_material = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
 bevy_material_macros = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
 bevy_math = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
 bevy_mesh = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
-bevy_pbr = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
+bevy_pbr = { path = "vendor/bevy_pbr" }
 bevy_picking = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
 bevy_platform = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
 bevy_reflect = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
 bevy_render = { path = "vendor/bevy_render" }
 bevy_render_macros = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
+bevy_scene = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
 bevy_shader = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
 bevy_shape = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
+bevy_sprite = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
+bevy_sprite_render = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
 bevy_state = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
 bevy_tasks = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
+bevy_text = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
 bevy_time = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
 bevy_transform = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
-bevy_ui_render = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
+bevy_ui = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
+bevy_ui_render = { path = "vendor/bevy_ui_render" }
 bevy_utils = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
 bevy_window = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
 bevy_winit = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
 
 [patch."https://github.com/bevyengine/bevy"]
+bevy_camera = { path = "vendor/bevy_camera" }
+bevy_core_pipeline = { path = "vendor/bevy_core_pipeline" }
+bevy_gizmos = { path = "vendor/bevy_gizmos" }
+bevy_gizmos_render = { path = "vendor/bevy_gizmos_render" }
 bevy_image = { path = "vendor/bevy_image" }
+bevy_pbr = { path = "vendor/bevy_pbr" }
 bevy_render = { path = "vendor/bevy_render" }
+bevy_ui_render = { path = "vendor/bevy_ui_render" }

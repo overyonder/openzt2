@@ -223,7 +223,7 @@ pub struct EffectPassPipelineSpecializationKey {
     pub(super) depth_write_enabled: bool,
     pub(super) depth_compare: CompareFunction,
     pub(super) stencil: StencilState,
-    pub(super) stencil_reference: u32,
+    pub(super) stencil_reference: Option<u32>,
     pub(super) independent_opaque: bool,
     pub(super) blend_state: Option<BlendState>,
     pub(super) color_writes: ColorWrites,

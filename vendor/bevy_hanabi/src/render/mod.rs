@@ -51,7 +51,6 @@ use bevy::{
     core_pipeline::{
         core_3d::{
             AlphaMask3d, Opaque3d, Opaque3dBatchSetKey, Opaque3dBinKey, Transparent3d,
-            CORE_3D_DEPTH_FORMAT,
         },
         prepass::{OpaqueNoLightmap3dBatchSetKey, OpaqueNoLightmap3dBinKey},
     },
@@ -2123,6 +2122,8 @@ pub(crate) struct ParticleRenderPipelineKey {
     /// The effect needs Alpha blend.
     alpha_mode: AlphaMode,
     authored_state: Option<EffectRenderPassState>,
+    #[cfg(feature = "3d")]
+    depth_stencil_format: TextureFormat,
     distance_sorted: bool,
     /// Key: FLIPBOOK
     /// The effect is rendered with flipbook texture animation based on the
@@ -2271,7 +2272,7 @@ impl SpecializedRenderPipeline for ParticlesRenderPipeline {
 
         #[cfg(feature = "3d")]
         let depth_stencil_3d = DepthStencilState {
-            format: CORE_3D_DEPTH_FORMAT,
+            format: key.depth_stencil_format,
             // Use depth buffer with alpha-masked or opaque particles, not
             // with transparent ones
             depth_write_enabled: Some(matches!(
@@ -2285,8 +2286,6 @@ impl SpecializedRenderPipeline for ParticlesRenderPipeline {
             bias: DepthBiasState::default(),
         };
 
-        #[cfg(all(feature = "2d", feature = "3d"))]
-        assert_eq!(CORE_2D_DEPTH_FORMAT, CORE_3D_DEPTH_FORMAT);
         #[cfg(all(feature = "2d", feature = "3d"))]
         let depth_stencil = match key.pipeline_mode {
             PipelineMode::Camera2d => Some(depth_stencil_2d),
@@ -5764,6 +5763,8 @@ fn emit_sorted_draw<T, F>(
                             pipeline_mode,
                             msaa_samples: msaa.samples(),
                             target_format: view.target_format,
+                            #[cfg(feature = "3d")]
+                            depth_stencil_format: view.depth_stencil_format,
                             spawner_bind_group_layout_desc: bindings.clone(),
                         },
                     );
@@ -5844,6 +5845,8 @@ fn emit_sorted_draw<T, F>(
                     pipeline_mode,
                     msaa_samples: msaa.samples(),
                     target_format: view.target_format,
+                    #[cfg(feature = "3d")]
+                    depth_stencil_format: view.depth_stencil_format,
                     spawner_bind_group_layout_desc: spawner_bind_group_layout_desc.clone(),
                 },
             );
@@ -6057,6 +6060,8 @@ fn emit_binned_draw<T, F, G>(
                     pipeline_mode,
                     msaa_samples: msaa.samples(),
                     target_format: view.target_format,
+                    #[cfg(feature = "3d")]
+                    depth_stencil_format: view.depth_stencil_format,
                     spawner_bind_group_layout_desc: spawner_bind_group_layout_desc.clone(),
                 },
             );

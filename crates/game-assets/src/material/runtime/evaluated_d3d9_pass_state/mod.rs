@@ -362,9 +362,9 @@ impl EvaluatedD3d9PassState {
         }
     }
 
-    pub(super) fn effective_stencil(&self) -> (StencilState, u32) {
+    pub(super) fn effective_stencil(&self) -> (StencilState, Option<u32>) {
         if !self.stencil_enabled {
-            return (StencilState::default(), 0);
+            return (StencilState::default(), None);
         }
         let mut stencil = self.stencil.clone();
         if self.stencil_two_sided {
@@ -373,7 +373,22 @@ impl EvaluatedD3d9PassState {
         } else {
             stencil.back = stencil.front;
         }
-        (stencil, self.stencil_reference)
+        stencil.read_mask &= 0xff;
+        stencil.write_mask &= 0xff;
+        if stencil.read_mask == 0 {
+            // Both operands are zero. Keep the comparison active even with both masks zero.
+            stencil.read_mask = 1;
+            for face in [&mut stencil.front, &mut stencil.back] {
+                face.compare = match face.compare {
+                    CompareFunction::Always
+                    | CompareFunction::Equal
+                    | CompareFunction::LessEqual
+                    | CompareFunction::GreaterEqual => CompareFunction::Always,
+                    _ => CompareFunction::Never,
+                };
+            }
+        }
+        (stencil, Some(self.stencil_reference & 0xff))
     }
 
     pub(super) fn blend(&self) -> io::Result<Option<BlendState>> {

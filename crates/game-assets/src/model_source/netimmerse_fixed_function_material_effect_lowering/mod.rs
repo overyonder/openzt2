@@ -196,6 +196,22 @@ pub(crate) fn lower_netimmerse_material_into_evaluated_d3d9_effect(
         ),
         render_state(22, d3d_cull_mode(material.cull_mode)?),
     ]);
+    if let Some(stencil) = &material.stencil {
+        // NIF orders its tests from Never to Always, as D3D9 does.
+        let function = match stencil.function {
+            0..=7 => stencil.function + 1,
+            value => return Err(invalid_native_material_state("stencil function", value)),
+        };
+        commands.extend([
+            render_state(52, 1),
+            render_state(53, d3d_stencil_operation(stencil.fail_action)?),
+            render_state(54, d3d_stencil_operation(stencil.depth_fail_action)?),
+            render_state(55, d3d_stencil_operation(stencil.pass_action)?),
+            render_state(56, function),
+            render_state(57, stencil.reference),
+            render_state(58, stencil.mask),
+        ]);
+    }
 
     let mut passes = vec![EvaluatedD3d9EffectPass {
         pass_name: "NetImmerseFixedFunction".to_owned(),
@@ -417,6 +433,14 @@ fn d3d_compare_function(netimmerse_mode: u32) -> io::Result<u32> {
         .get(netimmerse_mode as usize)
         .copied()
         .ok_or_else(|| invalid_native_material_state("alpha test mode", netimmerse_mode))
+}
+
+fn d3d_stencil_operation(netimmerse_action: u32) -> io::Result<u32> {
+    // Increment and decrement saturate in both the NIF actions and D3D9 operations 4 and 5.
+    match netimmerse_action {
+        0..=5 => Ok(netimmerse_action + 1),
+        value => Err(invalid_native_material_state("stencil operation", value)),
+    }
 }
 
 fn d3d_cull_mode(netimmerse_mode: u32) -> io::Result<u32> {

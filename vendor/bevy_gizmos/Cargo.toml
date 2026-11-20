@@ -1,0 +1,76 @@
+[package]
+name = "bevy_gizmos"
+version = "0.20.0-dev"
+edition = "2024"
+description = "Provides gizmos for Bevy Engine"
+homepage = "https://bevy.org"
+repository = "https://github.com/bevyengine/bevy"
+license = "MIT OR Apache-2.0"
+keywords = ["bevy"]
+
+[dependencies]
+# Bevy
+bevy_app = { version = "=0.20.0-dev" }
+bevy_camera = { version = "=0.20.0-dev" }
+bevy_color = { version = "=0.20.0-dev" }
+bevy_curve = { version = "=0.20.0-dev" }
+bevy_ecs = { version = "=0.20.0-dev" }
+bevy_math = { version = "=0.20.0-dev" }
+bevy_shape = { version = "=0.20.0-dev" }
+bevy_asset = { version = "=0.20.0-dev" }
+bevy_utils = { version = "=0.20.0-dev" }
+bevy_reflect = { version = "=0.20.0-dev" }
+bevy_transform = { version = "=0.20.0-dev" }
+bevy_gizmos_macros = { version = "=0.20.0-dev" }
+bevy_time = { version = "=0.20.0-dev" }
+bevy_input = { version = "=0.20.0-dev" }
+bevy_log = { version = "=0.20.0-dev" }
+bevy_window = { version = "=0.20.0-dev" }
+bevy_mesh = { version = "=0.20.0-dev", optional = true }
+
+[package.metadata.docs.rs]
+rustdoc-args = [
+  "-Zunstable-options",
+  "--generate-link-to-definition",
+  "--generate-macro-expansion",
+]
+all-features = true
+
+[lints.clippy]
+doc_markdown = "warn"
+manual_let_else = "warn"
+match_same_arms = "warn"
+redundant_closure_for_method_calls = "warn"
+redundant_else = "warn"
+semicolon_if_nothing_returned = "warn"
+type_complexity = "allow"
+undocumented_unsafe_blocks = "warn"
+unwrap_or_default = "warn"
+needless_lifetimes = "allow"
+too_many_arguments = "allow"
+nonstandard_macro_braces = "warn"
+print_stdout = "warn"
+print_stderr = "warn"
+
+ptr_as_ptr = "warn"
+ptr_cast_constness = "warn"
+ref_as_ptr = "warn"
+
+# see: https://github.com/bevyengine/bevy/pull/15375#issuecomment-2366966219
+too_long_first_doc_paragraph = "allow"
+
+# currently falsely fires on std::io, even tho core::io is unstable
+# https://github.com/rust-lang/rust-clippy/issues/13158#issuecomment-4373196346
+std_instead_of_core = "allow"
+std_instead_of_alloc = "warn"
+alloc_instead_of_core = "warn"
+
+allow_attributes = "warn"
+allow_attributes_without_reason = "warn"
+
+[lints.rust]
+missing_docs = "warn"
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(docsrs_dep)'] }
+unsafe_code = "deny"
+unsafe_op_in_unsafe_fn = "warn"
+unused_qualifications = "warn"

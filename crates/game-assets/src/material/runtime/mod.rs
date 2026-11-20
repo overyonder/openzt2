@@ -41,8 +41,11 @@ pub(super) fn register_effect_pass_material_asset_and_fixed_function_shader(appl
             texture_coordinate_animation::advance_texture_coordinate_animations
                 .in_set(texture_coordinate_animation::TextureCoordinateAnimationSet),
         )
+        .add_systems(
+            Last,
+            effect_pass_stencil_reference::select_camera_depth_stencil_format,
+        )
         .add_systems(Startup, initialize_fixed_function_world_light_buffer);
-    effect_pass_stencil_reference::register(application);
 }
 
 fn initialize_fixed_function_world_light_buffer(mut buffers: ResMut<Assets<ShaderBuffer>>) {

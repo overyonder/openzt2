@@ -27,6 +27,9 @@ impl Material for EffectPassMaterial {
     fn enable_shadows() -> bool {
         false
     }
+    fn stencil_reference(&self) -> Option<u32> {
+        self.pipeline_specialization_key.stencil_reference
+    }
     fn vertex_shader() -> bevy::shader::ShaderRef {
         FIXED_FUNCTION_SHADER.into()
     }
@@ -64,7 +67,7 @@ impl Material for EffectPassMaterial {
         if let Some(depth) = descriptor.depth_stencil.as_mut() {
             depth.depth_write_enabled = Some(key.bind_group_data.depth_write_enabled);
             depth.depth_compare = Some(key.bind_group_data.depth_compare);
-            if depth.format.has_stencil_aspect() {
+            if key.mesh_key.depth_stencil_format().has_stencil_aspect() {
                 depth.stencil = key.bind_group_data.stencil;
             }
         }

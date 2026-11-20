@@ -24,9 +24,9 @@ use bevy_camera::{
     primitives::Frustum,
     visibility::{self, RenderLayers, VisibleEntities},
     Camera, Camera2d, Camera3d, CameraMainTextureUsages, CameraOutputMode, CameraUpdateSystems,
-    ClearColor, ClearColorConfig, CompositingSpace, Exposure, Hdr, ManualTextureViewHandle,
-    MsaaWriteback, NormalizedRenderTarget, Projection, RenderTarget, RenderTargetInfo,
-    TonemappingPass, Viewport,
+    ClearColor, ClearColorConfig, CompositingSpace, DepthStencilFormat, Exposure, Hdr,
+    ManualTextureViewHandle, MsaaWriteback, NormalizedRenderTarget, Projection, RenderTarget,
+    RenderTargetInfo, TonemappingPass, Viewport,
 };
 use bevy_derive::{Deref, DerefMut};
 use bevy_ecs::{
@@ -486,7 +486,7 @@ pub fn extract_cameras(
         Query<(
             Entity,
             RenderEntity,
-            &Camera,
+            (&Camera, &DepthStencilFormat),
             &RenderTarget,
             &CameraRenderGraph,
             &GlobalTransform,
@@ -525,7 +525,7 @@ pub fn extract_cameras(
     // Count cameras per render target to make sure tonemapping isn't duplicated.
     // The map is a `Local` so it keeps its allocation between frames.
     active_cameras_per_target.clear();
-    for (_, _, camera, render_target, ..) in query.iter() {
+    for (_, _, (camera, _), render_target, ..) in query.iter() {
         if !camera.is_active {
             continue;
         }
@@ -549,7 +549,7 @@ pub fn extract_cameras(
     for (
         main_entity,
         render_entity,
-        camera,
+        (camera, depth_stencil_format),
         render_target,
         camera_render_graph,
         transform,
@@ -698,6 +698,7 @@ pub fn extract_cameras(
                         viewport_size.y,
                     ),
                     color_grading,
+                    depth_stencil_format: (*depth_stencil_format).into(),
                     invert_culling: camera.invert_culling,
                 },
                 render_visible_entities_cpu_culling,

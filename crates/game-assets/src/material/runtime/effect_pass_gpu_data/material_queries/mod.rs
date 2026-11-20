@@ -17,7 +17,7 @@ pub struct EffectPassDrawState {
     pub depth_compare: CompareFunction,
     pub color_writes: ColorWrites,
     pub stencil: StencilState,
-    pub stencil_reference: u32,
+    pub stencil_reference: Option<u32>,
 }
 
 impl EffectPassTextureAssets {

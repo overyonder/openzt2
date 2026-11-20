@@ -21,3 +21,6 @@ Focused ownership test, from the reimplementation workspace's direnv:
 `cargo test --manifest-path vendor/bevy_render/Cargo.toml --release --lib uniform_buffer_pages::tests`.
 The fork is excluded from first-party workspace membership so its upstream
 test dependencies do not enter the game's dependency resolution.
+
+Extracted views carry the camera's depth-stencil attachment format, ported from
+[Bevy PR #21493](https://github.com/bevyengine/bevy/pull/21493).

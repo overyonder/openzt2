@@ -85,7 +85,18 @@ pub struct NativeMaterialSource {
     pub depth_test: bool,
     pub depth_write: bool,
     pub depth_test_mode: u32,
+    pub stencil: Option<NativeStencilSource>,
     pub cull_mode: u32,
+}
+
+#[derive(Clone, Debug)]
+pub struct NativeStencilSource {
+    pub function: u32,
+    pub reference: u32,
+    pub mask: u32,
+    pub fail_action: u32,
+    pub depth_fail_action: u32,
+    pub pass_action: u32,
 }
 
 #[derive(Clone, Debug)]

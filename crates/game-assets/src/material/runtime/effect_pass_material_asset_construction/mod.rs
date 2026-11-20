@@ -306,7 +306,7 @@ fn create_effect_pass_material_asset(
         && depth_write_enabled
         && depth_compare == bevy::render::render_resource::CompareFunction::Greater
         && state.color_writes == bevy::render::render_resource::ColorWrites::ALL
-        && stencil == Default::default();
+        && stencil_reference.is_none();
     let dynamic_texture_semantics = std::array::from_fn(|stage| {
         state.textures[stage].as_ref().and_then(|parameter_name| {
             parameter_descriptions

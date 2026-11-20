@@ -152,6 +152,7 @@ pub fn extract_egui_camera_view_system(
                             physical_viewport_rect.size(),
                         )),
                         color_grading: Default::default(),
+                        depth_stencil_format: TextureFormat::Depth32Float,
                         invert_culling: false,
                     },
                     // Link to the main camera view.

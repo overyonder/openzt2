@@ -4,7 +4,9 @@ use bevy::math::{Mat3, Vec3};
 use std::collections::HashSet;
 
 use super::super::{
-    model::{NativeMaterialSource, NativeTextureEffectSource, NativeTextureSource},
+    model::{
+        NativeMaterialSource, NativeStencilSource, NativeTextureEffectSource, NativeTextureSource,
+    },
     native_geometry_lowering_error::{
         NativeGeometryLoweringError, NativeGeometryLoweringErrorKind, NativeGeometrySourceFamily,
     },
@@ -100,23 +102,10 @@ pub(super) fn lower_netimmerse_native_material(
         _ => None,
     });
     let emissive = material.map_or([0.0; 3], |value| value.emissive);
-    let stencil = property_refs
-        .iter()
-        .filter_map(|reference| document.block(*reference))
-        .find_map(|block| match &block.payload {
-            NetImmerseNifBlockPayload::NiStencilProperty(value) => Some(value),
-            _ => None,
-        });
-    if stencil.is_some_and(|value| value.stencil_enabled != 0) {
-        return Err(native_geometry_lowering_error(
-            NativeGeometrySourceFamily::Nif,
-            &document.source_path,
-            NativeGeometryLoweringErrorKind::InvalidMaterial {
-                detail: "active NIF stencil operations have no glTF material representation"
-                    .to_owned(),
-            },
-        ));
-    }
+    let stencil = properties.iter().find_map(|block| match &block.payload {
+        NetImmerseNifBlockPayload::NiStencilProperty(value) => Some(value),
+        _ => None,
+    });
     Ok(Some(NativeMaterialSource {
         name: material.map_or_else(String::new, |value| value.object.name.clone()),
         decal_0_texture,
@@ -148,6 +137,16 @@ pub(super) fn lower_netimmerse_native_material(
         depth_test: depth.is_none_or(|value| value.flags & 0x0001 != 0),
         depth_write: depth.is_none_or(|value| value.flags & 0x0002 != 0),
         depth_test_mode: depth.map_or(3, |value| value.function),
+        stencil: stencil
+            .filter(|value| value.stencil_enabled != 0)
+            .map(|value| NativeStencilSource {
+                function: value.stencil_function,
+                reference: value.stencil_ref,
+                mask: value.stencil_mask,
+                fail_action: value.fail_action,
+                depth_fail_action: value.z_fail_action,
+                pass_action: value.pass_action,
+            }),
         cull_mode: stencil.map_or(3, |value| value.draw_mode),
     }))
 }

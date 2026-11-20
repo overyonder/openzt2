@@ -754,7 +754,6 @@ dependencies = [
 [[package]]
 name = "bevy_camera"
 version = "0.20.0-dev"
-source = "git+https://github.com/bevyengine/bevy?rev=2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2#2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2"
 dependencies = [
  "bevy_app",
  "bevy_asset",
@@ -811,7 +810,6 @@ dependencies = [
 [[package]]
 name = "bevy_core_pipeline"
 version = "0.20.0-dev"
-source = "git+https://github.com/bevyengine/bevy?rev=2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2#2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2"
 dependencies = [
  "bevy_app",
  "bevy_asset",
@@ -1075,7 +1073,6 @@ dependencies = [
 [[package]]
 name = "bevy_gizmos"
 version = "0.20.0-dev"
-source = "git+https://github.com/bevyengine/bevy?rev=2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2#2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2"
 dependencies = [
  "bevy_app",
  "bevy_asset",
@@ -1109,7 +1106,6 @@ dependencies = [
 [[package]]
 name = "bevy_gizmos_render"
 version = "0.20.0-dev"
-source = "git+https://github.com/bevyengine/bevy?rev=2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2#2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2"
 dependencies = [
  "bevy_app",
  "bevy_asset",
@@ -1466,7 +1462,6 @@ checksum = "bff34eb29ff4b8a8688bc7299f14fb6b597461ca80fec03ed7d22939ab33e48f"
 [[package]]
 name = "bevy_pbr"
 version = "0.20.0-dev"
-source = "git+https://github.com/bevyengine/bevy?rev=2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2#2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2"
 dependencies = [
  "arrayvec",
  "bevy_app",
@@ -1997,7 +1992,6 @@ dependencies = [
 [[package]]
 name = "bevy_ui_render"
 version = "0.20.0-dev"
-source = "git+https://github.com/bevyengine/bevy?rev=2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2#2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2"
 dependencies = [
  "bevy_a11y",
  "bevy_app",
@@ -5499,6 +5493,7 @@ name = "openzt2_progression"
 version = "1.2.1-beta"
 dependencies = [
  "bevy",
+ "mlua",
  "openzt2_game_assets",
  "openzt2_game_data",
  "openzt2_interface_state",

@@ -118,19 +118,22 @@ pub(super) fn project_particle_renderer_materials(
                 if ordinal == 0 && simulation_textures.is_empty() {
                     simulation_textures.clone_from(&textures);
                 }
+                let draw_state = pass.map(EffectPassMaterial::draw_state);
+                let stencil_reference = draw_state
+                    .as_ref()
+                    .and_then(|state| state.stencil_reference);
                 draws.push(EffectRenderPass {
                     effect: effect.clone(),
                     textures,
                     sort_by_distance: renderer.sort_by_distance,
-                    state: pass.map(|pass| {
-                        let state = pass.draw_state();
-                        EffectRenderPassState {
-                            blend: state.blend,
-                            depth_write_enabled: state.depth_write_enabled,
-                            depth_compare: state.depth_compare,
-                            color_writes: state.color_writes,
-                        }
+                    state: draw_state.map(|state| EffectRenderPassState {
+                        blend: state.blend,
+                        depth_write_enabled: state.depth_write_enabled,
+                        depth_compare: state.depth_compare,
+                        stencil: state.stencil,
+                        color_writes: state.color_writes,
                     }),
+                    stencil_reference,
                 });
             }
         }

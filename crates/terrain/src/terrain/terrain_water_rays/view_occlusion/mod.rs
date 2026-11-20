@@ -18,7 +18,7 @@ use bevy::{
             SpecializedRenderPipeline, SpecializedRenderPipelines, VertexState,
         },
         renderer::{RenderContext, RenderDevice, RenderQueue, ViewQuery},
-        view::ViewDepthStencilTexture,
+        view::{ExtractedView, Msaa, ViewDepthStencilTexture},
         Render, RenderApp, RenderSystems,
     },
     shader::Shader,
@@ -138,18 +138,19 @@ fn prepare_water_ray_view_queries(
     mut views: Query<
         (
             Entity,
-            &ViewDepthStencilTexture,
+            &ExtractedView,
+            &Msaa,
             Option<&mut WaterRayViewPipeline>,
             Has<WaterRayGpuQuery>,
         ),
         With<WaterRayViewOcclusion>,
     >,
 ) {
-    for (entity, depth, pipeline, prepared) in &mut views {
+    for (entity, view, msaa, pipeline, prepared) in &mut views {
         let next = WaterRayViewPipeline(pipelines.specialize(
             &pipeline_cache,
             &WaterRayOcclusionPipeline,
-            (depth.texture().format(), depth.texture().sample_count()),
+            (view.depth_stencil_format, msaa.samples()),
         ));
         if let Some(mut current) = pipeline {
             current.set_if_neq(next);
