@@ -175,16 +175,27 @@ fn execute_current_wander_actions(
             .as_ref()
             .is_some_and(|wandering| clock.tick >= wandering.until_tick)
         {
-            if wandering.as_ref().is_some_and(|wandering| {
-                destination
-                    .is_some_and(|destination| wandering.request_id == Some(destination.request_id))
-            }) {
+            advance_behavior_task_to_next_action(task, clock.tick);
+            // Another wander leg next keeps walking on this route until its
+            // own destination replaces it, instead of stopping for a moment.
+            let wanders_next = matches!(
+                documents
+                    .get(&task.document)
+                    .and_then(|document| find_current_behavior_task_action(document, task)),
+                Some(BehaviorAction::Wander(_))
+            );
+            if !wanders_next
+                && wandering.as_ref().is_some_and(|wandering| {
+                    destination.is_some_and(|destination| {
+                        wandering.request_id == Some(destination.request_id)
+                    })
+                })
+            {
                 commands.entity(actor).remove::<Destination>();
             }
             commands
                 .entity(actor)
                 .remove::<(BehaviorWanderNavigation, StaffSubmergedDepth)>();
-            advance_behavior_task_to_next_action(task, clock.tick);
             continue;
         }
         let Some(definitions) = definitions.get(&definition_assets) else {
