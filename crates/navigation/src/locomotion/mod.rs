@@ -148,6 +148,7 @@ impl Plugin for LocomotionPlugin {
                     kinematic_navigation_agent_motion_integration::
                         integrate_non_physics_planned_navigation_motion,
                     crate::locomotion::direct_locomotion_execution::integrate_non_physics_direct_locomotion,
+                    person_walk_animation::apply_behavior_clip_root_motion,
                     avian_navigation_agent_driving::
                         drive_avian_navigation_agent_velocities_and_complete_routes,
                 )

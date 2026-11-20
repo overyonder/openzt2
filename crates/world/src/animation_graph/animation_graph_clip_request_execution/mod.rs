@@ -219,14 +219,18 @@ pub(crate) fn execute_explicit_animation_clip_playback_requests(
             animation_playback_controller.playback_repetition_policy =
                 animation_clip_request.playback_repetition_policy;
             *animation_graph_playback_state = replacement_animation_graph_playback_state;
-            started_animation_clip_requests.write(openzt2_world_state::animation_graph::animation_graph_playback_message_types::AnimationClipPlaybackRequestStarted {
-                animation_subject_entity: animation_clip_request.animation_subject_entity,
-                request_id,
-                playback_generation: animation_playback_controller.playback_generation,
-                previous_graph_node,
-            });
+            // A body split into parts, such as a guest's upper and lower
+            // body, plays the clip on every part that has it, or the parts
+            // would come apart at the waist.
+            if !started {
+                started_animation_clip_requests.write(openzt2_world_state::animation_graph::animation_graph_playback_message_types::AnimationClipPlaybackRequestStarted {
+                    animation_subject_entity: animation_clip_request.animation_subject_entity,
+                    request_id,
+                    playback_generation: animation_playback_controller.playback_generation,
+                    previous_graph_node,
+                });
+            }
             started = true;
-            break;
         }
         if started {
             continue;
@@ -340,5 +344,98 @@ mod tests {
         );
         assert_eq!(rejected[0].animation_subject_entity, subject);
         assert_eq!(rejected[0].animation_clip_asset_key, "Stand_ShopGiveMoney");
+    }
+
+    #[test]
+    fn every_body_part_with_the_clip_plays_it() {
+        use openzt2_game_assets::animation::animation_set_asset_types::AnimationClipRecord;
+        use openzt2_world_state::animation_playback::animation_playback_controller_types::{
+            AnimationPlaybackClock, AnimationPlaybackState,
+        };
+        let mut application = App::new();
+        application
+            .add_plugins((MinimalPlugins, AssetPlugin::default()))
+            .init_asset::<AnimationSetAsset>()
+            .init_asset::<AnimationClip>()
+            .add_message::<AnimationClipPlaybackRequest>()
+            .add_message::<AnimationClipPlaybackRequestRejected>()
+            .add_message::<openzt2_world_state::animation_graph::animation_graph_playback_message_types::CancelAnimationClipPlaybackRequest>()
+            .add_message::<openzt2_world_state::animation_graph::animation_graph_playback_message_types::AnimationClipPlaybackRequestStarted>()
+            .add_systems(Update, execute_explicit_animation_clip_playback_requests);
+        let clip = application
+            .world_mut()
+            .resource_mut::<Assets<AnimationClip>>()
+            .add(AnimationClip::default());
+        let set = application
+            .world_mut()
+            .resource_mut::<Assets<AnimationSetAsset>>()
+            .add(AnimationSetAsset::create_ready_animation_set_asset(
+                String::new(),
+                String::new(),
+                vec![AnimationClipRecord::create_embedded_animation_clip_record(
+                    "WalkItem_Ahead".to_owned(),
+                    clip,
+                    1000,
+                )],
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                None,
+            ));
+        let guest = application.world_mut().spawn_empty().id();
+        let parts: Vec<_> = (0..2)
+            .map(|_| {
+                application
+                    .world_mut()
+                    .spawn((
+                        AnimationPresentationOwner {
+                            gameplay_entity: guest,
+                        },
+                        ModelAnimationAssetLibrary {
+                            loaded_model_animation_set_asset_handles: Box::new([set.clone()]),
+                        },
+                        AnimationPlaybackController {
+                            playback_generation: 0,
+                            explicit_clip_request_id: None,
+                            animation_set_asset: set.clone(),
+                            animation_clip_asset_key: "Stand_Idle".to_owned(),
+                            elapsed_milliseconds: 0,
+                            fractional_milliseconds: default(),
+                            playback_speed_permille: 1000,
+                            playback_state: AnimationPlaybackState::Playing,
+                            playback_repetition_policy: AnimationPlaybackRepetitionPolicy::Loop,
+                            playback_clock: AnimationPlaybackClock::Simulation,
+                        },
+                        AnimationGraphPlaybackState::default(),
+                    ))
+                    .id()
+            })
+            .collect();
+        application
+            .world_mut()
+            .write_message(AnimationClipPlaybackRequest {
+                animation_subject_entity: guest,
+                animation_clip_asset_key: "WalkItem_Ahead".to_owned(),
+                blend_duration_milliseconds: 0,
+                playback_speed_permille: 1000,
+                playback_repetition_policy: AnimationPlaybackRepetitionPolicy::PlayOnce,
+            });
+        application.update();
+        for part in parts {
+            assert_eq!(
+                application
+                    .world()
+                    .get::<AnimationPlaybackController>(part)
+                    .unwrap()
+                    .animation_clip_asset_key,
+                "WalkItem_Ahead"
+            );
+        }
+        let started = application
+            .world_mut()
+            .resource_mut::<Messages<openzt2_world_state::animation_graph::animation_graph_playback_message_types::AnimationClipPlaybackRequestStarted>>()
+            .drain()
+            .count();
+        assert_eq!(started, 1);
     }
 }
