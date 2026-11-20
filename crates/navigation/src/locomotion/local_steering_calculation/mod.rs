@@ -13,6 +13,15 @@ use openzt2_zoo_state::locomotion::locomotion_types::MAX_STEERING_NEIGHBORS;
 
 /// The largest agent radius separation looks out for.
 const LARGEST_NEIGHBOR_RADIUS_M: f32 = 3.0;
+/// A person's authored collision radius, about 10 cm, is far narrower than
+/// the body drawn around it; keeping apart by it leaves people inside each
+/// other. Spacing treats everyone as at least this wide.
+const MINIMUM_SPACING_RADIUS_M: f32 = 0.3;
+
+fn spacing_radius(agent: &NavAgent) -> f32 {
+    agent.radius_m.max(MINIMUM_SPACING_RADIUS_M)
+}
+
 /// How many touching distances ahead a walker starts stepping aside.
 const AVOIDANCE_LOOK_AHEAD: f32 = 3.0;
 /// The sideways step's share of walking speed when about to touch.
@@ -91,8 +100,8 @@ pub(super) fn calculate_route_following_and_separation_steering(
                             navigation_agent_position - neighboring_global_transform.translation();
                         let neighboring_agent_distance_squared =
                             neighboring_agent_offset.length_squared();
-                        let required_separation_distance =
-                            navigation_agent.radius_m + neighboring_navigation_agent.radius_m;
+                        let required_separation_distance = spacing_radius(navigation_agent)
+                            + spacing_radius(neighboring_navigation_agent);
                         // Step aside from someone ahead before reaching them.
                         // Everyone steps to the same side of their own heading,
                         // so two people meeting head-on pass each other.
@@ -191,7 +200,7 @@ pub(super) fn separate_overlapping_idle_people(
                     };
                     let mut offset = position - neighbor_global.translation();
                     offset.y = 0.0;
-                    let required = agent.radius_m + neighbor_agent.radius_m;
+                    let required = spacing_radius(agent) + spacing_radius(neighbor_agent);
                     let distance = offset.length();
                     if distance >= required {
                         continue;
@@ -277,5 +286,42 @@ mod avoidance_tests {
         // The same side of each heading: -Z going east, +Z going west.
         assert!(steer(east).z < 0.0, "{:?}", steer(east));
         assert!(steer(west).z > 0.0, "{:?}", steer(west));
+    }
+
+    #[test]
+    fn standing_guests_part_wider_than_their_collision_radius() {
+        let mut world = World::new();
+        let agent = NavAgent {
+            radius_m: 0.1,
+            max_speed_mps: 1.0,
+            acceleration_mps2: 1.0,
+            capabilities: openzt2_zoo_state::locomotion::locomotion_types::NavFlags::GUEST,
+        };
+        let guest = |world: &mut World, x: f32| {
+            world
+                .spawn((
+                    openzt2_zoo_state::guests::guest_simulation_types::Guest,
+                    agent,
+                    GlobalTransform::from_translation(Vec3::X * x),
+                    Transform::from_translation(Vec3::X * x),
+                    SpatialCell(0),
+                ))
+                .id()
+        };
+        let left = guest(&mut world, 0.0);
+        let right = guest(&mut world, 0.25);
+        world.insert_resource(SpatialGrid {
+            width: 1,
+            height: 1,
+            cell_offsets: Box::new([0, 2]),
+            write_cursors: Box::new([2]),
+            entities: vec![left, right],
+            ..SpatialGrid::default()
+        });
+        let mut system = IntoSystem::into_system(separate_overlapping_idle_people);
+        system.initialize(&mut world);
+        system.run((), &mut world).unwrap();
+        assert!(world.get::<Transform>(left).unwrap().translation.x < 0.0);
+        assert!(world.get::<Transform>(right).unwrap().translation.x > 0.25);
     }
 }
