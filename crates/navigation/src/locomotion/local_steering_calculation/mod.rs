@@ -118,6 +118,11 @@ pub(super) fn calculate_route_following_and_separation_steering(
                                 * navigation_agent.max_speed_mps
                                 * (1.0 - neighboring_agent_distance / required_separation_distance);
                         }
+                        // Count only neighbours close enough to steer for, so
+                        // a crowd further off does not use up the budget first.
+                        if neighboring_agent_distance_squared >= look_ahead * look_ahead {
+                            continue;
+                        }
                         visited_neighbor_count += 1;
                         if visited_neighbor_count == MAX_STEERING_NEIGHBORS {
                             break 'neighboring_cells;
