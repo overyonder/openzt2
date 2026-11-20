@@ -91,18 +91,19 @@ pub(crate) fn detect_stuck_agents(
             progress.stationary_ticks = 0;
             continue;
         }
+        // Measure from the last position that counted as movement, so a slow
+        // walker covering under a centimetre per tick is not mistaken for stuck.
         let position = transform.translation();
-        let moved = position.distance_squared(progress.last_position) > 0.0001;
-        if moved {
+        if position.distance_squared(progress.last_position) > 0.0001 {
             progress.stationary_ticks = 0;
-        } else {
-            progress.stationary_ticks = progress.stationary_ticks.saturating_add(1);
+            progress.last_position = position;
+            continue;
         }
+        progress.stationary_ticks = progress.stationary_ticks.saturating_add(1);
         if progress.stationary_ticks >= STUCK_TICKS {
             destination.set_changed();
             progress.stationary_ticks = 0;
         }
-        progress.last_position = position;
     }
 }
 
@@ -261,5 +262,46 @@ pub(super) fn advance_route_cursor(
             break;
         }
         route.cursor += 1;
+    }
+}
+
+#[cfg(test)]
+mod stuck_detection_tests {
+    use super::*;
+
+    #[test]
+    fn a_slow_walker_is_not_mistaken_for_stuck() {
+        let mut world = World::new();
+        let mut route = Route::with_capacity(1);
+        route.points.push(Vec3::new(10.0, 0.0, 0.0));
+        let walker = world
+            .spawn((
+                GlobalTransform::IDENTITY,
+                route,
+                Destination {
+                    request_id: 1,
+                    world: Vec3::new(10.0, 0.0, 0.0),
+                    arrival_radius_m: 0.1,
+                },
+                MotionProgress {
+                    last_position: Vec3::ZERO,
+                    stationary_ticks: 0,
+                },
+            ))
+            .id();
+        let mut system = IntoSystem::into_system(detect_stuck_agents);
+        system.initialize(&mut world);
+        for tick in 1..=u32::from(STUCK_TICKS) * 2 {
+            *world.get_mut::<GlobalTransform>(walker).unwrap() =
+                GlobalTransform::from_translation(Vec3::X * 0.005 * tick as f32);
+            system.run((), &mut world).unwrap();
+            assert!(
+                world
+                    .get::<MotionProgress>(walker)
+                    .unwrap()
+                    .stationary_ticks
+                    < 3
+            );
+        }
     }
 }
