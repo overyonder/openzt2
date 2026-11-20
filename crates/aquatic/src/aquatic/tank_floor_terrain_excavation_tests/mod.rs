@@ -111,11 +111,11 @@ fn a_tank_floor_is_dug_into_the_terrain_and_filled_back_when_the_tank_goes() {
     let walls = (0..4)
         .map(|index| {
             app.world_mut()
-                .spawn(FenceEdge {
-                    definition: Default::default(),
-                    a: corners[index],
-                    b: corners[(index + 1) % 4],
-                })
+                .spawn(FenceEdge::between(
+                    Default::default(),
+                    corners[index],
+                    corners[(index + 1) % 4],
+                ))
                 .id()
         })
         .collect::<Box<[_]>>();
@@ -138,10 +138,15 @@ fn a_tank_floor_is_dug_into_the_terrain_and_filled_back_when_the_tank_goes() {
             HabitatRegion {
                 topology_cells: Box::default(),
                 area_square_metres: 25.0,
-                boundary_fence_entities: walls,
             },
         ))
         .id();
+    for &wall in &walls {
+        app.world_mut().spawn((
+            ChildOf(tank),
+            openzt2_zoo_state::habitat::habitat_types::HabitatBoundaryFence(wall),
+        ));
+    }
     app.update();
     // Walls stay inside the one test chunk, whose far edge belongs to the
     // next chunk. Samples 2..=3 lie more than one spacing inside the walls.

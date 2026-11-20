@@ -23,11 +23,7 @@ fn index_load_canonicalizes_and_rejects_duplicate_entries() {
         .id();
     let edge = app
         .world_mut()
-        .spawn(FenceEdge {
-            definition: AssetId::default(),
-            a,
-            b,
-        })
+        .spawn(FenceEdge::between(AssetId::default(), a, b))
         .id();
     app.update();
     let index = app.world().resource::<TopologyIndex>();

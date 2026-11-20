@@ -52,6 +52,7 @@ fn unchanged_placement_preview_keeps_its_footprint_and_grid_decals() {
             audio_cue_prefixes: Vec::new(),
             surface_effect_strength: None,
             presentation_caustic_policies: Vec::new(),
+            traversal_animation_manifests: Vec::new(),
             id: definition,
             kind: WorldObjectKind::Scenery,
             water_filter: None,

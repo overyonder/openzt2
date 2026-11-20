@@ -1,4 +1,11 @@
+use bevy::ecs::entity::EntityHashSet;
 use bevy::prelude::*;
+use openzt2_zoo_state::topology::{
+    topology_edit_types::FenceConnectivityChanged,
+    topology_graph_types::{
+        FenceEnd, FenceSegment, FenceStart, FencesEndingHere, FencesStartingHere,
+    },
+};
 
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
@@ -21,11 +28,15 @@ pub(super) fn refresh_fence_segment_prefabs_after_topology_index_changes(
     active_definitions: Res<WorldDefinitions>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     nodes: Query<&TopologyNode>,
+    mut changes: MessageReader<FenceConnectivityChanged>,
+    incident: Query<(Option<&FencesStartingHere>, Option<&FencesEndingHere>)>,
+    changed_edges: Query<Entity, Or<(Changed<FenceEdge>, Changed<FenceStart>, Changed<FenceEnd>)>>,
+    edges: Query<FenceSegment>,
     grid: Res<TopologyGrid>,
     mut transforms: Query<&mut Transform, With<FenceEdge>>,
     mut fences: Query<(
         Entity,
-        &FenceEdge,
+        FenceSegment,
         Option<&mut FenceSegmentPrefab>,
         Option<&mut FenceTerrainEndpointPresentationCells>,
         Option<&TopologyPresentation>,
@@ -35,35 +46,66 @@ pub(super) fn refresh_fence_segment_prefabs_after_topology_index_changes(
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };
-    if !topology_index.is_changed() {
+    let mut changed = changed_edges.iter().collect::<EntityHashSet>();
+    let affected_nodes = changes
+        .read()
+        .flat_map(|event| [event.0.lo, event.0.hi])
+        .filter_map(|cell| topology_index.nodes.get(&cell).copied())
+        .collect::<EntityHashSet>();
+    changed.extend(
+        affected_nodes
+            .into_iter()
+            .flat_map(|node| incident_edges(node, &incident)),
+    );
+    let dirty = if active_definitions.is_changed() || grid.is_changed() {
+        fences
+            .iter()
+            .map(|(entity, ..)| entity)
+            .collect::<EntityHashSet>()
+    } else {
+        adjacent_fences(&changed, &edges, &incident)
+    };
+    if dirty.is_empty() {
         return;
     }
-    let segments = fences
-        .iter()
-        .filter_map(|(entity, edge, ..)| {
+    // A candidate's other end must also be present to check reciprocity.
+    let neighbourhood = adjacent_fences(
+        &adjacent_fences(&dirty, &edges, &incident),
+        &edges,
+        &incident,
+    );
+    let segments = neighbourhood
+        .into_iter()
+        .filter_map(|entity| {
+            let edge = edges.get(entity).ok()?;
             Some((
                 entity,
                 (
                     edge.definition,
-                    nodes.get(edge.a).ok()?.cell,
-                    nodes.get(edge.b).ok()?.cell,
+                    nodes.get(edge.a()).ok()?.cell,
+                    nodes.get(edge.b()).ok()?.cell,
                 ),
             ))
         })
         .collect::<Vec<_>>();
-    let partners = select_reciprocal_fence_curve_partners(
+    let pairings = select_reciprocal_fence_curve_partners(
         &segments
             .iter()
             .map(|(_, segment)| *segment)
             .collect::<Vec<_>>(),
     );
     let partners = segments
-        .iter()
-        .zip(partners)
-        .map(|((entity, _), partner)| (*entity, partner))
-        .collect::<bevy::platform::collections::HashMap<_, _>>();
-    for (fence_entity, edge, current_prefab, endpoint_cells, presentation, gate) in &mut fences {
-        let (Ok(first_node), Ok(second_node)) = (nodes.get(edge.a), nodes.get(edge.b)) else {
+        .into_iter()
+        .zip(pairings)
+        .map(|((entity, _), pairing)| (entity, pairing))
+        .collect::<bevy::ecs::entity::EntityHashMap<_>>();
+    for fence_entity in dirty {
+        let Ok((_, edge, current_prefab, endpoint_cells, presentation, gate)) =
+            fences.get_mut(fence_entity)
+        else {
+            continue;
+        };
+        let (Ok(first_node), Ok(second_node)) = (nodes.get(edge.a()), nodes.get(edge.b())) else {
             continue;
         };
         // A gated edge shows its fence's gate variant, e.g. chainlinkgate.
@@ -121,4 +163,38 @@ pub(super) fn refresh_fence_segment_prefabs_after_topology_index_changes(
             commands.entity(fence_entity).insert(selected_prefab);
         }
     }
+}
+
+pub(super) fn incident_edges<'a>(
+    node: Entity,
+    incident: &'a Query<(Option<&FencesStartingHere>, Option<&FencesEndingHere>)>,
+) -> impl Iterator<Item = Entity> + 'a {
+    incident
+        .get(node)
+        .ok()
+        .into_iter()
+        .flat_map(|(starting, ending)| {
+            starting
+                .into_iter()
+                .flat_map(|edges| edges.iter())
+                .chain(ending.into_iter().flat_map(|edges| edges.iter()))
+        })
+}
+
+pub(super) fn adjacent_fences(
+    starting: &EntityHashSet,
+    edges: &Query<FenceSegment>,
+    incident: &Query<(Option<&FencesStartingHere>, Option<&FencesEndingHere>)>,
+) -> EntityHashSet {
+    starting
+        .iter()
+        .copied()
+        .chain(
+            starting
+                .iter()
+                .filter_map(|&entity| edges.get(entity).ok())
+                .flat_map(|edge| [edge.a(), edge.b()])
+                .flat_map(|node| incident_edges(node, incident)),
+        )
+        .collect()
 }

@@ -2,11 +2,8 @@
 
 use avian3d::prelude::RigidBody;
 use bevy::gltf::Gltf;
-use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use openzt2_zoo_state::placement::object_placement_geometry::ScenePlacementFootprints;
-
-use openzt2_game_data::AssetId;
 
 use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
 use openzt2_world::world_spawn::prefab_world_instance_spawning::spawn_loaded_scene_prefab_as_world_instance;
@@ -39,7 +36,7 @@ pub(super) fn apply_prepared_placed_object_creation_edit(
     edit: &mut PreparedObjectPlacementMutation,
     catalogue: openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView<'_>,
     root: Option<Entity>,
-    placement: &mut PlacedObjectFootprintOccupancyIndex,
+    placement: &PlacedObjectFootprintOccupancyIndex,
     scratch: &mut ObjectPlacementCellCollectionScratch,
     footprints: &ScenePlacementFootprints,
     prefabs: &Assets<ScenePrefabAsset>,
@@ -50,7 +47,6 @@ pub(super) fn apply_prepared_placed_object_creation_edit(
         &Transform,
         &PlacedObjectFootprintOccupancy,
     )>,
-    pending_created_definitions: &HashMap<Entity, AssetId>,
     stomped_occupants: &[Entity],
     repeat_placement: bool,
     tool: &mut ConstructionTool,
@@ -78,8 +74,7 @@ pub(super) fn apply_prepared_placed_object_creation_edit(
                     let occupant = placed
                         .get(entity)
                         .ok()
-                        .map(|(_, placeable, _, _)| placeable.definition)
-                        .or_else(|| pending_created_definitions.get(&entity).copied());
+                        .map(|(_, placeable, _, _)| placeable.definition);
                     object_placement_stomp_action(definition, catalogue, occupant)
                         != PlacementStompAction::Allow
                 })
@@ -102,7 +97,6 @@ pub(super) fn apply_prepared_placed_object_creation_edit(
     else {
         return false;
     };
-    placement.reserve(edit.cells.len());
     let spawned = spawn_loaded_scene_prefab_as_world_instance(
         commands,
         prefab,
@@ -150,9 +144,6 @@ pub(super) fn apply_prepared_placed_object_creation_edit(
             WorldMember { root },
             ChildOf(spawned),
         ));
-    }
-    for cell in edit.cells.iter().copied() {
-        placement.insert_entity_into_cell(cell, spawned);
     }
     edit.applied_entity = Some(spawned);
     if edit.mutation == PreparedObjectPlacementEditMutationKind::Create {

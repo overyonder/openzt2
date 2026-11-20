@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use openzt2_zoo_state::topology::topology_graph_types::FenceSegment;
 
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
@@ -6,7 +7,6 @@ use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and
 use openzt2_zoo_state::topology::fence_segment_presentation_types::FenceTerrainEndpointPresentationCells;
 use openzt2_zoo_state::topology::gate_operation_types::Gate;
 use openzt2_zoo_state::topology::gate_operation_types::GateMechanism;
-use openzt2_zoo_state::topology::topology_graph_types::FenceEdge;
 use openzt2_zoo_state::topology::topology_graph_types::PathTile;
 use openzt2_zoo_state::topology::topology_graph_types::TileSurface;
 use openzt2_zoo_state::topology::topology_graph_types::TopologyGrid;
@@ -23,7 +23,7 @@ pub(super) fn hydrate_save_loaded_topology_definition_facts(
     nodes: Query<&TopologyNode>,
     fences: Query<(
         Entity,
-        &FenceEdge,
+        FenceSegment,
         Option<&Gate>,
         Option<&GateMechanism>,
         Option<&Transform>,
@@ -36,7 +36,7 @@ pub(super) fn hydrate_save_loaded_topology_definition_facts(
         return;
     };
     for (entity, edge, gate, mechanism, transform, endpoint_cells, visibility) in &fences {
-        let (Ok(a), Ok(b)) = (nodes.get(edge.a), nodes.get(edge.b)) else {
+        let (Ok(a), Ok(b)) = (nodes.get(edge.a()), nodes.get(edge.b())) else {
             continue;
         };
         if definitions.find_fence(edge.definition).is_none() {

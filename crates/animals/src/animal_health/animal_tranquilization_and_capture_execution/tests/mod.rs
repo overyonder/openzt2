@@ -1,6 +1,5 @@
 use super::*;
 use openzt2_game_data::AssetId;
-use openzt2_zoo_state::staff::staff_employment_types::AvailableForWork;
 use openzt2_zoo_state::staff::staff_lifecycle_messages::StaffJobCancelled;
 
 fn capture_app() -> (App, CaptureAnimalRequest) {
@@ -43,7 +42,6 @@ fn capture_app() -> (App, CaptureAnimalRequest) {
             },
         ))
         .id();
-    app.world_mut().entity_mut(staff).insert(CurrentJob { job });
     let request = CaptureAnimalRequest {
         animal,
         staff,
@@ -91,7 +89,6 @@ fn cancelled_capture_preserves_emergency_state_and_releases_claim_in_either_syst
         );
         assert!(app.world().get_entity(request.job).is_err());
         assert!(app.world().get::<CurrentJob>(request.staff).is_none());
-        assert!(app.world().get::<AvailableForWork>(request.staff).is_some());
         assert!(app
             .world()
             .resource::<Messages<AnimalCaptured>>()

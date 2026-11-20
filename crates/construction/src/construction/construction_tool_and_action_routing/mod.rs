@@ -20,7 +20,7 @@ pub(super) fn construction_tool_active(tool: Res<ConstructionTool>) -> bool {
     *tool != ConstructionTool::Inspect
 }
 
-pub(super) fn select_construction_tool(
+pub(crate) fn select_construction_tool(
     mut selections: MessageReader<SelectConstructionTool>,
     mut tool: ResMut<ConstructionTool>,
     previews: Query<Entity, With<ConstructionPreview>>,

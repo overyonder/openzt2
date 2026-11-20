@@ -10,9 +10,7 @@ use openzt2_zoo_state::construction::construction_interaction_types::PlacementVa
 use openzt2_zoo_state::placement::placed_object_types::PlacedObjectDefinitionReference;
 use openzt2_zoo_state::placement::placement_preview_types::PlacementRotationRequest;
 use openzt2_zoo_state::placement::placement_preview_types::RelocatingPlacedObject;
-use openzt2_zoo_state::placement::placement_transaction_types::ApplyPreparedObjectPlacementEditRequest;
 use openzt2_zoo_state::placement::placement_transaction_types::CommitObjectPlacementPreviewRequest;
-use openzt2_zoo_state::placement::placement_transaction_types::ObjectPlacementEditApplicationAcknowledged;
 use openzt2_zoo_state::placement::placement_transaction_types::ObjectPlacementEditPreparationRejected;
 use openzt2_zoo_state::placement::placement_transaction_types::RemovePlacedObjectRequest;
 
@@ -69,17 +67,5 @@ pub(super) fn reject_object_placement_edit_preparation(
     rejected.write(ObjectPlacementEditPreparationRejected {
         transaction,
         reason,
-    });
-}
-
-pub(super) fn acknowledge_object_placement_edit_application(
-    acknowledged: &mut MessageWriter<ObjectPlacementEditApplicationAcknowledged>,
-    request: &ApplyPreparedObjectPlacementEditRequest,
-    accepted: bool,
-) {
-    acknowledged.write(ObjectPlacementEditApplicationAcknowledged {
-        transaction: request.transaction,
-        application: request.application,
-        accepted,
     });
 }

@@ -23,7 +23,6 @@ use openzt2_zoo_state::placement::placed_object_types::IndexedObjectPlacementCel
 use openzt2_zoo_state::placement::placed_object_types::PhysicsMovedPlacedObjectFootprint;
 use openzt2_zoo_state::placement::placed_object_types::PlacedObjectDefinitionReference;
 use openzt2_zoo_state::placement::placed_object_types::PlacedObjectFootprintOccupancy;
-use openzt2_zoo_state::placement::placement_occupancy_index::PlacedObjectFootprintOccupancyIndex;
 
 /// Projects loaded placement facts onto objects created by world hydration or
 /// save restoration. The indexed cells track the contribution of each entity.
@@ -99,11 +98,10 @@ pub(super) fn hydrate_placed_object_placement_components(
 
 type PlacedFootprintSources = (
     Entity,
-    &'static PersistentId,
     Ref<'static, PlacedObjectDefinitionReference>,
     &'static Transform,
     &'static mut PlacedObjectFootprintOccupancy,
-    &'static mut IndexedObjectPlacementCells,
+    Option<&'static IndexedObjectPlacementCells>,
     Option<Ref<'static, PrefabSourceAssetHandle>>,
 );
 
@@ -114,7 +112,7 @@ type ChangedPlacedFootprintSource = Or<(
 )>;
 
 pub(super) fn synchronize_placed_footprints(
-    mut index: ResMut<PlacedObjectFootprintOccupancyIndex>,
+    mut commands: Commands,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     footprints: Res<ScenePlacementFootprints>,
@@ -139,7 +137,7 @@ pub(super) fn synchronize_placed_footprints(
         let mut all = placed.p0();
         refresh_changed_placed_footprints(
             all.iter_mut()
-                .filter(|(entity, _, placeable, _, occupancy, _, prefab)| {
+                .filter(|(entity, placeable, _, occupancy, _, prefab)| {
                     definitions_changed
                         || placeable.is_changed()
                         || occupancy.is_changed()
@@ -150,7 +148,7 @@ pub(super) fn synchronize_placed_footprints(
                 }),
             catalogue,
             &footprints,
-            &mut index,
+            &mut commands,
             &mut scratch,
         );
     } else {
@@ -158,7 +156,7 @@ pub(super) fn synchronize_placed_footprints(
             placed.p1().iter_mut(),
             catalogue,
             &footprints,
-            &mut index,
+            &mut commands,
             &mut scratch,
         );
     }
@@ -168,12 +166,10 @@ fn refresh_changed_placed_footprints<'w, 's>(
     changed: impl Iterator<Item = bevy::ecs::query::QueryItem<'w, 's, PlacedFootprintSources>>,
     catalogue: WorldDefinitionsView<'_>,
     footprints: &ScenePlacementFootprints,
-    index: &mut ResMut<PlacedObjectFootprintOccupancyIndex>,
+    commands: &mut Commands,
     scratch: &mut Vec<IVec2>,
 ) {
-    let mut changed = changed.collect::<Vec<_>>();
-    changed.sort_unstable_by_key(|(_, id, ..)| id.0);
-    for (entity, _, placeable, transform, mut occupancy, mut cells, prefab) in changed {
+    for (entity, placeable, transform, mut occupancy, cells, prefab) in changed {
         refresh_occupied_cells(
             entity,
             placeable.definition,
@@ -182,15 +178,15 @@ fn refresh_changed_placed_footprints<'w, 's>(
             catalogue,
             footprints,
             &mut occupancy,
-            &mut cells,
-            index,
+            cells,
+            commands,
             scratch,
         );
     }
 }
 
 pub(super) fn synchronize_physics_moved_object_footprints_with_occupancy_index(
-    mut index: ResMut<PlacedObjectFootprintOccupancyIndex>,
+    mut commands: Commands,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     footprints: Res<ScenePlacementFootprints>,
@@ -203,7 +199,7 @@ pub(super) fn synchronize_physics_moved_object_footprints_with_occupancy_index(
     let Some(catalogue) = active_definitions.get(&definitions) else {
         return;
     };
-    for (entity, _, placeable, transform, mut occupancy, mut cells, prefab) in &mut moving {
+    for (entity, placeable, transform, mut occupancy, cells, prefab) in &mut moving {
         refresh_occupied_cells(
             entity,
             placeable.definition,
@@ -212,8 +208,8 @@ pub(super) fn synchronize_physics_moved_object_footprints_with_occupancy_index(
             catalogue,
             &footprints,
             &mut occupancy,
-            &mut cells,
-            &mut index,
+            cells,
+            &mut commands,
             &mut scratch,
         );
     }
@@ -227,8 +223,8 @@ fn refresh_occupied_cells(
     catalogue: WorldDefinitionsView<'_>,
     footprints: &ScenePlacementFootprints,
     occupancy: &mut Mut<PlacedObjectFootprintOccupancy>,
-    indexed: &mut Mut<IndexedObjectPlacementCells>,
-    index: &mut ResMut<PlacedObjectFootprintOccupancyIndex>,
+    indexed: Option<&IndexedObjectPlacementCells>,
+    commands: &mut Commands,
     scratch: &mut Vec<IVec2>,
 ) {
     let next = resolve_object_placeable_definition(catalogue, definition).and_then(|definition| {
@@ -253,26 +249,9 @@ fn refresh_occupied_cells(
     } else {
         &[]
     };
-    if indexed.0.as_ref() == next_cells {
-        return;
-    }
-    for cell in indexed.0.iter().copied() {
-        index.remove_entity_from_cell(cell, entity);
-    }
-    for cell in next_cells.iter().copied() {
-        index.insert_entity_into_cell(cell, entity);
-    }
-    indexed.0 = next_cells.into();
-}
-
-pub(super) fn remove_indexed_placement_footprint(
-    removed: On<Remove<IndexedObjectPlacementCells>>,
-    placed: Query<&IndexedObjectPlacementCells>,
-    mut index: ResMut<PlacedObjectFootprintOccupancyIndex>,
-) {
-    if let Ok(indexed) = placed.get(removed.entity) {
-        for cell in indexed.0.iter().copied() {
-            index.remove_entity_from_cell(cell, removed.entity);
-        }
+    if indexed.is_none_or(|cells| cells.0.as_ref() != next_cells) {
+        commands
+            .entity(entity)
+            .insert(IndexedObjectPlacementCells(next_cells.into()));
     }
 }

@@ -4,7 +4,6 @@ use bevy::gltf::Gltf;
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use openzt2_zoo_state::placement::object_placement_geometry::ScenePlacementFootprints;
-use openzt2_zoo_state::placement::placed_object_types::IndexedObjectPlacementCells;
 
 use openzt2_game_data::world_definitions::object_placement::placement_stomp_rules::PlacementStompAction;
 use openzt2_game_data::AssetId;
@@ -15,13 +14,12 @@ use openzt2_game_assets::world_definitions::world_definition_document_asset_and_
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::ConstructionPlacementPolicy;
 use openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::ConstructionTool;
-use openzt2_zoo_state::construction::construction_transaction_types::EditApplication;
+use openzt2_zoo_state::construction::construction_transaction_types::{EditApplication, RollbackContext};
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 use openzt2_world_state::world_spawn::prefab_model_readiness::first_missing_prefab_collider_model_asset_id;
 use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 
 use crate::placement::object_placement_edit_direction::object_placement_edit_application_creates_entity;
-use crate::placement::object_placement_request_routing::acknowledge_object_placement_edit_application;
 use crate::placement::placed_object_creation_edit_application::apply_prepared_placed_object_creation_edit;
 use crate::placement::placed_object_relocation_edit_application::apply_prepared_placed_object_relocation_edit;
 use crate::placement::placed_object_removal_edit_application::apply_prepared_placed_object_removal_edit;
@@ -53,13 +51,104 @@ fn ordered_prepared_object_placement_mutation_indices(
     })
 }
 
-/// Routes each accepted edit to its mutation-specific application procedure.
+/// Materialize each ordered mutation before the next reads the live footprint.
 pub(super) fn apply_prepared_object_placement_edits(
     mut commands: Commands,
     mut requests: MessageReader<ApplyPreparedObjectPlacementEditRequest>,
+) {
+    for request in requests.read().copied() {
+        commands.queue(move |world: &mut World| {
+            let accepted = apply_placement_batch(world, request);
+            world.write_message(ObjectPlacementEditApplicationAcknowledged {
+                transaction: request.transaction,
+                application: request.application,
+                accepted,
+            });
+        });
+    }
+}
+
+fn apply_placement_batch(
+    world: &mut World,
+    request: ApplyPreparedObjectPlacementEditRequest,
+) -> bool {
+    let Some(indices) = world
+        .run_system_cached_with(preflight_placement_batch, request)
+        .ok()
+        .flatten()
+    else {
+        return false;
+    };
+    let mut applied = Vec::with_capacity(indices.len());
+    for index in indices {
+        if world
+            .run_system_cached_with(commit_placement_mutation, (request, index))
+            .unwrap_or(false)
+        {
+            applied.push(index);
+            continue;
+        }
+        let rollback = ApplyPreparedObjectPlacementEditRequest {
+            application: EditApplication::FailureRollback,
+            ..request
+        };
+        for index in applied.into_iter().rev() {
+            let restored = world
+                .run_system_cached_with(commit_placement_mutation, (rollback, index))
+                .unwrap_or(false);
+            debug_assert!(restored, "accepted placement mutation must roll back");
+        }
+        return false;
+    }
+    true
+}
+
+fn preflight_placement_batch(
+    In(request): In<ApplyPreparedObjectPlacementEditRequest>,
+    edits: Query<(&PreparedObjectPlacementEdit, Option<&RollbackContext>)>,
+    roots: Query<Entity, With<WorldRoot>>,
+    placement: Res<PlacedObjectFootprintOccupancyIndex>,
+    mut scratch: ResMut<ObjectPlacementCellCollectionScratch>,
+    definitions: Res<Assets<WorldDefinitionAsset>>,
+    active_definitions: Res<WorldDefinitions>,
+    (prefabs, footprints): (Res<Assets<ScenePrefabAsset>>, Res<ScenePlacementFootprints>),
+    models: Res<Assets<Gltf>>,
+    placed: Query<(
+        &PersistentId,
+        &PlacedObjectDefinitionReference,
+        &Transform,
+        &PlacedObjectFootprintOccupancy,
+    )>,
+) -> Option<Vec<usize>> {
+    let (edit, rollback) = edits.get(request.transaction).ok()?;
+    let forward = matches!(
+        request.application,
+        EditApplication::InitialCommit | EditApplication::Redo
+    ) || (request.application == EditApplication::FailureRollback
+        && rollback.is_some_and(|rollback| rollback.failed_application == EditApplication::Undo));
+    let indices = ordered_prepared_object_placement_mutation_indices(edit.mutations.len(), forward);
+    preflight_prepared_object_placement_mutations(
+        &request,
+        edit,
+        forward,
+        active_definitions.get(&definitions)?,
+        roots.single().ok(),
+        &placement,
+        &mut scratch,
+        &footprints,
+        &prefabs,
+        &models,
+        &placed,
+    )
+    .then(|| indices.collect())
+}
+
+fn commit_placement_mutation(
+    In((request, index)): In<(ApplyPreparedObjectPlacementEditRequest, usize)>,
+    mut commands: Commands,
     mut edits: Query<&mut PreparedObjectPlacementEdit>,
     roots: Query<Entity, With<WorldRoot>>,
-    mut placement: ResMut<PlacedObjectFootprintOccupancyIndex>,
+    placement: Res<PlacedObjectFootprintOccupancyIndex>,
     mut scratch: ResMut<ObjectPlacementCellCollectionScratch>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
@@ -71,106 +160,39 @@ pub(super) fn apply_prepared_object_placement_edits(
         &mut Transform,
         &mut PlacedObjectFootprintOccupancy,
     )>,
-    mut indexed_cells: Query<&mut IndexedObjectPlacementCells>,
     policy: Res<ConstructionPlacementPolicy>,
     mut tool: ResMut<ConstructionTool>,
     mut object_placed: MessageWriter<ObjectPlacementCommitted>,
-    mut acknowledged: MessageWriter<ObjectPlacementEditApplicationAcknowledged>,
-) {
-    let catalogue = active_definitions.get(&definitions);
-    for request in requests.read() {
-        let accepted = catalogue
-            .and_then(|catalogue| {
-                let mut edit = edits.get_mut(request.transaction).ok()?;
-                if !preflight_prepared_object_placement_mutations(
-                    request,
-                    &edit,
-                    catalogue,
-                    roots.single().ok(),
-                    &placement,
-                    &mut scratch,
-                    &footprints,
-                    &prefabs,
-                    &models,
-                    &placed,
-                ) {
-                    return Some(false);
-                }
-                let forward = matches!(
-                    request.application,
-                    openzt2_zoo_state::construction::construction_transaction_types::EditApplication::InitialCommit
-                        | openzt2_zoo_state::construction::construction_transaction_types::EditApplication::Redo
-                );
-                let mutation_indices = ordered_prepared_object_placement_mutation_indices(
-                    edit.mutations.len(),
-                    forward,
-                );
-                let mut applied_mutation_indices = Vec::with_capacity(edit.mutations.len());
-                let mut pending_created_definitions = HashMap::new();
-                let mut accepted = true;
-                for mutation_index in mutation_indices {
-                    if apply_prepared_object_placement_mutation(
-                            &mut commands,
-                            request,
-                            &mut edit.mutations[mutation_index],
-                            catalogue,
-                            roots.single().ok(),
-                            &mut placement,
-                            &mut scratch,
-                            &footprints,
-                            &prefabs,
-                            &models,
-                            &mut placed,
-                            &mut indexed_cells,
-                            &mut pending_created_definitions,
-                            policy.repeat_placement,
-                            &mut tool,
-                            &mut object_placed,
-                        ) {
-                        applied_mutation_indices.push(mutation_index);
-                    } else {
-                        accepted = false;
-                        break;
-                    }
-                }
-                if !accepted {
-                    let rollback_request = ApplyPreparedObjectPlacementEditRequest {
-                        transaction: request.transaction,
-                        application: openzt2_zoo_state::construction::construction_transaction_types::EditApplication::FailureRollback,
-                    };
-                    for mutation_index in applied_mutation_indices.into_iter().rev() {
-                        let rolled_back = apply_prepared_object_placement_mutation(
-                            &mut commands,
-                            &rollback_request,
-                            &mut edit.mutations[mutation_index],
-                            catalogue,
-                            roots.single().ok(),
-                            &mut placement,
-                            &mut scratch,
-                            &footprints,
-                            &prefabs,
-                            &models,
-                            &mut placed,
-                            &mut indexed_cells,
-                            &mut pending_created_definitions,
-                            policy.repeat_placement,
-                            &mut tool,
-                            &mut object_placed,
-                        );
-                        debug_assert!(rolled_back, "accepted placement mutation must roll back");
-                    }
-                }
-                Some(accepted)
-            })
-            .unwrap_or(false);
-        acknowledge_object_placement_edit_application(&mut acknowledged, request, accepted);
-    }
+) -> bool {
+    let (Some(catalogue), Ok(mut edit)) = (
+        active_definitions.get(&definitions),
+        edits.get_mut(request.transaction),
+    ) else {
+        return false;
+    };
+    apply_prepared_object_placement_mutation(
+        &mut commands,
+        &request,
+        &mut edit.mutations[index],
+        catalogue,
+        roots.single().ok(),
+        &placement,
+        &mut scratch,
+        &footprints,
+        &prefabs,
+        &models,
+        &mut placed,
+        policy.repeat_placement,
+        &mut tool,
+        &mut object_placed,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
 fn preflight_prepared_object_placement_mutations(
     request: &ApplyPreparedObjectPlacementEditRequest,
     edit: &PreparedObjectPlacementEdit,
+    forward: bool,
     catalogue: openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView<'_>,
     root: Option<Entity>,
     placement: &PlacedObjectFootprintOccupancyIndex,
@@ -181,18 +203,13 @@ fn preflight_prepared_object_placement_mutations(
     placed: &Query<(
         &PersistentId,
         &PlacedObjectDefinitionReference,
-        &mut Transform,
-        &mut PlacedObjectFootprintOccupancy,
+        &Transform,
+        &PlacedObjectFootprintOccupancy,
     )>,
 ) -> bool {
-    let forward = matches!(
-        request.application,
-        openzt2_zoo_state::construction::construction_transaction_types::EditApplication::InitialCommit
-            | openzt2_zoo_state::construction::construction_transaction_types::EditApplication::Redo
-    );
     let indices = ordered_prepared_object_placement_mutation_indices(edit.mutations.len(), forward);
     let mut removed_entities = bevy::platform::collections::HashSet::new();
-    let mut projected_created_cells = HashMap::new();
+    let mut projected_created_cells: HashMap<IVec2, Vec<AssetId>> = HashMap::new();
     for index in indices {
         let mutation = &edit.mutations[index];
         let target = find_prepared_object_placement_mutation_entity(mutation, placement, placed);
@@ -249,14 +266,19 @@ fn preflight_prepared_object_placement_mutations(
                         object_placement_stomp_action(definition, catalogue, target)
                             != PlacementStompAction::Allow
                     });
-                let projected_blocked = projected_created_cells.get(&cell).is_some_and(|target| {
-                    object_placement_stomp_action(definition, catalogue, Some(*target))
-                        != PlacementStompAction::Allow
+                let projected_blocked = projected_created_cells.get(&cell).is_some_and(|targets| {
+                    targets.iter().any(|&target| {
+                        object_placement_stomp_action(definition, catalogue, Some(target))
+                            != PlacementStompAction::Allow
+                    })
                 });
                 if existing_blocked || projected_blocked {
                     return false;
                 }
-                projected_created_cells.insert(cell, mutation.definition);
+                projected_created_cells
+                    .entry(cell)
+                    .or_default()
+                    .push(mutation.definition);
             }
         } else {
             let Some(target) = target else {
@@ -300,8 +322,8 @@ fn find_prepared_object_placement_mutation_entity(
     placed: &Query<(
         &PersistentId,
         &PlacedObjectDefinitionReference,
-        &mut Transform,
-        &mut PlacedObjectFootprintOccupancy,
+        &Transform,
+        &PlacedObjectFootprintOccupancy,
     )>,
 ) -> Option<Entity> {
     edit.applied_entity
@@ -324,7 +346,7 @@ fn apply_prepared_object_placement_mutation(
     edit: &mut PreparedObjectPlacementMutation,
     catalogue: openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView<'_>,
     root: Option<Entity>,
-    placement: &mut PlacedObjectFootprintOccupancyIndex,
+    placement: &PlacedObjectFootprintOccupancyIndex,
     scratch: &mut ObjectPlacementCellCollectionScratch,
     footprints: &ScenePlacementFootprints,
     prefabs: &Assets<ScenePrefabAsset>,
@@ -335,8 +357,6 @@ fn apply_prepared_object_placement_mutation(
         &mut Transform,
         &mut PlacedObjectFootprintOccupancy,
     )>,
-    indexed_cells: &mut Query<&mut IndexedObjectPlacementCells>,
-    pending_created_definitions: &mut HashMap<Entity, AssetId>,
     repeat_placement: bool,
     tool: &mut ConstructionTool,
     object_placed: &mut MessageWriter<ObjectPlacementCommitted>,
@@ -350,7 +370,6 @@ fn apply_prepared_object_placement_mutation(
             placement,
             scratch,
             footprints,
-            indexed_cells,
             placed,
         );
         if accepted && request.application == EditApplication::InitialCommit {
@@ -374,7 +393,7 @@ fn apply_prepared_object_placement_mutation(
         request.application,
         entity_exists,
     ) {
-        let accepted = apply_prepared_placed_object_creation_edit(
+        apply_prepared_placed_object_creation_edit(
             commands,
             request.transaction,
             edit,
@@ -386,22 +405,12 @@ fn apply_prepared_object_placement_mutation(
             prefabs,
             models,
             &placed.as_readonly(),
-            pending_created_definitions,
             &[],
             repeat_placement,
             tool,
             object_placed,
-        );
-        if accepted {
-            if let Some(entity) = edit.applied_entity {
-                pending_created_definitions.insert(entity, edit.definition);
-            }
-        }
-        accepted
+        )
     } else {
-        if let Some(entity) = edit.applied_entity {
-            pending_created_definitions.remove(&entity);
-        }
         apply_prepared_placed_object_removal_edit(
             commands, edit, catalogue, placement, scratch, footprints, placed,
         )

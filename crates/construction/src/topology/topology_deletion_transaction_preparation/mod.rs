@@ -1,6 +1,9 @@
 use bevy::prelude::*;
 use openzt2_game_data::AssetId;
 use openzt2_zoo_state::aquatic::aquatic_simulation_types::TankWallTopHeight;
+use openzt2_zoo_state::topology::topology_graph_types::{
+    FenceSegment, FencesEndingHere, FencesStartingHere, IncomingPortals,
+};
 
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
@@ -16,7 +19,6 @@ use openzt2_zoo_state::topology::topology_edit_types::TopologyEdit;
 use openzt2_zoo_state::topology::topology_edit_types::TopologyEditPreparationRejected;
 use openzt2_zoo_state::topology::topology_edit_types::TopologyEditPrepared;
 use openzt2_zoo_state::topology::topology_edit_types::TopologySnapshot;
-use openzt2_zoo_state::topology::topology_graph_types::FenceEdge;
 use openzt2_zoo_state::topology::topology_graph_types::PathTile;
 use openzt2_zoo_state::topology::topology_graph_types::Portal;
 use openzt2_zoo_state::topology::topology_graph_types::TopologyNode;
@@ -59,7 +61,7 @@ pub(super) fn prepare_topology_deletion_transaction(
     topology: Query<(
         Entity,
         Option<&TopologyNode>,
-        Option<&FenceEdge>,
+        Option<FenceSegment>,
         Option<&PathTile>,
         Option<&Gate>,
         Option<&Portal>,
@@ -67,6 +69,11 @@ pub(super) fn prepare_topology_deletion_transaction(
         &PersistentId,
     )>,
     persistent: Query<(Entity, &PersistentId)>,
+    dependents: Query<(
+        Option<&FencesStartingHere>,
+        Option<&FencesEndingHere>,
+        Option<&IncomingPortals>,
+    )>,
     wall_tops: Query<&TankWallTopHeight>,
     mut prepared: MessageWriter<TopologyEditPrepared>,
     mut rejected: MessageWriter<TopologyEditPreparationRejected>,
@@ -98,7 +105,7 @@ pub(super) fn prepare_topology_deletion_transaction(
             });
         }
         if let Some(fence) = fence {
-            let Some(a) = persistent.get(fence.a).ok().map(|(_, id)| *id) else {
+            let Some(a) = persistent.get(fence.a()).ok().map(|(_, id)| *id) else {
                 write_topology_edit_preparation_rejection(
                     request.transaction,
                     PlacementFailure::InvalidTopology,
@@ -106,7 +113,7 @@ pub(super) fn prepare_topology_deletion_transaction(
                 );
                 continue;
             };
-            let Some(b) = persistent.get(fence.b).ok().map(|(_, id)| *id) else {
+            let Some(b) = persistent.get(fence.b()).ok().map(|(_, id)| *id) else {
                 write_topology_edit_preparation_rejection(
                     request.transaction,
                     PlacementFailure::InvalidTopology,
@@ -148,65 +155,60 @@ pub(super) fn prepare_topology_deletion_transaction(
         }
 
         let mut valid = true;
-        for (
-            dependent_entity,
-            _,
-            edge,
-            _,
-            edge_gate,
-            dependent_portal,
-            dependent_protected,
-            dependent_id,
-        ) in &topology
-        {
-            if node.is_some() {
-                if let Some(edge) = edge {
-                    if edge.a != request.target && edge.b != request.target {
-                        // This edge is unrelated, but its portal may still
-                        // target the entity being deleted.
-                    } else {
-                        if dependent_protected.is_some() {
-                            valid = false;
-                            break;
-                        }
-                        let Some(a) = persistent.get(edge.a).ok().map(|(_, id)| *id) else {
-                            valid = false;
-                            break;
-                        };
-                        let Some(b) = persistent.get(edge.b).ok().map(|(_, id)| *id) else {
-                            valid = false;
-                            break;
-                        };
-                        if !removed
-                            .iter()
-                            .any(|snapshot| snapshot.id() == *dependent_id)
-                        {
-                            removed.push(TopologySnapshot::Fence {
-                                id: *dependent_id,
-                                definition: edge.definition,
-                                a,
-                                b,
-                                gate: edge_gate.copied(),
-                                wall_top: wall_tops.get(dependent_entity).ok().copied(),
-                            });
-                        }
-                    }
-                }
-            }
-            if dependent_entity != request.target
-                && dependent_portal.is_some_and(|portal| {
-                    portal.destination == request.target
-                        && !removed
-                            .iter()
-                            .any(|snapshot| snapshot.id() == *dependent_id)
-                })
+        let mut visited = bevy::ecs::entity::EntityHashSet::new();
+        visited.insert(request.target);
+        let mut dependencies = vec![request.target];
+        while let Some(target) = dependencies.pop() {
+            let Ok((starting, ending, portals)) = dependents.get(target) else {
+                continue;
+            };
+            for entity in starting
+                .into_iter()
+                .flat_map(|links| links.iter())
+                .chain(ending.into_iter().flat_map(|links| links.iter()))
+                .chain(portals.into_iter().flat_map(|links| links.iter()))
             {
-                let portal = dependent_portal.expect("checked above");
-                removed.push(TopologySnapshot::Portal {
-                    id: *dependent_id,
-                    destination: *id,
-                    bidirectional: portal.bidirectional,
-                });
+                if !visited.insert(entity) {
+                    continue;
+                }
+                let Ok((_, _, edge, _, gate, portal, protected, id)) = topology.get(entity) else {
+                    continue;
+                };
+                if protected.is_some() {
+                    valid = false;
+                    break;
+                }
+                if let Some(edge) = edge {
+                    let (Ok((_, a)), Ok((_, b))) =
+                        (persistent.get(edge.a()), persistent.get(edge.b()))
+                    else {
+                        valid = false;
+                        break;
+                    };
+                    removed.push(TopologySnapshot::Fence {
+                        id: *id,
+                        definition: edge.definition,
+                        a: *a,
+                        b: *b,
+                        gate: gate.copied(),
+                        wall_top: wall_tops.get(entity).ok().copied(),
+                    });
+                }
+                if let Some(portal) = portal {
+                    let Ok((_, destination)) = persistent.get(portal.destination) else {
+                        valid = false;
+                        break;
+                    };
+                    removed.push(TopologySnapshot::Portal {
+                        id: *id,
+                        destination: *destination,
+                        bidirectional: portal.bidirectional,
+                    });
+                }
+                dependencies.push(entity);
+            }
+            if !valid {
+                break;
             }
         }
         if !valid {

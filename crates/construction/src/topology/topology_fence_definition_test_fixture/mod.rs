@@ -32,6 +32,7 @@ pub(super) fn install_fence_definition_with_broken_variant(
             audio_cue_prefixes: Vec::new(),
             surface_effect_strength: None,
             presentation_caustic_policies: Vec::new(),
+            traversal_animation_manifests: Vec::new(),
             water_filter: None,
             supports_show_tricks: false,
             behavior_type_identifiers: Vec::new(),

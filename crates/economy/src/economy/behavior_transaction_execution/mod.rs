@@ -81,7 +81,11 @@ pub(super) fn execute_authored_behavior_transaction_steps(
     clock: Res<ZooClock>,
     objects: Query<(&DefinitionId, Option<&FacilityPriceIndex>)>,
     worlds: Query<&WorldMember>,
-    children: Query<&Children>,
+    tracker_indexes: Query<(
+        &super::saved_world_economy_trackers::WorldEconomyConfiguration,
+        Option<&super::saved_world_economy_trackers::WorldEconomyTrackerIndex>,
+    )>,
+    asset_server: Res<AssetServer>,
     trackers: Query<&BehaviorEconomyTracker>,
     mut wallets: Query<&mut Wallet>,
     mut tasks: Query<
@@ -116,20 +120,23 @@ pub(super) fn execute_authored_behavior_transaction_steps(
             let key = running
                 .tracker
                 .unwrap_or_else(|| AssetId::from_key("general"));
-            let entity = worlds
+            let configuration = worlds
                 .get(actor)
                 .ok()
-                .and_then(|world| children.get(world.root).ok())
-                .and_then(|children| {
-                    children.iter().find(|child| {
-                        trackers
-                            .get(*child)
-                            .is_ok_and(|tracker| tracker.name == key)
-                    })
-                });
+                .and_then(|world| tracker_indexes.get(world.root).ok());
+            let entity = configuration.and_then(|(_, index)| index?.0.get(&key).copied());
             let Some((entity, tracker)) = entity
                 .and_then(|entity| trackers.get(entity).ok().map(|tracker| (entity, tracker)))
             else {
+                if configuration.is_some_and(|(configuration, index)| {
+                    index.is_none()
+                        && !matches!(
+                            asset_server.load_state(configuration.0.id()),
+                            bevy::asset::LoadState::Failed(_)
+                        )
+                }) {
+                    continue;
+                }
                 fail_transaction(
                     actor,
                     pending.transaction,
@@ -284,7 +291,7 @@ pub(super) fn execute_authored_behavior_transaction_steps(
                 if let Some(current_job) = keeper_refill {
                     commands.entity(operation).insert(
                         super::keeper_refill_settlement::StagedBehaviorRefill {
-                            job: current_job.job,
+                            job: current_job.job(),
                             definition: object.expect("validated refill object").0.id,
                             continuation: running
                                 .keeper_refill

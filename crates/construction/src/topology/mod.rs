@@ -10,10 +10,9 @@ mod gate_state_application;
 mod loaded_topology_validation;
 pub mod path_curb_presentation;
 mod path_placement_highlight_presentation;
+mod path_presentation_neighborhood;
 mod path_support_hydration;
 mod path_surface_presentation;
-mod tank_boundary_projection;
-mod tank_boundary_types;
 mod tank_wall_rail_presentation;
 pub mod topology_construction_interaction;
 mod topology_construction_planning;
@@ -45,7 +44,6 @@ use crate::topology::path_surface_presentation::fit_ground_path_tiles_to_authore
 use crate::topology::path_surface_presentation::hydrate_elevated_path_surface_mesh_and_material_presentations;
 use crate::topology::path_surface_presentation::invalidate_ground_path_terrain_fitting_after_terrain_changes;
 use crate::topology::path_surface_presentation::ElevatedPathSurfacePresentationAssets;
-use crate::topology::tank_boundary_projection::synchronize_tank_boundary_relationships_after_habitat_region_changes;
 use crate::topology::topology_construction_interaction::apply_fence_placement_requests_to_construction_previews;
 use crate::topology::topology_construction_interaction::apply_path_placement_requests_to_construction_previews;
 use crate::topology::topology_construction_interaction::drive_selected_topology_placement_pointer_sequence;
@@ -72,7 +70,6 @@ use openzt2_zoo_state::topology::topology_graph_types::TopologyIndex;
 
 use bevy::prelude::*;
 
-use crate::construction::construction_domain_preparation_collection::collect_construction_domain_preparation_results;
 use openzt2_game_assets::application_lifecycle::GamePhase;
 use openzt2_world_state::application_schedule::FixedGameSet;
 use openzt2_world_state::application_schedule::GameSet;
@@ -85,20 +82,25 @@ pub struct TopologyPlugin;
 
 impl Plugin for TopologyPlugin {
     fn build(&self, app: &mut App) {
+        use openzt2_zoo_state::topology::persistent_edit_lookup::PersistentEditLookupPlugin;
+        if !app.is_plugin_added::<PersistentEditLookupPlugin>() {
+            app.add_plugins(PersistentEditLookupPlugin);
+        }
         app.init_resource::<TopologyIndex>()
             .init_resource::<TopologyGrid>()
+            .add_observer(detach_removed_fence_endpoints)
+            .add_observer(despawn_fence_with_removed_endpoint)
             .add_observer(path_support_hydration::remove_supports_when_path_tile_is_removed)
             .add_observer(fence_construction_preview_presentation::remove_fence_segments_on_preview_removal)
             .add_observer(tank_wall_rail_presentation::remove_tank_wall_rails_on_component_removal)
             .add_observer(topology_construction_interaction::drop_prompt_candidates_when_fence_component_is_removed)
-            .add_observer(tank_boundary_projection::remove_memberships_when_tank_is_removed)
-            .add_observer(tank_boundary_projection::remove_memberships_when_tank_wall_is_removed)
             .init_resource::<ElevatedPathSurfacePresentationAssets>()
             .init_resource::<path_placement_highlight_presentation::PathPlacementHighlightAssets>()
             .add_message::<PlaceFence>()
             .add_message::<PlacePath>()
             .add_message::<SetGateState>()
             .add_message::<TopologyChanged>()
+            .add_message::<openzt2_zoo_state::topology::topology_edit_types::FenceConnectivityChanged>()
             .add_message::<openzt2_zoo_state::topology::topology_edit_types::PathConnectivityChanged>()
             .add_message::<TopologyEditPrepared>()
             .add_message::<TopologyEditPreparationRejected>()
@@ -131,20 +133,29 @@ impl Plugin for TopologyPlugin {
                     reconcile_fence_construction_preview_presentation_segments,
                     present_fence_anchor_cursor,
                     invalidate_ground_path_terrain_fitting_after_terrain_changes,
-                    fit_ground_path_tiles_to_authored_terrain,
+                    fit_ground_path_tiles_to_authored_terrain
+                        .after(invalidate_ground_path_terrain_fitting_after_terrain_changes),
                     hydrate_elevated_path_surface_mesh_and_material_presentations,
                     invalidate_path_curb_presentations_after_topology_or_terrain_changes,
-                    hydrate_authored_path_curb_prefab_presentations,
-                    refresh_fence_segment_prefabs_after_topology_index_changes,
-                    hydrate_topology_prefab_presentations,
-                    fence_construction_preview_presentation::synchronize_fence_preview_visibility_with_pointer_capture,
-                    attach_fence_posts_to_hydrated_segment_models,
-                    attach_authored_animation_sets_to_resolved_gate_models,
-                    fit_fence_presentations_to_terrain_endpoint_heights,
-                    project_fence_construction_preview_validity_onto_prefab_model_tints,
-                    tank_wall_rail_presentation::present_changed_tank_wall_rails,
+                    hydrate_authored_path_curb_prefab_presentations
+                        .after(invalidate_path_curb_presentations_after_topology_or_terrain_changes)
+                        .after(fit_ground_path_tiles_to_authored_terrain),
+                    refresh_fence_segment_prefabs_after_topology_index_changes
+                        .after(hydrate_save_loaded_topology_definition_facts),
+                    hydrate_topology_prefab_presentations
+                        .after(reconcile_fence_construction_preview_presentation_segments)
+                        .after(refresh_fence_segment_prefabs_after_topology_index_changes)
+                        .after(hydrate_save_loaded_topology_definition_facts),
+                    fence_construction_preview_presentation::synchronize_fence_preview_visibility_with_pointer_capture
+                        .after(reconcile_fence_construction_preview_presentation_segments),
+                    attach_fence_posts_to_hydrated_segment_models.after(hydrate_topology_prefab_presentations),
+                    attach_authored_animation_sets_to_resolved_gate_models.after(hydrate_topology_prefab_presentations),
+                    fit_fence_presentations_to_terrain_endpoint_heights.after(hydrate_topology_prefab_presentations),
+                    project_fence_construction_preview_validity_onto_prefab_model_tints
+                        .after(hydrate_topology_prefab_presentations),
+                    tank_wall_rail_presentation::present_changed_tank_wall_rails
+                        .after(fit_fence_presentations_to_terrain_endpoint_heights),
                 )
-                    .chain()
                     .in_set(GameSet::Presentation),
             )
             .add_systems(
@@ -153,20 +164,34 @@ impl Plugin for TopologyPlugin {
                     .in_set(GameSet::Presentation),
             )
             .add_systems(
+                PostUpdate,
+                (
+                    crate::construction::capture_confirmed_preview::<topology_construction_preview_types::FenceDrawPlan>,
+                    crate::construction::capture_confirmed_preview::<topology_construction_preview_types::PathDrawPlan>,
+                ),
+            )
+            .add_systems(
+                FixedUpdate,
+                (
+                    crate::construction::clear_confirmed_previews::<topology_construction_preview_types::FenceDrawPlan>,
+                    crate::construction::clear_confirmed_previews::<topology_construction_preview_types::PathDrawPlan>,
+                )
+                    .after(FixedConstructionSet::Prepare)
+                    .before(FixedConstructionSet::Apply),
+            )
+            .add_systems(
                 FixedUpdate,
                 (
                     prepare_topology_construction_transaction
                         .after(
                             openzt2_zoo_state::construction::FixedConstructionTransactionMaterializationSet,
                         )
-                        .before(FixedConstructionPreparedDomainEditMaterializationSet)
-                        .before(collect_construction_domain_preparation_results),
+                        .before(FixedConstructionPreparedDomainEditMaterializationSet),
                     prepare_topology_deletion_transaction
                         .after(
                             openzt2_zoo_state::construction::FixedConstructionTransactionMaterializationSet,
                         )
-                        .before(FixedConstructionPreparedDomainEditMaterializationSet)
-                        .before(collect_construction_domain_preparation_results),
+                        .before(FixedConstructionPreparedDomainEditMaterializationSet),
                 )
                     .in_set(FixedConstructionSet::Prepare),
             )
@@ -195,15 +220,50 @@ impl Plugin for TopologyPlugin {
                 FixedUpdate,
                 (
                     project_gate_state_to_ready_animation_presentations,
-                    synchronize_tank_boundary_relationships_after_habitat_region_changes,
                     invalidate_path_supports_after_topology_or_terrain_changes,
-                    hydrate_authored_path_supports_at_sampled_terrain_height,
+                    hydrate_authored_path_supports_at_sampled_terrain_height
+                        .after(invalidate_path_supports_after_topology_or_terrain_changes),
                 )
-                    .chain()
                     .in_set(FixedGameSet::Cleanup),
             )
             .add_systems(OnExit(GamePhase::InGame), reset_topology_grid);
     }
+}
+
+fn detach_removed_fence_endpoints(
+    removed: On<Remove<openzt2_zoo_state::topology::topology_graph_types::FenceEdge>>,
+    mut commands: Commands,
+) {
+    use openzt2_zoo_state::topology::topology_graph_types::{FenceEdge, FenceEnd, FenceStart};
+    let entity = removed.entity;
+    commands.queue(move |world: &mut World| {
+        if world.get::<FenceEdge>(entity).is_none() {
+            if let Ok(mut entity) = world.get_entity_mut(entity) {
+                entity.remove::<(FenceStart, FenceEnd)>();
+            }
+        }
+    });
+}
+
+fn despawn_fence_with_removed_endpoint(
+    removed: On<
+        Remove<(
+            openzt2_zoo_state::topology::topology_graph_types::FenceStart,
+            openzt2_zoo_state::topology::topology_graph_types::FenceEnd,
+        )>,
+    >,
+    mut commands: Commands,
+) {
+    use openzt2_zoo_state::topology::topology_graph_types::{FenceEdge, FenceEnd, FenceStart};
+    let entity = removed.entity;
+    commands.queue(move |world: &mut World| {
+        if world.get::<FenceEdge>(entity).is_some()
+            && (world.get::<FenceStart>(entity).is_none()
+                || world.get::<FenceEnd>(entity).is_none())
+        {
+            let _ = world.despawn(entity);
+        }
+    });
 }
 
 fn reset_topology_grid(mut grid: ResMut<TopologyGrid>) {

@@ -1,3 +1,4 @@
+use super::path_presentation_neighborhood::{cells_for_region, maximum_path_step, terrain_region};
 use bevy::prelude::*;
 use openzt2_game_data::AssetId;
 
@@ -205,39 +206,58 @@ pub(super) fn invalidate_path_supports_after_topology_or_terrain_changes(
         openzt2_zoo_state::terrain::terrain_edit_types::TerrainChanged,
     >,
     terrain_chunks: Query<&TerrainChunk>,
-    paths: Query<(Entity, &PathTile, Option<&Children>), With<PathSupportHydrated>>,
+    paths: Query<(&PathTile, Option<&Children>), With<PathSupportHydrated>>,
     changed_paths: Query<Entity, (Changed<PathTile>, With<PathSupportHydrated>)>,
     supports: Query<(), With<PathSupport>>,
     grid: Res<TopologyGrid>,
+    index: Res<TopologyIndex>,
+    definitions: Res<Assets<WorldDefinitionAsset>>,
+    active_definitions: Res<WorldDefinitions>,
 ) {
-    let topology_changed = !topology_changes.is_empty();
-    topology_changes.clear();
-    let terrain_regions = terrain_changes
-        .read()
-        .filter_map(|change| {
-            let chunk = terrain_chunks.get(change.chunk).ok()?;
-            Some((
-                chunk.origin + (change.min.as_vec2() - Vec2::ONE) * chunk.spacing_m,
-                chunk.origin + (change.max.as_vec2() + Vec2::ONE) * chunk.spacing_m,
-            ))
-        })
-        .collect::<Vec<_>>();
-    if !topology_changed && terrain_regions.is_empty() && changed_paths.is_empty() {
+    let Some(definitions) = active_definitions.get(&definitions) else {
         return;
+    };
+    let mut affected: bevy::ecs::entity::EntityHashSet = changed_paths.iter().collect();
+    let reach_cells = IVec2::splat(maximum_path_step(definitions));
+    for change in topology_changes.read() {
+        let cell = change.0.xy();
+        affected.extend(
+            index
+                .paths_within(cell - reach_cells, cell + reach_cells)
+                .filter(|&entity| {
+                    paths
+                        .get(entity)
+                        .is_ok_and(|(path, _)| path.cell.z == change.0.z)
+                }),
+        );
     }
-    for (entity, path, children) in &paths {
-        let point = grid.cell_translation(path.cell).xz();
-        if topology_changed
-            || changed_paths.contains(entity)
-            || terrain_regions
-                .iter()
-                .any(|(min, max)| point.cmpge(*min).all() && point.cmple(*max).all())
-        {
-            commands.entity(entity).remove::<PathSupportHydrated>();
-            if let Some(children) = children {
-                for child in children.iter().filter(|child| supports.contains(*child)) {
-                    commands.entity(child).try_despawn();
-                }
+    let regions = terrain_changes
+        .read()
+        .filter_map(|change| terrain_region(change, &terrain_chunks));
+    let reach = definitions
+        .paths()
+        .flat_map(|path| {
+            [
+                path.support_column.as_ref(),
+                path.curve_support_column.as_ref(),
+            ]
+            .into_iter()
+            .flatten()
+            .map(|column| column.fit_lowest_radius_metres)
+        })
+        .fold(0.0_f32, f32::max);
+    for (min, max) in regions {
+        let (min, max) = cells_for_region(*grid, min, max, reach);
+        affected.extend(index.paths_within(min, max));
+    }
+    for entity in affected {
+        let Ok((_, children)) = paths.get(entity) else {
+            continue;
+        };
+        commands.entity(entity).remove::<PathSupportHydrated>();
+        if let Some(children) = children {
+            for child in children.iter().filter(|child| supports.contains(*child)) {
+                commands.entity(child).try_despawn();
             }
         }
     }

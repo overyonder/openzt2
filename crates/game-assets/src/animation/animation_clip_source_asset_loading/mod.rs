@@ -3,30 +3,20 @@ use std::{io, sync::Arc};
 
 use bevy::{
     asset::{io::Reader, AssetLoader, LoadContext},
-    gltf::{GltfLoader, GltfLoaderSettings},
     prelude::*,
 };
 
 use crate::{
-    model::bevy_gltf_loader_configuration::create_bevy_gltf_loader_for_lowered_source_assets,
     model_source::native_animation_source_lowering::lower_native_animation_source,
     source_document::animation_text_keys::parse_blue_fang_animation_text_key_sidecar_source,
 };
 
-use super::animation_set_asset_types::AnimationClipSourceAsset;
+use super::animation_set_asset_types::{
+    AnimationClipSourceAsset, AnimationTimelineCommand, AnimationTimelineKey,
+};
 
-#[derive(TypePath)]
-pub(super) struct AnimationClipSourceAssetLoader {
-    bevy_gltf_loader: GltfLoader,
-}
-
-impl FromWorld for AnimationClipSourceAssetLoader {
-    fn from_world(world: &mut World) -> Self {
-        Self {
-            bevy_gltf_loader: create_bevy_gltf_loader_for_lowered_source_assets(world),
-        }
-    }
-}
+#[derive(Default, TypePath)]
+pub(super) struct AnimationClipSourceAssetLoader;
 
 impl AssetLoader for AnimationClipSourceAssetLoader {
     type Asset = AnimationClipSourceAsset;
@@ -68,47 +58,56 @@ impl AssetLoader for AnimationClipSourceAssetLoader {
             )) => Vec::new(),
             Err(error) => return Err(io::Error::new(io::ErrorKind::InvalidData, error)),
         };
-        let (gltf_binary_bytes, authored_animation_clip_metadata) = lower_native_animation_source(
+        let (clip, mut authored_animation_clip_metadata) = lower_native_animation_source(
             &animation_source_asset_path,
             &animation_source_bytes,
             &authored_animation_text_keys,
         )
         .map_err(io::Error::other)?;
-        let loaded_animation_gltf = GltfLoader::load_gltf(
-            &self.bevy_gltf_loader,
-            &gltf_binary_bytes,
-            animation_clip_load_context,
-            &GltfLoaderSettings::default(),
-        )
-        .await
-        .map_err(io::Error::other)?;
-        let animation_clip_handle = loaded_animation_gltf
-            .animations
-            .into_iter()
-            .next()
-            .ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "animation source contains no clip",
-                )
-            })?;
-
-        let text_key_times_milliseconds = authored_animation_clip_metadata
-            .authored_animation_text_keys
-            .iter()
-            .map(|key| {
-                text_key_time_milliseconds(
-                    key,
-                    authored_animation_clip_metadata
-                        .duration_milliseconds
-                        .max(1),
-                )
-            })
-            .collect::<Arc<[u32]>>();
+        let marker_time = |name: &str| {
+            authored_animation_clip_metadata
+                .animation_markers
+                .iter()
+                .find(|marker| marker.marker_name.eq_ignore_ascii_case(name))
+                .map(|marker| marker.event_time_milliseconds as f32 / 1000.0)
+        };
+        let loop_bounds = marker_time("loop_start")
+            .zip(marker_time("loop_end"))
+            .filter(|(start, end)| start < end && *end <= clip.duration())
+            .map(|(start, end)| start..end);
+        let animation_clip_handle = animation_clip_load_context.add_labeled_asset("Clip", clip);
+        let (graph, animation_node) = AnimationGraph::from_clip(animation_clip_handle.clone());
+        let animation_graph = animation_clip_load_context.add_labeled_asset("Graph", graph);
+        let duration = authored_animation_clip_metadata
+            .duration_milliseconds
+            .max(1);
+        let mut timeline =
+            std::mem::take(&mut authored_animation_clip_metadata.authored_animation_text_keys)
+                .into_iter()
+                .filter(|key| !key.animation_text_commands.is_empty())
+                .map(|key| AnimationTimelineKey {
+                    milliseconds: text_key_time_milliseconds(&key, duration),
+                    commands: key
+                        .animation_text_commands
+                        .into_iter()
+                        .map(|command| AnimationTimelineCommand {
+                            joint: command.target_skeleton_joint_asset_key.map(|joint| {
+                                openzt2_game_data::AssetId::from_key(&joint.to_ascii_lowercase())
+                            }),
+                            action: Arc::new(command.animation_text_action),
+                        })
+                        .collect::<Vec<_>>()
+                        .into_boxed_slice(),
+                })
+                .collect::<Vec<_>>();
+        timeline.sort_by_key(|key| key.milliseconds);
         Ok(AnimationClipSourceAsset {
             authored_animation_clip_metadata: Arc::new(authored_animation_clip_metadata),
-            text_key_times_milliseconds,
+            timeline: timeline.into(),
             animation_clip_handle,
+            animation_graph,
+            animation_node,
+            loop_bounds,
         })
     }
 

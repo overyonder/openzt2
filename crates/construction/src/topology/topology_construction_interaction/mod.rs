@@ -1,7 +1,15 @@
+use super::topology_construction_planning::{
+    calculate_ground_path_construction_cells, validate_path_construction_cells,
+};
+use super::topology_construction_preview_types::{
+    terrain_change_cursor, FenceDrawPlan, PathDrawPlan, TopologyPlanVersion,
+};
+use crate::construction::construction_lifecycle::ConstructionActive;
 use bevy::ecs::system::SystemParam;
 use bevy::picking::pointer::{PointerButton, PointerInput};
 use bevy::prelude::*;
 use openzt2_interface_state::input::input_types::MousePointer;
+use openzt2_zoo_state::topology::topology_graph_types::FenceSegment;
 
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
@@ -16,8 +24,6 @@ use openzt2_zoo_state::construction::construction_tool_and_placement_policy_type
 use openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::FencePlacementShape;
 use openzt2_interface_state::information::catalogue_types::PurchaseChoice;
 use openzt2_zoo_state::construction::construction_transaction_types::ConstructionCommitted;
-use openzt2_zoo_state::construction::construction_transaction_types::EditCommitPhase;
-use openzt2_zoo_state::construction::construction_transaction_types::EditCommitProgress;
 use openzt2_zoo_state::terrain::terrain_chunk_types::EditedTerrainSamples;
 use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainChunk;
 use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainIndex;
@@ -49,8 +55,6 @@ mod tests {
     use super::*;
     use openzt2_game_data::AssetId;
     use openzt2_zoo_state::economy::money_types::Money;
-    use openzt2_zoo_state::topology::topology_graph_types::EdgeKey;
-
     #[test]
     fn next_fence_run_starts_at_built_endpoint_instead_of_unsnapped_pointer() {
         let definition = AssetId([1; 16]);
@@ -66,13 +70,13 @@ mod tests {
                 cell: accepted_endpoint,
             })
             .id();
+        let start = app
+            .world_mut()
+            .spawn(TopologyNode { cell: IVec3::ZERO })
+            .id();
         let wall = app
             .world_mut()
-            .spawn(FenceEdge {
-                definition,
-                a: Entity::PLACEHOLDER,
-                b: endpoint,
-            })
+            .spawn(FenceEdge::between(definition, start, endpoint))
             .id();
         let transaction = app
             .world_mut()
@@ -120,12 +124,16 @@ mod tests {
     #[test]
     fn gate_pointer_picks_the_nearest_fence_segment_or_prompted_enclosure_wall() {
         let grid = TopologyGrid::default();
-        let mut index = TopologyIndex::default();
+        let mut world = World::new();
+        world.init_resource::<TopologyIndex>();
         let near = EdgeKey::new(IVec3::ZERO, IVec3::new(4, 0, 0)).unwrap();
         let far = EdgeKey::new(IVec3::new(0, 3, 0), IVec3::new(4, 3, 0)).unwrap();
         for edge in [near, far] {
-            index.edges.insert(edge, Entity::PLACEHOLDER);
+            let a = world.spawn(TopologyNode { cell: edge.lo }).id();
+            let b = world.spawn(TopologyNode { cell: edge.hi }).id();
+            world.spawn(FenceEdge::between(AssetId::default(), a, b));
         }
+        let index = world.resource::<TopologyIndex>();
         let above = |cell: IVec3, offset: Vec3| grid.cell_translation(cell) + offset;
         let beside_near = above(
             IVec3::new(2, 0, 0),
@@ -134,11 +142,11 @@ mod tests {
                 * 0.4,
         );
         assert_eq!(
-            hovered_fence_edge(&index, grid, beside_near),
+            hovered_fence_edge(index, grid, beside_near),
             Some((near.lo, near.hi))
         );
         assert_eq!(
-            hovered_fence_edge(&index, grid, above(IVec3::new(20, 20, 0), Vec3::ZERO)),
+            hovered_fence_edge(index, grid, above(IVec3::new(20, 20, 0), Vec3::ZERO)),
             None
         );
         assert_eq!(
@@ -213,7 +221,7 @@ pub(super) fn drive_selected_topology_placement_pointer_sequence(
         (Entity, Option<&FencePreview>, Option<&PathPreview>),
         With<ConstructionPreview>,
     >,
-    pending_transactions: Query<&EditCommitProgress>,
+    pending_transactions: Query<(), With<ConstructionActive>>,
     mut fences: MessageWriter<PlaceFence>,
     mut paths: MessageWriter<PlacePath>,
     mut commits: MessageWriter<CommitConstruction>,
@@ -242,10 +250,7 @@ pub(super) fn drive_selected_topology_placement_pointer_sequence(
         ConstructionTool::Fence(definition) | ConstructionTool::Path(definition) => definition,
         _ => return,
     };
-    if pending_transactions
-        .iter()
-        .any(|progress| progress.phase != EditCommitPhase::Complete)
-    {
+    if !pending_transactions.is_empty() {
         return;
     }
     let (Ok(cursor), Ok(root)) = (cursors.single(), roots.single()) else {
@@ -383,7 +388,7 @@ pub(super) struct GatePromptWallCandidates(Vec<Entity>);
 pub(super) struct GatePromptQueries<'w, 's> {
     prompts: Query<'w, 's, &'static Children, With<RectangularEnclosureGatePrompt>>,
     candidates: Query<'w, 's, &'static GatePromptCandidateWall>,
-    walls: Query<'w, 's, &'static FenceEdge>,
+    walls: Query<'w, 's, FenceSegment>,
     nodes: Query<'w, 's, &'static TopologyNode>,
 }
 
@@ -395,8 +400,8 @@ impl GatePromptQueries<'_, '_> {
                 .walls
                 .get(self.candidates.get(candidate).ok()?.0)
                 .ok()?;
-            let first = self.nodes.get(wall.a).ok()?;
-            let second = self.nodes.get(wall.b).ok()?;
+            let first = self.nodes.get(wall.a()).ok()?;
+            let second = self.nodes.get(wall.b()).ok()?;
             EdgeKey::new(first.cell, second.cell)
         });
         nearest_fence_edge(keys, grid, world, f32::INFINITY)
@@ -423,7 +428,7 @@ pub(super) fn track_rectangular_enclosure_gate_prompt(
     active_definitions: Res<WorldDefinitions>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     applied: Query<&AppliedFenceTopology>,
-    walls: Query<(&FenceEdge, &WorldMember, Has<Gate>)>,
+    walls: Query<(FenceSegment, &WorldMember, Has<Gate>)>,
     prompts: Query<Entity, With<RectangularEnclosureGatePrompt>>,
     mut purchases: MessageWriter<PurchaseChoice>,
 ) {
@@ -499,7 +504,21 @@ fn hovered_fence_edge(
     grid: TopologyGrid,
     world: Vec3,
 ) -> Option<(IVec3, IVec3)> {
-    nearest_fence_edge(index.edges.keys().copied(), grid, world, 1.5)
+    const REACH_M: f32 = 1.5;
+    if !world.is_finite() || !grid.spacing_m.is_finite() || grid.spacing_m <= 0.0 {
+        return None;
+    }
+    let point = world.xz() - grid.origin;
+    let min = ((point - Vec2::splat(REACH_M)) / grid.spacing_m)
+        .floor()
+        .as_ivec2();
+    let max = ((point + Vec2::splat(REACH_M)) / grid.spacing_m)
+        .ceil()
+        .as_ivec2();
+    let edges = index
+        .fences_within(min, max)
+        .filter_map(|entity| index.fence_key(entity));
+    nearest_fence_edge(edges, grid, world, REACH_M)
 }
 
 fn nearest_fence_edge(
@@ -577,7 +596,7 @@ pub(super) fn restart_fence_preview_from_committed_endpoint(
     tool: Res<ConstructionTool>,
     grid: Res<TopologyGrid>,
     applied: Query<&AppliedFenceTopology>,
-    walls: Query<&FenceEdge>,
+    walls: Query<FenceSegment>,
     nodes: Query<&TopologyNode>,
     mut previews: Query<(
         Entity,
@@ -609,7 +628,7 @@ pub(super) fn restart_fence_preview_from_committed_endpoint(
                 .rev()
                 .filter_map(|wall| walls.get(*wall).ok())
                 .find(|wall| wall.definition == definition)
-                .and_then(|wall| nodes.get(wall.b).ok())
+                .and_then(|wall| nodes.get(wall.b()).ok())
                 .map(|node| node.cell)
         }) else {
             continue;
@@ -626,59 +645,184 @@ pub(super) fn restart_fence_preview_from_committed_endpoint(
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn evaluate_topology_construction_preview_validity(
+    mut commands: Commands,
     grid: Res<TopologyGrid>,
     index: Res<TopologyIndex>,
     active_definitions: Res<WorldDefinitions>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     terrain: Res<TerrainIndex>,
     terrain_assets: Res<Assets<TerrainAsset>>,
+    mut changes: MessageReader<openzt2_zoo_state::terrain::terrain_edit_types::TerrainChanged>,
+    terrain_messages: Res<Messages<openzt2_zoo_state::terrain::terrain_edit_types::TerrainChanged>>,
     terrain_chunks: Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
     gate_hosts: GateHostEdges,
     mut previews: Query<
         (
+            Entity,
             &mut ConstructionPreview,
-            Option<&FencePreview>,
-            Option<&PathPreview>,
+            Option<Ref<FencePreview>>,
+            Option<Ref<PathPreview>>,
+            Option<&mut FenceDrawPlan>,
+            Option<&mut PathDrawPlan>,
         ),
-        Or<(Changed<FencePreview>, Changed<PathPreview>)>,
+        Or<(With<FencePreview>, With<PathPreview>)>,
     >,
 ) {
+    let version = TopologyPlanVersion {
+        revisions: [
+            grid.last_changed(),
+            index.last_changed(),
+            active_definitions.last_changed(),
+            definitions.last_changed(),
+            terrain.last_changed(),
+            terrain_assets.last_changed(),
+        ],
+        terrain_changes: terrain_change_cursor(&terrain_messages),
+    };
+    let terrain_changed = changes.read().count() != 0;
+    let dirty = terrain_changed
+        || grid.is_changed()
+        || index.is_changed()
+        || terrain.is_changed()
+        || terrain_assets.is_changed()
+        || active_definitions.is_changed()
+        || definitions.is_changed();
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };
-    for (mut construction, fence, path) in &mut previews {
-        let result = match (fence, path) {
-            (Some(fence), None) if fence_definition_is_gate(definitions, fence.definition) => {
-                calculate_gate_replacement_plan(fence, &index, definitions, &gate_hosts)
-                    .map(|(_, cost)| cost)
-            }
-            (Some(fence), None) => calculate_fence_construction_plan(
-                fence,
-                &index,
-                *grid,
-                definitions,
-                &terrain,
-                &terrain_assets,
-                &terrain_chunks,
-                &gate_hosts,
-            )
-            .map(|(_, cost, ..)| cost),
-            (None, Some(path)) => calculate_path_construction_plan(
-                path,
-                &index,
-                *grid,
-                definitions,
-                &terrain,
-                &terrain_assets,
-                &terrain_chunks,
-            )
-            .map(|(_, cost)| cost),
-            _ => Err(PlacementFailure::InvalidTopology),
-        };
-        construction.validity = match result {
+    for (entity, mut preview, fence, path, fence_plan, path_plan) in &mut previews {
+        let validity = |result: Result<
+            openzt2_zoo_state::economy::money_types::Money,
+            PlacementFailure,
+        >| match result {
             Ok(cost) => PlacementValidity::Valid { cost },
             Err(reason) => PlacementValidity::Invalid(reason),
         };
+        let next = if let Some(fence) = fence {
+            if !dirty && !fence.is_changed() && fence_plan.is_some() {
+                continue;
+            }
+            let gate = fence_definition_is_gate(definitions, fence.definition);
+            let result = if gate {
+                calculate_gate_replacement_plan(&fence, &index, definitions, &gate_hosts).map(
+                    |(host, cost)| {
+                        (
+                            vec![fence.from, fence.to],
+                            cost,
+                            Some(host),
+                            None,
+                            Vec::new(),
+                        )
+                    },
+                )
+            } else {
+                calculate_fence_construction_plan(
+                    &fence,
+                    &index,
+                    *grid,
+                    definitions,
+                    &terrain,
+                    &terrain_assets,
+                    &terrain_chunks,
+                    &gate_hosts,
+                )
+                .map(|(cells, cost, gate, broken)| (cells, cost, None, gate, broken))
+            };
+            let (plan, validity) = match result {
+                Ok((cells, cost, replaced, gate, broken)) => (
+                    FenceDrawPlan {
+                        input: *fence,
+                        version,
+                        quote: Some((cost, gate, broken)),
+                        cells,
+                        replaced,
+                    },
+                    validity(Ok(cost)),
+                ),
+                Err(reason) => (
+                    FenceDrawPlan {
+                        input: *fence,
+                        version,
+                        quote: None,
+                        cells: Vec::new(),
+                        replaced: None,
+                    },
+                    validity(Err(reason)),
+                ),
+            };
+            if let Some(mut existing) = fence_plan {
+                existing.set_if_neq(plan);
+            } else {
+                commands.entity(entity).insert(plan);
+            }
+            validity
+        } else if let Some(path) = path {
+            if !dirty && !path.is_changed() && path_plan.is_some() {
+                continue;
+            }
+            let (cells, approved, next) = if let Some(definition) = definitions
+                .find_path(path.definition)
+                .filter(|path| !path.elevated)
+            {
+                match calculate_ground_path_construction_cells(
+                    path.from,
+                    path.to,
+                    definition.width_cm,
+                    definitions.topology_cell_size_cm(),
+                    &index,
+                ) {
+                    Ok(cells) => {
+                        let result = validate_path_construction_cells(
+                            cells.clone(),
+                            definition,
+                            &index,
+                            *grid,
+                            definitions,
+                            &terrain,
+                            &terrain_assets,
+                            &terrain_chunks,
+                        );
+                        match result {
+                            Ok((approved, cost)) => (cells, approved, validity(Ok(cost))),
+                            Err(reason) => (cells, Vec::new(), validity(Err(reason))),
+                        }
+                    }
+                    Err(reason) => (Vec::new(), Vec::new(), validity(Err(reason))),
+                }
+            } else {
+                let result = calculate_path_construction_plan(
+                    &path,
+                    &index,
+                    *grid,
+                    definitions,
+                    &terrain,
+                    &terrain_assets,
+                    &terrain_chunks,
+                );
+                match result {
+                    Ok((cells, cost)) => (cells.clone(), cells, validity(Ok(cost))),
+                    Err(reason) => (Vec::new(), Vec::new(), validity(Err(reason))),
+                }
+            };
+            let plan = PathDrawPlan {
+                input: *path,
+                version,
+                cells,
+                approved,
+                validity: next,
+            };
+            if let Some(mut existing) = path_plan {
+                existing.set_if_neq(plan);
+            } else {
+                commands.entity(entity).insert(plan);
+            }
+            next
+        } else {
+            continue;
+        };
+        if preview.validity != next {
+            preview.validity = next;
+        }
     }
 }
 

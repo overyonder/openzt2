@@ -1,5 +1,6 @@
 use bevy::ecs::entity::EntityHashSet;
 use bevy::prelude::*;
+use openzt2_zoo_state::topology::habitat_boundary_queries::HabitatBoundaryQueries;
 
 use openzt2_zoo_state::aquatic::tank_wall_ground_sampling::TankWallGroundSampling;
 use openzt2_zoo_state::habitat::habitat_types::HabitatChanged;
@@ -7,7 +8,7 @@ use openzt2_zoo_state::habitat::habitat_types::HabitatRegion;
 use openzt2_zoo_state::habitat::habitat_types::HabitatSummary;
 use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainChunk;
 use openzt2_zoo_state::terrain::terrain_edit_types::TerrainChanged;
-use openzt2_zoo_state::topology::topology_graph_types::{FenceEdge, TopologyNode};
+use openzt2_zoo_state::topology::topology_graph_types::{FenceSegment, TopologyNode};
 
 use super::aquatic_simulation_types::{Tank, TankEnvironment, TankGeometry, TankWallTopHeight};
 use openzt2_game_assets::world_definitions::{
@@ -31,7 +32,8 @@ pub(super) fn project_changed_habitat_and_terrain_geometry_into_tanks(
         ),
         With<Tank>,
     >,
-    fences: Query<(&FenceEdge, Option<&TankWallTopHeight>)>,
+    boundaries: HabitatBoundaryQueries,
+    fences: Query<(FenceSegment, Option<&TankWallTopHeight>)>,
     changed_wall_tops: Query<Entity, Changed<TankWallTopHeight>>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
@@ -77,20 +79,18 @@ pub(super) fn project_changed_habitat_and_terrain_geometry_into_tanks(
             }
         }
         let wall_top_changed = surface.is_some()
-            && region
-                .boundary_fence_entities
-                .iter()
-                .any(|wall| changed_walls.contains(wall));
+            && boundaries
+                .fences(tank)
+                .any(|wall| changed_walls.contains(&wall));
         if !changed_habitat && !terrain_changed && !wall_top_changed {
             continue;
         }
         let mut next_geometry = *geometry;
         let mut next_environment = *environment;
         if let Some(surface) = surface.filter(|_| wall_top_changed) {
-            let rim = region
-                .boundary_fence_entities
-                .iter()
-                .filter_map(|wall| fences.get(*wall).ok()?.1.map(|top| top.0))
+            let rim = boundaries
+                .fences(tank)
+                .filter_map(|wall| fences.get(wall).ok()?.1.map(|top| top.0))
                 .fold(f32::INFINITY, f32::min);
             if rim.is_finite() {
                 next_geometry.wall_height = rim;
@@ -102,7 +102,7 @@ pub(super) fn project_changed_habitat_and_terrain_geometry_into_tanks(
         }
         if changed_habitat || terrain_changed {
             let lowest_ground = if changed_habitat || ground_changed {
-                lowest_ground_under_boundary(region, &fences, &nodes, &ground)
+                lowest_ground_under_boundary(boundaries.fences(tank), &fences, &nodes, &ground)
             } else {
                 None
             };
@@ -120,15 +120,15 @@ pub(super) fn project_changed_habitat_and_terrain_geometry_into_tanks(
 }
 
 fn lowest_ground_under_boundary(
-    region: &HabitatRegion,
-    fences: &Query<(&FenceEdge, Option<&TankWallTopHeight>)>,
+    boundary: impl Iterator<Item = Entity>,
+    fences: &Query<(FenceSegment, Option<&TankWallTopHeight>)>,
     nodes: &Query<&TopologyNode>,
     ground: &TankWallGroundSampling,
 ) -> Option<f32> {
     let mut lowest = None::<f32>;
-    for fence in region.boundary_fence_entities.iter() {
-        let (edge, _) = fences.get(*fence).ok()?;
-        for node in [edge.a, edge.b] {
+    for fence in boundary {
+        let (edge, _) = fences.get(fence).ok()?;
+        for node in [edge.a(), edge.b()] {
             let height = ground.ground_height_at_topology_cell(nodes.get(node).ok()?.cell)?;
             lowest = Some(lowest.map_or(height, |lowest| lowest.min(height)));
         }

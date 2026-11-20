@@ -94,14 +94,14 @@ fn food_prop_attach_and_detach_keys_share_one_request_and_cancel_with_the_task()
                 gameplay_entity: actor,
             },
             AnimationPlaybackController {
+                preserve_seek_on_restart: false,
                 playback_generation: 2,
                 explicit_clip_request_id: Some(7),
                 animation_set_asset: Handle::default(),
                 animation_clip_asset_key: "Chew_Eat".into(),
-                elapsed_milliseconds: 0,
-                fractional_milliseconds: default(),
+
                 playback_speed_permille: 1000,
-                playback_state: Default::default(),
+
                 playback_repetition_policy: Default::default(),
                 playback_clock: Default::default(),
             },

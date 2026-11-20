@@ -1,4 +1,4 @@
-use bevy::prelude::*;
+use bevy::{ecs::change_detection::Tick, prelude::*};
 use openzt2_zoo_state::placement::object_placement_geometry::{
     ScenePlacementFootprintChanged, ScenePlacementFootprints,
 };
@@ -25,20 +25,35 @@ use super::stomped_object_edit_preparation::{
 };
 use crate::placement::ground_path_placement_stomp::GroundPathPlacementStomp;
 use openzt2_zoo_state::economy::money_types::Money;
-use openzt2_zoo_state::placement::object_placement_definition_queries::resolve_object_placeable_definition;
+use openzt2_zoo_state::placement::object_placement_definition_queries::{
+    collect_occupied_placement_cells_for_transform, resolve_object_placeable_definition,
+};
 use openzt2_zoo_state::placement::object_placement_validation::calculate_authored_object_placement_eighth_turns;
 use openzt2_zoo_state::placement::object_placement_validation::validate_object_placement_footprint_cells;
 use openzt2_zoo_state::placement::object_placement_validation::ObjectPlacementAuthoritativeFacts;
 use openzt2_zoo_state::placement::placed_object_types::IndexedObjectPlacementCells;
 use openzt2_zoo_state::placement::placement_occupancy_index::PlacedObjectFootprintOccupancyIndex;
 use openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementPreviewPermissionFacts;
-use openzt2_zoo_state::placement::placement_transaction_types::EvaluateObjectPlacementPreviewRequest;
 use openzt2_zoo_state::placement::placement_transaction_types::PlacedObjectRelocationSource;
+
+#[derive(Component)]
+pub(super) struct ObjectPlacementPreviewDirty;
+
+#[derive(Component, Clone, PartialEq)]
+pub(super) struct ObjectPlacementFit {
+    pub transform: Transform,
+    pub cost: Money,
+    pub cells: Vec<IVec2>,
+    pub permission: ObjectPlacementPreviewPermissionFacts,
+    pub habitat: Option<Entity>,
+    pub revisions: [Option<Tick>; 7],
+    pub terrain_cursor: usize,
+}
 
 // Asset reloads and terrain edits must invalidate previews even if the pointer
 // and the projected boolean permission facts did not change.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn request_changed_object_placement_preview_evaluations(
+pub(super) fn mark_changed_object_placement_previews_dirty(
     mut containment: MessageReader<ContainmentChanged>,
     mut terrain_changes: MessageReader<TerrainChanged>,
     terrain_assets: Res<Assets<TerrainAsset>>,
@@ -54,7 +69,7 @@ pub(super) fn request_changed_object_placement_preview_evaluations(
         Option<Ref<HabitatMember>>,
         Option<Ref<ObjectPlacementPrefabSource>>,
     )>,
-    mut evaluate: MessageWriter<EvaluateObjectPlacementPreviewRequest>,
+    mut commands: Commands,
 ) {
     let terrain_changed = terrain_changes.read().count() != 0;
     let scene_changes = scene_changes
@@ -83,16 +98,12 @@ pub(super) fn request_changed_object_placement_preview_evaluations(
         {
             continue;
         }
-        evaluate.write(EvaluateObjectPlacementPreviewRequest {
-            preview: entity,
-            definition: preview.definition,
-            transform: preview.transform,
-        });
+        commands.entity(entity).insert(ObjectPlacementPreviewDirty);
     }
 }
 
-pub(super) fn evaluate_requested_object_placement_previews(
-    mut requests: MessageReader<EvaluateObjectPlacementPreviewRequest>,
+pub(super) fn evaluate_dirty_object_placement_previews(
+    mut commands: Commands,
     placement: Res<PlacedObjectFootprintOccupancyIndex>,
     ground_paths: GroundPathPlacementStomp,
     terrain_index: Res<TerrainIndex>,
@@ -101,35 +112,43 @@ pub(super) fn evaluate_requested_object_placement_previews(
     active_definitions: Res<WorldDefinitions>,
     footprints: Res<ScenePlacementFootprints>,
     chunks: Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
+    terrain_changes: Res<Messages<TerrainChanged>>,
     habitats: Query<&HabitatMember>,
     placed: Query<StompablePlacedObject>,
     mut previews: Query<
         (
+            Entity,
             &mut ConstructionPreview,
-            &mut Transform,
             Option<&ObjectPlacementPreviewPermissionFacts>,
             Option<&PlacedObjectRelocationSource>,
             Option<&ObjectPlacementPrefabSource>,
+            Option<&mut ObjectPlacementFit>,
         ),
-        Without<IndexedObjectPlacementCells>,
+        (
+            With<ObjectPlacementPreviewDirty>,
+            Without<IndexedObjectPlacementCells>,
+        ),
     >,
 ) {
     let Some(catalogue) = active_definitions.get(&definitions) else {
         return;
     };
-    for request in requests.read() {
-        let Ok((mut preview, mut transform, permission, relocation, prefab)) =
-            previews.get_mut(request.preview)
-        else {
-            continue;
-        };
-        if preview.definition != request.definition {
-            preview.definition = request.definition;
-        }
-        if preview.transform != request.transform {
-            preview.transform = request.transform;
-        }
-        transform.set_if_neq(request.transform);
+    let revisions = [
+        Some(placement.last_changed()),
+        ground_paths.topology_change_tick(),
+        Some(terrain_index.last_changed()),
+        Some(terrain_assets.last_changed()),
+        Some(definitions.last_changed()),
+        Some(active_definitions.last_changed()),
+        Some(footprints.last_changed()),
+    ];
+    let terrain_cursor = terrain_changes.oldest_message_count() + terrain_changes.len();
+    for (entity, mut preview, permission, relocation, prefab, existing_fit) in &mut previews {
+        commands
+            .entity(entity)
+            .remove::<ObjectPlacementPreviewDirty>();
+        let transform = preview.transform;
+        let definition_id = preview.definition;
         let Some(permission) = permission else {
             if preview.validity != PlacementValidity::Pending {
                 preview.validity = PlacementValidity::Pending;
@@ -142,20 +161,16 @@ pub(super) fn evaluate_requested_object_placement_previews(
             }
             continue;
         }
-        let Some(definition) = resolve_object_placeable_definition(catalogue, request.definition)
-        else {
-            let invalid =
-                PlacementValidity::Invalid(PlacementFailure::AuthoredRule(request.definition));
+        let Some(definition) = resolve_object_placeable_definition(catalogue, definition_id) else {
+            let invalid = PlacementValidity::Invalid(PlacementFailure::AuthoredRule(definition_id));
             if preview.validity != invalid {
                 preview.validity = invalid;
             }
             continue;
         };
-        let Some(turns) =
-            calculate_authored_object_placement_eighth_turns(definition, &request.transform)
+        let Some(turns) = calculate_authored_object_placement_eighth_turns(definition, &transform)
         else {
-            let invalid =
-                PlacementValidity::Invalid(PlacementFailure::AuthoredRule(request.definition));
+            let invalid = PlacementValidity::Invalid(PlacementFailure::AuthoredRule(definition_id));
             if preview.validity != invalid {
                 preview.validity = invalid;
             }
@@ -169,10 +184,14 @@ pub(super) fn evaluate_requested_object_placement_previews(
             sample_terrain(chunk, asset, edited, position)
         };
         let path_overlaps = ground_paths.overlaps(definition, catalogue);
+        let habitat = habitats
+            .get(entity)
+            .ok()
+            .map(|member| member.habitat_entity);
         let validity = validate_object_placement_footprint_cells(
             geometry,
             geometry.cells(turns),
-            &request.transform,
+            &transform,
             terrain,
             |cell| {
                 path_overlaps.prevents_placement(cell)
@@ -186,10 +205,7 @@ pub(super) fn evaluate_requested_object_placement_previews(
                     )
             },
             ObjectPlacementAuthoritativeFacts {
-                habitat: habitats
-                    .get(request.preview)
-                    .ok()
-                    .map(|member| member.habitat_entity),
+                habitat,
                 unlocked: permission.unlocked,
                 affordable: permission.affordable,
                 topology_valid: permission.topology_valid,
@@ -204,9 +220,30 @@ pub(super) fn evaluate_requested_object_placement_previews(
             }
             validity => validity,
         };
+        if let PlacementValidity::Valid { cost } = validity {
+            let mut cells = Vec::new();
+            if collect_occupied_placement_cells_for_transform(geometry, &transform, &mut cells)
+                .is_some()
+            {
+                let fit = ObjectPlacementFit {
+                    transform,
+                    cost,
+                    cells,
+                    permission: *permission,
+                    habitat,
+                    revisions,
+                    terrain_cursor,
+                };
+                if let Some(mut existing_fit) = existing_fit {
+                    existing_fit.set_if_neq(fit);
+                } else {
+                    commands.entity(entity).insert(fit);
+                }
+            }
+        }
         if preview.validity != validity {
             if let PlacementValidity::Invalid(failure) = validity {
-                debug!(?failure, definition = ?request.definition, "object placement preview invalid");
+                debug!(?failure, definition = ?definition_id, "object placement preview invalid");
             }
             preview.validity = validity;
         }

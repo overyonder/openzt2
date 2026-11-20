@@ -1,15 +1,20 @@
+use super::{
+    construction_history::ConstructionHistory, construction_lifecycle::ConstructionActive,
+};
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use openzt2_game_data::terrain::TerrainWaterDepth;
 use openzt2_game_data::ui_document::action::construction::UiBiomePaintClass;
 use openzt2_game_data::ui_document::action::construction::UiBiomeSurface;
 use openzt2_game_data::ui_document::action::construction::UiConstructionAction;
-use openzt2_game_data::ui_document::action::construction::UiConstructionConfirmation;
 use openzt2_game_data::ui_document::action::construction::UiFencePlacementMode;
 use openzt2_game_data::ui_document::action::construction::UiTankEditMode;
 use openzt2_game_data::ui_document::action::construction::UiTerrainEditMode;
 use openzt2_game_data::ui_document::action::UiTrigger;
 use openzt2_game_data::AssetId;
+use openzt2_zoo_state::topology::topology_confirmation::{
+    ResolveTopologyConfirmation, TopologyConfirmation, TopologyConfirmationOperations,
+};
 
 use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
@@ -25,14 +30,12 @@ use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocum
 use openzt2_world_state::world_spawn::world_entity_crating::RemoveWorldEntityFromCrate;
 use openzt2_world_state::world_spawn::world_entity_crating::WorldEntityIsCrated;
 
-use crate::construction::construction_edit_history_operations;
 use crate::topology::topology_construction_preview_types::FencePreview;
 use openzt2_interface_state::ui::authored_ui_action_projection_components::UiConstructionActions;
 use openzt2_interface_state::ui::authored_ui_activation_contracts::ActivateAuthoredUiTool;
 use openzt2_interface_state::ui::authored_ui_activation_contracts::UiNodeActivated;
 use openzt2_zoo_state::construction::construction_edit_history_types::ApplyConstructionTransaction;
 use openzt2_zoo_state::construction::construction_edit_history_types::ConstructionEditDirection;
-use openzt2_zoo_state::construction::construction_edit_history_types::ConstructionEditHistory;
 use openzt2_zoo_state::construction::construction_interaction_types::CancelConstruction;
 use openzt2_zoo_state::construction::construction_interaction_types::CommitConstruction;
 use openzt2_zoo_state::construction::construction_interaction_types::ConstructionPreview;
@@ -44,8 +47,6 @@ use openzt2_zoo_state::construction::construction_tool_and_placement_policy_type
 use openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::FencePlacementShape;
 use openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::SelectConstructionTool;
 use openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::TankEditKind;
-use openzt2_zoo_state::construction::construction_transaction_types::EditCommitPhase;
-use openzt2_zoo_state::construction::construction_transaction_types::EditCommitProgress;
 
 pub(super) fn route_authored_construction_tool_activations(
     mut activations: MessageReader<ActivateAuthoredUiTool>,
@@ -163,7 +164,7 @@ pub(super) struct ConstructionUiIntents<'w, 's> {
     commits: MessageWriter<'w, CommitConstruction>,
     cancellations: MessageWriter<'w, CancelConstruction>,
     history: MessageWriter<'w, ApplyConstructionTransaction>,
-    pending_transactions: Query<'w, 's, &'static EditCommitProgress>,
+    pending_transactions: Query<'w, 's, (), With<ConstructionActive>>,
     uncrate: MessageWriter<'w, RemoveWorldEntityFromCrate>,
     fence_previews: Query<'w, 's, (Entity, &'static mut FencePreview), With<ConstructionPreview>>,
     rotations: MessageWriter<'w, openzt2_interface_state::input::input_types::ActionRequest>,
@@ -178,7 +179,7 @@ pub(super) fn route_construction_ui_actions(
     roots: Query<&UiDocumentRoot>,
     selected: WorldUiSelection,
     mut intents: ConstructionUiIntents,
-    history: Res<ConstructionEditHistory>,
+    (history, confirmations): (ConstructionHistory, TopologyConfirmationOperations),
     mut policy: ResMut<ConstructionPlacementPolicy>,
     placeables: Query<
         &PlacedObjectDefinitionReference,
@@ -365,19 +366,10 @@ pub(super) fn route_construction_ui_actions(
                     intents.tools.write(SelectConstructionTool(tool));
                 }
                 UiConstructionAction::Undo => {
-                    if intents
-                        .pending_transactions
-                        .iter()
-                        .any(|progress| progress.phase != EditCommitPhase::Complete)
-                    {
+                    if !intents.pending_transactions.is_empty() {
                         continue;
                     }
-                    if let Some(transaction) =
-                        construction_edit_history_operations::requested_undo_or_redo_transaction(
-                            &history,
-                            ConstructionEditDirection::Undo,
-                        )
-                    {
+                    if let Some(transaction) = history.next(ConstructionEditDirection::Undo) {
                         intents.history.write(ApplyConstructionTransaction {
                             transaction,
                             direction: ConstructionEditDirection::Undo,
@@ -641,29 +633,13 @@ pub(super) fn route_construction_ui_actions(
                     }
                 }
                 UiConstructionAction::ResolveConfirmation { kind, confirmed } => {
-                    match kind {
-                        UiConstructionConfirmation::ZooGatePathDeletion
-                        | UiConstructionConfirmation::TankDeletion => {
-                            if *confirmed {
-                                if let Some(entity) = selected.subject() {
-                                    intents.deletions.write(DeleteEntity(entity));
-                                }
-                            }
-                        }
-                        UiConstructionConfirmation::TankMerge => {
-                            // A merge requires the two tank operands retained by the
-                            // overlap operation. Reject rather than inventing a target.
-                            if *confirmed {
-                                intents.cancellations.write(CancelConstruction);
-                            }
-                        }
-                        UiConstructionConfirmation::TankSplit => {
-                            if *confirmed {
-                                if let Some((preview, _)) = previews.iter().next() {
-                                    intents.commits.write(CommitConstruction { preview });
-                                }
-                            }
-                        }
+                    if let Some(entity) = confirmations
+                        .get(activation.node, TopologyConfirmation::Construction(*kind))
+                    {
+                        commands.trigger(ResolveTopologyConfirmation {
+                            entity,
+                            accepted: *confirmed,
+                        });
                     }
                 }
             }

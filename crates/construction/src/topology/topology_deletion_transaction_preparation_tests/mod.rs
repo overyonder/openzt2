@@ -35,11 +35,7 @@ fn deleting_a_node_prepares_its_incident_fence_without_mutation() {
     let fence = app
         .world_mut()
         .spawn((
-            FenceEdge {
-                definition: AssetId::default(),
-                a,
-                b,
-            },
+            FenceEdge::between(AssetId::default(), a, b),
             PersistentId(3),
         ))
         .id();

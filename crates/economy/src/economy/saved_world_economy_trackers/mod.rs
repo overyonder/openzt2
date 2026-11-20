@@ -1,0 +1,195 @@
+use bevy::{ecs::relationship::RelationshipTarget, prelude::*};
+use openzt2_game_assets::{
+    asset_source::AssetArchives,
+    original_saved_game_source::OriginalSavedGameSources,
+    original_saved_game_asset_loading::OriginalSavedGameAsset,
+    world_definitions::world_definition_asset_set_refresh_and_indexing::saved_world_economy_asset::{
+        SavedWorldEconomyAsset, SAVED_WORLD_ECONOMY_LABEL,
+    },
+    world_scenario::{
+        world_scenario_asset_set_state_and_borrowing_queries::WorldScenarios,
+        world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset,
+    },
+};
+use openzt2_interface_state::persistence::saved_game_source_types::OriginalSavedGameLoaded;
+use openzt2_world_state::{game_session_types::WorldSessionMode, world_spawn::{
+    world_load_completion_marker::WorldLoadCompleted,
+    selected_world_identity::SelectedWorldIdentity,
+    world_membership_types::{WorldMember, WorldRoot},
+}};
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::BehaviorEconomyTracker;
+
+#[derive(Component)]
+pub(super) struct WorldEconomyConfiguration(pub(super) Handle<SavedWorldEconomyAsset>);
+
+#[derive(Component, Default, PartialEq, Eq)]
+pub(super) struct WorldEconomyTrackerIndex(
+    pub(super) std::collections::BTreeMap<openzt2_game_data::AssetId, Entity>,
+);
+
+#[derive(Component)]
+pub(super) struct AuthoredWorldEconomyTracker;
+
+pub(super) fn use_original_saved_game_economy_source(
+    mut loaded: Option<MessageReader<OriginalSavedGameLoaded>>,
+    roots: Query<Entity, (With<WorldRoot>, With<WorldLoadCompleted>)>,
+    mut configurations: Query<&mut WorldEconomyConfiguration>,
+    server: Res<AssetServer>,
+    mut commands: Commands,
+) {
+    let (Some(loaded), Ok(root)) = (loaded.as_mut(), roots.single()) else {
+        return;
+    };
+    for game in loaded.read() {
+        let member = OriginalSavedGameSources::member_path(
+            game.source_identifier,
+            std::path::Path::new("saved/world.zt2"),
+        );
+        let path = format!("original-saves://{}", member.display());
+        let labeled_path = format!("{path}#{SAVED_WORLD_ECONOMY_LABEL}");
+        let source = server
+            .get_handle::<SavedWorldEconomyAsset>(labeled_path)
+            .unwrap_or_else(|| server.load(path));
+        if let Ok(mut current) = configurations.get_mut(root) {
+            if current.0 != source {
+                current.0 = source;
+            }
+        } else {
+            commands
+                .entity(root)
+                .insert(WorldEconomyConfiguration(source));
+        }
+    }
+}
+
+pub(super) fn load_selected_world_economy(
+    roots: Query<
+        (Entity, &SelectedWorldIdentity),
+        (With<WorldRoot>, Without<WorldEconomyConfiguration>),
+    >,
+    scenarios: Res<WorldScenarios>,
+    scenario_assets: Res<Assets<WorldScenarioDocumentAsset>>,
+    originals: Res<Assets<OriginalSavedGameAsset>>,
+    server: Res<AssetServer>,
+    archives: Res<AssetArchives>,
+    mut commands: Commands,
+) {
+    if roots.is_empty() {
+        return;
+    }
+    let view = scenarios.get(&scenario_assets);
+    for (root, identity) in &roots {
+        let original = originals.iter().find_map(|(id, asset)| {
+            asset
+                .source
+                .document
+                .find_starting_zoo(identity.start)
+                .and_then(|_| server.get_path(id))
+                .map(|path| path.into_owned().with_label(SAVED_WORLD_ECONOMY_LABEL))
+        });
+        let handle = if let Some(path) = original {
+            let Some(handle) = server.get_handle(path) else {
+                continue;
+            };
+            handle
+        } else {
+            let path = view
+                .as_ref()
+                .and_then(|view| view.start_path(identity.start))
+                .map(str::to_owned);
+            if let Some(path) = path {
+                server.load::<SavedWorldEconomyAsset>(path)
+            } else {
+                let template = match identity.mode {
+                    WorldSessionMode::Freeform => "config/freeform_mode.xml",
+                    WorldSessionMode::Challenge => "config/challenge_mode.xml",
+                    WorldSessionMode::Campaign => "config/campaign_mode.xml",
+                };
+                let Some(path) =
+                    archives.resolve_source_reference(std::path::Path::new(""), template)
+                else {
+                    continue;
+                };
+                server.load::<SavedWorldEconomyAsset>(path)
+            }
+        };
+        commands
+            .entity(root)
+            .insert(WorldEconomyConfiguration(handle));
+    }
+}
+
+pub(super) fn materialize_selected_world_economy_trackers(
+    mut configurations: Query<(
+        Entity,
+        Ref<WorldEconomyConfiguration>,
+        Option<&Children>,
+        Option<&mut WorldEconomyTrackerIndex>,
+    )>,
+    assets: Res<Assets<SavedWorldEconomyAsset>>,
+    mut asset_changes: MessageReader<AssetEvent<SavedWorldEconomyAsset>>,
+    mut trackers: Query<&mut BehaviorEconomyTracker, With<AuthoredWorldEconomyTracker>>,
+    mut commands: Commands,
+) {
+    let changed = asset_changes
+        .read()
+        .filter_map(|event| match *event {
+            AssetEvent::Added { id } | AssetEvent::Modified { id } | AssetEvent::Removed { id } => {
+                Some(id)
+            }
+            _ => None,
+        })
+        .collect::<std::collections::HashSet<_>>();
+    for (world, source, children, mut index) in &mut configurations {
+        if !source.is_changed() && !changed.contains(&source.0.id()) {
+            continue;
+        }
+        let current = children
+            .into_iter()
+            .flat_map(RelationshipTarget::iter)
+            .filter_map(|entity| {
+                trackers
+                    .get(entity)
+                    .ok()
+                    .map(|tracker| (tracker.name, entity))
+            })
+            .collect::<std::collections::BTreeMap<_, _>>();
+        let mut remaining = current;
+        if let Some(configuration) = assets.get(&source.0) {
+            let mut next = WorldEconomyTrackerIndex::default();
+            for definition in &configuration.trackers {
+                let entity = if let Some(entity) = remaining.remove(&definition.name) {
+                    if let Ok(mut tracker) = trackers.get_mut(entity) {
+                        if tracker.transactions != definition.transactions {
+                            tracker.transactions.clone_from(&definition.transactions);
+                        }
+                    }
+                    entity
+                } else {
+                    commands
+                        .spawn((
+                            AuthoredWorldEconomyTracker,
+                            BehaviorEconomyTracker {
+                                name: definition.name,
+                                transactions: definition.transactions.clone(),
+                            },
+                            ChildOf(world),
+                            WorldMember { root: world },
+                        ))
+                        .id()
+                };
+                next.0.insert(definition.name, entity);
+            }
+            if let Some(index) = index.as_mut() {
+                index.set_if_neq(next);
+            } else {
+                commands.entity(world).insert(next);
+            }
+        } else if index.is_some() {
+            commands.entity(world).remove::<WorldEconomyTrackerIndex>();
+        }
+        for entity in remaining.into_values() {
+            commands.entity(entity).try_despawn();
+        }
+    }
+}

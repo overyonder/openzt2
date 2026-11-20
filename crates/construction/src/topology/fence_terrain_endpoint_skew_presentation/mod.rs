@@ -1,7 +1,9 @@
 //! Terrain endpoint fitting for the source-authored fence skew component.
 
+use super::path_presentation_neighborhood::cells_for_region;
 use bevy::diagnostic::FrameCount;
 use bevy::prelude::*;
+use openzt2_zoo_state::topology::topology_graph_types::TopologyIndex;
 
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use openzt2_zoo_state::terrain::terrain_chunk_types::EditedTerrainSamples;
@@ -30,6 +32,7 @@ pub fn fit_fence_presentations_to_terrain_endpoint_heights(
     terrain_assets: Res<Assets<TerrainAsset>>,
     terrain_chunks: Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
     grid: Res<TopologyGrid>,
+    topology: Option<Res<TopologyIndex>>,
     frame: Option<Res<FrameCount>>,
     mut endpoint_fitting_reports: Option<ResMut<FenceEndpointFittingReports>>,
     mut fitting_history: FenceTerrainFittingObservation,
@@ -39,16 +42,60 @@ pub fn fit_fence_presentations_to_terrain_endpoint_heights(
         Ref<FenceTerrainEndpointSkewPresentation>,
         &mut Transform,
     )>,
+    changed_fences: Query<
+        Entity,
+        Or<(
+            Changed<FenceTerrainEndpointPresentationCells>,
+            Changed<FenceTerrainEndpointSkewPresentation>,
+        )>,
+    >,
     mut presentation_transforms: Query<
         &mut Transform,
         Without<FenceTerrainEndpointPresentationCells>,
     >,
 ) {
-    let terrain_was_changed = terrain_changed.read().next().is_some();
+    let mut terrain_affected = bevy::ecs::entity::EntityHashSet::new();
+    let mut terrain_was_changed = false;
+    for change in terrain_changed.read() {
+        terrain_was_changed = true;
+        let (Some(topology), Ok((chunk, _))) =
+            (topology.as_ref(), terrain_chunks.get(change.chunk))
+        else {
+            continue;
+        };
+        let min = chunk.origin + (change.min.as_vec2() - Vec2::ONE) * chunk.spacing_m;
+        let max = chunk.origin + (change.max.as_vec2() + Vec2::ONE) * chunk.spacing_m;
+        let (first, last) = cells_for_region(*grid, min, max, 0.0);
+        terrain_affected.extend(topology.fences_within(first, last).filter(|&entity| {
+            topology.fence_key(entity).is_some_and(|key| {
+                [key.lo, key.hi].into_iter().any(|cell| {
+                    let point = grid.cell_translation(cell).xz();
+                    point.cmpge(min).all() && point.cmple(max).all()
+                })
+            })
+        }));
+    }
     fitting_history.begin_frame();
-    for (entity, endpoint_cells, presentation, mut fence_transform) in &mut fences {
+    let mut dirty: bevy::ecs::entity::EntityHashSet = changed_fences.iter().collect();
+    dirty.extend(terrain_affected.iter().copied());
+    if grid.is_changed()
+        || (topology.is_none() && terrain_was_changed)
+        || fitting_history.is_active()
+    {
+        dirty.extend(fences.iter().filter_map(|(entity, ..)| {
+            (grid.is_changed()
+                || terrain_was_changed && topology.is_none()
+                || fitting_history.observes_owner(entity))
+            .then_some(entity)
+        }));
+    }
+    for entity in dirty {
+        let Ok((_, endpoint_cells, presentation, mut fence_transform)) = fences.get_mut(entity)
+        else {
+            continue;
+        };
         let triggers = [
-            terrain_was_changed,
+            terrain_affected.contains(&entity) || (topology.is_none() && terrain_was_changed),
             endpoint_cells.is_changed(),
             presentation.is_changed(),
             grid.is_changed(),

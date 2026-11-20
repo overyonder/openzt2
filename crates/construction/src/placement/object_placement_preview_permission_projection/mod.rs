@@ -189,6 +189,19 @@ impl ObjectPlacementHeadroomQueries<'_, '_> {
     }
 }
 
+#[derive(SystemParam)]
+pub(super) struct PlacementSiteChanges<'w, 's> {
+    colliders: Query<'w, 's, &'static avian3d::prelude::ColliderAabb, Changed<avian3d::prelude::ColliderAabb>>,
+    removed: RemovedComponents<'w, 's, avian3d::prelude::ColliderAabb>,
+    terrain: MessageReader<'w, 's, openzt2_zoo_state::terrain::terrain_edit_types::TerrainChanged>,
+    tanks: Query<'w, 's, (), Changed<openzt2_zoo_state::aquatic::aquatic_simulation_types::TankGeometry>>,
+    water: Query<'w, 's, (), Or<(
+        Changed<openzt2_zoo_state::terrain::terrain_water_presentation_types::TerrainWaterRegionSource>,
+        Changed<openzt2_zoo_state::terrain::terrain_water_presentation_types::TerrainWaterRegionEdit>,
+    )>>,
+    habitats: MessageReader<'w, 's, openzt2_zoo_state::habitat::habitat_types::ContainmentChanged>,
+}
+
 pub(super) fn project_authoritative_facts_onto_object_placement_previews(
     cash: Res<ZooCash>,
     unlimited_cash: Option<Res<UnlimitedZooCash>>,
@@ -201,7 +214,7 @@ pub(super) fn project_authoritative_facts_onto_object_placement_previews(
         With<WorldRoot>,
     >,
     topology: Res<TopologyIndex>,
-    headroom: ObjectPlacementHeadroomQueries,
+    (headroom, mut changes): (ObjectPlacementHeadroomQueries, PlacementSiteChanges),
     surfaces: openzt2_zoo_state::terrain::dry_surface_eligibility::DrySurfaceEligibility,
     sites: openzt2_zoo_state::placement::placement_surface_site::PlacementSiteQueries,
     definitions: Res<Assets<WorldDefinitionAsset>>,
@@ -211,14 +224,39 @@ pub(super) fn project_authoritative_facts_onto_object_placement_previews(
     mut diagnostics: Option<ResMut<ObjectPlacementHeadroomDiagnosticState>>,
     mut previews: Query<(
         Entity,
-        &ConstructionPreview,
+        Ref<ConstructionPreview>,
         &mut ObjectPlacementPreviewPermissionFacts,
-        &ObjectPlacementPrefabSource,
+        Ref<ObjectPlacementPrefabSource>,
         Option<&PlacedObjectRelocationSource>,
         Option<&WorldMember>,
         Option<&openzt2_zoo_state::habitat::habitat_types::HabitatMember>,
     )>,
 ) {
+    let terrain_changed = changes.terrain.read().count() != 0;
+    let removed_colliders = changes.removed.read().count() != 0;
+    let changed_habitats = changes
+        .habitats
+        .read()
+        .map(|event| event.affected_entity)
+        .collect::<bevy::ecs::entity::EntityHashSet>();
+    let inputs_changed = terrain_changed
+        || removed_colliders
+        || !changes.tanks.is_empty()
+        || !changes.water.is_empty()
+        || cash.is_changed()
+        || unlocks.is_changed()
+        || topology.is_changed()
+        || unlimited_cash
+            .as_ref()
+            .is_some_and(|cash| cash.is_changed())
+        || definitions.is_changed()
+        || active_definitions.is_changed()
+        || prefabs.is_changed()
+        || footprints.is_changed()
+        || models.is_changed()
+        || worlds.iter().any(|(mode, scenario)| {
+            mode.is_changed() || scenario.is_some_and(|scenario| scenario.is_changed())
+        });
     let Some(catalogue) = active_definitions.get(&definitions) else {
         return;
     };
@@ -241,6 +279,39 @@ pub(super) fn project_authoritative_facts_onto_object_placement_previews(
                 calculate_object_placement_footprint_origin(geometry, &preview.transform, turns)
                     .map(|origin| (origin, turns))
             });
+        if !inputs_changed
+            && !preview.is_changed()
+            && !prefab_source.is_changed()
+            && !changed_habitats.contains(&entity)
+            && diagnostics.is_none()
+        {
+            let blockers_moved = definition.minimum_headroom_metres > 0.0
+                && if permission.headroom_valid {
+                    pose.is_some_and(|(origin, turns)| {
+                        let cells = geometry.cells(turns);
+                        changes.colliders.iter().any(|bounds| {
+                            cells.iter().any(|cell| {
+                                let local = IVec2::new(
+                                    i32::from(cell.offset[0]),
+                                    i32::from(cell.offset[1]),
+                                );
+                                let world = origin
+                                    + rotate_object_placement_cell_by_quarter_turns(
+                                        local,
+                                        turns / 2,
+                                    );
+                                let ray = world.as_vec2();
+                                ray.cmpge(bounds.min.xz()).all() && ray.cmple(bounds.max.xz()).all()
+                            })
+                        })
+                    })
+                } else {
+                    !changes.colliders.is_empty()
+                };
+            if !blockers_moved {
+                continue;
+            }
+        }
         let topology_valid = pose.is_some_and(|(origin, turns)| {
             let has_path = !constraints.contains_all(PlacementConstraints::REQUIRE_PATH)
                 || authored_object_entrance_definitions(definition)

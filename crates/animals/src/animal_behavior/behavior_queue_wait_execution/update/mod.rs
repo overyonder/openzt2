@@ -3,9 +3,8 @@
 use super::super::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation;
 use super::{ActiveQueueWait, QueueWaitSources};
 use bevy::prelude::*;
-use openzt2_world_state::animation_graph::animation_presentation_relationship_types::AnimationPresentationOwner;
+use openzt2_world_state::animation_graph::animation_presentation_relationship_types::AnimationPresentations;
 use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackController;
-use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackState;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_zoo_state::animal_behavior::interaction_container_membership::InteractionContainerMemberships;
 use openzt2_zoo_state::behavior_task_execution_types::continuations::BehaviorContinuationFrames;
@@ -36,10 +35,8 @@ pub(super) fn update_queue_wait_deadlines_and_service_readiness(
         )>,
     )>,
     abandoned_waits: Query<Entity, (With<ActiveQueueWait>, Without<BehaviorTaskExecutionState>)>,
-    mut animation_controllers: Query<(
-        &AnimationPresentationOwner,
-        &mut AnimationPlaybackController,
-    )>,
+    presentations: Query<&AnimationPresentations>,
+    mut animation_controllers: Query<(&AnimationPlaybackController, &mut AnimationPlayer)>,
 ) {
     for entity in &abandoned_waits {
         commands.entity(entity).remove::<ActiveQueueWait>();
@@ -72,12 +69,16 @@ pub(super) fn update_queue_wait_deadlines_and_service_readiness(
         if let Some((pending, _)) =
             pending_animation.filter(|(pending, instruction)| pending.owns(&task, instruction))
         {
-            for (owner, mut controller) in &mut animation_controllers {
-                if owner.gameplay_entity == actor
-                    && controller.animation_clip_asset_key == pending.clip_key
+            for controller in
+                AnimationPresentations::for_subject(actor, presentations.get(actor).ok())
+            {
+                let Ok((controller, mut player)) = animation_controllers.get_mut(controller) else {
+                    continue;
+                };
+                if controller.animation_clip_asset_key == pending.clip_key
                     && controller.explicit_clip_request_id == Some(pending.request_id)
                 {
-                    controller.playback_state = AnimationPlaybackState::Paused;
+                    player.pause_all();
                 }
             }
         }

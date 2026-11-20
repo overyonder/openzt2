@@ -33,6 +33,7 @@ pub(super) fn apply_scripted_tank_wall_heights(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     tanks: Query<(
+        Entity,
         &Tank,
         &TankGeometry,
         &HabitatRegion,
@@ -51,25 +52,27 @@ pub(super) fn apply_scripted_tank_wall_heights(
     else {
         return;
     };
-    for (tank, geometry, region, summary, member) in &tanks {
+    for (habitat, tank, geometry, region, summary, member) in &tanks {
         if summary.boundary_is_breached || !geometry.is_valid() {
             continue;
         }
         let (Some(seed_cell), Some(mut wall_heights)) = (
             tank_habitat_seed_cell(region),
-            height_queries.wall_height_images(region, limits),
+            height_queries.wall_height_images(habitat, limits),
         ) else {
             continue;
         };
-        let Some(bounds) = height_queries.tank_height_bounds(region, limits, &wall_heights) else {
+        let Some(bounds) =
+            height_queries.tank_height_bounds(habitat, region, limits, &wall_heights)
+        else {
             continue;
         };
         height_queries.include_adjacent_tank_water_in_wall_minima(
             &mut wall_heights,
-            region,
+            habitat,
             limits,
             |entity| {
-                let (_, geometry, adjacent, _, world) = tanks.get(entity).ok()?;
+                let (_, _, geometry, adjacent, _, world) = tanks.get(entity).ok()?;
                 (world.root == member.root && tank_habitat_seed_cell(adjacent) != Some(seed_cell))
                     .then_some(geometry.water_height)
             },

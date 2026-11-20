@@ -1,3 +1,4 @@
+use super::path_presentation_neighborhood::{cells_for_region, terrain_region};
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use openzt2_game_data::AssetId;
@@ -12,7 +13,7 @@ use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainChunk;
 use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainIndex;
 use openzt2_zoo_state::terrain::terrain_edit_types::TerrainChanged;
 
-use openzt2_zoo_state::topology::topology_graph_types::PathTile;
+use openzt2_zoo_state::topology::topology_graph_types::{PathTile, TopologyGrid};
 
 #[derive(Resource, Default)]
 pub(super) struct ElevatedPathSurfacePresentationAssets {
@@ -70,38 +71,34 @@ pub(super) fn invalidate_ground_path_terrain_fitting_after_terrain_changes(
     terrain_chunks: Query<&TerrainChunk>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
-    paths: Query<(Entity, &PathTile, &Transform), With<PathTerrainFitted>>,
+    paths: Query<&PathTile, With<PathTerrainFitted>>,
+    grid: Res<TopologyGrid>,
+    index: Res<openzt2_zoo_state::topology::topology_graph_types::TopologyIndex>,
 ) {
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };
-    let changed_regions = changed
+    let reach = f32::from(definitions.maximum_ground_path_width_cm()) * 0.005;
+    let mut affected = bevy::ecs::entity::EntityHashSet::new();
+    for (min, max) in changed
         .read()
-        .filter_map(|change| {
-            let chunk = terrain_chunks.get(change.chunk).ok()?;
-            Some((
-                chunk.origin + change.min.as_vec2() * chunk.spacing_m,
-                chunk.origin + change.max.as_vec2() * chunk.spacing_m,
-            ))
-        })
-        .collect::<Vec<_>>();
-    if changed_regions.is_empty() {
-        return;
+        .filter_map(|change| terrain_region(change, &terrain_chunks))
+    {
+        let (first, last) = cells_for_region(*grid, min, max, reach);
+        affected.extend(index.paths_within(first, last).filter(|&entity| {
+            let Ok(path) = paths.get(entity) else {
+                return false;
+            };
+            let Some(definition) = definitions.find_path(path.definition) else {
+                return false;
+            };
+            let point = grid.cell_translation(path.cell).xz();
+            let half = Vec2::splat(f32::from(definition.width_cm) * 0.005);
+            !definition.elevated && point.cmpge(min - half).all() && point.cmple(max + half).all()
+        }));
     }
-    for (entity, path, transform) in &paths {
-        let Some(half_width_m) = (|| {
-            let definition = definitions.find_path(path.definition)?;
-            (!definition.elevated).then(|| f32::from(definition.width_cm) * 0.005)
-        })() else {
-            continue;
-        };
-        let centre = transform.translation.xz();
-        if changed_regions.iter().any(|(min, max)| {
-            let extent = Vec2::splat(half_width_m);
-            centre.cmpge(*min - extent).all() && centre.cmple(*max + extent).all()
-        }) {
-            commands.entity(entity).remove::<PathTerrainFitted>();
-        }
+    for entity in affected {
+        commands.entity(entity).remove::<PathTerrainFitted>();
     }
 }
 

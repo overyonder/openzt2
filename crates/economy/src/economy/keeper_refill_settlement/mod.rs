@@ -55,7 +55,7 @@ impl KeeperRefillSettlement<'_, '_> {
     ) -> Option<()> {
         let current = self.staff.get(actor).ok()?;
         let (job, claim, behavior) = self.jobs.get(payment.job).ok()?;
-        if current.job != payment.job
+        if current.job() != payment.job
             || claim.staff != actor
             || behavior.execution_id != Some(task.execution_id)
             || behavior.task != task.program

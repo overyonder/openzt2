@@ -1,5 +1,8 @@
 use bevy::prelude::*;
 use bevy::{ecs::entity::EntityHashMap, platform::collections::HashSet};
+use openzt2_zoo_state::topology::{
+    habitat_boundary_queries::HabitatBoundaryQueries, topology_graph_types::FenceSegment,
+};
 
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::{
@@ -63,14 +66,15 @@ enum TankWallBoundaryReading {
 /// with the lowest persistent identifier. A wall without a recorded top gets
 /// the rubber-band rule over its own two endpoints.
 fn read_tank_wall_boundary(
-    region: &HabitatRegion,
+    sides: impl Iterator<Item = Entity>,
     definitions: WorldDefinitionsView<'_>,
     limits: TankGeometryLimits,
-    fences: &Query<(&FenceEdge, &PersistentId, Option<&TankWallTopHeight>)>,
+    fences: &Query<(FenceSegment, &PersistentId, Option<&TankWallTopHeight>)>,
     nodes: &Query<&TopologyNode>,
     ground: &TankWallGroundSampling,
 ) -> TankWallBoundaryReading {
-    if region.boundary_fence_entities.is_empty() {
+    let mut sides = sides.peekable();
+    if sides.peek().is_none() {
         return TankWallBoundaryReading::NotTankWalls;
     }
     let mut definition = None;
@@ -78,8 +82,8 @@ fn read_tank_wall_boundary(
     let mut lowest_wall_top = f32::INFINITY;
     let mut sampled_cells = HashSet::new();
     let (mut lowest, mut sum) = (f32::INFINITY, 0.0);
-    for fence in region.boundary_fence_entities.iter() {
-        let Ok((edge, id, top)) = fences.get(*fence) else {
+    for fence in sides {
+        let Ok((edge, id, top)) = fences.get(fence) else {
             return TankWallBoundaryReading::NotReady;
         };
         if definitions.find_fence(edge.definition).is_none() {
@@ -91,7 +95,7 @@ fn read_tank_wall_boundary(
         if definition.is_none_or(|(lowest_id, _)| id.0 < lowest_id) {
             definition = Some((id.0, edge.definition));
         }
-        let (Ok(a), Ok(b)) = (nodes.get(edge.a), nodes.get(edge.b)) else {
+        let (Ok(a), Ok(b)) = (nodes.get(edge.a()), nodes.get(edge.b())) else {
             return TankWallBoundaryReading::NotReady;
         };
         let mut endpoint_ground = [0.0; 2];
@@ -111,7 +115,7 @@ fn read_tank_wall_boundary(
         );
         lowest_wall_top = lowest_wall_top.min(wall_top);
         if top.is_none() {
-            missing_tops.push((*fence, wall_top));
+            missing_tops.push((fence, wall_top));
         }
     }
     let Some((_, definition)) = definition else {
@@ -152,11 +156,11 @@ pub(super) fn promote_or_restore_habitats_enclosed_by_tank_walls(
     )>,
     pending_restorations: Query<(Entity, &PendingTankRestoration, &WorldMember)>,
     changed_restorations: Query<(), Changed<PendingTankRestoration>>,
-    fences: Query<(&FenceEdge, &PersistentId, Option<&TankWallTopHeight>)>,
+    fences: Query<(FenceSegment, &PersistentId, Option<&TankWallTopHeight>)>,
     nodes: Query<&TopologyNode>,
     changed_fences: Query<(), Changed<FenceEdge>>,
     changed_nodes: Query<(), Changed<TopologyNode>>,
-    ground: TankWallGroundSampling,
+    (ground, boundaries): (TankWallGroundSampling, HabitatBoundaryQueries),
     mut commands: Commands,
 ) {
     let terrain_loaded = terrain_assets.read().any(|event| {
@@ -218,28 +222,29 @@ pub(super) fn promote_or_restore_habitats_enclosed_by_tank_walls(
         else {
             continue;
         };
-        let walls =
-            match read_tank_wall_boundary(region, definitions, limits, &fences, &nodes, &ground) {
-                TankWallBoundaryReading::NotTankWalls => {
-                    commands.entity(habitat).remove::<PendingTankPromotion>();
-                    if tank.is_some() {
-                        commands
-                            .entity(habitat)
-                            .remove::<(Tank, TankGeometry, TankWater, TankEnvironment)>();
-                    }
-                    continue;
+        let walls = match read_tank_wall_boundary(
+            boundaries.fences(habitat),
+            definitions,
+            limits,
+            &fences,
+            &nodes,
+            &ground,
+        ) {
+            TankWallBoundaryReading::NotTankWalls => {
+                commands.entity(habitat).remove::<PendingTankPromotion>();
+                if tank.is_some() {
+                    commands
+                        .entity(habitat)
+                        .remove::<(Tank, TankGeometry, TankWater, TankEnvironment)>();
                 }
-                TankWallBoundaryReading::NotReady => {
-                    mark_tank_promotion_pending(
-                        &mut commands,
-                        &mut pending_habitats,
-                        habitat,
-                        false,
-                    );
-                    continue;
-                }
-                TankWallBoundaryReading::Walls(walls) => walls,
-            };
+                continue;
+            }
+            TankWallBoundaryReading::NotReady => {
+                mark_tank_promotion_pending(&mut commands, &mut pending_habitats, habitat, false);
+                continue;
+            }
+            TankWallBoundaryReading::Walls(walls) => walls,
+        };
         let restoration = restorations.get(&habitat).copied();
         let restored_wall_top = restoration
             .map(|(_, pending, _)| pending.geometry.wall_height)

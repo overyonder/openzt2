@@ -1,4 +1,12 @@
+use super::topology_construction_preview_types::{
+    terrain_change_cursor, FenceDrawPlan, PathDrawPlan, TopologyPlanVersion,
+};
+use crate::construction::construction_transaction_preparation::SubmittedPreview;
 use bevy::prelude::*;
+use openzt2_zoo_state::topology::{
+    habitat_boundary_queries::HabitatBoundaryQueries,
+    topology_graph_types::{FencesEndingHere, FencesStartingHere},
+};
 
 use crate::placement::stomped_object_edit_preparation::{
     prepare_placement_stomp_removals, StompablePlacedObject,
@@ -17,7 +25,6 @@ use openzt2_zoo_state::aquatic::tank_wall_ground_sampling::TankWallGroundSamplin
 use openzt2_zoo_state::topology::topology_graph_types::PathTile;
 use openzt2_zoo_state::topology::topology_grid_geometry::calculate_adjacent_topology_grid_cells_between_endpoints;
 use openzt2_zoo_state::construction::construction_interaction_types::PlacementFailure;
-use openzt2_zoo_state::habitat::habitat_types::HabitatRegion;
 use openzt2_zoo_state::construction::construction_transaction_types::PrepareConstruction;
 use openzt2_zoo_state::economy::money_types::Money;
 use openzt2_zoo_state::terrain::terrain_chunk_types::EditedTerrainSamples;
@@ -42,11 +49,11 @@ use openzt2_zoo_state::topology::topology_edit_types::TopologyEdit;
 use openzt2_zoo_state::topology::topology_edit_types::TopologyEditPreparationRejected;
 use openzt2_zoo_state::topology::topology_edit_types::TopologyEditPrepared;
 use openzt2_zoo_state::topology::topology_edit_types::TopologySnapshot;
-use openzt2_zoo_state::topology::topology_graph_types::FenceEdge;
 use openzt2_zoo_state::topology::topology_graph_types::TopologyGrid;
 use openzt2_zoo_state::topology::topology_graph_types::TopologyIndex;
 
 fn prepare_fence_construction_snapshots(
+    submitted: Option<&FenceDrawPlan>,
     preview: &FencePreview,
     index: &TopologyIndex,
     grid: TopologyGrid,
@@ -62,16 +69,22 @@ fn prepare_fence_construction_snapshots(
     paths: &Query<&PathTile>,
     (hosts, wall_tops): (&GateHostEdges, &Query<&TankWallTopHeight>),
 ) -> Result<(Vec<TopologySnapshot>, Vec<TopologySnapshot>, Money), PlacementFailure> {
-    let (cells, cost, gate, replaced) = calculate_fence_construction_plan(
-        preview,
-        index,
-        grid,
-        definitions,
-        terrain_index,
-        terrain_assets,
-        terrain_chunks,
-        hosts,
-    )?;
+    let (cells, cost, gate, replaced) = if let Some((plan, (cost, gate, replaced))) =
+        submitted.and_then(|plan| plan.quote.as_ref().map(|quote| (plan, quote)))
+    {
+        (plan.cells.clone(), *cost, *gate, replaced.clone())
+    } else {
+        calculate_fence_construction_plan(
+            preview,
+            index,
+            grid,
+            definitions,
+            terrain_index,
+            terrain_assets,
+            terrain_chunks,
+            hosts,
+        )?
+    };
     let id = |entity| {
         persistent
             .get(entity)
@@ -88,8 +101,8 @@ fn prepare_fence_construction_snapshots(
             Ok(TopologySnapshot::Fence {
                 id: id(edge)?,
                 definition: fence.definition,
-                a: id(fence.a)?,
-                b: id(fence.b)?,
+                a: id(fence.a())?,
+                b: id(fence.b())?,
                 gate: None,
                 wall_top: wall_tops.get(edge).ok().copied(),
             })
@@ -179,9 +192,14 @@ fn prepare_fence_construction_snapshots(
                         + policy.default_tank_wall_height_cm as f32 / 100.0,
                 );
             }
-            for path in paths.iter() {
-                if path.cell.z != 0 && samples.iter().any(|cell| cell.xy() == path.cell.xy()) {
-                    maximum = maximum.min(path.cell.z as f32 - 4.0);
+            for cell in &samples {
+                for path in paths
+                    .iter_many(index.paths_within(cell.xy(), cell.xy()))
+                    .filter_map(Result::ok)
+                {
+                    if path.cell.z != 0 {
+                        maximum = maximum.min(path.cell.z as f32 - 4.0);
+                    }
                 }
             }
             Some(TankWallTopHeight(top.0.max(minimum).min(maximum)))
@@ -205,6 +223,7 @@ fn prepare_fence_construction_snapshots(
 /// Swaps the fence segment under a gate preview for the same segment with a
 /// closed gate, so undo restores the plain fence.
 fn prepare_gate_replacement_snapshots(
+    submitted: Option<&FenceDrawPlan>,
     preview: &FencePreview,
     index: &TopologyIndex,
     definitions: WorldDefinitionsView<'_>,
@@ -214,7 +233,13 @@ fn prepare_gate_replacement_snapshots(
     ids: &mut PersistentIdAllocator,
     root: Entity,
 ) -> Result<(TopologySnapshot, TopologySnapshot, Money), PlacementFailure> {
-    let (edge, cost) = calculate_gate_replacement_plan(preview, index, definitions, hosts)?;
+    let (edge, cost) = if let Some((edge, (cost, ..))) =
+        submitted.and_then(|plan| plan.replaced.zip(plan.quote.as_ref()))
+    {
+        (edge, *cost)
+    } else {
+        calculate_gate_replacement_plan(preview, index, definitions, hosts)?
+    };
     let (fence, ..) = hosts
         .get(edge)
         .map_err(|_| PlacementFailure::InvalidTopology)?;
@@ -224,7 +249,7 @@ fn prepare_gate_replacement_snapshots(
             .copied()
             .map_err(|_| PlacementFailure::InvalidTopology)
     };
-    let (a, b) = (id(fence.a)?, id(fence.b)?);
+    let (a, b) = (id(fence.a())?, id(fence.b())?);
     let removed = TopologySnapshot::Fence {
         id: id(edge)?,
         definition: fence.definition,
@@ -250,6 +275,7 @@ fn prepare_gate_replacement_snapshots(
 }
 
 fn prepare_path_construction_snapshots(
+    submitted: Option<&PathDrawPlan>,
     preview: &PathPreview,
     index: &TopologyIndex,
     grid: TopologyGrid,
@@ -260,7 +286,16 @@ fn prepare_path_construction_snapshots(
     ids: &mut PersistentIdAllocator,
     root: Entity,
 ) -> Result<(Vec<TopologySnapshot>, Money), PlacementFailure> {
-    let (cells, cost) = calculate_path_construction_plan(
+    let (cells, cost) = if let Some((plan, cost)) = submitted.and_then(|plan| {
+        if let openzt2_zoo_state::construction::construction_interaction_types::PlacementValidity::Valid { cost } = plan.validity {
+            Some((plan, cost))
+        } else {
+            None
+        }
+    }) {
+        (plan.approved.clone(), cost)
+    } else {
+calculate_path_construction_plan(
         preview,
         index,
         grid,
@@ -268,7 +303,8 @@ fn prepare_path_construction_snapshots(
         terrain_index,
         terrain_assets,
         terrain_chunks,
-    )?;
+    )?
+    };
     let mut snapshots = Vec::with_capacity(cells.len());
     for cell in cells {
         snapshots.push(TopologySnapshot::Path {
@@ -347,27 +383,34 @@ pub(super) fn prepare_topology_construction_transaction(
     mut requests: MessageReader<PrepareConstruction>,
     index: Res<TopologyIndex>,
     grid: Res<TopologyGrid>,
-    (terrain, terrain_assets, terrain_chunks, ground, paths): (
+    (terrain, terrain_assets, terrain_chunks, ground, paths, terrain_messages): (
         Res<TerrainIndex>,
         Res<Assets<TerrainAsset>>,
         Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
         TankWallGroundSampling,
         Query<&PathTile>,
+        Res<Messages<openzt2_zoo_state::terrain::terrain_edit_types::TerrainChanged>>,
     ),
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     mut ids: ResMut<PersistentIdAllocator>,
     previews: Query<
-        (Option<&FencePreview>, Option<&PathPreview>),
+        (
+            Option<&FencePreview>,
+            Option<&PathPreview>,
+            Option<&SubmittedPreview<FenceDrawPlan>>,
+            Option<&SubmittedPreview<PathDrawPlan>>,
+        ),
         Or<(With<FencePreview>, With<PathPreview>)>,
     >,
     transactions: Query<&WorldMember>,
     persistent: Query<&PersistentId>,
     gate_hosts: GateHostEdges,
     wall_tops: Query<&TankWallTopHeight>,
-    (tanks, fence_edges): (
-        Query<(&TankGeometry, &HabitatRegion), With<Tank>>,
-        Query<&FenceEdge>,
+    (tanks, incident, boundaries): (
+        Query<&TankGeometry, With<Tank>>,
+        Query<(Option<&FencesStartingHere>, Option<&FencesEndingHere>)>,
+        HabitatBoundaryQueries,
     ),
     (mut prepared, mut rejected): (
         MessageWriter<TopologyEditPrepared>,
@@ -379,13 +422,29 @@ pub(super) fn prepare_topology_construction_transaction(
         MessageWriter<ObjectPlacementEditPrepared>,
     ),
 ) {
+    let version = TopologyPlanVersion {
+        revisions: [
+            grid.last_changed(),
+            index.last_changed(),
+            active_definitions.last_changed(),
+            definitions.last_changed(),
+            terrain.last_changed(),
+            terrain_assets.last_changed(),
+        ],
+        terrain_changes: terrain_change_cursor(&terrain_messages),
+    };
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };
     for request in requests.read() {
-        let Ok((fence, path)) = previews.get(request.preview) else {
+        let Ok((fence, path, fence_submission, path_submission)) = previews.get(request.preview)
+        else {
             continue;
         };
+        let fence_plan = fence_submission.map(|submission| &submission.0);
+        let path_plan = path_submission.map(|submission| &submission.0);
+        let fence = fence_plan.map(|plan| &plan.input).or(fence);
+        let path = path_plan.map(|plan| &plan.input).or(path);
         let Ok(member) = transactions.get(request.transaction) else {
             write_topology_edit_preparation_rejection(
                 request.transaction,
@@ -406,6 +465,7 @@ pub(super) fn prepare_topology_construction_transaction(
         let result = match (fence, path) {
             (Some(preview), None) if fence_definition_is_gate(definitions, preview.definition) => {
                 prepare_gate_replacement_snapshots(
+                    fence_plan.filter(|plan| plan.version == version && plan.input == *preview),
                     preview,
                     &index,
                     definitions,
@@ -418,6 +478,7 @@ pub(super) fn prepare_topology_construction_transaction(
                 .map(|(created, removed, cost)| (vec![created], vec![removed], cost))
             }
             (Some(preview), None) => prepare_fence_construction_snapshots(
+                fence_plan.filter(|plan| plan.version == version && plan.input == *preview),
                 preview,
                 &index,
                 *grid,
@@ -430,15 +491,17 @@ pub(super) fn prepare_topology_construction_transaction(
                 member.root,
                 |cell| {
                     let node = *index.nodes.get(&cell)?;
-                    tanks
-                        .iter()
-                        .filter_map(|(geometry, region)| {
-                            region
-                                .boundary_fence_entities
-                                .iter()
-                                .filter_map(|fence| fence_edges.get(*fence).ok())
-                                .any(|edge| edge.a == node || edge.b == node)
-                                .then_some(geometry.water_height)
+                    let (starting, ending) = incident.get(node).ok()?;
+                    starting
+                        .into_iter()
+                        .flat_map(|edges| edges.iter())
+                        .chain(ending.into_iter().flat_map(|edges| edges.iter()))
+                        .flat_map(|edge| boundaries.habitats(edge))
+                        .filter_map(|habitat| {
+                            tanks
+                                .get(habitat)
+                                .ok()
+                                .map(|geometry| geometry.water_height)
                         })
                         .max_by(f32::total_cmp)
                 },
@@ -447,6 +510,7 @@ pub(super) fn prepare_topology_construction_transaction(
                 (&gate_hosts, &wall_tops),
             ),
             (None, Some(preview)) => prepare_path_construction_snapshots(
+                path_plan.filter(|plan| plan.version == version && plan.input == *preview),
                 preview,
                 &index,
                 *grid,

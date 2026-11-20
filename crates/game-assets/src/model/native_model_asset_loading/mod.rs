@@ -10,6 +10,7 @@ use bevy::{
 };
 
 use crate::{
+    animation::animation_set_asset_types::{AnimationClipRecord, AnimationSetAsset},
     asset_source::AssetArchives,
     {
         effect::prepared_effect_emitters::prepare_particle_effect_document,
@@ -28,6 +29,7 @@ use crate::{
 };
 
 const SCENE_LABEL: &str = "Scene";
+pub const EMBEDDED_ANIMATION_SET_LABEL: &str = "EmbeddedAnimationSet";
 
 #[derive(TypePath)]
 struct NativeModelAssetLoader {
@@ -136,6 +138,53 @@ impl AssetLoader for NativeModelAssetLoader {
         )
         .await
         .map_err(io::Error::other)?;
+
+        let embedded_clips = loaded_gltf
+            .animations
+            .iter()
+            .enumerate()
+            .map(|(index, handle)| {
+                let clip = native_model_load_context
+                    .get_labeled_by_id(handle)
+                    .and_then(|asset| asset.get::<AnimationClip>())
+                    .ok_or_else(|| {
+                        io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "missing glTF animation subasset",
+                        )
+                    })?;
+                let key = loaded_gltf
+                    .named_animations
+                    .iter()
+                    .find_map(|(name, named)| (named == handle).then(|| name.to_string()))
+                    .unwrap_or_else(|| format!("animation_{index}"));
+                Ok(AnimationClipRecord::create_embedded_animation_clip_record(
+                    key,
+                    handle.clone(),
+                    (clip.duration() * 1000.0).max(1.0) as u32,
+                ))
+            })
+            .collect::<Result<Vec<_>, io::Error>>()?;
+        let mut embedded = AnimationSetAsset::create_ready_animation_set_asset(
+            String::new(),
+            String::new(),
+            embedded_clips,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            None,
+        );
+        if !embedded.animation_clips.is_empty() {
+            let (graph, _) = AnimationGraph::from_clips(
+                embedded
+                    .animation_clips
+                    .iter()
+                    .map(|clip| clip.animation_clip_handle.clone()),
+            );
+            embedded.embedded_animation_graph =
+                Some(native_model_load_context.add_labeled_asset("EmbeddedAnimationGraph", graph));
+        }
+        native_model_load_context.add_labeled_asset(EMBEDDED_ANIMATION_SET_LABEL, embedded);
 
         for lowered_material in lowered_native_model.materials {
             let label = labelled_native_model_subasset_label(&lowered_material.labelled_asset_path)

@@ -8,13 +8,14 @@ use openzt2_world_state::model_render::ModelExpanded;
 use openzt2_world_state::world_spawn::prefab_presentation_types::{
     PrefabMaterialOverride, PrefabMaterialOverrides,
 };
+use openzt2_zoo_state::topology::habitat_boundary_queries::HabitatBoundaryQueries;
 
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_data::AssetId;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_zoo_state::habitat::habitat_types::HabitatRegion;
-use openzt2_zoo_state::topology::topology_graph_types::{FenceEdge, TopologyGrid, TopologyNode};
+use openzt2_zoo_state::topology::topology_graph_types::{FenceEdge, FenceEnd, FenceSegment, FenceStart, TopologyGrid, TopologyNode};
 
 use super::aquatic_simulation_types::{Tank, TankGeometry, TankWallTopHeight};
 
@@ -67,8 +68,18 @@ pub(super) fn present_changed_tank_water_and_glass(
         ),
         With<Tank>,
     >,
-    fences: Query<(&FenceEdge, Option<&TankWallTopHeight>)>,
-    changed_fences: Query<(), Or<(Changed<FenceEdge>, Changed<TankWallTopHeight>)>>,
+    boundaries: HabitatBoundaryQueries,
+    mut habitat_changes: MessageReader<openzt2_zoo_state::habitat::habitat_types::HabitatChanged>,
+    fences: Query<(FenceSegment, Option<&TankWallTopHeight>)>,
+    changed_fences: Query<
+        (),
+        Or<(
+            Changed<FenceEdge>,
+            Changed<FenceStart>,
+            Changed<FenceEnd>,
+            Changed<TankWallTopHeight>,
+        )>,
+    >,
     nodes: Query<&TopologyNode>,
     mut presentations: Query<(&mut TankPresentationGeometry, Option<&Children>)>,
     mut passes: Query<(
@@ -97,6 +108,10 @@ pub(super) fn present_changed_tank_water_and_glass(
             })
         })
         .clone();
+    let changed_habitats = habitat_changes
+        .read()
+        .map(|event| event.habitat_entity)
+        .collect::<bevy::ecs::entity::EntityHashSet>();
     for (tank, geometry, region, member, roots) in &tanks {
         let previous_root = roots.and_then(|roots| roots.iter().next());
         let previous = previous_root.and_then(|root| presentations.get(root).ok());
@@ -104,14 +119,16 @@ pub(super) fn present_changed_tank_water_and_glass(
             floor_height: geometry.floor_height,
             fallback_wall_height: geometry.wall_height,
         };
-        let outline_changed = previous.is_none() || region.is_changed() || grid.is_changed();
+        let outline_changed = previous.is_none()
+            || region.is_changed()
+            || grid.is_changed()
+            || changed_habitats.contains(&tank);
         let walls_changed = outline_changed
             || definitions_changed
             || previous.is_some_and(|(current, _)| *current != next)
-            || region
-                .boundary_fence_entities
-                .iter()
-                .any(|fence| changed_fences.contains(*fence));
+            || boundaries
+                .fences(tank)
+                .any(|fence| changed_fences.contains(fence));
         if !walls_changed && !geometry.is_changed() {
             continue;
         }
@@ -132,12 +149,11 @@ pub(super) fn present_changed_tank_water_and_glass(
             }
             continue;
         }
-        let Some(walls) = region
-            .boundary_fence_entities
-            .iter()
+        let Some(walls) = boundaries
+            .fences(tank)
             .map(|fence| {
-                let (edge, top) = fences.get(*fence).ok()?;
-                let [a, b] = [edge.a, edge.b].map(|node| nodes.get(node).map(|node| node.cell));
+                let (edge, top) = fences.get(fence).ok()?;
+                let [a, b] = [edge.a(), edge.b()].map(|node| nodes.get(node).map(|node| node.cell));
                 let wall_material = definitions
                     .find_tank(edge.definition)?
                     .opaque_wall_material

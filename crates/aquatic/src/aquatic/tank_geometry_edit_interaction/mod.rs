@@ -160,28 +160,28 @@ pub(super) fn update_tank_geometry_gesture(
     let cell = ((cursor.world.xz() - grid.origin) / grid.spacing_m)
         .floor()
         .as_ivec2();
-    let Some((tank, geometry, region, member)) = habitat_index
+    let Some((habitat, (tank, geometry, region, _, member))) = habitat_index
         .habitat_for_topology_cell(cell)
-        .and_then(|habitat| tanks.get(habitat).ok())
-        .filter(|(_, geometry, _, summary, member)| {
+        .and_then(|habitat| tanks.get(habitat).ok().map(|facts| (habitat, facts)))
+        .filter(|(_, (_, geometry, _, summary, member))| {
             member.root == root && !summary.boundary_is_breached && geometry.is_valid()
         })
-        .map(|(tank, geometry, region, _, member)| (tank, geometry, region, member))
     else {
         return;
     };
     let (Some(seed_cell), Some(mut wall_heights)) = (
         tank_habitat_seed_cell(region),
-        height_queries.wall_height_images(region, limits),
+        height_queries.wall_height_images(habitat, limits),
     ) else {
         return;
     };
-    let Some(bounds) = height_queries.tank_height_bounds(region, limits, &wall_heights) else {
+    let Some(bounds) = height_queries.tank_height_bounds(habitat, region, limits, &wall_heights)
+    else {
         return;
     };
     height_queries.include_adjacent_tank_water_in_wall_minima(
         &mut wall_heights,
-        region,
+        habitat,
         limits,
         |entity| {
             let (_, geometry, adjacent, _, world) = tanks.get(entity).ok()?;

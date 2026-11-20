@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use bevy::prelude::*;
 
-use openzt2_zoo_state::locomotion::locomotion_types::SpatialGrid;
+use openzt2_zoo_state::locomotion::locomotion_types::{SpatialGrid, SpatialGridMembership};
 
 use openzt2_zoo_state::topology::gate_actor_type_queries::GateActorTypeQueries;
 use openzt2_zoo_state::topology::gate_operation_types::Gate;
@@ -58,6 +58,7 @@ pub(super) fn request_open_gates_for_agents_within_authored_trigger_distance(
     mut commands: Commands,
     time: Res<Time<Fixed>>,
     spatial_grid: Res<SpatialGrid>,
+    spatial_membership: SpatialGridMembership,
     actor_types: GateActorTypeQueries,
     agent_transforms: Query<&GlobalTransform>,
     mut gates: Query<(
@@ -134,13 +135,13 @@ pub(super) fn request_open_gates_for_agents_within_authored_trigger_distance(
             (minimum.x..=maximum.x).any(|x| {
                 let cell = u32::try_from(y).expect("clamped grid row") * spatial_grid.width
                     + u32::try_from(x).expect("clamped grid column");
-                spatial_grid.range(cell).iter().any(|agent| {
+                spatial_membership.members(cell).any(|agent| {
                     if policy.open_for_entity_type.is_some_and(|required_type| {
-                        !actor_types.actor_types(*agent).contains(&required_type)
+                        !actor_types.actor_types(agent).contains(&required_type)
                     }) {
                         return false;
                     }
-                    agent_transforms.get(*agent).is_ok_and(|agent_transform| {
+                    agent_transforms.get(agent).is_ok_and(|agent_transform| {
                         let agent_position = agent_transform.translation();
                         Vec2::new(agent_position.x, agent_position.z).distance_squared(center)
                             <= radius_squared

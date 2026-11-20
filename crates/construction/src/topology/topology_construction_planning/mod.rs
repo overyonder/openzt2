@@ -4,6 +4,7 @@ use openzt2_game_data::world_definitions::fences_and_gates::FencePlacementModePo
 use openzt2_game_data::world_definitions::paths_and_tile_surfaces::GuestPathDefinition;
 use openzt2_game_data::world_definitions::world_objects::WorldObjectKind;
 use openzt2_game_data::AssetId;
+use openzt2_zoo_state::topology::topology_graph_types::FenceSegment;
 
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
@@ -23,7 +24,7 @@ use openzt2_zoo_state::topology::ground_path_layout_calculation::calculate_snapp
 use openzt2_zoo_state::topology::topology_graph_types::EdgeKey;
 use openzt2_zoo_state::topology::topology_graph_types::TopologyGrid;
 use openzt2_zoo_state::topology::topology_graph_types::TopologyIndex;
-use openzt2_zoo_state::topology::topology_graph_types::{FenceEdge, TopologyProtected};
+use openzt2_zoo_state::topology::topology_graph_types::TopologyProtected;
 use openzt2_zoo_state::topology::topology_grid_geometry::calculate_adjacent_topology_grid_cells_between_endpoints;
 use openzt2_zoo_state::topology::topology_grid_geometry::calculate_heading_quantized_fence_segment_cells_between_endpoints;
 
@@ -102,11 +103,18 @@ pub(super) fn calculate_fence_construction_plan(
                 .filter_map(|step| EdgeKey::new(step[0], step[1]))
                 .collect::<Vec<_>>()
         })
-        .collect::<Vec<_>>();
+        .collect::<HashSet<_>>();
     // As in the original, a fence built over a segment an animal broke
     // replaces it; any other segment in the way occupies the run.
     let mut replaced = Vec::new();
-    for (edge, entity) in &index.edges {
+    let affected: bevy::ecs::entity::EntityHashSet = proposed_steps
+        .iter()
+        .flat_map(|&step| index.fences_covering_step(step))
+        .collect();
+    for entity in affected {
+        let Some(edge) = index.fence_key(entity) else {
+            continue;
+        };
         let Ok(steps) = calculate_adjacent_topology_grid_cells_between_endpoints(edge.lo, edge.hi)
         else {
             continue;
@@ -115,10 +123,7 @@ pub(super) fn calculate_fence_construction_plan(
             .windows(2)
             .filter_map(|step| EdgeKey::new(step[0], step[1]))
             .collect::<Vec<_>>();
-        if !steps.iter().any(|step| proposed_steps.contains(step)) {
-            continue;
-        }
-        let broken = hosts.get(*entity).is_ok_and(|(fence, gate, protected)| {
+        let broken = hosts.get(entity).is_ok_and(|(fence, gate, protected)| {
             !gate
                 && !protected
                 && definitions
@@ -128,8 +133,9 @@ pub(super) fn calculate_fence_construction_plan(
         if !broken || !steps.iter().all(|step| proposed_steps.contains(step)) {
             return Err(PlacementFailure::Occupied);
         }
-        replaced.push(*entity);
+        replaced.push(entity);
     }
+    replaced.sort_unstable_by_key(|entity| entity.to_bits());
     let segments = i64::try_from(cells.len() - 1).map_err(|_| PlacementFailure::InvalidTopology)?;
     let cost = unit_price
         .checked_mul(segments)
@@ -290,7 +296,7 @@ pub(super) fn calculate_tank_wall_top_for_fence_path(
 
 /// Existing fence edges a gate can replace, with their gate and protection state.
 pub(super) type GateHostEdges<'w, 's> =
-    Query<'w, 's, (&'static FenceEdge, Has<Gate>, Has<TopologyProtected>)>;
+    Query<'w, 's, (FenceSegment, Has<Gate>, Has<TopologyProtected>)>;
 
 pub(super) fn fence_definition_is_gate(definitions: WorldDefinitionsView<'_>, id: AssetId) -> bool {
     read_fence_construction_facts(definitions, id).is_some_and(|(_, gate, _)| gate.is_some())
@@ -359,6 +365,28 @@ pub(super) fn calculate_path_construction_plan(
             index,
         )?
     };
+    validate_path_construction_cells(
+        cells,
+        definition,
+        index,
+        grid,
+        definitions,
+        terrain_index,
+        terrain_assets,
+        terrain_chunks,
+    )
+}
+
+pub(super) fn validate_path_construction_cells(
+    cells: Vec<IVec3>,
+    definition: &GuestPathDefinition,
+    index: &TopologyIndex,
+    grid: TopologyGrid,
+    definitions: WorldDefinitionsView<'_>,
+    terrain_index: &TerrainIndex,
+    terrain_assets: &Assets<TerrainAsset>,
+    terrain_chunks: &Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
+) -> Result<(Vec<IVec3>, Money), PlacementFailure> {
     let unit_price = definitions
         .find_object(AssetId(definition.object.0))
         .map(|object| object.price_cents)

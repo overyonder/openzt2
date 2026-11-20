@@ -9,7 +9,9 @@ use openzt2_game_assets::{
     },
 };
 use openzt2_game_data::behavior::action_record::BehaviorMorphRecipient;
-use openzt2_world::world_spawn::prefab_world_instance_spawning::spawn_loaded_scene_prefab_as_world_instance;
+use openzt2_world::world_spawn::prefab_world_instance_spawning::{
+    morph_fade_projection::PrefabMorphFade, spawn_loaded_scene_prefab_as_world_instance,
+};
 use openzt2_world_state::{
     simulation_time::{
         deterministic_random_stream::{DeterministicRng, RngDomain, ZooSeed},
@@ -158,6 +160,11 @@ pub(super) fn morph_authored_entities(
                 recipient,
                 prefab: None,
             });
+            if action.fade {
+                commands
+                    .entity(recipient)
+                    .insert(PrefabMorphFade::fade_out(action.period));
+            }
             step.resume_at(actor, due, &mut commands);
             continue;
         }
@@ -208,6 +215,11 @@ pub(super) fn morph_authored_entities(
                 parents.copied().unwrap_or(Parents::NONE),
                 clock.tick,
             );
+            if action.fade && !action.period.is_zero() {
+                commands
+                    .entity(young)
+                    .insert(PrefabMorphFade::fade_in(action.period));
+            }
             if action.name_it {
                 if let Some(name) = name {
                     commands.entity(young).insert(name.clone());
@@ -261,6 +273,11 @@ pub(super) fn morph_authored_entities(
                 None,
                 RigidBody::Kinematic,
             );
+            if action.fade && !action.period.is_zero() {
+                commands
+                    .entity(replacement)
+                    .insert(PrefabMorphFade::fade_in(action.period));
+            }
             if action.name_it {
                 if let Some(name) = name {
                     commands.entity(replacement).insert(name.clone());
@@ -289,8 +306,24 @@ pub(super) fn morph_authored_entities(
         } else {
             commands.entity(recipient).insert(Visibility::Hidden);
         }
+        commands.entity(recipient).try_remove::<PrefabMorphFade>();
         commands.entity(actor).remove::<PendingAuthoredMorph>();
         step.complete(actor, clock.tick, &mut commands);
+    }
+}
+
+pub(super) fn cancel_interrupted_morph_fade(
+    removed: On<Remove<RunBehaviorMorphEntity>>,
+    pending: Query<&PendingAuthoredMorph>,
+    mut commands: Commands,
+) {
+    if let Ok(morph) = pending.get(removed.entity) {
+        commands
+            .entity(morph.recipient)
+            .try_remove::<PrefabMorphFade>();
+        commands
+            .entity(removed.entity)
+            .try_remove::<PendingAuthoredMorph>();
     }
 }
 

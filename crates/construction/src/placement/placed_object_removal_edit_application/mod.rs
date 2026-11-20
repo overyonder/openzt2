@@ -17,7 +17,7 @@ pub(super) fn apply_prepared_placed_object_removal_edit(
     commands: &mut Commands,
     edit: &mut PreparedObjectPlacementMutation,
     catalogue: openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView<'_>,
-    placement: &mut PlacedObjectFootprintOccupancyIndex,
+    placement: &PlacedObjectFootprintOccupancyIndex,
     scratch: &mut ObjectPlacementCellCollectionScratch,
     footprints: &ScenePlacementFootprints,
     placed: &Query<(
@@ -64,19 +64,7 @@ pub(super) fn apply_prepared_placed_object_removal_edit(
     if !valid {
         return false;
     }
-    despawn_indexed_placed_object(commands, placement, target, &edit.cells);
+    commands.entity(target).try_despawn();
     edit.applied_entity = None;
     true
-}
-
-pub(super) fn despawn_indexed_placed_object(
-    commands: &mut Commands,
-    placement: &mut PlacedObjectFootprintOccupancyIndex,
-    entity: Entity,
-    cells: &[IVec2],
-) {
-    for &cell in cells {
-        placement.remove_entity_from_cell(cell, entity);
-    }
-    commands.entity(entity).try_despawn();
 }

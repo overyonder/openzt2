@@ -26,10 +26,9 @@ pub(super) fn apply_prepared_placed_object_relocation_edit(
     application: EditApplication,
     edit: &PreparedObjectPlacementMutation,
     catalogue: openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView<'_>,
-    placement: &mut PlacedObjectFootprintOccupancyIndex,
+    placement: &PlacedObjectFootprintOccupancyIndex,
     scratch: &mut ObjectPlacementCellCollectionScratch,
     footprints: &ScenePlacementFootprints,
-    indexed_cells: &mut Query<&mut IndexedObjectPlacementCells>,
     placed: &mut Query<(
         &PersistentId,
         &PlacedObjectDefinitionReference,
@@ -97,23 +96,14 @@ pub(super) fn apply_prepared_placed_object_relocation_edit(
     {
         return false;
     }
-    let Ok(mut indexed) = indexed_cells.get_mut(target) else {
-        return false;
-    };
-    for cell in edit.cells.iter().chain(edit.previous_cells.iter()) {
-        placement.remove_entity_from_cell(*cell, target);
-    }
     *live_transform = transform;
     *occupancy = PlacedObjectFootprintOccupancy {
         origin,
         eighth_turns: turns,
     };
-    indexed.0 = cells.into();
-    for cell in cells.iter().copied() {
-        placement.insert_entity_into_cell(cell, target);
-    }
     commands
         .entity(target)
+        .insert(IndexedObjectPlacementCells(cells.into()))
         .remove::<RelocatingPlacedObject>()
         .remove::<PlacementRotationRequest>();
     if let Some(preview) = edit.preview {

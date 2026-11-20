@@ -52,7 +52,7 @@ impl AssetLoader for AnimationSetSourceAssetLoader {
                 &animation_set_source_bytes,
             )?
         };
-        let pending_animation_clip_source_asset_handles = animation_set_document
+        let preloaded_clip_sources = animation_set_document
             .animation_clips
             .iter()
             .filter(|reference| {
@@ -63,18 +63,18 @@ impl AssetLoader for AnimationSetSourceAssetLoader {
                     .load::<AnimationClipSourceAsset>(reference.animation_clip_asset_path.clone());
                 (reference.animation_clip_asset_key.clone(), source)
             })
-            .collect::<Vec<_>>();
+            .collect::<std::collections::BTreeMap<_, _>>();
         Ok(AnimationSetAsset {
             model_asset_path: animation_set_document.model_asset_path,
             skeleton_asset_path: animation_set_document.skeleton_asset_path,
             animation_clips: Vec::new(),
+            embedded_animation_graph: None,
             animation_graph_nodes: animation_set_document.animation_graph_nodes,
             animation_graph_order: animation_set_document.animation_graph_order,
             animation_graph_edges: animation_set_document.animation_graph_edges,
             animation_graph_metadata: animation_set_document.animation_graph_metadata,
             animation_clip_source_references: animation_set_document.animation_clips,
-            pending_animation_clip_source_asset_handles,
-            failed_animation_clip_asset_keys: Vec::new(),
+            preloaded_clip_sources,
         })
     }
 

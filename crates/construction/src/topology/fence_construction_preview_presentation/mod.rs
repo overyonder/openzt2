@@ -1,32 +1,30 @@
 //! Authored fence-prefab presentation for the active topology preview.
 
+use super::fence_segment_prefab_refresh::{adjacent_fences, incident_edges};
+use super::topology_construction_preview_types::FenceDrawPlan;
+use bevy::ecs::entity::EntityHashSet;
 use bevy::{ecs::relationship::RelationshipTarget, prelude::*};
+use openzt2_zoo_state::topology::topology_graph_types::{
+    FenceSegment, FencesEndingHere, FencesStartingHere,
+};
 
-use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_zoo_state::construction::construction_interaction_types::ConstructionPreview;
 use openzt2_zoo_state::construction::construction_interaction_types::PlacementValidity;
-use openzt2_zoo_state::terrain::terrain_chunk_types::EditedTerrainSamples;
-use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainChunk;
-use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainIndex;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentRoot;
 use openzt2_world_state::world_spawn::prefab_model_tint::PrefabModelTint;
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabRenderable;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
-use crate::topology::topology_construction_planning::calculate_fence_construction_plan;
-use crate::topology::topology_construction_planning::{
-    calculate_gate_replacement_plan, fence_definition_is_gate, GateHostEdges,
-};
+use crate::topology::topology_construction_planning::GateHostEdges;
 use crate::topology::topology_construction_preview_types::FencePreview;
 use crate::topology::topology_presentation_types::TopologyPresentation;
 use openzt2_zoo_state::topology::fence_segment_prefab_selection::select_authored_fence_segment_prefab_for_adjacent_topology;
 use openzt2_zoo_state::topology::fence_segment_prefab_selection::select_reciprocal_fence_curve_partners;
 use openzt2_zoo_state::topology::fence_segment_presentation_types::FenceSegmentPrefab;
 use openzt2_zoo_state::topology::fence_segment_presentation_types::FenceTerrainEndpointPresentationCells;
-use openzt2_zoo_state::topology::topology_graph_types::FenceEdge;
 use openzt2_zoo_state::topology::topology_graph_types::TopologyGrid;
 use openzt2_zoo_state::topology::topology_graph_types::TopologyIndex;
 use openzt2_zoo_state::topology::topology_graph_types::TopologyNode;
@@ -84,19 +82,18 @@ pub(super) fn reconcile_fence_construction_preview_presentation_segments(
     active_definitions: Res<WorldDefinitions>,
     grid: Res<TopologyGrid>,
     index: Res<TopologyIndex>,
-    terrain: Res<TerrainIndex>,
-    terrain_assets: Res<Assets<TerrainAsset>>,
-    terrain_chunks: Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
     previews: Query<
         (
             Entity,
-            Ref<FencePreview>,
+            &FencePreview,
+            Ref<FenceDrawPlan>,
             &WorldMember,
             Option<&FencePreviewSegments>,
         ),
         With<ConstructionPreview>,
     >,
-    fences: Query<&FenceEdge>,
+    fences: Query<FenceSegment>,
+    incident: Query<(Option<&FencesStartingHere>, Option<&FencesEndingHere>)>,
     gate_hosts: GateHostEdges,
     nodes: Query<&TopologyNode>,
     mut presentation_segments: Query<(
@@ -111,50 +108,43 @@ pub(super) fn reconcile_fence_construction_preview_presentation_segments(
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };
-    for (owner, preview, world_member, existing_segments) in &previews {
-        if !preview.is_changed() && !index.is_changed() {
+    for (owner, preview, plan, world_member, existing_segments) in &previews {
+        if !plan.is_changed() && !index.is_changed() && !grid.is_changed() {
             continue;
         }
-        let gate = fence_definition_is_gate(definitions, preview.definition);
-        // A gate previews as the gate variant of the fence it replaces.
-        let mut definition = definitions.find_fence(preview.definition);
-        let cells = if gate {
-            calculate_gate_replacement_plan(&preview, &index, definitions, &gate_hosts).map(
-                |(edge, _)| {
-                    definition = gate_hosts
-                        .get(edge)
-                        .ok()
-                        .and_then(|(host, ..)| definitions.find_gate_fence(host.definition));
-                    vec![preview.from, preview.to]
-                },
-            )
+        let definition = if let Some(edge) = plan.replaced {
+            gate_hosts
+                .get(edge)
+                .ok()
+                .and_then(|(host, ..)| definitions.find_gate_fence(host.definition))
         } else {
-            calculate_fence_construction_plan(
-                &preview,
-                &index,
-                *grid,
-                definitions,
-                &terrain,
-                &terrain_assets,
-                &terrain_chunks,
-                &gate_hosts,
-            )
-            .map(|(cells, ..)| cells)
-        }
-        .unwrap_or_default();
+            definitions.find_fence(preview.definition)
+        };
+        let cells = &plan.cells;
         let mut segments = cells
             .windows(2)
             .map(|pair| (preview.definition, pair[0], pair[1]))
             .collect::<Vec<_>>();
         // Pending segments must see the same junctions as the committed graph.
         // Keep them first so their presentation indexes still match the plan.
-        segments.extend(fences.iter().filter_map(|edge| {
-            Some((
-                edge.definition,
-                nodes.get(edge.a).ok()?.cell,
-                nodes.get(edge.b).ok()?.cell,
-            ))
-        }));
+        let touching = cells
+            .iter()
+            .filter_map(|cell| index.nodes.get(cell))
+            .flat_map(|&node| incident_edges(node, &incident))
+            .collect::<EntityHashSet>();
+        let neighbours = adjacent_fences(&touching, &fences, &incident);
+        segments.extend(
+            fences
+                .iter_many(neighbours)
+                .filter_map(Result::ok)
+                .filter_map(|edge| {
+                    Some((
+                        edge.definition,
+                        nodes.get(edge.a()).ok()?.cell,
+                        nodes.get(edge.b()).ok()?.cell,
+                    ))
+                }),
+        );
         let partners = select_reciprocal_fence_curve_partners(&segments);
         let segment_count = cells.len().saturating_sub(1);
         let mut entity_at_index = vec![None; segment_count];

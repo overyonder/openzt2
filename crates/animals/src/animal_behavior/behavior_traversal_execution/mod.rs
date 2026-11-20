@@ -3,8 +3,14 @@
 use avian3d::prelude::ColliderDisabled;
 use bevy::prelude::*;
 use openzt2_game_assets::{
-    animation::animation_set_asset_types::AnimationSetAsset, application_lifecycle::GamePhase,
+    animation::{
+        animation_clip_source_queries::AnimationClipSources,
+        animation_set_asset_types::{AnimationClipSourceAsset, AnimationSetAsset},
+    },
+    application_lifecycle::GamePhase,
 };
+use openzt2_world_state::animation_graph::animation_presentation_relationship_types::AnimationPresentations;
+use openzt2_world_state::animation_playback::traversal_animation_path_types::TraversalAnimationPath;
 use openzt2_world_state::{
     animation_graph::{
         animation_graph_playback_message_types::{
@@ -22,10 +28,7 @@ use openzt2_world_state::{
     simulation_time::simulation_clock_types::ZooClock,
 };
 use openzt2_zoo_state::{
-    animal_behavior::{
-        behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation,
-        behavior_traversal_types::BehaviorTraversalPath,
-    },
+    animal_behavior::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation,
     behavior_task_execution_types::{
         running_actions::{
             BehaviorInstructionId, RunBehaviorTraversalAnimation, RunBehaviorTraversalDock,
@@ -78,7 +81,7 @@ fn find_path(
     target: Entity,
     name: &str,
     children: &Query<&Children>,
-    paths: &Query<(&Name, &BehaviorTraversalPath, &GlobalTransform)>,
+    paths: &Query<(&Name, &TraversalAnimationPath, &GlobalTransform)>,
 ) -> Option<Entity> {
     children
         .iter_descendants_depth_first::<Children>(target)
@@ -120,7 +123,9 @@ fn start_traversal_docks(
     >,
     children: Query<&Children>,
     named: NamedNodeTransforms,
-    paths: Query<(&Name, &BehaviorTraversalPath, &GlobalTransform)>,
+    paths: Query<(&Name, &TraversalAnimationPath, &GlobalTransform)>,
+    sources: Res<Assets<AnimationClipSourceAsset>>,
+    clips: Res<Assets<AnimationClip>>,
     mut sequence: ResMut<NavigationRequestSequence>,
     mut requests: MessageWriter<DockAt>,
     mut playback: MessageWriter<AnimationClipPlaybackRequest>,
@@ -140,6 +145,10 @@ fn start_traversal_docks(
             continue;
         };
         let (_, geometry, _) = paths.get(path).expect("resolved traversal path");
+        let Some(entry) = geometry.local_pose(0.0, &sources, &clips) else {
+            mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
+            continue;
+        };
         if let Some(clip) = &action.clip {
             playback.write(AnimationClipPlaybackRequest {
                 animation_subject_entity: actor,
@@ -155,8 +164,8 @@ fn start_traversal_docks(
             entity: actor,
             request_id,
             target: path,
-            local_point: geometry.curve.position(0.0) - geometry.start_rotation * attachment,
-            local_forward: geometry.start_rotation * Vec3::Z,
+            local_point: entry.translation - entry.rotation * attachment,
+            local_forward: entry.rotation * Vec3::Z,
             radius_m: agent.radius_m.max(0.05),
         });
         commands.entity(actor).insert(TraversalDock {
@@ -237,7 +246,7 @@ fn start_traversal_animation(
     >,
     children: Query<&Children>,
     named: NamedNodeTransforms,
-    paths: Query<(&Name, &BehaviorTraversalPath, &GlobalTransform)>,
+    paths: Query<(&Name, &TraversalAnimationPath, &GlobalTransform)>,
     mut playback: MessageWriter<AnimationClipPlaybackRequest>,
     mut commands: Commands,
 ) {
@@ -258,11 +267,7 @@ fn start_traversal_animation(
         let request_id = playback
             .write(AnimationClipPlaybackRequest {
                 animation_subject_entity: actor,
-                animation_clip_asset_key: if action.exit {
-                    geometry.exit_clip.clone()
-                } else {
-                    geometry.enter_clip.clone()
-                },
+                animation_clip_asset_key: geometry.clip_key.clone(),
                 blend_duration_milliseconds: 0,
                 playback_speed_permille: 1000,
                 playback_repetition_policy: AnimationPlaybackRepetitionPolicy::PlayOnce,
@@ -292,8 +297,16 @@ fn animate_traversal(
         Has<PendingBehaviorTaskFailure>,
         &mut Transform,
     )>,
-    paths: Query<(&BehaviorTraversalPath, &GlobalTransform)>,
-    animations: Query<(&AnimationPresentationOwner, &AnimationPlaybackController)>,
+    paths: Query<(&TraversalAnimationPath, &GlobalTransform)>,
+    animations: Query<(
+        Option<&AnimationPresentationOwner>,
+        &AnimationPlaybackController,
+        &AnimationPlayer,
+    )>,
+    presentations: Query<&AnimationPresentations>,
+    clip_sources: AnimationClipSources,
+    sources: Res<Assets<AnimationClipSourceAsset>>,
+    clips: Res<Assets<AnimationClip>>,
     sets: Res<Assets<AnimationSetAsset>>,
     mut completed: MessageReader<AnimationCompleted>,
     mut rejected: MessageReader<AnimationClipPlaybackRequestRejected>,
@@ -302,12 +315,17 @@ fn animate_traversal(
     let completed = completed
         .read()
         .filter_map(|result| {
-            let (owner, _) = animations
+            let (owner, _, _) = animations
                 .get(result.animation_playback_controller_entity)
                 .ok()?;
-            result
-                .explicit_clip_request_id
-                .map(|id| (owner.gameplay_entity, id))
+            result.explicit_clip_request_id.map(|id| {
+                (
+                    owner.map_or(result.animation_playback_controller_entity, |owner| {
+                        owner.gameplay_entity
+                    }),
+                    id,
+                )
+            })
         })
         .collect::<Vec<_>>();
     let rejected = rejected
@@ -327,22 +345,18 @@ fn animate_traversal(
             let progress = if clip_completed {
                 Some(1.0)
             } else {
-                animations
-                    .iter()
-                    .find(|(owner, controller)| {
-                        owner.gameplay_entity == actor
-                            && controller.explicit_clip_request_id == Some(motion.request_id)
+                AnimationPresentations::for_subject(actor, presentations.get(actor).ok())
+                    .filter_map(|entity| animations.get(entity).ok())
+                    .find(|(_, controller, _)| {
+                        controller.explicit_clip_request_id == Some(motion.request_id)
                     })
-                    .and_then(|(_, controller)| {
+                    .and_then(|(_, controller, player)| {
                         let set = sets.get(&controller.animation_set_asset)?;
-                        let clip = set.animation_clips.iter().find(|clip| {
-                            clip.animation_clip_asset_key == controller.animation_clip_asset_key
-                        })?;
-                        Some(
-                            (controller.elapsed_milliseconds as f32
-                                / clip.duration_milliseconds.max(1) as f32)
-                                .clamp(0.0, 1.0),
-                        )
+                        let record = clip_sources.get(set, &controller.animation_clip_asset_key)?;
+                        let (_, node) = record.graph?;
+                        let active = player.animation(node)?;
+                        let clip = clips.get(record.clip)?;
+                        Some((active.seek_time() / clip.duration()).clamp(0.0, 1.0))
                     })
             };
             if let Some(progress) = progress {
@@ -351,12 +365,15 @@ fn animate_traversal(
                 } else {
                     progress
                 };
-                let local_rotation = path.start_rotation.slerp(path.end_rotation, t);
+                let Some(sample) = path.local_pose(t, &sources, &clips) else {
+                    continue;
+                };
+                let local_rotation = sample.rotation;
                 let rotation = world_transform.compute_transform().rotation * local_rotation;
                 let attachment = rotation * (transform.scale * motion.attachment);
                 transform.rotation = rotation;
                 transform.translation =
-                    world_transform.transform_point(path.curve.position(t)) - attachment;
+                    world_transform.transform_point(sample.translation) - attachment;
             }
             if !clip_completed {
                 continue;

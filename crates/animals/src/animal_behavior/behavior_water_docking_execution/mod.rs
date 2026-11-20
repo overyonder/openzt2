@@ -9,6 +9,7 @@ use openzt2_world_state::{
         AnimationClipPlaybackRequest, AnimationClipPlaybackRequestRejected,
         AnimationClipPlaybackRequestStarted, CancelAnimationClipPlaybackRequest,
     },
+    animation_graph::animation_presentation_relationship_types::AnimationPresentationOwner,
     animation_playback::{
         animation_event_message_types::AnimationCompleted,
         animation_playback_controller_types::{
@@ -88,53 +89,52 @@ fn receive_water_docking_events(
     mut completed: MessageReader<AnimationCompleted>,
     mut arrivals: MessageReader<Arrived>,
     mut failures: MessageReader<NavigationFailed>,
-    controllers: Query<(Entity, &openzt2_world_state::animation_graph::animation_presentation_relationship_types::AnimationPresentationOwner), With<AnimationPlaybackController>>,
+    owners: Query<&AnimationPresentationOwner, With<AnimationPlaybackController>>,
     mut docks: Query<(Entity, &mut WaterDock)>,
 ) {
     for event in starts.read() {
-        for (actor, mut dock) in &mut docks {
-            if actor != event.animation_subject_entity {
-                continue;
+        let Ok((_, mut dock)) = docks.get_mut(event.animation_subject_entity) else {
+            continue;
+        };
+        match &mut dock.stage {
+            WaterDockStage::Sampling { request, playback }
+            | WaterDockStage::Finishing { request, playback }
+                if *request == event.request_id =>
+            {
+                *playback = Some((event.controller_entity, event.playback_generation));
             }
-            let Some(controller) = controllers
-                .iter()
-                .find_map(|(entity, owner)| (owner.gameplay_entity == actor).then_some(entity))
-            else {
-                continue;
-            };
-            match &mut dock.stage {
-                WaterDockStage::Sampling { request, playback }
-                | WaterDockStage::Finishing { request, playback }
-                    if *request == event.request_id =>
-                {
-                    *playback = Some((controller, event.playback_generation));
-                }
-                _ => {}
-            }
+            _ => {}
         }
     }
     for event in rejections.read() {
-        for (_, mut dock) in &mut docks {
-            if matches!(dock.stage, WaterDockStage::Sampling { request, .. } | WaterDockStage::Finishing { request, .. } if request == event.request_id)
-            {
-                dock.stage = WaterDockStage::Failed;
-            }
+        let Ok((_, mut dock)) = docks.get_mut(event.animation_subject_entity) else {
+            continue;
+        };
+        if matches!(dock.stage, WaterDockStage::Sampling { request, .. } | WaterDockStage::Finishing { request, .. } if request == event.request_id)
+        {
+            dock.stage = WaterDockStage::Failed;
         }
     }
     for event in completed.read() {
-        for (_, mut dock) in &mut docks {
-            if let WaterDockStage::Finishing {
-                request,
-                playback: Some((controller, generation)),
-            } = dock.stage
-            {
-                if event.explicit_clip_request_id == Some(request)
-                    && event.animation_playback_controller_entity == controller
-                    && event.playback_generation == generation
-                {
-                    dock.stage = WaterDockStage::Finished;
-                }
-            }
+        let controller = event.animation_playback_controller_entity;
+        let actor = owners
+            .get(controller)
+            .map_or(controller, |owner| owner.gameplay_entity);
+        let Ok((_, mut dock)) = docks.get_mut(actor) else {
+            continue;
+        };
+        let WaterDockStage::Finishing {
+            request,
+            playback: Some((expected_controller, generation)),
+        } = dock.stage
+        else {
+            continue;
+        };
+        if event.explicit_clip_request_id == Some(request)
+            && controller == expected_controller
+            && event.playback_generation == generation
+        {
+            dock.stage = WaterDockStage::Finished;
         }
     }
     for event in arrivals.read() {

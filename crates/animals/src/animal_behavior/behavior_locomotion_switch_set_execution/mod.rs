@@ -18,7 +18,7 @@ use openzt2_game_assets::{
 };
 use openzt2_game_data::behavior::action::locomotion_switch_set::BehaviorLocomotionSwitchSetAction;
 use openzt2_world_state::animation_graph::animation_graph_playback_state_types::AnimationGraphPlaybackState;
-use openzt2_world_state::animation_graph::animation_presentation_relationship_types::AnimationPresentationOwner;
+use openzt2_world_state::animation_graph::animation_presentation_relationship_types::AnimationPresentations;
 use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackController;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_zoo_state::animal_lifecycle::types::SpeciesHandle;
@@ -256,11 +256,8 @@ pub(super) fn play_animation_node_behavior_sets(
     animal_types: super::behavior_subject_type_resolution::AnimalBehaviorSubjectTypes,
     clock: Res<ZooClock>,
     animation_sets: Res<Assets<AnimationSetAsset>>,
-    controllers: Query<(
-        &AnimationPresentationOwner,
-        &AnimationPlaybackController,
-        &AnimationGraphPlaybackState,
-    )>,
+    presentations: Query<&AnimationPresentations>,
+    controllers: Query<(&AnimationPlaybackController, &AnimationGraphPlaybackState)>,
     actors: Query<
         (
             Entity,
@@ -284,16 +281,16 @@ pub(super) fn play_animation_node_behavior_sets(
             continue;
         }
         let sets = running_action.0.clone();
-        let current_node = controllers
-            .iter()
-            .find(|(owner, _, _)| owner.gameplay_entity == actor)
-            .and_then(|(_, controller, state)| {
-                animation_sets
-                    .get(&controller.animation_set_asset)?
-                    .animation_graph_nodes
-                    .get(usize::try_from(state.current_animation_graph_node_index).ok()?)
-                    .map(|node| node.animation_graph_node_asset_key.clone())
-            });
+        let current_node =
+            AnimationPresentations::for_subject(actor, presentations.get(actor).ok())
+                .find_map(|entity| controllers.get(entity).ok())
+                .and_then(|(controller, state)| {
+                    animation_sets
+                        .get(&controller.animation_set_asset)?
+                        .animation_graph_nodes
+                        .get(usize::try_from(state.current_animation_graph_node_index).ok()?)
+                        .map(|node| node.animation_graph_node_asset_key.clone())
+                });
         let program = current_node
             .and_then(|node| {
                 sets.sets_by_animation_graph_node

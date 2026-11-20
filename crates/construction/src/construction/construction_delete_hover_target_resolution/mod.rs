@@ -2,18 +2,20 @@ use bevy::camera::primitives::Aabb;
 use bevy::ecs::system::SystemParam;
 use bevy::picking::mesh_picking::ray_cast::{RayCastBackfaces, SimplifiedMesh};
 use bevy::prelude::*;
+use openzt2_zoo_state::topology::topology_graph_types::FenceSegment;
+use openzt2_zoo_state::transport_tours::transport_pick_bounds::TransportPickBounds;
 
 use openzt2_game_data::world_definitions::transportation_and_tours::TransportationTrackKind;
 use openzt2_interface_state::camera::world_pointer_ray_types::WorldPointerRay;
 use openzt2_zoo_state::placement::placed_object_types::PlacedObjectDefinitionReference;
 use openzt2_zoo_state::topology::topology_graph_types::{
-    FenceEdge, TopologyGrid, TopologyIndex, TopologyNode,
+    TopologyGrid, TopologyIndex, TopologyNode,
 };
 use openzt2_zoo_state::transport_tours::transport_circuit_types::{
     CircuitMember, TransportCircuit,
 };
 use openzt2_zoo_state::transport_tours::transport_topology_types::{
-    TrackProfile, TrackSegment, TransportStation, TransportTrackJunction,
+    TrackIncidence, TrackProfile, TrackSegment, TransportStation, TransportTrackJunction,
 };
 use openzt2_zoo_state::transport_tours::transport_track_construction_types::TransportTrackConstructionPiece;
 use openzt2_zoo_state::transport_tours::transport_track_sale::TransportTrackSaleQueries;
@@ -128,7 +130,7 @@ pub(super) fn update_delete_hover_target(
         &mut DeleteHoverProbe,
         Option<&mut DeleteHoverTarget>,
     )>,
-    fences: Query<(Entity, &FenceEdge)>,
+    fences: Query<(Entity, FenceSegment)>,
     nodes: Query<&TopologyNode>,
     grid: Res<TopologyGrid>,
     track_pieces: Query<(Entity, &TransportTrackConstructionPiece)>,
@@ -137,7 +139,11 @@ pub(super) fn update_delete_hover_target(
         TransportTrackSaleQueries,
         Query<(Entity, &GlobalTransform), With<TransportTrackJunction>>,
     ),
-    sky_routes: Query<(&TrackSegment, &TrackProfile)>,
+    (sky_routes, track_incidence, transport_bounds): (
+        Query<&TrackProfile, With<TrackSegment>>,
+        TrackIncidence,
+        TransportPickBounds,
+    ),
     mut changes: DeleteTargetChanges,
 ) {
     let removed = changes.clear_removals();
@@ -189,7 +195,16 @@ pub(super) fn update_delete_hover_target(
             (*tool == ConstructionTool::Delete)
                 .then_some(ray.0)
                 .flatten()
-                .and_then(|ray| nearest_sky_tower(ray, &sky_towers, &sky_routes, &sales))
+                .and_then(|ray| {
+                    nearest_sky_tower(
+                        ray,
+                        &sky_towers,
+                        &sky_routes,
+                        &track_incidence,
+                        &transport_bounds,
+                        &sales,
+                    )
+                })
         })
         .or_else(|| {
             (*tool == ConstructionTool::Delete && cursor.over_terrain)
@@ -216,14 +231,14 @@ pub(super) fn update_delete_hover_target(
 
 fn nearest_fence(
     point: Vec2,
-    fences: &Query<(Entity, &FenceEdge)>,
+    fences: &Query<(Entity, FenceSegment)>,
     nodes: &Query<&TopologyNode>,
     grid: TopologyGrid,
 ) -> Option<Entity> {
     fences
         .iter()
         .filter_map(|(entity, fence)| {
-            let [a, b] = [fence.a, fence.b].map(|node| {
+            let [a, b] = [fence.a(), fence.b()].map(|node| {
                 nodes
                     .get(node)
                     .ok()
@@ -243,28 +258,25 @@ fn nearest_fence(
 fn nearest_sky_tower(
     ray: Ray3d,
     towers: &Query<(Entity, &GlobalTransform), With<TransportTrackJunction>>,
-    routes: &Query<(&TrackSegment, &TrackProfile)>,
+    routes: &Query<&TrackProfile, With<TrackSegment>>,
+    incidence: &TrackIncidence,
+    bounds: &TransportPickBounds,
     sales: &TransportTrackSaleQueries,
 ) -> Option<Entity> {
-    // A fixed 12 m pick height, read the tower's height if tall towers miss.
     towers
         .iter()
-        .filter_map(|(entity, transform)| {
-            let base = transform.translation();
-            let distance = (0_u8..=24)
-                .map(|step| base + Vec3::Y * (12.0 * f32::from(step) / 24.0))
-                .map(|point| {
-                    let along = (point - ray.origin).dot(*ray.direction).max(0.0);
-                    point.distance(ray.origin + *ray.direction * along)
+        .filter_map(|(entity, _)| {
+            let distance = bounds.hit_distance(entity, ray)?;
+            incidence
+                .incoming(entity)
+                .any(|route| {
+                    routes
+                        .get(route)
+                        .is_ok_and(|profile| profile.kind == TransportationTrackKind::Sky)
                 })
-                .fold(f32::INFINITY, f32::min);
-            (distance <= 2.0).then_some((entity, distance))
+                .then_some((entity, distance))
         })
-        .filter(|(entity, _)| {
-            routes.iter().any(|(route, profile)| {
-                route.to == *entity && profile.kind == TransportationTrackKind::Sky
-            }) && sales.can_sell_track_at(*entity)
-        })
+        .filter(|(entity, _)| sales.can_sell_track_at(*entity))
         .min_by(|(_, left), (_, right)| left.total_cmp(right))
         .map(|(entity, _)| entity)
 }

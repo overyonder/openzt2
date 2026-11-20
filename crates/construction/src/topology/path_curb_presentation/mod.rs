@@ -1,4 +1,3 @@
-use bevy::platform::collections::HashMap;
 use bevy::platform::collections::HashSet;
 use bevy::prelude::*;
 use openzt2_game_data::AssetId;
@@ -14,6 +13,9 @@ use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainIndex;
 use openzt2_zoo_state::terrain::terrain_edit_types::TerrainChanged;
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabPresentation;
 
+use super::path_presentation_neighborhood::{
+    cells_for_region, curb_neighborhood_radius, terrain_region,
+};
 use openzt2_zoo_state::topology::fence_segment_prefab_selection::select_authored_fence_segment_prefab_for_adjacent_topology;
 use openzt2_zoo_state::topology::fence_segment_prefab_selection::select_reciprocal_fence_curve_partners;
 use openzt2_zoo_state::topology::ground_path_boundary_queries::{
@@ -22,17 +24,15 @@ use openzt2_zoo_state::topology::ground_path_boundary_queries::{
 use openzt2_zoo_state::topology::ground_path_layout_calculation::calculate_snapped_ground_path_layout;
 use openzt2_zoo_state::topology::topology_edit_types::PathConnectivityChanged;
 use openzt2_zoo_state::topology::topology_graph_types::PathTile;
-use openzt2_zoo_state::topology::topology_graph_types::TopologyGrid;
+use openzt2_zoo_state::topology::topology_graph_types::{TopologyGrid, TopologyIndex};
 
 #[derive(Clone, Copy)]
 struct GroundPathMacroCellCurbPresentationRecord {
     owner: Entity,
-    definition: AssetId,
     curb: AssetId,
     cell: IVec3,
     centre_cell: IVec3,
     width_cells: i32,
-    tile_centre: Vec2,
 }
 
 #[derive(Clone, Copy)]
@@ -48,7 +48,6 @@ struct GroundPathConnectedCurbBoundarySegment {
 #[derive(Component)]
 pub struct PathCurbsHydrated {
     root: Option<Entity>,
-    segments: Vec<(IVec3, IVec3, AssetId, bool)>,
 }
 
 impl PathCurbsHydrated {
@@ -63,10 +62,8 @@ impl PathCurbsHydrated {
 
 /// Invalidates curb hierarchies whose exposed-edge result can have changed.
 ///
-/// A path insertion or removal changes the presentation of that cell and its
-/// four immediate neighbors. The topology edit message already owns that
-/// changed region, so curb projection remains reactive without scanning and
-/// rebuilding every path every frame.
+/// Include paths affected by neighbouring triangles, reciprocal curves and
+/// the terrain sampled beneath each segment.
 pub(crate) fn invalidate_path_curb_presentations_after_topology_or_terrain_changes(
     mut commands: Commands,
     mut changed: MessageReader<PathConnectivityChanged>,
@@ -74,66 +71,31 @@ pub(crate) fn invalidate_path_curb_presentations_after_topology_or_terrain_chang
     terrain_chunks: Query<&TerrainChunk>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
-    paths: Query<(Entity, &PathTile, &Transform, &PathCurbsHydrated)>,
+    paths: Query<&PathCurbsHydrated>,
+    index: Res<TopologyIndex>,
+    grid: Res<TopologyGrid>,
 ) {
-    if changed.is_empty() && terrain_changed.is_empty() {
-        return;
-    }
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };
-    let mut invalidated = HashSet::new();
-    let radius = definitions
-        .paths()
-        .filter_map({
-            let cell_size_cm = definitions.topology_cell_size_cm();
-            move |path| {
-                calculate_snapped_ground_path_layout(IVec3::ZERO, path.width_cm, cell_size_cm)
-                    .map(|(_, _, placement_step)| placement_step)
-            }
-        })
-        .max()
-        .unwrap_or(1);
+    let mut affected = bevy::ecs::entity::EntityHashSet::new();
+    let radius = IVec2::splat(curb_neighborhood_radius(definitions));
     for change in changed.read() {
-        let min = change.0.xy() - IVec2::splat(radius);
-        let max = change.0.xy() + IVec2::splat(radius);
-        for (entity, path, _, _) in &paths {
-            let cell = path.cell.xy();
-            if cell.x < min.x || cell.y < min.y || cell.x > max.x || cell.y > max.y {
-                continue;
-            }
-            invalidated.insert(entity);
-        }
+        let cell = change.0.xy();
+        affected.extend(index.paths_within(cell - radius, cell + radius));
     }
-    let changed_regions = terrain_changed
+    let reach = f32::from(definitions.maximum_ground_path_width_cm()) * 0.005;
+    for (min, max) in terrain_changed
         .read()
-        .filter_map(|change| {
-            let chunk = terrain_chunks.get(change.chunk).ok()?;
-            Some((
-                chunk.origin + change.min.as_vec2() * chunk.spacing_m,
-                chunk.origin + change.max.as_vec2() * chunk.spacing_m,
-            ))
-        })
-        .collect::<Vec<_>>();
-    for (entity, path, transform, _presentation) in &paths {
-        let Some(half_width_m) = (|| {
-            let definition = definitions.find_path(path.definition)?;
-            (!definition.elevated).then(|| f32::from(definition.width_cm) * 0.005)
-        })() else {
-            continue;
-        };
-        let centre = transform.translation.xz();
-        if changed_regions.iter().any(|(min, max)| {
-            let extent = Vec2::splat(half_width_m);
-            centre.cmpge(*min - extent).all() && centre.cmple(*max + extent).all()
-        }) {
-            invalidated.insert(entity);
-        }
+        .filter_map(|change| terrain_region(change, &terrain_chunks))
+    {
+        let (min, max) = cells_for_region(*grid, min, max, reach);
+        affected.extend(index.paths_within(min, max));
     }
-    for (entity, _, _, presentation) in &paths {
-        if invalidated.contains(&entity) {
+    for entity in affected {
+        if let Ok(presentation) = paths.get(entity) {
             if let Some(root) = presentation.root {
-                commands.entity(root).despawn();
+                commands.entity(root).try_despawn();
             }
             commands.entity(entity).remove::<PathCurbsHydrated>();
         }
@@ -153,104 +115,82 @@ pub(crate) fn hydrate_authored_path_curb_prefab_presentations(
     terrain_assets: Res<Assets<TerrainAsset>>,
     terrain_chunks: Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
     terrain_index: Res<TerrainIndex>,
-    paths: Query<(Entity, &PathTile, &Transform, Option<&PathCurbsHydrated>)>,
-    paths_awaiting_curb_hydration: Query<(), (With<PathTile>, Without<PathCurbsHydrated>)>,
-    mut topology_changed: MessageReader<PathConnectivityChanged>,
+    index: Res<TopologyIndex>,
+    paths: Query<&PathTile>,
+    dirty_paths: Query<(Entity, &PathTile, &Transform), Without<PathCurbsHydrated>>,
 ) {
-    let boundary_changed = topology_changed.read().count() != 0;
-    if paths_awaiting_curb_hydration.is_empty() && !boundary_changed {
+    if dirty_paths.is_empty() {
         return;
     }
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };
-    let path_rows = paths
-        .iter()
-        .filter_map(|(entity, path, transform, _)| {
-            (|| {
-                let definition = definitions.find_path(path.definition)?;
-                if definition.elevated {
-                    return None;
-                }
-                let width_cm = definition.width_cm;
-                let cell_size_cm = definitions.topology_cell_size_cm();
-                let (centre_cell, width_cells, _) =
-                    calculate_snapped_ground_path_layout(path.cell, width_cm, cell_size_cm)?;
-                Some(GroundPathMacroCellCurbPresentationRecord {
-                    owner: entity,
-                    definition: path.definition,
-                    curb: AssetId(definition.curb.0),
-                    cell: path.cell,
-                    centre_cell,
-                    width_cells,
-                    tile_centre: transform.translation.xz(),
-                })
-            })()
-        })
-        .collect::<Vec<_>>();
-    let mut owners = HashMap::<(AssetId, IVec3), Entity>::new();
-    let mut triangles = HashSet::<IVec3>::new();
-    for path in &path_rows {
-        triangles.extend(ground_path_tile_triangles(
+    let radius = IVec2::splat(curb_neighborhood_radius(definitions));
+    let path_row = |(owner, path): (Entity, &PathTile)| {
+        let definition = definitions.find_path(path.definition)?;
+        if definition.elevated {
+            return None;
+        }
+        let (centre_cell, width_cells, _) = calculate_snapped_ground_path_layout(
             path.cell,
-            path.centre_cell,
-            path.width_cells,
-        ));
-        owners
-            .entry((path.definition, path.cell))
-            .and_modify(|owner| {
-                if path.owner.to_bits() < owner.to_bits() {
-                    *owner = path.owner;
-                }
-            })
-            .or_insert(path.owner);
-    }
-    let connected_curb_boundary_segments = path_rows
-        .iter()
-        .filter(|path| owners.get(&(path.definition, path.cell)) == Some(&path.owner))
-        .flat_map(|path| {
-            ground_path_tile_triangles(path.cell, path.centre_cell, path.width_cells)
-                .flat_map(|triangle| {
-                    ground_path_triangle_curb_boundary(&triangles, path.centre_cell, triangle)
-                })
-                .map(
-                    |(first_cell, second_cell)| GroundPathConnectedCurbBoundarySegment {
-                        owner: path.owner,
-                        curb: path.curb,
-                        first_cell,
-                        second_cell,
-                    },
-                )
-                .collect::<Vec<_>>()
+            definition.width_cm,
+            definitions.topology_cell_size_cm(),
+        )?;
+        Some(GroundPathMacroCellCurbPresentationRecord {
+            owner,
+            curb: AssetId(definition.curb.0),
+            cell: path.cell,
+            centre_cell,
+            width_cells,
         })
-        .collect::<Vec<_>>();
-
-    let curve_edges = connected_curb_boundary_segments
-        .iter()
-        .map(|segment| (segment.curb, segment.first_cell, segment.second_cell))
-        .collect::<Vec<_>>();
-    let curve_partners = select_reciprocal_fence_curve_partners(&curve_edges);
-
-    for (entity, _path, transform, hydrated) in &paths {
-        let Some(path) = path_rows
-            .iter()
-            .find(|candidate| candidate.owner == entity)
-            .filter(|path| path.curb != AssetId::default())
-            .filter(|path| owners.get(&(path.definition, path.cell)) == Some(&entity))
-            .copied()
-        else {
-            if let Some(root) = hydrated.and_then(|current| current.root) {
-                commands.entity(root).despawn();
-            }
-            commands.entity(entity).insert(PathCurbsHydrated {
-                root: None,
-                segments: Vec::new(),
-            });
+    };
+    for (entity, tile, transform) in &dirty_paths {
+        let Some(path) = path_row((entity, tile)).filter(|path| {
+            path.curb != AssetId::default() && index.paths.get(&path.cell) == Some(&entity)
+        }) else {
+            commands
+                .entity(entity)
+                .insert(PathCurbsHydrated { root: None });
             continue;
         };
         let Some(curb_definition) = definitions.find_fence(path.curb) else {
             continue;
         };
+        let centre = path.centre_cell.xy();
+        let neighbours = index
+            .paths_within(centre - radius, centre + radius)
+            .filter_map(|entity| path_row((entity, paths.get(entity).ok()?)))
+            .filter(|row| row.cell.z == path.cell.z)
+            .collect::<Vec<_>>();
+        let triangles: HashSet<_> = neighbours
+            .iter()
+            .flat_map(|path| {
+                ground_path_tile_triangles(path.cell, path.centre_cell, path.width_cells)
+            })
+            .collect();
+        let connected_curb_boundary_segments = neighbours
+            .iter()
+            .flat_map(|path| {
+                ground_path_tile_triangles(path.cell, path.centre_cell, path.width_cells)
+                    .flat_map(|triangle| {
+                        ground_path_triangle_curb_boundary(&triangles, path.centre_cell, triangle)
+                    })
+                    .map(
+                        |(first_cell, second_cell)| GroundPathConnectedCurbBoundarySegment {
+                            owner: path.owner,
+                            curb: path.curb,
+                            first_cell,
+                            second_cell,
+                        },
+                    )
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let curve_edges = connected_curb_boundary_segments
+            .iter()
+            .map(|segment| (segment.curb, segment.first_cell, segment.second_cell))
+            .collect::<Vec<_>>();
+        let curve_partners = select_reciprocal_fence_curve_partners(&curve_edges);
         let selected_segments = connected_curb_boundary_segments
             .iter()
             .enumerate()
@@ -271,11 +211,6 @@ pub(crate) fn hydrate_authored_path_curb_prefab_presentations(
             .filter(|(_, _, prefab)| prefab.asset != AssetId::default())
             .map(|(first, second, prefab)| (first, second, prefab.asset, prefab.mirror_source_y))
             .collect::<Vec<_>>();
-        // Reciprocal curve pairing also depends on the partner's other end.
-        // Compare the selected geometry beyond the immediate edited cells.
-        if hydrated.is_some_and(|current| current.segments == selected_segments) {
-            continue;
-        }
         // Prefab presentation keeps strong handles throughout
         // asynchronous loading and renders each segment once it is ready.
         // Looking up Assets here and dropping an unready handle cancels the
@@ -290,9 +225,6 @@ pub(crate) fn hydrate_authored_path_curb_prefab_presentations(
         else {
             continue;
         };
-        if let Some(root) = hydrated.and_then(|current| current.root) {
-            commands.entity(root).despawn();
-        }
         let mut root = None;
         for (first, second, mirror_source_y, prefab) in ready_segments {
             let root = *root.get_or_insert_with(|| {
@@ -318,9 +250,9 @@ pub(crate) fn hydrate_authored_path_curb_prefab_presentations(
             let direction = second_world - first_world;
             commands.spawn((
                 Transform::from_translation(Vec3::new(
-                    first_world.x - path.tile_centre.x,
+                    first_world.x - transform.translation.xz().x,
                     local_y,
-                    first_world.z - path.tile_centre.y,
+                    first_world.z - transform.translation.xz().y,
                 ))
                 .with_rotation(Quat::from_rotation_y((-direction.z).atan2(direction.x)))
                 .with_scale(Vec3::new(
@@ -333,10 +265,7 @@ pub(crate) fn hydrate_authored_path_curb_prefab_presentations(
                 PrefabPresentation::new(prefab),
             ));
         }
-        commands.entity(entity).insert(PathCurbsHydrated {
-            root,
-            segments: selected_segments,
-        });
+        commands.entity(entity).insert(PathCurbsHydrated { root });
     }
 }
 

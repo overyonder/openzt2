@@ -1,6 +1,7 @@
+use super::topology_construction_preview_types::PathDrawPlan;
 use super::{
     topology_construction_planning::{
-        calculate_ground_path_construction_cells, calculate_path_construction_plan,
+        calculate_ground_path_construction_cells, validate_path_construction_cells,
     },
     topology_construction_preview_types::PathPreview,
 };
@@ -22,9 +23,7 @@ use openzt2_interface_state::ui::pointer_capture_types::UiPointerCapture;
 use openzt2_world_state::world_spawn::world_membership_types::{WorldMember, WorldRoot};
 use openzt2_zoo_state::{
     construction::{
-        construction_interaction_types::{
-            ConstructionCursor, ConstructionPreview, PlacementValidity,
-        },
+        construction_interaction_types::{ConstructionCursor, PlacementValidity},
         construction_tool_and_placement_policy_types::ConstructionTool,
     },
     terrain::{
@@ -84,7 +83,7 @@ pub(super) fn present_ground_path_placement_highlights(
     mut terrain_changes: MessageReader<TerrainChanged>,
     cursors: Query<&ConstructionCursor>,
     roots: Query<Entity, With<WorldRoot>>,
-    previews: Query<(&PathPreview, &ConstructionPreview)>,
+    previews: Query<(&PathPreview, &PathDrawPlan)>,
     mut highlights: Query<(
         Entity,
         &PathPlacementHighlight,
@@ -127,25 +126,28 @@ pub(super) fn present_ground_path_placement_highlights(
         from: cell,
         to: cell,
     };
-    let (preview, validity) = previews
+    let (cells, valid) = if let Some((_, plan)) = previews
         .single()
         .ok()
         .filter(|(path, _)| path.definition == definition.id)
-        .map_or((&hovered, None), |(path, construction)| {
-            (path, Some(construction.validity))
-        });
-    let Ok(cells) = calculate_ground_path_construction_cells(
-        preview.from,
-        preview.to,
-        definition.width_cm,
-        definitions.topology_cell_size_cm(),
-        &index,
-    ) else {
-        return;
-    };
-    let valid = !matches!(validity, Some(PlacementValidity::Invalid(_)))
-        && calculate_path_construction_plan(
-            preview,
+    {
+        (
+            plan.cells.clone(),
+            matches!(plan.validity, PlacementValidity::Valid { .. }),
+        )
+    } else {
+        let Ok(cells) = calculate_ground_path_construction_cells(
+            hovered.from,
+            hovered.to,
+            definition.width_cm,
+            definitions.topology_cell_size_cm(),
+            &index,
+        ) else {
+            return;
+        };
+        let valid = validate_path_construction_cells(
+            cells.clone(),
+            definition,
             &index,
             *grid,
             definitions,
@@ -154,6 +156,8 @@ pub(super) fn present_ground_path_placement_highlights(
             &terrain_chunks,
         )
         .is_ok();
+        (cells, valid)
+    };
     let desired: HashSet<_> = cells.into_iter().collect();
     let mut retained = HashSet::default();
     for (entity, highlight, mesh, mut material, mut visibility) in &mut highlights {

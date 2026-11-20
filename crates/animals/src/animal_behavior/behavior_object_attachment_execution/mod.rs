@@ -177,8 +177,9 @@ fn start_or_finish_object_attachment(
     transforms: Query<&GlobalTransform>,
     children: Query<&Children>,
     attachment_nodes: Query<&PrefabAuthoredAttachmentIdentifier>,
+    presentations: Query<&openzt2_world_state::animation_graph::animation_presentation_relationship_types::AnimationPresentations>,
     animated: Query<
-        &openzt2_world_state::animation_graph::animation_presentation_relationship_types::AnimationPresentationOwner,
+        (),
         With<openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackController>,
     >,
 ) {
@@ -278,7 +279,9 @@ fn start_or_finish_object_attachment(
         // static model, cannot play the authored clip: the item attaches at
         // once and its detach rule applies as the clip's end would.
         let plays_clip = action.animation.is_some()
-            && animated.iter().any(|owner| owner.gameplay_entity == actor);
+            && openzt2_world_state::animation_graph::animation_presentation_relationship_types::AnimationPresentations::for_subject(
+                actor, presentations.get(actor).ok()
+            ).any(|controller| animated.contains(controller));
         let detach_at_once = action.animation.is_some() && !plays_clip;
         if let Some(animation) = action.animation.as_ref().filter(|_| plays_clip) {
             if pending.is_none_or(|pending| pending.request_id.is_none()) {

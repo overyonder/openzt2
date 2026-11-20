@@ -15,13 +15,17 @@ use crate::topology::topology_construction_preview_types::PlacePath;
 use crate::topology::topology_fence_definition_test_fixture::install_fence_definition_for_topology_transaction_tests;
 use bevy::camera::NormalizedRenderTarget;
 use bevy::picking::pointer::{Location, PointerAction, PointerButton, PointerId, PointerInput};
+use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use openzt2_game_assets::terrain::terrain_test_asset::terrain_test_asset;
 use openzt2_interface_state::ui::pointer_capture_types::UiPointerCapture;
 use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 use openzt2_zoo_state::construction::construction_interaction_types::CommitConstruction;
 use openzt2_zoo_state::construction::construction_interaction_types::ConstructionCursor;
 use openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::ConstructionTool;
-use openzt2_zoo_state::topology::topology_graph_types::EdgeKey;
+use openzt2_zoo_state::terrain::terrain_chunk_types::{
+    EditedTerrainSamples, TerrainChunk, TerrainIndex,
+};
+use openzt2_zoo_state::topology::topology_graph_types::FenceEdge;
 
 fn fence_preview_app() -> App {
     let mut app = App::new();
@@ -37,11 +41,14 @@ fn fence_preview_app() -> App {
         .add_message::<PlaceFence>()
         .add_message::<PlacePath>()
         .add_message::<CommitConstruction>()
+        .add_message::<openzt2_zoo_state::terrain::terrain_edit_types::TerrainChanged>()
+        .add_message::<openzt2_zoo_state::topology::topology_edit_types::FenceConnectivityChanged>()
         .add_systems(
             Update,
             (
                 drive_selected_topology_placement_pointer_sequence,
                 apply_fence_placement_requests_to_construction_previews,
+                crate::topology::topology_construction_interaction::evaluate_topology_construction_preview_validity,
                 reconcile_fence_construction_preview_presentation_segments,
                 refresh_fence_segment_prefabs_after_topology_index_changes,
             )
@@ -121,22 +128,11 @@ fn insert_fence(app: &mut App, definition: AssetId, first: IVec3, second: IVec3)
         if let Some(entity) = app.world().resource::<TopologyIndex>().nodes.get(&cell) {
             return *entity;
         }
-        let entity = app.world_mut().spawn(TopologyNode { cell }).id();
-        app.world_mut()
-            .resource_mut::<TopologyIndex>()
-            .nodes
-            .insert(cell, entity);
-        entity
+        app.world_mut().spawn(TopologyNode { cell }).id()
     });
-    let edge = app
-        .world_mut()
-        .spawn((FenceEdge { definition, a, b }, Transform::IDENTITY))
-        .id();
-    let mut index = app.world_mut().resource_mut::<TopologyIndex>();
-    index
-        .edges
-        .insert(EdgeKey::new(first, second).unwrap(), edge);
-    edge
+    app.world_mut()
+        .spawn((FenceEdge::between(definition, a, b), Transform::IDENTITY))
+        .id()
 }
 
 fn spawn_preview(app: &mut App, from: IVec3, to: IVec3) -> Entity {

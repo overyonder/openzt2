@@ -8,11 +8,12 @@ use openzt2_zoo_state::construction::construction_interaction_types::Constructio
 use openzt2_zoo_state::construction::construction_interaction_types::PlacementValidity;
 use openzt2_zoo_state::economy::money_types::Money;
 
-use crate::placement::object_placement_preview_validation::request_changed_object_placement_preview_evaluations;
+use crate::placement::object_placement_preview_validation::{
+    mark_changed_object_placement_previews_dirty, ObjectPlacementPreviewDirty,
+};
 use openzt2_zoo_state::placement::object_placement_geometry::ScenePlacementFootprintChanged;
 use openzt2_zoo_state::placement::placement_occupancy_index::PlacedObjectFootprintOccupancyIndex;
 use openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementPreviewPermissionFacts;
-use openzt2_zoo_state::placement::placement_transaction_types::EvaluateObjectPlacementPreviewRequest;
 
 #[test]
 fn occupancy_index_change_revalidates_an_unchanged_continuing_preview() {
@@ -25,56 +26,48 @@ fn occupancy_index_change_revalidates_an_unchanged_continuing_preview() {
         .add_message::<openzt2_zoo_state::terrain::terrain_edit_types::TerrainChanged>()
         .add_message::<openzt2_zoo_state::habitat::habitat_types::ContainmentChanged>()
         .add_message::<ScenePlacementFootprintChanged>()
-        .add_message::<EvaluateObjectPlacementPreviewRequest>()
-        .add_systems(Update, request_changed_object_placement_preview_evaluations);
-    app.world_mut().spawn((
-        ConstructionPreview {
-            definition: AssetId([3; 16]),
-            transform: Transform::IDENTITY,
-            validity: PlacementValidity::Valid { cost: Money(100) },
-        },
-        ObjectPlacementPreviewPermissionFacts {
-            unlocked: true,
-            affordable: true,
-            topology_valid: true,
-            headroom_valid: true,
-            surface_valid: true,
-            prefab_ready: true,
-        },
-    ));
-    let mut cursor = app
+        .add_systems(Update, mark_changed_object_placement_previews_dirty);
+    let preview = app
+        .world_mut()
+        .spawn((
+            ConstructionPreview {
+                definition: AssetId([3; 16]),
+                transform: Transform::IDENTITY,
+                validity: PlacementValidity::Valid { cost: Money(100) },
+            },
+            ObjectPlacementPreviewPermissionFacts {
+                unlocked: true,
+                affordable: true,
+                topology_valid: true,
+                headroom_valid: true,
+                surface_valid: true,
+                prefab_ready: true,
+            },
+        ))
+        .id();
+    app.update();
+    assert!(app
         .world()
-        .resource::<Messages<EvaluateObjectPlacementPreviewRequest>>()
-        .get_cursor();
-    app.update();
-    assert_eq!(
-        cursor
-            .read(
-                app.world()
-                    .resource::<Messages<EvaluateObjectPlacementPreviewRequest>>()
-            )
-            .count(),
-        1
-    );
-    app.update();
-    assert_eq!(
-        cursor
-            .read(
-                app.world()
-                    .resource::<Messages<EvaluateObjectPlacementPreviewRequest>>()
-            )
-            .count(),
-        0
-    );
-    let occupied = app.world_mut().spawn_empty().id();
+        .get::<ObjectPlacementPreviewDirty>(preview)
+        .is_some());
     app.world_mut()
-        .resource_mut::<PlacedObjectFootprintOccupancyIndex>()
-        .insert_entity_into_cell(IVec2::ZERO, occupied);
+        .entity_mut(preview)
+        .remove::<ObjectPlacementPreviewDirty>();
+    app.update();
+    assert!(app
+        .world()
+        .get::<ObjectPlacementPreviewDirty>(preview)
+        .is_none());
+    app.world_mut().spawn(
+        openzt2_zoo_state::placement::placed_object_types::IndexedObjectPlacementCells(Box::new([
+            IVec2::ZERO,
+        ])),
+    );
 
     app.update();
 
-    let messages = app
+    assert!(app
         .world()
-        .resource::<Messages<EvaluateObjectPlacementPreviewRequest>>();
-    assert_eq!(cursor.read(messages).count(), 1);
+        .get::<ObjectPlacementPreviewDirty>(preview)
+        .is_some());
 }

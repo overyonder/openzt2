@@ -21,7 +21,9 @@ use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 
 use super::{
     adoption_offer_inventory_types::AnimalAdoptionOfferInventory,
-    animal_adoption_contracts::{AdoptAnimal, AnimalAdopted, PendingAdoption},
+    animal_adoption_contracts::{
+        AdoptAnimal, AnimalAdopted, AnimalAdoptionRefund, PendingAdoption,
+    },
     animal_adoption_pricing::resolve_nonnegative_animal_adoption_cost,
     animal_spawn_operation_contracts::{AnimalSpawnRejected, AnimalSpawned, SpawnAnimalRequest},
     animal_spawn_resolution::resolve_species_and_variant_to_animal_spawn_components,
@@ -32,9 +34,6 @@ use super::{
 /// was requested. It lives only on the caller-owned operation entity.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct CompletedAnimalAdoptionPayment;
-
-#[derive(Component)]
-pub(super) struct AnimalAdoptionRefund;
 
 pub(super) fn request_animal_adoption_payment_or_unpaid_spawn(
     mut commands: Commands,

@@ -8,8 +8,7 @@ use super::{
 use bevy::prelude::*;
 use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
 use openzt2_game_data::AssetId;
-use openzt2_world_state::animation_graph::animation_presentation_relationship_types::AnimationPresentationOwner;
-use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackController;
+use openzt2_world_state::animation_graph::animation_presentation_relationship_types::AnimationPresentations;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_zoo_state::animal_behavior::behavior_synchronized_set_types::{
     SynchronizedBehaviorOperation, SynchronizedBehaviorPartner, SynchronizedBehaviorSubject,
@@ -136,10 +135,8 @@ pub(super) fn claim_synchronized_behavior(
         Has<BehaviorTaskExecutionState>,
     )>,
     mut sequence: ResMut<BehaviorTaskExecutionSequence>,
-    mut controllers: Query<(
-        &AnimationPresentationOwner,
-        &mut AnimationPlaybackController,
-    )>,
+    presentations: Query<&AnimationPresentations>,
+    mut players: Query<&mut AnimationPlayer>,
 ) {
     let actor = request.actor;
     let Ok((task, instruction)) = actors.get(actor) else {
@@ -207,9 +204,15 @@ pub(super) fn claim_synchronized_behavior(
         &mut commands,
     );
     if prepared.reset_animation_phase {
-        for (owner, mut controller) in &mut controllers {
-            if owner.gameplay_entity == actor || owner.gameplay_entity == target {
-                controller.elapsed_milliseconds = 0;
+        for subject in [actor, target] {
+            for controller in
+                AnimationPresentations::for_subject(subject, presentations.get(subject).ok())
+            {
+                if let Ok(mut player) = players.get_mut(controller) {
+                    for (_, active) in player.playing_animations_mut() {
+                        active.set_seek_time(0.0);
+                    }
+                }
             }
         }
     }

@@ -1,5 +1,6 @@
 //! Authored object placement over loaded definitions and precise ECS indexes.
 
+use bevy::ecs::schedule::common_conditions::any_with_component;
 mod behavior_target_placement_application;
 mod biome_automatic_object_placement_edit_preparation;
 mod ground_path_placement_stomp;
@@ -34,23 +35,20 @@ use crate::placement::object_placement_preview_presentation::hydrate_object_plac
 use crate::placement::object_placement_preview_presentation::project_object_placement_validity_onto_preview_model_tint;
 use crate::placement::object_placement_preview_presentation::rebuild_object_placement_preview_footprint_and_grid_decals;
 use crate::placement::object_placement_preview_rotation::rotate_active_object_placement_preview_by_authored_increment;
-use crate::placement::object_placement_preview_validation::evaluate_requested_object_placement_previews;
-use crate::placement::object_placement_preview_validation::request_changed_object_placement_preview_evaluations;
+use crate::placement::object_placement_preview_validation::evaluate_dirty_object_placement_previews;
+use crate::placement::object_placement_preview_validation::mark_changed_object_placement_previews_dirty;
 use crate::placement::object_placement_request_routing::cancel_all_active_object_relocations;
 use crate::placement::object_placement_request_routing::route_placed_object_removal_requests_to_construction;
 use crate::placement::object_placement_request_routing::route_valid_object_placement_requests_to_construction;
 use crate::placement::placed_object_footprint_occupancy_index_synchronization::hydrate_placed_object_placement_components;
 use crate::placement::placed_object_footprint_occupancy_index_synchronization::synchronize_physics_moved_object_footprints_with_occupancy_index;
-use crate::placement::placed_object_footprint_occupancy_index_synchronization::{
-    remove_indexed_placement_footprint, synchronize_placed_footprints,
-};
+use crate::placement::placed_object_footprint_occupancy_index_synchronization::synchronize_placed_footprints;
 use crate::placement::placed_object_removal_edit_preparation::prepare_placed_object_removal_edit;
 use crate::placement::placed_object_terrain_support_reconciliation::reconcile_static_placed_object_support_after_terrain_changes;
 use openzt2_zoo_state::placement::placement_occupancy_index::PlacedObjectFootprintOccupancyIndex;
 use openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementCellCollectionScratch;
 use openzt2_zoo_state::placement::placement_transaction_types::ApplyPreparedObjectPlacementEditRequest;
 use openzt2_zoo_state::placement::placement_transaction_types::CommitObjectPlacementPreviewRequest;
-use openzt2_zoo_state::placement::placement_transaction_types::EvaluateObjectPlacementPreviewRequest;
 use openzt2_zoo_state::placement::placement_transaction_types::ObjectPlacementCommitted;
 use openzt2_zoo_state::placement::placement_transaction_types::ObjectPlacementEditApplicationAcknowledged;
 use openzt2_zoo_state::placement::placement_transaction_types::ObjectPlacementEditPreparationRejected;
@@ -115,9 +113,7 @@ impl Plugin for ObjectPlacementPlugin {
         );
         app.init_resource::<PlacedObjectFootprintOccupancyIndex>()
             .init_resource::<ObjectPlacementCellCollectionScratch>()
-            .add_message::<EvaluateObjectPlacementPreviewRequest>()
             .add_message::<openzt2_zoo_state::placement::object_placement_geometry::ScenePlacementFootprintChanged>()
-            .add_observer(remove_indexed_placement_footprint)
             .add_message::<CommitObjectPlacementPreviewRequest>()
             .add_message::<RemovePlacedObjectRequest>()
             .init_resource::<openzt2_zoo_state::placement::object_placement_geometry::ScenePlacementFootprints>()
@@ -131,26 +127,40 @@ impl Plugin for ObjectPlacementPlugin {
             .add_systems(
                 Update,
                 (
-                    route_valid_object_placement_requests_to_construction,
                     route_placed_object_removal_requests_to_construction,
                     cancel_all_active_object_relocations,
-                    create_active_object_placement_preview,
+                    create_active_object_placement_preview
+                        .after(crate::construction::construction_tool_and_action_routing::select_construction_tool),
                     biome_automatic_object_placement_edit_preparation::hydrate_biome_automatic_placement_state_onto_world_and_terrain_brush_previews,
-                    hydrate_object_placement_preview_prefab_render_tree,
-                    apply_authored_initial_animal_placement_preview_animation_repetition_policy,
+                    hydrate_object_placement_preview_prefab_render_tree.after(create_active_object_placement_preview),
+                    apply_authored_initial_animal_placement_preview_animation_repetition_policy
+                        .after(hydrate_object_placement_preview_prefab_render_tree),
                     hydrate_object_placement_preview_materials_from_ui_document,
-                    rotate_active_object_placement_preview_by_authored_increment,
-                    synchronize_object_placement_preview_with_construction_cursor,
-                    project_authoritative_facts_onto_object_placement_previews,
-                    request_changed_object_placement_preview_evaluations,
-                    evaluate_requested_object_placement_previews,
-                    rebuild_object_placement_preview_footprint_and_grid_decals,
-                    crate::placement::object_placement_preview_presentation::pulse_object_placement_entrance_arrows,
-                    project_object_placement_validity_onto_preview_model_tint,
-                    crate::placement::object_placement_preview_presentation::hide_alpha_blended_meshes_of_object_placement_previews,
-                    animate_object_placement_preview_presentation_toward_authoritative_transform,
+                    rotate_active_object_placement_preview_by_authored_increment.after(create_active_object_placement_preview),
+                    synchronize_object_placement_preview_with_construction_cursor
+                        .after(rotate_active_object_placement_preview_by_authored_increment)
+                        .after(openzt2_zoo_state::construction::ConstructionCursorUpdateSet),
+                    project_authoritative_facts_onto_object_placement_previews
+                        .after(synchronize_object_placement_preview_with_construction_cursor)
+                        .run_if(any_with_component::<openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementPrefabSource>),
+                    mark_changed_object_placement_previews_dirty.after(project_authoritative_facts_onto_object_placement_previews),
+                    evaluate_dirty_object_placement_previews.after(mark_changed_object_placement_previews_dirty),
+                    route_valid_object_placement_requests_to_construction.after(evaluate_dirty_object_placement_previews),
+                    rebuild_object_placement_preview_footprint_and_grid_decals
+                        .after(evaluate_dirty_object_placement_previews)
+                        .after(hydrate_object_placement_preview_materials_from_ui_document),
+                    (
+                        crate::placement::object_placement_preview_presentation::pulse_object_placement_entrance_arrows
+                            .after(rebuild_object_placement_preview_footprint_and_grid_decals),
+                        project_object_placement_validity_onto_preview_model_tint
+                            .after(evaluate_dirty_object_placement_previews)
+                            .after(hydrate_object_placement_preview_prefab_render_tree),
+                        crate::placement::object_placement_preview_presentation::hide_alpha_blended_meshes_of_object_placement_previews
+                            .after(hydrate_object_placement_preview_prefab_render_tree),
+                        animate_object_placement_preview_presentation_toward_authoritative_transform
+                            .after(synchronize_object_placement_preview_with_construction_cursor),
+                    ),
                 )
-                    .chain()
                     .in_set(ObjectPlacementPreviewUpdateSet)
                     .in_set(GameSet::Intent)
                     .run_if(in_state(GamePhase::InGame)),
@@ -164,6 +174,16 @@ impl Plugin for ObjectPlacementPlugin {
                     .chain()
                     .after(WorldDefinitionPublicationSet)
                     .after(scene_placement_footprint_indexing::index_scene_placement_footprints),
+            )
+            .add_systems(
+                PostUpdate,
+                crate::construction::capture_confirmed_preview::<object_placement_preview_validation::ObjectPlacementFit>,
+            )
+            .add_systems(
+                FixedUpdate,
+                crate::construction::clear_confirmed_previews::<object_placement_preview_validation::ObjectPlacementFit>
+                    .after(FixedConstructionSet::Prepare)
+                    .before(FixedConstructionSet::Apply),
             )
             .add_systems(
                 FixedUpdate,
@@ -185,6 +205,7 @@ impl Plugin for ObjectPlacementPlugin {
                 apply_prepared_object_placement_edits
                     .in_set(FixedConstructionSet::Apply)
                     .after(openzt2_zoo_state::construction::ConstructionDomainApplicationDispatchSet)
+                    .after(openzt2_zoo_state::construction::ConstructionFailureRollbackDispatchSet)
                     .before(openzt2_zoo_state::construction::ConstructionDomainAcknowledgementCollectionSet)
                     .run_if(in_state(GamePhase::InGame)),
             )

@@ -25,7 +25,7 @@ use openzt2_zoo_state::{
     },
     topology::{
         topology_edit_types::TopologyChanged,
-        topology_graph_types::{FenceEdge, TopologyIndex, TopologyNode},
+        topology_graph_types::{FenceEdge, FenceEnd, FenceStart, TopologyIndex, TopologyNode},
         topology_grid_geometry::calculate_topology_edge_cell_bounds,
     },
 };
@@ -62,7 +62,7 @@ fn morph_current_behavior_targets(
         ),
     >,
     grid: Res<openzt2_zoo_state::topology::topology_graph_types::TopologyGrid>,
-    mut fences: Query<&mut FenceEdge>,
+    mut fences: Query<(&mut FenceEdge, &FenceStart, &FenceEnd)>,
     nodes: Query<&TopologyNode>,
     mut topology: ResMut<TopologyIndex>,
     mut changed: MessageWriter<TopologyChanged>,
@@ -87,12 +87,14 @@ fn morph_current_behavior_targets(
         }
         let breaks = destroy || morph.is_some_and(|morph| morph.0 == AssetId::from_key("s_broken"));
         if breaks {
-            if let Some(mut edge) = task.target().and_then(|target| fences.get_mut(target).ok()) {
+            if let Some((mut edge, start, end)) =
+                task.target().and_then(|target| fences.get_mut(target).ok())
+            {
                 let broken = definitions
                     .find_fence(edge.definition)
                     .and_then(|fence| fence.broken);
                 if let (Some(broken), Ok(first), Ok(second)) =
-                    (broken, nodes.get(edge.a), nodes.get(edge.b))
+                    (broken, nodes.get(start.0), nodes.get(end.0))
                 {
                     debug!(from = ?edge.definition, to = ?broken,
                         actor = %actor_transform.translation(),

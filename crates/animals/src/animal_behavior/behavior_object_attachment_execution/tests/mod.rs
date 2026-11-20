@@ -17,6 +17,7 @@ fn object(id: AssetId) -> WorldObjectDefinition {
         audio_cue_prefixes: Vec::new(),
         surface_effect_strength: None,
         presentation_caustic_policies: Vec::new(),
+        traversal_animation_manifests: Vec::new(),
         id,
         kind: WorldObjectKind::Scenery,
         water_filter: None,
@@ -142,14 +143,15 @@ fn detach_transfers_inventory_and_kills_only_on_the_later_detach_event() {
         .spawn((AnimationPresentationOwner {
             gameplay_entity: actor,
         }, openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackController {
+            preserve_seek_on_restart: false,
             playback_generation: 1,
             explicit_clip_request_id: None,
             animation_set_asset: Handle::default(),
             animation_clip_asset_key: "idle".into(),
-            elapsed_milliseconds: 0,
-                    fractional_milliseconds: default(),
+
+
             playback_speed_permille: 1000,
-            playback_state: Default::default(),
+
             playback_repetition_policy: Default::default(),
             playback_clock: Default::default(),
         }))

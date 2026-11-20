@@ -9,10 +9,7 @@ use openzt2_game_assets::world_definitions::{
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_zoo_state::construction::construction_interaction_types::PlacementFailure;
-use openzt2_zoo_state::construction::construction_transaction_types::DomainAckStatus;
 use openzt2_zoo_state::construction::construction_transaction_types::EditApplication;
-use openzt2_zoo_state::construction::construction_transaction_types::EditCommitPhase;
-use openzt2_zoo_state::construction::construction_transaction_types::EditCommitProgress;
 use openzt2_zoo_state::construction::construction_transaction_types::PrepareConstruction;
 use openzt2_zoo_state::construction::construction_transaction_types::RollbackContext;
 use openzt2_zoo_state::economy::money_types::Money;
@@ -70,6 +67,7 @@ fn habitat_region_facts(
 /// Whether the edit's `after` image obeys the rules and the tank's current
 /// surroundings.
 fn edit_after_is_reachable(
+    tank: Entity,
     edit: &TankGeometryEdit,
     definitions: Option<WorldDefinitionsView<'_>>,
     region: &HabitatRegion,
@@ -83,10 +81,11 @@ fn edit_after_is_reachable(
     definitions.is_some_and(|definitions| {
         definitions.tank_edit_policy().is_some()
             && tank_geometry_limits(definitions).is_some_and(|limits| {
-                let Some(mut walls) = bounds.wall_height_images(region, limits) else {
+                let Some(mut walls) = bounds.wall_height_images(tank, limits) else {
                     return false;
                 };
-                let Some(height_bounds) = bounds.tank_height_bounds(region, limits, &walls) else {
+                let Some(height_bounds) = bounds.tank_height_bounds(tank, region, limits, &walls)
+                else {
                     return false;
                 };
                 adjacent_water_limits(&mut walls, limits);
@@ -114,7 +113,7 @@ pub(super) fn prepare_tank_geometry_construction_edits(
     mut commands: Commands,
     mut requests: MessageReader<PrepareConstruction>,
     previews: Query<(&TankGeometryEdit, &TankGeometryGesture, &WorldMember)>,
-    transactions: Query<(&EditCommitProgress, &WorldMember)>,
+    transactions: Query<&WorldMember>,
     habitat_index: Res<HabitatIndex>,
     tanks: Query<(
         &Tank,
@@ -138,12 +137,8 @@ pub(super) fn prepare_tank_geometry_construction_edits(
         let tank = transactions
             .get(request.transaction)
             .ok()
-            .filter(|(progress, member)| {
-                progress.phase == EditCommitPhase::Preparing
-                    && member.root == preview_member.root
-                    && gesture.pending
-            })
-            .and_then(|(_, member)| {
+            .filter(|member| member.root == preview_member.root && gesture.pending)
+            .and_then(|member| {
                 resolve_edited_tank(edit, member.root, &habitat_index, |habitat| {
                     let (tank, geometry, region, summary, member) = tanks.get(habitat).ok()?;
                     (*geometry == edit.before && region.area_square_metres == geometry.area).then(
@@ -159,9 +154,10 @@ pub(super) fn prepare_tank_geometry_construction_edits(
             });
         let valid = edit.before != edit.after
             && tank
-                .and_then(|tank| tanks.get(tank).ok())
-                .is_some_and(|(_, _, region, ..)| {
+                .and_then(|tank| tanks.get(tank).ok().map(|facts| (tank, facts)))
+                .is_some_and(|(tank, (_, _, region, ..))| {
                     edit_after_is_reachable(
+                        tank,
                         edit,
                         active_definitions.get(&definitions),
                         region,
@@ -170,7 +166,7 @@ pub(super) fn prepare_tank_geometry_construction_edits(
                         |walls, limits| {
                             bounds.include_adjacent_tank_water_in_wall_minima(
                                 walls,
-                                region,
+                                tank,
                                 limits,
                                 |entity| {
                                     let (_, geometry, adjacent, _, world) =
@@ -203,12 +199,7 @@ pub(super) fn prepare_tank_geometry_construction_edits(
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(super) fn apply_tank_geometry_construction_edits(
     mut requests: MessageReader<CommitTankGeometryEdit>,
-    transactions: Query<(
-        &TankGeometryEdit,
-        &EditCommitProgress,
-        &WorldMember,
-        Option<&RollbackContext>,
-    )>,
+    transactions: Query<(&TankGeometryEdit, &WorldMember, Option<&RollbackContext>)>,
     habitat_index: Res<HabitatIndex>,
     mut tanks: Query<(
         &Tank,
@@ -226,12 +217,9 @@ pub(super) fn apply_tank_geometry_construction_edits(
     mut acknowledged: MessageWriter<TankGeometryEditAcknowledged>,
 ) {
     for request in requests.read() {
-        let Ok((edit, progress, member, rollback)) = transactions.get(request.transaction) else {
+        let Ok((edit, member, rollback)) = transactions.get(request.transaction) else {
             continue;
         };
-        if progress.application != request.application {
-            continue;
-        }
         let forward = match request.application {
             EditApplication::InitialCommit | EditApplication::Redo => true,
             EditApplication::Undo => false,
@@ -242,21 +230,6 @@ pub(super) fn apply_tank_geometry_construction_edits(
                 rollback.failed_application == EditApplication::Undo
             }
         };
-        let authorized = if request.application == EditApplication::FailureRollback {
-            progress.phase == EditCommitPhase::RollingBack
-                && progress.aquatic
-                    == if forward {
-                        DomainAckStatus::Reverted
-                    } else {
-                        DomainAckStatus::Applied
-                    }
-        } else {
-            progress.phase == EditCommitPhase::Applying
-                && progress.aquatic == DomainAckStatus::Pending
-        };
-        if !authorized {
-            continue;
-        }
         let (expected, replacement) = if forward {
             (edit.before, edit.after)
         } else {
@@ -276,6 +249,7 @@ pub(super) fn apply_tank_geometry_construction_edits(
             let bounds = wall_access.p0();
             tanks.get(*tank).is_ok_and(|(_, _, region, ..)| {
                 edit_after_is_reachable(
+                    *tank,
                     edit,
                     active_definitions.get(&definitions),
                     region,
@@ -284,7 +258,7 @@ pub(super) fn apply_tank_geometry_construction_edits(
                     |walls, limits| {
                         bounds.include_adjacent_tank_water_in_wall_minima(
                             walls,
-                            region,
+                            *tank,
                             limits,
                             |entity| {
                                 let (_, geometry, adjacent, _, world) = tanks.get(entity).ok()?;
@@ -298,17 +272,17 @@ pub(super) fn apply_tank_geometry_construction_edits(
             })
         });
         let accepted = tank.is_some_and(|tank| {
-            let Ok((_, mut geometry, region, ..)) = tanks.get_mut(tank) else {
+            let Ok((_, mut geometry, ..)) = tanks.get_mut(tank) else {
                 return false;
             };
+            let fences = wall_access.p0().boundary_fences(tank).collect::<Vec<_>>();
             let mut walls = wall_access.p1();
             let mut updates = Vec::new();
             for wall in edit.wall_heights.iter() {
                 if wall.before == wall.after {
                     continue;
                 }
-                let Some(entity) = region
-                    .boundary_fence_entities
+                let Some(entity) = fences
                     .iter()
                     .copied()
                     .find(|entity| walls.get(*entity).is_ok_and(|(id, _)| *id == wall.id))

@@ -133,6 +133,7 @@ pub(super) fn install_definitions(
         audio_cue_prefixes: Vec::new(),
         surface_effect_strength: None,
         presentation_caustic_policies: Vec::new(),
+        traversal_animation_manifests: Vec::new(),
         id: AssetId::from_key(name),
         kind: WorldObjectKind::Food,
         water_filter: None,

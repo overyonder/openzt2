@@ -111,7 +111,7 @@ pub(super) fn validate_staff_capture_requests_and_clear_animal_emergency_state(
             || !animals.contains(request.animal)
             || !staff
                 .get(request.staff)
-                .is_ok_and(|current| current.job == request.job)
+                .is_ok_and(|current| current.job() == request.job)
             || !jobs.get(request.job).is_ok_and(|(job, claim, behavior)| {
                 job.kind == StaffJobKind::Capture
                     && job.target == request.animal

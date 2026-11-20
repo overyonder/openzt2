@@ -1,10 +1,7 @@
 use super::super::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation;
 use super::SynchronizedBehaviorParticipant;
 use bevy::{ecs::relationship::RelationshipTarget, prelude::*};
-use openzt2_world_state::animation_graph::animation_presentation_relationship_types::AnimationPresentationOwner;
-use openzt2_world_state::animation_playback::animation_playback_controller_types::{
-    AnimationPlaybackController, AnimationPlaybackState,
-};
+use openzt2_world_state::animation_graph::animation_presentation_relationship_types::AnimationPresentations;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_zoo_state::animal_behavior::behavior_synchronized_set_types::{
     SynchronizedBehaviorOperation, SynchronizedBehaviorPartner, SynchronizedBehaviorSubject,
@@ -34,10 +31,8 @@ pub(super) fn finish_or_cancel_synchronized_behavior_sets(
     frames: BehaviorContinuationFrames,
     tasks: Query<(&BehaviorTaskExecutionState, Has<PendingBehaviorTaskFailure>)>,
     looping_clips: Query<(&RunBehaviorAnimationClip, &RunningBehaviorInstruction)>,
-    mut controllers: Query<(
-        &AnimationPresentationOwner,
-        &mut AnimationPlaybackController,
-    )>,
+    presentations: Query<&AnimationPresentations>,
+    mut players: Query<&mut AnimationPlayer>,
 ) {
     for (actor, execution_id, success) in finished
         .read()
@@ -119,10 +114,19 @@ pub(super) fn finish_or_cancel_synchronized_behavior_sets(
             }
         }
         if failed || !owns_subject {
-            for (presentation, mut controller) in &mut controllers {
-                let presented = Some(presentation.gameplay_entity);
-                if (owns_subject && presented == actor) || (owns_partner && presented == target) {
-                    controller.playback_state = AnimationPlaybackState::Paused;
+            for subject in [
+                actor.filter(|_| owns_subject),
+                target.filter(|_| owns_partner),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                for controller in
+                    AnimationPresentations::for_subject(subject, presentations.get(subject).ok())
+                {
+                    if let Ok(mut player) = players.get_mut(controller) {
+                        player.pause_all();
+                    }
                 }
             }
         }

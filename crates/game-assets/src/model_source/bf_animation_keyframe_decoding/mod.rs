@@ -1,9 +1,11 @@
 //! Blue Fang translation, rotation, scale, and scalar-axis keyframe decoding.
 
 use super::{
+    bf_animation_cubic_keyframe_sampling::BlueFangScalarCurve,
     bf_animation_keyframe_interpolation::normalize_blue_fang_rotation_quaternion,
     bf_animation_primitive_reading::{read_blue_fang_i16, read_blue_fang_u16, read_blue_fang_u8},
-    bf_animation_source_types::{BlueFangAnimationProperty, BlueFangAnimationTrack},
+    bf_animation_quaternion_keyframe_sampling::BlueFangQuaternionCurve,
+    bf_animation_source_types::BlueFangAnimationTrack,
     conversion_error::ConversionError,
 };
 
@@ -13,7 +15,7 @@ pub(super) fn parse_blue_fang_translation_vector_track(
     keyframe_count: usize,
     includes_control_values: bool,
 ) -> Result<BlueFangAnimationTrack, ConversionError> {
-    let mut keyframes = (0..keyframe_count)
+    let keyframes = (0..keyframe_count)
         .map(|_| {
             let keyframe_time_milliseconds = read_blue_fang_u16(source_bytes, source_byte_cursor)?;
             let translation_components = [
@@ -38,27 +40,9 @@ pub(super) fn parse_blue_fang_translation_vector_track(
             ))
         })
         .collect::<Result<Vec<_>, ConversionError>>()?;
-    keyframes.sort_by_key(|keyframe| keyframe.0);
-    keyframes.dedup_by_key(|keyframe| keyframe.0);
-    let keyframes = if includes_control_values {
-        super::bf_animation_cubic_keyframe_sampling::sample_cubic_keyframes(keyframes)
-    } else {
-        keyframes
-            .into_iter()
-            .map(|(time, value, _, _)| (time, value))
-            .collect()
-    };
-    Ok(BlueFangAnimationTrack {
-        animated_property: BlueFangAnimationProperty::Translation,
-        keyframe_times_seconds: keyframes
-            .iter()
-            .map(|keyframe| f32::from(keyframe.0) / 1000.0)
-            .collect(),
-        keyframe_values: keyframes
-            .into_iter()
-            .flat_map(|keyframe| keyframe.1)
-            .collect(),
-    })
+    Ok(BlueFangAnimationTrack::Translation(
+        BlueFangScalarCurve::new(keyframes, includes_control_values),
+    ))
 }
 
 pub(super) fn parse_blue_fang_scalar_axis_keyframes(
@@ -66,8 +50,8 @@ pub(super) fn parse_blue_fang_scalar_axis_keyframes(
     source_byte_cursor: &mut usize,
     keyframe_count: usize,
     includes_control_values: bool,
-) -> Result<Vec<(u16, f32)>, ConversionError> {
-    let mut keyframes = (0..keyframe_count)
+) -> Result<BlueFangScalarCurve<1>, ConversionError> {
+    let keyframes = (0..keyframe_count)
         .map(|_| {
             let scalar_axis_keyframe = (
                 read_blue_fang_u16(source_bytes, source_byte_cursor)?,
@@ -89,19 +73,7 @@ pub(super) fn parse_blue_fang_scalar_axis_keyframes(
             ))
         })
         .collect::<Result<Vec<_>, ConversionError>>()?;
-    keyframes.sort_by_key(|keyframe| keyframe.0);
-    keyframes.dedup_by_key(|keyframe| keyframe.0);
-    Ok(if includes_control_values {
-        super::bf_animation_cubic_keyframe_sampling::sample_cubic_keyframes(keyframes)
-            .into_iter()
-            .map(|(time, value)| (time, value[0]))
-            .collect()
-    } else {
-        keyframes
-            .into_iter()
-            .map(|(time, value, _, _)| (time, value[0]))
-            .collect()
-    })
+    Ok(BlueFangScalarCurve::new(keyframes, includes_control_values))
 }
 
 pub(super) fn parse_blue_fang_quaternion_rotation_track(
@@ -110,7 +82,7 @@ pub(super) fn parse_blue_fang_quaternion_rotation_track(
     keyframe_count: usize,
     includes_control_values: bool,
 ) -> Result<BlueFangAnimationTrack, ConversionError> {
-    let mut keyframes = (0..keyframe_count)
+    let keyframes = (0..keyframe_count)
         .map(|_| {
             let keyframe_time_milliseconds = read_blue_fang_u16(source_bytes, source_byte_cursor)?;
             let mut rotation_quaternion = [0.0; 4];
@@ -139,27 +111,9 @@ pub(super) fn parse_blue_fang_quaternion_rotation_track(
             )
         })
         .collect::<Result<Vec<_>, ConversionError>>()?;
-    keyframes.sort_by_key(|keyframe| keyframe.0);
-    keyframes.dedup_by_key(|keyframe| keyframe.0);
-    let keyframes = if includes_control_values {
-        super::bf_animation_quaternion_keyframe_sampling::sample_tcb_quaternion_keyframes(keyframes)
-    } else {
-        keyframes
-            .into_iter()
-            .map(|(time, value, _)| (time, value))
-            .collect()
-    };
-    Ok(BlueFangAnimationTrack {
-        animated_property: BlueFangAnimationProperty::Rotation,
-        keyframe_times_seconds: keyframes
-            .iter()
-            .map(|keyframe| f32::from(keyframe.0) / 1000.0)
-            .collect(),
-        keyframe_values: keyframes
-            .into_iter()
-            .flat_map(|keyframe| keyframe.1)
-            .collect(),
-    })
+    Ok(BlueFangAnimationTrack::Rotation(
+        BlueFangQuaternionCurve::new(keyframes, includes_control_values),
+    ))
 }
 
 pub(super) fn parse_blue_fang_scale_track(
@@ -168,7 +122,7 @@ pub(super) fn parse_blue_fang_scale_track(
     keyframe_count: usize,
     includes_control_values: bool,
 ) -> Result<BlueFangAnimationTrack, ConversionError> {
-    let mut keyframes = (0..keyframe_count)
+    let keyframes = (0..keyframe_count)
         .map(|_| {
             let keyframe_time_milliseconds = read_blue_fang_u16(source_bytes, source_byte_cursor)?;
             let uniform_scale =
@@ -189,25 +143,8 @@ pub(super) fn parse_blue_fang_scale_track(
             ))
         })
         .collect::<Result<Vec<_>, ConversionError>>()?;
-    keyframes.sort_by_key(|keyframe| keyframe.0);
-    keyframes.dedup_by_key(|keyframe| keyframe.0);
-    let keyframes = if includes_control_values {
-        super::bf_animation_cubic_keyframe_sampling::sample_cubic_keyframes(keyframes)
-    } else {
-        keyframes
-            .into_iter()
-            .map(|(time, value, _, _)| (time, value))
-            .collect()
-    };
-    Ok(BlueFangAnimationTrack {
-        animated_property: BlueFangAnimationProperty::Scale,
-        keyframe_times_seconds: keyframes
-            .iter()
-            .map(|keyframe| f32::from(keyframe.0) / 1000.0)
-            .collect(),
-        keyframe_values: keyframes
-            .into_iter()
-            .flat_map(|keyframe| keyframe.1)
-            .collect(),
-    })
+    Ok(BlueFangAnimationTrack::Scale(BlueFangScalarCurve::new(
+        keyframes,
+        includes_control_values,
+    )))
 }

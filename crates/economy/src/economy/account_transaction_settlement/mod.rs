@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooCalendar;
+use openzt2_zoo_state::animal_lifecycle::animal_adoption_contracts::AnimalAdoptionRefund;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
 use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorTaskFailure;
 use openzt2_zoo_state::economy::general_economy_types::{
@@ -107,14 +108,22 @@ fn transaction_accounts_are_same(left_account: Account, right_account: Account) 
 pub(super) fn stage_requested_account_transactions<const PLAYER: bool>(
     mut commands: Commands,
     mut requests: MessageReader<TransactionRequest>,
-    ui_cash_grants: Query<(), With<super::zoo_cash_ui::UiCashGrantPendingTransaction>>,
+    player_operations: Query<
+        (),
+        Or<(
+            With<super::zoo_cash_ui::UiCashGrantPendingTransaction>,
+            With<AnimalAdoptionRefund>,
+        )>,
+    >,
     settlements: Query<(), With<TransactionSettlement>>,
 ) {
     for (request, message) in requests.read_with_id() {
         let player_operation = matches!(
             request.kind,
-            TransactionKind::Construction | TransactionKind::Research
-        ) || ui_cash_grants.contains(request.operation);
+            TransactionKind::Construction
+                | TransactionKind::Research
+                | TransactionKind::AnimalAdoption
+        ) || player_operations.contains(request.operation);
         if player_operation == PLAYER && !settlements.contains(request.operation) {
             commands.entity(request.operation).try_insert_if_new((
                 AwaitingAccountSettlement,

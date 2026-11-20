@@ -20,7 +20,8 @@ use openzt2_game_data::{
 use openzt2_world_state::{
     application_schedule::FixedGameSet,
     simulation_time::{
-        deterministic_random_stream::ZooSeed, simulation_clock_types::ZooClock,
+        deterministic_random_stream::ZooSeed,
+        simulation_clock_types::{ZooCalendar, ZooClock},
         simulation_control_queries::simulation_is_running,
         simulation_control_types::SimulationControl,
     },
@@ -28,7 +29,9 @@ use openzt2_world_state::{
 };
 use openzt2_zoo_state::{
     animal_lifecycle::{
-        animal_adoption_contracts::{AdoptAnimal, AnimalAdopted, PendingAdoption},
+        animal_adoption_contracts::{
+            AdoptAnimal, AnimalAdopted, AnimalAdoptionRefund, PendingAdoption,
+        },
         types::Animal,
     },
     construction::FixedConstructionSet,
@@ -37,6 +40,7 @@ use openzt2_zoo_state::{
         money_types::Money,
         zoo_cash_types::ZooCash,
     },
+    guests::guest_simulation_types::{GuestArrived, GuestDeparted},
     terrain::terrain_chunk_types::{TerrainChunk, TerrainIndex},
     topology::topology_graph_types::TopologyGrid,
 };
@@ -119,6 +123,7 @@ fn object(id: AssetId) -> WorldObjectDefinition {
         audio_cue_prefixes: Vec::new(),
         surface_effect_strength: None,
         presentation_caustic_policies: Vec::new(),
+        traversal_animation_manifests: Vec::new(),
         id,
         kind: WorldObjectKind::Animal,
         water_filter: None,
@@ -170,6 +175,13 @@ fn setup(cash: i64) -> (App, Entity) {
             tick_in_day: 99,
             fractional_tick: Default::default(),
         })
+        .insert_resource(ZooCalendar {
+            year: 2000,
+            month: 1,
+            day: 1,
+        })
+        .add_message::<GuestArrived>()
+        .add_message::<GuestDeparted>()
         .init_resource::<Assets<SpeciesAsset>>()
         .init_resource::<SpeciesAssets>()
         .init_resource::<Assets<WorldDefinitionAsset>>()
@@ -342,8 +354,7 @@ fn assert_no_pending_adoption(app: &mut App) {
     );
     assert_eq!(
         world
-            .query_filtered::<Entity, With<super::animal_adoption_execution::AnimalAdoptionRefund>>(
-            )
+            .query_filtered::<Entity, With<AnimalAdoptionRefund>>()
             .iter(world)
             .count(),
         0

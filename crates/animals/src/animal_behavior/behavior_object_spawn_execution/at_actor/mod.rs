@@ -131,9 +131,7 @@ pub(super) fn spawn_behavior_objects_at_actor(
                 ))
                 .id()
         };
-        for occupant in placement.stomped_objects {
-            commands.entity(occupant).try_despawn();
-        }
+        placement.apply_stomps(&mut commands);
         if object
             .properties
             .contains_all(WorldObjectPropertyFlags::LOOSE_LITTER)

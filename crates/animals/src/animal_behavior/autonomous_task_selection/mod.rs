@@ -508,13 +508,13 @@ pub(super) fn select_idle_animal_tasks(
                     .map(|target| AssetId::from_key(&target.to_ascii_lowercase()))
                     .collect::<Vec<_>>();
                 let boundary = animal_habitat
-                    .and_then(|habitat| world_objects.habitat_regions.get(habitat).ok())
-                    .map_or(&[][..], |region| &region.boundary_fence_entities[..]);
+                    .into_iter()
+                    .flat_map(|habitat| world_objects.habitat_boundaries.fences(habitat));
                 if task.name.contains("Fence") {
-                    debug!(?animal, task = %task.name, ?animal_habitat, fences = boundary.len(),
+                    debug!(?animal, task = %task.name, ?animal_habitat, fences = animal_habitat.map_or(0, |habitat| world_objects.habitat_boundaries.fences(habitat).count()),
                         "animal fence task looks at its habitat's fences");
                 }
-                for &fence in boundary {
+                for fence in boundary {
                     let Ok((edge, transform)) = world_objects.fences.get(fence) else {
                         continue;
                     };
@@ -537,7 +537,7 @@ pub(super) fn select_idle_animal_tasks(
                     }
                     let distance = facts.transform.translation().distance(
                         world_objects
-                            .fence_middle(edge)
+                            .fence_middle(&edge)
                             .unwrap_or_else(|| transform.translation()),
                     );
                     let electric = object

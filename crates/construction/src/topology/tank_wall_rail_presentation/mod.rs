@@ -3,6 +3,7 @@
 use bevy::{ecs::relationship::RelationshipTarget, prelude::*};
 use openzt2_game_data::world_definitions::fences_and_gates::FenceSegmentPrefabs;
 use openzt2_game_data::AssetId;
+use openzt2_zoo_state::topology::topology_graph_types::FenceSegment;
 
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
@@ -65,7 +66,7 @@ pub(super) fn present_changed_tank_wall_rails(
     grid: Res<TopologyGrid>,
     walls: Query<(
         Entity,
-        &FenceEdge,
+        FenceSegment,
         Ref<FenceSegmentPrefab>,
         Ref<TankWallTopHeight>,
         Option<&FenceTerrainEndpointPresentationCells>,
@@ -104,8 +105,8 @@ pub(super) fn present_changed_tank_wall_rails(
             continue;
         };
         let (Ok(a), Ok(b), Some(handle)) = (
-            nodes.get(edge.a),
-            nodes.get(edge.b),
+            nodes.get(edge.a()),
+            nodes.get(edge.b()),
             definitions.scene(rail),
         ) else {
             continue;

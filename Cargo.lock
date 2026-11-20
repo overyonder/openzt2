@@ -5558,6 +5558,7 @@ version = "1.2.1-beta"
 dependencies = [
  "avian3d",
  "bevy",
+ "openzt2_construction",
  "openzt2_game_assets",
  "openzt2_game_data",
  "openzt2_interface_state",

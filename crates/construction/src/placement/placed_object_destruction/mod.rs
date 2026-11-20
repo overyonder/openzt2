@@ -4,7 +4,6 @@
 use bevy::asset::{AssetLoadFailedEvent, LoadState};
 use bevy::ecs::{entity::EntityHashSet, system::SystemParam};
 use bevy::gltf::Gltf;
-use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use openzt2_zoo_state::placement::object_placement_geometry::{ScenePlacementFootprintChanged, ScenePlacementFootprints};
 use openzt2_world_state::world_spawn::prefab_model_readiness::first_missing_prefab_collider_model_asset_id;
@@ -22,7 +21,7 @@ use openzt2_zoo_state::placement::object_placement_definition_queries::{
     collect_occupied_placement_cells_for_transform, resolve_object_placeable_definition,
 };
 use openzt2_zoo_state::placement::placed_object_types::{
-    IndexedObjectPlacementCells, PlacedObjectDefinitionReference, PlacedObjectFootprintOccupancy,
+    PlacedObjectDefinitionReference, PlacedObjectFootprintOccupancy,
 };
 use openzt2_zoo_state::placement::placement_occupancy_index::PlacedObjectFootprintOccupancyIndex;
 use openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementCellCollectionScratch;
@@ -32,7 +31,6 @@ use openzt2_zoo_state::placement::placement_transaction_types::{
 };
 
 use crate::placement::placed_object_creation_edit_application::apply_prepared_placed_object_creation_edit;
-use crate::placement::placed_object_removal_edit_application::despawn_indexed_placed_object;
 
 type PlacedObjects<'w, 's> = Query<
     'w,
@@ -246,7 +244,6 @@ pub(super) fn mark_waiting_building_destruction_assets_ready(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(super) fn ruin_destroyed_placed_objects(
     mut commands: Commands,
     ready: Query<
@@ -257,6 +254,18 @@ pub(super) fn ruin_destroyed_placed_objects(
         ),
         With<BuildingDestructionReady>,
     >,
+) {
+    let mut ready = ready.iter().collect::<Vec<_>>();
+    ready.sort_unstable_by_key(|(_, request, _)| request.0);
+    for (building, _, _) in ready {
+        commands.run_system_cached_with(ruin_destroyed_placed_object, building);
+    }
+}
+
+fn ruin_destroyed_placed_object(
+    In(building): In<Entity>,
+    mut commands: Commands,
+    ready: Query<&BuildingDestructionAssets, With<BuildingDestructionReady>>,
     world_assets: Res<Assets<WorldDefinitionAsset>>,
     world_definitions: Res<WorldDefinitions>,
     server: Res<AssetServer>,
@@ -265,9 +274,9 @@ pub(super) fn ruin_destroyed_placed_objects(
         Res<Assets<Gltf>>,
         Res<ScenePlacementFootprints>,
     ),
-    members: Query<(&WorldMember, &IndexedObjectPlacementCells)>,
-    (mut placement, mut scratch, mut allocator): (
-        ResMut<PlacedObjectFootprintOccupancyIndex>,
+    members: Query<&WorldMember>,
+    (placement, mut scratch, mut allocator): (
+        Res<PlacedObjectFootprintOccupancyIndex>,
         ResMut<ObjectPlacementCellCollectionScratch>,
         ResMut<PersistentIdAllocator>,
     ),
@@ -278,141 +287,138 @@ pub(super) fn ruin_destroyed_placed_objects(
         MessageWriter<PlayPositionedAudioCue>,
     ),
 ) {
+    let Ok(assets) = ready.get(building) else {
+        return;
+    };
     let Some(catalogue) = world_definitions.get(&world_assets) else {
         return;
     };
-    let created = HashMap::new();
-    let mut ready = ready.iter().collect::<Vec<_>>();
-    ready.sort_unstable_by_key(|(_, request, _)| request.0);
-    for (building, _, assets) in ready {
-        let (Ok((_, reference, transform, _)), Ok((member, indexed))) =
-            (placed.get(building), members.get(building))
-        else {
-            commands.entity(building).remove::<(
-                BuildingDestructionRequest,
-                BuildingDestructionAssets,
-                BuildingDestructionReady,
-            )>();
-            continue;
-        };
-        let (definition, transform, root) = (reference.definition, *transform, member.root);
-        if resolve_object_placeable_definition(catalogue, definition).is_none() {
-            commands.entity(building).remove::<(
-                BuildingDestructionRequest,
-                BuildingDestructionAssets,
-                BuildingDestructionReady,
-            )>();
-            continue;
-        }
-        let ruin = assets
-            .ruin
+    let (Ok((_, reference, transform, _)), Ok(member)) =
+        (placed.get(building), members.get(building))
+    else {
+        commands.entity(building).remove::<(
+            BuildingDestructionRequest,
+            BuildingDestructionAssets,
+            BuildingDestructionReady,
+        )>();
+        return;
+    };
+    let (definition, transform, root) = (reference.definition, *transform, member.root);
+    if resolve_object_placeable_definition(catalogue, definition).is_none() {
+        commands.entity(building).remove::<(
+            BuildingDestructionRequest,
+            BuildingDestructionAssets,
+            BuildingDestructionReady,
+        )>();
+        return;
+    }
+    let ruin = assets
+        .ruin
+        .as_ref()
+        .filter(|(_, handle)| prefabs.contains(handle.id()))
+        .cloned();
+    commands.entity(building).try_despawn();
+    if let Some(destruction) = catalogue
+        .find_object(definition)
+        .and_then(|object| object.destruction.as_ref())
+    {
+        let fragments = assets
+            .rubble
             .as_ref()
-            .filter(|(_, handle)| prefabs.contains(handle.id()))
-            .cloned();
-        despawn_indexed_placed_object(&mut commands, &mut placement, building, &indexed.0);
-        if let Some(destruction) = catalogue
-            .find_object(definition)
-            .and_then(|object| object.destruction.as_ref())
-        {
-            let fragments = assets
-                .rubble
-                .as_ref()
-                .and_then(|handle| prefabs.get(handle));
-            debug!(?building, fragments = destruction.rubble_count, loaded = fragments.is_some(),
+            .and_then(|handle| prefabs.get(handle));
+        debug!(?building, fragments = destruction.rubble_count, loaded = fragments.is_some(),
                 effect = %destruction.effect_path, cue = ?destruction.audio_cue,
                 "destroyed object's effect, sound and fragments");
-            if let Some(prefab) = fragments {
-                throw_fragments(
-                    &mut commands,
-                    prefab,
-                    destruction,
-                    &transform,
-                    building.to_bits(),
-                );
-            }
-            effects.write(SpawnCompleteParticleEffectDocument {
-                particle_effect_asset: server.load(destruction.effect_path.clone()),
-                parent_entity: None,
-                inherit_parent_rotation: false,
-                effect_transform: Transform::from_translation(transform.translation),
-                manual_particle_count: 0,
-            });
-            sounds.write(PlayPositionedAudioCue {
-                cue: destruction.audio_cue,
-                world_position: transform.translation,
-                selection: building.to_bits(),
-                priority: 192,
-                force_looped: false,
-                listener_above_water: true,
-                listener_below_water: true,
-                admission: None,
-            });
+        if let Some(prefab) = fragments {
+            throw_fragments(
+                &mut commands,
+                prefab,
+                destruction,
+                &transform,
+                building.to_bits(),
+            );
         }
-        debug!(?building, ?definition, ruin = ?ruin.as_ref().map(|(ruin, _)| *ruin),
+        effects.write(SpawnCompleteParticleEffectDocument {
+            particle_effect_asset: server.load(destruction.effect_path.clone()),
+            parent_entity: None,
+            inherit_parent_rotation: false,
+            effect_transform: Transform::from_translation(transform.translation),
+            manual_particle_count: 0,
+        });
+        sounds.write(PlayPositionedAudioCue {
+            cue: destruction.audio_cue,
+            world_position: transform.translation,
+            selection: building.to_bits(),
+            priority: 192,
+            force_looped: false,
+            listener_above_water: true,
+            listener_below_water: true,
+            admission: None,
+        });
+    }
+    debug!(?building, ?definition, ruin = ?ruin.as_ref().map(|(ruin, _)| *ruin),
             "placed object destroyed");
-        let Some((ruin, handle)) = ruin else {
-            continue;
-        };
-        let Some(ruin_placeable) = resolve_object_placeable_definition(catalogue, ruin) else {
-            continue;
-        };
-        let Some(cells) = collect_occupied_placement_cells_for_transform(
-            footprints.resolve(ruin_placeable, Some(&handle)),
-            &transform,
-            &mut scratch.cells,
-        )
-        .map(|cells| cells.to_vec().into_boxed_slice()) else {
-            warn!(
-                ?building,
-                ?ruin,
-                "ruin of a destroyed object has no footprint"
-            );
-            continue;
-        };
-        let Ok(id) = allocator.allocate(root) else {
-            warn!(
-                ?building,
-                ?ruin,
-                "ruin of a destroyed object has no persistent id"
-            );
-            continue;
-        };
-        let mut edit = PreparedObjectPlacementMutation {
-            entity: id,
-            definition: ruin,
-            transform,
-            cells,
-            previous_transform: None,
-            previous_cells: Box::new([]),
-            mutation: PreparedObjectPlacementEditMutationKind::Create,
-            applied_entity: None,
-            preview: None,
-            prefab: handle,
-        };
-        if !apply_prepared_placed_object_creation_edit(
-            &mut commands,
-            building,
-            &mut edit,
-            catalogue,
-            Some(root),
-            &mut placement,
-            &mut scratch,
-            &footprints,
-            &prefabs,
-            &models,
-            &placed,
-            &created,
-            &[],
-            false,
-            &mut ConstructionTool::Inspect,
-            &mut committed,
-        ) {
-            warn!(
-                ?building,
-                ?ruin,
-                "ruin of a destroyed object could not be put down"
-            );
-        }
+    let Some((ruin, handle)) = ruin else {
+        return;
+    };
+    let Some(ruin_placeable) = resolve_object_placeable_definition(catalogue, ruin) else {
+        return;
+    };
+    let Some(cells) = collect_occupied_placement_cells_for_transform(
+        footprints.resolve(ruin_placeable, Some(&handle)),
+        &transform,
+        &mut scratch.cells,
+    )
+    .map(|cells| cells.to_vec().into_boxed_slice()) else {
+        warn!(
+            ?building,
+            ?ruin,
+            "ruin of a destroyed object has no footprint"
+        );
+        return;
+    };
+    let Ok(id) = allocator.allocate(root) else {
+        warn!(
+            ?building,
+            ?ruin,
+            "ruin of a destroyed object has no persistent id"
+        );
+        return;
+    };
+    let mut edit = PreparedObjectPlacementMutation {
+        entity: id,
+        definition: ruin,
+        transform,
+        cells,
+        previous_transform: None,
+        previous_cells: Box::new([]),
+        mutation: PreparedObjectPlacementEditMutationKind::Create,
+        applied_entity: None,
+        preview: None,
+        prefab: handle,
+    };
+    if !apply_prepared_placed_object_creation_edit(
+        &mut commands,
+        building,
+        &mut edit,
+        catalogue,
+        Some(root),
+        &placement,
+        &mut scratch,
+        &footprints,
+        &prefabs,
+        &models,
+        &placed,
+        &[building],
+        false,
+        &mut ConstructionTool::Inspect,
+        &mut committed,
+    ) {
+        warn!(
+            ?building,
+            ?ruin,
+            "ruin of a destroyed object could not be put down"
+        );
     }
 }
 

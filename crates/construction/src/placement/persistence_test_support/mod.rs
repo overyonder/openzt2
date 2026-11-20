@@ -9,7 +9,7 @@ use openzt2_game_assets::{
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 use openzt2_zoo_state::{
     construction::construction_tool_and_placement_policy_types::ConstructionTool,
-    economy::account_transaction_types::TransactionSettled,
+    economy::account_transaction_types::TransactionSettlement,
     placement::{
         placed_object_types::{PlacedObjectDefinitionReference, PlacedObjectFootprintOccupancy},
         placement_occupancy_index::PlacedObjectFootprintOccupancyIndex,
@@ -25,7 +25,6 @@ pub fn add_placement_persistence_test_systems(app: &mut App) {
         .add_message::<ObjectPlacementCommitted>()
         .init_resource::<openzt2_zoo_state::placement::object_placement_geometry::ScenePlacementFootprints>()
         .add_message::<openzt2_zoo_state::placement::object_placement_geometry::ScenePlacementFootprintChanged>()
-        .add_observer(super::placed_object_footprint_occupancy_index_synchronization::remove_indexed_placement_footprint)
         .add_systems(Update, (
             super::placed_object_footprint_occupancy_index_synchronization::hydrate_placed_object_placement_components,
             super::placed_object_footprint_occupancy_index_synchronization::synchronize_placed_footprints,
@@ -38,12 +37,14 @@ pub fn apply_settled_placement_purchase_for_test(
     transaction: Entity,
     mut edit: PreparedObjectPlacementMutation,
 ) -> Entity {
-    assert!(world.get::<TransactionSettled>(transaction).is_some());
+    assert!(world
+        .get::<TransactionSettlement>(transaction)
+        .is_some_and(|settlement| settlement.is_settled_in_domain(true)));
     let mut state = SystemState::<(
         Commands,
         Res<WorldDefinitions>,
         Res<Assets<WorldDefinitionAsset>>,
-        ResMut<PlacedObjectFootprintOccupancyIndex>,
+        Res<PlacedObjectFootprintOccupancyIndex>,
         ResMut<ObjectPlacementCellCollectionScratch>,
         Res<Assets<ScenePrefabAsset>>,
         Res<Assets<bevy::gltf::Gltf>>,
@@ -60,7 +61,7 @@ pub fn apply_settled_placement_purchase_for_test(
         mut commands,
         active,
         assets,
-        mut occupancy,
+        occupancy,
         mut scratch,
         prefabs,
         models,
@@ -75,13 +76,12 @@ pub fn apply_settled_placement_purchase_for_test(
             &mut edit,
             active.get(&assets).unwrap(),
             Some(root),
-            &mut occupancy,
+            &occupancy,
             &mut scratch,
             &openzt2_zoo_state::placement::object_placement_geometry::ScenePlacementFootprints::default(),
             &prefabs,
             &models,
             &placed,
-            &default(),
             &[],
             false,
             &mut tool,

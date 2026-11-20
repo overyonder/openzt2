@@ -1,6 +1,9 @@
 use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 use openzt2_game_data::AssetId;
+use openzt2_zoo_state::topology::habitat_boundary_queries::HabitatBoundaryQueries;
+use openzt2_zoo_state::topology::persistent_edit_lookup::PersistentEditLookup;
+use openzt2_zoo_state::topology::topology_graph_types::FenceSegment;
 
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
@@ -43,7 +46,7 @@ fn topology_snapshot_application_is_valid(
     current: &HashMap<u64, Entity>,
     topology: &Query<(
         Option<&TopologyNode>,
-        Option<&FenceEdge>,
+        Option<FenceSegment>,
         Option<&PathTile>,
         Option<&Portal>,
     )>,
@@ -78,8 +81,8 @@ fn topology_snapshot_application_is_valid(
             } => {
                 fence.is_some_and(|value| {
                     value.definition == *definition
-                        && current.get(&a.0) == Some(&value.a)
-                        && current.get(&b.0) == Some(&value.b)
+                        && current.get(&a.0) == Some(&value.a())
+                        && current.get(&b.0) == Some(&value.b())
                 }) && gates.get(entity).ok().copied() == *gate
             }
             TopologySnapshot::Path {
@@ -98,19 +101,35 @@ fn topology_snapshot_application_is_valid(
             return false;
         }
     }
+    let node_additions = added_node_cells(add);
+    let surviving = |id: PersistentId| {
+        current
+            .get(&id.0)
+            .copied()
+            .filter(|entity| !removed_entities.contains(entity))
+    };
+    let node_available = |id: PersistentId| {
+        node_additions.contains_key(&id.0)
+            || surviving(id)
+                .is_some_and(|entity| topology.get(entity).is_ok_and(|facts| facts.0.is_some()))
+    };
     if !add.iter().all(|snapshot| match *snapshot {
-        TopologySnapshot::Fence { a, b, .. } => {
-            persistent_node_is_available_after_application(a, add, remove, current, topology)
-                && persistent_node_is_available_after_application(b, add, remove, current, topology)
-        }
-        TopologySnapshot::Portal { destination, .. } => {
-            persistent_endpoint_is_available_after_application(
-                destination,
-                add,
-                remove,
-                current,
-                topology,
-            )
+        TopologySnapshot::Fence { a, b, .. } => node_available(a) && node_available(b),
+        TopologySnapshot::Portal {
+            id, destination, ..
+        } => {
+            id != destination
+                && (added_ids.contains(&destination.0)
+                    || surviving(destination).is_some_and(|entity| {
+                        topology
+                            .get(entity)
+                            .is_ok_and(|(node, fence, path, portal)| {
+                                node.is_some()
+                                    || fence.is_some()
+                                    || path.is_some()
+                                    || portal.is_some()
+                            })
+                    }))
         }
         _ => true,
     }) {
@@ -136,10 +155,10 @@ fn topology_snapshot_application_is_valid(
                     .is_none_or(|entity| removed_entities.contains(entity))
         }
         TopologySnapshot::Fence { a, b, .. } => {
-            let Some(a) = resolve_topology_node_cell(a, current, topology, add) else {
+            let Some(a) = resolve_topology_node_cell(a, current, topology, &node_additions) else {
                 return false;
             };
-            let Some(b) = resolve_topology_node_cell(b, current, topology, add) else {
+            let Some(b) = resolve_topology_node_cell(b, current, topology, &node_additions) else {
                 return false;
             };
             let Some(key) = EdgeKey::new(a, b) else {
@@ -155,67 +174,14 @@ fn topology_snapshot_application_is_valid(
     })
 }
 
-fn snapshot_entity_is_removed_by_application(
-    entity: Entity,
-    remove: &[TopologySnapshot],
-    current: &HashMap<u64, Entity>,
-) -> bool {
-    remove
+fn added_node_cells(snapshots: &[TopologySnapshot]) -> HashMap<u64, IVec3> {
+    snapshots
         .iter()
-        .any(|snapshot| current.get(&snapshot.id().0) == Some(&entity))
-}
-
-fn persistent_endpoint_is_available_after_application(
-    id: PersistentId,
-    add: &[TopologySnapshot],
-    remove: &[TopologySnapshot],
-    current: &HashMap<u64, Entity>,
-    topology: &Query<(
-        Option<&TopologyNode>,
-        Option<&FenceEdge>,
-        Option<&PathTile>,
-        Option<&Portal>,
-    )>,
-) -> bool {
-    current.get(&id.0).is_some_and(|entity| {
-        !snapshot_entity_is_removed_by_application(*entity, remove, current)
-            && topology
-                .get(*entity)
-                .is_ok_and(|(node, fence, path, portal)| {
-                    node.is_some() || fence.is_some() || path.is_some() || portal.is_some()
-                })
-    }) || add.iter().any(|snapshot| {
-        snapshot.id() == id
-            && matches!(
-                snapshot,
-                TopologySnapshot::Node { .. }
-                    | TopologySnapshot::Fence { .. }
-                    | TopologySnapshot::Path { .. }
-            )
-    })
-}
-
-fn persistent_node_is_available_after_application(
-    id: PersistentId,
-    add: &[TopologySnapshot],
-    remove: &[TopologySnapshot],
-    current: &HashMap<u64, Entity>,
-    topology: &Query<(
-        Option<&TopologyNode>,
-        Option<&FenceEdge>,
-        Option<&PathTile>,
-        Option<&Portal>,
-    )>,
-) -> bool {
-    current
-        .get(&id.0)
-        .is_some_and(|entity| {
-            !snapshot_entity_is_removed_by_application(*entity, remove, current)
-                && topology.get(*entity).is_ok_and(|facts| facts.0.is_some())
+        .filter_map(|snapshot| match *snapshot {
+            TopologySnapshot::Node { id, cell } => Some((id.0, cell)),
+            _ => None,
         })
-        || add.iter().any(
-            |snapshot| matches!(snapshot, TopologySnapshot::Node { id: candidate, .. } if *candidate == id),
-        )
+        .collect()
 }
 
 fn resolve_topology_node_cell(
@@ -223,51 +189,15 @@ fn resolve_topology_node_cell(
     resolved: &HashMap<u64, Entity>,
     topology: &Query<(
         Option<&TopologyNode>,
-        Option<&FenceEdge>,
+        Option<FenceSegment>,
         Option<&PathTile>,
         Option<&Portal>,
     )>,
-    additions: &[TopologySnapshot],
+    additions: &HashMap<u64, IVec3>,
 ) -> Option<IVec3> {
-    additions
-        .iter()
-        .find_map(|snapshot| match *snapshot {
-            TopologySnapshot::Node {
-                id: candidate,
-                cell,
-            } if candidate == id => Some(cell),
-            _ => None,
-        })
-        .or_else(|| {
-            let entity = resolved.get(&id.0)?;
-            topology.get(*entity).ok()?.0.map(|node| node.cell)
-        })
-}
-
-fn find_adjacent_added_fence_cell(
-    endpoint: PersistentId,
-    excluded_endpoint: PersistentId,
-    additions: &[TopologySnapshot],
-    resolved: &HashMap<u64, Entity>,
-    topology: &Query<(
-        Option<&TopologyNode>,
-        Option<&FenceEdge>,
-        Option<&PathTile>,
-        Option<&Portal>,
-    )>,
-) -> Option<IVec3> {
-    additions.iter().find_map(|snapshot| {
-        let TopologySnapshot::Fence { a, b, .. } = *snapshot else {
-            return None;
-        };
-        let other = if a == endpoint && b != excluded_endpoint {
-            b
-        } else if b == endpoint && a != excluded_endpoint {
-            a
-        } else {
-            return None;
-        };
-        resolve_topology_node_cell(other, resolved, topology, additions)
+    additions.get(&id.0).copied().or_else(|| {
+        let entity = resolved.get(&id.0)?;
+        topology.get(*entity).ok()?.0.map(|node| node.cell)
     })
 }
 
@@ -296,12 +226,12 @@ fn apply_one_committed_topology_edit(
         &HabitatRegion,
         &WorldMember,
     )>,
-    roots: Query<Entity, With<WorldRoot>>,
+    (roots, boundaries): (Query<Entity, With<WorldRoot>>, HabitatBoundaryQueries),
     members: Query<&WorldMember>,
-    persistent: Query<(Entity, &PersistentId)>,
+    persistent: Res<PersistentEditLookup>,
     topology: Query<(
         Option<&TopologyNode>,
-        Option<&FenceEdge>,
+        Option<FenceSegment>,
         Option<&PathTile>,
         Option<&Portal>,
     )>,
@@ -328,10 +258,19 @@ fn apply_one_committed_topology_edit(
         write_topology_edit_acknowledgement(&request, false, &mut acknowledged);
         return;
     };
-    let current = persistent
-        .iter()
-        .map(|(entity, id)| (id.0, entity))
-        .collect::<HashMap<_, _>>();
+    let mut current = HashMap::new();
+    for snapshot in edit.created.iter().chain(&edit.removed) {
+        let operands = match *snapshot {
+            TopologySnapshot::Fence { a, b, .. } => [Some(a), Some(b)],
+            TopologySnapshot::Portal { destination, .. } => [Some(destination), None],
+            _ => [None, None],
+        };
+        for id in std::iter::once(snapshot.id()).chain(operands.into_iter().flatten()) {
+            if let Some(entity) = persistent.get(root, id) {
+                current.insert(id.0, entity);
+            }
+        }
+    }
     let forward_pair = (&edit.created, &edit.removed);
     let inverse_pair = (&edit.removed, &edit.created);
     let direction = match request.application {
@@ -374,14 +313,15 @@ fn apply_one_committed_topology_edit(
 
     let mut restorations = live_restorations.as_deref().cloned().unwrap_or_default();
     let mut captured = Vec::new();
-    for (tank, geometry, quality, region, member) in &tanks {
-        if member.root != root
-            || !remove.iter().any(|snapshot| {
-                current
-                    .get(&snapshot.id().0)
-                    .is_some_and(|entity| region.boundary_fence_entities.contains(entity))
-            })
-        {
+    let affected_tanks: bevy::ecs::entity::EntityHashSet = remove
+        .iter()
+        .filter_map(|snapshot| current.get(&snapshot.id().0).copied())
+        .flat_map(|entity| boundaries.habitats(entity))
+        .collect();
+    for (tank, geometry, quality, region, member) in
+        tanks.iter_many(affected_tanks).filter_map(Result::ok)
+    {
+        if member.root != root {
             continue;
         }
         let Some(seed_cell) = tank_habitat_seed_cell(region) else {
@@ -417,6 +357,15 @@ fn apply_one_committed_topology_edit(
         commands.entity(request.transaction).insert(restorations);
     }
     let mut resolved = current;
+    let node_additions = added_node_cells(add);
+    let mut joined_endpoints: HashMap<u64, Vec<PersistentId>> = HashMap::new();
+    for snapshot in add {
+        if let TopologySnapshot::Fence { a, b, .. } = *snapshot {
+            joined_endpoints.entry(a.0).or_default().push(b);
+            joined_endpoints.entry(b.0).or_default().push(a);
+        }
+    }
+    let no_additions = HashMap::new();
     let mut bounds: Option<IRect> = None;
     for snapshot in remove {
         let entity = resolved[&snapshot.id().0];
@@ -429,8 +378,8 @@ fn apply_one_committed_topology_edit(
             }
             TopologySnapshot::Fence { a, b, .. } => {
                 if let (Some(a), Some(b)) = (
-                    resolve_topology_node_cell(a, &resolved, &topology, &[]),
-                    resolve_topology_node_cell(b, &resolved, &topology, &[]),
+                    resolve_topology_node_cell(a, &resolved, &topology, &no_additions),
+                    resolve_topology_node_cell(b, &resolved, &topology, &no_additions),
                 ) {
                     bounds = merge_topology_changed_cell_bounds(
                         bounds,
@@ -440,7 +389,7 @@ fn apply_one_committed_topology_edit(
             }
             TopologySnapshot::Portal { .. } => {}
         }
-        commands.entity(entity).despawn();
+        commands.entity(entity).try_despawn();
     }
 
     for snapshot in add
@@ -472,17 +421,13 @@ fn apply_one_committed_topology_edit(
                 else {
                     unreachable!()
                 };
-                let a_cell = resolve_topology_node_cell(a, &resolved, &topology, add)
+                let a_cell = resolve_topology_node_cell(a, &resolved, &topology, &node_additions)
                     .expect("validated endpoint");
-                let b_cell = resolve_topology_node_cell(b, &resolved, &topology, add)
+                let b_cell = resolve_topology_node_cell(b, &resolved, &topology, &node_additions)
                     .expect("validated endpoint");
                 let entity = commands
                     .spawn((
-                        FenceEdge {
-                            definition,
-                            a: a_entity,
-                            b: b_entity,
-                        },
+                        FenceEdge::between(definition, a_entity, b_entity),
                         id,
                         WorldMember { root },
                         FenceTerrainEndpointPresentationCells {
@@ -504,7 +449,15 @@ fn apply_one_committed_topology_edit(
                     definitions.find_fence(definition)
                 };
                 if let Some(fence) = fence {
-                    let next = find_adjacent_added_fence_cell(b, a, add, &resolved, &topology);
+                    let next = joined_endpoints
+                        .get(&b.0)
+                        .into_iter()
+                        .flatten()
+                        .copied()
+                        .filter(|&other| other != a)
+                        .find_map(|other| {
+                            resolve_topology_node_cell(other, &resolved, &topology, &node_additions)
+                        });
                     let prefab = select_authored_fence_segment_prefab_for_adjacent_topology(
                         fence, a_cell, b_cell, next,
                     );
@@ -547,6 +500,12 @@ fn apply_one_committed_topology_edit(
         }
     }
     for snapshot in add {
+        if let TopologySnapshot::Portal { id, .. } = *snapshot {
+            let entity = commands.spawn((id, WorldMember { root })).id();
+            resolved.insert(id.0, entity);
+        }
+    }
+    for snapshot in add {
         let TopologySnapshot::Portal {
             id,
             destination,
@@ -555,18 +514,10 @@ fn apply_one_committed_topology_edit(
         else {
             continue;
         };
-        let destination = resolved[&destination.0];
-        let entity = commands
-            .spawn((
-                Portal {
-                    destination,
-                    bidirectional,
-                },
-                id,
-                WorldMember { root },
-            ))
-            .id();
-        resolved.insert(id.0, entity);
+        commands.entity(resolved[&id.0]).insert(Portal {
+            destination: resolved[&destination.0],
+            bidirectional,
+        });
     }
 
     if request.application == EditApplication::InitialCommit && !created_fences.is_empty() {

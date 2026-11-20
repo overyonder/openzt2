@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use openzt2_zoo_state::topology::topology_graph_types::FenceSegment;
 
 use openzt2_game_assets::animation::animation_set_asset_types::AnimationSetAsset;
 
@@ -14,7 +15,6 @@ use openzt2_zoo_state::topology::gate_operation_types::Gate;
 use openzt2_zoo_state::topology::gate_operation_types::GateAutoClose;
 use openzt2_zoo_state::topology::gate_operation_types::SetGateState;
 use openzt2_zoo_state::topology::topology_edit_types::TopologyChanged;
-use openzt2_zoo_state::topology::topology_graph_types::FenceEdge;
 use openzt2_zoo_state::topology::topology_graph_types::TopologyNode;
 use openzt2_zoo_state::topology::topology_grid_geometry::calculate_topology_edge_cell_bounds;
 
@@ -25,7 +25,7 @@ pub(super) fn apply_requested_gate_state(
     time: Res<Time<Fixed>>,
     mut requests: MessageReader<SetGateState>,
     definitions: GateActorTypeQueries,
-    mut gates: Query<(&mut Gate, &FenceEdge, Option<&mut GateAutoClose>)>,
+    mut gates: Query<(&mut Gate, FenceSegment, Option<&mut GateAutoClose>)>,
     nodes: Query<&TopologyNode>,
     mut changed: MessageWriter<TopologyChanged>,
 ) {
@@ -40,7 +40,7 @@ pub(super) fn apply_requested_gate_state(
         if gate.locked || gate.open == request.open {
             continue;
         }
-        let (Ok(first_node), Ok(second_node)) = (nodes.get(edge.a), nodes.get(edge.b)) else {
+        let (Ok(first_node), Ok(second_node)) = (nodes.get(edge.a()), nodes.get(edge.b())) else {
             continue;
         };
         gate.open = request.open;
@@ -70,7 +70,6 @@ pub(super) fn apply_requested_gate_state(
 pub(super) fn attach_authored_animation_sets_to_resolved_gate_models(
     mut commands: Commands,
     definitions: GateActorTypeQueries,
-    animation_set_assets: Res<Assets<AnimationSetAsset>>,
     resolved_models: Query<
         Entity,
         (
@@ -80,7 +79,7 @@ pub(super) fn attach_authored_animation_sets_to_resolved_gate_models(
     >,
     parents: Query<&ChildOf>,
     presentation_owners: Query<&AnimationPresentationOwner>,
-    gates: Query<(&Gate, &FenceEdge)>,
+    gates: Query<(&Gate, FenceSegment)>,
 ) {
     let Some(definitions) = definitions.definitions() else {
         return;
@@ -106,11 +105,7 @@ pub(super) fn attach_authored_animation_sets_to_resolved_gate_models(
         else {
             continue;
         };
-        if clip.is_empty()
-            || animation_set_assets
-                .get(&animation_set)
-                .is_some_and(|set| set.animation_clip_asset_load_has_failed(clip))
-        {
+        if clip.is_empty() {
             continue;
         }
         commands
@@ -127,7 +122,7 @@ pub(super) fn attach_authored_animation_sets_to_resolved_gate_models(
 /// subsequent state changes address that same gate-animation presentation.
 pub(super) fn project_gate_state_to_ready_animation_presentations(
     definitions: GateActorTypeQueries,
-    gates: Query<(Ref<Gate>, &FenceEdge)>,
+    gates: Query<(Ref<Gate>, FenceSegment)>,
     controllers: Query<(
         Entity,
         Ref<AnimationPlaybackController>,

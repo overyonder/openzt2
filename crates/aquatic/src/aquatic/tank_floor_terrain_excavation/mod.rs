@@ -1,5 +1,8 @@
 //! Keeps the terrain inside each tank's walls at the tank floor, so the floor
 //! is the ground seen through the glass and under the water.
+use openzt2_zoo_state::topology::{
+    habitat_boundary_queries::HabitatBoundaryQueries, topology_graph_types::FenceSegment,
+};
 
 use bevy::ecs::entity::EntityHashSet;
 use bevy::prelude::*;
@@ -17,7 +20,7 @@ use openzt2_zoo_state::terrain::terrain_edit_types::{
     CommitTerrainEdit, TerrainChanged, TerrainEdit, TerrainEditAcknowledged,
 };
 use openzt2_zoo_state::terrain::terrain_sample_grid_queries::read_materialized_terrain_sample;
-use openzt2_zoo_state::topology::topology_graph_types::{FenceEdge, TopologyGrid, TopologyNode};
+use openzt2_zoo_state::topology::topology_graph_types::{TopologyGrid, TopologyNode};
 
 use super::aquatic_simulation_types::{Tank, TankGeometry};
 use super::tank_presentation::inside_walls;
@@ -77,8 +80,8 @@ pub(super) fn excavate_changed_tank_floors(
     tanks: Query<(Entity, &TankGeometry, Ref<HabitatRegion>), With<Tank>>,
     mut restorations: MessageReader<RestoreTankFloorTerrain>,
     mut changes: MessageReader<TerrainChanged>,
-    ground: TankWallGroundSampling,
-    fences: Query<&FenceEdge>,
+    (ground, boundaries): (TankWallGroundSampling, HabitatBoundaryQueries),
+    fences: Query<FenceSegment>,
     nodes: Query<&TopologyNode>,
     chunks: Query<(
         &TerrainChunk,
@@ -115,13 +118,12 @@ pub(super) fn excavate_changed_tank_floors(
                 return None;
             }
             let mut wall_ground_sum = 0.0;
-            let walls = region
-                .boundary_fence_entities
-                .iter()
+            let walls = boundaries
+                .fences(tank)
                 .map(|fence| {
-                    let edge = fences.get(*fence).ok()?;
-                    let a = nodes.get(edge.a).ok()?.cell;
-                    let b = nodes.get(edge.b).ok()?.cell;
+                    let edge = fences.get(fence).ok()?;
+                    let a = nodes.get(edge.a()).ok()?.cell;
+                    let b = nodes.get(edge.b()).ok()?.cell;
                     wall_ground_sum += ground.ground_height_at_topology_cell(a)?;
                     Some([a, b].map(|cell| grid.cell_translation(cell).xz()))
                 })

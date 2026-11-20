@@ -45,6 +45,7 @@ pub struct AnimalLifecyclePlugin;
 
 impl Plugin for AnimalLifecyclePlugin {
     fn build(&self, app: &mut App) {
+        app.add_observer(authored_entity_morph::cancel_interrupted_morph_fade);
         app.add_systems(Update, (
             starting_animal_hydration::hydrate_starting_animals,
             crate::animal_welfare::systems::initialize_animal_needs

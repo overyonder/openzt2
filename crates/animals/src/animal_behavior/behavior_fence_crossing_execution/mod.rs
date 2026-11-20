@@ -6,7 +6,7 @@ use openzt2_game_assets::application_lifecycle::GamePhase;
 use openzt2_world_state::application_schedule::FixedGameSet;
 use openzt2_zoo_state::{
     behavior_task_execution_types::{BehaviorTaskFailed, BehaviorTaskFinished},
-    topology::topology_graph_types::{FenceEdge, TopologyGrid, TopologyNode},
+    topology::topology_graph_types::{FenceSegment, TopologyGrid, TopologyNode},
 };
 
 /// The fence the animal's current task crosses.
@@ -51,7 +51,7 @@ fn carry_animals_across_their_crossed_fences(
     mut finished: MessageReader<BehaviorTaskFinished>,
     mut failed: MessageReader<BehaviorTaskFailed>,
     mut animals: Query<(&CrossingFence, &mut Transform)>,
-    fences: Query<&FenceEdge>,
+    fences: Query<FenceSegment>,
     nodes: Query<&TopologyNode>,
     grid: Res<TopologyGrid>,
 ) {
@@ -72,8 +72,8 @@ fn carry_animals_across_their_crossed_fences(
         }
         let ends = fences.get(crossing.fence).ok().and_then(|edge| {
             Some((
-                grid.cell_translation(nodes.get(edge.a).ok()?.cell),
-                grid.cell_translation(nodes.get(edge.b).ok()?.cell),
+                grid.cell_translation(nodes.get(edge.a()).ok()?.cell),
+                grid.cell_translation(nodes.get(edge.b()).ok()?.cell),
             ))
         });
         if let Some((first, second)) = ends {

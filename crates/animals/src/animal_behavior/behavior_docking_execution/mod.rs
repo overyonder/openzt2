@@ -55,7 +55,7 @@ pub(super) type DockBehaviorActors<'w, 's> = Query<
 #[derive(SystemParam)]
 pub(super) struct DockBehaviorGeometry<'w, 's> {
     target_entrances: Query<'w, 's, &'static PlacedObjectAuthoredEntrance>,
-    fences: Query<'w, 's, &'static openzt2_zoo_state::topology::topology_graph_types::FenceEdge>,
+    fences: Query<'w, 's, openzt2_zoo_state::topology::topology_graph_types::FenceSegment>,
     topology_nodes:
         Query<'w, 's, &'static openzt2_zoo_state::topology::topology_graph_types::TopologyNode>,
     topology_grid: Res<'w, openzt2_zoo_state::topology::topology_graph_types::TopologyGrid>,
@@ -369,75 +369,76 @@ fn request_behavior_dock(
         instruction.complete(actor, tick, commands);
         return;
     }
-    let (mut local_point, local_forward) =
-        if let Some(radial_distance_m) = docking_action.radial_distance_m {
-            let (Ok(actor_transform), Ok(target_transform)) = (
-                entity_global_transforms.get(actor),
-                entity_global_transforms.get(target),
-            ) else {
-                return;
-            };
-            // A fence segment's origin is its first end; dock on its middle,
-            // on the ground there rather than at the topology layer's height.
-            let centre = fences.get(target).ok().and_then(|edge| {
-                let first = topology_grid.cell_translation(topology_nodes.get(edge.a).ok()?.cell);
-                let second = topology_grid.cell_translation(topology_nodes.get(edge.b).ok()?.cell);
-                let middle = (first + second) * 0.5;
-                let middle = middle.with_y(ground.ground_height(middle.xz()).unwrap_or(middle.y));
-                Some(target_transform.affine().inverse().transform_point3(middle))
-            });
-            radial_dock_point_and_forward_in_target_space(
-                actor_transform,
-                target_transform,
-                centre.unwrap_or(Vec3::ZERO),
-                radial_distance_m,
-                docking_action.rotation_tolerance_radians,
-            )
-        } else {
-            let interaction_slot_target_node_name = target_definition
-                .and_then(|definition| {
-                    memberships
-                        .actor_slot(target, actor)
-                        .and_then(|slot| definition.interaction_slots.get(slot))
-                })
-                .map(|slot| slot.target_node_name.as_str())
-                .filter(|name| !name.is_empty());
-            let target_node_name = docking_action
-                .target_node_name
-                .as_deref()
-                .or(interaction_slot_target_node_name);
-            let authored_named_target_dock = target_node_name.and_then(|target_node_name| {
-                find_named_descendant_global_transform(
-                    target,
-                    target_node_name,
-                    children,
-                    authored_attachment_transforms,
-                )
-                .and_then(|target_node_global_transform| {
-                    let target_global_transform = entity_global_transforms.get(target).ok()?;
-                    let target_from_node = target_global_transform.affine().inverse()
-                        * target_node_global_transform.affine();
-                    Some((
-                        target_from_node.translation.into(),
-                        target_from_node
-                            .transform_vector3(Vec3::Z)
-                            .normalize_or_zero(),
-                    ))
-                })
-            });
-            if target_node_name.is_some() && authored_named_target_dock.is_none() {
-                debug!(?actor, ?target, target_node = ?target_node_name,
-                    "dock waits: the target node is absent");
-                return;
-            }
-            authored_named_target_dock.unwrap_or_else(|| {
-                target_entrances
-                    .get(target)
-                    .map_or((Vec3::ZERO, Vec3::Z), |entrance| {
-                        (entrance.local_position, entrance.local_forward)
-                    })
-            })
+    let (mut local_point, local_forward) = if let Some(radial_distance_m) =
+        docking_action.radial_distance_m
+    {
+        let (Ok(actor_transform), Ok(target_transform)) = (
+            entity_global_transforms.get(actor),
+            entity_global_transforms.get(target),
+        ) else {
+            return;
         };
+        // A fence segment's origin is its first end; dock on its middle,
+        // on the ground there rather than at the topology layer's height.
+        let centre = fences.get(target).ok().and_then(|edge| {
+            let first = topology_grid.cell_translation(topology_nodes.get(edge.a()).ok()?.cell);
+            let second = topology_grid.cell_translation(topology_nodes.get(edge.b()).ok()?.cell);
+            let middle = (first + second) * 0.5;
+            let middle = middle.with_y(ground.ground_height(middle.xz()).unwrap_or(middle.y));
+            Some(target_transform.affine().inverse().transform_point3(middle))
+        });
+        radial_dock_point_and_forward_in_target_space(
+            actor_transform,
+            target_transform,
+            centre.unwrap_or(Vec3::ZERO),
+            radial_distance_m,
+            docking_action.rotation_tolerance_radians,
+        )
+    } else {
+        let interaction_slot_target_node_name = target_definition
+            .and_then(|definition| {
+                memberships
+                    .actor_slot(target, actor)
+                    .and_then(|slot| definition.interaction_slots.get(slot))
+            })
+            .map(|slot| slot.target_node_name.as_str())
+            .filter(|name| !name.is_empty());
+        let target_node_name = docking_action
+            .target_node_name
+            .as_deref()
+            .or(interaction_slot_target_node_name);
+        let authored_named_target_dock = target_node_name.and_then(|target_node_name| {
+            find_named_descendant_global_transform(
+                target,
+                target_node_name,
+                children,
+                authored_attachment_transforms,
+            )
+            .and_then(|target_node_global_transform| {
+                let target_global_transform = entity_global_transforms.get(target).ok()?;
+                let target_from_node = target_global_transform.affine().inverse()
+                    * target_node_global_transform.affine();
+                Some((
+                    target_from_node.translation.into(),
+                    target_from_node
+                        .transform_vector3(Vec3::Z)
+                        .normalize_or_zero(),
+                ))
+            })
+        });
+        if target_node_name.is_some() && authored_named_target_dock.is_none() {
+            debug!(?actor, ?target, target_node = ?target_node_name,
+                    "dock waits: the target node is absent");
+            return;
+        }
+        authored_named_target_dock.unwrap_or_else(|| {
+            target_entrances
+                .get(target)
+                .map_or((Vec3::ZERO, Vec3::Z), |entrance| {
+                    (entrance.local_position, entrance.local_forward)
+                })
+        })
+    };
     if let Some(subject_node_name) = docking_action.subject_node_name.as_deref() {
         let Some(subject_node_global_transform) = find_named_descendant_global_transform(
             actor,

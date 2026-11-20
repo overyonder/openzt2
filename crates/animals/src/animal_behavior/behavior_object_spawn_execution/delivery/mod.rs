@@ -1,4 +1,5 @@
 use super::*;
+use openzt2_world_state::animation_playback::animation_joint_target_types::AnimationRigJoints;
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
     RunBehaviorSpawnObject, RunningBehaviorInstruction,
 };
@@ -14,6 +15,7 @@ pub(super) fn deliver_behavior_object_spawns(
     mut completed: MessageReader<AnimationCompleted>,
     mut rejected: MessageReader<AnimationClipPlaybackRequestRejected>,
     owners: Query<(&AnimationPresentationOwner, &AnimationPlaybackController)>,
+    rigs: Query<&AnimationRigJoints>,
     joints: Query<(&AnimationJointTarget, &GlobalTransform)>,
     children: Query<&Children>,
     named_nodes: super::super::behavior_docking_execution::NamedNodeTransforms,
@@ -78,12 +80,10 @@ pub(super) fn deliver_behavior_object_spawns(
             let object = view.find_object(*entity)?;
             // The spawn node, such as an animal's `Poop`, may be an animated
             // joint or a plain named node. Without either the spawn fails.
-            let transform = joints
-                .iter()
-                .find(|(joint, _)| {
-                    joint.animation_playback_controller_entity == event.controller
-                        && joint.joint_asset_key.eq_ignore_ascii_case(subject_node)
-                })
+            let subject_joint = AssetId::from_key(subject_node);
+            let transform = rigs.get(event.controller).ok()
+                .into_iter().flat_map(|rig| joints.iter_many(rig.joints()).matched())
+                .find(|(joint, _)| joint.authored_joint_id == subject_joint)
                 .map(|(_, transform)| transform.compute_transform())
                 .or_else(|| {
                     super::super::behavior_docking_execution::find_named_descendant_global_transform(
@@ -141,9 +141,7 @@ pub(super) fn deliver_behavior_object_spawns(
                     ))
                     .id()
             };
-            for occupant in placement.stomped_objects {
-                commands.entity(occupant).try_despawn();
-            }
+            placement.apply_stomps(&mut commands);
             if object
                 .properties
                 .contains_all(WorldObjectPropertyFlags::ANIMAL_WASTE)

@@ -7,7 +7,6 @@ use openzt2_zoo_state::economy::account_transaction_types::TransactionRequest;
 use openzt2_zoo_state::economy::general_economy_types::GeneralEconomyTransaction;
 use openzt2_zoo_state::economy::money_types::Money;
 
-use crate::construction::construction_payment_operation_types::ConstructionPaymentOperation;
 use crate::construction::construction_payment_operation_types::ConstructionPaymentPurpose;
 
 pub(super) fn create_construction_payment_request(
@@ -27,10 +26,8 @@ pub(super) fn create_construction_payment_request(
         (Account::External, Account::Zoo)
     };
     let mut payment_operation = commands.spawn((
-        ConstructionPaymentOperation {
-            construction_transaction,
-            purpose: payment_purpose,
-        },
+        ChildOf(construction_transaction),
+        payment_purpose,
         world_member,
     ));
     if let Some(general_transaction) = general_transaction {

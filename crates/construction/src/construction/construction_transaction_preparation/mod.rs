@@ -1,3 +1,7 @@
+use super::{
+    construction_history::ConstructionHistoryPolicy,
+    construction_lifecycle::{ConstructionActive, Preparing},
+};
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 
@@ -6,45 +10,72 @@ use openzt2_zoo_state::economy::general_economy_types::GeneralEconomyTransaction
 use openzt2_zoo_state::economy::money_types::Money;
 use openzt2_zoo_state::terrain::terrain_brush_types::{TerrainBrushKind, TerrainBrushPreview};
 
-use openzt2_zoo_state::construction::construction_edit_history_types::ConstructionEditHistory;
 use openzt2_zoo_state::construction::construction_interaction_types::CommitConstruction;
 use openzt2_zoo_state::construction::construction_interaction_types::ConstructionPreview;
 use openzt2_zoo_state::construction::construction_interaction_types::PlacementValidity;
 use openzt2_zoo_state::construction::construction_transaction_types::ConstructionFeedbackOrigin;
-use openzt2_zoo_state::construction::construction_transaction_types::EditCommitPhase;
-use openzt2_zoo_state::construction::construction_transaction_types::EditCommitProgress;
 use openzt2_zoo_state::construction::construction_transaction_types::EditTransaction;
 use openzt2_zoo_state::construction::construction_transaction_types::PrepareConstruction;
 use openzt2_zoo_state::construction::construction_transaction_types::TransactionState;
 
+#[derive(Component)]
+pub(crate) struct SubmittedPreview<T: Component + Clone>(pub T);
+
+pub(crate) fn capture_confirmed_preview<T: Component + Clone>(
+    mut confirmations: MessageReader<CommitConstruction>,
+    previews: Query<&T>,
+    mut commands: Commands,
+) {
+    for confirmation in confirmations.read() {
+        if let Ok(preview) = previews.get(confirmation.preview) {
+            commands
+                .entity(confirmation.preview)
+                .try_insert_if_new(SubmittedPreview(preview.clone()));
+        }
+    }
+}
+
+pub(crate) fn clear_confirmed_previews<T: Component + Clone>(
+    previews: Query<Entity, With<SubmittedPreview<T>>>,
+    mut commands: Commands,
+) {
+    for preview in &previews {
+        commands.entity(preview).try_remove::<SubmittedPreview<T>>();
+    }
+}
+
 /// Opens one construction transaction only from the exact still-live valid
 /// preview. The confirming pointer coordinate is retained solely for feedback
 /// after the domain and economy transaction has fully committed.
-pub fn begin_construction_transaction_from_valid_preview(
+pub(super) fn begin_construction_transaction_from_valid_preview(
     mut commands: Commands,
     mut construction_commit_requests: MessageReader<CommitConstruction>,
     previews: Query<(
         &ConstructionPreview,
         &WorldMember,
         Option<&TerrainBrushPreview>,
+        Option<&SubmittedPreview<ConstructionPreview>>,
     )>,
-    pending_transactions: Query<&EditCommitProgress>,
-    mut construction_edit_history: ResMut<ConstructionEditHistory>,
+    submitted: Query<Entity, With<SubmittedPreview<ConstructionPreview>>>,
+    pending_transactions: Query<(), With<ConstructionActive>>,
+    mut construction_edit_history: ResMut<ConstructionHistoryPolicy>,
     mut construction_preparation_requests: MessageWriter<PrepareConstruction>,
     primary_windows: Query<&Window, With<PrimaryWindow>>,
 ) {
-    if pending_transactions
-        .iter()
-        .any(|progress| progress.phase != EditCommitPhase::Complete)
-    {
+    if !pending_transactions.is_empty() {
+        construction_commit_requests.clear();
         return;
     }
-    for construction_commit_request in construction_commit_requests.read() {
-        let Ok((preview, world_member, terrain_brush)) =
-            previews.get(construction_commit_request.preview)
+    let requests = construction_commit_requests
+        .read()
+        .map(|request| request.preview)
+        .collect::<Vec<_>>();
+    for preview_entity in requests.into_iter().chain(&submitted) {
+        let Ok((preview, world_member, terrain_brush, submission)) = previews.get(preview_entity)
         else {
             continue;
         };
+        let preview = submission.map_or(preview, |submitted| &submitted.0);
         if !matches!(preview.validity, PlacementValidity::Valid { .. }) {
             continue;
         }
@@ -57,7 +88,7 @@ pub fn begin_construction_transaction_from_valid_preview(
                 state: TransactionState::Applied,
                 cost: Money(0),
             },
-            EditCommitProgress::preparing(),
+            Preparing,
             *world_member,
             match terrain_brush.map(|brush| brush.kind) {
                 None => GeneralEconomyTransaction::Build,
@@ -87,7 +118,7 @@ pub fn begin_construction_transaction_from_valid_preview(
         let transaction = transaction.id();
         construction_preparation_requests.write(PrepareConstruction {
             transaction,
-            preview: construction_commit_request.preview,
+            preview: preview_entity,
         });
         break;
     }

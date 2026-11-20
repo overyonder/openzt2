@@ -14,6 +14,7 @@ use bevy::camera::NormalizedRenderTarget;
 use bevy::picking::pointer::{
     Location, PointerAction, PointerButton, PointerId, PointerInput, PointerMap,
 };
+use openzt2_construction::construction::construction_history::ConstructionHistory;
 use openzt2_construction::construction::ConstructionPlugin;
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use openzt2_game_assets::terrain::terrain_test_asset::terrain_test_asset;
@@ -34,7 +35,6 @@ use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 use openzt2_zoo_state::construction::construction_edit_history_types::ApplyConstructionTransaction;
 use openzt2_zoo_state::construction::construction_edit_history_types::ConstructionEditDirection;
-use openzt2_zoo_state::construction::construction_edit_history_types::ConstructionEditHistory;
 use openzt2_zoo_state::construction::construction_interaction_types::ConstructionCursor;
 use openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::ConstructionPlacementPolicy;
 use openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::ConstructionTool;
@@ -230,11 +230,7 @@ fn tank_geometry_construction_fixture(kind: TankEditKind) -> (App, Entity, Entit
         .map(|index| {
             app.world_mut()
                 .spawn((
-                    FenceEdge {
-                        definition,
-                        a: corners[index],
-                        b: corners[(index + 1) % 4],
-                    },
+                    FenceEdge::between(definition, corners[index], corners[(index + 1) % 4]),
                     openzt2_world_state::world_spawn::persistent_id_types::PersistentId(
                         100 + index as u64,
                     ),
@@ -253,7 +249,6 @@ fn tank_geometry_construction_fixture(kind: TankEditKind) -> (App, Entity, Entit
                 topology_cells: vec![IVec2::ZERO, IVec2::X, IVec2::Y, IVec2::ONE]
                     .into_boxed_slice(),
                 area_square_metres: 4.0,
-                boundary_fence_entities: walls,
             },
             HabitatSummary {
                 land_area_square_metres: 0.0,
@@ -263,6 +258,12 @@ fn tank_geometry_construction_fixture(kind: TankEditKind) -> (App, Entity, Entit
             },
         ))
         .id();
+    for &wall in &walls {
+        app.world_mut().spawn((
+            ChildOf(tank),
+            openzt2_zoo_state::habitat::habitat_types::HabitatBoundaryFence(wall),
+        ));
+    }
     let other = app.world_mut().spawn((Tank { definition }, geometry)).id();
     let mut habitat_index = app.world_mut().resource_mut::<HabitatIndex>();
     for cell in [IVec2::ZERO, IVec2::X, IVec2::Y, IVec2::ONE] {
@@ -397,17 +398,15 @@ fn floor_release_commits_once_and_history_reverses_canonical_geometry_and_show_e
     );
     assert!(app.world().get::<ShowTankEligible>(tank).is_some());
     assert_eq!(*app.world().get::<TankGeometry>(other).unwrap(), before);
-    let history = app.world().resource::<ConstructionEditHistory>();
-    assert_eq!(history.entries.len(), 1);
-    assert_eq!(history.cursor, 1);
-    let transaction = history.entries[0];
+    let transaction = app
+        .world_mut()
+        .run_system_cached(undo_candidate)
+        .unwrap()
+        .unwrap();
     app.world_mut().run_schedule(FixedUpdate);
     assert_eq!(
-        app.world()
-            .resource::<ConstructionEditHistory>()
-            .entries
-            .len(),
-        1
+        app.world_mut().run_system_cached(undo_candidate).unwrap(),
+        Some(transaction)
     );
     for (direction, expected, cursor) in [
         (ConstructionEditDirection::Undo, before, 0),
@@ -422,8 +421,8 @@ fn floor_release_commits_once_and_history_reverses_canonical_geometry_and_show_e
         app.world_mut().run_schedule(TankProjectionStep);
         assert_eq!(*app.world().get::<TankGeometry>(tank).unwrap(), expected);
         assert_eq!(
-            app.world().resource::<ConstructionEditHistory>().cursor,
-            cursor
+            app.world_mut().run_system_cached(undo_candidate).unwrap(),
+            (cursor == 1).then_some(transaction)
         );
         assert_eq!(
             app.world().get::<ShowTankEligible>(tank).is_some(),
@@ -434,4 +433,8 @@ fn floor_release_commits_once_and_history_reverses_canonical_geometry_and_show_e
         .world()
         .resource::<Messages<TransactionRequest>>()
         .is_empty());
+}
+
+fn undo_candidate(history: ConstructionHistory) -> Option<Entity> {
+    history.next(ConstructionEditDirection::Undo)
 }

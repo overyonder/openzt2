@@ -1,6 +1,8 @@
+use openzt2_zoo_state::topology::habitat_boundary_queries::HabitatBoundaryQueries;
+use openzt2_zoo_state::topology::topology_graph_types::FenceSegment;
 use std::collections::BTreeMap;
 
-use bevy::ecs::{relationship::RelationshipTarget, system::SystemParam};
+use bevy::ecs::system::SystemParam;
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 
@@ -8,10 +10,8 @@ use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 use openzt2_zoo_state::aquatic::aquatic_simulation_types::TankWallTopHeight;
 use openzt2_zoo_state::aquatic::tank_geometry_edit_types::{TankHeightBounds, TankWallHeightEdit};
 use openzt2_zoo_state::aquatic::tank_wall_ground_sampling::TankWallGroundSampling;
-use openzt2_zoo_state::habitat::habitat_types::{HabitatFenceIncidences, HabitatRegion};
-use openzt2_zoo_state::topology::topology_graph_types::{
-    FenceEdge, PathTile, TopologyGrid, TopologyNode,
-};
+use openzt2_zoo_state::habitat::habitat_types::HabitatRegion;
+use openzt2_zoo_state::topology::topology_graph_types::{PathTile, TopologyGrid, TopologyNode};
 use openzt2_zoo_state::topology::topology_grid_geometry::calculate_adjacent_topology_grid_cells_between_endpoints;
 
 use super::tank_geometry_rules::TankGeometryLimits;
@@ -68,15 +68,14 @@ pub(super) struct TankHeightBoundsQueries<'w, 's> {
         'w,
         's,
         (
-            &'static FenceEdge,
+            FenceSegment,
             &'static PersistentId,
             Option<&'static TankWallTopHeight>,
         ),
     >,
     nodes: Query<'w, 's, &'static TopologyNode>,
     clearance: Res<'w, TankPathClearance>,
-    fence_habitats: Query<'w, 's, &'static HabitatFenceIncidences>,
-    incidence_habitats: Query<'w, 's, &'static ChildOf>,
+    boundaries: HabitatBoundaryQueries<'w, 's>,
     grid: Res<'w, TopologyGrid>,
     show_stages: Query<
         'w,
@@ -88,17 +87,21 @@ pub(super) struct TankHeightBoundsQueries<'w, 's> {
 }
 
 impl TankHeightBoundsQueries<'_, '_> {
+    pub(super) fn boundary_fences(&self, tank: Entity) -> impl Iterator<Item = Entity> + '_ {
+        self.boundaries.fences(tank)
+    }
+
     pub(super) fn wall_height_images(
         &self,
-        region: &HabitatRegion,
+        tank: Entity,
         limits: TankGeometryLimits,
     ) -> Option<Box<[TankWallHeightEdit]>> {
-        let mut walls = Vec::with_capacity(region.boundary_fence_entities.len());
-        for fence in region.boundary_fence_entities.iter() {
-            let (edge, id, top) = self.fences.get(*fence).ok()?;
+        let mut walls = Vec::new();
+        for fence in self.boundaries.fences(tank) {
+            let (edge, id, top) = self.fences.get(fence).ok()?;
             let (a, b) = (
-                self.nodes.get(edge.a).ok()?.cell,
-                self.nodes.get(edge.b).ok()?.cell,
+                self.nodes.get(edge.a()).ok()?.cell,
+                self.nodes.get(edge.b()).ok()?.cell,
             );
             let cells = calculate_adjacent_topology_grid_cells_between_endpoints(a, b).ok()?;
             let mut highest = f32::NEG_INFINITY;
@@ -138,25 +141,19 @@ impl TankHeightBoundsQueries<'_, '_> {
     pub(super) fn include_adjacent_tank_water_in_wall_minima(
         &self,
         walls: &mut [TankWallHeightEdit],
-        region: &HabitatRegion,
+        tank: Entity,
         limits: TankGeometryLimits,
         adjacent_water_height: impl Fn(Entity) -> Option<f32>,
     ) {
-        for fence in region.boundary_fence_entities.iter().copied() {
-            let (Ok((_, id, _)), Ok(incidences)) =
-                (self.fences.get(fence), self.fence_habitats.get(fence))
-            else {
+        for fence in self.boundaries.fences(tank) {
+            let Ok((_, id, _)) = self.fences.get(fence) else {
                 continue;
             };
             let Ok(index) = walls.binary_search_by_key(&id.0, |wall| wall.id.0) else {
                 continue;
             };
-            for habitat in self
-                .incidence_habitats
-                .iter_many(incidences.iter())
-                .flatten()
-            {
-                if let Some(height) = adjacent_water_height(habitat.parent()) {
+            for habitat in self.boundaries.habitats(fence) {
+                if let Some(height) = adjacent_water_height(habitat) {
                     walls[index].minimum = walls[index].minimum.max(height + limits.water_offset_m);
                 }
             }
@@ -165,15 +162,13 @@ impl TankHeightBoundsQueries<'_, '_> {
 
     pub(super) fn tank_height_bounds(
         &self,
+        tank: Entity,
         region: &HabitatRegion,
         limits: TankGeometryLimits,
         walls: &[TankWallHeightEdit],
     ) -> Option<TankHeightBounds> {
-        let (edge, ..) = self
-            .fences
-            .get(*region.boundary_fence_entities.first()?)
-            .ok()?;
-        let cell = self.nodes.get(edge.a).ok()?.cell;
+        let (edge, ..) = self.fences.get(self.boundaries.fences(tank).next()?).ok()?;
+        let cell = self.nodes.get(edge.a()).ok()?.cell;
         let units = self.ground.terrain_units_at_topology_cell(cell)?;
         let is_show_tank = self.show_stages.iter().any(|transform| {
             let cell = ((transform.translation.xz() - self.grid.origin) / self.grid.spacing_m)

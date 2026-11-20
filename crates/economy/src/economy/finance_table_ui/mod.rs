@@ -111,11 +111,6 @@ pub(super) fn request_authored_finance_report_list_row_counts_and_bind_world_sub
                 {
                     history.retained_month_finance_records().len()
                 }
-                FinanceDonationsBySpecies | FinanceTourDonations | FinanceShowDonations
-                    if policy.is_changed() =>
-                {
-                    0
-                }
                 _ => continue,
             };
             if let Ok(mut count_field) = counts.get_mut(list) {

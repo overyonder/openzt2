@@ -18,11 +18,13 @@ mod behavior_transaction_execution;
 mod catalogue_price_ui;
 mod facility_accounting;
 mod facility_economy_ui;
+mod finance_donation_reports;
 pub mod finance_table_ui;
 mod guest_admission_payment;
 mod guest_admission_ui;
 mod keeper_refill_settlement;
 mod monthly_finance_recording;
+mod saved_world_economy_trackers;
 mod scenario_economy_command_application;
 mod selected_object_sale_ui;
 mod service_cancellation;
@@ -52,7 +54,15 @@ pub struct EconomyPlugin;
 
 impl Plugin for EconomyPlugin {
     fn build(&self, app: &mut App) {
-        app.add_message::<TransactionRequest>()
+        app.add_systems(
+                Update,
+                (
+                    saved_world_economy_trackers::use_original_saved_game_economy_source,
+                    saved_world_economy_trackers::load_selected_world_economy,
+                    saved_world_economy_trackers::materialize_selected_world_economy_trackers,
+                ).chain().run_if(in_state(GamePhase::Loading).or_else(in_state(GamePhase::InGame))),
+            )
+            .add_message::<TransactionRequest>()
             .add_message::<TransactionCompleted>()
             .add_message::<TransactionRejected>()
             .add_message::<ScenarioEconomyCommand>()
@@ -64,6 +74,7 @@ impl Plugin for EconomyPlugin {
             .init_resource::<ZooCash>()
             .init_resource::<AdmissionPrice>()
             .init_resource::<MonthlyFinanceHistory>()
+            .init_resource::<finance_donation_reports::FinanceDonationReports>()
             .init_resource::<GeneralEconomyLedger>()
             .init_resource::<guest_admission_ui::AuthoredZooAdmissionPriceBands>()
             .init_resource::<ZooAdmissionsOpen>()
@@ -89,6 +100,10 @@ impl Plugin for EconomyPlugin {
                     guest_admission_ui::project_zoo_admissions_status_into_authored_ui_text
                         .after(guest_admission_ui::apply_zoo_admission_policy_changes_from_authored_ui_actions)
                         .after(openzt2_interface_state::ui::UiSet::Commands),
+                    (
+                        finance_donation_reports::reduce_donations_for_finance_reports,
+                        finance_donation_reports::project_finance_donation_rows,
+                    ).chain_ignore_deferred(),
                     finance_table_ui::request_authored_finance_table_row_counts,
                     finance_table_ui::request_authored_finance_report_list_row_counts_and_bind_world_subjects,
                     finance_table_ui::project_monthly_finance_values_into_authored_table_rows,
@@ -178,6 +193,7 @@ impl Plugin for EconomyPlugin {
                 (
                     zoo_cash_policy::clear_unlimited_cash_policy_after_leaving_game,
                     monthly_finance_recording::clear_finance_history_after_leaving_game,
+                    finance_donation_reports::clear_finance_donation_reports,
                 ),
             );
     }

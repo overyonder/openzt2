@@ -5,6 +5,7 @@ use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and
 use openzt2_game_data::world_definitions::object_placement::{
     PlaceableDefinition, placement_stomp_rules::PlacementStompAction,
 };
+use openzt2_game_data::AssetId;
 use openzt2_world_state::world_spawn::{
     persistent_id_types::PersistentId, prefab_source_asset_handle::PrefabSourceAssetHandle,
 };

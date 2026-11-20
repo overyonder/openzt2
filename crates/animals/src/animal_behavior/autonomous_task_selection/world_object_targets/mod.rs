@@ -1,5 +1,6 @@
 //! Placed world objects as concrete targets of authored animal tasks.
 
+use openzt2_zoo_state::topology::habitat_boundary_queries::HabitatBoundaryQueries;
 use super::candidate_facts::compare_q16;
 use openzt2_zoo_state::animal_lifecycle::types::Animal;
 use openzt2_zoo_state::feeding::container_quantity::DrinkContainer;
@@ -46,7 +47,7 @@ pub(crate) struct WorldObjectTargetSources<'w, 's> {
         'w,
         's,
         (
-            &'static openzt2_zoo_state::topology::topology_graph_types::FenceEdge,
+            openzt2_zoo_state::topology::topology_graph_types::FenceSegment,
             &'static GlobalTransform,
         ),
     >,
@@ -54,8 +55,7 @@ pub(crate) struct WorldObjectTargetSources<'w, 's> {
         Query<'w, 's, &'static openzt2_zoo_state::habitat::habitat_types::HabitatSummary>,
     pub(super) topology_nodes:
         Query<'w, 's, &'static openzt2_zoo_state::topology::topology_graph_types::TopologyNode>,
-    pub(super) habitat_regions:
-        Query<'w, 's, &'static openzt2_zoo_state::habitat::habitat_types::HabitatRegion>,
+    pub(super) habitat_boundaries: HabitatBoundaryQueries<'w, 's>,
 }
 
 impl WorldObjectTargetSources<'_, '_> {
@@ -83,14 +83,14 @@ impl WorldObjectTargetSources<'_, '_> {
     /// ground there.
     pub(super) fn fence_middle(
         &self,
-        edge: &openzt2_zoo_state::topology::topology_graph_types::FenceEdge,
+        edge: &openzt2_zoo_state::topology::topology_graph_types::FenceSegmentItem<'_, '_>,
     ) -> Option<Vec3> {
         let first = self
             .topology_grid
-            .cell_translation(self.topology_nodes.get(edge.a).ok()?.cell);
+            .cell_translation(self.topology_nodes.get(edge.a()).ok()?.cell);
         let second = self
             .topology_grid
-            .cell_translation(self.topology_nodes.get(edge.b).ok()?.cell);
+            .cell_translation(self.topology_nodes.get(edge.b()).ok()?.cell);
         // On the ground, not at the topology layer's height.
         let middle = (first + second) * 0.5;
         Some(

@@ -89,6 +89,7 @@ fn litter(id: AssetId) -> WorldObjectDefinition {
         audio_cue_prefixes: Vec::new(),
         surface_effect_strength: None,
         presentation_caustic_policies: Vec::new(),
+        traversal_animation_manifests: Vec::new(),
         id,
         kind: WorldObjectKind::Scenery,
         water_filter: None,

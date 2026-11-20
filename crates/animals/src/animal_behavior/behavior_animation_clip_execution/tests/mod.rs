@@ -1,4 +1,5 @@
 use super::*;
+use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
 use openzt2_game_data::{
     behavior::{
         action::animation::BehaviorAnimationClipAction,
@@ -20,7 +21,7 @@ fn restarted_clip_ignores_old_outcomes_and_consumes_its_completion_once() {
             tick_in_day: 0,
         })
         .add_message::<AnimationClipPlaybackRequest>()
-        .add_message::<AnimationClipPresentationSelection>()
+        .add_message::<AnimationClipActionOptions>()
         .add_message::<AnimationClipPlaybackRequestRejected>()
         .add_message::<AnimationCompleted>()
         .add_systems(
