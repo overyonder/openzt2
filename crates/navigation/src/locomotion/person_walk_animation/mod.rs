@@ -41,7 +41,7 @@ use openzt2_zoo_state::{
 const WALK_CLIP: &str = "Walk_Ahead";
 const STAND_CLIP: &str = "Stand_Idle";
 
-#[derive(Component)]
+#[derive(Component, Clone)]
 pub(super) struct PersonGaitPlayback {
     binder: AssetId,
     row: AssetId,
@@ -175,7 +175,9 @@ pub(super) fn project_person_motion_to_walk_animation(
     >,
     mut playback_requests: MessageWriter<AnimationClipPlaybackRequest>,
     caffeine_modes: Query<&CaffeineMode>,
+    mut shared_gaits: Local<bevy::platform::collections::HashMap<Entity, PersonGaitPlayback>>,
 ) {
+    shared_gaits.clear();
     for (controller_entity, controller, enabled, mut consumed, mut gait, grace) in &mut controllers
     {
         let Some(person) = parents
@@ -379,7 +381,22 @@ pub(super) fn project_person_motion_to_walk_animation(
             let current = gait.as_deref_mut().unwrap_or(&mut new_gait);
             current.reset_seconds_remaining -=
                 assets.time.as_ref().map_or(0.0, |time| time.delta_secs());
-            if current.binder != table.binder
+            let shared = shared_gaits.get(&person).filter(|shared| {
+                shared.binder == table.binder
+                    && shared.row == row.key
+                    && shared.node == row.node
+                    && shared.rates == row.playback_speed_range
+            });
+            if let Some(shared) = shared {
+                // Every body part of one person walks at the same rate, or
+                // its legs fall out of step with its upper body.
+                current.rate = shared.rate;
+                current.reset_seconds_remaining = shared.reset_seconds_remaining;
+                current.binder = shared.binder;
+                current.row = shared.row;
+                current.node.clone_from(&shared.node);
+                current.rates = shared.rates;
+            } else if current.binder != table.binder
                 || current.row != row.key
                 || current.node != row.node
                 || current.rates != row.playback_speed_range
@@ -402,6 +419,9 @@ pub(super) fn project_person_motion_to_walk_animation(
                 current.rates = row.playback_speed_range;
             }
             let rate = current.rate;
+            shared_gaits
+                .entry(person)
+                .or_insert_with(|| current.clone());
             if newly_projected {
                 commands.entity(controller_entity).insert(new_gait);
             }
