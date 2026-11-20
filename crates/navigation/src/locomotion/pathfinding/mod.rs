@@ -232,6 +232,15 @@ pub(super) fn advance_route(
         push_if_turn(navigation_position(navigation, *node), &mut route.points);
     }
     push_if_turn(destination, &mut route.points);
+    drop_doubled_back_endpoints(
+        navigation,
+        &world_segment_is_blocked,
+        mode,
+        agent,
+        start_world,
+        goal,
+        &mut route.points,
+    );
     let mut previous = start_world;
     let crosses_boundary = route.points.iter().copied().any(|point| {
         let blocked = world_segment_is_blocked(previous, point);
@@ -624,6 +633,51 @@ fn distance_squared_cm(a: [i32; 3], b: [i32; 3]) -> u128 {
         let delta = i128::from(a) - i128::from(b);
         sum + (delta * delta) as u128
     })
+}
+
+/// A cell centre behind the agent at the start, or past the destination at
+/// the end, would make the agent turn back for a step. Skip such a centre when
+/// the agent is inside its cell and the direct segment stays clear.
+fn drop_doubled_back_endpoints(
+    navigation: &TerrainDerivedNavigationGraph,
+    world_segment_is_blocked: impl Fn(Vec3, Vec3) -> bool,
+    mode: LocomotionMode,
+    agent: &NavAgent,
+    start_world: Vec3,
+    goal: u32,
+    points: &mut Vec<Vec3>,
+) {
+    let cell = terrain_cell_size_m(navigation);
+    let len = points.len();
+    if len >= 2 {
+        let previous = if len >= 3 {
+            points[len - 3]
+        } else {
+            start_world
+        };
+        let (centre, destination) = (points[len - 2], points[len - 1]);
+        let dry = !matches!(mode, LocomotionMode::Ground | LocomotionMode::Vehicle)
+            || agent.capabilities.contains(NavFlags::AMPHIBIOUS)
+            || navigation.path_surface_at_node(goal).is_some()
+            || ground_endpoint_segment_is_dry(navigation, previous, destination);
+        if (centre - destination).xz().length() <= cell
+            && (destination - centre).xz().dot((centre - previous).xz()) < 0.0
+            && dry
+            && !world_segment_is_blocked(previous, destination)
+        {
+            points.remove(len - 2);
+        }
+    }
+    if points.len() >= 2
+        && (points[0] - start_world).xz().length() <= cell
+        && (points[0] - start_world)
+            .xz()
+            .dot((points[1] - start_world).xz())
+            <= 0.0
+        && !world_segment_is_blocked(start_world, points[1])
+    {
+        points.remove(0);
+    }
 }
 
 fn push_if_turn(point: Vec3, points: &mut Vec<Vec3>) {
