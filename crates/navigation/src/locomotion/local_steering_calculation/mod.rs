@@ -26,11 +26,6 @@ fn spacing_radius(agent: &NavAgent) -> f32 {
 /// approaching agent counts as arrived.
 const OCCUPIED_ARRIVAL_SPACINGS: f32 = 4.0;
 
-/// How many touching distances ahead a walker starts stepping aside.
-const AVOIDANCE_LOOK_AHEAD: f32 = 3.0;
-/// The sideways step's share of walking speed when about to touch.
-const AVOIDANCE_WEIGHT: f32 = 0.6;
-
 pub(super) fn calculate_route_following_and_separation_steering(
     spatial_grid: Res<SpatialGrid>,
     mut route_following_navigation_agents: Query<
@@ -42,12 +37,13 @@ pub(super) fn calculate_route_following_and_separation_steering(
             &mut Route,
             &Destination,
             Option<&LocomotionMode>,
-            &ContactSteering,
+            &mut ContactSteering,
             &mut Steering,
         ),
         Without<DirectLocomotion>,
     >,
     neighboring_navigation_agents: Query<(&GlobalTransform, &NavAgent, Has<Destination>)>,
+    time: Res<Time<Fixed>>,
 ) {
     for (
         navigation_agent_entity,
@@ -57,7 +53,7 @@ pub(super) fn calculate_route_following_and_separation_steering(
         mut planned_route,
         destination,
         locomotion_mode,
-        contact_steering,
+        mut contact_steering,
         mut steering,
     ) in &mut route_following_navigation_agents
     {
@@ -80,6 +76,7 @@ pub(super) fn calculate_route_following_and_separation_steering(
                 .distance(destination.world.xz())
                 < spacing_radius(navigation_agent) * OCCUPIED_ARRIVAL_SPACINGS;
         let mut destination_occupied = false;
+        let mut person_contact = false;
         let mut visited_neighbor_count = 0;
         // Reach far enough to see a large neighbour, such as an elephant,
         // before walking into it.
@@ -126,36 +123,34 @@ pub(super) fn calculate_route_following_and_separation_steering(
                             neighboring_agent_offset.length_squared();
                         let required_separation_distance = spacing_radius(navigation_agent)
                             + spacing_radius(neighboring_navigation_agent);
-                        // Step aside from someone ahead before reaching them.
-                        // Everyone steps to the same side of their own heading,
-                        // so two people meeting head-on pass each other.
-                        let look_ahead = required_separation_distance * AVOIDANCE_LOOK_AHEAD;
-                        let ahead = -neighboring_agent_offset.xz().dot(route_direction.xz());
-                        if ahead > 0.0
-                            && neighboring_agent_distance_squared < look_ahead * look_ahead
+                        // Count only neighbours touching this one, so a crowd
+                        // further off does not use up the budget first.
+                        if neighboring_agent_distance_squared
+                            >= required_separation_distance * required_separation_distance
                         {
-                            let aside = Vec3::new(route_direction.z, 0.0, -route_direction.x);
-                            desired_velocity += aside
-                                * navigation_agent.max_speed_mps
-                                * AVOIDANCE_WEIGHT
-                                * (1.0 - neighboring_agent_distance_squared.sqrt() / look_ahead);
-                        }
-                        if neighboring_agent_distance_squared > 0.0001
-                            && neighboring_agent_distance_squared
-                                < required_separation_distance * required_separation_distance
-                        {
-                            let neighboring_agent_distance =
-                                neighboring_agent_distance_squared.sqrt();
-                            desired_velocity += neighboring_agent_offset
-                                / neighboring_agent_distance
-                                * navigation_agent.max_speed_mps
-                                * (1.0 - neighboring_agent_distance / required_separation_distance);
-                        }
-                        // Count only neighbours close enough to steer for, so
-                        // a crowd further off does not use up the budget first.
-                        if neighboring_agent_distance_squared >= look_ahead * look_ahead {
                             continue;
                         }
+                        // Like the original's collision handler, a walker is
+                        // pushed off whoever it touches, standing or walking,
+                        // but never backwards: a push against its heading
+                        // turns into a step to the side it leans towards, so
+                        // two people meeting head-on slip past each other.
+                        let neighboring_agent_distance = neighboring_agent_distance_squared.sqrt();
+                        let mut push = if neighboring_agent_distance > 0.0001 {
+                            neighboring_agent_offset / neighboring_agent_distance
+                        } else {
+                            -route_direction
+                        };
+                        push.y = 0.0;
+                        if push.dot(route_direction) < 0.0 {
+                            let aside = Vec3::new(route_direction.z, 0.0, -route_direction.x);
+                            push = if push.dot(aside) < 0.0 { -aside } else { aside };
+                        }
+                        person_contact = true;
+                        desired_velocity += push
+                            * navigation_agent.max_speed_mps
+                            * contact_steering.factor
+                            * (1.0 - neighboring_agent_distance / required_separation_distance);
                         visited_neighbor_count += 1;
                         if visited_neighbor_count == MAX_STEERING_NEIGHBORS {
                             break 'neighboring_cells;
@@ -163,6 +158,14 @@ pub(super) fn calculate_route_following_and_separation_steering(
                     }
                 }
             }
+        }
+        // Staying pressed against someone weakens the push, as it does for
+        // any other contact, so a jam eventually lets the walkers through.
+        if person_contact {
+            contact_steering.factor = (contact_steering.factor
+                - ContactSteering::DECAY_PER_SECOND * time.delta_secs())
+            .max(ContactSteering::MINIMUM_FACTOR);
+            contact_steering.recovery_delay_s = ContactSteering::RECOVERY_DELAY_SECONDS;
         }
         if destination_occupied {
             planned_route.cursor = planned_route.points.len();
@@ -289,17 +292,17 @@ mod avoidance_tests {
                         world: Vec3::new(to, 0.0, 0.0),
                         arrival_radius_m: 0.1,
                     },
-                    ContactSteering {
-                        direction: Vec3::ZERO,
-                        factor: 0.0,
-                        recovery_delay_s: 0.0,
-                    },
+                    ContactSteering::default(),
                     Steering::default(),
                 ))
                 .id()
         };
-        let east = walker(&mut world, -0.5, 10.0);
-        let west = walker(&mut world, 0.5, -10.0);
+        // Touching, face to face.
+        let east = walker(&mut world, -0.2, 10.0);
+        let west = walker(&mut world, 0.2, -10.0);
+        let mut time = Time::<Fixed>::default();
+        time.advance_by(std::time::Duration::from_millis(100));
+        world.insert_resource(time);
         world.insert_resource(SpatialGrid {
             width: 1,
             height: 1,
@@ -315,6 +318,10 @@ mod avoidance_tests {
         // The same side of each heading: -Z going east, +Z going west.
         assert!(steer(east).z < 0.0, "{:?}", steer(east));
         assert!(steer(west).z > 0.0, "{:?}", steer(west));
+        // Neither is pushed back the way it came.
+        assert!(steer(east).x > 0.0 && steer(west).x < 0.0);
+        // Staying pressed together weakens the push.
+        assert!(world.get::<ContactSteering>(east).unwrap().factor < 1.0);
     }
 
     #[test]
@@ -377,11 +384,7 @@ mod avoidance_tests {
                     world: spot,
                     arrival_radius_m: 0.1,
                 },
-                ContactSteering {
-                    direction: Vec3::ZERO,
-                    factor: 0.0,
-                    recovery_delay_s: 0.0,
-                },
+                ContactSteering::default(),
                 Steering::default(),
             ))
             .id();
@@ -400,6 +403,7 @@ mod avoidance_tests {
             entities: vec![walker, stander],
             ..SpatialGrid::default()
         });
+        world.insert_resource(Time::<Fixed>::default());
         let mut system = IntoSystem::into_system(calculate_route_following_and_separation_steering);
         system.initialize(&mut world);
         system.run((), &mut world).unwrap();
