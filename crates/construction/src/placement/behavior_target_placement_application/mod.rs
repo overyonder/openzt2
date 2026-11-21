@@ -435,10 +435,25 @@ fn choose_behavior_target_placement_site(
             &mut candidates,
         );
     }
-    // Preserve the recipient site when valid, then try dry shore nodes. The
+    // Try the recipient's own spot, then dry ground nodes around it. The
     // authored placement set still navigates to and docks at the chosen site.
+    // An object put down over an animal, such as a trough, shuts it in its
+    // walls, so a site must leave the recipient clear.
+    let clearance = world
+        .prefabs
+        .get(&handle)
+        .map_or(DEFAULT_PLACED_OBJECT_RADIUS_M, |prefab| {
+            placed_object_radius(prefab, object.prefab_scale)
+        });
+    let recipient_radius = world
+        .agents
+        .get(pending.recipient)
+        .map_or(0.0, |agent| agent.radius_m);
     for candidate in std::iter::once(recipient.translation()).chain(candidates) {
         let position = candidate.xz();
+        if position.distance(recipient.translation().xz()) < clearance + recipient_radius {
+            continue;
+        }
         let Some(point) = sample_behavior_placement_terrain(world, position) else {
             continue;
         };
@@ -463,6 +478,59 @@ fn choose_behavior_target_placement_site(
         }
     }
     SiteChoice::Rejected
+}
+
+/// How far a placed object reaches from its origin when its prefab gives no
+/// bounds.
+const DEFAULT_PLACED_OBJECT_RADIUS_M: f32 = 1.0;
+
+/// The horizontal reach of a placed object from its origin.
+fn placed_object_radius(prefab: &ScenePrefabAsset, scale: f32) -> f32 {
+    prefab
+        .canonical_scene_prefab_document()
+        .automatic_placement_bounds_xz
+        .map_or(DEFAULT_PLACED_OBJECT_RADIUS_M, |[minimum, maximum]| {
+            [minimum, maximum]
+                .into_iter()
+                .flat_map(|corner| [corner[0].abs(), corner[1].abs()])
+                .fold(0.0_f32, f32::max)
+                * std::f32::consts::SQRT_2
+                * scale
+        })
+}
+
+/// The site moved away from the actor until the object no longer reaches it,
+/// or `None` when the actor already stands clear.
+fn clear_of_actor(
+    actor: Entity,
+    site: &BehaviorTargetPlacementSite,
+    world: &BehaviorTargetPlacementWorld,
+) -> Option<BehaviorTargetPlacementSite> {
+    let position = world.actor_transforms.get(actor).ok()?.translation().xz();
+    let radius = world.agents.get(actor).map_or(0.0, |agent| agent.radius_m);
+    let reach = world
+        .prefabs
+        .get(&site.prefab)
+        .map_or(DEFAULT_PLACED_OBJECT_RADIUS_M, |prefab| {
+            placed_object_radius(prefab, site.transform.scale.x)
+        });
+    let centre = site.transform.translation.xz();
+    let moved = clear_point(position, centre, reach + radius)?;
+    let mut clear = site.clone();
+    clear.transform.translation.x = moved.x;
+    clear.transform.translation.z = moved.y;
+    Some(clear)
+}
+
+/// `centre` pushed directly away from `standing` until they are `distance`
+/// apart, or `None` when they already are.
+fn clear_point(standing: Vec2, centre: Vec2, distance: f32) -> Option<Vec2> {
+    let offset = centre - standing;
+    if offset.length() >= distance {
+        return None;
+    }
+    let direction = offset.try_normalize().unwrap_or(Vec2::Y);
+    Some(standing + direction * distance)
 }
 
 fn site_is_still_valid(
@@ -595,9 +663,15 @@ fn create_behavior_target_placement_object(
     creation: &mut BehaviorTargetPlacementCreation,
     created: &mut HashMap<Entity, AssetId>,
 ) -> Option<Entity> {
-    if !site_is_still_valid(pending, site, catalogue, world, creation, created) {
-        return None;
-    }
+    // The keeper stands with the object in its hands at the site. Put the
+    // object down just clear of it, so it is not shut in the object's walls.
+    let moved = clear_of_actor(actor, site, world)
+        .filter(|moved| site_is_still_valid(pending, moved, catalogue, world, creation, created));
+    let site = match &moved {
+        Some(moved) => moved,
+        None if site_is_still_valid(pending, site, catalogue, world, creation, created) => site,
+        None => return None,
+    };
     let definition = resolve_object_placeable_definition(catalogue, pending.definition)?;
     let cells = collect_occupied_placement_cells_for_transform(
         definition,
@@ -719,4 +793,17 @@ fn sample_behavior_placement_terrain(
         position,
     )?;
     Some((point.height_m, !world.surfaces.on_land(position)?))
+}
+
+#[cfg(test)]
+mod clearance_tests {
+    use super::*;
+
+    #[test]
+    fn an_object_is_put_down_clear_of_the_keeper() {
+        let keeper = Vec2::ZERO;
+        let moved = clear_point(keeper, Vec2::new(0.5, 0.0), 1.5).unwrap();
+        assert!((moved - Vec2::new(1.5, 0.0)).length() < 1e-5);
+        assert_eq!(clear_point(keeper, Vec2::new(3.0, 0.0), 1.5), None);
+    }
 }
