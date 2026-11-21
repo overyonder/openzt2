@@ -50,6 +50,9 @@ impl AuthoredAnimationTextActionExecutionContext<'_, '_> {
                     *use_terrain_surface_sound,
                 ),
             AuthoredAnimationTextAction::AttachPendingObject
+            | AuthoredAnimationTextAction::CreateObject { .. }
+            | AuthoredAnimationTextAction::CreateObjectOverride { .. }
+            | AuthoredAnimationTextAction::DestroyObject { .. }
             | AuthoredAnimationTextAction::SpawnObject
             | AuthoredAnimationTextAction::AttachNamedObject { .. }
             | AuthoredAnimationTextAction::TriggerSurfaceEffect { .. }
@@ -187,10 +190,7 @@ impl AuthoredAnimationTextActionExecutionContext<'_, '_> {
                     animation_playback_controller_entity,
                     animation_graph_node_asset_key,
                 ),
-            AuthoredAnimationTextAction::CreateObject { .. }
-            | AuthoredAnimationTextAction::CreateObjectOverride { .. }
-            | AuthoredAnimationTextAction::DestroyObject { .. }
-            | AuthoredAnimationTextAction::KillAnimationSubject => {}
+            AuthoredAnimationTextAction::KillAnimationSubject => {}
             AuthoredAnimationTextAction::UnrecognizedAuthoredCommand(_) => {
                 unreachable!("asset loader admitted an unlowered animation text-key command")
             }

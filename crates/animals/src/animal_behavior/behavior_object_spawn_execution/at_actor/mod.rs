@@ -4,6 +4,9 @@ mod tests;
 use openzt2_zoo_state::animal_behavior::behavior_random_stream_state::BehaviorRandomStream;
 use openzt2_zoo_state::guests::guest_simulation_types::GuestRng;
 
+/// How far dropped litter rests above where it was dropped.
+const LOOSE_LITTER_LIFT_M: f32 = 0.01;
+
 /// Spawns the object of a node- and clip-less `BFBehSpawn` beside its actor,
 /// such as the `TrashGround` a guest drops, once its model has loaded.
 pub(super) fn spawn_behavior_objects_at_actor(
@@ -92,11 +95,19 @@ pub(super) fn spawn_behavior_objects_at_actor(
             mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
             continue;
         };
-        let transform = pose_validation
+        let mut transform = pose_validation
             .select_spawn_pose(
                 actor, object.id, actor_pose, actor_pose, *pose, view, random,
             )
             .mul_transform(Transform::from_scale(Vec3::splat(object.prefab_scale)));
+        let loose_litter = object
+            .properties
+            .contains_all(WorldObjectPropertyFlags::LOOSE_LITTER);
+        // Dropped litter is flat and lies where the dropper stands, level with
+        // a ground path's surface, which would hide it. It rests just above.
+        if loose_litter {
+            transform.translation.y += LOOSE_LITTER_LIFT_M;
+        }
         let spawned = if let Some((handle, prefab)) = presentation {
             spawn_loaded_scene_prefab_as_world_instance(
                 &mut commands,
@@ -124,10 +135,9 @@ pub(super) fn spawn_behavior_objects_at_actor(
                 ))
                 .id()
         };
-        if object
-            .properties
-            .contains_all(WorldObjectPropertyFlags::LOOSE_LITTER)
-        {
+        debug!(?actor, ?spawned, object = ?object.id, at = %transform.translation,
+            actor_at = %actor_pose.translation, "behavior spawned an object at its actor");
+        if loose_litter {
             commands.entity(spawned).insert(LooseLitterWaste {
                 uncontained_waste_units: 1,
             });

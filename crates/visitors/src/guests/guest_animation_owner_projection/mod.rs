@@ -41,15 +41,19 @@ pub(super) fn request_authored_animation_sets_for_resolved_guest_models(
         Added<ModelAnimationAttachmentResolved>,
     >,
     parents: Query<&ChildOf>,
-    owners: Query<(Option<&GuestArchetype>, Has<DefinitionId>)>,
+    owners: Query<(
+        Option<&GuestArchetype>,
+        Has<DefinitionId>,
+        Has<openzt2_world_state::animation_playback::animation_joint_target_types::HeldPropPresentation>,
+    )>,
 ) {
     let Some(definitions) = world_definitions.get(&definition_assets) else {
         return;
     };
     for (model, has_controller, has_graph) in &resolved_models {
         let owner = parents.iter_ancestors(model).find_map(|ancestor| {
-            let (archetype, defined) = owners.get(ancestor).ok()?;
-            (archetype.is_some() || defined).then_some((ancestor, archetype))
+            let (archetype, defined, held) = owners.get(ancestor).ok()?;
+            (archetype.is_some() || defined || held).then_some((ancestor, archetype))
         });
         let Some((guest, Some(archetype))) = owner else {
             continue;

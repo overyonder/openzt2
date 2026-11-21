@@ -1052,7 +1052,16 @@ pub(super) fn bind_authored_staff_catalogue(
         prefab: AssetId::from_virtual_path(prefab),
         catalogue_preview_prefab,
         presentation_attachments: Vec::new(),
-        named_physical_presentations: Vec::new(),
+        // Tools such as a worker's `Broom` appear only while an animation
+        // creates them, so only binders that aren't required are kept.
+        named_physical_presentations:
+            super::named_physical_presentation_source_lowering::lower_named_physical_presentations(
+                record,
+                actor_scene_paths,
+            )?
+            .into_iter()
+            .filter(|binder| !binder.required)
+            .collect(),
         interaction_slots: super::interaction_container_source_lowering::lower_authored_world_object_interaction_slots(record)?,
         container_quantity: None,
         transactions: super::authored_transaction_lowering::lower_object_transactions(record)?,
