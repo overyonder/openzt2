@@ -108,6 +108,18 @@ impl InteractionContainerOccupancy {
         true
     }
 
+    /// Leaves a container, its queue or its service place, once the actor's
+    /// task no longer targets it, as when a guest gives up waiting or walks
+    /// off with what they bought. Otherwise they would hold the place forever.
+    pub fn release_after_task_moved_on(&mut self, actor: Entity, task_target: Option<Entity>) {
+        if self
+            .container_for_member(actor)
+            .is_some_and(|(container, _)| Some(container) != task_target)
+        {
+            self.remove_actor(actor);
+        }
+    }
+
     pub fn remove_actor(&mut self, actor: Entity) {
         self.docked.remove(&actor);
         self.members.retain(|_, members| {
@@ -170,6 +182,22 @@ impl InteractionContainerOccupancy {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_actor_whose_task_moved_on_leaves_the_queue() {
+        let mut world = World::new();
+        let stand = world.spawn_empty().id();
+        let path = world.spawn_empty().id();
+        let waiting = world.spawn_empty().id();
+        let left = world.spawn_empty().id();
+        let mut occupancy = InteractionContainerOccupancy::default();
+        occupancy.admit(stand, left, 1, 8);
+        occupancy.admit(stand, waiting, 1, 8);
+        occupancy.release_after_task_moved_on(waiting, Some(stand));
+        occupancy.release_after_task_moved_on(left, Some(path));
+        assert_eq!(occupancy.actor_slot(stand, waiting), Some(1));
+        assert_eq!(occupancy.actor_slot(stand, left), None);
+    }
 
     #[test]
     fn service_selection_preserves_membership_and_excludes_queue_full_and_other_containers() {

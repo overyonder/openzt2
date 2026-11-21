@@ -27,15 +27,15 @@ use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 const QUEUE_PLACE_SPACING_M: f32 = 0.8;
 
 /// Where the guest `place` places back in a queue stands, and the direction
-/// the line runs. The line runs out from the stand through its queue node,
-/// each guest one place behind whoever joined before them, as far as the
-/// authored queue reaches.
+/// the line runs. The line starts at the queue node and runs out away from
+/// the stand, each guest one place behind whoever joined before them, as far
+/// as the authored queue reaches. The authored hit radius is how near counts
+/// as there, not how far away to stand.
 fn queue_place(
     queue_node: Vec3,
     stand: Vec3,
     actor: Vec3,
     place: usize,
-    hit_radius_m: f32,
     queue_radius_m: f32,
 ) -> (Vec3, Vec3) {
     let line = (queue_node - stand).xz();
@@ -46,8 +46,7 @@ fn queue_place(
     }
     .normalize_or_zero();
     let direction = Vec3::new(line.x, 0.0, line.y);
-    let distance =
-        (hit_radius_m + place as f32 * QUEUE_PLACE_SPACING_M).min(queue_radius_m.max(hit_radius_m));
+    let distance = (place as f32 * QUEUE_PLACE_SPACING_M).min(queue_radius_m);
     (queue_node + direction * distance, direction)
 }
 
@@ -194,7 +193,6 @@ pub(super) fn start_current_supported_behavior_docking_actions(
                 target_transform.translation(),
                 actor_transform.translation(),
                 place,
-                queue_approach.hit_radius_m,
                 queue_approach.queue_radius_m,
             );
             if (actor_transform.translation() - spot).xz().length() <= QUEUE_PLACE_SPACING_M * 0.5 {
@@ -723,9 +721,9 @@ mod queue_place_tests {
     #[test]
     fn a_queue_lines_up_behind_its_node_up_to_its_reach() {
         let node = Vec3::new(2.0, 0.0, 0.0);
-        let place = |n| queue_place(node, Vec3::ZERO, Vec3::new(0.0, 0.0, 9.0), n, 2.5, 12.0).0;
-        assert_eq!(place(0), Vec3::new(4.5, 0.0, 0.0));
-        assert_eq!(place(1), Vec3::new(4.5 + QUEUE_PLACE_SPACING_M, 0.0, 0.0));
+        let place = |n| queue_place(node, Vec3::ZERO, Vec3::new(0.0, 0.0, 9.0), n, 12.0).0;
+        assert_eq!(place(0), node);
+        assert_eq!(place(1), Vec3::new(2.0 + QUEUE_PLACE_SPACING_M, 0.0, 0.0));
         assert_eq!(place(100), Vec3::new(14.0, 0.0, 0.0));
     }
 }
