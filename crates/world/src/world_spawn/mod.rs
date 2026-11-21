@@ -157,7 +157,10 @@ impl Plugin for WorldSpawnPlugin {
             )
             .add_systems(
                 PostUpdate,
-                crate::world_spawn::prefab_attachment_independent_rotation::preserve_independent_attachment_orientation
+                (
+                    crate::world_spawn::prefab_attachment_independent_rotation::preserve_independent_attachment_orientation,
+                    crate::world_spawn::prefab_attachment_independent_rotation::preserve_attachment_owner_scale,
+                )
                     .after(bevy::app::AnimationSystems)
                     .before(bevy::transform::TransformSystems::Propagate),
             )

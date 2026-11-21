@@ -75,3 +75,10 @@ pub struct PrefabShadowPolicy {
 /// Instance-owned clothing substitutions, retained when model scenes are rebuilt.
 #[derive(Component, Debug, Clone, Default)]
 pub struct PrefabClothingTextures(pub Vec<(AssetId, Handle<Image>)>);
+
+/// A part hung on a node of its owner's model keeps its owner's scale rather
+/// than the node's, as a separate head does on a body's `Link_Head`.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct PrefabAttachmentKeepsOwnerScale {
+    pub owner: Entity,
+}
