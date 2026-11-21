@@ -1,4 +1,4 @@
-use super::types::{HabitatSuitability, WelfareBand, MAX_NEED_Q16, Q16_ONE};
+use super::types::{NeedPoints, WelfareBand, MAX_NEED_Q16, Q16_ONE};
 
 #[inline]
 pub(super) fn clamp_animal_need_q16_after_delta(value: i32, delta_q16: i32) -> i32 {
@@ -23,34 +23,19 @@ pub(super) fn animal_need_crossed_authored_threshold(
         || cessation.is_some_and(|threshold| old < threshold && new >= threshold)
 }
 
-pub(super) fn calculate_mean_animal_welfare_with_habitat_limit(
-    values_q16: [i32; 10],
-    habitat: HabitatSuitability,
-) -> u16 {
-    let needs = values_q16
-        .into_iter()
-        .map(convert_animal_need_q16_to_permille)
-        .fold(0_u32, |sum, value| sum + u32::from(value))
-        / values_q16.len() as u32;
-    // Habitat is a hard welfare constraint: excellent individual needs cannot
-    // conceal an unsuitable or breached enclosure.
-    needs.min(u32::from(habitat.overall)) as u16
-}
-
-pub(super) fn classify_animal_welfare_against_authored_thresholds(
-    value: u16,
-    critical: u16,
-    good: u16,
-) -> WelfareBand {
-    let critical = critical.min(1000);
-    let good = good.clamp(critical, 1000);
-    let fair = critical + (good - critical) / 2;
-    let excellent = good + (1000 - good) / 2;
-    match value {
-        value if value <= critical => WelfareBand::Critical,
-        value if value < fair => WelfareBand::Poor,
-        value if value < good => WelfareBand::Fair,
-        value if value < excellent => WelfareBand::Good,
-        _ => WelfareBand::Excellent,
-    }
+/// The animal's welfare as the original's needs panel shows it: bad need
+/// points minus good ones, -100 to 100. Below 0 the animal is content, from 0
+/// its needs are pressing and from half the maximum critical. Welfare is that
+/// balance as permille, 1000 for -100 and 0 for 100.
+pub(super) fn welfare_from_need_points(points: &NeedPoints) -> (u16, WelfareBand) {
+    let balance = points.bad - points.good;
+    let permille = ((100.0 - balance) * 5.0).round().clamp(0.0, 1000.0) as u16;
+    let band = if balance >= 50.0 {
+        WelfareBand::Critical
+    } else if balance >= 0.0 {
+        WelfareBand::Poor
+    } else {
+        WelfareBand::Good
+    };
+    (permille, band)
 }

@@ -70,6 +70,12 @@ pub(super) fn capture_animal_snapshot_records(
                     let points = required_animal_component::<CumulativeNeedPoints>(animal)?;
                     [points.good, points.bad]
                 },
+                need_points: animal.get::<NeedPoints>().map(|points| {
+                    (
+                        [points.good, points.bad, points.seconds_until_update],
+                        points.unmet,
+                    )
+                }),
                 welfare: welfare.0,
                 habitat_suitability: {
                     let suitability = required_animal_component::<HabitatSuitability>(animal)?;
