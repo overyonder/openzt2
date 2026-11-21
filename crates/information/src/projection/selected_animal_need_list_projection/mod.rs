@@ -131,7 +131,15 @@ pub(crate) fn project_selected_animal_states_to_authored_list_rows(
     species_index: Res<SpeciesAssets>,
     lists: Query<(&UiListPolicy, &UiDocumentOwner)>,
     information_panels: Query<&InfoPanel>,
-    animals: Query<(&SpeciesHandle, &NeedPoints, &HealthNeed, Has<Disease>), With<Animal>>,
+    animals: Query<
+        (
+            &SpeciesHandle,
+            Option<&NeedPoints>,
+            Option<&HealthNeed>,
+            Has<Disease>,
+        ),
+        With<Animal>,
+    >,
     rows: Query<(Entity, &UiListRow, Option<&UiShortTooltipKey>)>,
     mut commands: Commands,
     mut multi_icons: Query<(&UiDocumentOwner, &mut UiValue), With<UiMultiIconPolicy>>,
@@ -152,14 +160,17 @@ pub(crate) fn project_selected_animal_states_to_authored_list_rows(
         let Ok((species, points, health, sick)) = animals.get(panel.subject) else {
             continue;
         };
+        // An animal restored without them reads as content and healthy.
+        let points = points.copied().unwrap_or_default();
+        let health = health.map_or(MAX_NEED_Q16, |health| health.0);
         let (icon, fill_percent, color, tooltip_key) = match row.index {
             0 => {
-                let (icon, fill, color) = happiness_row(points);
+                let (icon, fill, color) = happiness_row(&points);
                 (icon, fill, color, "entityneeds:animal_happy")
             }
             1 => {
                 let wellness_permille =
-                    u16::try_from(health.0.clamp(0, MAX_NEED_Q16) / Q16_ONE).unwrap_or_default();
+                    u16::try_from(health.clamp(0, MAX_NEED_Q16) / Q16_ONE).unwrap_or_default();
                 let thresholds = species_view
                     .and_then(|view| view.find(species.species))
                     .and_then(|species| {
@@ -203,9 +214,10 @@ pub(crate) fn project_selected_animal_states_to_authored_list_rows(
         };
         let tooltip_key = AssetId::from_key(tooltip_key);
         if tooltip.map(|tooltip| tooltip.0) != Some(tooltip_key) {
+            // A plain icon item takes no hits; its tooltip needs the pointer.
             commands
                 .entity(row_entity)
-                .insert(UiShortTooltipKey(tooltip_key));
+                .insert((UiShortTooltipKey(tooltip_key), Pickable::default()));
         }
         for (owner, mut value) in &mut multi_icons {
             if owner.0 == row_entity && value.0 != icon {
@@ -303,9 +315,10 @@ pub(crate) fn project_selected_animal_needs_to_authored_list_rows(
         // The icon names its need when hovered, as the original's tooltip.
         let tooltip_key = AssetId::from_key(need_tooltip_key(need_kind));
         if tooltip.map(|tooltip| tooltip.0) != Some(tooltip_key) {
+            // A plain icon item takes no hits; its tooltip needs the pointer.
             commands
                 .entity(row_entity)
-                .insert(UiShortTooltipKey(tooltip_key));
+                .insert((UiShortTooltipKey(tooltip_key), Pickable::default()));
         }
 
         for (owner, mut icon_value) in &mut multi_icons {
