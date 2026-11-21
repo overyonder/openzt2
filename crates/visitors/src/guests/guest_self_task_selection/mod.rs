@@ -35,8 +35,11 @@ use openzt2_zoo_state::animal_lifecycle::types::Animal;
 use openzt2_zoo_state::economy::service_types::ServiceReservation;
 use openzt2_zoo_state::habitat::habitat_membership_and_containment::locate_habitat_at_world_position;
 use openzt2_zoo_state::habitat::habitat_types::HabitatIndex;
+use openzt2_zoo_state::habitat::habitat_types::HabitatRegion;
 use openzt2_zoo_state::habitat::habitat_types::HabitatMember;
+use openzt2_zoo_state::topology::topology_graph_types::FenceEdge;
 use openzt2_zoo_state::topology::topology_graph_types::TopologyGrid;
+use openzt2_zoo_state::topology::topology_graph_types::TopologyNode;
 use openzt2_zoo_state::locomotion::locomotion_types::Destination;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_zoo_state::topology::topology_graph_types::PathTile;
@@ -112,9 +115,14 @@ pub(super) fn select_idle_guest_tasks(
         (&GlobalTransform, &Visibility, &WorldMember, &HabitatMember),
         With<Animal>,
     >,
-    (habitat_lookup, busy_guests): (
+    (habitat_lookup, busy_guests, (regions, fence_edges, topology_nodes)): (
         (Option<Res<HabitatIndex>>, Option<Res<TopologyGrid>>),
         Query<&BehaviorTaskExecutionState, With<Guest>>,
+        (
+            Query<&HabitatRegion>,
+            Query<&FenceEdge>,
+            Query<&TopologyNode>,
+        ),
     ),
     controllers: Query<
         &AnimationPresentationOwner,
@@ -155,6 +163,30 @@ pub(super) fn select_idle_guest_tasks(
         };
         path_is_beside_habitat(habitats, *topology, path, habitat, distance_m)
     };
+    // A wall guests cannot see through, such as concrete, hides the animals
+    // behind it; the sight line enters the habitat across its boundary.
+    let view_is_walled_off = |path: Vec2, animal: Vec2, habitat: Entity| {
+        let (Some(topology), Ok(region)) = (topology.as_deref(), regions.get(habitat)) else {
+            return false;
+        };
+        region.boundary_fence_entities.iter().any(|&fence| {
+            let Ok(edge) = fence_edges.get(fence) else {
+                return false;
+            };
+            let (Ok(a), Ok(b)) = (topology_nodes.get(edge.a), topology_nodes.get(edge.b)) else {
+                return false;
+            };
+            definitions
+                .find_fence(edge.definition)
+                .is_some_and(|definition| definition.blocks_view)
+                && segments_cross(
+                    path,
+                    animal,
+                    topology.cell_translation(a.cell).xz(),
+                    topology.cell_translation(b.cell).xz(),
+                )
+        })
+    };
     let viewing_paths = definitions
         .guest_viewing()
         .map(|viewing| {
@@ -173,6 +205,11 @@ pub(super) fn select_idle_guest_tasks(
                                     path,
                                     member.habitat_entity,
                                     viewing.ground_distance_m,
+                                )
+                                && !view_is_walled_off(
+                                    path,
+                                    animal.translation().xz(),
+                                    member.habitat_entity,
                                 )
                         })
                 })
@@ -558,6 +595,12 @@ pub(super) fn select_idle_guest_tasks(
     }
 }
 
+/// Whether the segments `a0`-`a1` and `b0`-`b1` cross each other.
+fn segments_cross(a0: Vec2, a1: Vec2, b0: Vec2, b1: Vec2) -> bool {
+    let side = |p: Vec2, q: Vec2, r: Vec2| (q - p).perp_dot(r - p);
+    side(a0, a1, b0) * side(a0, a1, b1) < 0.0 && side(b0, b1, a0) * side(b0, b1, a1) < 0.0
+}
+
 /// Whether any of `habitat`'s ground lies closer than `distance_m` to `path`.
 fn path_is_beside_habitat(
     habitats: &HabitatIndex,
@@ -602,6 +645,18 @@ mod viewing_path_tests {
             Vec2::new(6.5, 0.5),
             habitat,
             6.0
+        ));
+        assert!(segments_cross(
+            Vec2::ZERO,
+            Vec2::X * 4.0,
+            Vec2::new(2.0, -1.0),
+            Vec2::new(2.0, 1.0)
+        ));
+        assert!(!segments_cross(
+            Vec2::ZERO,
+            Vec2::X * 4.0,
+            Vec2::new(5.0, -1.0),
+            Vec2::new(5.0, 1.0)
         ));
         // A stand 20 m away sees the animal within range but not the habitat.
         assert!(!path_is_beside_habitat(
