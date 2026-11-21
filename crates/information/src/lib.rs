@@ -141,6 +141,17 @@ impl Plugin for InformationPlugin {
             .add_systems(
                 Update,
                 (
+                    projection::selected_animal_need_list_projection::request_selected_animal_state_row_counts,
+                    projection::selected_animal_need_list_projection::project_selected_animal_states_to_authored_list_rows,
+                )
+                    .chain()
+                    .after(projection::selected_animal_need_list_projection::project_selected_animal_needs_to_authored_list_rows)
+                    .in_set(GameSet::Ui)
+                    .run_if(in_state(GamePhase::InGame)),
+            )
+            .add_systems(
+                Update,
+                (
                     projection::selected_animal_summary_projection::project_selected_entity_information_section_visibility,
                     projection::selected_animal_summary_projection::project_selected_animal_identity_health_and_action_summary,
                     projection::animal_pickup_release_information_projection::project_selected_animal_pickup_release_and_conservation_controls,

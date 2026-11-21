@@ -15,6 +15,8 @@ pub enum UiWidgetLiveCollectionSource {
     SelectedEntityInventory,
     SelectedAnimalBasicNeeds,
     SelectedAnimalAdvancedNeeds,
+    /// The selected animal's happiness, health and, when pregnant, pregnancy.
+    SelectedAnimalStates,
     ScenarioObjectives,
     ZoopediaTableOfContents,
     OverviewLayers,

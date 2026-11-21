@@ -269,6 +269,9 @@ pub(super) fn unbound_list_source(
         {
             UiWidgetLiveCollectionSource::SelectedAnimalAdvancedNeeds
         }
+        (UiDocumentRole::EntityInfo, Some(name)) if name.eq_ignore_ascii_case("state display") => {
+            UiWidgetLiveCollectionSource::SelectedAnimalStates
+        }
         (UiDocumentRole::Globe | UiDocumentRole::MapSelect, Some(name))
             if name.eq_ignore_ascii_case("map list") =>
         {
@@ -348,7 +351,8 @@ pub(super) fn list_row_document(
                 AssetId::from_virtual_path(SELECTED_ENTITY_INVENTORY_ROW_DOCUMENT)
             }
             UiWidgetLiveCollectionSource::SelectedAnimalBasicNeeds
-            | UiWidgetLiveCollectionSource::SelectedAnimalAdvancedNeeds => {
+            | UiWidgetLiveCollectionSource::SelectedAnimalAdvancedNeeds
+            | UiWidgetLiveCollectionSource::SelectedAnimalStates => {
                 AssetId::from_virtual_path(SELECTED_ANIMAL_NEED_ROW_DOCUMENT)
             }
             UiWidgetLiveCollectionSource::DisplayResolutions => {
