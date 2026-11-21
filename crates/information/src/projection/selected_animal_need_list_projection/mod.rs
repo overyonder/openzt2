@@ -1,7 +1,8 @@
 use bevy::prelude::*;
 use openzt2_game_data::{
-    species::NeedKind, ui_document::widget_live_collection::UiWidgetLiveCollectionSource,
+    species::NeedKind, ui_document::widget_live_collection::UiWidgetLiveCollectionSource, AssetId,
 };
+use openzt2_ui::authored_tooltip_presentation::UiShortTooltipKey;
 
 use openzt2_game_assets::species::species_asset_types::{SpeciesAsset, SpeciesAssets};
 use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::SetUiListRowCount;
@@ -82,7 +83,8 @@ pub(crate) fn project_selected_animal_needs_to_authored_list_rows(
         ),
         With<Animal>,
     >,
-    rows: Query<(Entity, &UiListRow)>,
+    rows: Query<(Entity, &UiListRow, Option<&UiShortTooltipKey>)>,
+    mut commands: Commands,
     mut multi_icons: Query<(&UiDocumentOwner, &mut UiValue), With<UiMultiIconPolicy>>,
     mut foreground_layouts: Query<(Entity, &Name, &UiDocumentOwner, &mut Node)>,
     mut foreground_visuals: Query<(&ChildOf, &mut ImageNode), With<UiVisualLayer>>,
@@ -90,7 +92,7 @@ pub(crate) fn project_selected_animal_needs_to_authored_list_rows(
     let Some(species_view) = species_index.get(&species_assets) else {
         return;
     };
-    for (row_entity, row) in &rows {
+    for (row_entity, row, tooltip) in &rows {
         let Ok((list_policy, document_owner)) = lists.get(row.list) else {
             continue;
         };
@@ -111,6 +113,14 @@ pub(crate) fn project_selected_animal_needs_to_authored_list_rows(
         else {
             continue;
         };
+
+        // The icon names its need when hovered, as the original's tooltip.
+        let tooltip_key = AssetId::from_key(need_tooltip_key(need_kind));
+        if tooltip.map(|tooltip| tooltip.0) != Some(tooltip_key) {
+            commands
+                .entity(row_entity)
+                .insert(UiShortTooltipKey(tooltip_key));
+        }
 
         for (owner, mut icon_value) in &mut multi_icons {
             if owner.0 == row_entity && icon_value.0 != authored_icon_index {
@@ -136,9 +146,12 @@ pub(crate) fn project_selected_animal_needs_to_authored_list_rows(
             if owner.0 != row_entity || !name.as_str().eq_ignore_ascii_case("icon foreground") {
                 continue;
             }
+            // The colour fills the icon from the bottom up as the need grows.
             let next_height = Val::Percent(foreground_height_percent);
-            if node.height != next_height {
+            let next_top = Val::Percent(100.0 - foreground_height_percent);
+            if node.height != next_height || node.top != next_top {
                 node.height = next_height;
+                node.top = next_top;
             }
             for (parent, mut image) in &mut foreground_visuals {
                 if parent.parent() == foreground_entity && image.color != foreground_color {
@@ -161,6 +174,23 @@ type SelectedAnimalNeedComponents<'a> = (
     &'a SocialNeed,
     &'a StimulationNeed,
 );
+
+/// The `needs.xml` label naming an animal need, such as "Hunger:".
+fn need_tooltip_key(need: NeedKind) -> &'static str {
+    match need {
+        NeedKind::Environment => "entityneeds:animal_environment",
+        NeedKind::Hunger => "entityneeds:animal_hunger",
+        NeedKind::Thirst => "entityneeds:animal_thirst",
+        NeedKind::Rest => "entityneeds:animal_rest",
+        NeedKind::Exercise => "entityneeds:animal_exercise",
+        NeedKind::Privacy => "entityneeds:animal_privacy",
+        NeedKind::Hygiene => "entityneeds:animal_hygiene",
+        NeedKind::Social => "entityneeds:animal_social",
+        NeedKind::Stimulation => "entityneeds:animal_stimulation",
+        NeedKind::Reproduction => "entityneeds:animal_reproduction",
+        NeedKind::Health | NeedKind::Bathroom => "entityneeds:animal_well",
+    }
+}
 
 fn selected_animal_need_row_value(
     source: UiWidgetLiveCollectionSource,
@@ -196,5 +226,31 @@ fn selected_animal_need_row_value(
             Some((NeedKind::Stimulation, 9, needs.9 .0))
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tooltip_tests {
+    use super::*;
+
+    #[test]
+    fn each_shown_need_has_its_own_label() {
+        let shown = [
+            NeedKind::Environment,
+            NeedKind::Hunger,
+            NeedKind::Thirst,
+            NeedKind::Rest,
+            NeedKind::Exercise,
+            NeedKind::Privacy,
+            NeedKind::Hygiene,
+            NeedKind::Social,
+            NeedKind::Stimulation,
+        ];
+        let keys: std::collections::HashSet<_> = shown.into_iter().map(need_tooltip_key).collect();
+        assert_eq!(keys.len(), shown.len());
+        assert_eq!(
+            need_tooltip_key(NeedKind::Hunger),
+            "entityneeds:animal_hunger"
+        );
     }
 }
