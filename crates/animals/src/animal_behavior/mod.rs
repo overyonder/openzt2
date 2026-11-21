@@ -173,6 +173,7 @@ impl Plugin for AnimalBehaviorExecutionPlugin {
             (
                 behavior_feedback_dispatch_execution::dispatch_current_authored_behavior_feedback_and_advance,
                 interaction_container_cleanup::remove_destroyed_container_memberships,
+                interaction_container_cleanup::release_people_whose_task_moved_on,
                 behavior_interaction_container_execution::enter_authored_interaction_containers_and_play_selected_behavior_sets,
                 (
                     behavior_locomotion_switch_set_execution::play_locomotion_medium_behavior_sets,
