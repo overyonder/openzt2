@@ -36,6 +36,7 @@ pub(super) fn bind_fence(
         segment_length_cm: number_or(record, &["segmentLengthCm", "lengthCm"], 300)?,
         height_cm: required_number(record, &["heightCm", "height"])?,
         strength: number_or(record, &["strength"], 0)?,
+        blocks_view: false,
         blocks: traversal_blocking_flags,
         gate: asset(record, &["gate", "gateDefinition"]),
         post_prefab: asset(record, &["postPrefab", "post"]),
