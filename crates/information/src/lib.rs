@@ -147,6 +147,7 @@ impl Plugin for InformationPlugin {
                     projection::guest_status_projection::project_live_guest_status_to_visible_information_panels,
                     projection::staff_status_projection::project_maintenance_worker_duties_to_information_panel_controls,
                     projection::staff_status_projection::project_live_staff_status_to_visible_information_panels,
+                    projection::selected_entity_feedback_projection::project_selected_entity_current_action,
                     projection::zoo_status_projection::project_live_zoo_status_to_authored_information_bindings,
                     (
                         projection::information_list_projection::project_live_world_entities_to_visible_information_list_rows,

@@ -249,6 +249,45 @@ impl PendingBehaviorDockingCompletion {
     }
 }
 
+/// The authored feedback an actor's tasks last gave, for its information
+/// panel: what it is doing and the thoughts it still has.
+#[derive(Component, Clone, Debug, Default, PartialEq)]
+pub struct BehaviorFeedbackLog {
+    /// The current `ZTActionInfo`, such as `staffactions:GoHealAnimal`.
+    pub action: Option<BehaviorFeedbackLine>,
+    /// `ZTThoughtInfo` entries, newest last, each kept until it times out.
+    pub thoughts: Vec<BehaviorFeedbackThought>,
+}
+
+/// A localized feedback text and the entity named in its `%s`, if any.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BehaviorFeedbackLine {
+    pub localization_key: String,
+    pub named: Option<Entity>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct BehaviorFeedbackThought {
+    pub line: BehaviorFeedbackLine,
+    pub expires_tick: u64,
+}
+
+impl BehaviorFeedbackLog {
+    /// The most thoughts an actor keeps; the oldest go first.
+    pub const MAXIMUM_THOUGHTS: usize = 8;
+
+    /// Adds a thought, dropping expired ones, a repeat of the same text and,
+    /// beyond the limit, the oldest.
+    pub fn think(&mut self, line: BehaviorFeedbackLine, now_tick: u64, expires_tick: u64) {
+        self.thoughts
+            .retain(|thought| thought.expires_tick > now_tick && thought.line != line);
+        self.thoughts
+            .push(BehaviorFeedbackThought { line, expires_tick });
+        let excess = self.thoughts.len().saturating_sub(Self::MAXIMUM_THOUGHTS);
+        self.thoughts.drain(..excess);
+    }
+}
+
 #[derive(Message, Clone, Debug)]
 pub struct BehaviorFeedbackDispatched {
     pub actor: Entity,
@@ -376,5 +415,36 @@ impl PendingBehaviorMoveCompletion {
     pub fn still_owns_exact_task_frame(&self, task: &BehaviorTaskExecutionState) -> bool {
         task.stack.len() == self.stack_depth
             && task.is_at_or_nested_under(&self.origin, self.stack_depth)
+    }
+}
+
+#[cfg(test)]
+mod feedback_log_tests {
+    use super::*;
+
+    #[test]
+    fn thoughts_expire_do_not_repeat_and_keep_the_newest() {
+        let line = |key: &str| BehaviorFeedbackLine {
+            localization_key: key.into(),
+            named: None,
+        };
+        let mut log = BehaviorFeedbackLog::default();
+        log.think(line("a"), 0, 10);
+        log.think(line("b"), 0, 100);
+        log.think(line("b"), 5, 100);
+        assert_eq!(log.thoughts.len(), 2);
+        // At tick 20 the first thought has timed out.
+        log.think(line("c"), 20, 100);
+        let keys: Vec<_> = log
+            .thoughts
+            .iter()
+            .map(|t| t.line.localization_key.as_str())
+            .collect();
+        assert_eq!(keys, ["b", "c"]);
+        for index in 0..20 {
+            log.think(line(&index.to_string()), 20, 100);
+        }
+        assert_eq!(log.thoughts.len(), BehaviorFeedbackLog::MAXIMUM_THOUGHTS);
+        assert_eq!(log.thoughts.last().unwrap().line.localization_key, "19");
     }
 }

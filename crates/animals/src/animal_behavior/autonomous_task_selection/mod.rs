@@ -147,27 +147,30 @@ pub(super) fn select_idle_animal_tasks(
             continue;
         };
         let variant_id = facts.variant_id();
-        let declarations = subject_tasks.by_variant.entry(variant_id).or_insert_with(|| {
-            view.behavior_tasks()
-                .filter(|(_, _, task)| {
-                    task_has_typed_subject_and_target(task)
-                        && candidate_requirements_are_satisfied(
-                            &task.candidate_eligibility_requirements,
-                            |role, required| {
-                                role != BehaviorCandidateRole::Subject
-                                    || animal_subject_type_can_match(
-                                        required,
-                                        authored_types,
-                                        definition.id,
-                                        variant_id,
-                                    )
-                            },
-                            |_, _| true,
-                        )
-                })
-                .map(|(document, index, _)| (document.clone(), index))
-                .collect()
-        });
+        let declarations = subject_tasks
+            .by_variant
+            .entry(variant_id)
+            .or_insert_with(|| {
+                view.behavior_tasks()
+                    .filter(|(_, _, task)| {
+                        task_has_typed_subject_and_target(task)
+                            && candidate_requirements_are_satisfied(
+                                &task.candidate_eligibility_requirements,
+                                |role, required| {
+                                    role != BehaviorCandidateRole::Subject
+                                        || animal_subject_type_can_match(
+                                            required,
+                                            authored_types,
+                                            definition.id,
+                                            variant_id,
+                                        )
+                                },
+                                |_, _| true,
+                            )
+                    })
+                    .map(|(document, index, _)| (document.clone(), index))
+                    .collect()
+            });
         for (document, declaration) in declarations.iter() {
             let declaration = *declaration;
             let Some(task) = assets
@@ -871,10 +874,13 @@ fn subject_can_consider_task(
 fn task_has_typed_subject_and_target(task: &BehaviorTask) -> bool {
     !task.targets.is_empty()
         && !task.subjects.is_empty()
-        && task.candidate_eligibility_requirements.iter().any(|requirements| {
-            requirements.candidate_role == BehaviorCandidateRole::Subject
-                && !requirements.candidate_type_identifiers.is_empty()
-        })
+        && task
+            .candidate_eligibility_requirements
+            .iter()
+            .any(|requirements| {
+                requirements.candidate_role == BehaviorCandidateRole::Subject
+                    && !requirements.candidate_type_identifiers.is_empty()
+            })
 }
 
 #[cfg(test)]

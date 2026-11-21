@@ -236,6 +236,13 @@ pub(super) fn lower_authored_ui_node_property_bindings_to_canonical_records(
         }
     } else {
         match (normalized_virtual_path.as_str(), normalized_name.as_str()) {
+            ("ui/layout/entityinfo.xml", "tasklabel")
+                if matches!(node.widget, SourceUiWidgetData::Text(_)) =>
+            {
+                Some(UiNodePropertyBinding::TextContent(
+                    UiTextPropertyBindingSource::SelectedEntityCurrentAction,
+                ))
+            }
             ("ui/layout/econlistcategory.xml", "label") => {
                 Some(UiNodePropertyBinding::TextContent(
                     UiTextPropertyBindingSource::FinanceBalanceSheetCategoryLabel,
