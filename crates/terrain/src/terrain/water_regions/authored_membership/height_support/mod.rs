@@ -1,3 +1,4 @@
+use openzt2_zoo_state::topology::habitat_boundary_queries::HabitatBoundaryQueries;
 use bevy::{ecs::{entity::EntityHashSet, system::SystemParam}};
 use bevy::prelude::*;
 use bevy::transform::helper::TransformHelper;
@@ -13,17 +14,26 @@ use openzt2_zoo_state::terrain::terrain_water_presentation_types::{
 use openzt2_zoo_state::placement::object_placement_definition_queries::collect_occupied_placement_cells_for_transform;
 use openzt2_zoo_state::placement::object_placement_geometry::ScenePlacementFootprints;
 use openzt2_world_state::world_spawn::prefab_source_asset_handle::PrefabSourceAssetHandle;
-use openzt2_zoo_state::topology::topology_graph_types::{FenceEdge, PathTile, TileSurface, TopologyGrid, TopologyNode};
-use openzt2_zoo_state::transport_tours::transport_topology_types::TrackSegment;
+use openzt2_zoo_state::topology::topology_graph_types::{FenceSegment, PathTile, TileSurface, TopologyGrid, TopologyNode};
+use openzt2_zoo_state::transport_tours::transport_topology_types::TrackRoute;
 
 /// Borrows live structures; the resulting point limits are a derived terrain index.
 #[derive(SystemParam)]
 pub(in crate::terrain) struct TerrainHeightSupports<'w, 's> {
     paths: Query<'w, 's, (&'static PathTile, Option<&'static TileSurface>)>,
-    tanks: Query<'w, 's, (&'static TankGeometry, Option<&'static HabitatRegion>)>,
-    fences: Query<'w, 's, &'static FenceEdge>,
+    tanks: Query<
+        'w,
+        's,
+        (
+            Entity,
+            &'static TankGeometry,
+            Option<&'static HabitatRegion>,
+        ),
+    >,
+    boundaries: HabitatBoundaryQueries<'w, 's>,
+    fences: Query<'w, 's, FenceSegment>,
     nodes: Query<'w, 's, &'static TopologyNode>,
-    tracks: Query<'w, 's, &'static TrackSegment>,
+    tracks: Query<'w, 's, TrackRoute>,
     objects: Query<'w, 's, &'static DefinitionId>,
     scene_sources: Query<'w, 's, Ref<'static, PrefabSourceAssetHandle>>,
     scene_footprints: Option<Res<'w, ScenePlacementFootprints>>,
@@ -73,10 +83,15 @@ impl TerrainHeightSupports<'_, '_> {
             if definition.kind != TransportationTrackKind::Sky {
                 continue;
             }
-            owners.extend([track.from, track.to].into_iter().filter_map(|endpoint| {
-                let (entity, definition) = self.endpoint_owner(endpoint, &mut dependencies)?;
-                Some((entity, definition.0))
-            }));
+            owners.extend(
+                [track.from(), track.to()]
+                    .into_iter()
+                    .filter_map(|endpoint| {
+                        let (entity, definition) =
+                            self.endpoint_owner(endpoint, &mut dependencies)?;
+                        Some((entity, definition.0))
+                    }),
+            );
         }
         owners.sort_unstable_by_key(|(entity, _)| *entity);
         owners.dedup_by_key(|(entity, _)| *entity);
@@ -159,7 +174,7 @@ impl TerrainHeightSupports<'_, '_> {
             }
         }
         // A tank floor is owned by the habitat's exact topology cells, not its bounds.
-        for (tank, habitat) in &self.tanks {
+        for (entity, tank, habitat) in &self.tanks {
             let habitat = habitat?;
             for cell in &habitat.topology_cells {
                 let minimum = topology.cell_translation(cell.extend(0)).xz();
@@ -172,13 +187,13 @@ impl TerrainHeightSupports<'_, '_> {
                     1000.0,
                 );
             }
-            for edge in &habitat.boundary_fence_entities {
-                let edge = self.fences.get(*edge).ok()?;
+            for fence in self.boundaries.fences(entity) {
+                let edge = self.fences.get(fence).ok()?;
                 let first = topology
-                    .cell_translation(self.nodes.get(edge.a).ok()?.cell)
+                    .cell_translation(self.nodes.get(edge.a()).ok()?.cell)
                     .xz();
                 let second = topology
-                    .cell_translation(self.nodes.get(edge.b).ok()?.cell)
+                    .cell_translation(self.nodes.get(edge.b()).ok()?.cell)
                     .xz();
                 let delta = second - first;
                 let steps = (delta.abs().max_element() / spacing).round() as u32;

@@ -21,6 +21,14 @@ pub(super) fn lower_named_physical_presentations(
     record: &RecordView<'_, '_>,
     scene_paths: &BTreeMap<String, String>,
 ) -> Result<Vec<WorldObjectNamedPhysicalPresentationDefinition>, BindError> {
+    lower_named_physical_binders(record, scene_paths, false)
+}
+
+fn lower_named_physical_binders(
+    record: &RecordView<'_, '_>,
+    scene_paths: &BTreeMap<String, String>,
+    optional_only: bool,
+) -> Result<Vec<WorldObjectNamedPhysicalPresentationDefinition>, BindError> {
     let mut presentations = Vec::new();
     let mut seen = BTreeSet::new();
     for binder in authored_type_family_elements_named(record, "BFNamedBinder") {
@@ -47,6 +55,9 @@ pub(super) fn lower_named_physical_presentations(
                 ))
             }
         };
+        if optional_only && required {
+            continue;
+        }
         let reference = component
             .attribute_named_any(&["modelfile", "actorfile"])
             .expect("presentation lookup requires a reference");
@@ -97,9 +108,8 @@ pub(super) fn lower_named_physical_presentations(
 /// Lowers the binders `physObjParenting` hangs on nodes of an object's main
 /// model, such as fires, mist, fans and flags on buildings.
 ///
-/// Presentation-controller states (signs), optional alternatives
-/// (`required="0"`) and actors (vendors, fish) are owned elsewhere, and a
-/// binder whose scene is unresolved is left out.
+/// Presentation-controller states and parented actors are lowered separately.
+/// Optional binders are retained for animation keys to instantiate on demand.
 pub(super) fn lower_parented_named_physical_presentations(
     record: &RecordView<'_, '_>,
     scene_paths: &BTreeMap<String, String>,
@@ -184,6 +194,15 @@ pub(super) fn lower_parented_named_physical_presentations(
         });
     }
     lower_station_construction_markers(&binders, scene_paths, &mut seen, &mut presentations);
+    let populated = presentations
+        .iter()
+        .map(|binder| binder.name)
+        .collect::<BTreeSet<_>>();
+    presentations.extend(
+        lower_named_physical_binders(record, scene_paths, true)?
+            .into_iter()
+            .filter(|binder| !populated.contains(&binder.name)),
+    );
     Ok(presentations)
 }
 
@@ -421,6 +440,7 @@ mod tests {
         let parented = object
             .named_physical_presentations
             .iter()
+            .filter(|presentation| presentation.required)
             .map(|presentation| {
                 (
                     presentation.name,
@@ -449,8 +469,13 @@ mod tests {
                     1.0,
                 ),
             ],
-            "optional alternatives and actors are not parented presentations"
+            "required presentations use their authored parent nodes"
         );
+        let optional = object
+            .named_physical_presentations
+            .iter()
+            .find(|presentation| presentation.name == AssetId::from_key("dead"));
+        assert!(optional.is_some_and(|presentation| !presentation.required));
         Ok(())
     }
 

@@ -1,15 +1,23 @@
 use bevy::prelude::*;
+use openzt2_game_data::AssetId;
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::BehaviorInstructionId;
+use std::collections::{BTreeMap, BTreeSet};
 
-/// Subscription at the guest's current watching target (path, seat, or viewing
-/// area). This does not establish which running show owns that target.
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-#[relationship(relationship_target = ShowTargetAudience)]
-pub(super) struct GuestShowAttendance {
+#[derive(Component)]
+#[relationship(relationship_target = StageShowAudience)]
+pub(super) struct GuestWatchingStage {
     #[relationship]
-    pub(super) target: Entity,
-    pub(super) execution_id: u64,
+    pub(super) stage: Entity,
+    pub(super) instruction: Option<BehaviorInstructionId>,
 }
 
+#[derive(Component)]
+#[relationship_target(relationship = GuestWatchingStage)]
+pub(super) struct StageShowAudience(Vec<Entity>);
+
 #[derive(Component, Default)]
-#[relationship_target(relationship = GuestShowAttendance)]
-pub(super) struct ShowTargetAudience(Vec<Entity>);
+pub(super) struct GuestShowExperience {
+    pub(super) show: Option<Entity>,
+    pub(super) reactions: BTreeMap<AssetId, u32>,
+    pub(super) delivered_events: BTreeSet<Entity>,
+}

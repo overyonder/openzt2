@@ -10,10 +10,11 @@ use openzt2_game_data::behavior::action::modification::{
 
 use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
+use openzt2_zoo_state::animal_behavior::animal_lineage::{AnimalMate, PregnancyFather};
 use openzt2_zoo_state::animal_health::types::FreezeAnimal;
 use openzt2_zoo_state::animal_health::types::ThawAnimal;
 use openzt2_zoo_state::animal_lifecycle::types::Animal;
-use openzt2_zoo_state::animal_lifecycle::types::{Mate, Pregnancy};
+use openzt2_zoo_state::animal_lifecycle::types::Pregnancy;
 use openzt2_zoo_state::animal_welfare::types::AdjustBathroom;
 use openzt2_zoo_state::animal_welfare::types::AdjustExercise;
 use openzt2_zoo_state::animal_welfare::types::AdjustHealthNeed;
@@ -142,7 +143,7 @@ pub(super) fn apply_supported_current_behavior_fact_modifications(
     mut drink_containers: Query<(Entity, &mut DrinkContainer)>,
     animals: Query<(), With<Animal>>,
     pregnancies: Query<(), With<Pregnancy>>,
-    mates: Query<&Mate>,
+    mates: Query<&AnimalMate>,
     caffeine_modes: Query<&CaffeineMode>,
     mut maintenance: MaintenanceFacts,
     price_effect: openzt2_zoo_state::economy::price_effect::BehaviorPriceEffectContext,
@@ -337,11 +338,15 @@ pub(super) fn apply_supported_current_behavior_fact_modifications(
                         == BehaviorFactModificationOperation::Clear
                         || value_q16 == 0
                     {
-                        commands.entity(animal).remove::<Pregnancy>();
+                        commands
+                            .entity(animal)
+                            .remove::<(Pregnancy, PregnancyFather)>();
                     } else if !pregnancies.contains(animal) {
-                        commands.entity(animal).insert(Pregnancy {
-                            father: mates.get(animal).ok().map(|mate| mate.0),
-                        });
+                        let mut animal = commands.entity(animal);
+                        animal.insert(Pregnancy { father: None });
+                        if let Ok(mate) = mates.get(animal.id()) {
+                            animal.insert(PregnancyFather(mate.0));
+                        }
                     }
                 }
                 BehaviorFact::Frozen => {

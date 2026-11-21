@@ -1,4 +1,7 @@
-use bevy::prelude::*;
+use bevy::{
+    ecs::{relationship::RelationshipTarget, system::SystemParam},
+    prelude::*,
+};
 use openzt2_game_data::ui_document::action::UiTrigger;
 use openzt2_game_data::{species::Sex, AssetId};
 use openzt2_world_state::game_session_types::WorldSessionMode;
@@ -6,7 +9,9 @@ use openzt2_world_state::world_spawn::selected_world_identity::SelectedWorldIden
 
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
-use openzt2_animals::animal_lifecycle::adoption_offer_inventory_types::AnimalAdoptionOfferInventory;
+use openzt2_animals::animal_lifecycle::adoption_offer_types::{
+    AdoptionOfferClock, AdoptionOfferOption, AdoptionOfferOptions, AdoptionOfferSupply, AdoptionOfferUnlocked, CurrentAdoptionOffer,
+};
 use openzt2_zoo_state::animal_lifecycle::animal_adoption_contracts::AnimalCatalogueGender;
 use openzt2_zoo_state::animal_lifecycle::animal_adoption_contracts::BeginAnimalAdoptionPlacement;
 use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::SetUiListRowCount;
@@ -98,37 +103,92 @@ pub(crate) fn apply_authored_adoption_catalogue_tab_initialization(
     }
 }
 
-/// Selects the first live offer once both the authored adoption surface and
-/// its canonical world inventory exist. Either side can finish loading first.
+#[derive(SystemParam)]
+pub(crate) struct AdoptionCatalogueOffers<'w, 's> {
+    roots: Query<
+        'w,
+        's,
+        (
+            Entity,
+            Ref<'static, AdoptionOfferClock>,
+            Option<Ref<'static, AdoptionOfferOptions>>,
+        ),
+        With<WorldRoot>,
+    >,
+    options: Query<
+        'w,
+        's,
+        (
+            &'static AdoptionOfferOption,
+            Option<Ref<'static, CurrentAdoptionOffer>>,
+        ),
+    >,
+    supplies: Query<
+        'w,
+        's,
+        (
+            Ref<'static, AdoptionOfferSupply>,
+            Option<Ref<'static, AdoptionOfferUnlocked>>,
+        ),
+    >,
+    removed_offers: RemovedComponents<'w, 's, CurrentAdoptionOffer>,
+}
+
+fn offer_is_actionable(offer: &AdoptionOfferSupply, sex: Sex, unlocked: bool) -> bool {
+    unlocked
+        && match sex {
+            Sex::Female => offer.available_by_sex[0] != 0,
+            Sex::Male => offer.available_by_sex[1] != 0,
+            Sex::Any => offer.available_by_sex != [0; 2],
+        }
+}
+
+/// Selects the first live offer once the authored adoption surface opens.
 pub(crate) fn select_first_available_species_after_adoption_catalogue_and_offer_inventory_are_both_available(
     adoption_lists: Query<(Ref<UiTablePolicy>, &UiDocumentOwner)>,
     selected_genders: Query<&AnimalCatalogueGender>,
-    inventories: Query<Ref<AnimalAdoptionOfferInventory>, With<WorldRoot>>,
+    offers: AdoptionCatalogueOffers,
     mut selected_catalogue_entry: ResMut<SelectedCatalogueEntry>,
 ) {
-    let Ok(inventory) = inventories.single() else {
+    let Ok((_, clock, Some(members))) = offers.roots.single() else {
         return;
     };
     for (table_policy, document_owner) in &adoption_lists {
         if *table_policy != UiTablePolicy::AdoptionList
-            || (!table_policy.is_added() && !inventory.is_added())
+            || (!table_policy.is_added()
+                && !clock.is_added()
+                && selected_catalogue_entry.0.is_some())
         {
             continue;
         }
         let sex = selected_genders
             .get(document_owner.0)
             .map_or(Sex::Female, |gender| gender.0);
-        let mut actionable_offers = inventory.actionable_offers(sex);
-        let Some((_, first_offer)) = actionable_offers.next() else {
-            continue;
-        };
-        if selected_catalogue_entry.0 == Some(first_offer.species())
-            || actionable_offers
-                .any(|(_, offer)| selected_catalogue_entry.0 == Some(offer.species()))
-        {
-            continue;
+        let mut eligible = offers
+            .options
+            .iter_many(members.iter())
+            .flatten()
+            .filter_map(|(option, current)| {
+                let (supply, unlocked) = offers.supplies.get(*current?.collection()).ok()?;
+                offer_is_actionable(&supply, sex, unlocked.is_some()).then_some((
+                    option.slot,
+                    option.option,
+                    supply.species,
+                ))
+            });
+        let mut first = None;
+        for candidate in &mut eligible {
+            if selected_catalogue_entry.0 == Some(candidate.2) {
+                first = Some(candidate);
+                break;
+            }
+            if first.is_none_or(|previous| candidate < previous) {
+                first = Some(candidate);
+            }
         }
-        selected_catalogue_entry.0 = Some(first_offer.species());
+        if let Some((_, _, species)) = first {
+            selected_catalogue_entry.set_if_neq(SelectedCatalogueEntry(Some(species)));
+        }
     }
 }
 
@@ -137,8 +197,7 @@ pub(crate) fn request_authored_adoption_list_row_count(
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,
     adoption_lists: Query<(Entity, Ref<UiTablePolicy>, &UiDocumentOwner)>,
-    selected_genders: Query<Ref<AnimalCatalogueGender>>,
-    inventories: Query<Ref<AnimalAdoptionOfferInventory>, With<WorldRoot>>,
+    worlds: Query<Ref<AdoptionOfferClock>, With<WorldRoot>>,
     mut row_count_requests: MessageWriter<SetUiListRowCount>,
 ) {
     let Some(world_definitions) = active_world_definitions.get(&world_definition_assets) else {
@@ -147,19 +206,17 @@ pub(crate) fn request_authored_adoption_list_row_count(
     let Some(configuration) = world_definitions.animal_adoption_offer_configuration() else {
         return;
     };
-    let Ok(inventory) = inventories.single() else {
+    let Ok(clock) = worlds.single() else {
         return;
     };
     let displayed_slot_count = maximum_authored_animal_adoption_offer_slot_count(configuration);
 
-    for (list_entity, table_policy, document_owner) in &adoption_lists {
-        let selected_gender = selected_genders.get(document_owner.0).ok();
+    for (list_entity, table_policy, _) in &adoption_lists {
         if *table_policy != UiTablePolicy::AdoptionList
             || (!table_policy.is_added()
-                && !inventory.is_changed()
-                && selected_gender
-                    .as_ref()
-                    .is_none_or(|gender| !gender.is_changed()))
+                && !clock.is_added()
+                && !active_world_definitions.is_changed()
+                && !world_definition_assets.is_changed())
         {
             continue;
         }
@@ -194,7 +251,7 @@ pub(crate) fn project_adoption_catalogue_entries_to_authored_rows(
     active_world_definitions: Res<WorldDefinitions>,
     adoption_lists: Query<(&UiTablePolicy, &UiDocumentOwner)>,
     selected_genders: Query<Ref<AnimalCatalogueGender>>,
-    inventories: Query<Ref<AnimalAdoptionOfferInventory>, With<WorldRoot>>,
+    mut offers: AdoptionCatalogueOffers,
     selected_catalogue_entry: Res<SelectedCatalogueEntry>,
     child_entities: Query<&Children>,
     mut visual_images: Query<
@@ -230,13 +287,46 @@ pub(crate) fn project_adoption_catalogue_entries_to_authored_rows(
     let Some(configuration) = world_definitions.animal_adoption_offer_configuration() else {
         return;
     };
-    let Ok(inventory) = inventories.single() else {
+    let removed_offer = offers.removed_offers.read().count() != 0;
+    let Ok((_, clock, members)) = offers.roots.single() else {
         return;
     };
+    let mut offers_changed = removed_offer
+        || clock.is_added()
+        || members.as_ref().is_some_and(|members| members.is_changed());
+    let mut slots = Vec::<[Option<(Ref<AdoptionOfferSupply>, bool)>; 2]>::new();
+    for (option, current) in offers
+        .options
+        .iter_many(
+            members
+                .as_deref()
+                .into_iter()
+                .flat_map(RelationshipTarget::iter),
+        )
+        .flatten()
+    {
+        let slot = usize::from(option.slot);
+        if slots.len() <= slot {
+            slots.resize_with(slot + 1, || [None, None]);
+        }
+        let Some(current) = current else {
+            continue;
+        };
+        offers_changed |= current.is_changed();
+        if let Ok((supply, unlocked)) = offers.supplies.get(*current.collection()) {
+            offers_changed |= supply.is_changed()
+                || unlocked
+                    .as_ref()
+                    .is_some_and(|unlocked| unlocked.is_added());
+            if let Some(entry) = slots[slot].get_mut(usize::from(option.option)) {
+                *entry = Some((supply, unlocked.is_some()));
+            }
+        }
+    }
     if !catalogue_content_changed
         && !adoption_rows_changed
         && !selected_gender_changed
-        && !inventory.is_changed()
+        && !offers_changed
         && !selected_catalogue_entry.is_changed()
     {
         return;
@@ -264,7 +354,7 @@ pub(crate) fn project_adoption_catalogue_entries_to_authored_rows(
         if *table_policy != UiTablePolicy::AdoptionList {
             continue;
         }
-        let locked = usize::from(row.index) >= inventory.slot_count();
+        let locked = usize::from(row.index) >= slots.len();
         let is_locked_slot = icon_name
             .as_str()
             .eq_ignore_ascii_case("Locked Adoption Slot");
@@ -311,7 +401,7 @@ pub(crate) fn project_adoption_catalogue_entries_to_authored_rows(
         if bound_entry.is_some()
             && !row.is_changed()
             && !catalogue_content_changed
-            && !inventory.is_changed()
+            && !offers_changed
             && !selected_catalogue_entry.is_changed()
             && selected_gender
                 .as_ref()
@@ -321,7 +411,9 @@ pub(crate) fn project_adoption_catalogue_entries_to_authored_rows(
         }
         let sex = selected_gender.map_or(Sex::Female, |gender| gender.0);
         let offer_slot_index = row.index;
-        let Some(offer) = inventory.offer_at_slot(usize::from(offer_slot_index), option_index)
+        let Some((offer, unlocked)) = slots
+            .get(usize::from(offer_slot_index))
+            .and_then(|slot| slot[option_index].as_ref())
         else {
             if *visibility != Visibility::Hidden {
                 *visibility = Visibility::Hidden;
@@ -332,15 +424,17 @@ pub(crate) fn project_adoption_catalogue_entries_to_authored_rows(
             continue;
         };
         if let Some(mut interaction_enabled) = interaction_enabled {
-            interaction_enabled.0 =
-                inventory.offer_is_actionable(usize::from(offer_slot_index), offer.species(), sex);
+            let enabled = offer_is_actionable(offer, sex, *unlocked);
+            if interaction_enabled.0 != enabled {
+                interaction_enabled.0 = enabled;
+            }
         }
-        let is_selected = selected_catalogue_entry.0 == Some(offer.species());
+        let is_selected = selected_catalogue_entry.0 == Some(offer.species);
         if let Some(mut selected) = selected {
             selected.0 = is_selected;
         }
 
-        let species_identifier = offer.species();
+        let species_identifier = offer.species;
         let Some(catalogue_entry) = world_definitions
             .catalogue_entry_for_definition(species_identifier)
             .map(|(_, entry)| entry)

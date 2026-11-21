@@ -2,6 +2,10 @@ use openzt2_zoo_state::donations::donation_guest_decision_types::DonationProgres
 use std::collections::BTreeMap;
 
 use bevy::prelude::*;
+use openzt2_zoo_state::{
+    animal_lifecycle::types::SpeciesHandle, progression::fame_types::GuestSpeciesFameViews,
+    shows::show_stage_types::ShowStage, transport_tours::transport_circuit_types::TransportCircuit,
+};
 
 use openzt2_zoo_state::economy::account_transaction_types::TransactionCompleted;
 use openzt2_zoo_state::economy::account_transaction_types::TransactionKind;
@@ -30,6 +34,9 @@ pub(super) fn settle_completed_donation_transactions_and_update_acceptor_totals(
     mut payment_operations: Query<(&PendingDonationPayment, &mut DonationPaymentState)>,
     guests: Query<(), (With<Guest>, With<DonationPaymentRequested>)>,
     donation_opportunities: Query<&DonationOpportunity>,
+    species: Query<&SpeciesHandle>,
+    attributed_subjects: Query<(), Or<(With<ShowStage>, With<TransportCircuit>)>>,
+    mut fame_views: Query<&mut GuestSpeciesFameViews>,
     mut donation_totals: Query<&mut DonationTotal>,
     mut donation_category_totals: Query<&mut DonationCategoryTotals>,
     mut completed_donations: MessageWriter<DonationCompleted>,
@@ -154,6 +161,33 @@ pub(super) fn settle_completed_donation_transactions_and_update_acceptor_totals(
             *total = updated_total;
         } else {
             new_donation_totals.insert(pending_payment.acceptor, updated_total);
+        }
+        if let (Ok(species), Ok(mut views)) = (
+            species.get(pending_payment.subject),
+            fame_views.get_mut(pending_payment.guest),
+        ) {
+            views.0.entry(species.species).or_default().donation +=
+                pending_payment.amount.0 as f32 / 100.0;
+        }
+        if pending_payment.subject != pending_payment.acceptor
+            && attributed_subjects.contains(pending_payment.subject)
+        {
+            if let Ok(mut current) = donation_totals.get_mut(pending_payment.subject) {
+                if let Some(total) =
+                    accumulate_completed_donation_total(*current, pending_payment.amount)
+                {
+                    *current = total;
+                }
+            } else {
+                let current = new_donation_totals
+                    .entry(pending_payment.subject)
+                    .or_default();
+                if let Some(total) =
+                    accumulate_completed_donation_total(*current, pending_payment.amount)
+                {
+                    *current = total;
+                }
+            }
         }
         if let Some((available_at, expires_at)) = timeout {
             commands.spawn((

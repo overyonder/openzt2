@@ -246,7 +246,7 @@ pub(crate) fn claim_highest_ranked_compatible_jobs_for_available_staff(
         });
     });
 
-    let mut candidates: Vec<_> = evaluated.drain().flatten().collect();
+    let mut candidates: Vec<_> = evaluated.drain().collect();
     candidates.sort_unstable_by(|(left, _), (right, _)| left.claim_order(right));
     let mut claimed_jobs = HashSet::new();
     let mut claimed_staff = HashSet::new();

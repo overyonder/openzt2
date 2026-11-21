@@ -23,6 +23,8 @@ use openzt2_interface_state::information::entity_selection_types::WorldUiSelecti
 use openzt2_zoo_state::placement::placed_object_types::PlacedObjectDefinitionReference;
 use openzt2_zoo_state::placement::placement_preview_types::PlacementRotationRequest;
 use openzt2_zoo_state::placement::placement_preview_types::RelocatingPlacedObject;
+use openzt2_zoo_state::staff::staff_lifecycle_messages::BeginStaffHirePlacement;
+use openzt2_zoo_state::staff::staff_presentation_variant_selection::staff_role_for_definition;
 use openzt2_zoo_state::terrain::terrain_brush_types::TerrainBrushKind;
 use openzt2_zoo_state::terrain::terrain_brush_types::TerrainBrushPreview;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner;
@@ -160,6 +162,7 @@ pub(super) struct ConstructionUiIntents<'w, 's> {
         Without<openzt2_zoo_state::animal_lifecycle::types::CratingRestricted>,
     >,
     tools: MessageWriter<'w, SelectConstructionTool>,
+    staff_hires: Option<MessageWriter<'w, BeginStaffHirePlacement>>,
     deletions: MessageWriter<'w, DeleteEntity>,
     commits: MessageWriter<'w, CommitConstruction>,
     cancellations: MessageWriter<'w, CancelConstruction>,
@@ -345,8 +348,17 @@ pub(super) fn route_construction_ui_actions(
                     }
                 }
                 UiConstructionAction::SetPlacementObject { definition } => {
-                    let definition = openzt2_game_data::AssetId(definition.0);
-                    let Some(tool) = active_definitions.get(&definitions).and_then(|catalogue| {
+                    let definition = *definition;
+                    let catalogue = active_definitions.get(&definitions);
+                    if catalogue.is_some_and(|catalogue| {
+                        staff_role_for_definition(catalogue, definition).is_some()
+                    }) {
+                        if let Some(staff_hires) = &mut intents.staff_hires {
+                            staff_hires.write(BeginStaffHirePlacement(definition));
+                        }
+                        continue;
+                    }
+                    let Some(tool) = catalogue.and_then(|catalogue| {
                         if catalogue.find_fence(definition).is_some() {
                             Some(ConstructionTool::Fence(definition))
                         } else if catalogue.find_path(definition).is_some() {

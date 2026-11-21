@@ -4,9 +4,9 @@ use openzt2_game_data::AssetId;
 
 use openzt2_zoo_state::topology::gate_actor_type_queries::GateActorTypeQueries;
 use openzt2_zoo_state::topology::gate_operation_types::Gate;
-use openzt2_zoo_state::topology::topology_graph_types::FenceEdge;
 use openzt2_zoo_state::topology::topology_graph_types::TopologyGrid;
 use openzt2_zoo_state::topology::topology_graph_types::TopologyNode;
+use openzt2_zoo_state::topology::topology_graph_types::{FenceEdge, FenceSegment, TopologyIndex};
 use openzt2_zoo_state::topology::topology_grid_geometry::horizontal_world_segments_intersect;
 
 use openzt2_zoo_state::locomotion::locomotion_types::NavFlags;
@@ -14,8 +14,8 @@ use openzt2_zoo_state::locomotion::locomotion_types::NavFlags;
 #[derive(SystemParam)]
 pub(super) struct FenceNavigationPolicy<'w, 's> {
     pub(super) actor_types: GateActorTypeQueries<'w, 's>,
-    fences: Query<'w, 's, (&'static FenceEdge, Option<&'static Gate>)>,
-    gates: Query<'w, 's, (&'static FenceEdge, &'static Gate)>,
+    fences: Query<'w, 's, (FenceSegment, Option<&'static Gate>)>,
+    index: Res<'w, TopologyIndex>,
     nodes: Query<'w, 's, &'static TopologyNode>,
     grid: Res<'w, TopologyGrid>,
 }
@@ -28,8 +28,8 @@ impl FenceNavigationPolicy<'_, '_> {
         capabilities: NavFlags,
         actor_types: &[AssetId],
     ) -> bool {
-        self.fences.iter().any(|(edge, gate)| {
-            let (Ok(a), Ok(b)) = (self.nodes.get(edge.a), self.nodes.get(edge.b)) else {
+        self.segment_candidates(from, to).any(|(edge, gate)| {
+            let (Ok(a), Ok(b)) = (self.nodes.get(edge.a()), self.nodes.get(edge.b())) else {
                 return false;
             };
             horizontal_world_segments_intersect(
@@ -37,7 +37,7 @@ impl FenceNavigationPolicy<'_, '_> {
                 to.xz(),
                 self.grid.cell_translation(a.cell).xz(),
                 self.grid.cell_translation(b.cell).xz(),
-            ) && self.definition_blocks_actor(edge, gate, capabilities, actor_types, true)
+            ) && self.definition_blocks_actor(edge.edge, gate, capabilities, actor_types, true)
         })
     }
 
@@ -50,7 +50,7 @@ impl FenceNavigationPolicy<'_, '_> {
         let Ok((edge, gate)) = self.fences.get(fence_entity) else {
             return false;
         };
-        self.definition_blocks_actor(edge, gate, capabilities, actor_types, true)
+        self.definition_blocks_actor(edge.edge, gate, capabilities, actor_types, true)
     }
 
     /// Route planning can anticipate an eligible automatic opening. Actual
@@ -62,8 +62,9 @@ impl FenceNavigationPolicy<'_, '_> {
         from: Vec3,
         to: Vec3,
     ) -> bool {
-        self.gates.iter().any(|(edge, gate)| {
-            let (Ok(a), Ok(b)) = (self.nodes.get(edge.a), self.nodes.get(edge.b)) else {
+        self.segment_candidates(from, to).any(|(edge, gate)| {
+            let Some(gate) = gate else { return false };
+            let (Ok(a), Ok(b)) = (self.nodes.get(edge.a()), self.nodes.get(edge.b())) else {
                 return false;
             };
             horizontal_world_segments_intersect(
@@ -72,13 +73,42 @@ impl FenceNavigationPolicy<'_, '_> {
                 self.grid.cell_translation(a.cell).xz(),
                 self.grid.cell_translation(b.cell).xz(),
             ) && self.definition_blocks_actor(
-                edge,
+                edge.edge,
                 Some(gate),
                 capabilities,
                 self.actor_types.actor_types(actor),
                 false,
             )
         })
+    }
+
+    fn segment_candidates(
+        &self,
+        from: Vec3,
+        to: Vec3,
+    ) -> impl Iterator<
+        Item = (
+            openzt2_zoo_state::topology::topology_graph_types::FenceSegmentItem<'_, '_>,
+            Option<&Gate>,
+        ),
+    > + '_ {
+        let valid = from.is_finite()
+            && to.is_finite()
+            && self.grid.spacing_m.is_finite()
+            && self.grid.spacing_m > 0.0;
+        let first = ((from.xz() - self.grid.origin) / self.grid.spacing_m)
+            .floor()
+            .as_ivec2();
+        let last = ((to.xz() - self.grid.origin) / self.grid.spacing_m)
+            .floor()
+            .as_ivec2();
+        let mut seen = bevy::ecs::entity::EntityHashSet::new();
+        valid
+            .then_some((first.min(last) - IVec2::ONE, first.max(last) + IVec2::ONE))
+            .into_iter()
+            .flat_map(|(min, max)| self.index.fences_within(min, max))
+            .filter(move |&entity| seen.insert(entity))
+            .filter_map(|entity| self.fences.get(entity).ok())
     }
 
     fn definition_blocks_actor(

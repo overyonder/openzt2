@@ -1,10 +1,10 @@
 use super::{
-    construction_history::ConstructionHistoryPolicy,
+    construction_history::WorldConstructionHistory,
     construction_lifecycle::{ConstructionActive, Preparing},
 };
 use bevy::prelude::*;
 
-use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
+use openzt2_world_state::world_spawn::world_membership_types::{WorldMember, WorldRoot};
 use openzt2_zoo_state::economy::money_types::Money;
 
 use openzt2_zoo_state::construction::construction_interaction_types::DeleteEntity;
@@ -17,7 +17,7 @@ pub fn begin_deletion_transaction_preparation(
     mut deletion_requests: MessageReader<DeleteEntity>,
     pending_transactions: Query<(), With<ConstructionActive>>,
     world_members: Query<&WorldMember>,
-    mut construction_edit_history: ResMut<ConstructionHistoryPolicy>,
+    mut world_histories: Query<&mut WorldConstructionHistory, With<WorldRoot>>,
     mut deletion_preparation_requests: MessageWriter<PrepareDeletion>,
 ) {
     if !pending_transactions.is_empty() {
@@ -27,7 +27,10 @@ pub fn begin_deletion_transaction_preparation(
         let Ok(world_member) = world_members.get(deletion_request.0) else {
             continue;
         };
-        let Some(transaction_sequence) = construction_edit_history.allocate_sequence() else {
+        let Ok(mut history) = world_histories.get_mut(world_member.root) else {
+            continue;
+        };
+        let Some(transaction_sequence) = history.allocate_sequence() else {
             continue;
         };
         let transaction = commands

@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 use openzt2_game_data::species::LifeStage;
+use openzt2_zoo_state::animal_behavior::animal_lineage::{AnimalFather, AnimalMother};
 
 use super::{
     animal_age_resolution::resolve_animal_life_stage_from_elapsed_age_ticks,
@@ -45,32 +46,17 @@ fn age_crosses_each_authored_stage_at_its_exact_tick() {
 }
 
 #[test]
-fn lineage_cleanup_clears_only_the_removed_parent() {
+fn lineage_relationship_removes_only_the_despawned_parent() {
     let mut app = App::new();
-    app.add_systems(
-        Update,
-        super::animal_lineage_reference_cleanup::
-            clear_lineage_references_to_deleted_animal_entities,
-    );
     let mother = app.world_mut().spawn(Animal).id();
     let father = app.world_mut().spawn(Animal).id();
     let child = app
         .world_mut()
-        .spawn(Parents {
-            mother: Some(mother),
-            father: Some(father),
-        })
+        .spawn((AnimalMother(mother), AnimalFather(father)))
         .id();
-    app.update();
     app.world_mut().entity_mut(mother).despawn();
-    app.update();
-    assert_eq!(
-        *app.world().get::<Parents>(child).unwrap(),
-        Parents {
-            mother: None,
-            father: Some(father),
-        }
-    );
+    assert!(app.world().get::<AnimalMother>(child).is_none());
+    assert_eq!(app.world().get::<AnimalFather>(child).unwrap().0, father);
 }
 
 #[test]
@@ -130,30 +116,34 @@ fn pregnant_and_non_adult_animals_are_not_released() {
 #[test]
 fn outgoing_adoption_removes_animal_and_crate_without_wild_release_credit() {
     use super::animal_adoption_contracts::PlaceAnimalForAdoption;
+    use bevy::ecs::relationship::Relationship;
     use openzt2_world_state::world_spawn::world_entity_crating::{
-        AnimalCrate, ContainedCratedAnimal, WorldEntityIsCrated,
+        AnimalCrate, WorldEntityIsCrated,
     };
 
     let mut app = App::new();
     app.add_message::<PlaceAnimalForAdoption>()
         .add_message::<AnimalReleased>()
-        .add_systems(Update, (
+        .add_systems(
+            Update,
             super::outgoing_animal_adoption_execution::transfer_animals_out_for_adoption,
-            super::animal_lineage_reference_cleanup::clear_lineage_references_to_deleted_animal_entities,
-        ).chain());
+        );
     let animal = app.world_mut().spawn((Animal, WorldEntityIsCrated)).id();
     let presentation = app.world_mut().spawn(ChildOf(animal)).id();
-    let crate_entity = app.world_mut().spawn(ContainedCratedAnimal(animal)).id();
+    let crate_entity = app.world_mut().spawn_empty().id();
     app.world_mut()
         .entity_mut(animal)
         .insert(AnimalCrate(crate_entity));
+    assert_eq!(
+        app.world()
+            .get::<AnimalCrate>(animal)
+            .map(Relationship::get),
+        Some(crate_entity)
+    );
     let restricted = app.world_mut().spawn((Animal, ReleaseRestricted)).id();
     let child = app
         .world_mut()
-        .spawn(Parents {
-            mother: Some(animal),
-            father: Some(restricted),
-        })
+        .spawn((AnimalMother(animal), AnimalFather(restricted)))
         .id();
     app.world_mut()
         .write_message(PlaceAnimalForAdoption(animal));
@@ -166,12 +156,10 @@ fn outgoing_adoption_removes_animal_and_crate_without_wild_release_credit() {
     assert!(app.world().get_entity(presentation).is_err());
     assert!(app.world().get_entity(crate_entity).is_err());
     assert!(app.world().get_entity(restricted).is_ok());
+    assert!(app.world().get::<AnimalMother>(child).is_none());
     assert_eq!(
-        *app.world().get::<Parents>(child).unwrap(),
-        Parents {
-            mother: None,
-            father: Some(restricted)
-        }
+        app.world().get::<AnimalFather>(child).unwrap().0,
+        restricted
     );
     assert!(app
         .world()

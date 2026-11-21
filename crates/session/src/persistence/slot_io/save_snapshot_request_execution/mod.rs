@@ -20,9 +20,14 @@ use super::{
     },
     economy_snapshot_capture::capture_economy_snapshot_records_from_live_world,
     persistence_failure_message_publication::publish_persistence_failure_for_slot_operation,
-    photo_snapshot_capture::capture_sorted_photo_and_challenge_progress_snapshot_records_from_live_world,
+    photo_snapshot_capture::{
+        capture_sorted_photo_and_challenge_progress_snapshot_records_from_live_world,
+        PhotoSnapshotCaptureQueries,
+    },
     save_snapshot_file_write_task_execution::spawn_persistence_slot_snapshot_file_write_task,
-    show_snapshot_capture::capture_sorted_show_snapshot_records_from_live_world,
+    show_snapshot_capture::{
+        capture_sorted_show_snapshot_records_from_live_world, ShowScheduleSnapshotQueries,
+    },
     snapshot_container_section_assembly::append_captured_world_snapshot_sections_and_finalize_container,
     tank_snapshot_capture::capture_sorted_tank_snapshot_records_from_live_world,
     transport_snapshot_capture::capture_sorted_transport_snapshot_records_from_live_world,
@@ -48,6 +53,8 @@ pub(in super::super) fn begin_saving_requested_live_world_snapshot_to_save_slot(
         )>,
     >,
     world_snapshot_capture_queries: WorldSnapshotCaptureQueries,
+    shows: ShowScheduleSnapshotQueries,
+    photos: PhotoSnapshotCaptureQueries,
     mut snapshot_scratch_storage: ResMut<ReusableWorldSnapshotByteBuffer>,
     mut persistence_failures: MessageWriter<WorldSnapshotPersistenceFailed>,
 ) {
@@ -245,6 +252,7 @@ pub(in super::super) fn begin_saving_requested_live_world_snapshot_to_save_slot(
             scheduled_show_break_snapshot_records,
         ) = match capture_sorted_show_snapshot_records_from_live_world(
             &world_snapshot_capture_queries,
+            &shows,
         ) {
             Ok(captured_show_snapshot_records) => captured_show_snapshot_records,
             Err(failure_reason) => {
@@ -330,7 +338,7 @@ pub(in super::super) fn begin_saving_requested_live_world_snapshot_to_save_slot(
             capture_economy_snapshot_records_from_live_world(&world_snapshot_capture_queries);
         let (photo_snapshot_records, photo_challenge_progress_snapshot_records) =
             match capture_sorted_photo_and_challenge_progress_snapshot_records_from_live_world(
-                &world_snapshot_capture_queries,
+                &photos,
             ) {
                 Ok(captured_photo_and_challenge_progress_snapshot_records) => {
                     captured_photo_and_challenge_progress_snapshot_records

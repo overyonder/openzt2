@@ -86,6 +86,7 @@ impl AssetLoader for GatedPrefabLoader {
 
 fn litter(id: AssetId) -> WorldObjectDefinition {
     WorldObjectDefinition {
+        authored_runtime: Default::default(),
         audio_cue_prefixes: Vec::new(),
         surface_effect_strength: None,
         presentation_caustic_policies: Vec::new(),
@@ -156,6 +157,7 @@ fn dropped_litter_waits_for_its_model_and_spawns_once() {
     .init_asset::<openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset>()
     .init_resource::<WorldDefinitions>()
     .init_resource::<openzt2_zoo_state::topology::topology_graph_types::TopologyGrid>()
+    .init_resource::<openzt2_zoo_state::topology::topology_graph_types::TopologyIndex>()
     .init_resource::<openzt2_zoo_state::habitat::habitat_types::HabitatIndex>()
     .init_resource::<openzt2_zoo_state::placement::placement_occupancy_index::PlacedObjectFootprintOccupancyIndex>()
     .init_resource::<openzt2_zoo_state::terrain::terrain_chunk_types::TerrainIndex>()
@@ -217,7 +219,9 @@ fn dropped_litter_waits_for_its_model_and_spawns_once() {
             }]),
         ));
     let root = app.world_mut().spawn_empty().id();
-    app.insert_resource(PersistentIdAllocator::new(root));
+    app.world_mut()
+        .entity_mut(root)
+        .insert(PersistentIdAllocator::default());
     let guest = app
         .world_mut()
         .spawn((

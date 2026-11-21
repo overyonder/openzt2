@@ -15,11 +15,7 @@ impl Plugin for LuaScriptAssetLoadingPlugin {
         register_lua_script_asset_and_loader(application);
         application
             .init_resource::<LuaScriptArchivePathIndex>()
-            .add_systems(
-                PreUpdate,
-                discover_lua_script_archive_paths
-                    .run_if(resource_changed::<crate::asset_source::AssetArchives>),
-            );
+            .add_systems(PreUpdate, discover_lua_script_archive_paths);
     }
 }
 pub mod lua_script_module_execution;

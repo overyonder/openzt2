@@ -1,5 +1,5 @@
-use bevy::prelude::*;
 use bevy::{ecs::entity::EntityHashMap, platform::collections::HashMap};
+use bevy::{ecs::query::QueryData, prelude::*};
 use openzt2_game_data::AssetId;
 
 use super::topology_spatial_index_lifecycle::{
@@ -17,8 +17,52 @@ pub struct TopologyNode {
 #[component(on_insert = index_inserted_fence_edge, on_discard = discard_indexed_fence_edge)]
 pub struct FenceEdge {
     pub definition: AssetId,
-    pub a: Entity,
-    pub b: Entity,
+}
+
+impl FenceEdge {
+    pub fn between(definition: AssetId, a: Entity, b: Entity) -> (FenceStart, FenceEnd, Self) {
+        (FenceStart(a), FenceEnd(b), Self { definition })
+    }
+}
+
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+#[relationship(relationship_target = FencesStartingHere)]
+pub struct FenceStart(pub Entity);
+
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+#[relationship(relationship_target = FencesEndingHere)]
+pub struct FenceEnd(pub Entity);
+
+#[derive(Component, Debug)]
+#[relationship_target(relationship = FenceStart, linked_spawn)]
+pub struct FencesStartingHere(Vec<Entity>);
+
+#[derive(Component, Debug)]
+#[relationship_target(relationship = FenceEnd, linked_spawn)]
+pub struct FencesEndingHere(Vec<Entity>);
+
+#[derive(QueryData)]
+pub struct FenceSegment {
+    pub edge: &'static FenceEdge,
+    pub start: &'static FenceStart,
+    pub end: &'static FenceEnd,
+}
+
+impl FenceSegmentItem<'_, '_> {
+    pub fn a(&self) -> Entity {
+        self.start.0
+    }
+    pub fn b(&self) -> Entity {
+        self.end.0
+    }
+}
+
+impl std::ops::Deref for FenceSegmentItem<'_, '_> {
+    type Target = FenceEdge;
+
+    fn deref(&self) -> &Self::Target {
+        self.edge
+    }
 }
 
 /// Authored scenario topology that construction tools may inspect but not
@@ -34,10 +78,16 @@ pub struct PathTile {
 }
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+#[relationship(relationship_target = IncomingPortals)]
 pub struct Portal {
+    #[relationship]
     pub destination: Entity,
     pub bidirectional: bool,
 }
+
+#[derive(Component, Debug)]
+#[relationship_target(relationship = Portal, linked_spawn)]
+pub struct IncomingPortals(Vec<Entity>);
 
 #[derive(Component, Debug, Clone, Copy, PartialEq)]
 pub struct PathSupport {
@@ -57,7 +107,48 @@ pub struct TopologyIndex {
     pub nodes: HashMap<IVec3, Entity>,
     pub paths: HashMap<IVec3, Entity>,
     pub edges: HashMap<EdgeKey, Entity>,
+    pub(super) path_columns: HashMap<IVec2, Vec<Entity>>,
+    pub(super) fine_fence_steps: HashMap<EdgeKey, Vec<Entity>>,
+    pub(super) fence_columns: HashMap<IVec2, Vec<Entity>>,
     pub(super) edge_keys: EntityHashMap<EdgeKey>,
+}
+
+impl TopologyIndex {
+    pub fn paths_within(&self, min: IVec2, max: IVec2) -> impl Iterator<Item = Entity> + '_ {
+        (min.y..=max.y).flat_map(move |y| {
+            (min.x..=max.x).flat_map(move |x| {
+                self.path_columns
+                    .get(&IVec2::new(x, y))
+                    .into_iter()
+                    .flatten()
+                    .copied()
+            })
+        })
+    }
+
+    pub fn fences_within(&self, min: IVec2, max: IVec2) -> impl Iterator<Item = Entity> + '_ {
+        (min.y..=max.y).flat_map(move |y| {
+            (min.x..=max.x).flat_map(move |x| {
+                self.fence_columns
+                    .get(&IVec2::new(x, y))
+                    .into_iter()
+                    .flatten()
+                    .copied()
+            })
+        })
+    }
+
+    pub fn fences_covering_step(&self, step: EdgeKey) -> impl Iterator<Item = Entity> + '_ {
+        self.fine_fence_steps
+            .get(&step)
+            .into_iter()
+            .flatten()
+            .copied()
+    }
+
+    pub fn fence_key(&self, entity: Entity) -> Option<EdgeKey> {
+        self.edge_keys.get(&entity).copied()
+    }
 }
 
 /// Spatial projection of integer topology cells for the active terrain.

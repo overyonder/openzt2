@@ -4,7 +4,7 @@ use openzt2_game_data::world_definitions::guest_simulation_definitions::{
 use openzt2_game_data::world_definitions::GUEST_MEMORY_CAPACITY;
 use std::mem::size_of;
 
-use bevy::prelude::Entity;
+use bevy::prelude::{Entity, Quat, Vec3};
 
 use super::{
     guest_simulation_calculations::{apply_q16, push_memory},

@@ -21,9 +21,7 @@ use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and
 #[test]
 fn undo_and_redo_restore_stable_identity_and_connectivity() {
     let mut app = App::new();
-    app.add_plugins(
-        openzt2_zoo_state::topology::persistent_edit_lookup::PersistentEditLookupPlugin,
-    );
+    app.add_plugins(openzt2_world_state::world_spawn::persistent_id_index::PersistentIdIndexPlugin);
     app.insert_resource(Assets::<
         openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
     >::default())

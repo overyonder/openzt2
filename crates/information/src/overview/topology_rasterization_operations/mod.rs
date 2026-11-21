@@ -9,9 +9,9 @@ use openzt2_game_data::{
 };
 
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
-use openzt2_zoo_state::topology::topology_graph_types::FenceEdge;
+use openzt2_zoo_state::topology::topology_graph_types::FenceSegment;
 use openzt2_zoo_state::topology::topology_graph_types::PathTile;
-use openzt2_zoo_state::transport_tours::transport_topology_types::TrackSegment;
+use openzt2_zoo_state::transport_tours::transport_topology_types::TrackRoute;
 use openzt2_world_state::world_spawn::world_terrain_hydration::WorldTerrainHorizontalBounds;
 
 use super::overview_map_pixel_operations::{
@@ -24,7 +24,7 @@ pub(super) fn rasterize_fence_edges_into_overview_map_pixels(
     world_bounds: &WorldTerrainHorizontalBounds,
     rasterization_palette: &UiMapColorsRecord,
     world_definitions: WorldDefinitionsView<'_>,
-    fence_edges: &Query<&FenceEdge>,
+    fence_edges: &Query<FenceSegment>,
     topology_node_transforms: &Query<&GlobalTransform>,
 ) {
     for fence_edge in fence_edges {
@@ -38,8 +38,8 @@ pub(super) fn rasterize_fence_edges_into_overview_map_pixels(
             _ => rasterization_palette.fence,
         };
         let (Ok(start_node_transform), Ok(end_node_transform)) = (
-            topology_node_transforms.get(fence_edge.a),
-            topology_node_transforms.get(fence_edge.b),
+            topology_node_transforms.get(fence_edge.a()),
+            topology_node_transforms.get(fence_edge.b()),
         ) else {
             continue;
         };
@@ -96,7 +96,7 @@ pub(super) fn rasterize_transport_track_segments_into_overview_map_pixels(
     world_bounds: &WorldTerrainHorizontalBounds,
     track_pixel_color: [u8; 4],
     requested_track_kind: TransportationTrackKind,
-    transport_track_segments: &Query<&TrackSegment>,
+    transport_track_segments: &Query<TrackRoute>,
     topology_node_transforms: &Query<&GlobalTransform>,
     world_definitions: WorldDefinitionsView<'_>,
 ) {
@@ -114,8 +114,8 @@ pub(super) fn rasterize_transport_track_segments_into_overview_map_pixels(
             continue;
         }
         let (Ok(start_node_transform), Ok(end_node_transform)) = (
-            topology_node_transforms.get(track_segment.from),
-            topology_node_transforms.get(track_segment.to),
+            topology_node_transforms.get(track_segment.from()),
+            topology_node_transforms.get(track_segment.to()),
         ) else {
             continue;
         };

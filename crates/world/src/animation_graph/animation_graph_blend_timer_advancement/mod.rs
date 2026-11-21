@@ -13,14 +13,10 @@ pub(crate) fn advance_animation_graph_blend_timers(
         else {
             continue;
         };
-        let elapsed_milliseconds = active_animation_graph_blend
-            .fractional_milliseconds
-            .advance(fixed_time.delta(), 1.0);
-        active_animation_graph_blend.elapsed_milliseconds = active_animation_graph_blend
-            .elapsed_milliseconds
-            .saturating_add(elapsed_milliseconds);
-        if active_animation_graph_blend.elapsed_milliseconds
-            >= active_animation_graph_blend.duration_milliseconds
+        if active_animation_graph_blend
+            .timer
+            .tick(fixed_time.delta())
+            .is_finished()
         {
             animation_graph_playback_state.active_animation_graph_blend = None;
         }

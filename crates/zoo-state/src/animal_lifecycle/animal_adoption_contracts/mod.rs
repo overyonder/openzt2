@@ -61,6 +61,10 @@ pub struct PendingAdoption {
     pub cost: Money,
 }
 
+/// A refund for a paid adoption whose animal could not be spawned.
+#[derive(Component)]
+pub struct AnimalAdoptionRefund;
+
 #[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AnimalAdopted {
     pub operation: Entity,

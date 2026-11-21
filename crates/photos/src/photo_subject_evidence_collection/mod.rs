@@ -4,12 +4,14 @@ use openzt2_zoo_state::behavior_task_execution_types::continuations::BehaviorCon
 
 use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::{WorldDefinitions, WorldDefinitionsView};
 use openzt2_zoo_state::extinct_animals::fossil_collection_and_assembly_types::FossilSetAssembly;
 
 use openzt2_game_assets::animation::animation_set_asset_types::AnimationSetAsset;
 use openzt2_interface_state::information::entity_selection_types::Inspectable;
-use openzt2_interface_state::photos::photo_capture_types::{AlbumPhotoReadbackOf, PhotoMode};
+use openzt2_interface_state::photos::photo_capture_types::{
+    AlbumPhotoReadbackOf, PhotoMode, PhotoView,
+};
 use openzt2_world_state::animation_graph::animation_graph_playback_state_types::AnimationGraphPlaybackState;
 use openzt2_world_state::animation_graph::animation_presentation_relationship_types::AnimationPresentations;
 use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackController;
@@ -107,7 +109,7 @@ pub(super) struct PhotographableSemanticFactQueries<'w, 's> {
 pub(super) fn collect_visible_photo_subjects_and_semantic_evidence_for_pending_captures(
     spatial_query: SpatialQuery,
     mut commands: Commands,
-    cameras: Query<(&Camera, &GlobalTransform), With<PhotoMode>>,
+    cameras: Query<(&Camera, &GlobalTransform, &PhotoView), With<PhotoMode>>,
     mut captures: Query<
         (
             Entity,
@@ -136,11 +138,15 @@ pub(super) fn collect_visible_photo_subjects_and_semantic_evidence_for_pending_c
     semantic_queries: PhotographableSemanticFactQueries,
 ) {
     for (capture_entity, owner, mut capture, mut evidence) in &mut captures {
-        let Ok((camera, camera_transform)) = cameras.get(owner.0) else {
+        let Ok((camera, camera_transform, view)) = cameras.get(owner.0) else {
             continue;
         };
+        capture.view = *view;
         capture.camera_position = camera_transform.translation();
         capture.camera_rotation = camera_transform.rotation();
+        let definitions = semantic_queries
+            .world_definitions
+            .get(&semantic_queries.world_definition_assets);
         // Include stationary objects as well as moving animals.
         for (entity, species, definition, transform, visible, colliders, behavior_task) in &subjects
         {
@@ -176,6 +182,21 @@ pub(super) fn collect_visible_photo_subjects_and_semantic_evidence_for_pending_c
                 &spatial_query,
                 behavior_task.is_some(),
             );
+            let variant = semantic_queries
+                .animal_variants
+                .get(entity)
+                .ok()
+                .map(|variant| variant.0);
+            let object =
+                definitions.and_then(|view| view.find_object(variant.unwrap_or(definition)));
+            let play_set = behavior_task
+                .filter(|task| task.phase == BehaviorTaskExecutionPhase::Set)
+                .and_then(|task| {
+                    behavior_document_assets
+                        .get(&task.document)?
+                        .behavior_set_at_index(task.declaration)
+                })
+                .map(|set| set.name.clone());
             let semantics = PhotoSemanticEvidence {
                 animal: species.is_some(),
                 guest: semantic_queries
@@ -183,11 +204,15 @@ pub(super) fn collect_visible_photo_subjects_and_semantic_evidence_for_pending_c
                     .get(entity)
                     .is_ok_and(|(_, guest, _, _)| guest.is_some()),
                 position_mm: (transform.translation() * 1000.0).round().as_ivec3(),
-                animal_variant: semantic_queries
-                    .animal_variants
-                    .get(entity)
-                    .ok()
-                    .map(|variant| variant.0),
+                animal_variant: variant,
+                play_set,
+                type_ancestry: object
+                    .map_or_else(Vec::new, |object| object.behavior_type_identifiers.clone()),
+                rarity_percent: variant
+                    .and_then(|variant| {
+                        definitions?.find_animal_adoption_species_eligibility(variant)
+                    })
+                    .map(|eligibility| eligibility.rarity_fame_percent as u16),
                 behavior: behavior_task.map(BehaviorTaskExecutionState::program),
                 animation: AnimationPresentations::for_subject(
                     entity,
@@ -294,6 +319,7 @@ pub(super) fn collect_visible_photo_subjects_and_semantic_evidence_for_pending_c
                     &semantic_queries.continuations,
                     &behavior_document_assets,
                     &semantic_queries.entity_kinds,
+                    definitions,
                 ),
                 contained_entities: capture_photo_subject_contained_entities(
                     entity,
@@ -385,6 +411,7 @@ fn capture_photo_subject_task_evidence<'w, 's>(
             Option<&'static Inspectable>,
         ),
     >,
+    definitions: Option<WorldDefinitionsView<'_>>,
 ) -> PhotoSubjectTaskEvidence {
     let Some(behavior_task) = behavior_task else {
         return PhotoSubjectTaskEvidence::NoCurrentTask;
@@ -410,6 +437,7 @@ fn capture_photo_subject_task_evidence<'w, 's>(
         selected_task.target,
         authored_task_name,
         entity_kinds,
+        definitions,
     )
 }
 
@@ -459,6 +487,7 @@ fn capture_photo_subject_task_evidence_from_resolved_name<'w, 's>(
             Option<&'static Inspectable>,
         ),
     >,
+    definitions: Option<WorldDefinitionsView<'_>>,
 ) -> PhotoSubjectTaskEvidence {
     // A missing target definition leaves the task evidence unresolved.
     let target_definition = target.and_then(|target| {
@@ -472,9 +501,18 @@ fn capture_photo_subject_task_evidence_from_resolved_name<'w, 's>(
     if target.is_some() && target_definition.is_none() {
         return PhotoSubjectTaskEvidence::UnresolvedAtCapture;
     }
+    let target_object = target_definition.and_then(|id| definitions?.find_object(id));
+    let target_type = target_object
+        .and_then(|object| object.audio_cue_prefixes.first())
+        .cloned()
+        .or_else(|| target_definition.map(|id| id.to_lowercase_hexadecimal_string()))
+        .unwrap_or_default();
     PhotoSubjectTaskEvidence::CurrentTask {
         authored_task_name,
         target_definition,
+        target_type,
+        target_ancestry: target_object
+            .map_or_else(Vec::new, |object| object.behavior_type_identifiers.clone()),
     }
 }
 

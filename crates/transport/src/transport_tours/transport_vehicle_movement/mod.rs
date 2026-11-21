@@ -1,6 +1,7 @@
 use avian3d::prelude::SpatialQuery;
 use avian3d::prelude::SpatialQueryFilter;
 use bevy::prelude::*;
+use openzt2_zoo_state::transport_tours::transport_topology_types::{TrackIncidence, TrackRoute};
 
 use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackController;
 use openzt2_zoo_state::locomotion::locomotion_types::Arrived;
@@ -16,19 +17,22 @@ use openzt2_zoo_state::transport_tours::transport_circuit_types::CircuitRunning;
 use openzt2_zoo_state::transport_tours::transport_circuit_types::TransportCircuit;
 use openzt2_zoo_state::transport_tours::transport_topology_types::TrackSegment;
 use openzt2_zoo_state::transport_tours::transport_topology_types::TransportStation;
-use openzt2_zoo_state::transport_tours::transport_vehicle_types::RoutePosition;
 use openzt2_zoo_state::transport_tours::transport_vehicle_types::StationDestination;
+use openzt2_zoo_state::transport_tours::transport_vehicle_types::{RoutePosition, VehicleOnTrack};
 use openzt2_zoo_state::transport_tours::transport_vehicle_types::{
     TransportVehicle, TransportVehicleArrival,
 };
 
 pub(super) fn advance_transport_vehicles_along_canonical_track_segments(
     spatial_query: SpatialQuery,
+    commands: bevy::ecs::system::ParallelCommands,
+    incidence: TrackIncidence,
     fixed_time: Res<Time<Fixed>>,
     mut transport_vehicles: Query<(
         Entity,
         &TransportVehicle,
         &mut RoutePosition,
+        &VehicleOnTrack,
         &mut StationDestination,
         &mut Transform,
         &mut Velocity,
@@ -36,7 +40,7 @@ pub(super) fn advance_transport_vehicles_along_canonical_track_segments(
         Option<&DirectLocomotion>,
         &mut TransportVehicleArrival,
     )>,
-    track_segments: Query<(Entity, &TrackSegment, &CircuitMember)>,
+    track_segments: Query<(Entity, TrackRoute, &CircuitMember)>,
     track_travel_distances: Query<&TrackTravelDistances, With<TrackSegment>>,
     transport_stations: Query<(), With<TransportStation>>,
     entity_parents: Query<&ChildOf>,
@@ -52,6 +56,7 @@ pub(super) fn advance_transport_vehicles_along_canonical_track_segments(
             vehicle_entity,
             transport_vehicle,
             mut route_position,
+            current_track,
             mut station_destination,
             mut vehicle_transform,
             mut vehicle_velocity,
@@ -68,15 +73,14 @@ pub(super) fn advance_transport_vehicles_along_canonical_track_segments(
                 vehicle_velocity.set_if_neq(Velocity(Vec3::ZERO));
                 return;
             }
-            let Ok((_, track_segment, track_circuit_member)) =
-                track_segments.get(route_position.segment)
+            let Ok((_, track_segment, track_circuit_member)) = track_segments.get(current_track.0)
             else {
                 return;
             };
             if track_circuit_member.0 != circuit_member.0 {
                 return;
             }
-            let Ok(distances) = track_travel_distances.get(route_position.segment) else {
+            let Ok(distances) = track_travel_distances.get(current_track.0) else {
                 return;
             };
             let authored_reverse_direction =
@@ -107,8 +111,8 @@ pub(super) fn advance_transport_vehicles_along_canonical_track_segments(
                 requested_travel_distance,
                 moving_in_reverse,
             );
-            let (candidate_translation, mut forward_displacement) =
-                distances.translation_and_tangent(track_segment, candidate_route_position.distance);
+            let (candidate_translation, mut forward_displacement) = distances
+                .translation_and_tangent(track_segment.geometry, candidate_route_position.distance);
             let consumed_displacement = candidate_translation - vehicle_transform.translation;
             let movement_is_obstructed =
                 Dir3::new(consumed_displacement).is_ok_and(|movement_direction| {
@@ -120,7 +124,8 @@ pub(super) fn advance_transport_vehicles_along_canonical_track_segments(
                             false,
                             &SpatialQueryFilter::DEFAULT,
                             &|hit_entity| {
-                                let owners = [vehicle_entity, track_segment.from, track_segment.to];
+                                let owners =
+                                    [vehicle_entity, track_segment.from(), track_segment.to()];
                                 !owners.contains(&hit_entity)
                                     && !entity_parents
                                         .iter_ancestors::<ChildOf>(hit_entity)
@@ -153,36 +158,47 @@ pub(super) fn advance_transport_vehicles_along_canonical_track_segments(
             }
 
             let reached_station_entity = if moving_in_reverse {
-                track_segment.from
+                track_segment.from()
             } else {
-                track_segment.to
+                track_segment.to()
             };
             if transport_stations.contains(reached_station_entity) {
                 arrival.0 = Some(reached_station_entity);
             }
-            if let Some((next_segment_entity, next_track_segment)) = track_segments
-                .iter()
-                .filter(|(_, _, track_circuit_member)| track_circuit_member.0 == circuit_member.0)
-                .find_map(|(track_segment_entity, candidate_track_segment, _)| {
-                    if moving_in_reverse {
-                        (candidate_track_segment.to == track_segment.from)
-                            .then_some((track_segment_entity, candidate_track_segment))
-                    } else {
-                        (candidate_track_segment.from == track_segment.to)
-                            .then_some((track_segment_entity, candidate_track_segment))
-                    }
-                })
-            {
-                route_position.segment = next_segment_entity;
+            let next = if moving_in_reverse {
+                incidence
+                    .incoming(reached_station_entity)
+                    .find_map(|entity| {
+                        track_segments
+                            .get(entity)
+                            .ok()
+                            .filter(|(_, _, circuit)| circuit.0 == circuit_member.0)
+                    })
+            } else {
+                incidence
+                    .outgoing(reached_station_entity)
+                    .find_map(|entity| {
+                        track_segments
+                            .get(entity)
+                            .ok()
+                            .filter(|(_, _, circuit)| circuit.0 == circuit_member.0)
+                    })
+            };
+            if let Some((next_segment_entity, next_track_segment, _)) = next {
+                commands.command_scope(|mut commands| {
+                    commands
+                        .entity(vehicle_entity)
+                        .insert(VehicleOnTrack(next_segment_entity));
+                });
                 route_position.distance = if moving_in_reverse {
                     next_track_segment.length
                 } else {
                     0.0
                 };
                 let candidate_destination = if moving_in_reverse {
-                    next_track_segment.from
+                    next_track_segment.from()
                 } else {
-                    next_track_segment.to
+                    next_track_segment.to()
                 };
                 if transport_stations.contains(candidate_destination) {
                     station_destination.0 = candidate_destination;

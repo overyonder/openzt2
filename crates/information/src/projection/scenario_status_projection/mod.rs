@@ -56,7 +56,7 @@ pub(crate) fn project_active_scenario_status_to_authored_information_bindings(
     let Some(localization_catalogue) = localization_catalogue else {
         return;
     };
-    for (property_binding, mut projected_text) in &mut authored_text {
+    for (property_binding, projected_text) in &mut authored_text {
         let UiTextPropertyBindingSource::ScenarioObjectiveText { objective } = &property_binding.0
         else {
             continue;
@@ -92,7 +92,7 @@ pub(crate) fn project_active_scenario_status_to_authored_information_bindings(
         );
         if projected_text.0 != *formatted_text {
             super::text_replacement_operations::replace_projected_ui_text_if_changed(
-                &mut projected_text.0,
+                projected_text,
                 &formatted_text,
             );
         }
@@ -154,7 +154,7 @@ pub(crate) fn project_active_scenario_status_to_authored_information_bindings(
         };
     }
 
-    for (property_binding, mut projected_text) in &mut authored_text {
+    for (property_binding, projected_text) in &mut authored_text {
         let localization_key = match &property_binding.0 {
             UiTextPropertyBindingSource::ScenarioDescription => active_scenario_session
                 .and_then(|session| scenario_document.find_scenario_record(session.definition))
@@ -172,7 +172,7 @@ pub(crate) fn project_active_scenario_status_to_authored_information_bindings(
         );
         if projected_text.0 != *formatted_text {
             super::text_replacement_operations::replace_projected_ui_text_if_changed(
-                &mut projected_text.0,
+                projected_text,
                 &formatted_text,
             );
         }

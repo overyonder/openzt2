@@ -39,12 +39,8 @@ pub(super) fn find_target_and_enter_success_or_failure_behavior_set(
         Option<&StaffRole>,
         Option<&GuestArchetype>,
     )>,
-    candidates: Query<(
-        Entity,
-        Option<&DefinitionId>,
-        Option<&FenceEdge>,
-        &GlobalTransform,
-    )>,
+    positions: Query<(Entity, Option<&DefinitionId>, &GlobalTransform)>,
+    fences: Query<(Entity, &FenceEdge, &GlobalTransform)>,
     mut commands: Commands,
 ) {
     let Some(view) = documents.create_declaration_index_view(&assets) else {
@@ -60,52 +56,51 @@ pub(super) fn find_target_and_enter_success_or_failure_behavior_set(
         if !instruction.is_current(task) {
             continue;
         }
-        let action = running_action.0.clone();
+        let action = &running_action.0;
         let maximum_distance_squared = (action.target_radius_cm as f32 * 0.01).powi(2);
-        let matches = |candidate: Option<&DefinitionId>, fence: Option<&FenceEdge>| {
-            let definition = match action.target_test_kind {
-                BehaviorTargetTestKind::Fence => fence.map(|fence| fence.definition),
-                BehaviorTargetTestKind::Position => candidate.map(|candidate| candidate.0),
-            };
-            action
+        let matches = |definition, transform: &GlobalTransform| {
+            if action
                 .target_definition_asset_id
-                .is_none_or(|required| definition == Some(required))
-        };
-        let selected = task
-            .target
-            .filter(|target| {
-                candidates
-                    .get(*target)
-                    .is_ok_and(|(_, definition, fence, transform)| {
-                        matches(definition, fence)
-                            && candidate_is_within_authored_target_radius(
-                                origin,
-                                transform,
-                                maximum_distance_squared,
-                                action.target_radius_cm,
-                            )
-                    })
-            })
-            .or_else(|| {
-                candidates
-                    .iter()
-                    .filter(|(candidate, definition, fence, transform)| {
-                        *candidate != entity
-                            && matches(*definition, *fence)
-                            && candidate_is_within_authored_target_radius(
-                                origin,
-                                transform,
-                                maximum_distance_squared,
-                                action.target_radius_cm,
-                            )
-                    })
-                    .min_by(|left, right| {
-                        calculate_squared_distance_from_optional_origin(origin, left.3).total_cmp(
-                            &calculate_squared_distance_from_optional_origin(origin, right.3),
-                        )
-                    })
-                    .map(|(candidate, ..)| candidate)
+                .is_some_and(|required| definition != Some(required))
+            {
+                return None;
+            }
+            let distance_squared = origin.map(|origin| {
+                origin
+                    .translation()
+                    .distance_squared(transform.translation())
             });
+            if action.target_radius_cm != 0
+                && !distance_squared.is_some_and(|distance| distance <= maximum_distance_squared)
+            {
+                return None;
+            }
+            Some(distance_squared.unwrap_or_default())
+        };
+        let selected = match action.target_test_kind {
+            BehaviorTargetTestKind::Fence => select_authored_target(
+                task.target
+                    .and_then(|target| fences.get(target).ok())
+                    .map(|(entity, edge, pose)| (entity, Some(edge.definition), pose)),
+                fences
+                    .iter()
+                    .map(|(entity, edge, pose)| (entity, Some(edge.definition), pose)),
+                entity,
+                matches,
+            ),
+            BehaviorTargetTestKind::Position => select_authored_target(
+                task.target
+                    .and_then(|target| positions.get(target).ok())
+                    .map(|(entity, definition, pose)| {
+                        (entity, definition.map(|definition| definition.0), pose)
+                    }),
+                positions.iter().map(|(entity, definition, pose)| {
+                    (entity, definition.map(|definition| definition.0), pose)
+                }),
+                entity,
+                matches,
+            ),
+        };
         let branch = if selected.is_some() {
             action.success_behavior_set_asset_id
         } else {
@@ -149,23 +144,33 @@ pub(super) fn find_target_and_enter_success_or_failure_behavior_set(
     }
 }
 
-fn candidate_is_within_authored_target_radius(
-    origin: Option<&GlobalTransform>,
-    target: &GlobalTransform,
-    maximum_distance_squared: f32,
-    radius_cm: u32,
-) -> bool {
-    radius_cm == 0
-        || origin.is_some_and(|origin| {
-            origin.translation().distance_squared(target.translation()) <= maximum_distance_squared
+fn select_authored_target<'a>(
+    current: Option<(
+        Entity,
+        Option<openzt2_game_data::AssetId>,
+        &'a GlobalTransform,
+    )>,
+    candidates: impl Iterator<
+        Item = (
+            Entity,
+            Option<openzt2_game_data::AssetId>,
+            &'a GlobalTransform,
+        ),
+    >,
+    actor: Entity,
+    distance_if_eligible: impl Fn(Option<openzt2_game_data::AssetId>, &GlobalTransform) -> Option<f32>,
+) -> Option<Entity> {
+    current
+        .and_then(|(candidate, definition, pose)| {
+            distance_if_eligible(definition, pose).map(|_| candidate)
         })
-}
-
-fn calculate_squared_distance_from_optional_origin(
-    origin: Option<&GlobalTransform>,
-    target: &GlobalTransform,
-) -> f32 {
-    origin.map_or(0.0, |origin| {
-        origin.translation().distance_squared(target.translation())
-    })
+        .or_else(|| {
+            candidates
+                .filter(|(candidate, ..)| *candidate != actor)
+                .filter_map(|(candidate, definition, pose)| {
+                    distance_if_eligible(definition, pose).map(|distance| (candidate, distance))
+                })
+                .min_by(|left, right| left.1.total_cmp(&right.1))
+                .map(|(candidate, _)| candidate)
+        })
 }

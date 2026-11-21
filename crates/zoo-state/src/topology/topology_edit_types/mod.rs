@@ -18,6 +18,9 @@ pub struct TopologyChanged {
 #[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PathConnectivityChanged(pub IVec3);
 
+#[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FenceConnectivityChanged(pub super::topology_graph_types::EdgeKey);
+
 #[derive(Component, Debug, Clone, PartialEq)]
 pub struct TopologyEdit {
     pub created: Box<[TopologySnapshot]>,

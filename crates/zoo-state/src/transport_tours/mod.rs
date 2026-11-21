@@ -6,3 +6,6 @@ pub mod transport_track_sale;
 pub mod transport_vehicle_types;
 
 pub mod tour_scoring_types;
+
+pub mod transport_highlight_style;
+pub mod transport_pick_bounds;

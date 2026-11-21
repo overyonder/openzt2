@@ -5,11 +5,7 @@ use openzt2_game_data::{species::LifeStage, AssetId as DomainAssetId};
 
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdError;
 
-#[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) enum PhotoView {
-    #[default]
-    GroundCamera,
-}
+pub(crate) use openzt2_interface_state::photos::photo_capture_types::PhotoView;
 
 /// Visual facts recorded when the shutter fires.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,6 +30,8 @@ pub(crate) enum PhotoSubjectTaskEvidence {
     CurrentTask {
         authored_task_name: String,
         target_definition: Option<DomainAssetId>,
+        target_type: String,
+        target_ancestry: Vec<DomainAssetId>,
     },
 }
 
@@ -132,8 +130,13 @@ pub(crate) struct PhotoEvidence {
 #[derive(Component, Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct PendingPhotoEvidence(pub Vec<PhotoEvidence>);
 
-#[derive(Component, Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct CapturedPhotoEvidence(pub Vec<PhotoEvidence>, pub Option<DomainAssetId>);
+#[derive(Component, Debug, Clone, Default, PartialEq)]
+pub(crate) struct CapturedPhotoEvidence {
+    pub subjects: Vec<PhotoEvidence>,
+    pub challenge_set: Option<DomainAssetId>,
+    pub camera_position: Vec3,
+    pub view: PhotoView,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PhotoSemanticEvidence {
@@ -144,6 +147,9 @@ pub(crate) struct PhotoSemanticEvidence {
     pub animal_variant: Option<DomainAssetId>,
     pub behavior: Option<DomainAssetId>,
     pub animation: Option<String>,
+    pub play_set: Option<String>,
+    pub type_ancestry: Vec<DomainAssetId>,
+    pub rarity_percent: Option<u16>,
     pub object_use: Option<DomainAssetId>,
     pub habitat: Option<DomainAssetId>,
     pub aquatic: bool,
@@ -165,9 +171,6 @@ pub(crate) struct PhotoSemanticEvidence {
     /// Authored interaction-container membership at shutter time.
     pub contained_entities: PhotoSubjectContainedEntitiesEvidence,
 }
-
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct CapturedPhotoView(pub PhotoView);
 
 #[derive(Component, Debug, Clone, Copy, Default)]
 pub(crate) struct PhotoSubjectsCollected;

@@ -264,6 +264,14 @@ pub(super) fn validate_loaded_snapshot_references_and_imported_persistent_identi
                         .iter()
                         .map(|record| record.persistent_identifier),
                 )
+                .chain(
+                    transport_snapshot_records
+                        .graph
+                        .routes
+                        .iter()
+                        .flat_map(|route| route.pieces.iter().skip(1))
+                        .map(|&id| PersistentId(id)),
+                )
                 .filter(|persistent_identifier| {
                     !persistent_identifier_exists(*persistent_identifier)
                 }),

@@ -1,8 +1,9 @@
-use bevy::{platform::collections::HashSet, prelude::*};
+use bevy::{ecs::entity::EntityHashMap, platform::collections::HashSet, prelude::*};
 use openzt2_game_data::world_definitions::staff_management::StaffJobKind;
 
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_interface_state::camera::camera_runtime_state_types::ZooCamera;
 use openzt2_zoo_state::animal_lifecycle::types::Animal;
 use openzt2_zoo_state::staff::staff_employment_types::Staff;
 use openzt2_zoo_state::staff::staff_job_types::CurrentJob;
@@ -29,16 +30,19 @@ pub(super) fn validate_tranquilizer_requests_and_apply_timed_tranquilization(
     mut tranquilizer_requests: MessageReader<TranquilizeRequest>,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,
-    animals: Query<
+    mut animals: Query<
         (
             &GlobalTransform,
             Option<&Escaped>,
             Option<&Rampaging>,
-            Option<&Tranquilized>,
+            Option<&mut Tranquilized>,
         ),
         (With<Animal>, Without<Dead>),
     >,
-    tranquilizer_sources: Query<&GlobalTransform, Or<(With<Staff>, With<TranquilizerTool>)>>,
+    tranquilizer_sources: Query<
+        &GlobalTransform,
+        Or<(With<Staff>, With<TranquilizerTool>, With<ZooCamera>)>,
+    >,
 ) {
     let Some(world_definitions) = active_world_definitions.get(&world_definition_assets) else {
         return;
@@ -46,12 +50,16 @@ pub(super) fn validate_tranquilizer_requests_and_apply_timed_tranquilization(
     let Some(tranquilizer_mode) = world_definitions.tranquilizer_mode() else {
         return;
     };
+    let maximum_range_m = tranquilizer_mode.range_cm as f32 / 100.0;
+    let maximum_range_squared = maximum_range_m * maximum_range_m;
+    let mut first_doses: Vec<(Entity, Tranquilized)> = Vec::new();
+    let mut first_dose_indices: EntityHashMap<usize> = EntityHashMap::default();
     for request in tranquilizer_requests.read() {
         let Ok(source_transform) = tranquilizer_sources.get(request.source) else {
             continue;
         };
         let Ok((animal_transform, escaped, rampaging, existing_tranquilization)) =
-            animals.get(request.animal)
+            animals.get_mut(request.animal)
         else {
             continue;
         };
@@ -60,7 +68,6 @@ pub(super) fn validate_tranquilizer_requests_and_apply_timed_tranquilization(
         else {
             continue;
         };
-        let maximum_range_m = tranquilizer_mode.range_cm as f32 / 100.0;
         if !authored_tranquilizer_allows_animal_state(
             tranquilizer_definition.eligible_states,
             escaped.is_some(),
@@ -68,21 +75,34 @@ pub(super) fn validate_tranquilizer_requests_and_apply_timed_tranquilization(
         ) || source_transform
             .translation()
             .distance_squared(animal_transform.translation())
-            > maximum_range_m * maximum_range_m
+            > maximum_range_squared
         {
             continue;
         }
-        let remaining_ticks =
-            existing_tranquilization.map_or(tranquilizer_definition.duration_ticks, |current| {
-                current
-                    .remaining_ticks
-                    .max(tranquilizer_definition.duration_ticks)
-            });
-        commands.entity(request.animal).insert(Tranquilized {
-            remaining_ticks,
+        let dose = Tranquilized {
+            remaining_ticks: tranquilizer_definition.duration_ticks,
             recovery_ticks: tranquilizer_definition.recovery_ticks,
-        });
+        };
+        if let Some(mut current) = existing_tranquilization {
+            let mut next = *current;
+            refresh_tranquilization(&mut next, dose);
+            current.set_if_neq(next);
+        } else {
+            let index = *first_dose_indices.entry(request.animal).or_insert_with(|| {
+                first_doses.push((request.animal, dose));
+                first_doses.len() - 1
+            });
+            refresh_tranquilization(&mut first_doses[index].1, dose);
+        }
     }
+    for (animal, dose) in first_doses {
+        commands.entity(animal).insert(dose);
+    }
+}
+
+fn refresh_tranquilization(current: &mut Tranquilized, dose: Tranquilized) {
+    current.remaining_ticks = current.remaining_ticks.max(dose.remaining_ticks);
+    current.recovery_ticks = dose.recovery_ticks;
 }
 
 pub(super) fn validate_staff_capture_requests_and_clear_animal_emergency_state(
@@ -113,7 +133,7 @@ pub(super) fn validate_staff_capture_requests_and_clear_animal_emergency_state(
                 .get(request.staff)
                 .is_ok_and(|current| current.job() == request.job)
             || !jobs.get(request.job).is_ok_and(|(job, claim, behavior)| {
-                job.kind == StaffJobKind::Capture
+                job.kind == Some(StaffJobKind::Capture)
                     && job.target == request.animal
                     && claim.staff == request.staff
                     && behavior.execution_id == Some(request.execution_id)

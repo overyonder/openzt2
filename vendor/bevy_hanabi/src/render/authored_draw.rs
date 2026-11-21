@@ -21,12 +21,14 @@ pub struct EffectRenderPass {
     pub textures: Vec<Handle<Image>>,
     /// Draw particles back to front in each view.
     pub sort_by_distance: bool,
-    /// Overrides for the renderer's color and depth targets.
+    /// Overrides for the renderer's color and depth-stencil targets.
     pub state: Option<EffectRenderPassState>,
+    /// Reference value for the stencil test and replace operation.
+    pub stencil_reference: Option<u32>,
 }
 
 /// Authored pipeline state for a particle renderer.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct EffectRenderPassState {
     /// Color and alpha blending, with None for replacement.
     pub blend: Option<BlendState>,
@@ -34,6 +36,8 @@ pub struct EffectRenderPassState {
     pub depth_write_enabled: bool,
     /// Depth comparison in Bevy's reverse-Z convention.
     pub depth_compare: CompareFunction,
+    /// Stencil test and operations for stencil-capable views.
+    pub stencil: StencilState,
     /// Writable color channels.
     pub color_writes: ColorWrites,
 }
@@ -50,6 +54,7 @@ pub(super) struct CompiledEffectRenderPass {
     pub textures: Vec<Handle<Image>>,
     pub sort_by_distance: bool,
     pub state: Option<EffectRenderPassState>,
+    pub stencil_reference: Option<u32>,
 }
 
 pub(crate) fn compile_effect_render_passes(
@@ -138,7 +143,8 @@ pub(crate) fn compile_effect_render_passes(
                 texture_layout,
                 textures: pass.textures[..texture_count].to_vec(),
                 sort_by_distance: pass.sort_by_distance,
-                state: pass.state,
+                state: pass.state.clone(),
+                stencil_reference: pass.stencil_reference,
             });
         }
     }
@@ -164,6 +170,7 @@ pub(super) struct QueuedParticlePass {
     pub pipeline: CachedRenderPipelineId,
     pub properties: PropertyBindGroupKey,
     pub sorted: bool,
+    pub stencil_reference: Option<u32>,
 }
 
 impl CompiledEffectRenderPass {

@@ -1,7 +1,11 @@
 use std::io;
 
-use openzt2_game_data::behavior::{
-    action::termination::BehaviorTerminationAction, action_record::BehaviorAction,
+use openzt2_game_data::{
+    behavior::{
+        action::{animation::BehaviorAnimationClipAction, termination::BehaviorTerminationAction},
+        action_record::BehaviorAction,
+    },
+    AssetId,
 };
 
 use crate::source_document::ordered_source_document_types::OrderedSourceDocumentNode as DataNode;
@@ -14,19 +18,19 @@ pub(super) fn lower_termination_action_source_node(
     if termination_action_source_node.name != "BFBehKill" {
         return Ok(None);
     }
-    if termination_action_source_node
-        .attributes
-        .iter()
-        .any(|attribute| {
-            !matches!(
-                attribute.name(),
-                "killSubject" | "killTarget" | "fadeOutPeriod"
-            )
-        })
-        || termination_action_source_node
-            .element_children()
-            .next()
-            .is_some()
+    let node = termination_action_source_node;
+    if node.attributes.iter().any(|attribute| {
+        !matches!(
+            attribute.name(),
+            "killSubject"
+                | "killTarget"
+                | "fadeOutPeriod"
+                | "targetAnim"
+                | "killUsingDestroyEntity"
+                | "radius"
+                | "radiusKillType"
+        )
+    }) || node.element_children().next().is_some()
     {
         return Err(invalid_behavior_source_data(
             "BFBehKill has unmapped authored policy",
@@ -47,72 +51,91 @@ pub(super) fn lower_termination_action_source_node(
         )?,
         kill_target: read_boolean_attribute_or_false(termination_action_source_node, "killTarget")?,
     };
-    if !termination_action.kill_subject && !termination_action.kill_target {
+    let radius = super::source_value_reading::read_optional_float_attribute(node, "radius")?;
+    if radius.is_some_and(|radius| !radius.is_finite() || radius < 0.0) {
+        return Err(invalid_behavior_source_data(
+            "BFBehKill has an invalid radius",
+        ));
+    }
+    let radius = radius
+        .filter(|radius| *radius > 0.0)
+        .map(|radius| {
+            let kind = super::source_value_reading::read_optional_trimmed_string_attribute(
+                node,
+                "radiusKillType",
+            )
+            .ok_or_else(|| invalid_behavior_source_data("BFBehKill has no radiusKillType"))?;
+            Ok::<_, io::Error>((radius, AssetId::from_key(&kind.to_ascii_lowercase())))
+        })
+        .transpose()?;
+    if !termination_action.kill_subject && !termination_action.kill_target && radius.is_none() {
         return Err(invalid_behavior_source_data(
             "BFBehKill does not identify a subject or target",
         ));
     }
-    Ok(Some(BehaviorAction::Termination(termination_action)))
+    let animation =
+        super::source_value_reading::read_optional_trimmed_string_attribute(node, "targetAnim")
+            .map(effect_clip);
+    let destroy = read_boolean_attribute_or_false(node, "killUsingDestroyEntity")?;
+    Ok(Some(
+        if animation.is_none() && radius.is_none() && !destroy {
+            BehaviorAction::Termination(termination_action)
+        } else {
+            BehaviorAction::AnimationKill {
+                animation,
+                termination: termination_action,
+                radius,
+                destroy,
+            }
+        },
+    ))
 }
 
-/// `BFBehKill` that destroys its target with a clip: the fence a raptor
-/// smashes (`radiusKillType="fence"`) becomes its broken variant, as
-/// `ZTBehMorph` makes it for an elephant, and a building an ankylosaur bashes
-/// (`killUsingDestroyEntity`) gives way to its ruin.
-// Only the target breaks; the authored `radius` would also break
-// fences beside it.
-pub(crate) fn lower_fence_kill_actions(node: &DataNode) -> io::Result<Option<[BehaviorAction; 2]>> {
-    if node.name != "BFBehKill" {
-        return Ok(None);
-    }
-    let breaks_fences = node.attribute("radiusKillType").map(str::trim) == Some("fence");
-    if !breaks_fences
-        && !(read_boolean_attribute_or_false(node, "killUsingDestroyEntity")?
-            && node.attribute("radius").is_none()
-            && node.attribute("targetAnim").is_some())
-    {
+pub(super) fn lower_whap_action_source_node(node: &DataNode) -> io::Result<Option<BehaviorAction>> {
+    if node.name != "BFBehWhap" {
         return Ok(None);
     }
     if node.attributes.iter().any(|attribute| {
         !matches!(
             attribute.name(),
-            "targetAnim"
-                | "killTarget"
-                | "radius"
-                | "radiusKillType"
-                | "fadeOutPeriod"
-                | "killUsingDestroyEntity"
+            "targetAnim" | "whapAngle" | "randomOffset" | "whapNow" | "interruptFlag" | "groundFit"
         )
-    }) || !read_boolean_attribute_or_false(node, "killTarget")?
+    }) || node.element_children().next().is_some()
     {
         return Err(invalid_behavior_source_data(
-            "BFBehKill on a fence has unmapped authored policy",
+            "BFBehWhap has unmapped authored policy",
         ));
     }
-    let animation_clip_asset_key = node
-        .attribute("targetAnim")
-        .map(str::trim)
-        .filter(|key| !key.is_empty())
-        .ok_or_else(|| invalid_behavior_source_data("BFBehKill on a fence has no targetAnim"))?
-        .to_owned();
-    Ok(Some([
-        BehaviorAction::AnimationClip(
-            openzt2_game_data::behavior::action::animation::BehaviorAnimationClipAction {
-                animation_clip_asset_key,
-                looping: false,
-                physical_object: None,
-                play_duration_seconds: None,
-                interrupts_current_animation: false,
-                interruptible: false,
-                ground_fit: None,
-                blend_duration_seconds: None,
-                playback_speed: None,
-            },
-        ),
-        if breaks_fences {
-            BehaviorAction::MorphTarget(openzt2_game_data::AssetId::from_key("s_broken"))
-        } else {
-            BehaviorAction::DestroyTarget
-        },
-    ]))
+    let angle = |name| -> io::Result<Option<f32>> {
+        let value = super::source_value_reading::read_optional_float_attribute(node, name)?;
+        if value.is_some_and(|angle| !angle.is_finite()) {
+            return Err(invalid_behavior_source_data(
+                "BFBehWhap has an invalid angle",
+            ));
+        }
+        Ok(value)
+    };
+    let animation =
+        super::source_value_reading::read_optional_trimmed_string_attribute(node, "targetAnim")
+            .filter(|_| node.attribute("whapNow") != Some("true"))
+            .map(effect_clip);
+    Ok(Some(BehaviorAction::Whap {
+        animation,
+        angle_degrees: angle("whapAngle")?,
+        random_offset_degrees: angle("randomOffset")?,
+    }))
+}
+
+fn effect_clip(animation_clip_asset_key: String) -> BehaviorAnimationClipAction {
+    BehaviorAnimationClipAction {
+        animation_clip_asset_key,
+        looping: false,
+        physical_object: None,
+        play_duration_seconds: None,
+        interrupts_current_animation: false,
+        interruptible: false,
+        ground_fit: None,
+        blend_duration_seconds: None,
+        playback_speed: None,
+    }
 }

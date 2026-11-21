@@ -96,7 +96,6 @@ impl Plugin for PhotosPlugin {
                         .before(album_presentation::present_photo_camera_roll_and_album_choices_in_authored_rows)
                         .before(album_presentation::present_active_photo_album_and_camera_roll_image_slots)
                         .before(album_presentation::present_default_photo_captions_from_canonical_subjects),
-                    album_presentation::request_authored_photo_camera_roll_and_album_choice_row_counts,
                     album_presentation::present_photo_camera_roll_and_album_choices_in_authored_rows,
                     album_presentation::present_active_photo_album_and_camera_roll_image_slots,
                     album_presentation::present_active_photo_album_photo_count,

@@ -27,12 +27,12 @@ pub(crate) fn project_live_zoo_status_to_authored_information_bindings(
         .and_then(|history| history.current_month_finance())
         .map_or(0, |month| month.active_users);
     let guest_count_changed = *previous_guest_count != Some(guest_count);
-    for (binding, mut text) in &mut guest_texts {
+    for (binding, text) in &mut guest_texts {
         if matches!(binding.0, UiTextPropertyBindingSource::ZooGuestCount { .. })
             && (guest_count_changed || binding.is_added())
         {
             super::text_replacement_operations::replace_projected_ui_text_if_changed(
-                &mut text.0,
+                text,
                 &guest_count.to_string(),
             );
         }

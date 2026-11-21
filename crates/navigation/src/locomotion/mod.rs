@@ -16,6 +16,7 @@ mod fence_navigation_crossing_types;
 mod fence_navigation_policy;
 mod kinematic_navigation_agent_motion_integration;
 mod local_steering_calculation;
+mod locomotion_clip_dependencies;
 mod navigation_agent_initialization;
 mod navigation_destination_request_execution;
 mod navigation_reachability_testing;
@@ -60,8 +61,9 @@ impl Plugin for LocomotionPlugin {
     fn build(&self, game_application: &mut App) {
         game_application
             .init_resource::<FenceNavigationCrossingIndex>()
-            .add_observer(fence_navigation_crossing_types::index_inserted_fence_crossings)
-            .add_observer(fence_navigation_crossing_types::unindex_discarded_fence_crossings)
+            .add_observer(fence_navigation_crossing_types::mark_crossing_added)
+            .add_observer(fence_navigation_crossing_types::mark_crossing_removed)
+            .add_observer(topology_navigation_edge_invalidation::remove_crossings_after_fence_is_removed)
             .init_resource::<NavigationRequestSequence>()
             .init_resource::<SpatialGrid>()
             .add_message::<NavigateTo>()
@@ -125,6 +127,7 @@ impl Plugin for LocomotionPlugin {
                         .after_ignore_deferred(path_surface_navigation_projection::project_path_surfaces_into_navigation_graph),
                     path_surface_navigation_projection::project_path_surfaces_into_navigation_graph
                         .after(terrain_edit_navigation_refresh::refresh_navigation_graph_after_terrain_edits),
+                    fence_navigation_crossing_types::prune_empty_route_edges.before(topology_navigation_edge_invalidation::synchronize_fence_navigation_crossings),
                     topology_navigation_edge_invalidation::synchronize_fence_navigation_crossings
                         .after_ignore_deferred(path_surface_navigation_projection::project_path_surfaces_into_navigation_graph),
                     tank_water_navigation_overlay::project_tank_water_onto_navigation_cells

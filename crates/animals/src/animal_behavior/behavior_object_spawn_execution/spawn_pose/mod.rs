@@ -30,7 +30,7 @@ use openzt2_zoo_state::{
     },
     topology::{
         topology_edit_types::{TopologyChanged, TopologySnapshot},
-        topology_graph_types::{TopologyGrid, TopologyNode},
+        topology_graph_types::{TopologyGrid, TopologyIndex, TopologyNode},
     },
 };
 use std::collections::{BTreeMap, BTreeSet};
@@ -42,6 +42,7 @@ pub(super) struct SpawnPoseValidation<'w, 's> {
     fences: Query<'w, 's, FenceSegment>,
     nodes: Query<'w, 's, &'static TopologyNode>,
     grid: Res<'w, TopologyGrid>,
+    topology: Res<'w, TopologyIndex>,
     habitats: Res<'w, HabitatIndex>,
     occupancy: Res<'w, PlacedObjectFootprintOccupancyIndex>,
     occupants: Query<'w, 's, (&'static DefinitionId, &'static WorldMember)>,
@@ -110,7 +111,18 @@ impl SpawnPoseValidation<'_, '_> {
         }
         let point = pose.translation.xz();
         // The spawn clearance probe excludes fence segments within two metres.
-        if self.fences.iter().any(|edge| {
+        let spacing = self.grid.spacing_m;
+        if !spacing.is_finite() || spacing <= 0.0 {
+            return None;
+        }
+        let min = ((point - Vec2::splat(2.0) - self.grid.origin) / spacing)
+            .floor()
+            .as_ivec2();
+        let max = ((point + Vec2::splat(2.0) - self.grid.origin) / spacing)
+            .ceil()
+            .as_ivec2();
+        let nearby_fences = self.topology.fences_within(min, max);
+        if self.fences.iter_many(nearby_fences).flatten().any(|edge| {
             let (Ok(a), Ok(b)) = (self.nodes.get(edge.a()), self.nodes.get(edge.b())) else {
                 return false;
             };

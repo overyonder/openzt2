@@ -20,6 +20,7 @@ use super::effect_pass_gpu_data::{
 };
 
 use super::gpu_texture_transforms::TRANSFORM_INPUT_BINDING;
+use super::morph_fragment_opacity::MORPH_OPACITY_BINDING;
 
 const FIRST_TEXTURE_BINDING: u32 = EFFECT_SHADER_BINDING_LAYOUT.first_texture_binding;
 const FIRST_CUBE_TEXTURE_BINDING: u32 = EFFECT_SHADER_BINDING_LAYOUT.first_cube_texture_binding;
@@ -106,6 +107,23 @@ impl AsBindGroup for EffectPassMaterial {
                 &BufferInitDescriptor {
                     label: Some("effect pass cube texture stages"),
                     contents: &cube_texture_stage_mask_bytes,
+                    usage: BufferUsages::UNIFORM,
+                },
+            )),
+        ));
+        let mut morph_bytes = [0_u8; 16];
+        for (bytes, value) in morph_bytes
+            .chunks_exact_mut(4)
+            .zip(self.morph_opacity.to_array())
+        {
+            bytes.copy_from_slice(&value.to_le_bytes());
+        }
+        result.binding_resources.0.push((
+            MORPH_OPACITY_BINDING,
+            UnpreparedBindingResource::Buffer(render_device.create_buffer_with_data(
+                &BufferInitDescriptor {
+                    label: Some("effect pass morph opacity"),
+                    contents: &morph_bytes,
                     usage: BufferUsages::UNIFORM,
                 },
             )),
@@ -204,6 +222,16 @@ impl AsBindGroup for EffectPassMaterial {
         });
         entries.push(BindGroupLayoutEntry {
             binding: CUBE_TEXTURE_STAGE_MASK_BINDING,
+            visibility: ShaderStages::FRAGMENT,
+            ty: BindingType::Buffer {
+                ty: BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        });
+        entries.push(BindGroupLayoutEntry {
+            binding: MORPH_OPACITY_BINDING,
             visibility: ShaderStages::FRAGMENT,
             ty: BindingType::Buffer {
                 ty: BufferBindingType::Uniform,

@@ -3,7 +3,7 @@ use bevy::animation::animation_curves::{AnimatableCurve, AnimatableKeyframeCurve
 use bevy::animation::{animated_field, AnimationTargetId};
 use bevy::math::Affine3A;
 use openzt2_world_state::animation_playback::animation_playback_controller_types::{
-    AnimationPlaybackClock, AnimationPlaybackRepetitionPolicy, AnimationPlaybackState,
+    AnimationPlaybackClock, AnimationPlaybackRepetitionPolicy,
 };
 
 #[test]
@@ -24,16 +24,16 @@ fn a_rotated_scaled_model_follows_the_requested_world_direction(
         Vec3::ZERO,
     );
     let mut motion = ConsumedLocomotionRootMotion::new(1, parent);
-    motion.sample_interval(&clip, "root", 0.0..0.25, 0, 1.0);
+    motion.sample_interval(&clip, "root", 0.0..0.25, 0, 0.0..1.0);
     let controller = AnimationPlaybackController {
+        preserve_seek_on_restart: false,
         playback_generation: 0,
         explicit_clip_request_id: Some(1),
         animation_set_asset: Handle::default(),
         animation_clip_asset_key: "walk".to_owned(),
-        elapsed_milliseconds: 250,
-        fractional_milliseconds: default(),
+
         playback_speed_permille: 1000,
-        playback_state: AnimationPlaybackState::Playing,
+
         playback_repetition_policy: AnimationPlaybackRepetitionPolicy::Loop,
         playback_clock: AnimationPlaybackClock::Simulation,
     };

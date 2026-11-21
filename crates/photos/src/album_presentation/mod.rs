@@ -19,7 +19,7 @@ use openzt2_game_assets::localization::localization_precedence_index::Localizati
 use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
-use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::SetUiListRowCount;
+use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::RequestedUiListRowCount;
 use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::UiListPolicy;
 use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::UiListRow;
 use openzt2_ui::authored_ui_image_content_binding::UiImageBinding;
@@ -43,60 +43,46 @@ use super::photo_capture_types::PhotoCaptionSubject;
 use openzt2_interface_state::ui::authored_ui_action_projection_components::UiPhotoActions;
 use openzt2_interface_state::ui::authored_ui_action_projection_components::UiPresentationActions;
 
-/// Sizes the camera-roll and album-choice lists.
-pub(super) fn request_authored_photo_camera_roll_and_album_choice_row_counts(
-    lists: Query<(Entity, &UiListPolicy)>,
-    rows: Query<&ChildOf, With<UiListRow>>,
-    albums: Query<(Entity, Has<PhotoCameraRoll>), With<PhotoAlbum>>,
-    members: Query<&AlbumPhotos>,
-    mut row_counts: MessageWriter<SetUiListRowCount>,
-) {
-    let camera_roll = albums.iter().find(|row| row.1).map(|row| row.0);
-    for (list, policy) in &lists {
-        let expected = match policy.source {
-            UiWidgetLiveCollectionSource::PhotoCameraRoll => camera_roll
-                .and_then(|album| members.get(album).ok())
-                .map_or(0, RelationshipTarget::len),
-            UiWidgetLiveCollectionSource::PhotoAlbums => albums.iter().filter(|row| !row.1).count(),
-            _ => continue,
-        }
-        .min(usize::from(u16::MAX)) as u16;
-        let current = rows.iter().filter(|parent| parent.parent() == list).count() as u16;
-        if current != expected {
-            row_counts.write(SetUiListRowCount {
-                list,
-                count: expected,
-            });
-        }
-    }
-}
+#[derive(Component, Default)]
+pub(super) struct PhotoAlbumChoiceOrder(Vec<Entity>);
 
-/// Binds each camera-roll or album-choice row to its photo or album.
-#[allow(clippy::too_many_arguments)]
 pub(super) fn present_photo_camera_roll_and_album_choices_in_authored_rows(
     mut commands: Commands,
-    lists: Query<&UiListPolicy>,
-    rows: Query<(
+    mut lists: Query<(
         Entity,
-        &UiListRow,
-        &ChildOf,
-        Option<&PhotoCameraRollRow>,
-        Option<&PhotoAlbumChoiceRow>,
+        Ref<UiListPolicy>,
+        &mut RequestedUiListRowCount,
+        Option<&Children>,
+        Option<&mut PhotoAlbumChoiceOrder>,
+    )>,
+    mut rows: Query<(
+        Ref<UiListRow>,
+        Ref<ChildOf>,
+        Option<&mut PhotoCameraRollRow>,
+        Option<&mut PhotoAlbumChoiceRow>,
     )>,
     children: Query<&Children>,
-    albums: Query<(
-        Entity,
-        &PhotoAlbum,
-        Option<&WorldMember>,
-        Option<&PhotoAlbumPage>,
-        Option<&SelectedAlbumPhoto>,
-        Option<&PhotoMove>,
-        Option<&PhotoCameraRoll>,
-        Option<&Name>,
-        Has<ActivePhotoAlbum>,
-    )>,
-    photos: Query<(Entity, &Photo, &AlbumMember, Option<&PhotoAlbumOrder>)>,
-    members: Query<&AlbumPhotos>,
+    albums: Query<
+        (
+            Entity,
+            Has<PhotoCameraRoll>,
+            Option<Ref<SelectedAlbumPhoto>>,
+            Option<Ref<Name>>,
+            Has<ActivePhotoAlbum>,
+        ),
+        With<PhotoAlbum>,
+    >,
+    photos: Query<Ref<Photo>>,
+    members: Query<Ref<AlbumPhotos>>,
+    new_albums: Query<(), Added<PhotoAlbum>>,
+    active_albums: Query<(), Added<ActivePhotoAlbum>>,
+    mut removed: (
+        RemovedComponents<PhotoAlbum>,
+        RemovedComponents<ActivePhotoAlbum>,
+        RemovedComponents<SelectedAlbumPhoto>,
+        RemovedComponents<Name>,
+        RemovedComponents<AlbumPhotos>,
+    ),
     mut projected_nodes: Query<(
         &UiNodeId,
         Option<&mut ImageNode>,
@@ -104,70 +90,126 @@ pub(super) fn present_photo_camera_roll_and_album_choices_in_authored_rows(
         Option<&mut UiSelected>,
     )>,
 ) {
-    let camera_roll = albums.iter().find(|row| row.6.is_some()).map(|row| row.0);
-    let camera_roll_photos = camera_roll
-        .and_then(|album| members.get(album).ok())
+    let membership_changed = !new_albums.is_empty() || !removed.0.is_empty();
+    let active_changed = !active_albums.is_empty() || !removed.1.is_empty();
+    let selection_removed = !removed.2.is_empty();
+    let name_removed = removed.3.read().collect::<std::collections::HashSet<_>>();
+    removed.0.clear();
+    removed.1.clear();
+    removed.2.clear();
+
+    let roll = albums.iter().find(|(_, is_roll, ..)| *is_roll);
+    let roll_members = roll
+        .as_ref()
+        .and_then(|(entity, ..)| members.get(*entity).ok());
+    let roll_order = roll_members
+        .as_ref()
         .map_or(&[][..], |members| members.collection().as_slice());
-    let album_choices =
-        ordered_photo_album_entities(albums.iter().filter(|row| row.6.is_none()).map(|row| row.0));
+    let roll_selection = roll
+        .as_ref()
+        .and_then(|(_, _, selection, ..)| selection.as_ref());
+    let roll_members_removed = removed
+        .4
+        .read()
+        .any(|entity| roll.as_ref().is_some_and(|(roll, ..)| *roll == entity));
+    removed.4.clear();
+    let roll_changed = membership_changed
+        || selection_removed
+        || roll_members_removed
+        || roll_members.as_ref().is_some_and(Ref::is_changed)
+        || roll_selection.is_some_and(Ref::is_changed);
+    let mut choices = None;
     let exposure_image_node = openzt2_game_data::AssetId::from_key("ui/role/fragment/node/button");
-    for (row_entity, list_row, parent, camera_row, album_row) in &rows {
-        let Ok(policy) = lists.get(parent.parent()) else {
-            continue;
-        };
-        match policy.source {
-            UiWidgetLiveCollectionSource::PhotoCameraRoll => {
-                let Some(photo_entity) =
-                    camera_roll_photos.get(usize::from(list_row.index)).copied()
-                else {
-                    continue;
-                };
-                let Ok((_, photo, member, _)) = photos.get(photo_entity) else {
-                    continue;
-                };
-                let selected = albums
-                    .get(member.0)
-                    .ok()
-                    .and_then(|album| album.4)
-                    .is_some_and(|selected| selected.0 == photo_entity);
-                if camera_row.is_none_or(|row| row.0 != photo_entity) {
-                    commands
-                        .entity(row_entity)
-                        .insert(PhotoCameraRollRow(photo_entity));
-                }
-                present_photo_storage_row_descendants(
-                    &mut commands,
-                    row_entity,
-                    Some((&photo.image, exposure_image_node)),
-                    None,
-                    selected,
-                    &children,
-                    &mut projected_nodes,
-                );
-            }
+
+    for (list, policy, mut count, owned_rows, mut order) in &mut lists {
+        let (order, all_changed) = match policy.source {
+            UiWidgetLiveCollectionSource::PhotoCameraRoll => (roll_order, roll_changed),
             UiWidgetLiveCollectionSource::PhotoAlbums => {
-                let Some(&album_entity) = album_choices.get(usize::from(list_row.index)) else {
-                    continue;
-                };
-                let Ok((_, _, _, _, _, _, _, name, active)) = albums.get(album_entity) else {
-                    continue;
-                };
-                if album_row.is_none_or(|row| row.0 != album_entity) {
-                    commands
-                        .entity(row_entity)
-                        .insert(PhotoAlbumChoiceRow(album_entity));
+                if membership_changed || policy.is_changed() || order.is_none() {
+                    let choices = choices.get_or_insert_with(|| {
+                        ordered_photo_album_entities(
+                            albums
+                                .iter()
+                                .filter(|(_, roll, ..)| !*roll)
+                                .map(|(entity, ..)| entity),
+                        )
+                    });
+                    if let Some(order) = &mut order {
+                        order.0.clone_from(choices);
+                    } else {
+                        commands
+                            .entity(list)
+                            .insert(PhotoAlbumChoiceOrder(choices.clone()));
+                    }
+                    (choices.as_slice(), true)
+                } else {
+                    let Some(order) = order.as_deref() else {
+                        continue;
+                    };
+                    (order.0.as_slice(), active_changed)
                 }
-                present_photo_storage_row_descendants(
-                    &mut commands,
-                    row_entity,
-                    None,
-                    name.map(Name::as_str),
-                    active,
-                    &children,
-                    &mut projected_nodes,
-                );
             }
-            _ => {}
+            _ => continue,
+        };
+        count.set_if_neq(RequestedUiListRowCount(Some(
+            order.len().min(usize::from(u16::MAX)) as u16,
+        )));
+        for entity in owned_rows.into_iter().flat_map(RelationshipTarget::iter) {
+            let Ok((row, parent, camera_row, album_row)) = rows.get_mut(entity) else {
+                continue;
+            };
+            let Some(&subject) = order.get(usize::from(row.index)) else {
+                continue;
+            };
+            let mut refresh =
+                all_changed || row.is_changed() || parent.is_changed() || policy.is_changed();
+            if policy.source == UiWidgetLiveCollectionSource::PhotoCameraRoll {
+                let Ok(photo) = photos.get(subject) else {
+                    continue;
+                };
+                let selected = roll_selection.is_some_and(|selection| selection.0 == subject);
+                if let Some(mut row) = camera_row {
+                    refresh |= row.set_if_neq(PhotoCameraRollRow(subject));
+                } else {
+                    commands.entity(entity).insert(PhotoCameraRollRow(subject));
+                    refresh = true;
+                }
+                if refresh || photo.is_changed() {
+                    present_photo_storage_row_descendants(
+                        &mut commands,
+                        entity,
+                        Some((&photo.image, exposure_image_node)),
+                        None,
+                        selected,
+                        &children,
+                        &mut projected_nodes,
+                    );
+                }
+            } else {
+                let Ok((_, _, _, name, active)) = albums.get(subject) else {
+                    continue;
+                };
+                if let Some(mut row) = album_row {
+                    refresh |= row.set_if_neq(PhotoAlbumChoiceRow(subject));
+                } else {
+                    commands.entity(entity).insert(PhotoAlbumChoiceRow(subject));
+                    refresh = true;
+                }
+                if refresh
+                    || name_removed.contains(&subject)
+                    || name.as_ref().is_some_and(Ref::is_changed)
+                {
+                    present_photo_storage_row_descendants(
+                        &mut commands,
+                        entity,
+                        None,
+                        name.as_deref().map(Name::as_str),
+                        active,
+                        &children,
+                        &mut projected_nodes,
+                    );
+                }
+            }
         }
     }
 }

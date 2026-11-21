@@ -7,14 +7,15 @@ use openzt2_game_data::{
     AssetId,
 };
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
+use openzt2_zoo_state::animal_behavior::animal_lineage::AnimalMate;
 use openzt2_zoo_state::animal_health::types::Disease;
 use openzt2_zoo_state::animal_health::types::Frozen;
 use openzt2_zoo_state::animal_health::types::Rampaging;
 use openzt2_zoo_state::animal_lifecycle::types::AnimalLifeStage;
 use openzt2_zoo_state::animal_lifecycle::types::AnimalSex;
 use openzt2_zoo_state::animal_lifecycle::types::AnimalVariant;
+use openzt2_zoo_state::animal_lifecycle::types::Pregnancy;
 use openzt2_zoo_state::animal_lifecycle::types::SpeciesHandle;
-use openzt2_zoo_state::animal_lifecycle::types::{Mate, Pregnancy};
 use openzt2_zoo_state::animal_welfare::types::BathroomNeed;
 use openzt2_zoo_state::animal_welfare::types::EnvironmentNeed;
 use openzt2_zoo_state::animal_welfare::types::ExerciseNeed;
@@ -59,8 +60,12 @@ pub(super) fn animal_subject_type_can_match(
     species: AssetId,
     variant: AssetId,
 ) -> bool {
-    LIVE_STATE_TYPES.iter().any(|&(id, _)| id == required)
+    is_live_animal_state_type(required)
         || matches_static_type(required, authored_types, species, variant)
+}
+
+pub(super) fn is_live_animal_state_type(required: AssetId) -> bool {
+    LIVE_STATE_TYPES.iter().any(|&(id, _)| id == required)
 }
 
 fn matches_static_type(
@@ -108,18 +113,19 @@ pub(crate) struct AnimalCandidateFacts {
     hygiene: &'static HygieneNeed,
     bathroom: &'static BathroomNeed,
     pub(crate) transform: &'static GlobalTransform,
-    pub(super) world: &'static WorldMember,
+    pub(crate) world: &'static WorldMember,
     mode: Option<&'static LocomotionMode>,
     water_contact:
         Option<&'static openzt2_zoo_state::locomotion::locomotion_types::AnimalTerrainWaterContact>,
     triggers: &'static NeedTriggerState,
+    need_latches: Option<crate::animal_welfare::need_updates::AnimalNeedLatches>,
     pregnant: Has<Pregnancy>,
     diseased: Has<Disease>,
     rampaging: Has<Rampaging>,
     frozen: Has<Frozen>,
     velocity: Option<&'static Velocity>,
     habitat: Option<&'static HabitatMember>,
-    mate: Has<Mate>,
+    mate: Has<AnimalMate>,
     reproduction: Option<&'static ReproductionNeed>,
     pub(super) escaped: Has<openzt2_zoo_state::animal_health::types::Escaped>,
     need_points: Option<&'static openzt2_zoo_state::animal_welfare::types::NeedPoints>,
@@ -136,7 +142,7 @@ impl AnimalCandidateFactsItem<'_, '_> {
         self.variant.0
     }
 
-    pub(super) fn is_adult(&self) -> bool {
+    pub(in crate::animal_behavior) fn is_adult(&self) -> bool {
         self.life_stage.0 == LifeStage::Adult
     }
 
@@ -179,6 +185,10 @@ impl AnimalCandidateFactsItem<'_, '_> {
 
     /// Canonical wellness uses 0..1000; authored BFAI values are deprivation 0..100.
     pub(super) fn source_need(&self, name: AssetId) -> Option<(i32, bool)> {
+        let trigger_mask = self
+            .need_latches
+            .as_ref()
+            .map_or(self.triggers.0, |latches| latches.mask());
         let needs = [
             self.hunger.0,
             self.thirst.0,
@@ -197,19 +207,12 @@ impl AnimalCandidateFactsItem<'_, '_> {
             return self.reproduction.map(|need| {
                 (
                     deprivation(need.0),
-                    self.triggers.0 & (1 << REPRODUCTION_TRIGGER_INDEX) != 0,
+                    trigger_mask & (1 << REPRODUCTION_TRIGGER_INDEX) != 0,
                 )
             });
         }
         NEED_NAMES.iter().enumerate().find_map(|(index, key)| {
-            (*key == name).then_some((
-                deprivation(needs[index]),
-                self.triggers.0 & (1 << index) != 0
-                    // An escaped animal roams: its exercise need always
-                    // scores, so it wanders off rather than standing by the gap.
-                    // Not yet confirmed against the original.
-                    || (self.escaped && *key == AssetId::from_key("exercise")),
-            ))
+            (*key == name).then_some((deprivation(needs[index]), trigger_mask & (1 << index) != 0))
         })
     }
 
@@ -220,7 +223,7 @@ impl AnimalCandidateFactsItem<'_, '_> {
         let actual = match fact.fact_input {
             BehaviorEligibilityFactInput::Spatial(
                 BehaviorSpatialEligibilityFact::SupportedSurface,
-            ) => Q16_ONE,
+            ) => i32::from(self.water_contact.is_some()) * Q16_ONE,
             BehaviorEligibilityFactInput::Spatial(BehaviorSpatialEligibilityFact::InWater) => {
                 let Some(contact) = self.water_contact else {
                     return false;
@@ -279,7 +282,7 @@ impl AnimalCandidateFactsItem<'_, '_> {
     }
 }
 
-pub(super) fn compare_q16(
+pub(crate) fn compare_q16(
     actual: i32,
     expected: i32,
     comparison: BehaviorEligibilityFactComparison,

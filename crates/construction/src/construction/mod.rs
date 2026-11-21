@@ -25,7 +25,7 @@ mod selected_biome_ui_projection;
 use bevy::ecs::schedule::ApplyDeferred;
 use bevy::prelude::*;
 use construction_history::{
-    record_history_application, retain_accepted_edits, ConstructionHistoryPolicy,
+    record_history_application, retain_accepted_edits, WorldConstructionHistory,
 };
 use openzt2_zoo_state::construction::construction_edit_history_types::ApplyConstructionTransaction;
 use openzt2_zoo_state::construction::construction_edit_history_types::ConstructionTransactionApplied;
@@ -43,6 +43,7 @@ use openzt2_zoo_state::construction::construction_transaction_types::PrepareDele
 
 use openzt2_game_assets::application_lifecycle::GamePhase;
 use openzt2_world_state::application_schedule::GameSet;
+use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 
 /// Installs the generic edit lifecycle. Domain plugins retain ownership of the
 /// typed terrain, topology, and placement operations attached to transactions.
@@ -81,8 +82,8 @@ fn configure_fixed_construction_sets(app: &mut App) {
 
 impl Plugin for ConstructionPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<ConstructionTool>()
-            .init_resource::<ConstructionHistoryPolicy>()
+        app.register_required_components::<WorldRoot, WorldConstructionHistory>()
+            .init_resource::<ConstructionTool>()
             .init_resource::<ConstructionPlacementPolicy>()
             .add_message::<SelectConstructionTool>()
             .add_message::<CommitConstruction>()
@@ -186,10 +187,8 @@ impl Plugin for ConstructionPlugin {
 
 fn reset_construction_state(
     mut tool: ResMut<ConstructionTool>,
-    mut history: ResMut<ConstructionHistoryPolicy>,
     mut policy: ResMut<ConstructionPlacementPolicy>,
 ) {
     *tool = default();
-    *history = default();
     *policy = default();
 }

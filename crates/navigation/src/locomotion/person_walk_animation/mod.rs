@@ -1,8 +1,10 @@
 //! Projects person navigation onto animation. Staff use their authored gait
 //! tables and sampled clip speeds; guests retain their configured walk speed.
 
+use super::locomotion_clip_dependencies::LocomotionClipDependencies;
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
+use openzt2_game_assets::animation::animation_clip_source_queries::AnimationClipSources;
 use openzt2_game_assets::animation::animation_set_asset_types::AnimationSetAsset;
 use openzt2_game_assets::world_definitions::{
     world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions,
@@ -18,6 +20,7 @@ use openzt2_world_state::{
     animation_graph::{
         animation_graph_playback_message_types::AnimationClipPlaybackRequest,
         animation_graph_playback_state_types::AnimationGraphEnabled,
+        animation_presentation_relationship_types::AnimationPresentationOwner,
     },
     animation_playback::animation_playback_controller_types::{
         AnimationPlaybackController, AnimationPlaybackRepetitionPolicy,
@@ -47,8 +50,8 @@ pub(super) struct PersonGaitPlayback {
 
 #[derive(SystemParam)]
 pub(super) struct PersonAnimationAssets<'w> {
-    sets: ResMut<'w, Assets<AnimationSetAsset>>,
-    server: Option<Res<'w, AssetServer>>,
+    sets: Res<'w, Assets<AnimationSetAsset>>,
+    sources: AnimationClipSources<'w>,
     definitions: Option<Res<'w, WorldDefinitions>>,
     definition_assets: Option<Res<'w, Assets<WorldDefinitionAsset>>>,
     time: Option<Res<'w, Time<Fixed>>>,
@@ -56,23 +59,25 @@ pub(super) struct PersonAnimationAssets<'w> {
 
 use super::sampled_animation_motion_projection::LocomotionAnimationSource;
 use openzt2_world_state::animation_playback::{
-    animation_joint_target_types::AnimationJointTarget,
+    animation_joint_target_types::{AnimationJointTarget, AnimationRigJoints},
     locomotion_root_motion::{clip_motion_velocity, ConsumedLocomotionRootMotion},
 };
 use openzt2_zoo_state::locomotion::locomotion_types::{CaffeineMode, NavAgent};
 
 pub(super) fn project_person_motion_to_walk_animation(
     mut commands: Commands,
-    mut assets: PersonAnimationAssets,
+    assets: PersonAnimationAssets,
     mut controllers: Query<(
         Entity,
         &AnimationPlaybackController,
+        &AnimationPresentationOwner,
+        Option<&AnimationPlayer>,
+        Option<&AnimationRigJoints>,
+        Option<&mut LocomotionClipDependencies>,
         Option<&AnimationGraphEnabled>,
         Option<&mut ConsumedLocomotionRootMotion>,
         Option<&mut PersonGaitPlayback>,
     )>,
-    parents: Query<&ChildOf>,
-    children: Query<&Children>,
     joints: Query<(&AnimationJointTarget, &ChildOf)>,
     transforms: Query<&GlobalTransform>,
     mut people: Query<
@@ -96,13 +101,19 @@ pub(super) fn project_person_motion_to_walk_animation(
     mut playback_requests: MessageWriter<AnimationClipPlaybackRequest>,
     caffeine_modes: Query<&CaffeineMode>,
 ) {
-    for (controller_entity, controller, enabled, mut consumed, mut gait) in &mut controllers {
-        let Some(person) = parents
-            .iter_ancestors(controller_entity)
-            .find(|ancestor| people.contains(*ancestor))
-        else {
-            continue;
-        };
+    for (
+        controller_entity,
+        controller,
+        owner,
+        player,
+        rig,
+        dependencies,
+        enabled,
+        mut consumed,
+        mut gait,
+    ) in &mut controllers
+    {
+        let person = owner.gameplay_entity;
         let Ok((
             navigating,
             direct,
@@ -191,6 +202,7 @@ pub(super) fn project_person_motion_to_walk_animation(
                 set.animation_graph_nodes
                     .iter()
                     .any(|node| node.animation_graph_node_asset_key == node_key)
+                    || set.embedded_clip(node_key).is_some()
                     || set
                         .find_animation_clip_source_reference_by_asset_key(node_key)
                         .is_some()
@@ -246,87 +258,45 @@ pub(super) fn project_person_motion_to_walk_animation(
         } else {
             None
         };
-        let pending = assets
-            .sets
-            .get(&controller.animation_set_asset)
-            .map(|set| {
-                let missing = |key: &str| {
-                    set.find_animation_clip_record_by_asset_key(key).is_none()
-                        && !set.animation_clip_asset_load_has_failed(key)
-                        && !set.animation_clip_asset_load_is_pending(key)
-                };
-                set.animation_graph_nodes
-                    .iter()
-                    .find(|node| node.animation_graph_node_asset_key == node_key)
-                    .map_or_else(
-                        || {
-                            if missing(node_key) {
-                                vec![node_key.to_owned()]
-                            } else {
-                                Vec::new()
-                            }
-                        },
-                        |node| {
-                            node.animation_clip_asset_keys
-                                .iter()
-                                .filter(|key| missing(key))
-                                .cloned()
-                                .collect()
-                        },
-                    )
-            })
-            .unwrap_or_default();
-        if !pending.is_empty() {
-            if let Some(server) = assets.server.as_ref() {
-                if let Some(mut set) = assets.sets.get_mut(&controller.animation_set_asset) {
-                    for key in &pending {
-                        set.request_animation_clip_asset_load(server, key);
-                    }
-                }
-            }
-        }
         let Some(set) = assets.sets.get(&controller.animation_set_asset) else {
             continue;
         };
-        let selected = set.animation_graph_nodes.iter().find(|node| node.animation_graph_node_asset_key == node_key)
-            .and_then(|node| openzt2_world_state::animation_graph::animation_graph_transition_operations::select_preferred_animation_clip_from_graph_node(set, node));
-        let wanted = if !moving {
-            table
-                .and_then(|table| table.stationary_clip.as_deref())
-                .or(selected.as_deref())
-                .unwrap_or(node_key)
-        } else {
-            selected.as_deref().unwrap_or(node_key)
-        };
-        if set
-            .find_animation_clip_source_reference_by_asset_key(wanted)
-            .is_none()
-            || set.animation_clip_asset_load_has_failed(wanted)
-            || set.animation_clip_asset_load_is_pending(wanted)
-        {
+        let stationary_clip = (!moving)
+            .then(|| table.and_then(|table| table.stationary_clip.as_deref()))
+            .flatten();
+        LocomotionClipDependencies::retain(
+            &mut commands,
+            controller_entity,
+            dependencies,
+            controller.animation_set_asset.id(),
+            stationary_clip.unwrap_or(node_key),
+            set,
+            &assets.sources,
+        );
+        let selected = set.animation_graph_nodes.iter()
+            .find(|node| node.animation_graph_node_asset_key == node_key)
+            .and_then(|node| openzt2_world_state::animation_graph::animation_graph_transition_operations::select_preferred_animation_clip_from_graph_node(
+                set, |key| assets.sources.get(set, key).is_some(), node,
+            ));
+        let wanted = stationary_clip.or(selected.as_deref()).unwrap_or(node_key);
+        let Some(clip) = assets.sources.get(set, wanted) else {
             continue;
-        }
+        };
         let binding = moving
             .then(|| {
-                let clip = set.find_animation_clip_record_by_asset_key(wanted)?;
-                let root = clip
-                    .authored_animation_clip_metadata
-                    .as_ref()?
-                    .root_motion_joint
-                    .as_ref()?;
-                let parent = std::iter::once(controller_entity)
-                    .chain(children.iter_descendants_depth_first::<Children>(controller_entity))
-                    .find_map(|entity| {
-                        let (binding, parent) = joints.get(entity).ok()?;
-                        (binding.animation_playback_controller_entity == controller_entity
-                            && binding
-                                .joint_asset_key
-                                .eq_ignore_ascii_case(&root.joint_asset_key))
-                        .then(|| transforms.get(parent.parent()).ok())
-                        .flatten()
-                    })?;
+                let root = clip.metadata?.root_motion_joint.as_ref()?;
+                let joint = AssetId::from_key(&root.joint_asset_key);
+                let parent =
+                    joints
+                        .iter_many(rig?.joints())
+                        .matched()
+                        .find_map(|(binding, parent)| {
+                            (binding.authored_joint_id == joint)
+                                .then(|| transforms.get(parent.parent()).ok())
+                                .flatten()
+                        })?;
                 let actor = transforms.get(person).ok()?;
-                let speed = clip_motion_velocity(clip, parent, 1000)?.length();
+                let speed = clip_motion_velocity(&clip, parent, 1000)?.length();
                 if speed <= 0.0 {
                     return None;
                 }
@@ -355,8 +325,14 @@ pub(super) fn project_person_motion_to_walk_animation(
             if let Some(agent) = agent.as_deref_mut() {
                 let active = controller.animation_clip_asset_key == wanted
                     && controller.playback_speed_permille == rate
-                    && controller.playback_state == openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackState::Playing
-                    && consumed.as_ref().is_some_and(|motion| motion.owns_playback(controller));
+                    && player.is_some_and(|player| {
+                        player
+                            .playing_animations()
+                            .any(|(_, active)| !active.is_paused() && !active.is_finished())
+                    })
+                    && consumed
+                        .as_ref()
+                        .is_some_and(|motion| motion.owns_playback(controller));
                 agent.max_speed_mps = if active {
                     binding.map_or(0.0, |(_, _, speed)| speed)
                 } else {
@@ -407,34 +383,35 @@ pub(super) fn project_person_motion_to_walk_animation(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use openzt2_game_data::animation::animation_set::AuthoredAnimationSetClipReference;
-    use openzt2_world_state::animation_playback::animation_playback_controller_types::{
-        AnimationPlaybackClock, AnimationPlaybackState,
+    use openzt2_game_assets::animation::animation_set_asset_types::{
+        AnimationClipRecord, AnimationClipSourceAsset,
     };
+    use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackClock;
 
     #[test]
     fn navigating_guest_walks_and_stopped_guest_stands() {
         let mut app = App::new();
         let mut sets = Assets::<AnimationSetAsset>::default();
-        let set = sets.add(AnimationSetAsset {
-            model_asset_path: String::new(),
-            skeleton_asset_path: String::new(),
-            animation_clips: Vec::new(),
-            animation_graph_nodes: Vec::new(),
-            animation_graph_order: Vec::new(),
-            animation_graph_edges: Vec::new(),
-            animation_graph_metadata: None,
-            animation_clip_source_references: [WALK_CLIP, STAND_CLIP]
-                .map(|key| AuthoredAnimationSetClipReference {
-                    animation_clip_asset_key: key.to_owned(),
-                    animation_clip_asset_path: String::new(),
-                    playback_policy: default(),
+        let set = sets.add(AnimationSetAsset::create_ready_animation_set_asset(
+            String::new(),
+            String::new(),
+            [WALK_CLIP, STAND_CLIP]
+                .map(|key| {
+                    AnimationClipRecord::create_embedded_animation_clip_record(
+                        key.to_owned(),
+                        Handle::default(),
+                        1000,
+                    )
                 })
                 .into(),
-            pending_animation_clip_source_asset_handles: Vec::new(),
-            failed_animation_clip_asset_keys: Vec::new(),
-        });
-        app.insert_resource(sets)
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            None,
+        ));
+        app.add_plugins(AssetPlugin::default())
+            .init_asset::<AnimationClipSourceAsset>()
+            .insert_resource(sets)
             .add_message::<AnimationClipPlaybackRequest>()
             .add_systems(Update, project_person_motion_to_walk_animation);
         let guest = app
@@ -451,16 +428,16 @@ mod tests {
         let controller = app
             .world_mut()
             .spawn((
-                ChildOf(guest),
+                AnimationPresentationOwner {
+                    gameplay_entity: guest,
+                },
                 AnimationPlaybackController {
                     playback_generation: 0,
                     explicit_clip_request_id: None,
                     animation_set_asset: set,
                     animation_clip_asset_key: STAND_CLIP.to_owned(),
-                    elapsed_milliseconds: 0,
-                    fractional_milliseconds: default(),
+                    preserve_seek_on_restart: false,
                     playback_speed_permille: 1000,
-                    playback_state: AnimationPlaybackState::Playing,
                     playback_repetition_policy: AnimationPlaybackRepetitionPolicy::Loop,
                     playback_clock: AnimationPlaybackClock::Simulation,
                 },

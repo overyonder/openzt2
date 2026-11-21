@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use openzt2_game_data::species::{NeedKind, SpeciesNeed};
+use openzt2_game_data::species::{AnimalNeedPointPolicy, NeedKind, SpeciesNeed};
 
 use openzt2_game_assets::species::species_asset_types::{SpeciesAsset, SpeciesAssets};
 use openzt2_world_state::simulation_time::deterministic_random_stream::DeterministicRng;
@@ -7,19 +7,18 @@ use openzt2_world_state::simulation_time::deterministic_random_stream::RngDomain
 use openzt2_world_state::simulation_time::deterministic_random_stream::ZooSeed;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 use openzt2_zoo_state::animal_health::types::Dead;
-use openzt2_zoo_state::animal_lifecycle::types::Animal;
 use openzt2_zoo_state::animal_lifecycle::types::SpeciesHandle;
+use openzt2_zoo_state::animal_lifecycle::types::{Animal, AnimalVariant};
 
 use super::{
     calculations::{
-        animal_need_crossed_authored_threshold, calculate_mean_animal_welfare_with_habitat_limit,
-        clamp_animal_need_q16_after_delta, classify_animal_welfare_against_authored_thresholds,
-        convert_animal_need_q16_to_permille,
+        calculate_mean_animal_welfare_with_habitat_limit,
+        classify_animal_welfare_against_authored_thresholds,
     },
     types::*,
 };
 
-fn need_rank(kind: &NeedKind) -> Option<usize> {
+pub(super) fn need_rank(kind: &NeedKind) -> Option<usize> {
     Some(match kind {
         NeedKind::Hunger => 0,
         NeedKind::Thirst => 1,
@@ -174,46 +173,110 @@ pub(crate) fn initialize_animal_needs(
     }
 }
 
-// `animal.xml`'s `f_NeedPointUpdateInterval`, `f_NeedPointGoodDelta`,
-// `f_NeedPointBadDelta` and `f_NeedPointMax`; read them from the animal
-// family if a species ever authors its own.
-const NEED_POINT_UPDATE_SECONDS: f32 = 3.0;
-const NEED_POINT_DELTA: f32 = 0.2;
-const NEED_POINT_MAX: f32 = 100.0;
+#[derive(Component, PartialEq)]
+#[require(ActiveNeedPointBranch)]
+pub(super) struct AuthoredNeedPointPolicy(AnimalNeedPointPolicy);
 
-/// One need-point update: the branch matching the animal's needs grows and
-/// the other shrinks by the same delta, so a moment of a met need doesn't wipe
-/// out a long spell of unhappiness.
-pub(super) fn step_need_points(points: &mut NeedPoints, unmet: bool) {
-    let (grows, shrinks) = if unmet {
-        (&mut points.bad, &mut points.good)
-    } else {
-        (&mut points.good, &mut points.bad)
-    };
-    *grows = (*grows + NEED_POINT_DELTA).min(NEED_POINT_MAX);
-    *shrinks = (*shrinks - NEED_POINT_DELTA).max(0.0);
+#[derive(Component, Default)]
+pub(super) struct ActiveNeedPointBranch {
+    unmet: Option<bool>,
+    factor: f32,
 }
 
-/// Every update an animal with an unmet need gains bad need points and loses
-/// good ones, and an animal whose needs are all met the other way round.
-pub(super) fn update_need_points(
-    time: Res<Time<Fixed>>,
-    mut animals: Query<(Entity, &NeedTriggerState, &mut NeedPoints), (With<Animal>, Without<Dead>)>,
-    mut outcomes: MessageWriter<AccumulateNeedPoints>,
+pub(super) fn project_need_point_policy(
+    assets: Res<Assets<SpeciesAsset>>,
+    index: Res<SpeciesAssets>,
+    animals: Query<
+        (
+            Entity,
+            Ref<AnimalVariant>,
+            Option<&mut AuthoredNeedPointPolicy>,
+        ),
+        With<Animal>,
+    >,
+    mut commands: Commands,
 ) {
-    for (animal, triggers, mut points) in &mut animals {
-        points.seconds_until_update -= time.delta_secs();
-        if points.seconds_until_update > 0.0 {
+    let all = assets.is_changed() || index.is_changed();
+    let Some(species) = index.get(&assets) else {
+        return;
+    };
+    let mut animals = animals;
+    for (animal, variant, current) in &mut animals {
+        if !all && !variant.is_changed() {
             continue;
         }
-        points.seconds_until_update += NEED_POINT_UPDATE_SECONDS;
+        let Some(variant) = species.find_variant(variant.0) else {
+            if current.is_some() {
+                commands.entity(animal).remove::<AuthoredNeedPointPolicy>();
+            }
+            continue;
+        };
+        let policy = AuthoredNeedPointPolicy(variant.need_points);
+        if let Some(mut current) = current {
+            current.set_if_neq(policy);
+        } else {
+            commands.entity(animal).insert(policy);
+        }
+    }
+}
+
+pub(super) fn step_need_points(
+    points: &mut NeedPoints,
+    branch: &mut ActiveNeedPointBranch,
+    policy: &AnimalNeedPointPolicy,
+    unmet: bool,
+) -> (f32, f32) {
+    if branch.unmet != Some(unmet) {
+        branch.unmet = Some(unmet);
+        branch.factor = policy.factor;
+        if unmet {
+            points.good = 0.0;
+        } else {
+            points.bad = 0.0;
+        }
+    } else {
+        branch.factor += policy.factor_delta;
+    }
+    if unmet {
+        let delta = policy.bad_delta * branch.factor;
+        points.bad = (points.bad + delta).min(policy.maximum);
+        (0.0, delta)
+    } else {
+        let delta = policy.good_delta * branch.factor;
+        points.good = (points.good + delta).min(policy.maximum);
+        (delta, 0.0)
+    }
+}
+
+pub(super) fn update_need_points(
+    time: Res<Time<Fixed>>,
+    mut animals: Query<
+        (
+            Entity,
+            &NeedTriggerState,
+            Ref<AuthoredNeedPointPolicy>,
+            &mut ActiveNeedPointBranch,
+            &mut NeedPoints,
+        ),
+        (With<Animal>, Without<Dead>),
+    >,
+    mut outcomes: MessageWriter<AccumulateNeedPoints>,
+) {
+    for (animal, triggers, policy, mut branch, mut points) in &mut animals {
         let unmet = triggers.0 != 0;
-        step_need_points(&mut points, unmet);
-        outcomes.write(AccumulateNeedPoints {
-            animal,
-            good: if unmet { 0.0 } else { NEED_POINT_DELTA },
-            bad: if unmet { NEED_POINT_DELTA } else { 0.0 },
-        });
+        let remaining = points.seconds_until_update - time.delta_secs();
+        if remaining > 0.0 && branch.unmet == Some(unmet) && !policy.is_changed() {
+            points.seconds_until_update = remaining;
+            continue;
+        }
+        if policy.is_changed() {
+            branch.unmet = None;
+        }
+        points.seconds_until_update = policy.0.interval_seconds;
+        let (good, bad) = step_need_points(&mut points, &mut branch, &policy.0, unmet);
+        if good != 0.0 || bad != 0.0 {
+            outcomes.write(AccumulateNeedPoints { animal, good, bad });
+        }
     }
 }
 
@@ -228,170 +291,6 @@ pub(super) fn accumulate_need_points(
         };
         cumulative.good += outcome.good;
         cumulative.bad += outcome.bad;
-    }
-}
-
-fn rate_result(value: i32, row: &SpeciesNeed) -> (i32, bool) {
-    let next = clamp_animal_need_q16_after_delta(value, row.wellness_adjustment_per_update_q16);
-    let crossed = animal_need_crossed_authored_threshold(
-        value,
-        next,
-        row.trigger_wellness_threshold,
-        row.cessation_wellness_threshold,
-    );
-    (next, crossed)
-}
-
-#[allow(clippy::type_complexity)]
-#[allow(
-    clippy::needless_pass_by_value,
-    reason = "Bevy systems receive resource guards by value"
-)]
-pub(super) fn decay_animal_needs(
-    mut commands: Commands,
-    time: Res<Time<Fixed>>,
-    seed: Res<ZooSeed>,
-    (definitions, definition_assets): (
-        Res<openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions>,
-        Res<Assets<openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset>>,
-    ),
-    (assets, index): (Res<Assets<SpeciesAsset>>, Res<SpeciesAssets>),
-    mut animals: Query<
-        (
-            Entity,
-            &PersistentId,
-            &SpeciesHandle,
-            (
-                &mut Hunger,
-                &mut Thirst,
-                &mut RestNeed,
-                &mut PrivacyNeed,
-                &mut SocialNeed,
-                &mut ExerciseNeed,
-                &mut StimulationNeed,
-                &mut EnvironmentNeed,
-                &mut HealthNeed,
-                &mut HygieneNeed,
-                &mut BathroomNeed,
-            ),
-            &mut NeedTriggerState,
-            Option<&mut AnimalNeedAdjustmentTimer>,
-            Option<&mut ReproductionNeed>,
-        ),
-        (With<Animal>, Without<Dead>),
-    >,
-    mut changed: MessageWriter<NeedChanged>,
-) {
-    let Some(definitions) = definitions.get(&definition_assets) else {
-        return;
-    };
-    let Some(policy) = definitions.need_adjustment() else {
-        return;
-    };
-    if !policy.enabled {
-        return;
-    }
-    let step_ns = u64::try_from(time.timestep().as_nanos()).unwrap_or(u64::MAX);
-    for (
-        entity,
-        persistent_id,
-        species,
-        (
-            mut hunger,
-            mut thirst,
-            mut rest,
-            mut privacy,
-            mut social,
-            mut exercise,
-            mut stimulation,
-            mut environment,
-            mut health,
-            mut hygiene,
-            mut bathroom,
-        ),
-        mut triggers,
-        timer,
-        reproduction,
-    ) in &mut animals
-    {
-        let Some(needs) = species_needs(&index, &assets, species) else {
-            continue;
-        };
-        let mut state = timer
-            .as_deref()
-            .copied()
-            .unwrap_or_else(|| AnimalNeedAdjustmentTimer {
-                remaining_ns: 0,
-                random: DeterministicRng::from_entity(
-                    *seed,
-                    *persistent_id,
-                    RngDomain::AnimalNeeds,
-                ),
-            });
-        let due = openzt2_zoo_state::need_adjustment::advance_need_adjustment_timer(
-            &mut state.remaining_ns,
-            step_ns,
-            policy.delay_steps,
-            &mut state.random,
-        );
-        if let Some(mut timer) = timer {
-            *timer = state;
-        } else {
-            commands.entity(entity).insert(state);
-        }
-        if !due {
-            continue;
-        }
-        let values = [
-            &mut hunger.0,
-            &mut thirst.0,
-            &mut rest.0,
-            &mut privacy.0,
-            &mut social.0,
-            &mut exercise.0,
-            &mut stimulation.0,
-            &mut environment.0,
-            &mut health.0,
-            &mut hygiene.0,
-            &mut bathroom.0,
-        ];
-        for (index, (value, need)) in values.into_iter().zip(needs).enumerate() {
-            let (next, crossed) = rate_result(*value, need);
-            *value = next;
-            triggers.observe(
-                index,
-                next,
-                need.trigger_wellness_threshold,
-                need.cessation_wellness_threshold,
-            );
-            if crossed {
-                changed.write(NeedChanged {
-                    animal: entity,
-                    need: need.kind,
-                    value: convert_animal_need_q16_to_permille(next),
-                });
-            }
-        }
-        if let (Some(mut reproduction), Some(need)) = (
-            reproduction,
-            species_reproduction_need(&index, &assets, species),
-        ) {
-            let (next, crossed) = rate_result(reproduction.0, need);
-            reproduction.0 = next;
-            triggers.observe(
-                REPRODUCTION_TRIGGER_INDEX,
-                next,
-                need.trigger_wellness_threshold,
-                need.cessation_wellness_threshold,
-            );
-            if crossed {
-                changed.write(NeedChanged {
-                    animal: entity,
-                    need: need.kind,
-                    value: convert_animal_need_q16_to_permille(next),
-                });
-            }
-        }
     }
 }
 
@@ -430,250 +329,8 @@ pub(crate) fn initialize_missing_reproduction_needs(
     }
 }
 
-/// `AdjustReproduction`, as the welfare needs' adjustment systems apply theirs.
-pub(super) fn adjust_reproduction(
-    mut messages: MessageReader<AdjustReproduction>,
-    assets: Res<Assets<SpeciesAsset>>,
-    index: Res<SpeciesAssets>,
-    mut animals: Query<
-        (&SpeciesHandle, &mut ReproductionNeed, &mut NeedTriggerState),
-        (With<Animal>, Without<Dead>),
-    >,
-    mut changed: MessageWriter<NeedChanged>,
-) {
-    for message in messages.read() {
-        let Ok((species, mut value, mut triggers)) = animals.get_mut(message.animal) else {
-            continue;
-        };
-        let Some(need) = species_reproduction_need(&index, &assets, species) else {
-            continue;
-        };
-        let old = value.0;
-        let next = clamp_animal_need_q16_after_delta(old, message.delta_q16);
-        value.0 = next;
-        triggers.observe(
-            REPRODUCTION_TRIGGER_INDEX,
-            next,
-            need.trigger_wellness_threshold,
-            need.cessation_wellness_threshold,
-        );
-        if animal_need_crossed_authored_threshold(
-            old,
-            next,
-            need.trigger_wellness_threshold,
-            need.cessation_wellness_threshold,
-        ) {
-            changed.write(NeedChanged {
-                animal: message.animal,
-                need: NeedKind::Reproduction,
-                value: convert_animal_need_q16_to_permille(next),
-            });
-        }
-    }
-}
-
-macro_rules! adjustment_system {
-    ($function:ident, $message:ty, $component:ty, $index:expr, $kind:expr) => {
-        pub(super) fn $function(
-            mut messages: MessageReader<$message>,
-            assets: Res<Assets<SpeciesAsset>>,
-            index: Res<SpeciesAssets>,
-            mut animals: Query<
-                (&SpeciesHandle, &mut $component, &mut NeedTriggerState),
-                (With<Animal>, Without<Dead>),
-            >,
-            mut changed: MessageWriter<NeedChanged>,
-        ) {
-            for message in messages.read() {
-                let Ok((species, mut value, mut triggers)) = animals.get_mut(message.animal) else {
-                    continue;
-                };
-                let Some(needs) = species_needs(&index, &assets, species) else {
-                    continue;
-                };
-                let old = value.0;
-                let next = clamp_animal_need_q16_after_delta(old, message.delta_q16);
-                if next != old {
-                    value.0 = next;
-                }
-                triggers.observe(
-                    $index,
-                    next,
-                    needs[$index].trigger_wellness_threshold,
-                    needs[$index].cessation_wellness_threshold,
-                );
-                if animal_need_crossed_authored_threshold(
-                    old,
-                    next,
-                    needs[$index].trigger_wellness_threshold,
-                    needs[$index].cessation_wellness_threshold,
-                ) {
-                    changed.write(NeedChanged {
-                        animal: message.animal,
-                        need: $kind,
-                        value: convert_animal_need_q16_to_permille(next),
-                    });
-                }
-            }
-        }
-    };
-}
-
-adjustment_system!(adjust_hunger, AdjustHunger, Hunger, 0, NeedKind::Hunger);
-adjustment_system!(adjust_thirst, AdjustThirst, Thirst, 1, NeedKind::Thirst);
-adjustment_system!(adjust_rest, AdjustRest, RestNeed, 2, NeedKind::Rest);
-adjustment_system!(
-    adjust_privacy,
-    AdjustPrivacy,
-    PrivacyNeed,
-    3,
-    NeedKind::Privacy
-);
-adjustment_system!(adjust_social, AdjustSocial, SocialNeed, 4, NeedKind::Social);
-adjustment_system!(
-    adjust_exercise,
-    AdjustExercise,
-    ExerciseNeed,
-    5,
-    NeedKind::Exercise
-);
-adjustment_system!(
-    adjust_stimulation,
-    AdjustStimulation,
-    StimulationNeed,
-    6,
-    NeedKind::Stimulation
-);
-adjustment_system!(
-    adjust_environment,
-    AdjustEnvironment,
-    EnvironmentNeed,
-    7,
-    NeedKind::Environment
-);
-adjustment_system!(
-    adjust_health_need,
-    AdjustHealthNeed,
-    HealthNeed,
-    8,
-    NeedKind::Health
-);
-
-adjustment_system!(
-    adjust_hygiene,
-    AdjustHygiene,
-    HygieneNeed,
-    9,
-    NeedKind::Hygiene
-);
-
-adjustment_system!(
-    adjust_bathroom,
-    AdjustBathroom,
-    BathroomNeed,
-    10,
-    NeedKind::Bathroom
-);
-
-pub(super) fn set_animal_need(
-    mut messages: MessageReader<SetAnimalNeed>,
-    mut reproduction: MessageWriter<AdjustReproduction>,
-    reproduction_needs: Query<&ReproductionNeed>,
-    assets: Res<Assets<SpeciesAsset>>,
-    index: Res<SpeciesAssets>,
-    mut animals: Query<
-        (
-            &SpeciesHandle,
-            &mut Hunger,
-            &mut Thirst,
-            &mut RestNeed,
-            &mut PrivacyNeed,
-            &mut SocialNeed,
-            &mut ExerciseNeed,
-            &mut StimulationNeed,
-            &mut EnvironmentNeed,
-            &mut HealthNeed,
-            &mut HygieneNeed,
-            &mut BathroomNeed,
-            &mut NeedTriggerState,
-        ),
-        (With<Animal>, Without<Dead>),
-    >,
-    mut changed: MessageWriter<NeedChanged>,
-) {
-    for message in messages.read() {
-        // Setting reproduction is the adjustment from its current value.
-        if message.need == NeedKind::Reproduction {
-            if let Ok(current) = reproduction_needs.get(message.animal) {
-                reproduction.write(AdjustReproduction {
-                    animal: message.animal,
-                    delta_q16: message.value_q16.clamp(0, MAX_NEED_Q16) - current.0,
-                });
-            }
-            continue;
-        }
-        let Ok((
-            species,
-            mut hunger,
-            mut thirst,
-            mut rest,
-            mut privacy,
-            mut social,
-            mut exercise,
-            mut stimulation,
-            mut environment,
-            mut health,
-            mut hygiene,
-            mut bathroom,
-            mut triggers,
-        )) = animals.get_mut(message.animal)
-        else {
-            continue;
-        };
-        let Some(needs) = species_needs(&index, &assets, species) else {
-            continue;
-        };
-        let (index, value) = match message.need {
-            NeedKind::Hunger => (0, &mut hunger.0),
-            NeedKind::Thirst => (1, &mut thirst.0),
-            NeedKind::Rest => (2, &mut rest.0),
-            NeedKind::Privacy => (3, &mut privacy.0),
-            NeedKind::Social => (4, &mut social.0),
-            NeedKind::Exercise => (5, &mut exercise.0),
-            NeedKind::Stimulation => (6, &mut stimulation.0),
-            NeedKind::Environment => (7, &mut environment.0),
-            NeedKind::Health => (8, &mut health.0),
-            NeedKind::Hygiene => (9, &mut hygiene.0),
-            NeedKind::Bathroom => (10, &mut bathroom.0),
-            NeedKind::Reproduction => unreachable!("handled above"),
-        };
-        let old = *value;
-        let next = message.value_q16.clamp(0, MAX_NEED_Q16);
-        *value = next;
-        triggers.observe(
-            index,
-            next,
-            needs[index].trigger_wellness_threshold,
-            needs[index].cessation_wellness_threshold,
-        );
-        if animal_need_crossed_authored_threshold(
-            old,
-            next,
-            needs[index].trigger_wellness_threshold,
-            needs[index].cessation_wellness_threshold,
-        ) {
-            changed.write(NeedChanged {
-                animal: message.animal,
-                need: message.need,
-                value: convert_animal_need_q16_to_permille(next),
-            });
-        }
-    }
-}
-
 pub(super) fn derive_animal_welfare(
-    assets: Res<Assets<SpeciesAsset>>,
-    index: Res<SpeciesAssets>,
+    profiles: Res<super::need_updates::SpeciesNeedProfiles>,
     needs: Query<
         (
             Entity,
@@ -743,23 +400,14 @@ pub(super) fn derive_animal_welfare(
         if welfare.0 != next_value {
             welfare.0 = next_value;
         }
-        let Some(needs) = species_needs(&index, &assets, species) else {
+        let Some(profile) = profiles.rows.get(&species.species) else {
             continue;
         };
-        let critical = needs
-            .iter()
-            .take(10)
-            .map(|need| need.critical_wellness_threshold.unwrap_or(0))
-            .sum::<u16>()
-            / 10;
-        let good = needs
-            .iter()
-            .take(10)
-            .map(|need| need.cessation_wellness_threshold.unwrap_or(1000))
-            .sum::<u16>()
-            / 10;
-        let next_band =
-            classify_animal_welfare_against_authored_thresholds(next_value, critical, good);
+        let next_band = classify_animal_welfare_against_authored_thresholds(
+            next_value,
+            profile.critical,
+            profile.good,
+        );
         if *band != next_band {
             changed.write(WelfareChanged {
                 animal: entity,

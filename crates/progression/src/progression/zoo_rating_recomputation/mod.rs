@@ -7,9 +7,13 @@ use openzt2_game_assets::world_definitions::world_definition_document_asset_and_
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_zoo_state::animal_health::types::Dead;
 use openzt2_zoo_state::animal_lifecycle::types::{Animal, SpeciesHandle};
-use openzt2_zoo_state::animal_welfare::types::AnimalWelfare;
+use openzt2_zoo_state::animal_welfare::types::{AnimalWelfare, NeedPoints};
 use openzt2_zoo_state::economy::zoo_cash_types::ZooCash;
-use openzt2_zoo_state::guests::guest_simulation_types::{Guest, GuestEducation, GuestSatisfaction};
+use openzt2_zoo_state::guests::{
+    guest_simulation_types::{Guest, GuestEducation, GuestSatisfaction, GuestSpeciesViewCounts},
+    guest_survey_types::GuestSurveyExperience,
+};
+use openzt2_zoo_state::progression::fame_types::GuestSpeciesFameViews;
 use openzt2_zoo_state::maintenance::maintenance_types::ZooCleanlinessPermille;
 use openzt2_zoo_state::placement::placed_object_types::PlacedObjectDefinitionReference;
 
@@ -22,45 +26,57 @@ use super::{
         smooth_zoo_rating_toward_target,
     },
     zoo_rating_input_types::{
-        AnimalWelfareRating, GuestRatingFacts, LivingAnimalPopulation, ZooFinanceRating,
-        ZooOverallRatingTarget, ZooSceneryRating,
+        AnimalObservation, AnimalWelfareRating, GuestObservation, GuestRatingFacts,
+        LivingAnimalPopulation, ZooFinanceRating, ZooOverallRatingTarget, ZooSceneryRating,
     },
 };
 
 pub(super) fn reduce_living_animal_population(
-    living: Query<&SpeciesHandle, (With<Animal>, Without<Dead>)>,
+    living: Query<(&SpeciesHandle, Option<&NeedPoints>), (With<Animal>, Without<Dead>)>,
     changed: Query<
         (),
         (
             With<Animal>,
-            Or<(Added<Animal>, Changed<SpeciesHandle>, Added<Dead>)>,
+            Or<(
+                Added<Animal>,
+                Changed<SpeciesHandle>,
+                Added<Dead>,
+                Changed<NeedPoints>,
+            )>,
         ),
     >,
     mut removed_animals: RemovedComponents<Animal>,
     mut removed_species: RemovedComponents<SpeciesHandle>,
     mut removed_dead: RemovedComponents<Dead>,
+    mut removed_happiness: RemovedComponents<NeedPoints>,
     mut population: ResMut<LivingAnimalPopulation>,
 ) {
     let animals_removed = removed_animals.read().count() != 0;
     let species_removed = removed_species.read().count() != 0;
     let deaths_removed = removed_dead.read().count() != 0;
+    let happiness_removed = removed_happiness.read().count() != 0;
     if !population.is_added()
         && changed.is_empty()
         && !animals_removed
         && !species_removed
         && !deaths_removed
+        && !happiness_removed
     {
         return;
     }
     let mut species = BTreeSet::new();
-    let mut animals = 0_u32;
-    for animal in &living {
-        animals = animals.saturating_add(1);
+    let mut observations = Vec::new();
+    for (animal, happiness) in &living {
         species.insert(animal.species);
+        observations.push(AnimalObservation {
+            species: animal.species,
+            happiness: happiness.map_or(0.0, |happiness| happiness.good),
+        });
     }
     population.set_if_neq(LivingAnimalPopulation {
-        animals,
+        animals: u32::try_from(observations.len()).unwrap_or(u32::MAX),
         species: u32::try_from(species.len()).unwrap_or(u32::MAX),
+        observations,
     });
 }
 
@@ -94,7 +110,16 @@ pub(super) fn recompute_animal_welfare_rating(
 }
 
 pub(super) fn recompute_guest_ratings(
-    guests: Query<(Option<&GuestSatisfaction>, Option<&GuestEducation>), With<Guest>>,
+    guests: Query<
+        (
+            Option<&GuestSatisfaction>,
+            Option<&GuestEducation>,
+            Option<&GuestSpeciesViewCounts>,
+            Option<&GuestSurveyExperience>,
+            Option<&GuestSpeciesFameViews>,
+        ),
+        With<Guest>,
+    >,
     changed: Query<
         (),
         (
@@ -103,38 +128,79 @@ pub(super) fn recompute_guest_ratings(
                 Added<Guest>,
                 Changed<GuestSatisfaction>,
                 Changed<GuestEducation>,
+                Changed<GuestSpeciesViewCounts>,
+                Changed<GuestSurveyExperience>,
+                Changed<GuestSpeciesFameViews>,
             )>,
         ),
     >,
-    mut removed_guests: RemovedComponents<Guest>,
-    mut removed_satisfaction: RemovedComponents<GuestSatisfaction>,
-    mut removed_education: RemovedComponents<GuestEducation>,
+    mut removed: (
+        RemovedComponents<Guest>,
+        RemovedComponents<GuestSatisfaction>,
+        RemovedComponents<GuestEducation>,
+        RemovedComponents<GuestSpeciesViewCounts>,
+        RemovedComponents<GuestSurveyExperience>,
+        RemovedComponents<GuestSpeciesFameViews>,
+    ),
     mut facts: ResMut<GuestRatingFacts>,
 ) {
-    let guest_removed = removed_guests.read().count() != 0;
-    let satisfaction_removed = removed_satisfaction.read().count() != 0;
-    let education_removed = removed_education.read().count() != 0;
-    if !facts.is_added()
-        && changed.is_empty()
-        && !guest_removed
-        && !satisfaction_removed
-        && !education_removed
-    {
+    let removed_count = removed.0.read().count()
+        + removed.1.read().count()
+        + removed.2.read().count()
+        + removed.3.read().count()
+        + removed.4.read().count()
+        + removed.5.read().count();
+    if !facts.is_added() && changed.is_empty() && removed_count == 0 {
         return;
     }
-    facts.set_if_neq(GuestRatingFacts {
-        count: u32::try_from(guests.iter().len()).unwrap_or(u32::MAX),
-        satisfaction: calculate_mean_permille(
-            guests
-                .iter()
-                .filter_map(|(value, _)| value.map(|value| value.0)),
-        ),
-        education: calculate_mean_permille(
-            guests
-                .iter()
-                .filter_map(|(_, value)| value.map(|value| value.0)),
-        ),
-    });
+    let mut next = GuestRatingFacts::default();
+    let mut satisfaction_totals = (0, 0);
+    let mut education_totals = (0, 0);
+    for (satisfaction, education, species_counts, survey, typed_views) in &guests {
+        if let Some(value) = satisfaction {
+            satisfaction_totals.0 += u64::from(value.0.min(1000));
+            satisfaction_totals.1 += 1;
+        }
+        if let Some(value) = education {
+            education_totals.0 += u64::from(value.0.min(1000));
+            education_totals.1 += 1;
+        }
+        next.observations.push(GuestObservation {
+            happiness: satisfaction.map_or(0.0, |value| value.source_q16() as f32 / 65_536.0),
+            education: education.map_or(0.0, |value| f32::from(value.0) / 10.0),
+        });
+        if let Some(typed_views) = typed_views {
+            for (&species, facts) in &typed_views.0 {
+                let total = next.species_seen.entry(species).or_default();
+                total.guests = total.guests.saturating_add(u32::from(facts.events != 0));
+                total.events = total.events.saturating_add(facts.events);
+                total.entertainment += facts.entertainment;
+                total.donation += facts.donation;
+            }
+        } else {
+            if let Some(counts) = species_counts {
+                for &(species, count) in &counts.0 {
+                    if count != 0 {
+                        let total = next.species_seen.entry(species).or_default();
+                        total.guests = total.guests.saturating_add(1);
+                    }
+                }
+            }
+            if let Some(survey) = survey {
+                let total = next
+                    .species_seen
+                    .entry(openzt2_game_data::AssetId::default())
+                    .or_default();
+                total.events = total.events.saturating_add(survey.entertainment_views);
+                total.entertainment += survey.entertainment_sum;
+            }
+        }
+    }
+    let mean = |(sum, count): (u64, u64)| ((sum + count / 2) / count.max(1)) as u16;
+    next.count = u32::try_from(next.observations.len()).unwrap_or(u32::MAX);
+    next.satisfaction = mean(satisfaction_totals);
+    next.education = mean(education_totals);
+    facts.set_if_neq(next);
 }
 
 pub(super) fn recompute_scenery_rating(

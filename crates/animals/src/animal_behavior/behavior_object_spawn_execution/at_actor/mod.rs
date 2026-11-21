@@ -16,7 +16,7 @@ pub(super) fn spawn_behavior_objects_at_actor(
     prefabs: Res<Assets<ScenePrefabAsset>>,
     server: Res<AssetServer>,
     clock: Res<ZooClock>,
-    mut ids: ResMut<PersistentIdAllocator>,
+    mut ids: Query<&mut PersistentIdAllocator>,
     pose_validation: super::spawn_pose::SpawnPoseValidation,
     mut actors: Query<
         (
@@ -92,9 +92,12 @@ pub(super) fn spawn_behavior_objects_at_actor(
                 continue;
             }
         };
-        let (Some(actor_pose), Ok(id)) =
-            (pose_validation.actor_pose(actor), ids.allocate(world.root))
-        else {
+        let (Some(actor_pose), Some(id)) = (
+            pose_validation.actor_pose(actor),
+            ids.get_mut(world.root)
+                .ok()
+                .and_then(|mut ids| ids.allocate().ok()),
+        ) else {
             mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
             continue;
         };

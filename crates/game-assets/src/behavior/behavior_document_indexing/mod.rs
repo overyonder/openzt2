@@ -13,20 +13,18 @@ use crate::asset_source::{ArchiveOverlayChanged, AssetArchives};
 pub(super) fn refresh_behavior_documents_after_archive_change(
     behavior_source_archives: Res<AssetArchives>,
     asset_server: Res<AssetServer>,
-    archive_events: Option<Res<Messages<ArchiveOverlayChanged>>>,
-    mut cursor: Local<bevy::ecs::message::MessageCursor<ArchiveOverlayChanged>>,
+    mut overlay_changes: Option<MessageReader<ArchiveOverlayChanged>>,
     mut loaded_behavior_documents: ResMut<LoadedBehaviorDocumentCollection>,
 ) {
-    let assets_changed = archive_events.as_ref().is_some_and(|events| {
-        cursor.read(events).fold(false, |relevant, event| {
-            relevant
-                || event
-                    .changes
-                    .iter()
-                    .any(|change| is_behavior_document_asset_path(&change.normalized_asset_path))
-        })
+    let changed = overlay_changes.as_mut().is_some_and(|changes| {
+        let relevant = changes
+            .read()
+            .flat_map(|change| &change.changes)
+            .any(|change| is_behavior_document_asset_path(&change.normalized_asset_path));
+        changes.clear();
+        relevant
     });
-    if !behavior_source_archives.is_changed() && !assets_changed {
+    if !behavior_source_archives.is_added() && !changed {
         return;
     }
     loaded_behavior_documents.behavior_document_assets = behavior_source_archives

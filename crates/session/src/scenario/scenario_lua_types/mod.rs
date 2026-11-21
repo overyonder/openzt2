@@ -216,7 +216,7 @@ impl ScenarioLuaQueryFacts<'_> {
     ) -> Option<Vec<ScenarioLuaPhotoChallengeMemberStars>> {
         let set = self.current_photo_challenge_sets.iter().next()?;
         let asset = self.scenario_document_assets.get(&set.source)?;
-        let record = asset.document.photo_challenge_sets.get(set.row as usize)?;
+        let record = asset.document.find_photo_challenge_set(set.id)?;
         record
             .members
             .iter()
@@ -229,8 +229,7 @@ impl ScenarioLuaQueryFacts<'_> {
                     .scenario_document_assets
                     .get(&challenge.source)?
                     .document
-                    .photo_challenges
-                    .get(challenge.row as usize)?;
+                    .find_photo_challenge_rule(challenge.id)?;
                 Some(ScenarioLuaPhotoChallengeMemberStars {
                     required: rule.difficulty,
                     obtained: if progress.completed {

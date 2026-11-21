@@ -10,6 +10,7 @@ use openzt2_zoo_state::progression::rating_types;
 use openzt2_zoo_state::progression::research_duration_calculation;
 use openzt2_zoo_state::progression::research_types;
 use openzt2_zoo_state::progression::unlock_types;
+mod authored_fame_script;
 mod award_condition_calculations;
 mod award_evaluation_and_granting;
 mod award_ui_action_routing;
@@ -70,6 +71,7 @@ impl Plugin for ProgressionPlugin {
             .init_resource::<ZooRating>()
             .init_resource::<zoo_rating_input_types::AnimalWelfareRating>()
             .init_resource::<zoo_rating_input_types::LivingAnimalPopulation>()
+            .init_resource::<zoo_rating_input_types::EarnedAwardFamePoints>()
             .init_resource::<zoo_rating_input_types::GuestRatingFacts>()
             .init_resource::<zoo_rating_input_types::ZooSceneryRating>()
             .init_resource::<zoo_rating_input_types::ZooFinanceRating>()
@@ -84,8 +86,7 @@ impl Plugin for ProgressionPlugin {
             .add_systems(
                 Update,
                 research_execution::apply_research_duration_overrides.after(
-                    catalogue_unlock_storage_initialization::
-                        initialize_catalogue_unlock_storage_from_active_world_definitions,
+                    catalogue_unlock_storage_initialization::reconcile_authored_research_items,
                 ),
             )
             .add_message::<ApplyCatalogueDefinitionUnlockRequest>()
@@ -98,6 +99,12 @@ impl Plugin for ProgressionPlugin {
             .add_message::<ProgressionAwardGrantCandidate>()
             .add_message::<AdjustScenarioAwardPointTotalRequest>()
             .add_message::<fame_types::SetScenarioMaximumFame>()
+            .add_message::<fame_types::FameGateAppearanceRequested>()
+            .add_systems(
+                Update,
+                authored_fame_script::resolve_winning_fame_script
+                    .run_if(in_state(GamePhase::InGame)),
+            )
             .add_message::<adoption_and_content_availability_types::MakeScenarioContentAvailableRequest>()
             .add_systems(
                 Update,
@@ -125,6 +132,8 @@ impl Plugin for ProgressionPlugin {
                 (
                     catalogue_unlock_storage_initialization::
                         initialize_catalogue_unlock_storage_from_active_world_definitions,
+                    catalogue_unlock_storage_initialization::reconcile_authored_research_items
+                        .after(research_ui_action_routing::route_authored_research_ui_actions_to_start_requests),
                     award_evaluation_and_granting::initialize_award_condition_duration_storage,
                 )
                     .in_set(GameSet::Intent)
@@ -163,12 +172,7 @@ impl Plugin for ProgressionPlugin {
                         zoo_rating_recomputation::reconcile_zoo_rating_and_weighted_target
                             .after(openzt2_zoo_state::maintenance::ZooCleanlinessProjection),
                         zoo_rating_recomputation::advance_zoo_rating_smoothing,
-                        (
-                            zoo_rating_recomputation::publish_zoo_rating_changes,
-                            award_evaluation_and_granting::evaluate_all_progression_award_conditions_and_queue_grants,
-                        ),
-                        fame_progression::update_fame_and_apply_authored_fame_unlocks
-                            .after(profile_challenge_fact_recording::record_released_animals_for_zoo_fame),
+                        zoo_rating_recomputation::publish_zoo_rating_changes,
                     ).chain(),
                     profile_challenge_fact_recording::record_released_animals_for_zoo_fame,
                 )
@@ -180,10 +184,7 @@ impl Plugin for ProgressionPlugin {
                 (
                     profile_challenge_fact_recording::record_endangered_animal_births_for_profile_challenges,
                     research_execution::advance_research_availability_unlock_countdowns
-                        .run_if(simulation_is_running)
-                        .before(research_execution::refresh_authored_research_availability),
-                    research_execution::refresh_authored_research_availability
-                        .after(fame_progression::update_fame_and_apply_authored_fame_unlocks),
+                        .run_if(simulation_is_running),
                     research_execution::advance_active_research_projects_by_one_tick
                         .run_if(simulation_is_running),
                 )
@@ -193,13 +194,22 @@ impl Plugin for ProgressionPlugin {
             .add_systems(
                 FixedUpdate,
                 (
-                    research_execution::complete_research_projects_and_apply_authored_unlocks,
-                    catalogue_unlock_application::apply_catalogue_definition_unlock_requests,
-                    award_evaluation_and_granting::grant_earned_progression_awards,
+                    (
+                        award_evaluation_and_granting::evaluate_all_progression_award_conditions_and_queue_grants,
+                        award_evaluation_and_granting::grant_earned_progression_awards,
+                        fame_progression::count_earned_award_fame_points,
+                        fame_progression::update_fame_and_apply_authored_fame_unlocks
+                            .after(scenario_award_point_adjustment::apply_requested_scenario_award_point_total_adjustments),
+                        fame_progression::apply_scenario_maximum_fame_requests,
+                        research_execution::refresh_authored_research_availability,
+                        research_execution::complete_research_projects_and_apply_authored_unlocks,
+                    ).chain(),
+                    catalogue_unlock_application::apply_catalogue_definition_unlock_requests
+                        .after(research_execution::complete_research_projects_and_apply_authored_unlocks),
                     catalogue_unlock_application::
-                        apply_authored_catalogue_unlock_requirements_from_progression_facts,
+                        apply_authored_catalogue_unlock_requirements_from_progression_facts
+                        .after(catalogue_unlock_application::apply_catalogue_definition_unlock_requests),
                 )
-                    .chain()
                     .in_set(FixedGameSet::Cleanup)
                     .run_if(in_state(GamePhase::InGame)),
             )
@@ -208,7 +218,6 @@ impl Plugin for ProgressionPlugin {
                 (
                     scenario_award_point_adjustment::
                         apply_requested_scenario_award_point_total_adjustments,
-                    fame_progression::apply_scenario_maximum_fame_requests,
                     profile_challenge_fact_recording::
                         record_completed_profile_challenge_family_counts,
                 )

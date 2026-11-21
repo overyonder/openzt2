@@ -143,6 +143,7 @@ impl Plugin for GameUiPlugin {
             .add_observer(authored_ui_focus_navigation_and_activation::authored_focus_left)
             .add_observer(authored_ui_change_activation_dispatch::activate_initial_deselection)
             .add_observer(authored_ui_change_activation_dispatch::activate_initial_visibility)
+            .add_message::<authored_ui_node_projection_components::UiSliderValueChanged>()
             .add_observer(slider::apply_native_slider_value)
             .add_message::<authored_ui_activation_contracts::UiNodeActivated>()
             .add_message::<authored_ui_activation_contracts::RunAuthoredTimedScenarioScript>()

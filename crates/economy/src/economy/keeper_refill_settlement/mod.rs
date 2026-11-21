@@ -59,7 +59,7 @@ impl KeeperRefillSettlement<'_, '_> {
             || claim.staff != actor
             || behavior.execution_id != Some(task.execution_id)
             || behavior.task != task.program
-            || job.kind != StaffJobKind::Feed
+            || job.kind != Some(StaffJobKind::Feed)
             || job.token != Some(AssetId::from_key("t_fillfoodcontainer"))
             || task.target != Some(job.target)
             || self.cancellations.as_ref().is_some_and(|messages| {

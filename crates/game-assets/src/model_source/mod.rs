@@ -2,12 +2,10 @@
 
 pub mod animation;
 mod bf_animation_cubic_keyframe_sampling;
-pub mod bf_animation_glb_and_metadata_lowering;
 pub mod bf_animation_keyframe_decoding;
 pub mod bf_animation_keyframe_interpolation;
 pub mod bf_animation_primitive_reading;
 mod bf_animation_quaternion_keyframe_sampling;
-pub mod bf_animation_root_motion_calculation;
 pub mod bf_animation_source_parsing;
 pub mod bf_animation_source_types;
 pub mod blue_fang_bfb_source;
@@ -17,10 +15,7 @@ pub mod gltf_binary_buffer;
 pub mod gltf_model_source;
 pub mod kf_animation;
 pub mod kf_animation_curve_sampling;
-pub mod kf_animation_glb_and_metadata_lowering;
-pub mod kf_animation_keyframe_sampling;
 pub mod kf_animation_source_extraction;
-pub mod kf_animation_source_types;
 pub mod model;
 pub mod native_animation_source_lowering;
 pub mod native_geometry;

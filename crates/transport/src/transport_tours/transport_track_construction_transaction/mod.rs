@@ -2,6 +2,7 @@ use super::transport_track_sale_steps::{
     ApplyTransportTrackSaleStep, TrackApplicationAcknowledgements,
 };
 use bevy::prelude::*;
+use openzt2_zoo_state::topology::persistent_edit_lookup::PersistentEditLookup;
 
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
@@ -11,7 +12,6 @@ use openzt2_zoo_state::construction::construction_interaction_types::PlacementVa
 use openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::ConstructionTool;
 use openzt2_zoo_state::construction::construction_transaction_types::EditApplication;
 use openzt2_zoo_state::construction::construction_transaction_types::PrepareConstruction;
-use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator;
 use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
@@ -126,6 +126,7 @@ pub(super) fn prepare_transport_track_construction_edit(
                 to_endpoint: track_preview.to_station,
                 to_endpoint_index: track_preview.to_endpoint_index,
                 path_points: track_preview.path_points.clone().into_boxed_slice(),
+                tower_height_m: track_preview.tower_height_m,
                 applied_entities: Vec::new(),
                 preview: Some(request.preview),
                 application_in_flight: None,
@@ -167,7 +168,7 @@ pub(super) fn apply_prepared_transport_track_construction_edits(
     mut requests: MessageReader<ApplyPreparedTransportTrackConstructionEditRequest>,
     mut step_requests: MessageReader<ApplyTransportTrackSaleStep>,
     mut edits: Query<(&mut PreparedTransportTrackConstructionEdit, &WorldMember)>,
-    persistent_entities: Query<(Entity, &PersistentId)>,
+    persistent_entities: Res<PersistentEditLookup>,
     sales: openzt2_zoo_state::transport_tours::transport_track_sale::TransportTrackSaleQueries,
     mut connections: MessageWriter<ConnectTransportTrackRequest>,
     mut disconnections: MessageWriter<DisconnectTransportTrackRequest>,
@@ -209,23 +210,14 @@ pub(super) fn apply_prepared_transport_track_construction_edits(
         let live_entities = edit
             .piece_entities
             .iter()
-            .filter_map(|wanted_id| {
-                persistent_entities
-                    .iter()
-                    .find_map(|(entity, id)| (*id == *wanted_id).then_some(entity))
-            })
+            .filter_map(|&id| persistent_entities.get(world_member.root, id))
             .collect::<Vec<_>>();
-        let live_destination_junction_entity =
-            edit.destination_junction_entity.and_then(|wanted_id| {
-                persistent_entities
-                    .iter()
-                    .find_map(|(entity, id)| (*id == wanted_id).then_some(entity))
-            });
-        let live_source_junction_entity = edit.source_junction_entity.and_then(|wanted_id| {
-            persistent_entities
-                .iter()
-                .find_map(|(entity, id)| (*id == wanted_id).then_some(entity))
-        });
+        let live_destination_junction_entity = edit
+            .destination_junction_entity
+            .and_then(|id| persistent_entities.get(world_member.root, id));
+        let live_source_junction_entity = edit
+            .source_junction_entity
+            .and_then(|id| persistent_entities.get(world_member.root, id));
         if live_entities.len() != edit.piece_entities.len() && !live_entities.is_empty() {
             for entity in live_entities {
                 commands.entity(entity).despawn();
@@ -324,8 +316,7 @@ pub(super) fn apply_prepared_transport_track_construction_edits(
                 });
                 continue;
             };
-            commands
-                .spawn((
+            let mut junction = commands.spawn((
                     destination_junction_identifier,
                     DefinitionId(edit.definition),
                     openzt2_zoo_state::transport_tours::transport_topology_types::TransportTrackJunction,
@@ -333,8 +324,15 @@ pub(super) fn apply_prepared_transport_track_construction_edits(
                     GlobalTransform::from_translation(destination_position),
                     Visibility::Inherited,
                     *world_member,
-                ))
-                .id()
+                ));
+            if let Some(height) = edit.tower_height_m {
+                junction.insert(
+                    openzt2_zoo_state::transport_tours::transport_topology_types::SkyTowerHeight(
+                        height,
+                    ),
+                );
+            }
+            junction.id()
         };
         let from_endpoint = match (edit.source_junction_entity, live_source_junction_entity) {
             (_, Some(endpoint)) => endpoint,
@@ -399,13 +397,13 @@ pub(super) fn acknowledge_completed_transport_track_topology_applications(
     mut applied_connections: MessageReader<TransportTrackConnectionApplied>,
     mut rejected_connections: MessageReader<TransportTrackConnectionRejected>,
     mut applied_disconnections: MessageReader<TransportTrackDisconnectionApplied>,
-    mut edits: Query<&mut PreparedTransportTrackConstructionEdit>,
-    persistent_entities: Query<(Entity, &PersistentId)>,
+    mut edits: Query<(&mut PreparedTransportTrackConstructionEdit, &WorldMember)>,
+    persistent_entities: Res<PersistentEditLookup>,
     previews: Query<(), With<TransportTrackConstructionPreview>>,
     mut acknowledged: TrackApplicationAcknowledgements,
 ) {
     for applied in applied_connections.read() {
-        let Ok(mut edit) = edits.get_mut(applied.transaction) else {
+        let Ok((mut edit, _)) = edits.get_mut(applied.transaction) else {
             continue;
         };
         if edit.applied_entities.first() != Some(&applied.track)
@@ -435,7 +433,7 @@ pub(super) fn acknowledge_completed_transport_track_topology_applications(
         });
     }
     for rejected in rejected_connections.read() {
-        let Ok(mut edit) = edits.get_mut(rejected.transaction) else {
+        let Ok((mut edit, member)) = edits.get_mut(rejected.transaction) else {
             continue;
         };
         if edit.applied_entities.first() != Some(&rejected.track)
@@ -446,14 +444,13 @@ pub(super) fn acknowledge_completed_transport_track_topology_applications(
         for entity in edit.applied_entities.drain(..) {
             commands.entity(entity).despawn();
         }
-        if let Some(endpoint) = edit.destination_junction_entity.and_then(|wanted_id| {
-            persistent_entities
-                .iter()
-                .find_map(|(entity, id)| (*id == wanted_id).then_some(entity))
-        }) {
+        if let Some(endpoint) = edit
+            .destination_junction_entity
+            .and_then(|id| persistent_entities.get(member.root, id))
+        {
             commands.entity(endpoint).despawn();
         }
-        despawn_source_junction(&mut commands, &edit, &persistent_entities);
+        despawn_source_junction(&mut commands, &edit, &persistent_entities, member.root);
         edit.application_in_flight = None;
         acknowledged.write(TransportTrackConstructionEditApplicationAcknowledged {
             transaction: rejected.transaction,
@@ -462,7 +459,7 @@ pub(super) fn acknowledge_completed_transport_track_topology_applications(
         });
     }
     for disconnected in applied_disconnections.read() {
-        let Ok(mut edit) = edits.get_mut(disconnected.transaction) else {
+        let Ok((mut edit, member)) = edits.get_mut(disconnected.transaction) else {
             continue;
         };
         if edit.applied_entities.first() != Some(&disconnected.track)
@@ -473,14 +470,13 @@ pub(super) fn acknowledge_completed_transport_track_topology_applications(
         for entity in edit.applied_entities.drain(..) {
             commands.entity(entity).despawn();
         }
-        if let Some(endpoint) = edit.destination_junction_entity.and_then(|wanted_id| {
-            persistent_entities
-                .iter()
-                .find_map(|(entity, id)| (*id == wanted_id).then_some(entity))
-        }) {
+        if let Some(endpoint) = edit
+            .destination_junction_entity
+            .and_then(|id| persistent_entities.get(member.root, id))
+        {
             commands.entity(endpoint).despawn();
         }
-        despawn_source_junction(&mut commands, &edit, &persistent_entities);
+        despawn_source_junction(&mut commands, &edit, &persistent_entities, member.root);
         edit.application_in_flight = None;
         if let Some(preview) = edit.preview.take() {
             commands.entity(preview).despawn();
@@ -496,13 +492,13 @@ pub(super) fn acknowledge_completed_transport_track_topology_applications(
 fn despawn_source_junction(
     commands: &mut Commands,
     edit: &PreparedTransportTrackConstructionEdit,
-    persistent_entities: &Query<(Entity, &PersistentId)>,
+    persistent_entities: &PersistentEditLookup,
+    root: Entity,
 ) {
-    if let Some(endpoint) = edit.source_junction_entity.and_then(|wanted_id| {
-        persistent_entities
-            .iter()
-            .find_map(|(entity, id)| (*id == wanted_id).then_some(entity))
-    }) {
+    if let Some(endpoint) = edit
+        .source_junction_entity
+        .and_then(|id| persistent_entities.get(root, id))
+    {
         commands.entity(endpoint).despawn();
     }
 }

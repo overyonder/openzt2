@@ -137,7 +137,7 @@ fn project_localized_zoopedia_plain_body_to_authored_text_node(
         return;
     };
     if let Some(existing_text) = input.existing_text {
-        replace_projected_ui_text_if_changed(&mut existing_text.0, localized_plain_body_text);
+        replace_projected_ui_text_if_changed(existing_text, localized_plain_body_text);
     } else {
         commands
             .entity(input.authored_text_entity)

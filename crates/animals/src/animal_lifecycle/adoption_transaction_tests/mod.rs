@@ -89,6 +89,7 @@ fn species_document() -> SpeciesDocument {
                 authored_species_name_override: None,
                 authored_product_name_override: None,
                 variant: SpeciesVariant {
+                    need_points: Default::default(),
                     placement_surface_policy: Default::default(),
                     id: AssetId::from_key(&format!("young_{index}")),
                     behavior_subject_type_identifiers: vec![],
@@ -120,6 +121,7 @@ fn species_document() -> SpeciesDocument {
 
 fn object(id: AssetId) -> WorldObjectDefinition {
     WorldObjectDefinition {
+        authored_runtime: Default::default(),
         audio_cue_prefixes: Vec::new(),
         surface_effect_strength: None,
         presentation_caustic_policies: Vec::new(),
@@ -188,6 +190,7 @@ fn setup(cash: i64) -> (App, Entity) {
         .init_resource::<WorldDefinitions>()
         .init_resource::<Assets<TerrainAsset>>()
         .init_resource::<TopologyGrid>()
+        .init_resource::<openzt2_zoo_state::habitat::habitat_types::HabitatIndex>()
         .add_plugins((
             super::AnimalLifecyclePlugin,
             openzt2_economy::economy::EconomyPlugin,
@@ -254,7 +257,9 @@ fn setup(cash: i64) -> (App, Entity) {
         .resource_mut::<WorldDefinitions>()
         .index_test_document(handle, &definitions);
     let root = app.world_mut().spawn(WorldRoot { scenario: species }).id();
-    app.insert_resource(PersistentIdAllocator::new(root));
+    app.world_mut()
+        .entity_mut(root)
+        .insert(PersistentIdAllocator::default());
     let grid = TerrainGrid {
         width: 2,
         height: 2,
@@ -399,7 +404,9 @@ fn paused_adoption_with_insufficient_funds_does_not_spawn_or_charge() {
 #[test]
 fn failed_paid_spawn_refunds_once_through_a_distinct_live_operation() {
     let (mut app, root) = setup(10_000);
-    app.insert_resource(PersistentIdAllocator::from_snapshot(root, u64::MAX).unwrap());
+    app.world_mut()
+        .entity_mut(root)
+        .insert(PersistentIdAllocator::from_snapshot(u64::MAX).unwrap());
     advance_fixed(&mut app);
     assert_eq!(animal_count(&mut app), 0);
     assert_eq!(app.world().resource::<ZooCash>().0, Money(8_750));

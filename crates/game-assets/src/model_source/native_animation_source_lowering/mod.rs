@@ -1,50 +1,90 @@
-//! Native BF/KF animation dispatch into GLB and authored clip metadata.
-
 use std::path::Path;
 
-use anyhow::Result;
+use bevy::{
+    animation::{animated_field, AnimationTargetId},
+    prelude::*,
+};
 use openzt2_game_data::animation::{
-    animation_clip_metadata::AuthoredAnimationClipMetadata,
-    animation_text_key::AuthoredAnimationTextKey,
+    animation_clip_metadata::{
+        AuthoredAnimationClipMetadata, AuthoredAnimationRootMotionJoint,
+        AuthoredAnimationRootMotionTransform,
+    },
+    animation_text_key::{AuthoredAnimationTextAction, AuthoredAnimationTextKey},
 };
 
 use super::{
-    animation::convert_blue_fang_animation_source_to_glb_and_authored_clip_metadata,
-    conversion_error::ConversionError,
-    kf_animation::convert_netimmerse_kf_animation_to_glb_and_authored_clip_metadata,
+    animation::lower_blue_fang_clip, conversion_error::ConversionError,
+    kf_animation::lower_netimmerse_kf_clip,
     netimmerse_nif_source::document_source_types::NetImmerseNifDocument,
 };
 
 #[cfg_attr(feature = "tracing", tracing::instrument(skip_all))]
-pub fn lower_native_animation_source(
-    animation_clip_asset_path: &str,
-    animation_source_bytes: &[u8],
-    authored_animation_text_keys: &[AuthoredAnimationTextKey],
-) -> Result<(Vec<u8>, AuthoredAnimationClipMetadata)> {
-    match Path::new(animation_clip_asset_path)
+pub(crate) fn lower_native_animation_source(
+    path: &str,
+    bytes: &[u8],
+    text_keys: &[AuthoredAnimationTextKey],
+) -> anyhow::Result<(AnimationClip, AuthoredAnimationClipMetadata)> {
+    let extension = Path::new(path)
         .extension()
-        .and_then(|extension| extension.to_str())
-    {
+        .and_then(|extension| extension.to_str());
+    let (clip, metadata) = match extension {
         Some(extension) if extension.eq_ignore_ascii_case("bf") => {
-            convert_blue_fang_animation_source_to_glb_and_authored_clip_metadata(
-                animation_clip_asset_path,
-                animation_source_bytes,
-                authored_animation_text_keys,
-            )
-            .map_err(Into::into)
+            lower_blue_fang_clip(path, bytes, text_keys)?
         }
         Some(extension) if extension.eq_ignore_ascii_case("kf") => {
-            let netimmerse_document = NetImmerseNifDocument::parse(
-                animation_clip_asset_path.to_owned(),
-                animation_source_bytes,
-            )?;
-            convert_netimmerse_kf_animation_to_glb_and_authored_clip_metadata(
-                animation_clip_asset_path,
-                &netimmerse_document,
-                authored_animation_text_keys,
-            )
-            .map_err(Into::into)
+            let document = NetImmerseNifDocument::parse(path.to_owned(), bytes)?;
+            lower_netimmerse_kf_clip(path, &document, text_keys)?
         }
-        _ => Err(ConversionError::InvalidSource("unsupported animation source").into()),
+        _ => return Err(ConversionError::InvalidSource("unsupported animation source").into()),
+    };
+    if metadata
+        .authored_animation_text_keys
+        .iter()
+        .flat_map(|key| &key.animation_text_commands)
+        .any(|command| {
+            matches!(
+                &command.animation_text_action,
+                AuthoredAnimationTextAction::UnrecognizedAuthoredCommand(_)
+            )
+        })
+    {
+        return Err(ConversionError::InvalidSource(
+            "animation text keys contain an unlowered command",
+        )
+        .into());
     }
+    Ok((clip, metadata))
+}
+
+pub(super) fn sample_root_motion(
+    clip: &AnimationClip,
+    joint_name: &str,
+) -> (
+    AuthoredAnimationRootMotionJoint,
+    AuthoredAnimationRootMotionTransform,
+) {
+    let lower_name = joint_name.to_ascii_lowercase();
+    let target = AnimationTargetId::from_iter([lower_name.as_str()]);
+    let translation_at = |time| {
+        clip.sample_clamped(animated_field!(Transform::translation), target, time)
+            .unwrap_or(Vec3::ZERO)
+    };
+    let rotation_at = |time| {
+        clip.sample_clamped(animated_field!(Transform::rotation), target, time)
+            .unwrap_or(Quat::IDENTITY)
+    };
+    let initial = translation_at(0.0);
+    (
+        AuthoredAnimationRootMotionJoint {
+            joint_asset_key: joint_name.to_owned(),
+            initial_translation: initial.to_array(),
+        },
+        AuthoredAnimationRootMotionTransform {
+            translation_from_first_to_last_frame: (translation_at(clip.duration()) - initial)
+                .to_array(),
+            rotation_from_first_to_last_frame: (rotation_at(clip.duration())
+                * rotation_at(0.0).inverse())
+            .to_array(),
+        },
+    )
 }

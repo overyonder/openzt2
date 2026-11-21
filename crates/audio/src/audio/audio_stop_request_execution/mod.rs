@@ -1,16 +1,38 @@
+use bevy::ecs::relationship::RelationshipTarget;
 use bevy::prelude::*;
 
-use super::{audio_playback_message_types::StopAudioCue, audio_player_spawning::AudioCueSelection};
+use super::{
+    audio_playback_message_types::StopAudioCue,
+    audio_player_spawning::{AudioCueSelection, NonspatialCueOwner, NonspatialCueVoices},
+};
 
 pub(super) fn execute_audio_stop_requests(
     mut commands: Commands,
     mut requests: MessageReader<StopAudioCue>,
-    playing_audio: Query<(Entity, &AudioCueSelection)>,
+    emitter_voices: Query<&Children>,
+    nonspatial_voices: Query<&NonspatialCueVoices, With<NonspatialCueOwner>>,
+    playing: Query<&AudioCueSelection>,
 ) {
     for request in requests.read() {
-        for (playing_entity, selection) in &playing_audio {
-            if selection.emitter == request.emitter && selection.selection == request.selection {
-                commands.entity(playing_entity).despawn();
+        let voices = match request.emitter {
+            Some(emitter) => {
+                let Ok(children) = emitter_voices.get(emitter) else {
+                    continue;
+                };
+                children.collection().as_slice()
+            }
+            None => {
+                let Ok(voices) = nonspatial_voices.single() else {
+                    continue;
+                };
+                voices.collection().as_slice()
+            }
+        };
+        for &voice in voices {
+            if playing.get(voice).is_ok_and(|selection| {
+                selection.emitter == request.emitter && selection.selection == request.selection
+            }) {
+                commands.entity(voice).try_despawn();
             }
         }
     }

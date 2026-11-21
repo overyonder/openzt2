@@ -37,10 +37,21 @@ struct SynchronizedBehaviorSources<'w, 's> {
 
 pub(super) fn register_synchronized_behavior_execution(app: &mut App) {
     use openzt2_game_assets::application_lifecycle::GamePhase;
-    use openzt2_world_state::application_schedule::FixedGameSet;
-    app.add_observer(start::claim_synchronized_behavior).add_systems(FixedUpdate, (finish::finish_or_cancel_synchronized_behavior_sets, start::start_synchronized_behavior_sets)
-        .chain().before(super::behavior_task_phase_transition_execution::advance_behavior_tasks_through_return_failure_completion_and_final_outcome)
-        .in_set(FixedGameSet::Think).run_if(in_state(GamePhase::InGame)));
+    use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
+        BehaviorStep, BehaviorStepSet,
+    };
+
+    app.add_observer(start::claim_synchronized_behavior)
+        .add_systems(
+            BehaviorStep,
+            (
+                finish::finish_or_cancel_synchronized_behavior_sets,
+                start::start_synchronized_behavior_sets,
+            )
+                .chain()
+                .in_set(BehaviorStepSet::Actions)
+                .run_if(in_state(GamePhase::InGame)),
+        );
 }
 
 use openzt2_zoo_state::behavior_task_execution_types::SynchronizedBehaviorParticipant;

@@ -170,8 +170,8 @@ mod tests {
             return Err("credits did not retain its timed action sequence".into());
         };
         assert_eq!(
-            events.iter().map(|event| event.due_ms).collect::<Vec<_>>(),
-            [0, 0, 2000, 3000, 3500]
+            events.iter().map(|event| event.due).collect::<Vec<_>>(),
+            [0, 0, 2000, 3000, 3500].map(std::time::Duration::from_millis)
         );
         let action = |index: usize| match &events[index].action {
             openzt2_game_data::ui_document::timed_presentation::UiTimedEventAction::Ui(

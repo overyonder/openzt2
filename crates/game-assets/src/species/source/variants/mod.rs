@@ -43,6 +43,7 @@ pub(super) fn lower_species_root_actor_to_fallback_canonical_variant(
                 (Some(animation_clip_asset_key), loops)
             });
     Ok(Some(SpeciesVariant {
+        need_points: lower_need_point_policy(species)?,
         placement_surface_policy: crate::world_definitions::lower::authored_placement_footprint_lowering::authored_surface_policy(species)?,
         id: AssetId::from_key(&canonicalize_source_document_record_key(&format!(
             "{}_adult",
@@ -74,6 +75,32 @@ pub(super) fn lower_species_root_actor_to_fallback_canonical_variant(
         flags: SpeciesVariantFlags::DEFAULT,
         adoption_count_range: [1, 1],
     }))
+}
+
+fn lower_need_point_policy(
+    record: &RecordView<'_, '_>,
+) -> Result<openzt2_game_data::species::AnimalNeedPointPolicy, BindError> {
+    use super::source_queries::find_effective_authored_animal_shared_attribute;
+    use crate::source_document::blue_fang_source_numeric_lexeme::parse_blue_fang_source_numeric_lexeme;
+    use openzt2_game_data::species::AnimalNeedPointPolicy;
+
+    let default = AnimalNeedPointPolicy::default();
+    let number = |name, fallback| {
+        let Some(value) = find_effective_authored_animal_shared_attribute(record, name) else {
+            return Ok(fallback);
+        };
+        parse_blue_fang_source_numeric_lexeme::<f32>(value)
+            .filter(|value| value.is_finite())
+            .ok_or_else(|| BindError::record(record, format!("invalid {name}")))
+    };
+    Ok(AnimalNeedPointPolicy {
+        interval_seconds: number("f_NeedPointUpdateInterval", default.interval_seconds)?,
+        maximum: number("f_NeedPointMax", default.maximum)?,
+        good_delta: number("f_NeedPointGoodDelta", default.good_delta)?,
+        bad_delta: number("f_NeedPointBadDelta", default.bad_delta)?,
+        factor: number("f_NeedPointFactor", default.factor)?,
+        factor_delta: number("f_NeedPointFactorDelta", default.factor_delta)?,
+    })
 }
 
 pub(super) fn lower_species_variant_source_record_to_canonical_variant(
@@ -175,6 +202,7 @@ pub(super) fn lower_species_variant_source_record_to_canonical_variant(
             .or_else(|| find_authored_base_species_variant_probability(&stage_record))
             .unwrap_or(100);
     Ok(Some(SpeciesVariant {
+        need_points: lower_need_point_policy(candidate)?,
         placement_surface_policy: crate::world_definitions::lower::authored_placement_footprint_lowering::authored_surface_policy(candidate)?,
         id: AssetId::from_key(&canonicalize_source_document_record_key(candidate.key)),
         behavior_subject_type_identifiers: authored_behavior_type_identifiers(candidate),

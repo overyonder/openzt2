@@ -16,7 +16,7 @@ use openzt2_interface_state::input::input_types::GameAction;
 
 use super::authored_scrollbar::ScrollsViewport;
 use super::authored_ui_integer_range_components::{UiMaximum, UiMinimum};
-use super::authored_ui_node_projection_components::{UiNodeId, UiValue};
+use super::authored_ui_node_projection_components::{UiNodeId, UiSliderValueChanged, UiValue};
 use bevy::input_focus::InputFocus;
 
 #[derive(Component, Debug, Clone, Copy, PartialEq)]
@@ -280,6 +280,7 @@ pub(super) fn adjust_focused_sliders(
     focus: Res<InputFocus>,
     context: crate::active_authored_ui_context::ActiveAuthoredUiContext,
     sliders: Query<(&UiSliderPolicy, Option<&ScrollsViewport>, Has<Slider>)>,
+    mut slider_input: MessageWriter<UiSliderValueChanged>,
     mut values: Query<(&UiMinimum, &UiMaximum, &mut UiValue)>,
     mut scrolls: Query<(&ComputedNode, &mut ScrollPosition)>,
 ) {
@@ -332,7 +333,12 @@ pub(super) fn adjust_focused_sliders(
             );
         } else if let Ok((minimum, maximum, mut value)) = values.get_mut(focused) {
             let next = stepped_value(value.0, direction, policy, minimum.0, maximum.0);
-            value.set_if_neq(UiValue(next));
+            if value.set_if_neq(UiValue(next)) {
+                slider_input.write(UiSliderValueChanged {
+                    slider: focused,
+                    value: next,
+                });
+            }
         }
     }
 }
@@ -382,6 +388,7 @@ pub(super) fn project_native_slider_values(
 pub(super) fn apply_native_slider_value(
     event: On<ValueChange<f32>>,
     context: crate::active_authored_ui_context::ActiveAuthoredUiContext,
+    mut slider_input: MessageWriter<UiSliderValueChanged>,
     mut values: Query<(&UiSliderPolicy, &UiMinimum, &UiMaximum, &mut UiValue), With<Slider>>,
 ) {
     let node = event.source;
@@ -396,7 +403,12 @@ pub(super) fn apply_native_slider_value(
         return;
     };
     let next = clamp_and_step(f64::from(event.value), policy, minimum.0, maximum.0);
-    value.set_if_neq(UiValue(next));
+    if value.set_if_neq(UiValue(next)) {
+        slider_input.write(UiSliderValueChanged {
+            slider: node,
+            value: next,
+        });
+    }
 }
 
 pub(super) fn apply_authored_slider_pointer_events(
@@ -417,6 +429,7 @@ pub(super) fn apply_authored_slider_pointer_events(
         ),
         Without<Slider>,
     >,
+    mut slider_input: MessageWriter<UiSliderValueChanged>,
     mut values: Query<(&UiMinimum, &UiMaximum, &mut UiValue)>,
     mut scrolls: Query<(&ComputedNode, &mut ScrollPosition)>,
 ) {
@@ -504,7 +517,12 @@ pub(super) fn apply_authored_slider_pointer_events(
                 minimum.0,
                 maximum.0,
             ) {
-                value.set_if_neq(UiValue(next));
+                if value.set_if_neq(UiValue(next)) {
+                    slider_input.write(UiSliderValueChanged {
+                        slider: slider,
+                        value: next,
+                    });
+                }
             }
         }
     }

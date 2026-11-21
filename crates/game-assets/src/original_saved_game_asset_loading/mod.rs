@@ -24,7 +24,10 @@ use std::io;
 pub struct OriginalSavedGameAsset {
     pub document: OrderedSourceDocument,
     pub source: WorldScenarioDocumentSource,
+    #[dependency]
     pub terrain: Handle<TerrainAsset>,
+    #[dependency]
+    pub economy: Handle<crate::world_definitions::world_definition_asset_set_refresh_and_indexing::saved_world_economy_asset::SavedWorldEconomyAsset>,
     pub unlimited_cash: bool,
 }
 
@@ -127,7 +130,7 @@ impl AssetLoader for OriginalSavedGameAssetLoader {
         starting_zoos[0].map = map.id;
         source.document.starting_zoos = starting_zoos;
         source.scenes = starting.scenes;
-        let (configuration, unlimited_cash) =
+        let (configuration, unlimited_cash, economy) =
             load_saved_world_configuration(&document, map.id, &self.archives, context).await?;
         source.document.scenarios = configuration.scenarios;
         source.document.scenario_script_bindings = configuration.scenario_script_bindings;
@@ -136,6 +139,7 @@ impl AssetLoader for OriginalSavedGameAssetLoader {
             document,
             source,
             terrain,
+            economy,
             unlimited_cash,
         })
     }

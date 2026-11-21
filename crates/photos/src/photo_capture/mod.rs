@@ -33,9 +33,8 @@ use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use super::{
     photo_album_types::{ActivePhotoAlbum, PhotoCameraRoll, PHOTO_CAMERA_ROLL_CAPACITY},
     photo_capture_types::{
-        CapturedPhotoEvidence, CapturedPhotoView, PendingPhotoCapture, PendingPhotoEvidence,
-        PendingPhotoScore, PhotoCaptionSubject, PhotoCaptureFailed, PhotoFailure,
-        PhotoSubjectsCollected, PhotoView,
+        CapturedPhotoEvidence, PendingPhotoCapture, PendingPhotoEvidence, PendingPhotoScore,
+        PhotoCaptionSubject, PhotoCaptureFailed, PhotoFailure, PhotoSubjectsCollected, PhotoView,
     },
     photo_mode_presentation_lifecycle::AuthoredPhotoModeDocumentPresentationOwner,
 };
@@ -52,7 +51,7 @@ pub(super) fn begin_requested_album_photo_captures(
     mut requests: MessageReader<CapturePhotoRequest>,
     clock: Res<ZooClock>,
     realtime: Res<Time<Real>>,
-    cameras: Query<(&Camera, &RenderTarget, Has<PhotoMode>, Option<&PhotoView>)>,
+    cameras: Query<(&Camera, &RenderTarget, Has<PhotoMode>)>,
     pending_album_captures: Query<(), With<AlbumPhotoReadbackOf>>,
     screenshots: Query<&Screenshot, Without<Captured>>,
     primary_window: Query<Entity, With<PrimaryWindow>>,
@@ -70,7 +69,7 @@ pub(super) fn begin_requested_album_photo_captures(
             if reserved {
                 return Err(PhotoFailure::ReadbackBusy);
             }
-            let (camera, target, in_photo_mode, view) = cameras
+            let (camera, target, in_photo_mode) = cameras
                 .get(request.camera)
                 .map_err(|_| PhotoFailure::InvalidCamera)?;
             if !in_photo_mode {
@@ -90,9 +89,9 @@ pub(super) fn begin_requested_album_photo_captures(
             }) {
                 return Err(PhotoFailure::ReadbackBusy);
             }
-            Ok((target, view.copied().unwrap_or_default()))
+            Ok(target)
         })();
-        let (target, view) = match result {
+        let target = match result {
             Ok(capture) => capture,
             Err(reason) => {
                 failed.write(PhotoCaptureFailed { reason });
@@ -109,7 +108,7 @@ pub(super) fn begin_requested_album_photo_captures(
                 captured_tick: clock.tick,
                 camera_position: Vec3::ZERO,
                 camera_rotation: Quat::IDENTITY,
-                view,
+                view: PhotoView::default(),
                 challenge_set,
                 expires_at: realtime.elapsed() + Duration::from_secs(5),
                 completed: false,
@@ -241,8 +240,12 @@ fn create_album_photo_from_completed_screenshot_capture(
             },
             PhotoSubjects(evidence.0.iter().map(|subject| subject.entity).collect()),
             AlbumMember(album),
-            CapturedPhotoEvidence(std::mem::take(&mut evidence.0), capture.challenge_set),
-            CapturedPhotoView(capture.view),
+            CapturedPhotoEvidence {
+                subjects: std::mem::take(&mut evidence.0),
+                challenge_set: capture.challenge_set,
+                camera_position: capture.camera_position,
+                view: capture.view,
+            },
             PendingPhotoScore,
         ));
         if let Some(caption) = caption {

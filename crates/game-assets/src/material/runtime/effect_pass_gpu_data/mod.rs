@@ -133,6 +133,7 @@ pub struct EffectPassTextureAssets {
 
 #[derive(Asset, TypePath, Clone, Debug)]
 pub struct EffectPassMaterial {
+    pub(super) morph_opacity: Vec4,
     pub(super) texture_coordinate_animations:
         std::sync::Arc<[super::texture_coordinate_animation::TextureCoordinateAnimation]>,
     pub(super) texture_coordinate_animation_geometry: Option<Entity>,

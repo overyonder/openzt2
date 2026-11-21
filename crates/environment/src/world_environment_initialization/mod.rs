@@ -45,9 +45,8 @@ pub(super) fn initialize_world_environment_from_loaded_scenario_and_definitions(
     active_definitions: Res<WorldDefinitions>,
     clock: Option<Res<ZooClock>>,
     seed: Option<Res<ZooSeed>>,
-    allocator: Option<ResMut<PersistentIdAllocator>>,
-    roots: Query<
-        (Entity, &WorldRoot, Option<&SelectedWorldDocumentHandles>),
+    mut roots: Query<
+        (Entity, &WorldRoot, Option<&SelectedWorldDocumentHandles>, &mut PersistentIdAllocator),
         (
             With<WorldLoadCompleted>,
             With<openzt2_interface_state::photos::photo_album_types::DefaultPhotoAlbumStorageInitializedForWorld>,
@@ -58,7 +57,7 @@ pub(super) fn initialize_world_environment_from_loaded_scenario_and_definitions(
     mut effects: MessageWriter<SpawnParticleEffectEmitter>,
     mut stop_effects: MessageWriter<StopParticleEffectsAttachedToEntity>,
 ) {
-    let (Some(clock), Some(seed), Some(mut allocator)) = (clock, seed, allocator) else {
+    let (Some(clock), Some(seed)) = (clock, seed) else {
         return;
     };
     let Some(definitions) = active_definitions.get(&definitions) else {
@@ -67,7 +66,7 @@ pub(super) fn initialize_world_environment_from_loaded_scenario_and_definitions(
     let Some(scenario_catalogue) = active_scenarios.get(&scenarios) else {
         return;
     };
-    for (root, world, documents) in &roots {
+    for (root, world, documents, mut allocator) in &mut roots {
         let scoped_catalogue = match documents {
             Some(documents) => scenario_catalogue
                 .with_document(&documents.map)
@@ -90,7 +89,7 @@ pub(super) fn initialize_world_environment_from_loaded_scenario_and_definitions(
             );
             continue;
         };
-        let Ok(persistent_id) = allocator.allocate(root) else {
+        let Ok(persistent_id) = allocator.allocate() else {
             continue;
         };
         let mut random = DeterministicRng::from_entity(*seed, persistent_id, RngDomain::Weather);
@@ -167,7 +166,7 @@ pub(super) fn initialize_world_environment_from_loaded_scenario_and_definitions(
             .iter()
             .filter_map(|identifier| definitions.find_ambient_spawn(*identifier))
         {
-            let Ok(id) = allocator.allocate(root) else {
+            let Ok(id) = allocator.allocate() else {
                 break;
             };
             let mut random = DeterministicRng::from_entity(*seed, id, RngDomain::AmbientSpawner);

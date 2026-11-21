@@ -9,17 +9,10 @@ use openzt2_zoo_state::transport_tours::transport_vehicle_types::TransportVehicl
 
 pub(crate) fn transport_station_capacity_is_valid(transport_station: &TransportStation) -> bool {
     transport_station.capacity > 0
-        && transport_station.queued <= transport_station.capacity
-        && transport_station.occupied <= transport_station.capacity
-        && transport_station
-            .queued
-            .saturating_add(transport_station.occupied)
-            <= transport_station.capacity
 }
 
 pub(crate) fn transport_track_segment_is_valid(track_segment: &TrackSegment) -> bool {
-    track_segment.from != track_segment.to
-        && track_segment.from_endpoint_index < 2
+    track_segment.from_endpoint_index < 2
         && track_segment.to_endpoint_index < 2
         && track_segment.from_position.is_finite()
         && track_segment.to_position.is_finite()
@@ -133,7 +126,6 @@ pub(crate) fn transport_vehicle_capacity_and_speed_are_valid(
     transport_vehicle: &TransportVehicle,
 ) -> bool {
     transport_vehicle.seats > 0
-        && transport_vehicle.occupied <= transport_vehicle.seats
         && transport_vehicle
             .maximum_speed_metres_per_second
             .is_finite()

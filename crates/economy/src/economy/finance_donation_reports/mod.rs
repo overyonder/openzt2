@@ -25,7 +25,9 @@ use openzt2_interface_state::ui::{
     },
     authored_ui_node_projection_components::UiValue,
 };
-use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
+use openzt2_world_state::world_spawn::world_membership_types::{
+    DefinitionId, WorldMember, WorldRoot,
+};
 use openzt2_zoo_state::{
     donations::donation_payment_types::{DonationCategoryTotals, DonationTotal},
     economy::currency_formatting::write_whole_dollar_currency_with_thousands_separators,
@@ -33,42 +35,50 @@ use openzt2_zoo_state::{
     transport_tours::transport_circuit_types::TransportCircuit,
 };
 
-#[derive(Resource, Default, PartialEq)]
+#[derive(Component, Default, PartialEq)]
 pub(super) struct FinanceDonationReports {
     species: Vec<DonationReportEntry>,
     tours: Vec<DonationReportEntry>,
     shows: Vec<DonationReportEntry>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum DonationReportSubject {
-    Species(AssetId),
-    Tour(Entity),
-    Show(Entity),
-}
-
-#[derive(Component, PartialEq, Eq)]
-pub(super) struct FinanceDonationRow(DonationReportSubject);
-
 #[derive(PartialEq)]
 struct DonationReportEntry {
-    subject: DonationReportSubject,
+    subject: Entity,
     label: AssetId,
     name: String,
     total: DonationTotal,
 }
 
+type ChangedDonationReportMember = Or<(
+    Changed<WorldMember>,
+    Changed<DonationCategoryTotals>,
+    Changed<DonationTotal>,
+    Changed<TransportCircuit>,
+    Changed<ShowStage>,
+    Changed<ShowName>,
+    Changed<Name>,
+    Changed<DefinitionId>,
+)>;
+
 pub(super) fn reduce_donations_for_finance_reports(
-    mut report: ResMut<FinanceDonationReports>,
+    mut reports: Query<(Entity, &mut FinanceDonationReports), With<WorldRoot>>,
     species_index: Res<SpeciesAssets>,
     species_assets: Res<Assets<SpeciesAsset>>,
     active_definitions: Res<WorldDefinitions>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
-    categories: Query<&DonationCategoryTotals>,
-    tours: Query<(Entity, &TransportCircuit, Option<&Name>, &DonationTotal)>,
+    categories: Query<(&WorldMember, &DonationCategoryTotals)>,
+    tours: Query<(
+        Entity,
+        &WorldMember,
+        &TransportCircuit,
+        Option<&Name>,
+        &DonationTotal,
+    )>,
     shows: Query<
         (
             Entity,
+            &WorldMember,
             Option<&DefinitionId>,
             Option<&ShowName>,
             Option<&Name>,
@@ -76,39 +86,26 @@ pub(super) fn reduce_donations_for_finance_reports(
         ),
         With<ShowStage>,
     >,
-    changed: (
-        Query<(), Changed<DonationCategoryTotals>>,
-        Query<
-            (),
-            (
+    changed: Query<
+        (),
+        (
+            Or<(
+                With<DonationCategoryTotals>,
                 With<TransportCircuit>,
-                Or<(
-                    Changed<Name>,
-                    Changed<TransportCircuit>,
-                    Changed<DonationTotal>,
-                )>,
-            ),
-        >,
-        Query<
-            (),
-            (
                 With<ShowStage>,
-                Or<(
-                    Added<ShowStage>,
-                    Changed<Name>,
-                    Changed<ShowName>,
-                    Changed<DonationTotal>,
-                )>,
-            ),
-        >,
-    ),
+            )>,
+            ChangedDonationReportMember,
+        ),
+    >,
     mut removed: (
+        RemovedComponents<WorldMember>,
         RemovedComponents<DonationCategoryTotals>,
         RemovedComponents<DonationTotal>,
         RemovedComponents<ShowStage>,
         RemovedComponents<TransportCircuit>,
         RemovedComponents<Name>,
         RemovedComponents<ShowName>,
+        RemovedComponents<DefinitionId>,
     ),
 ) {
     let removed_count = removed.0.read().count()
@@ -116,33 +113,32 @@ pub(super) fn reduce_donations_for_finance_reports(
         + removed.2.read().count()
         + removed.3.read().count()
         + removed.4.read().count()
-        + removed.5.read().count();
-    if !report.is_added()
+        + removed.5.read().count()
+        + removed.6.read().count()
+        + removed.7.read().count();
+    if changed.is_empty()
+        && removed_count == 0
         && !species_index.is_changed()
         && !species_assets.is_changed()
         && !active_definitions.is_changed()
         && !definitions.is_changed()
-        && removed_count == 0
-        && changed.0.is_empty()
-        && changed.1.is_empty()
-        && changed.2.is_empty()
+        && !reports.iter_mut().any(|(_, report)| report.is_added())
     {
         return;
     }
-    let mut by_category = BTreeMap::<AssetId, DonationTotal>::new();
-    for (category, amount) in categories.iter().flat_map(DonationCategoryTotals::iter) {
-        let total = by_category.entry(category).or_default();
-        total.count = total.count.saturating_add(amount.count);
-        total.amount.0 = total.amount.0.saturating_add(amount.amount.0);
+
+    let mut categories_by_world = BTreeMap::<Entity, BTreeMap<AssetId, DonationTotal>>::new();
+    for (member, categories) in &categories {
+        let totals = categories_by_world.entry(member.root).or_default();
+        for (category, amount) in categories.iter() {
+            add_total(totals.entry(category).or_default(), amount);
+        }
     }
 
-    let mut next = FinanceDonationReports::default();
+    let mut by_world = BTreeMap::<Entity, FinanceDonationReports>::new();
     if let Some(species) = species_index.get(&species_assets) {
         let mut emitted = BTreeSet::new();
-        for record in species.species() {
-            if !emitted.insert(record.id) {
-                continue;
-            }
+        for record in species.species().filter(|record| emitted.insert(record.id)) {
             let keys = std::iter::once(record.authored_species_name.as_str())
                 .chain(species.variants(record.id).filter_map(|variant| {
                     species
@@ -152,65 +148,80 @@ pub(super) fn reduce_donations_for_finance_reports(
                 }))
                 .map(|name| AssetId::from_key(&format!("Donate_{name}")))
                 .collect::<BTreeSet<_>>();
-            let mut total = DonationTotal::default();
-            for key in keys {
-                if let Some(category) = by_category.remove(&key) {
-                    total.count = total.count.saturating_add(category.count);
-                    total.amount.0 = total.amount.0.saturating_add(category.amount.0);
+            for (&root, categories) in &mut categories_by_world {
+                let mut total = DonationTotal::default();
+                for key in &keys {
+                    if let Some(amount) = categories.remove(key) {
+                        add_total(&mut total, amount);
+                    }
                 }
-            }
-            if total.count != 0 {
-                next.species.push(DonationReportEntry {
-                    subject: DonationReportSubject::Species(record.id),
-                    label: record.name_key,
-                    name: record.authored_species_name.clone(),
-                    total,
-                });
+                if total.count != 0 {
+                    by_world
+                        .entry(root)
+                        .or_default()
+                        .species
+                        .push(DonationReportEntry {
+                            subject: root,
+                            label: record.name_key,
+                            name: record.authored_species_name.clone(),
+                            total,
+                        });
+                }
             }
         }
     }
     let definitions = active_definitions.get(&definitions);
-    for (tour, circuit, name, total) in &tours {
+    for (tour, member, circuit, name, total) in &tours {
         let label = definitions
             .and_then(|definitions| definitions.find_object(circuit.definition))
             .map_or(AssetId::default(), |object| object.name_key);
-        next.tours.push(DonationReportEntry {
-            subject: DonationReportSubject::Tour(tour),
-            label,
-            name: name.map_or_else(String::new, |name| name.as_str().to_owned()),
-            total: *total,
-        });
+        by_world
+            .entry(member.root)
+            .or_default()
+            .tours
+            .push(DonationReportEntry {
+                subject: tour,
+                label,
+                name: name.map_or_else(String::new, |name| name.as_str().to_owned()),
+                total: *total,
+            });
     }
-    next.tours
-        .sort_unstable_by_key(|entry| match entry.subject {
-            DonationReportSubject::Tour(entity) => entity.to_bits(),
-            _ => 0,
-        });
-    for (show, definition, name, fallback, total) in &shows {
+    for (show, member, definition, name, fallback, total) in &shows {
         let label = definition
             .and_then(|definition| definitions?.find_object(definition.0))
             .map_or(AssetId::default(), |object| object.name_key);
-        next.shows.push(DonationReportEntry {
-            subject: DonationReportSubject::Show(show),
-            label,
-            name: name
-                .map(|name| name.0.as_str())
-                .or_else(|| fallback.map(Name::as_str))
-                .unwrap_or_default()
-                .to_owned(),
-            total: total.copied().unwrap_or_default(),
-        });
+        by_world
+            .entry(member.root)
+            .or_default()
+            .shows
+            .push(DonationReportEntry {
+                subject: show,
+                label,
+                name: name
+                    .map(|name| name.0.as_str())
+                    .or_else(|| fallback.map(Name::as_str))
+                    .unwrap_or_default()
+                    .to_owned(),
+                total: total.copied().unwrap_or_default(),
+            });
     }
-    next.shows
-        .sort_unstable_by_key(|entry| match entry.subject {
-            DonationReportSubject::Show(entity) => entity.to_bits(),
-            _ => 0,
-        });
-    report.set_if_neq(next);
+    for (root, mut report) in &mut reports {
+        let mut next = by_world.remove(&root).unwrap_or_default();
+        next.tours
+            .sort_unstable_by_key(|entry| entry.subject.to_bits());
+        next.shows
+            .sort_unstable_by_key(|entry| entry.subject.to_bits());
+        report.set_if_neq(next);
+    }
+}
+
+fn add_total(total: &mut DonationTotal, amount: DonationTotal) {
+    total.count = total.count.saturating_add(amount.count);
+    total.amount.0 = total.amount.0.saturating_add(amount.amount.0);
 }
 
 pub(super) fn project_finance_donation_rows(
-    report: Res<FinanceDonationReports>,
+    reports: Query<Ref<FinanceDonationReports>, With<WorldRoot>>,
     active_locale: Res<LocalizationPrecedenceIndex>,
     locales: Res<Assets<LocalizationAsset>>,
     mut lists: Query<(
@@ -218,11 +229,13 @@ pub(super) fn project_finance_donation_rows(
         Option<&Children>,
         &mut RequestedUiListRowCount,
     )>,
-    mut rows: Query<(Ref<UiListRow>, Option<&mut FinanceDonationRow>)>,
+    rows: Query<Ref<UiListRow>>,
     children: Query<&Children>,
     mut fields: Query<(&Name, &mut Text, Option<&mut UiValue>)>,
-    mut commands: Commands,
 ) {
+    let Ok(report) = reports.single() else {
+        return;
+    };
     let locale_changed = active_locale.is_changed() || locales.is_changed();
     let Some(locale) = active_locale.borrow_loaded_localization_view(&locales) else {
         return;
@@ -239,31 +252,19 @@ pub(super) fn project_finance_donation_rows(
             report_rows.len().min(usize::from(u16::MAX)) as u16,
         )));
         for entity in owned.into_iter().flat_map(RelationshipTarget::iter) {
-            let Ok((row, previous)) = rows.get_mut(entity) else {
+            let Ok(row) = rows.get(entity) else {
                 continue;
             };
             let Some(entry) = report_rows.get(usize::from(row.index)) else {
                 continue;
             };
-            let mut changed =
-                report.is_changed() || locale_changed || row.is_changed() || policy.is_changed();
-            if let Some(mut previous) = previous {
-                changed |= previous.set_if_neq(FinanceDonationRow(entry.subject));
-            } else {
-                commands
-                    .entity(entity)
-                    .insert(FinanceDonationRow(entry.subject));
-                changed = true;
-            }
-            if !changed {
+            if !report.is_changed() && !locale_changed && !row.is_changed() && !policy.is_changed()
+            {
                 continue;
             }
             let localized = locale
                 .find_plain_localized_text(entry.label)
-                .filter(|_| {
-                    entry.name.is_empty()
-                        || matches!(entry.subject, DonationReportSubject::Species(_))
-                })
+                .filter(|_| entry.name.is_empty() || policy.source == FinanceDonationsBySpecies)
                 .unwrap_or(entry.name.as_str());
             for node in std::iter::once(entity).chain(children.iter_descendants::<Children>(entity))
             {
@@ -324,8 +325,4 @@ pub(super) fn project_finance_donation_rows(
             }
         }
     }
-}
-
-pub(super) fn clear_finance_donation_reports(mut reports: ResMut<FinanceDonationReports>) {
-    reports.set_if_neq(FinanceDonationReports::default());
 }

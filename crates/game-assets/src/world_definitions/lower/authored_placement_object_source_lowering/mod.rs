@@ -471,7 +471,7 @@ pub(super) fn bind_authored_placement_object(
     )
     .expect("authored object flags are part of the canonical flag vocabulary");
 
-    let (presentation_caustic_policies, surface_effect_strength) =
+    let (presentation_caustic_policies, surface_effect_strength, traversal_animation_manifests) =
         super::authored_presentation_physics_source_lowering::lower_authored_presentation_physics(
             record,
         )?;
@@ -491,6 +491,7 @@ pub(super) fn bind_authored_placement_object(
         record.key.to_string(),
     ));
     output.document.objects.push(WorldObjectDefinition {
+        authored_runtime: super::object_and_placeable_source_lowering::lower_authored_world_object_runtime(record)?,
         audio_cue_prefixes: super::authored_audio_cue_prefixes(record),
         behavior_type_identifiers: crate::source_document::authored_behavior_type_identifiers::authored_behavior_type_identifiers(record),
         selected_ui_broadcasts: super::object_selected_ui_broadcast_source_lowering::lower_object_selected_ui_broadcasts(record),
@@ -561,6 +562,7 @@ pub(super) fn bind_authored_placement_object(
         prefab_scale: presentation_scale,
         surface_effect_strength,
         presentation_caustic_policies,
+        traversal_animation_manifests,
         icon,
         biomes,
         location,

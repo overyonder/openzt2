@@ -14,7 +14,6 @@ pub(super) struct SpawnAnimalRequest {
     pub(super) variant: Option<AssetId>,
     pub(super) sex: Option<Sex>,
     pub(super) world: Entity,
-    pub(super) habitat: Option<Entity>,
     pub(super) transform: Transform,
     pub(super) parents: Parents,
 }

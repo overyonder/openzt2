@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use openzt2_zoo_state::transport_tours::transport_topology_types::{TrackIncidence, TrackRoute};
 
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
@@ -9,9 +10,9 @@ use crate::transport_tours::transport_fact_validation::authored_transport_track_
 use crate::transport_tours::transport_fact_validation::transport_station_capacity_is_valid;
 use crate::transport_tours::transport_fact_validation::transport_track_segment_is_valid;
 use crate::transport_tours::transport_fact_validation::transport_vehicle_capacity_and_speed_are_valid;
-use openzt2_zoo_state::transport_tours::transport_circuit_types::CircuitMember;
 use openzt2_zoo_state::transport_tours::transport_circuit_types::OpenCircuitRequest;
 use openzt2_zoo_state::transport_tours::transport_circuit_types::TransportCircuit;
+use openzt2_zoo_state::transport_tours::transport_circuit_types::{CircuitMember, CircuitMembers};
 use openzt2_zoo_state::transport_tours::transport_topology_types::TrackSegment;
 use openzt2_zoo_state::transport_tours::transport_topology_types::TransportStation;
 use openzt2_zoo_state::transport_tours::transport_topology_types::TransportTrackJunction;
@@ -22,10 +23,12 @@ fn transport_circuit_is_valid_for_opening(
     transport_circuit: &TransportCircuit,
     world_definitions: WorldDefinitionsView<'_>,
     endpoint_transforms: &Query<&GlobalTransform>,
+    members: &CircuitMembers,
+    incidence: &TrackIncidence,
     transport_circuit_members: &Query<(
         Entity,
         &CircuitMember,
-        Option<&TrackSegment>,
+        Option<TrackRoute>,
         Option<&TransportStation>,
         Option<&TransportTrackJunction>,
         Option<&TransportVehicle>,
@@ -55,7 +58,9 @@ fn transport_circuit_is_valid_for_opening(
         transport_station,
         transport_junction,
         transport_vehicle,
-    ) in transport_circuit_members.iter()
+    ) in transport_circuit_members
+        .iter_many(members.iter())
+        .filter_map(Result::ok)
     {
         if circuit_member.0 != transport_circuit_entity {
             continue;
@@ -73,13 +78,13 @@ fn transport_circuit_is_valid_for_opening(
             }
             station_count += 1;
             first_station_entity.get_or_insert(entity);
-            for (_, track_circuit_member, track_segment, _, _, _) in
-                transport_circuit_members.iter()
+            for (_, track_circuit_member, track_segment, _, _, _) in transport_circuit_members
+                .iter_many(incidence.incident(entity))
+                .filter_map(Result::ok)
             {
-                let Some(track_segment) = track_segment.filter(|track_segment| {
-                    track_circuit_member.0 == transport_circuit_entity
-                        && (track_segment.from == entity || track_segment.to == entity)
-                }) else {
+                let Some(track_segment) =
+                    track_segment.filter(|_| track_circuit_member.0 == transport_circuit_entity)
+                else {
                     continue;
                 };
                 let Some(authored_track) = world_definitions.find_track(track_segment.definition)
@@ -97,16 +102,18 @@ fn transport_circuit_is_valid_for_opening(
             else {
                 return false;
             };
-            if !transport_track_segment_is_valid(track_segment) {
+            if track_segment.from() == track_segment.to()
+                || !transport_track_segment_is_valid(track_segment.geometry)
+            {
                 return false;
             }
             let Ok((_, start_circuit_member, _, start_station, start_junction, _)) =
-                transport_circuit_members.get(track_segment.from)
+                transport_circuit_members.get(track_segment.from())
             else {
                 return false;
             };
             let Ok((_, end_circuit_member, _, end_station, end_junction, _)) =
-                transport_circuit_members.get(track_segment.to)
+                transport_circuit_members.get(track_segment.to())
             else {
                 return false;
             };
@@ -115,10 +122,10 @@ fn transport_circuit_is_valid_for_opening(
             {
                 return false;
             }
-            let Ok(start_transform) = endpoint_transforms.get(track_segment.from) else {
+            let Ok(start_transform) = endpoint_transforms.get(track_segment.from()) else {
                 return false;
             };
-            let Ok(end_transform) = endpoint_transforms.get(track_segment.to) else {
+            let Ok(end_transform) = endpoint_transforms.get(track_segment.to()) else {
                 return false;
             };
             let start_position = start_station
@@ -184,53 +191,47 @@ fn transport_circuit_is_valid_for_opening(
         return false;
     }
 
-    // Every station or track junction in a valid directed circuit has exactly
-    // one incoming and one outgoing track segment.
-    for (endpoint_entity, circuit_member, _, transport_station, transport_junction, _) in
-        transport_circuit_members.iter()
+    let mut successors = bevy::ecs::entity::EntityHashMap::default();
+    let in_circuit = |segment: Entity| {
+        transport_circuit_members
+            .get(segment)
+            .ok()
+            .and_then(|(_, member, route, _, _, _)| {
+                (member.0 == transport_circuit_entity)
+                    .then_some(route)
+                    .flatten()
+            })
+    };
+    for (endpoint, member, _, station, junction, _) in transport_circuit_members
+        .iter_many(members.iter())
+        .filter_map(Result::ok)
     {
-        if circuit_member.0 != transport_circuit_entity
-            || (transport_station.is_none() && transport_junction.is_none())
-        {
+        if member.0 != transport_circuit_entity || (station.is_none() && junction.is_none()) {
             continue;
         }
-        let mut incoming_track_count = 0usize;
-        let mut outgoing_track_count = 0usize;
-        for (_, track_circuit_member, track_segment, _, _, _) in transport_circuit_members.iter() {
-            let Some(track_segment) =
-                track_segment.filter(|_| track_circuit_member.0 == transport_circuit_entity)
-            else {
-                continue;
-            };
-            incoming_track_count += usize::from(track_segment.to == endpoint_entity);
-            outgoing_track_count += usize::from(track_segment.from == endpoint_entity);
-        }
-        if incoming_track_count != 1 || outgoing_track_count != 1 {
+        let mut incoming = incidence.incoming(endpoint).filter_map(in_circuit);
+        let mut outgoing = incidence.outgoing(endpoint).filter_map(in_circuit);
+        let (Some(_), Some(next)) = (incoming.next(), outgoing.next()) else {
+            return false;
+        };
+        if incoming.next().is_some() || outgoing.next().is_some() {
             return false;
         }
+        successors.insert(endpoint, next.to());
     }
 
     // Degree validity permits disjoint loops, so walk exactly one full circuit.
-    let mut current_endpoint_entity = first_station_entity;
-    for traversed_track_count in 0..track_segment_count {
-        let next_station_entity = transport_circuit_members.iter().find_map(
-            |(_, circuit_member, track_segment, _, _, _)| {
-                track_segment
-                    .filter(|track_segment| {
-                        circuit_member.0 == transport_circuit_entity
-                            && track_segment.from == current_endpoint_entity
-                    })
-                    .map(|track_segment| track_segment.to)
-            },
-        );
-        let Some(next_station_entity) = next_station_entity else {
+    let mut endpoint = first_station_entity;
+    for traversed in 0..track_segment_count {
+        let Some(&next) = successors.get(&endpoint) else {
             return false;
         };
-        current_endpoint_entity = next_station_entity;
-        if current_endpoint_entity == first_station_entity {
-            return traversed_track_count + 1 == track_segment_count;
+        endpoint = next;
+        if endpoint == first_station_entity {
+            return traversed + 1 == track_segment_count;
         }
     }
+
     false
 }
 
@@ -238,7 +239,7 @@ pub(super) fn close_changed_transport_circuits_and_apply_open_requests(
     mut open_circuit_requests: MessageReader<OpenCircuitRequest>,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,
-    mut transport_circuits: Query<(Entity, &mut TransportCircuit)>,
+    mut transport_circuits: Query<(Entity, &mut TransportCircuit, Option<&CircuitMembers>)>,
     changed_circuit_members: Query<
         &CircuitMember,
         Or<(
@@ -252,34 +253,39 @@ pub(super) fn close_changed_transport_circuits_and_apply_open_requests(
     transport_circuit_members: Query<(
         Entity,
         &CircuitMember,
-        Option<&TrackSegment>,
+        Option<TrackRoute>,
         Option<&TransportStation>,
         Option<&TransportTrackJunction>,
         Option<&TransportVehicle>,
     )>,
     endpoint_transforms: Query<&GlobalTransform>,
+    incidence: TrackIncidence,
 ) {
     let Some(world_definitions) = active_world_definitions.get(&world_definition_assets) else {
         return;
     };
     for circuit_member in &changed_circuit_members {
-        if let Ok((_, mut transport_circuit)) = transport_circuits.get_mut(circuit_member.0) {
+        if let Ok((_, mut transport_circuit, _)) = transport_circuits.get_mut(circuit_member.0) {
             transport_circuit.closed = true;
         }
     }
     for open_circuit_request in open_circuit_requests.read() {
-        let Ok((transport_circuit_entity, mut transport_circuit)) =
+        let Ok((transport_circuit_entity, mut transport_circuit, members)) =
             transport_circuits.get_mut(open_circuit_request.circuit)
         else {
             continue;
         };
         transport_circuit.closed = !open_circuit_request.open
-            || !transport_circuit_is_valid_for_opening(
-                transport_circuit_entity,
-                &transport_circuit,
-                world_definitions,
-                &endpoint_transforms,
-                &transport_circuit_members,
-            );
+            || !members.is_some_and(|members| {
+                transport_circuit_is_valid_for_opening(
+                    transport_circuit_entity,
+                    &transport_circuit,
+                    world_definitions,
+                    &endpoint_transforms,
+                    members,
+                    &incidence,
+                    &transport_circuit_members,
+                )
+            });
     }
 }

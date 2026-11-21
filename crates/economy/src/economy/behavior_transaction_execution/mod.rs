@@ -33,6 +33,10 @@ use openzt2_game_data::{
 pub(super) fn start_authored_behavior_transactions(
     mut commands: Commands,
     clock: Res<ZooClock>,
+    show_donations: Query<
+        &openzt2_zoo_state::animal_behavior::behavior_token_types::BehaviorSelfToken,
+        With<openzt2_zoo_state::economy::experience_donation::ExperienceDonation>,
+    >,
     tasks: Query<
         (
             Entity,
@@ -53,6 +57,14 @@ pub(super) fn start_authored_behavior_transactions(
             continue;
         }
         if !instruction.is_current(task) {
+            continue;
+        }
+        if running_action.transaction == AssetId::from_key("donate")
+            && task
+                .object
+                .and_then(|object| show_donations.get(object).ok())
+                .is_some_and(|token| token.name == AssetId::from_key("t_donationshow"))
+        {
             continue;
         }
         let RunBehaviorEconomy {
@@ -82,7 +94,7 @@ pub(super) fn execute_authored_behavior_transaction_steps(
     objects: Query<(&DefinitionId, Option<&FacilityPriceIndex>)>,
     worlds: Query<&WorldMember>,
     tracker_indexes: Query<(
-        &super::saved_world_economy_trackers::WorldEconomyConfiguration,
+        &openzt2_zoo_state::economy::world_economy_configuration::WorldEconomyConfiguration,
         Option<&super::saved_world_economy_trackers::WorldEconomyTrackerIndex>,
     )>,
     asset_server: Res<AssetServer>,
@@ -113,7 +125,7 @@ pub(super) fn execute_authored_behavior_transaction_steps(
                 .remove::<RunningBehaviorEconomyTransaction>();
             continue;
         }
-        if pending.payment.is_some() {
+        if pending.payment.is_some() || task.next_action_tick > clock.tick {
             continue;
         }
         let tracker = if running.general || running.tracker.is_some() {

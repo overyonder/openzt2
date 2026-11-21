@@ -18,3 +18,30 @@ impl Fame {
         (percent / 10.0).floor() as u8
     }
 }
+
+/// Authored presentation request to replace the entrance appearance in place.
+#[derive(Message, Clone, Copy)]
+pub struct FameGateAppearanceRequested {
+    pub gate: Entity,
+    pub definition: openzt2_game_data::AssetId,
+}
+
+/// Accumulated view facts per species from the guest's accepted view events.
+#[derive(Component, Default)]
+pub struct GuestSpeciesFameViews(
+    pub std::collections::BTreeMap<openzt2_game_data::AssetId, GuestSpeciesFameView>,
+);
+
+#[derive(Default)]
+pub struct GuestSpeciesFameView {
+    pub events: u32,
+    pub entertainment: f32,
+    pub donation: f32,
+}
+
+/// Layout values produced by the world's authored fame script.
+#[derive(Component, Default, PartialEq)]
+pub struct FameAuthoredPresentation {
+    pub bars: std::collections::BTreeMap<openzt2_game_data::AssetId, f32>,
+    pub gate_icon: Option<openzt2_game_data::AssetId>,
+}

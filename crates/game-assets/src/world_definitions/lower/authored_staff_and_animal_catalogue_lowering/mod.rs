@@ -69,7 +69,7 @@ mod tests {
                 "worker.xml",
                 r#"<BFTypedBinder binderType="Worker" abstract="true">
                 <types><entity><actor><people><Staff><Worker/></Staff></people></actor></entity></types>
-                <shared><UIToggleButton><UIAspect><default image="worker.dds"/></UIAspect><on><event msg="ZT_SETPLACEMENTOBJECT" string="Worker"/></on></UIToggleButton></shared>
+                <shared><UIToggleButton><UIAspect><default image="worker.dds"/></UIAspect><on><event msg="ZT_SETPLACEMENTOBJECT" string="Worker_Adult_F"/></on></UIToggleButton></shared>
             </BFTypedBinder>"#,
             ),
         ];
@@ -114,6 +114,9 @@ mod tests {
                 .first()
                 .ok_or_else(|| std::io::Error::other("staff object is absent"))?;
             assert_eq!(object.prefab, AssetId::from_virtual_path("body.nif#scene"));
+            assert!(document.catalogue.iter().any(|entry| {
+                entry.id == id("catalogue/worker") && entry.definition == id("worker_adult_f")
+            }));
             assert_eq!(
                 object.catalogue_preview_prefab,
                 Some(AssetId::from_virtual_path("head.nif#scene"))
@@ -786,17 +789,43 @@ fn find_first_authored_staff_family_variant_with_primary_actor<'index, 'document
         .min_by(|left, right| left.key.cmp(right.key))
 }
 
+fn find_authored_staff_hire_button(
+    node: &OrderedSourceDocumentNode,
+) -> Option<(&OrderedSourceDocumentNode, AssetId)> {
+    if source_document_names_are_semantically_equal(node.name.as_str(), "UIToggleButton") {
+        let activation = find_descendant(node, "on")?;
+        return activation
+            .element_children()
+            .filter(|event| {
+                source_document_names_are_semantically_equal(event.name.as_str(), "event")
+                    && event.attribute_named_any(&["msg"]).is_some_and(|message| {
+                        source_document_names_are_semantically_equal(
+                            message,
+                            "ZT_SETPLACEMENTOBJECT",
+                        )
+                    })
+            })
+            .filter_map(|event| {
+                event
+                    .attribute_named_any(&["string", "value"])
+                    .filter(|target| !target.trim().is_empty())
+            })
+            .last()
+            .map(|target| (node, id(target)));
+    }
+    node.element_children()
+        .find_map(find_authored_staff_hire_button)
+}
+
 pub(super) fn bind_authored_staff_catalogue(
     record: &RecordView<'_, '_>,
     resolved_source_records: &[RecordView<'_, '_>],
     actor_scene_paths: &BTreeMap<String, String>,
     output: &mut WorldDefinitionLoweringTables,
 ) -> Result<(), BindError> {
-    let Some(purchase_button) = record.descendant_named("UIToggleButton").filter(|_| {
-        record
-            .descendant_with_attribute("event", "msg", "ZT_SETPLACEMENTOBJECT")
-            .is_some()
-    }) else {
+    let Some((purchase_button, hire_placement)) =
+        find_authored_staff_hire_button(record.source_document_element())
+    else {
         return Ok(());
     };
     let Some(actor_record) = authored_staff_primary_actor_component(record)
@@ -988,7 +1017,7 @@ pub(super) fn bind_authored_staff_catalogue(
             })
             .transpose()?;
 
-    let (presentation_caustic_policies, surface_effect_strength) =
+    let (presentation_caustic_policies, surface_effect_strength, traversal_animation_manifests) =
         super::authored_presentation_physics_source_lowering::lower_authored_presentation_physics(
             record,
         )?;
@@ -1001,6 +1030,7 @@ pub(super) fn bind_authored_staff_catalogue(
         record.key.to_string(),
     ));
     output.document.objects.push(WorldObjectDefinition {
+        authored_runtime: super::object_and_placeable_source_lowering::lower_authored_world_object_runtime(record)?,
         audio_cue_prefixes: super::authored_audio_cue_prefixes(record),
         behavior_type_identifiers: crate::source_document::authored_behavior_type_identifiers::authored_behavior_type_identifiers(record),
         selected_ui_broadcasts: super::object_selected_ui_broadcast_source_lowering::lower_object_selected_ui_broadcasts(record),
@@ -1033,6 +1063,7 @@ pub(super) fn bind_authored_staff_catalogue(
         prefab_scale: 1.0,
         surface_effect_strength,
         presentation_caustic_policies,
+        traversal_animation_manifests,
         icon,
         biomes: Vec::new(),
         location: AssetId::default(),
@@ -1086,7 +1117,7 @@ pub(super) fn bind_authored_staff_catalogue(
             record,
         ),
         id: id(&format!("catalogue/{}", record.key)),
-        definition,
+        definition: hire_placement,
         kind,
         kinds,
         category: CatalogueCategory::Staff,
@@ -1233,7 +1264,7 @@ pub(super) fn bind_authored_animal_catalogue(
             format!("authored animal actor {actor:?} has no resolved model scene"),
         )
     })?;
-    let (presentation_caustic_policies, surface_effect_strength) =
+    let (presentation_caustic_policies, surface_effect_strength, traversal_animation_manifests) =
         super::authored_presentation_physics_source_lowering::lower_authored_presentation_physics(
             record,
         )?;
@@ -1246,6 +1277,7 @@ pub(super) fn bind_authored_animal_catalogue(
         record.key.to_string(),
     ));
     output.document.objects.push(WorldObjectDefinition {
+        authored_runtime: super::object_and_placeable_source_lowering::lower_authored_world_object_runtime(record)?,
         audio_cue_prefixes: super::authored_audio_cue_prefixes(record),
         behavior_type_identifiers: crate::source_document::authored_behavior_type_identifiers::authored_behavior_type_identifiers(record),
         selected_ui_broadcasts: super::object_selected_ui_broadcast_source_lowering::lower_object_selected_ui_broadcasts(record),
@@ -1278,6 +1310,7 @@ pub(super) fn bind_authored_animal_catalogue(
         prefab_scale,
         surface_effect_strength,
         presentation_caustic_policies,
+        traversal_animation_manifests,
         icon,
         biomes,
         location,

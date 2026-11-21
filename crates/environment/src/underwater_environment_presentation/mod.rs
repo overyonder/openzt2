@@ -1,8 +1,5 @@
 use bevy::pbr::{DistanceFog, FogFalloff};
 use bevy::prelude::*;
-use openzt2_game_assets::effect::particle_wave_surface::{
-    ParticleEffectWaveSurface, ParticleEffectWaveSurfaceFog,
-};
 use openzt2_game_assets::{
     terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset,
     world_definitions::{
@@ -15,50 +12,6 @@ use super::environment_presentation_types::{AboveWaterFog, EnvironmentFog};
 use super::environment_state_types::{EnvironmentDaylightFraction, ObjectAmbientLight};
 
 pub(crate) mod current;
-
-pub(crate) fn update_water_particle_wave_fog(
-    mut commands: Commands,
-    cameras: Query<
-        (
-            Ref<openzt2_zoo_state::terrain::terrain_water_view_state::TerrainWaterCameraPose>,
-            Ref<Projection>,
-            Ref<DistanceFog>,
-        ),
-        With<openzt2_interface_state::camera::camera_runtime_state_types::ZooCamera>,
-    >,
-    mut effects: Query<
-        (Entity, Option<&mut ParticleEffectWaveSurfaceFog>),
-        With<ParticleEffectWaveSurface>,
-    >,
-) {
-    let camera = cameras.single().ok();
-    let changed = camera.as_ref().is_none_or(|(transform, projection, fog)| {
-        transform.is_changed() || projection.is_changed() || fog.is_changed()
-    });
-    let mut sample = None;
-    for (entity, fog) in &mut effects {
-        if !changed && fog.is_some() {
-            continue;
-        }
-        let next = *sample.get_or_insert_with(|| {
-            camera.as_ref().and_then(|(transform, projection, fog)| {
-                ParticleEffectWaveSurfaceFog::from_camera(transform.0.as_ref()?, projection, fog)
-            })
-        });
-        match (fog, next) {
-            (Some(mut fog), Some(next)) => *fog = next,
-            (None, Some(next)) => {
-                commands.entity(entity).insert(next);
-            }
-            (Some(_), None) => {
-                commands
-                    .entity(entity)
-                    .remove::<ParticleEffectWaveSurfaceFog>();
-            }
-            (None, None) => {}
-        }
-    }
-}
 
 pub(crate) fn sample_water_environment_map(
     daylight_fraction: Res<EnvironmentDaylightFraction>,

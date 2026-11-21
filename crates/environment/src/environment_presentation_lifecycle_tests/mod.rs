@@ -108,14 +108,9 @@ fn registered_world_exit_flushes_members_before_environment_and_surviving_camera
             bevy::pbr::DistanceFog::default(),
         ))
         .id();
-    let orphan_member = application
+    let disabled_member = application
         .world_mut()
-        .spawn((
-            WorldMember {
-                root: Entity::PLACEHOLDER,
-            },
-            Disabled,
-        ))
+        .spawn((WorldMember { root }, Disabled))
         .id();
     let unrelated_parent = application.world_mut().spawn_empty().id();
     let environment_without_membership = application
@@ -167,7 +162,7 @@ fn registered_world_exit_flushes_members_before_environment_and_surviving_camera
         visual,
         renderer,
         world_camera,
-        orphan_member,
+        disabled_member,
         environment_without_membership,
         leftover_visual,
         environment_camera,

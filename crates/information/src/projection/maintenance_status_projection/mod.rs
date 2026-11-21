@@ -1,10 +1,10 @@
+use super::panel_binding_families::*;
+use bevy::ecs::relationship::RelationshipTarget;
 use bevy::prelude::*;
 use openzt2_game_data::ui_document::node_property_binding::UiIntegerPropertyBindingSource;
 
-use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiValue;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiValueBinding;
-use openzt2_zoo_state::aquatic::aquatic_simulation_types::WaterQuality;
 use openzt2_zoo_state::maintenance::maintenance_types::AnimalHabitatWaste;
 use openzt2_zoo_state::maintenance::maintenance_types::FacilityContainedWaste;
 use openzt2_zoo_state::maintenance::maintenance_types::FacilityContainedWastePresentationLevel;
@@ -16,30 +16,30 @@ use openzt2_interface_state::information::entity_selection_types::{InfoPanel, Se
 /// Updates maintenance information for the selected entity.
 pub(crate) fn project_live_maintenance_status_to_visible_information_panels(
     cleanliness: Res<ZooCleanlinessPermille>,
-    panels: Query<(Entity, &ChildOf, Ref<InheritedVisibility>), With<InfoPanel>>,
+    panels: Query<
+        (
+            &ChildOf,
+            Ref<InheritedVisibility>,
+            Option<Ref<MaintenanceFields>>,
+        ),
+        With<InfoPanel>,
+    >,
     selections: Query<Ref<SelectedSubject>>,
     subjects: Query<(
         Option<Ref<FacilityContainedWaste>>,
         Option<Ref<LooseLitterWaste>>,
         Option<Ref<AnimalHabitatWaste>>,
-        Option<Ref<WaterQuality>>,
     )>,
-    mut values: Query<(
-        &UiDocumentOwner,
-        &UiValueBinding,
-        &mut UiValue,
-        &mut Visibility,
-    )>,
+    mut values: Query<(&UiValueBinding, &mut UiValue, &mut Visibility), MaintenanceField>,
 ) {
-    for (panel_entity, parent, visible) in &panels {
+    for (parent, visible, fields) in &panels {
         let Ok(selection) = selections.get(parent.parent()) else {
             continue;
         };
         if !visible.get() {
             continue;
         }
-        let Ok((container, litter, habitat_waste, water_quality)) = subjects.get(selection.0)
-        else {
+        let Ok((container, litter, habitat_waste)) = subjects.get(selection.0) else {
             continue;
         };
         if !selection.is_changed()
@@ -50,16 +50,18 @@ pub(crate) fn project_live_maintenance_status_to_visible_information_panels(
             && habitat_waste
                 .as_ref()
                 .is_none_or(|value| !value.is_changed())
-            && water_quality
-                .as_ref()
-                .is_none_or(|value| !value.is_changed())
+            && !fields.as_ref().is_some_and(Ref::is_changed)
         {
             continue;
         }
-        for (owner, binding, mut value, mut visibility) in &mut values {
-            if owner.0 != panel_entity {
+        for entity in fields
+            .as_deref()
+            .into_iter()
+            .flat_map(RelationshipTarget::iter)
+        {
+            let Ok((binding, mut value, mut visibility)) = values.get_mut(entity) else {
                 continue;
-            }
+            };
             let next = match &binding.0 {
                 UiIntegerPropertyBindingSource::FacilityWasteUnits => container
                     .as_ref()
@@ -95,9 +97,6 @@ pub(crate) fn project_live_maintenance_status_to_visible_information_panels(
                         Visibility::Hidden
                     });
                     cleanliness.0.map(i64::from)
-                }
-                UiIntegerPropertyBindingSource::TankWaterQualityPermille => {
-                    water_quality.as_ref().map(|quality| i64::from(quality.0))
                 }
                 _ => None,
             };

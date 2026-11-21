@@ -36,7 +36,7 @@ impl Plugin for WorldScenarioDocumentAssetPlugin {
             .add_systems(
                 PreUpdate,
                 (
-                    refresh_world_scenario_catalogue_sources.run_if(resource_changed::<crate::asset_source::AssetArchives>),
+                    refresh_world_scenario_catalogue_sources,
                     index_loaded_world_scenario_assets_by_identifier,
                 )
                     .chain()

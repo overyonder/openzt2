@@ -142,6 +142,19 @@ mod tests {
             .get_mut::<ServiceFacility>(facility)
             .unwrap()
             .payment_trigger = FacilityPaymentTrigger::TimedTicks;
+        commit_timed_service_reservation(
+            world,
+            guest,
+            PendingServiceRequest {
+                service: AssetId::from_key("facility/other_service"),
+                ..request
+            },
+            2,
+            3,
+        );
+        assert!(world.get::<ServiceReservation>(guest).is_none());
+        assert!(world.get::<FacilityReservations>(facility).is_none());
+        assert_eq!(world.get::<Inventory>(facility).unwrap().available, 5);
         commit_timed_service_reservation(world, guest, request, 2, 3);
         commit_timed_service_reservation(world, other_guest, request, 2, 3);
         assert_eq!(

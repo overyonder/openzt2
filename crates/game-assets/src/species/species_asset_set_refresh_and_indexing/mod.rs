@@ -4,9 +4,10 @@ use bevy::{
 };
 
 use crate::asset_source::{
-    archive_entry_asset_path::archive_entry_asset_path, ArchiveCatalogue, AssetArchives,
+    archive_entry_asset_path::archive_entry_asset_path, ArchiveCatalogue, ArchiveOverlayChanged,
+    AssetArchives,
 };
-use std::{collections::BTreeSet, path::Path, sync::Arc};
+use std::{collections::BTreeSet, path::Path};
 
 use super::species_asset_types::{SpeciesAsset, SpeciesAssets};
 
@@ -20,18 +21,17 @@ pub(crate) fn is_species_catalogue_source(path: &Path) -> bool {
 pub(super) fn discover_species_catalogue_sources(
     archives: Res<AssetArchives>,
     mut index: ResMut<SpeciesAssets>,
-    mut previous: Local<Option<Arc<[z2f::ResolvedArchiveEntry]>>>,
+    mut overlay_changes: MessageReader<ArchiveOverlayChanged>,
 ) {
-    if !archives.is_changed() && previous.is_some() {
+    let changed = overlay_changes
+        .read()
+        .flat_map(|change| &change.changes)
+        .any(|change| is_species_catalogue_source(&change.normalized_asset_path));
+    overlay_changes.clear();
+    if index.discovered && !changed {
         return;
     }
     let sources = archives.catalogue_sources(ArchiveCatalogue::Species);
-    if previous
-        .as_ref()
-        .is_some_and(|previous| Arc::ptr_eq(previous, &sources))
-    {
-        return;
-    }
     index.pending_paths = sources.iter().map(archive_entry_asset_path).collect();
     index.handles.clear();
     index.source_ids.clear();
@@ -39,7 +39,6 @@ pub(super) fn discover_species_catalogue_sources(
     index.failed.clear();
     index.discovered = true;
     index.source_set_changed = true;
-    *previous = Some(sources);
 }
 
 pub(super) fn index_loaded_species_assets_by_species_and_variant_identifier(

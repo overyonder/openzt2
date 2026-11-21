@@ -12,7 +12,8 @@ use openzt2_world_state::simulation_time::deterministic_random_stream::{
     DeterministicRng, RngDomain, ZooSeed,
 };
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
-use openzt2_zoo_state::animal_lifecycle::types::AnimalVariant;
+use openzt2_zoo_state::animal_behavior::animal_lineage::{AnimalFather, AnimalMother};
+use openzt2_zoo_state::animal_lifecycle::types::{AnimalVariant, Pregnancy};
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionPhase;
 
 fn document() -> SpeciesDocument {
@@ -59,6 +60,7 @@ fn document() -> SpeciesDocument {
                 authored_species_name_override: None,
                 authored_product_name_override: None,
                 variant: SpeciesVariant {
+                    need_points: Default::default(),
                     placement_surface_policy: Default::default(),
                     id: AssetId::from_key(&format!("young_{index}")),
                     behavior_subject_type_identifiers: vec![],
@@ -115,8 +117,7 @@ fn birth_action_spawns_one_young_variant_with_mother_and_mate() {
         })
         .add_message::<AnimalBorn>()
         .add_systems(Update, spawn_children_for_authored_births);
-    let root = app.world_mut().spawn_empty().id();
-    app.insert_resource(PersistentIdAllocator::new(root));
+    let root = app.world_mut().spawn(PersistentIdAllocator::default()).id();
     let definitions = WorldDefinitionDocument {
         simulation_timing: Some(SimulationTimingDefinition {
             fixed_hz: 10,
@@ -174,7 +175,7 @@ fn birth_action_spawns_one_young_variant_with_mother_and_mate() {
             },
             Transform::from_xyz(3.0, 4.0, 5.0),
             Pregnancy { father: None },
-            Mate(father),
+            AnimalMate(father),
             BehaviorRandomStream(DeterministicRng::from_entity(
                 ZooSeed(1),
                 PersistentId(20),
@@ -205,13 +206,8 @@ fn birth_action_spawns_one_young_variant_with_mother_and_mate() {
         .collect::<Vec<_>>();
     assert_eq!(born.len(), 1);
     let child = born[0];
-    assert_eq!(
-        *app.world().get::<Parents>(child).unwrap(),
-        Parents {
-            mother: Some(mother),
-            father: Some(father),
-        }
-    );
+    assert_eq!(app.world().get::<AnimalMother>(child).unwrap().0, mother);
+    assert_eq!(app.world().get::<AnimalFather>(child).unwrap().0, father);
     assert_eq!(
         app.world().get::<AnimalVariant>(child).unwrap().0,
         AssetId::from_key("young_1")

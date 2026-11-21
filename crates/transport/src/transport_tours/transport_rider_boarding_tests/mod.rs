@@ -1,5 +1,8 @@
 use bevy::prelude::*;
 use openzt2_game_data::AssetId;
+use openzt2_zoo_state::transport_tours::transport_rider_types::{
+    StationQueue, TransportSeat, TransportSeatRider, VehicleRiders,
+};
 
 use openzt2_zoo_state::guests::guest_simulation_types::Guest;
 use openzt2_zoo_state::locomotion::locomotion_types::Arrived;
@@ -18,8 +21,6 @@ fn transport_station_for_boarding_test() -> TransportStation {
     TransportStation {
         definition: AssetId::from_key("station"),
         capacity: 8,
-        queued: 2,
-        occupied: 0,
     }
 }
 
@@ -27,7 +28,7 @@ fn one_seat_transport_vehicle_for_boarding_test() -> TransportVehicle {
     TransportVehicle {
         definition: AssetId::from_key("vehicle"),
         seats: 1,
-        occupied: 0,
+
         maximum_speed_metres_per_second: 0.25,
     }
 }
@@ -64,6 +65,16 @@ fn boarding_uses_stable_entity_order_and_updates_station_vehicle_and_guest_relat
             StationDestination(station_entity),
         ))
         .id();
+    let seat = application
+        .world_mut()
+        .spawn((
+            ChildOf(vehicle_entity),
+            TransportSeat {
+                index: 0,
+                back_facing: false,
+            },
+        ))
+        .id();
     let first_guest_entity = application
         .world_mut()
         .spawn((
@@ -71,7 +82,6 @@ fn boarding_uses_stable_entity_order_and_updates_station_vehicle_and_guest_relat
             guest_navigation_agent_for_boarding_test(),
             WaitingForTransport {
                 station: station_entity,
-                circuit: transport_circuit_entity,
             },
         ))
         .id();
@@ -82,7 +92,6 @@ fn boarding_uses_stable_entity_order_and_updates_station_vehicle_and_guest_relat
             guest_navigation_agent_for_boarding_test(),
             WaitingForTransport {
                 station: station_entity,
-                circuit: transport_circuit_entity,
             },
         ))
         .id();
@@ -109,9 +118,14 @@ fn boarding_uses_stable_entity_order_and_updates_station_vehicle_and_guest_relat
             .get::<TransportRider>(boarded_guest_entity),
         Some(&TransportRider {
             vehicle: vehicle_entity,
-            boarded_station: station_entity,
-            seat_index: 0,
         }),
+    );
+    assert_eq!(
+        application
+            .world()
+            .get::<TransportSeatRider>(boarded_guest_entity)
+            .map(|mount| mount.0),
+        Some(seat),
     );
     assert!(application
         .world()
@@ -120,17 +134,17 @@ fn boarding_uses_stable_entity_order_and_updates_station_vehicle_and_guest_relat
     assert_eq!(
         application
             .world()
-            .get::<TransportVehicle>(vehicle_entity)
+            .get::<VehicleRiders>(vehicle_entity)
             .unwrap()
-            .occupied,
+            .len(),
         1,
     );
     assert_eq!(
         application
             .world()
-            .get::<TransportStation>(station_entity)
+            .get::<StationQueue>(station_entity)
             .unwrap()
-            .queued,
+            .len(),
         1,
     );
 }

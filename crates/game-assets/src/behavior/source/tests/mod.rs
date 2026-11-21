@@ -255,7 +255,6 @@ fn keeper_food_placement_lowers_with_its_holding_container_and_placement_set() {
             follows_medium_changes: false,
         }
     );
-    // The direct radius form has no runtime owner.
     assert!(sets[2].actions.has_unsupported_suffix());
     let [BehaviorAction::LocomotionSwitchSet(following)] = sets[3].actions.lowered_actions() else {
         panic!("following locomotion switch");
@@ -275,14 +274,19 @@ fn bashing_a_fence_docks_on_it_plays_out_the_bash_and_breaks_it() {
     let BehaviorDocument::Sets(sets) = lower_behavior_source_document(&source).unwrap() else {
         panic!("sets expected");
     };
-    let [BehaviorAction::Dock(dock), BehaviorAction::PlaySet(_), BehaviorAction::MorphTarget(morph)] =
-        sets[0].actions.lowered_actions()
+    let [BehaviorAction::Dock(dock), BehaviorAction::PlaySetWithInterrupt { interrupt, .. }, BehaviorAction::MorphEntity {
+        definition: morph, ..
+    }] = sets[0].actions.lowered_actions()
     else {
         panic!("a fence dock, the bash set and the morph expected");
     };
     // The animal stops short of the fence segment's middle on its own side.
     assert_eq!(dock.radial_distance_m, Some(2.0));
     assert_eq!(dock.subject_node_name, None);
+    assert_eq!(
+        *interrupt,
+        openzt2_game_data::AssetId::from_key("collidewithtarget")
+    );
     assert_eq!(*morph, openzt2_game_data::AssetId::from_key("s_broken"));
 }
 
@@ -298,13 +302,19 @@ fn a_raptor_smashing_a_fence_plays_its_clip_then_breaks_the_fence() {
     let BehaviorDocument::Sets(sets) = lower_behavior_source_document(&source).unwrap() else {
         panic!("sets expected");
     };
-    let [BehaviorAction::AnimationClip(clip), BehaviorAction::MorphTarget(morph)] =
-        sets[0].actions.lowered_actions()
+    let [BehaviorAction::AnimationKill {
+        animation: Some(clip),
+        termination,
+        radius: Some((radius, kind)),
+        destroy: true,
+    }] = sets[0].actions.lowered_actions()
     else {
-        panic!("the smash clip, then the fence's morph expected");
+        panic!("the timed fence destruction");
     };
     assert_eq!(clip.animation_clip_asset_key, "Stand_SmashFence");
-    assert_eq!(*morph, openzt2_game_data::AssetId::from_key("s_broken"));
+    assert!(termination.kill_target);
+    assert_eq!(*radius, 5.0);
+    assert_eq!(*kind, openzt2_game_data::AssetId::from_key("fence"));
 }
 
 #[test]
@@ -319,12 +329,17 @@ fn an_ankylosaur_destroying_a_building_plays_its_clip_then_destroys_it() {
     let BehaviorDocument::Sets(sets) = lower_behavior_source_document(&source).unwrap() else {
         panic!("sets expected");
     };
-    let [BehaviorAction::AnimationClip(clip), BehaviorAction::DestroyTarget] =
-        sets[0].actions.lowered_actions()
+    let [BehaviorAction::AnimationKill {
+        animation: Some(clip),
+        termination,
+        radius: None,
+        destroy: true,
+    }] = sets[0].actions.lowered_actions()
     else {
-        panic!("the attack clip, then the building's destruction expected");
+        panic!("timed destruction of the selected building");
     };
     assert_eq!(clip.animation_clip_asset_key, "Stand_GuestAttack");
+    assert!(termination.kill_target);
 }
 
 #[test]

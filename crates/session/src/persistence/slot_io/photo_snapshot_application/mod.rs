@@ -13,6 +13,7 @@ use openzt2_interface_state::photos::photo_challenge_types::PhotoChallengeProgre
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
+use std::collections::BTreeMap;
 
 use openzt2_interface_state::persistence::generated_photo_persistence_types::DurableChallengePhotoFileIdentifiers;
 
@@ -34,15 +35,16 @@ pub(super) fn apply_photo_and_challenge_progress_snapshot_records_to_live_world(
         &mut PhotoChallengeProgress,
     )>,
 ) -> Result<(), WorldSnapshotPersistenceFailure> {
-    let mut restored_photo_entities = Vec::with_capacity(photo_snapshot_records.len());
+    let baseline_entities = entities_with_persistent_identifiers
+        .iter()
+        .map(|(entity, identifier)| (identifier.0, entity))
+        .collect::<BTreeMap<_, _>>();
+    let mut restored_photo_entities = BTreeMap::new();
 
     for photo_snapshot_record in photo_snapshot_records {
-        let album_entity = entities_with_persistent_identifiers
-            .iter()
-            .find_map(|(entity, persistent_identifier)| {
-                (*persistent_identifier == photo_snapshot_record.album_persistent_identifier)
-                    .then_some(entity)
-            })
+        let album_entity = baseline_entities
+            .get(&photo_snapshot_record.album_persistent_identifier.0)
+            .copied()
             .ok_or(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference)?;
 
         persistent_identifier_allocator
@@ -86,7 +88,7 @@ pub(super) fn apply_photo_and_challenge_progress_snapshot_records_to_live_world(
                 },
             ))
             .id();
-        restored_photo_entities.push((photo_snapshot_record.persistent_identifier, photo_entity));
+        restored_photo_entities.insert(photo_snapshot_record.persistent_identifier.0, photo_entity);
     }
 
     for photo_challenge_progress_snapshot_record in photo_challenge_progress_snapshot_records {
@@ -103,16 +105,13 @@ pub(super) fn apply_photo_and_challenge_progress_snapshot_records_to_live_world(
         {
             Some(completing_photo_persistent_identifier) => Some(
                 restored_photo_entities
-                    .iter()
-                    .find_map(|(persistent_identifier, entity)| {
-                        (*persistent_identifier == completing_photo_persistent_identifier)
-                            .then_some(*entity)
-                    })
+                    .get(&completing_photo_persistent_identifier.0)
+                    .copied()
                     .ok_or(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference)?,
             ),
             None => None,
         };
-        photo_challenge_progress.completed = photo_challenge_progress.completed_by.is_some();
+        photo_challenge_progress.completed = photo_challenge_progress_snapshot_record.completed;
         photo_challenge_progress.rating_stars =
             photo_challenge_progress_snapshot_record.rating_stars;
     }

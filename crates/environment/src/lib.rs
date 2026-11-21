@@ -105,8 +105,6 @@ impl Plugin for EnvironmentPlugin {
                     underwater_environment_presentation::project_resolved_camera_distance_fog
                         .after(daylight_environment_presentation::project_current_daylight_weather_and_sky_into_bevy_renderer)
                         .after(environment_fog_attachment::attach_neutral_environment_fog_to_new_zoo_cameras),
-                    underwater_environment_presentation::update_water_particle_wave_fog
-                        .after(underwater_environment_presentation::project_resolved_camera_distance_fog),
                     underwater_environment_presentation::update_water_ray_environment_light_samples
                         .after(daylight_environment_presentation::project_current_daylight_weather_and_sky_into_bevy_renderer),
                     underwater_environment_presentation::sample_water_environment_map

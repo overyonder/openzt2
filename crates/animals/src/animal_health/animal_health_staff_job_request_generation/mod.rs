@@ -15,12 +15,13 @@ pub(super) fn request_tranquilization_for_rampaging_animals(
 ) {
     for animal in &rampaging_animals {
         staff_job_requests.write(StaffJobRequest {
-            kind: StaffJobKind::Tranquilize,
+            kind: Some(StaffJobKind::Tranquilize),
             target: animal,
             urgency: openzt2_zoo_state::staff::staff_job_types::authored_staff_request_urgency(
                 openzt2_game_data::world_definitions::staff_management::StaffRequestData::CONSTRUCTED_DEFAULT.priority,
             ).expect("the default staff priority is positive"),
             token: Some(AssetId::from_key("t_tranqdino")),
+            routing: Default::default(),
         });
     }
 }

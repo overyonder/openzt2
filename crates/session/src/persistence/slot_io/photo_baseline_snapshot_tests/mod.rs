@@ -259,11 +259,13 @@ pub(crate) fn saved_photo_container_for_scenario(world: &mut World, scenario: As
     let progress = [
         PhotoChallengeProgressSnapshotRecord {
             challenge_definition_identifier: FIRST,
+            completed: true,
             completed_by_photo_persistent_identifier: Some(PersistentId(41)),
             rating_stars: 2,
         },
         PhotoChallengeProgressSnapshotRecord {
             challenge_definition_identifier: SECOND,
+            completed: true,
             completed_by_photo_persistent_identifier: Some(PersistentId(42)),
             rating_stars: 5,
         },

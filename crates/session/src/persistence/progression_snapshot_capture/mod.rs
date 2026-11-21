@@ -12,9 +12,11 @@ use openzt2_zoo_state::progression::fame_types::Fame;
 use openzt2_zoo_state::progression::profile_challenge_types::TotalEndangeredAnimalBirthCount;
 use openzt2_zoo_state::progression::rating_types::ZooRating;
 use openzt2_zoo_state::progression::research_types::ResearchAvailabilityUnlockCountdown;
-use openzt2_zoo_state::progression::research_types::ResearchProject;
 use openzt2_zoo_state::progression::research_types::ResearchProjectAvailability;
 use openzt2_zoo_state::progression::research_types::ResearchProjectPaused;
+use openzt2_zoo_state::progression::research_types::{
+    ResearchProject, ResearchProjectPersistentId,
+};
 use openzt2_zoo_state::progression::unlock_types::UnlockedCatalogueDefinitionSet;
 
 use super::{
@@ -41,7 +43,7 @@ pub(super) struct ProgressionSnapshotCaptureQueries<'w, 's> {
         'w,
         's,
         (
-            &'static PersistentId,
+            &'static ResearchProjectPersistentId,
             &'static ResearchProject,
             Option<&'static ResearchProjectPaused>,
         ),
@@ -73,13 +75,14 @@ pub(super) struct ProgressionSnapshotCaptureQueries<'w, 's> {
             &'static SpeciesAdoptionChanceMultiplier,
         ),
     >,
+    research_projects_without_persistent_identifiers:
+        Query<'w, 's, (), (With<ResearchProject>, Without<ResearchProjectPersistentId>)>,
     progression_entities_without_persistent_identifiers: Query<
         'w,
         's,
         (),
         (
             Or<(
-                With<ResearchProject>,
                 With<EarnedProgressionAward>,
                 With<ProgressionAwardConditionDurationProgress>,
                 With<ResearchProjectAvailability>,
@@ -96,6 +99,9 @@ pub(super) fn capture_progression_snapshot_records_from_live_world(
     if !progression_snapshot_capture_queries
         .progression_entities_without_persistent_identifiers
         .is_empty()
+        || !progression_snapshot_capture_queries
+            .research_projects_without_persistent_identifiers
+            .is_empty()
     {
         return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection);
     }
@@ -116,7 +122,7 @@ pub(super) fn capture_progression_snapshot_records_from_live_world(
         .map(
             |(persistent_identifier, research_project, optional_paused_marker)| {
                 ResearchProjectSnapshotRecord {
-                    persistent_identifier: *persistent_identifier,
+                    persistent_identifier: persistent_identifier.0,
                     definition_identifier: research_project.definition,
                     elapsed_simulation_ticks: research_project.elapsed_ticks,
                     required_simulation_ticks: research_project.required_ticks,

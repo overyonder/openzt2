@@ -31,4 +31,29 @@ pub(super) struct TransportSnapshotRecords {
     pub circuit_records: Vec<TransportCircuitSnapshotRecord>,
     pub circuit_member_records: Vec<TransportCircuitMemberSnapshotRecord>,
     pub vehicle_records: Vec<TransportVehicleSnapshotRecord>,
+    pub graph: TransportGraphSnapshot,
+}
+
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
+pub(super) struct TransportGraphSnapshot {
+    pub poses: Vec<(u64, bevy::prelude::Transform)>,
+    pub fares: Vec<(u64, i64)>,
+    pub junctions: Vec<(u64, Option<f32>)>,
+    pub routes: Vec<TransportRouteSnapshot>,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub(super) struct TransportRouteSnapshot {
+    pub pieces: Vec<u64>,
+    pub definition: AssetId,
+    pub kind:
+        openzt2_game_data::world_definitions::transportation_and_tours::TransportationTrackKind,
+    pub maximum_grade_permille: u16,
+    pub from: u64,
+    pub from_socket: u8,
+    pub to: u64,
+    pub to_socket: u8,
+    pub points: Vec<bevy::prelude::Vec3>,
+    pub travel_points: Vec<bevy::prelude::Vec3>,
+    pub length: f32,
 }

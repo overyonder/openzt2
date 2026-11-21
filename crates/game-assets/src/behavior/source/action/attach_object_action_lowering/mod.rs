@@ -31,7 +31,9 @@ pub(super) fn lower_attach_object_action(
             "detachBehSet",
         ]
         .contains(&attribute.name())
-    }) || node.element_children().next().is_some()
+    }) || node
+        .element_children()
+        .any(|child| !child.name.eq_ignore_ascii_case("textkeys"))
     {
         return Err(invalid_behavior_source_data(
             "BFBehAttachObject has unsupported attachment policy",
@@ -53,20 +55,24 @@ pub(super) fn lower_attach_object_action(
             .map(|value| AssetId::from_key(&value.to_ascii_lowercase()))
             .unwrap_or_default()
     };
-    Ok(Some(BehaviorAction::AttachObject(
-        BehaviorAttachObjectAction {
-            entity: AssetId::from_key(&entity.to_ascii_lowercase()),
-            animation: read_optional_trimmed_string_attribute(node, "targetAnim"),
-            container: identifier("container"),
-            detach_rule: identifier("detachAction"),
-            locomotion_modifier: read_optional_trimmed_string_attribute(node, "locoMod")
-                .map(|value| AssetId::from_key(&value.to_ascii_lowercase())),
-            subject_node: read_optional_trimmed_string_attribute(node, "subjectNode"),
-            target_node,
-            detach_behavior_set: read_optional_trimmed_string_attribute(node, "detachBehSet")
-                .map(|value| AssetId::from_key(&value.to_ascii_lowercase())),
-        },
-    )))
+    let attachment = BehaviorAttachObjectAction {
+        entity: AssetId::from_key(&entity.to_ascii_lowercase()),
+        animation: read_optional_trimmed_string_attribute(node, "targetAnim"),
+        container: identifier("container"),
+        detach_rule: identifier("detachAction"),
+        locomotion_modifier: read_optional_trimmed_string_attribute(node, "locoMod")
+            .map(|value| AssetId::from_key(&value.to_ascii_lowercase())),
+        subject_node: read_optional_trimmed_string_attribute(node, "subjectNode"),
+        target_node,
+        detach_behavior_set: read_optional_trimmed_string_attribute(node, "detachBehSet")
+            .map(|value| AssetId::from_key(&value.to_ascii_lowercase())),
+    };
+    let keys = super::animation_action_lowering::lower_behavior_animation_text_keys(node)?;
+    Ok(Some(if keys.is_empty() {
+        BehaviorAction::AttachObject(attachment)
+    } else {
+        BehaviorAction::AttachWithTextKeys { attachment, keys }
+    }))
 }
 
 pub(super) fn lower_detach_object_action(
@@ -75,15 +81,13 @@ pub(super) fn lower_detach_object_action(
     if node.name != "BFBehDetachObject" || node.attribute("targetAnim").is_some() {
         return Ok(None);
     }
-    lower_detach_object_rule(node).map(Some)
+    lower_detach_object_rule(node).map(|detach| Some(BehaviorAction::DetachObject(detach)))
 }
 
-/// `BFBehDetachObject` with a `targetAnim`, such as a guest's
-/// `StandItem_ThrowAway`: the clip plays, then the rule applies. A detach key
-/// in the clip only returns the item to the holder's inventory first.
-pub(crate) fn lower_animated_detach_object_actions(
+/// A detach that owns its clip and reacts to its authored keys.
+pub(crate) fn lower_animated_detach_object_action(
     node: &OrderedSourceDocumentNode,
-) -> io::Result<Option<[BehaviorAction; 2]>> {
+) -> io::Result<Option<BehaviorAction>> {
     if node.name != "BFBehDetachObject" {
         return Ok(None);
     }
@@ -95,28 +99,36 @@ pub(crate) fn lower_animated_detach_object_actions(
     else {
         return Ok(None);
     };
-    Ok(Some([
-        BehaviorAction::AnimationClip(BehaviorAnimationClipAction {
-            animation_clip_asset_key,
-            looping: false,
-            physical_object: None,
-            play_duration_seconds: None,
-            interrupts_current_animation: false,
-            interruptible: false,
-            ground_fit: None,
-            blend_duration_seconds: None,
-            playback_speed: None,
-        }),
-        lower_detach_object_rule(node)?,
-    ]))
+    let animation = BehaviorAnimationClipAction {
+        animation_clip_asset_key,
+        looping: false,
+        physical_object: None,
+        play_duration_seconds: None,
+        interrupts_current_animation: false,
+        interruptible: false,
+        ground_fit: None,
+        blend_duration_seconds: None,
+        playback_speed: None,
+    };
+    let keys = super::animation_action_lowering::lower_behavior_animation_text_keys(node)?;
+    let detach = lower_detach_object_rule(node)?;
+    Ok(Some(BehaviorAction::DetachWithAnimation {
+        detach,
+        animation,
+        keys,
+    }))
 }
 
-fn lower_detach_object_rule(node: &OrderedSourceDocumentNode) -> io::Result<BehaviorAction> {
+fn lower_detach_object_rule(
+    node: &OrderedSourceDocumentNode,
+) -> io::Result<BehaviorDetachObjectAction> {
     // A container or a node changes where the item goes; only the detach of a
     // named item, optionally after its clip, is mapped.
     if node.attributes.iter().any(|attribute| {
         !["detachEntity", "detachAction", "targetAnim"].contains(&attribute.name())
-    }) || node.element_children().next().is_some()
+    }) || node
+        .element_children()
+        .any(|child| !child.name.eq_ignore_ascii_case("textkeys"))
     {
         return Err(invalid_behavior_source_data(
             "BFBehDetachObject has unsupported detach policy",
@@ -129,10 +141,14 @@ fn lower_detach_object_rule(node: &OrderedSourceDocumentNode) -> io::Result<Beha
                 invalid_behavior_source_data(format!("BFBehDetachObject requires {name}"))
             })
     };
-    Ok(BehaviorAction::DetachObject(BehaviorDetachObjectAction {
-        entity: identifier("detachEntity")?,
+    Ok(BehaviorDetachObjectAction {
+        entity: if node.attribute("detachEntity").is_some() {
+            identifier("detachEntity")?
+        } else {
+            AssetId::default()
+        },
         detach_rule: identifier("detachAction")?,
-    }))
+    })
 }
 
 #[cfg(test)]
@@ -152,10 +168,13 @@ mod tests {
         .expect("source");
         let node = source.root.element_children().next().expect("action");
         assert!(lower_detach_object_action(node).expect("lower").is_none());
-        let [BehaviorAction::AnimationClip(clip), BehaviorAction::DetachObject(detach)] =
-            lower_animated_detach_object_actions(node)
-                .expect("lower")
-                .expect("animated detach")
+        let BehaviorAction::DetachWithAnimation {
+            animation: clip,
+            detach,
+            ..
+        } = lower_animated_detach_object_action(node)
+            .expect("lower")
+            .expect("animated detach")
         else {
             panic!("clip then detach")
         };

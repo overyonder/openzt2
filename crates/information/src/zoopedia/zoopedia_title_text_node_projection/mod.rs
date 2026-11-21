@@ -12,7 +12,7 @@ pub(super) fn project_localized_zoopedia_title_to_authored_text_node(
 ) {
     let localized_title_text = input.localized_title_text.unwrap_or_default();
     if let Some(existing_text) = input.existing_text {
-        replace_projected_ui_text_if_changed(&mut existing_text.0, localized_title_text);
+        replace_projected_ui_text_if_changed(existing_text, localized_title_text);
     } else {
         commands
             .entity(input.authored_text_entity)

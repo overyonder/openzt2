@@ -14,6 +14,7 @@ pub(crate) mod zoo_cleanliness_projection;
 use bevy::{ecs::schedule::common_conditions::on_message, prelude::*};
 use openzt2_interface_state::input::input_types::ActionRequest;
 use openzt2_world_state::application_schedule::GameSet;
+use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 
 use crate::staff::staff_job_behavior_start_and_completion::settle_staff_jobs_after_authored_behavior_finishes;
 use crate::staff::staff_job_request_creation::create_or_raise_priority_of_requested_staff_jobs;
@@ -49,7 +50,7 @@ impl Plugin for MaintenancePlugin {
         game_application
             .add_message::<openzt2_zoo_state::maintenance::maintenance_types::AdjustFacilityContainedWaste>()
             .init_resource::<ZooCleanlinessPermille>()
-            .init_resource::<ZooCleanlinessTotals>();
+            .register_required_components::<WorldRoot, ZooCleanlinessTotals>();
 
         game_application.add_systems(
             Update,

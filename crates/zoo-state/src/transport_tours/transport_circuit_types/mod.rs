@@ -25,15 +25,30 @@ pub enum CircuitDirection {
 }
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+#[relationship(relationship_target = CircuitMembers)]
 pub struct CircuitMember(pub Entity);
+
+#[derive(Component, Debug)]
+#[relationship_target(relationship = CircuitMember)]
+pub struct CircuitMembers(Vec<Entity>);
 
 /// The selected vehicle definition for one circuit, resolved before the UI
 /// action is activated. Generation never searches a source catalogue.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CircuitVehicleDefinition(pub AssetId);
 
+/// Reopens a saved circuit after its member definitions are available.
+#[derive(Component)]
+pub struct ReopenRestoredTransportCircuit;
+
 #[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OpenCircuitRequest {
     pub circuit: Entity,
     pub open: bool,
+}
+
+#[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SetTransportCircuitFare {
+    pub circuit: Entity,
+    pub fare: crate::economy::money_types::Money,
 }

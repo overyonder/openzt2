@@ -11,12 +11,14 @@ use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocum
 
 use openzt2_interface_state::ui::authored_ui_action_projection_components::UiTransportActions;
 use openzt2_interface_state::ui::authored_ui_activation_contracts::UiNodeActivated;
+use openzt2_zoo_state::topology::topology_confirmation::{
+    ResolveTopologyConfirmation, TopologyConfirmation, TopologyConfirmationOperations,
+};
 use openzt2_zoo_state::transport_tours::transport_circuit_types::CircuitDirection;
 use openzt2_zoo_state::transport_tours::transport_circuit_types::CircuitMember;
 use openzt2_zoo_state::transport_tours::transport_circuit_types::CircuitVehicleDefinition;
 use openzt2_zoo_state::transport_tours::transport_circuit_types::OpenCircuitRequest;
 use openzt2_zoo_state::transport_tours::transport_circuit_types::TransportCircuit;
-use openzt2_zoo_state::transport_tours::transport_topology_types::TransportPathDeletionPending;
 use openzt2_zoo_state::transport_tours::transport_vehicle_types::GenerateTransportVehicleForCircuitRequest;
 
 /// Applies the authored vehicle catalogue choice to the selected compatible
@@ -90,12 +92,9 @@ pub(super) fn route_authored_transport_ui_actions_to_selected_circuit_and_path_d
     mut circuits: Query<&mut CircuitDirection, With<TransportCircuit>>,
     circuit_members: Query<&CircuitMember>,
     vehicle_definitions: Query<&CircuitVehicleDefinition>,
-    pending_deletions: Query<&TransportPathDeletionPending>,
+    confirmations: TopologyConfirmationOperations,
     mut open_circuit_requests: MessageWriter<OpenCircuitRequest>,
     mut vehicle_generation_requests: MessageWriter<GenerateTransportVehicleForCircuitRequest>,
-    mut deletions: MessageWriter<
-        openzt2_zoo_state::construction::construction_interaction_types::DeleteEntity,
-    >,
 ) {
     for activation in activations.read() {
         let Ok((range, owner)) = action_nodes.get(activation.node) else {
@@ -162,21 +161,39 @@ pub(super) fn route_authored_transport_ui_actions_to_selected_circuit_and_path_d
                     }
                 }
                 UiTransportAction::ResolvePendingTransportPathDeletion { deletion_confirmed } => {
-                    if let Ok(pending) = pending_deletions.get(owner.0) {
-                        if *deletion_confirmed && selected_entity.subject() == Some(pending.target)
-                        {
-                            deletions.write(
-                                openzt2_zoo_state::construction::construction_interaction_types::DeleteEntity(
-                                    pending.target,
-                                ),
-                            );
-                        }
-                        commands
-                            .entity(owner.0)
-                            .remove::<TransportPathDeletionPending>();
+                    if let Some(entity) =
+                        confirmations.get(activation.node, TopologyConfirmation::TransportDeletion)
+                    {
+                        commands.trigger(ResolveTopologyConfirmation {
+                            entity,
+                            accepted: *deletion_confirmed,
+                        });
                     }
                 }
             }
+        }
+    }
+}
+
+pub(super) fn set_transport_circuit_fares(
+    mut requests: MessageReader<
+        openzt2_zoo_state::transport_tours::transport_circuit_types::SetTransportCircuitFare,
+    >,
+    mut fares: Query<
+        Option<&mut openzt2_zoo_state::economy::facility_economy_types::Price>,
+        With<TransportCircuit>,
+    >,
+    mut commands: Commands,
+) {
+    for request in requests.read().filter(|request| request.fare.0 >= 0) {
+        let Ok(fare) = fares.get_mut(request.circuit) else {
+            continue;
+        };
+        let next = openzt2_zoo_state::economy::facility_economy_types::Price(request.fare);
+        if let Some(mut fare) = fare {
+            fare.set_if_neq(next);
+        } else {
+            commands.entity(request.circuit).insert(next);
         }
     }
 }

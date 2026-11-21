@@ -112,7 +112,7 @@ pub struct AuthoredDisease {
     pub chance_percent: f32,
     /// A type whose zoo count scales `chance_percent`, such as `TrashGround`.
     pub chance_multiplier: Option<AssetId>,
-    /// Kept while its role in the manager is unknown.
+    /// The first successful exposure ends this disease's candidate pass.
     pub single_qualifier: bool,
     /// `false` when the disease is only given through its cause object's tasks.
     pub search_for_targets: bool,
@@ -153,7 +153,7 @@ pub enum DiseaseZooTest {
         attribute: Option<(AssetId, bool)>,
         quantity: u32,
         comparison: DiseaseComparison,
-        /// Kept while its role in the predicate is unknown.
+        /// Count distinct entity definitions rather than individual entities.
         different: bool,
     },
     /// `ZTZooFamePredicate`.

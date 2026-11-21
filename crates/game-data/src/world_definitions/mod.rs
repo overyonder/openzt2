@@ -5,6 +5,7 @@ pub const GUEST_MEMORY_CAPACITY: usize = 10;
 
 pub mod animal_health;
 pub mod animal_shows_and_training;
+pub mod animation_binder_rig;
 pub mod aquatic_habitats;
 pub mod behavior_selection_policy;
 pub mod biomes_locations_and_details;

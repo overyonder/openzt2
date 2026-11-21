@@ -22,7 +22,7 @@ use super::{
 };
 
 #[derive(SystemParam)]
-pub(super) struct ShowScheduleSnapshotQueries<'w, 's> {
+pub(in crate::persistence) struct ShowScheduleSnapshotQueries<'w, 's> {
     rows: Query<
         'w,
         's,

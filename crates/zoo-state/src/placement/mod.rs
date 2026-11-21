@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 
+pub mod ground_path_placement_stomp;
 pub mod object_placement_definition_queries;
 pub mod object_placement_headroom_diagnostic_types;
 pub mod object_placement_validation;

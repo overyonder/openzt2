@@ -11,7 +11,8 @@ use bevy::{
 };
 
 use crate::asset_source::{
-    archive_entry_asset_path::archive_entry_asset_path, ArchiveCatalogue, AssetArchives,
+    archive_entry_asset_path::archive_entry_asset_path, ArchiveCatalogue, ArchiveOverlayChanged,
+    AssetArchives,
 };
 
 use super::{
@@ -48,15 +49,17 @@ pub(super) fn refresh_world_scenario_catalogue_sources(
     archives: Res<AssetArchives>,
     server: Res<AssetServer>,
     mut scenarios: ResMut<WorldScenarios>,
-    mut previous: Local<Option<std::sync::Arc<[z2f::ResolvedArchiveEntry]>>>,
+    mut overlay_changes: MessageReader<ArchiveOverlayChanged>,
 ) {
-    let sources = archives.catalogue_sources(ArchiveCatalogue::Scenarios);
-    if previous
-        .as_ref()
-        .is_some_and(|previous| std::sync::Arc::ptr_eq(previous, &sources))
-    {
+    let changed = overlay_changes
+        .read()
+        .flat_map(|change| &change.changes)
+        .any(|change| scenario_catalogue_path(&change.normalized_asset_path));
+    overlay_changes.clear();
+    if scenarios.discovered && !changed {
         return;
     }
+    let sources = archives.catalogue_sources(ArchiveCatalogue::Scenarios);
     let handles = sources
         .iter()
         .map(|entry| server.load(archive_entry_asset_path(entry)))
@@ -67,7 +70,6 @@ pub(super) fn refresh_world_scenario_catalogue_sources(
         scenarios.discovery_changed = true;
         scenarios.discovered = true;
     }
-    *previous = Some(sources);
 }
 
 pub fn index_loaded_world_scenario_assets_by_identifier(

@@ -1,5 +1,11 @@
 //! Authored carried objects use ordinary world entities and the shared container owner.
 
+use super::behavior_animation_key_execution::CrossedBehaviorAnimationEffect;
+use openzt2_zoo_state::behavior_task_execution_types::{
+    running_actions::{BehaviorAnimationEffect, TimedBehaviorAnimationEffect},
+    PendingBehaviorAnimationClipCompletion,
+};
+
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
     BehaviorInstructionId, RunBehaviorAttachObject, RunBehaviorDetachObject,
     RunningBehaviorInstruction,
@@ -37,7 +43,7 @@ use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_interface_state::information::entity_selection_types::Inspectable;
 use avian3d::prelude::RigidBody;
 use openzt2_zoo_state::animal_behavior::behavior_world_release_types::{
-    BehaviorWorldObjectReleased, BehaviorWorldReleaseMotion, BehaviorWorldReleaseSupport,
+    BehaviorWorldObjectReleased, BehaviorWorldReleaseMotion,
 };
 use bevy::{asset::LoadState, ecs::system::SystemParam, prelude::*};
 use openzt2_game_data::{AssetId};
@@ -100,8 +106,32 @@ impl PendingObjectAttachment {
 }
 
 #[derive(SystemParam)]
+pub(super) struct AnimationAttachmentKeyOwners<'w, 's> {
+    attachments: Query<'w, 's, Option<&'static PendingObjectAttachment>>,
+    food: Query<'w, 's, &'static held_food_prop::HeldFoodPropAttachment>,
+}
+
+impl AnimationAttachmentKeyOwners<'_, '_> {
+    pub(super) fn owns_request(
+        &self,
+        actor: Entity,
+        task: &BehaviorTaskExecutionState,
+        step: &RunningBehaviorInstruction,
+        request: usize,
+    ) -> bool {
+        self.attachments
+            .get(actor)
+            .ok()
+            .flatten()
+            .or_else(|| self.food.get(actor).ok().map(|food| &food.origin))
+            .is_some_and(|attachment| {
+                attachment.request_id == Some(request) && attachment.owns(task, step)
+            })
+    }
+}
+
+#[derive(SystemParam)]
 struct AttachmentAssets<'w> {
-    world_releases: Option<Res<'w, BehaviorWorldReleaseSupport>>,
     documents: Res<'w, Assets<BehaviorDocumentAsset>>,
     definitions: Res<'w, WorldDefinitions>,
     definition_assets: Res<'w, Assets<WorldDefinitionAsset>>,
@@ -114,32 +144,34 @@ pub(super) fn register_object_attachment_execution(app: &mut App) {
     use openzt2_world_state::application_schedule::FixedGameSet;
     held_food_prop::register(app);
     events::register_attachment_animation_observers(app);
-    app.add_observer(detach::record_slots_of_destroyed_holders)
-        .add_observer(admission::apply_object_attachment_admissions);
-    app.add_systems(FixedUpdate, (
+    app.add_observer(detach::retire_owned_objects_when_holder_is_destroyed)
+        .add_observer(detach::release_detached_object_presentation)
+        .add_observer(admission::apply_object_attachment_admissions)
+        .add_observer(presentation::unbind_carried_prefab_presentation);
+    use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
+        BehaviorStep, BehaviorStepSet,
+    };
+    app.add_systems(BehaviorStep, (
         start_or_finish_object_attachment,
         detach_held_objects_for_current_actions,
         detach::apply_delivered_detach_after_object_admission,
         created::hydrate_detach_created_objects,
-        detach::release_objects_from_destroyed_holders,
-        release_detached_object_locomotion_modifiers
-            .before(openzt2_zoo_state::locomotion::AnimalAnimationNavigationProjection),
-    ).chain().in_set(FixedGameSet::Think)
-        .after(super::behavior_task_phase_transition_execution::advance_behavior_tasks_through_return_failure_completion_and_final_outcome)
+        release_detached_object_locomotion_modifiers,
+    ).chain().in_set(BehaviorStepSet::Actions)
         .run_if(in_state(GamePhase::InGame)))
         .add_systems(FixedUpdate, held_clip::release_behavior_held_animation_clips
             .in_set(FixedGameSet::Act)
             .after(events::receive_object_animation_commands)
             .run_if(in_state(GamePhase::InGame)))
         .add_systems(FixedUpdate, events::receive_object_animation_commands
+            .after(openzt2_zoo_state::behavior_task_execution_types::running_actions::BehaviorAnimationKeyDelivery)
             .in_set(openzt2_world_state::animation_playback::animation_event_message_types::AnimationObjectCommandDelivery)
             .in_set(FixedGameSet::Act)
             .before(super::behavior_animation_clip_execution::fail_behavior_animation_actions_after_playback_rejection)
             .before(super::behavior_animation_clip_execution::finish_behavior_animation_clip_actions_after_playback_completion)
             .run_if(in_state(GamePhase::InGame)))
-        .add_systems(PostUpdate, presentation::project_contained_object_transforms
-            .after(bevy::app::AnimationSystems)
-            .before(bevy::transform::TransformSystems::Propagate)
+        .add_systems(Update, presentation::bind_carried_prefab_presentation
+            .before(openzt2_world_state::application_schedule::GameSet::Intent)
             .run_if(in_state(GamePhase::InGame)));
 }
 
@@ -345,7 +377,6 @@ fn start_or_finish_object_attachment(
                 &objects,
                 &transforms,
                 &memberships,
-                assets.world_releases.as_deref(),
                 &mut commands,
             )
         {
@@ -433,16 +464,22 @@ fn detach_held_objects_for_current_actions(
     assets: AttachmentAssets,
     clock: Res<ZooClock>,
     memberships: InteractionContainerMemberships,
-    mut actors: Query<
+    actors: Query<
         (
             Entity,
-            (
-                &BehaviorTaskExecutionState,
-                &RunningBehaviorInstruction,
-                &RunBehaviorDetachObject,
-            ),
+            &BehaviorTaskExecutionState,
+            &RunningBehaviorInstruction,
+            Option<&RunBehaviorDetachObject>,
+            Option<&TimedBehaviorAnimationEffect>,
+            Option<&CrossedBehaviorAnimationEffect>,
         ),
-        Without<PendingBehaviorTaskFailure>,
+        (
+            Without<PendingBehaviorTaskFailure>,
+            Or<(
+                With<RunBehaviorDetachObject>,
+                With<TimedBehaviorAnimationEffect>,
+            )>,
+        ),
     >,
     objects: Query<(&ContainedObject, &DefinitionId, Option<&WorldMember>)>,
     transforms: Query<&GlobalTransform>,
@@ -450,22 +487,32 @@ fn detach_held_objects_for_current_actions(
     let Some(definitions) = assets.definitions.get(&assets.definition_assets) else {
         return;
     };
-    for (actor, (task, instruction, running_action)) in &mut actors {
-        if task.next_action_tick > clock.tick {
-            continue;
-        }
+    for (actor, task, instruction, immediate, timed, key) in &actors {
         if !instruction.is_current(task) {
             continue;
         }
-        let action = &running_action.0;
-        let item = if action.entity == AssetId::from_key("object") {
+        let (entity, rule) = match (immediate, timed) {
+            (Some(immediate), _) if task.next_action_tick <= clock.tick => {
+                (immediate.0.entity, immediate.0.detach_rule)
+            }
+            (
+                _,
+                Some(TimedBehaviorAnimationEffect(BehaviorAnimationEffect::Detach {
+                    entity,
+                    rule,
+                })),
+            ) if key.is_some_and(|key| key.belongs_to(instruction)) => (*entity, *rule),
+            _ => continue,
+        };
+        let item = if entity == AssetId::from_key("object") {
             task.object
         } else {
             memberships.members_of_container(actor).find(|item| {
                 objects.get(*item).is_ok_and(|(_, id, _)| {
-                    id.0 == action.entity
+                    entity == AssetId::default()
+                        || id.0 == entity
                         || definitions.find_object(id.0).is_some_and(|object| {
-                            object.behavior_type_identifiers.contains(&action.entity)
+                            object.behavior_type_identifiers.contains(&entity)
                         })
                 })
             })
@@ -481,11 +528,10 @@ fn detach_held_objects_for_current_actions(
         if !detach::detach_object(
             actor,
             item,
-            Some(action.detach_rule),
+            Some(rule),
             &definitions,
             &objects,
             &transforms,
-            assets.world_releases.as_deref(),
             &mut commands,
         ) {
             warn!(
@@ -494,6 +540,12 @@ fn detach_held_objects_for_current_actions(
             );
             mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
             continue;
+        }
+        if timed.is_some() {
+            commands.entity(actor).try_remove::<(
+                CrossedBehaviorAnimationEffect,
+                PendingBehaviorAnimationClipCompletion,
+            )>();
         }
         instruction.complete(actor, clock.tick, &mut commands);
     }

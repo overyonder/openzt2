@@ -17,10 +17,9 @@ use openzt2_zoo_state::animal_lifecycle::types::SpeciesHandle;
 use openzt2_ui::authored_ui_image_content_binding::UiImageBinding;
 use openzt2_ui::authored_ui_text_content_binding::UiTextBinding;
 
-use super::{visit_information_row, InformationRows};
-use openzt2_interface_state::information::entity_selection_types::InformationEntitySource;
+use super::{information_row_field_binding::InformationRowFieldOf, InformationRows};
+use bevy::ecs::relationship::RelationshipTarget;
 use openzt2_interface_state::information::entity_selection_types::Inspectable;
-use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::UiListRow;
 
 pub(crate) fn project_world_subject_identity_to_information_list_rows(
     mut commands: Commands,
@@ -31,7 +30,6 @@ pub(crate) fn project_world_subject_identity_to_information_list_rows(
     species_assets: Res<Assets<SpeciesAsset>>,
     active_species: Res<SpeciesAssets>,
     sources: InformationRows,
-    children: Query<&Children>,
     subjects: Query<(
         Ref<Inspectable>,
         Option<Ref<SpeciesHandle>>,
@@ -39,25 +37,12 @@ pub(crate) fn project_world_subject_identity_to_information_list_rows(
     )>,
     mut text_nodes: Query<(&UiTextBinding, &mut Text)>,
     mut image_nodes: Query<(&UiImageBinding, Option<&mut ImageNode>)>,
-    mut scratch: Local<(Vec<Entity>, String)>,
-    parents: Query<&ChildOf>,
+    mut formatted: Local<String>,
     new_bindings: Query<
-        Entity,
-        (
-            Or<(With<UiTextBinding>, With<UiImageBinding>)>,
-            Or<(
-                Changed<ChildOf>,
-                Changed<UiTextBinding>,
-                Changed<UiImageBinding>,
-            )>,
-        ),
+        &InformationRowFieldOf,
+        Or<(Changed<UiTextBinding>, Changed<UiImageBinding>)>,
     >,
-    mut removed: (
-        RemovedComponents<InformationEntitySource>,
-        RemovedComponents<UiListRow>,
-        RemovedComponents<Name>,
-        RemovedComponents<SpeciesHandle>,
-    ),
+    mut removed: (RemovedComponents<Name>, RemovedComponents<SpeciesHandle>),
 ) {
     if sources.is_empty() {
         return;
@@ -67,24 +52,12 @@ pub(crate) fn project_world_subject_identity_to_information_list_rows(
         || active_localization.is_changed()
         || localization_assets.is_changed()
         || species_assets.is_changed()
-        || active_species.is_changed()
-        || !removed.2.is_empty()
-        || !removed.3.is_empty();
-    let mut rebound_rows = std::collections::HashSet::new();
-    for node in new_bindings
-        .iter()
-        .chain(removed.0.read())
+        || active_species.is_changed();
+    let removed_subject_facts = removed
+        .0
+        .read()
         .chain(removed.1.read())
-    {
-        if let Some(row) = std::iter::once(node)
-            .chain(parents.iter_ancestors::<ChildOf>(node))
-            .find(|&candidate| sources.contains(candidate))
-        {
-            rebound_rows.insert(row);
-        }
-    }
-    removed.2.clear();
-    removed.3.clear();
+        .collect::<bevy::ecs::entity::EntityHashSet>();
     let Some(definitions) = active_world_definitions.get(&world_definition_assets) else {
         return;
     };
@@ -96,13 +69,14 @@ pub(crate) fn project_world_subject_identity_to_information_list_rows(
     let Some(species) = active_species.get(&species_assets) else {
         return;
     };
-    let (stack, formatted) = &mut *scratch;
-    for (row, source) in &sources {
+    for (source, bindings) in &sources {
         let Ok((inspectable, species_handle, name)) = subjects.get(source.0) else {
             continue;
         };
         if !refresh_rows
-            && !rebound_rows.contains(&row)
+            && !bindings.is_changed()
+            && !bindings.iter().any(|field| new_bindings.contains(field))
+            && !removed_subject_facts.contains(&source.0)
             && !source.is_changed()
             && !inspectable.is_changed()
             && !species_handle.as_ref().is_some_and(Ref::is_changed)
@@ -119,7 +93,7 @@ pub(crate) fn project_world_subject_identity_to_information_list_rows(
             continue;
         };
         let mut formatted_name = false;
-        visit_information_row(row, &children, &sources, stack, |entity| {
+        for entity in bindings.iter() {
             if let Ok((binding, mut text)) = text_nodes.get_mut(entity) {
                 let next = match &binding.0 {
                     UiTextPropertyBindingSource::SelectedEntityName if name.is_some() => {
@@ -134,7 +108,7 @@ pub(crate) fn project_world_subject_identity_to_information_list_rows(
                                 let _ = localization.write_localized_text_with_format_arguments(
                                     key,
                                     &[],
-                                    formatted,
+                                    &mut *formatted,
                                 );
                                 formatted_name = true;
                             }
@@ -152,10 +126,10 @@ pub(crate) fn project_world_subject_identity_to_information_list_rows(
             }
             if let Ok((binding, image)) = image_nodes.get_mut(entity) {
                 if !matches!(binding.0, UiImagePropertyBindingSource::SelectedEntityIcon) {
-                    return;
+                    continue;
                 }
                 let Some(icon) = definitions.texture_image(AssetId(definition.icon.0)) else {
-                    return;
+                    continue;
                 };
                 if let Some(mut image) = image {
                     if image.image != icon {
@@ -165,7 +139,7 @@ pub(crate) fn project_world_subject_identity_to_information_list_rows(
                     commands.entity(entity).insert(ImageNode::new(icon));
                 }
             }
-        });
+        }
     }
 }
 

@@ -9,11 +9,9 @@ use openzt2_game_assets::{
 use openzt2_game_data::behavior::action::wander::{
     BehaviorGroundLocomotionSpeed, BehaviorWanderAction,
 };
+use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_world_state::world_spawn::world_entity_crating::WorldEntityIsCrated;
 use openzt2_world_state::world_spawn::world_membership_types::{DefinitionId, WorldMember};
-use openzt2_world_state::{
-    application_schedule::FixedGameSet, simulation_time::simulation_clock_types::ZooClock,
-};
 use openzt2_zoo_state::animal_health::types::{Dead, Tranquilized};
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
     RunBehaviorEvasion, RunBehaviorWander, RunningBehaviorInstruction,
@@ -38,18 +36,20 @@ use openzt2_zoo_state::behavior_task_execution_types::{
     BehaviorEvasionNavigation, BehaviorEvasionSteering, BehaviorWanderNavigation,
 };
 
+use super::behavior_spatial_candidates::BehaviorSpatialCandidates;
+
 pub(super) fn register_wander_execution(application: &mut App) {
+    use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
+        BehaviorStep, BehaviorStepSet,
+    };
     application.add_systems(
-        FixedUpdate,
+        BehaviorStep,
         (
             finish_wander_navigation_requests,
-            execute_current_wander_actions,
+            execute_current_wander_actions.after(finish_wander_navigation_requests),
             execute_current_evasion_actions,
         )
-            .chain()
-            .after(super::behavior_task_phase_transition_execution::advance_behavior_tasks_through_return_failure_completion_and_final_outcome)
-            .before(openzt2_zoo_state::locomotion::AnimalAnimationNavigationProjection)
-            .in_set(FixedGameSet::Think)
+            .in_set(BehaviorStepSet::Actions)
             .run_if(in_state(GamePhase::InGame)),
     );
 }
@@ -97,7 +97,8 @@ fn execute_current_wander_actions(
         Without<WorldEntityIsCrated>,
     >,
     routes: Query<&Route>,
-    mut avoided_positions: Local<Vec<Vec2>>,
+    nearby: BehaviorSpatialCandidates,
+    mut candidates: Local<Vec<Entity>>,
     mut animals: Query<
         (
             Entity,
@@ -229,44 +230,48 @@ fn execute_current_wander_actions(
             continue;
         }
         let position = transform.translation();
-        avoided_positions.clear();
-        if let Some(avoidance) = &action.avoided_entities {
-            if let Ok((_, _, _, world)) = entities.get(actor) {
-                for (entity, other_transform, definition, other_world) in &entities {
-                    if entity == actor || other_world.root != world.root {
-                        continue;
+        let world = entities.get(actor).ok().map(|(_, _, _, world)| world.root);
+        let mut avoids_entities = |start: Vec2, end: Vec2| {
+            let (Some(avoidance), Some(world)) = (action.avoided_entities.as_ref(), world) else {
+                return true;
+            };
+            let margin = Vec2::splat(avoidance.radius_m.abs());
+            nearby.in_bounds(
+                start.min(end) - margin,
+                start.max(end) + margin,
+                &mut candidates,
+            );
+            let offset = end - start;
+            let denominator = offset.length_squared().max(f32::EPSILON);
+            let radius_squared = avoidance.radius_m.powi(2);
+            entities
+                .iter_many(candidates.iter().copied())
+                .flatten()
+                .all(|(entity, transform, definition, membership)| {
+                    if entity == actor || membership.root != world {
+                        return true;
+                    }
+                    let other = transform.translation().xz();
+                    let along = ((other - start).dot(offset) / denominator).clamp(0.0, 1.0);
+                    let closest = start + offset * along;
+                    let initial_distance = start.distance_squared(other);
+                    if closest.distance_squared(other) >= radius_squared
+                        || (initial_distance < radius_squared
+                            && along == 0.0
+                            && end.distance_squared(other) > initial_distance)
+                    {
+                        return true;
                     }
                     let types = subject_types.borrow_for(entity);
                     let object = definitions.find_object(definition.0);
-                    if avoidance.types.iter().any(|required| {
+                    !avoidance.types.iter().any(|required| {
                         *required == definition.0
                             || types.contains(required)
                             || object.is_some_and(|object| {
                                 object.behavior_type_identifiers.contains(required)
                             })
-                    }) {
-                        avoided_positions.push(other_transform.translation().xz());
-                    }
-                }
-            }
-        }
-        let avoids_entities = |start: Vec2, end: Vec2| {
-            action.avoided_entities.as_ref().is_none_or(|avoidance| {
-                avoided_positions.iter().all(|other| {
-                    let offset = end - start;
-                    let along = ((*other - start).dot(offset)
-                        / offset.length_squared().max(f32::EPSILON))
-                    .clamp(0.0, 1.0);
-                    let closest = start + offset * along;
-                    let initial_distance = start.distance_squared(*other);
-                    let radius_squared = avoidance.radius_m.powi(2);
-                    // An actor already inside the radius may move directly away.
-                    closest.distance_squared(*other) >= radius_squared
-                        || (initial_distance < radius_squared
-                            && along == 0.0
-                            && end.distance_squared(*other) > initial_distance)
+                    })
                 })
-            })
         };
         if let Some(active) = wandering
             .as_deref_mut()
@@ -423,6 +428,8 @@ fn execute_current_evasion_actions(
         (Entity, &GlobalTransform, &DefinitionId, &WorldMember),
         Without<WorldEntityIsCrated>,
     >,
+    nearby: BehaviorSpatialCandidates,
+    mut candidates: Local<Vec<Entity>>,
     mut actors: Query<
         (
             Entity,
@@ -523,7 +530,16 @@ fn execute_current_evasion_actions(
         let mut entity_direction = Vec2::ZERO;
         let mut entity_near = false;
         if let Ok((_, _, _, world)) = entities.get(actor) {
-            for (entity, other, definition, other_world) in &entities {
+            let margin = Vec2::splat(action.radius_m.abs());
+            nearby.in_bounds(
+                position.xz() - margin,
+                position.xz() + margin,
+                &mut candidates,
+            );
+            nearby.preserve_query_order(&mut candidates);
+            for (entity, other, definition, other_world) in
+                entities.iter_many(candidates.iter().copied()).flatten()
+            {
                 if entity == actor || other_world.root != world.root {
                     continue;
                 }

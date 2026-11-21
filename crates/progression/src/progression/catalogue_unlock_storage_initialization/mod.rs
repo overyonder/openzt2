@@ -1,4 +1,4 @@
-use super::research_types::{ResearchProjectAvailability, WorldResearchItems};
+use super::research_types::{ResearchItemInWorld, ResearchProjectAvailability, WorldResearchItems};
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use bevy::prelude::*;
@@ -27,11 +27,9 @@ pub(super) fn initialize_catalogue_unlock_storage_from_active_world_definitions(
     >,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
-    research_availability: Query<(Entity, &WorldMember, &ResearchProjectAvailability)>,
     profile_variables: Option<
         Res<openzt2_zoo_state::progression::profile_scenario_variables::ProfileScenarioVariables>,
     >,
-    mut identifiers: ResMut<PersistentIdAllocator>,
     mut unlocked_catalogue_definitions: ResMut<UnlockedCatalogueDefinitionSet>,
 ) {
     let Some(root) = roots.iter().next() else {
@@ -69,38 +67,98 @@ pub(super) fn initialize_catalogue_unlock_storage_from_active_world_definitions(
             }
         }
     }
-    let mut items = WorldResearchItems::default();
-    items.definitions.extend(
-        research_availability
-            .iter()
-            .filter(|(_, member, _)| member.root == root)
-            .map(|(entity, _, availability)| (availability.item, entity)),
-    );
-    for research in definitions.research() {
-        let item = if let Some(&item) = items.definitions.get(&research.id) {
-            item
-        } else {
-            let Ok(identifier) = identifiers.allocate(root) else {
-                return;
-            };
-            let item = commands
-                .spawn((
-                    ResearchProjectAvailability {
-                        item: research.id,
-                        available: false,
-                    },
-                    WorldMember { root },
-                    identifier,
-                ))
-                .id();
-            items.definitions.insert(research.id, item);
-            item
-        };
-        for &target in &research.unlocks {
-            items.unlocks.entry(target).or_default().push(item);
-        }
-    }
     commands
         .entity(root)
-        .insert((CatalogueUnlockStorageInitialized, items));
+        .insert(CatalogueUnlockStorageInitialized);
+}
+
+pub(super) fn reconcile_authored_research_items(
+    mut commands: Commands,
+    mut roots: Query<
+        (Entity, Option<&mut WorldResearchItems>),
+        (With<WorldLoadCompleted>, With<WorldRoot>),
+    >,
+    definitions: Res<Assets<WorldDefinitionAsset>>,
+    active_definitions: Res<WorldDefinitions>,
+    research_availability: Query<(
+        Entity,
+        &WorldMember,
+        &ResearchProjectAvailability,
+        Has<ResearchItemInWorld>,
+    )>,
+    mut identifiers: ResMut<PersistentIdAllocator>,
+) {
+    let definitions_changed = active_definitions.is_changed() || definitions.is_changed();
+    let Some(definitions) = active_definitions.get(&definitions) else {
+        return;
+    };
+    for (root, mut current) in &mut roots {
+        if !identifiers.owns_world(root) || (!definitions_changed && current.is_some()) {
+            continue;
+        }
+        let mut existing = if let Some(current) = current.as_deref() {
+            current
+                .definitions
+                .iter()
+                .filter(|(_, &item)| research_availability.contains(item))
+                .map(|(&definition, &item)| (definition, item))
+                .collect()
+        } else {
+            research_availability
+                .iter()
+                .filter(|(_, world, ..)| world.root == root)
+                .map(|(entity, _, item, _)| (item.item, entity))
+                .collect::<std::collections::BTreeMap<_, _>>()
+        };
+        let new_count = definitions
+            .research()
+            .filter(|research| !existing.contains_key(&research.id))
+            .count();
+        if u64::try_from(new_count)
+            .ok()
+            .and_then(|count| identifiers.next().checked_add(count))
+            .is_none()
+        {
+            continue;
+        }
+        let mut items = WorldResearchItems::default();
+        for research in definitions.research() {
+            let item = if let Some(item) = existing.remove(&research.id) {
+                if research_availability
+                    .get(item)
+                    .is_ok_and(|(_, _, _, linked)| !linked)
+                {
+                    commands.entity(item).insert(ResearchItemInWorld(root));
+                }
+                item
+            } else {
+                let Ok(identifier) = identifiers.allocate(root) else {
+                    return;
+                };
+                commands
+                    .spawn((
+                        ResearchProjectAvailability {
+                            item: research.id,
+                            available: false,
+                        },
+                        ResearchItemInWorld(root),
+                        WorldMember { root },
+                        identifier,
+                    ))
+                    .id()
+            };
+            items.definitions.insert(research.id, item);
+            for &target in &research.unlocks {
+                items.unlocks.entry(target).or_default().push(item);
+            }
+        }
+        for retired in existing.into_values() {
+            commands.entity(retired).try_despawn();
+        }
+        if let Some(current) = current.as_mut() {
+            current.set_if_neq(items);
+        } else {
+            commands.entity(root).insert(items);
+        }
+    }
 }

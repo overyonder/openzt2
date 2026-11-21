@@ -12,44 +12,69 @@ use openzt2_game_assets::localization::{
 };
 use openzt2_ui::authored_ui_text_content_binding::UiTextBinding;
 
+use openzt2_world_state::world_spawn::world_membership_types::{WorldMember, WorldRoot};
+
 use super::donation_payment_types::{DonationCategoryTotals, DonationTotal};
 
-#[derive(Resource, Default, PartialEq, Eq)]
+#[derive(Component, Default, PartialEq, Eq)]
 pub(super) struct ZooDonationSummary(HashMap<Option<AssetId>, Option<DonationTotal>>);
 
 pub(super) fn aggregate_zoo_donations_by_category(
-    acceptors: Query<&DonationCategoryTotals>,
-    changed_acceptors: Query<(), Changed<DonationCategoryTotals>>,
+    acceptors: Query<(&WorldMember, &DonationCategoryTotals)>,
+    changed_acceptors: Query<
+        (),
+        (
+            With<DonationCategoryTotals>,
+            Or<(Changed<DonationCategoryTotals>, Changed<WorldMember>)>,
+        ),
+    >,
+    donation_acceptors: Query<(), With<DonationCategoryTotals>>,
     mut removed_acceptors: RemovedComponents<DonationCategoryTotals>,
-    mut summary: ResMut<ZooDonationSummary>,
+    mut removed_members: RemovedComponents<WorldMember>,
+    mut summaries: Query<(Entity, &mut ZooDonationSummary), With<WorldRoot>>,
 ) {
-    let removed = removed_acceptors.read().count() != 0;
-    if !removed && changed_acceptors.is_empty() {
+    let acceptors_removed = removed_acceptors.read().count() != 0;
+    let members_removed = removed_members
+        .read()
+        .any(|entity| donation_acceptors.contains(entity));
+    if !acceptors_removed
+        && !members_removed
+        && changed_acceptors.is_empty()
+        && !summaries.iter_mut().any(|(_, summary)| summary.is_added())
+    {
         return;
     }
-    let mut totals = HashMap::new();
-    for (category, accepted) in acceptors.iter().flat_map(DonationCategoryTotals::iter) {
-        for key in [Some(category), None] {
-            let total = totals.entry(key).or_insert(Some(DonationTotal::default()));
-            *total = total.and_then(|current| {
-                Some(DonationTotal {
-                    count: current.count.checked_add(accepted.count)?,
-                    amount: openzt2_zoo_state::economy::money_types::Money(
-                        current.amount.0.checked_add(accepted.amount.0)?,
-                    ),
-                })
-            });
+    let mut totals_by_world = HashMap::<Entity, ZooDonationSummary>::new();
+    for (member, categories) in &acceptors {
+        let totals = &mut totals_by_world.entry(member.root).or_default().0;
+        for (category, accepted) in categories.iter() {
+            for key in [Some(category), None] {
+                let total = totals.entry(key).or_insert(Some(DonationTotal::default()));
+                *total = total.and_then(|current| {
+                    Some(DonationTotal {
+                        count: current.count.checked_add(accepted.count)?,
+                        amount: openzt2_zoo_state::economy::money_types::Money(
+                            current.amount.0.checked_add(accepted.amount.0)?,
+                        ),
+                    })
+                });
+            }
         }
     }
-    summary.set_if_neq(ZooDonationSummary(totals));
+    for (root, mut summary) in &mut summaries {
+        summary.set_if_neq(totals_by_world.remove(&root).unwrap_or_default());
+    }
 }
 
 pub(super) fn project_zoo_donation_summary(
     active_localization: Option<Res<LocalizationPrecedenceIndex>>,
     localizations: Res<Assets<LocalizationAsset>>,
-    summary: Res<ZooDonationSummary>,
+    summaries: Query<Ref<ZooDonationSummary>, With<WorldRoot>>,
     mut fields: Query<(Ref<UiTextBinding>, &mut Text)>,
 ) {
+    let Ok(summary) = summaries.single() else {
+        return;
+    };
     let refresh_all = summary.is_changed()
         || localizations.is_changed()
         || active_localization
@@ -59,7 +84,7 @@ pub(super) fn project_zoo_donation_summary(
         .as_deref()
         .and_then(|sources| sources.borrow_loaded_localization_view(&localizations));
 
-    for (binding, mut text) in &mut fields {
+    for (binding, text) in &mut fields {
         if !refresh_all && !binding.is_changed() && !text.is_added() {
             continue;
         }

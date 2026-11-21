@@ -327,6 +327,10 @@ pub(super) fn bind_resolved_world_definition_source_records_to_canonical_documen
         })
         .collect::<Vec<_>>();
     let mut output = WorldDefinitionLoweringTables::default();
+    output.document.animation_binder_rigs = primary_records
+        .iter()
+        .flat_map(animation_binder_rig_source_lowering::lower_authored_animation_binder_rigs)
+        .collect();
     if matches!(
         primary_path,
         "config/freeform_mode.xml" | "config/challenge_mode.xml" | "config/campaign_mode.xml"
@@ -811,6 +815,7 @@ pub mod ambient_spawn_element_source_lowering;
 pub mod animal_adoption_offer_configuration_source_lowering;
 mod animal_adoption_species_eligibility_source_lowering;
 pub mod animal_health_source_lowering;
+mod animation_binder_rig_source_lowering;
 pub mod aquatic_habitat_source_lowering;
 pub mod authored_fence_source_lowering;
 pub mod authored_gate_policy_lowering;

@@ -1,17 +1,11 @@
+use super::panel_binding_families::{IdentityIconFields, IdentityTextFieldOf, IdentityTextFields};
 use bevy::{ecs::relationship::RelationshipTarget, prelude::*, text::EditableText};
-use openzt2_game_data::{
-    ui_document::node_property_binding::{
-        UiImagePropertyBindingSource, UiTextPropertyBindingSource,
-    },
-    AssetId,
-};
+use openzt2_game_data::{ui_document::node_property_binding::UiTextPropertyBindingSource, AssetId};
 
 use openzt2_game_assets::localization::localization_asset_types::LocalizationAsset;
 use openzt2_game_assets::localization::localization_precedence_index::LocalizationPrecedenceIndex;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
-use openzt2_ui::authored_ui_image_content_binding::UiImageBinding;
-use openzt2_interface_state::ui::authored_ui_node_projection_components::{UiDocumentMembers, UiDocumentOwner};
 use openzt2_ui::authored_ui_text_content_binding::UiTextBinding;
 use openzt2_interface_state::ui::authored_ui_visual_types::UiSourceRect;
 use openzt2_interface_state::ui::authored_ui_visual_types::UiVisualLayer;
@@ -27,9 +21,9 @@ pub(crate) fn project_live_zoo_name_to_authored_editable_fields(
     mut edits: Query<(&UiTextBinding, &mut EditableText)>,
 ) {
     let Ok(name) = zoos.single() else { return };
-    for (binding, mut edit) in &mut edits {
+    for (binding, edit) in &mut edits {
         if matches!(binding.0, UiTextPropertyBindingSource::ZooName) {
-            replace_projected_editable_ui_text_if_changed(&mut edit, name.as_str());
+            replace_projected_editable_ui_text_if_changed(edit, name.as_str());
         }
     }
 }
@@ -42,12 +36,16 @@ pub(crate) fn project_selected_entity_identity_to_authored_panel_members(
     localization_assets: Res<Assets<LocalizationAsset>>,
     inspectable_world_subjects: Query<(&Inspectable, Option<&Name>)>,
     information_panels: Query<
-        (&ChildOf, &InheritedVisibility, &UiDocumentMembers),
+        (
+            &ChildOf,
+            &InheritedVisibility,
+            Option<&IdentityTextFields>,
+            Option<&IdentityIconFields>,
+        ),
         With<InfoPanel>,
     >,
     selections: Query<Ref<SelectedSubject>>,
-    mut text_nodes: Query<(&UiTextBinding, &mut Text)>,
-    image_nodes: Query<&UiImageBinding>,
+    mut text_nodes: Query<(&UiTextBinding, &mut Text), With<IdentityTextFieldOf>>,
     children: Query<&Children>,
     mut visual_images: Query<
         (Entity, Option<&UiSourceRect>, Option<&mut ImageNode>),
@@ -57,7 +55,7 @@ pub(crate) fn project_selected_entity_identity_to_authored_panel_members(
     let world_definitions = active_world_definitions.get(&world_definition_assets);
     let active_localization =
         active_localization.borrow_loaded_localization_view(&localization_assets);
-    for (parent, inherited_visibility, members) in &information_panels {
+    for (parent, inherited_visibility, text_fields, icon_fields) in &information_panels {
         let Ok(selection) = selections.get(parent.parent()) else {
             continue;
         };
@@ -79,8 +77,8 @@ pub(crate) fn project_selected_entity_identity_to_authored_panel_members(
             .map_or(localized_definition_name, Name::as_str);
         let icon_image = world_definition
             .and_then(|definition| world_definitions?.texture_image(AssetId(definition.icon.0)));
-        for entity in members.iter() {
-            if let Ok((binding, mut text)) = text_nodes.get_mut(entity) {
+        for entity in text_fields.into_iter().flat_map(RelationshipTarget::iter) {
+            if let Ok((binding, text)) = text_nodes.get_mut(entity) {
                 let name = match &binding.0 {
                     UiTextPropertyBindingSource::SelectedEntityName => Some(live_name),
                     UiTextPropertyBindingSource::SelectedEntityDefinitionName => {
@@ -89,14 +87,11 @@ pub(crate) fn project_selected_entity_identity_to_authored_panel_members(
                     _ => None,
                 };
                 if let Some(name) = name {
-                    replace_projected_ui_text_if_changed(&mut text.0, name);
+                    replace_projected_ui_text_if_changed(text, name);
                 }
             }
-            if !image_nodes.get(entity).is_ok_and(|binding| {
-                matches!(&binding.0, UiImagePropertyBindingSource::SelectedEntityIcon)
-            }) {
-                continue;
-            }
+        }
+        for entity in icon_fields.into_iter().flat_map(RelationshipTarget::iter) {
             let Ok(children) = children.get(entity) else {
                 continue;
             };
@@ -142,14 +137,17 @@ pub(crate) fn project_selected_entity_name_to_authored_editable_fields(
     active_localization: Res<LocalizationPrecedenceIndex>,
     localization_assets: Res<Assets<LocalizationAsset>>,
     inspectable_world_subjects: Query<(&Inspectable, Option<&Name>)>,
-    information_panels: Query<(Entity, &ChildOf, Ref<InheritedVisibility>), With<InfoPanel>>,
+    information_panels: Query<
+        (&ChildOf, &InheritedVisibility, &IdentityTextFields),
+        With<InfoPanel>,
+    >,
     selections: Query<Ref<SelectedSubject>>,
-    mut editable_name_nodes: Query<(&UiDocumentOwner, &UiTextBinding, &mut EditableText)>,
+    mut editable_name_nodes: Query<(&UiTextBinding, &mut EditableText), With<IdentityTextFieldOf>>,
 ) {
     let world_definitions = active_world_definitions.get(&world_definition_assets);
     let active_localization =
         active_localization.borrow_loaded_localization_view(&localization_assets);
-    for (panel_entity, parent, inherited_visibility) in &information_panels {
+    for (parent, inherited_visibility, text_fields) in &information_panels {
         let Ok(selection) = selections.get(parent.parent()) else {
             continue;
         };
@@ -166,17 +164,15 @@ pub(crate) fn project_selected_entity_name_to_authored_editable_fields(
                 })
             })
             .unwrap_or_default();
-        for (document_owner, text_binding, mut editable_text) in &mut editable_name_nodes {
-            if document_owner.0 == panel_entity
-                && matches!(
-                    &text_binding.0,
-                    UiTextPropertyBindingSource::SelectedEntityName
-                )
-            {
-                replace_projected_editable_ui_text_if_changed(
-                    &mut editable_text,
-                    selected_entity_name,
-                );
+        for entity in text_fields.iter() {
+            let Ok((text_binding, editable_text)) = editable_name_nodes.get_mut(entity) else {
+                continue;
+            };
+            if matches!(
+                &text_binding.0,
+                UiTextPropertyBindingSource::SelectedEntityName
+            ) {
+                replace_projected_editable_ui_text_if_changed(editable_text, selected_entity_name);
             }
         }
     }

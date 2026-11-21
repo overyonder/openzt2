@@ -278,7 +278,7 @@ fn ruin_destroyed_placed_object(
     (placement, mut scratch, mut allocator): (
         Res<PlacedObjectFootprintOccupancyIndex>,
         ResMut<ObjectPlacementCellCollectionScratch>,
-        ResMut<PersistentIdAllocator>,
+        Query<&mut PersistentIdAllocator>,
     ),
     placed: PlacedObjects,
     mut committed: MessageWriter<ObjectPlacementCommitted>,
@@ -377,7 +377,11 @@ fn ruin_destroyed_placed_object(
         );
         return;
     };
-    let Ok(id) = allocator.allocate(root) else {
+    let Some(id) = allocator
+        .get_mut(root)
+        .ok()
+        .and_then(|mut allocator| allocator.allocate().ok())
+    else {
         warn!(
             ?building,
             ?ruin,

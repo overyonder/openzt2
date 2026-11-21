@@ -5,4 +5,4 @@ pub mod model_joint_attachment_binding;
 
 pub mod locomotion_root_motion;
 
-pub mod fractional_animation_milliseconds;
+pub mod traversal_animation_path_types;

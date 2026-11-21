@@ -7,8 +7,7 @@ use openzt2_zoo_state::economy::money_types::Money;
 use openzt2_zoo_state::guests::guest_simulation_types::GuestReaction;
 
 use crate::transport_tours::transport_fare_settlement::complete_paid_transport_trips_and_publish_guest_reactions;
-use crate::transport_tours::transport_fare_types::PendingTransportFare;
-use crate::transport_tours::transport_fare_types::QueuedFare;
+use crate::transport_tours::transport_fare_types::{FareGuest, PendingTransportFare, QueuedFare};
 use openzt2_zoo_state::transport_tours::tour_scoring_types::TransportTripCompleted;
 
 fn application_with_transport_fare_settlement() -> App {
@@ -32,8 +31,8 @@ fn matching_completed_payment_emits_one_trip_and_consumes_fare_operation() {
     let fare_operation = application
         .world_mut()
         .spawn((
+            FareGuest(guest_entity),
             PendingTransportFare {
-                guest: guest_entity,
                 circuit: circuit_entity,
                 score: 420.0,
                 rating: 0.42,
@@ -69,8 +68,8 @@ fn unrelated_completed_payment_does_not_complete_transport_trip() {
     let fare_operation = application
         .world_mut()
         .spawn((
+            FareGuest(guest_entity),
             PendingTransportFare {
-                guest: guest_entity,
                 circuit: circuit_entity,
                 score: 100.0,
                 rating: 0.1,

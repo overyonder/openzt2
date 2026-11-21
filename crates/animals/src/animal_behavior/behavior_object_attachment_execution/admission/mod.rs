@@ -1,6 +1,7 @@
 use super::*;
 use crate::animal_behavior::behavior_container_admission::BehaviorAdmissionInstruction;
 use bevy::ecs::{entity::Entities, world::EntityWorldMut};
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
 use openzt2_world::world_spawn::prefab_world_instance_spawning::hydrate_loaded_scene_prefab_into_world_instance_root;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 use openzt2_zoo_state::animal_behavior::interaction_container_membership::requests::{
@@ -146,6 +147,8 @@ pub(super) fn apply_object_attachment_admissions(
     mut pending: Query<&mut PendingAttachmentAdmission>,
     tasks: Query<(&BehaviorTaskExecutionState, &RunningBehaviorInstruction)>,
     prefabs: Res<Assets<ScenePrefabAsset>>,
+    definitions: Res<WorldDefinitions>,
+    definition_assets: Res<Assets<WorldDefinitionAsset>>,
     mut playback: MessageWriter<AnimationClipPlaybackRequest>,
     entities: &Entities,
 ) {
@@ -159,7 +162,12 @@ pub(super) fn apply_object_attachment_admissions(
     commands.entity(result.request_entity).despawn();
     match (admission, result.outcome) {
         (AttachmentAdmission::Detach(admission), outcome) => {
-            apply_detach_admission(admission, outcome, &mut commands);
+            apply_detach_admission(
+                admission,
+                outcome,
+                definitions.get(&definition_assets),
+                &mut commands,
+            );
         }
         (
             AttachmentAdmission::Attach(prepared),
@@ -190,9 +198,12 @@ pub(super) fn apply_object_attachment_admissions(
                 }
             }
             if !entities.contains_spawned(actor) {
-                commands
-                    .entity(member)
-                    .try_insert(detach::DestroyedHolderSlot(slot));
+                if slot_owns_item(definitions.get(&definition_assets), &attachment, slot) {
+                    commands.entity(member).try_despawn();
+                } else {
+                    commands.entity(member).try_insert(Visibility::Inherited);
+                }
+                return;
             }
             if let Some(modifier) = modifier {
                 commands
@@ -245,6 +256,7 @@ pub(super) fn apply_object_attachment_admissions(
 fn apply_detach_admission(
     admission: DetachAdmission,
     outcome: InteractionContainerAdmissionOutcome,
+    definitions: Option<WorldDefinitionsView<'_>>,
     commands: &mut Commands,
 ) {
     use InteractionContainerAdmissionOutcome::{Granted, IdentityUnavailable};
@@ -274,6 +286,7 @@ fn apply_detach_admission(
                 ..
             },
         ) => {
+            let owned = slot_owns_item(definitions, &attachment, slot);
             commands.entity(member).try_insert((
                 created::PendingDetachCreatedObject::default(),
                 DefinitionId(definition),
@@ -284,17 +297,34 @@ fn apply_detach_admission(
                 attachment,
                 Visibility::Hidden,
             ));
-            // A membership command can despawn the holder or one of its ancestors.
+            // Admission may itself remove the holder through a slot conflict.
             commands
                 .entity(member)
                 .queue_silenced(move |mut item: EntityWorldMut<'_>| {
                     if !item.world().entities().contains_spawned(holder) {
-                        item.insert(detach::DestroyedHolderSlot(slot));
+                        if owned {
+                            item.despawn();
+                        } else {
+                            item.remove::<ContainedObject>();
+                        }
                     }
                 });
         }
         _ => {}
     }
+}
+
+fn slot_owns_item(
+    definitions: Option<WorldDefinitionsView<'_>>,
+    attachment: &ContainedObject,
+    slot: usize,
+) -> bool {
+    definitions
+        .and_then(|definitions| {
+            holder::AttachmentHolder::find(&definitions, attachment.holder_definition)
+        })
+        .and_then(|holder| holder.place(slot))
+        .is_some_and(|place| place.owns_contents)
 }
 
 fn hydrate_admitted_attachment(

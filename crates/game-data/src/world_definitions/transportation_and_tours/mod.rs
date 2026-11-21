@@ -15,6 +15,9 @@ pub struct TransportationStationDefinition {
     pub cardinal_endpoint_offsets_metres: Option<[[f32; 3]; 2]>,
     pub diagonal_endpoint_offsets_metres: Option<[[f32; 3]; 2]>,
     pub passenger_entry_offsets_cm: [[i16; 2]; 2],
+    /// Local X/Z offset in metres followed by the authored heading in degrees.
+    #[serde(default)]
+    pub passenger_exits: [Option<[f32; 3]>; 2],
     pub capacity: u16,
 }
 #[derive(Clone, Copy, Debug, serde::Deserialize, Eq, PartialEq, serde::Serialize)]
@@ -112,6 +115,8 @@ pub struct TransportationVehicleSeatDefinition {
     pub vehicle: AssetId,
     pub index: u16,
     pub back_facing: bool,
+    #[serde(default)]
+    pub mount_node: Option<AssetId>,
     pub view_limits_degrees: [i16; 4],
     pub emote_bands: Vec<TransportationVehicleSeatEmoteBand>,
     pub animation_states: Vec<TransportationVehicleSeatAnimationState>,
@@ -193,4 +198,26 @@ pub struct TourCategoryScore {
 pub struct TourRatingRange {
     pub score: [f32; 2],
     pub rating: [f32; 2],
+}
+
+/// Highlight palettes and frame intervals from the construction modes.
+#[derive(Clone, Copy, Debug, Default, serde::Deserialize, PartialEq, serde::Serialize)]
+pub struct TransportHighlightPolicy {
+    pub track: Option<TrackHighlightPolicy>,
+    pub deletion: Option<TransportDeletionHighlightPolicy>,
+}
+
+#[derive(Clone, Copy, Debug, serde::Deserialize, PartialEq, serde::Serialize)]
+pub struct TrackHighlightPolicy {
+    pub place: [[u8; 4]; 2],
+    pub steep: [u8; 4],
+    pub endpoint: [[u8; 4]; 2],
+    pub station: [[u8; 4]; 2],
+    pub color_interval_seconds: f32,
+}
+
+#[derive(Clone, Copy, Debug, serde::Deserialize, PartialEq, serde::Serialize)]
+pub struct TransportDeletionHighlightPolicy {
+    pub colors: [[u8; 4]; 2],
+    pub color_interval_seconds: f32,
 }

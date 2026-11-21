@@ -2,6 +2,98 @@ use super::*;
 use openzt2_game_data::AssetId;
 use openzt2_zoo_state::staff::staff_lifecycle_messages::StaffJobCancelled;
 
+#[test]
+fn a_dose_batch_keeps_the_longest_sedation_and_last_recovery() {
+    use openzt2_game_data::world_definitions::{
+        animal_health::{TranquilizerDefinition, TranquilizerEligibility, TranquilizerModePolicy},
+        document::WorldDefinitionDocument,
+    };
+
+    let long = AssetId::from_key("long-dose");
+    let short = AssetId::from_key("short-dose");
+    let document = WorldDefinitionDocument {
+        tranquilizer_mode: Some(TranquilizerModePolicy {
+            range_cm: 500,
+            charge_points_per_second: 0.0,
+            charge_decrease_points_per_second: 0.0,
+            required_charge_points: 0.0,
+            use_distance_cm: 0,
+            shot_cue: AssetId::default(),
+            misfire_cue: AssetId::default(),
+            begin_charge_cue: AssetId::default(),
+            charge_cue: AssetId::default(),
+            end_charge_cue: AssetId::default(),
+            lose_tracking_cue: AssetId::default(),
+            shot_effect: AssetId::default(),
+            shot_effect_distance_cm: 0,
+            shot_effect_offset_cm: [0; 2],
+            recoil_duration_seconds: 0.0,
+            misfire_duration_seconds: 0.0,
+            reticle_charging: AssetId::default(),
+            reticle_ready: AssetId::default(),
+        }),
+        tranquilizers: [(long, 120, 15), (short, 30, 5)]
+            .map(
+                |(id, duration_ticks, recovery_ticks)| TranquilizerDefinition {
+                    id,
+                    duration_ticks,
+                    recovery_ticks,
+                    eligible_states: TranquilizerEligibility::CONTAINED,
+                },
+            )
+            .to_vec(),
+        ..default()
+    };
+    let mut assets = Assets::<WorldDefinitionAsset>::default();
+    let handle = assets.add(WorldDefinitionAsset::from_test_document(document.clone()));
+    let mut definitions = WorldDefinitions::default();
+    definitions.index_test_document(handle, &document);
+    let mut app = App::new();
+    app.insert_resource(assets)
+        .insert_resource(definitions)
+        .add_message::<TranquilizeRequest>()
+        .add_systems(
+            Update,
+            validate_tranquilizer_requests_and_apply_timed_tranquilization,
+        );
+    let source = app
+        .world_mut()
+        .spawn((ZooCamera, GlobalTransform::IDENTITY))
+        .id();
+    let transform = GlobalTransform::from_translation(Vec3::X * 5.0);
+    let untranquilized = app.world_mut().spawn((Animal, transform)).id();
+    let tranquilized = app
+        .world_mut()
+        .spawn((
+            Animal,
+            transform,
+            Tranquilized {
+                remaining_ticks: 60,
+                recovery_ticks: 10,
+            },
+        ))
+        .id();
+    for animal in [untranquilized, tranquilized] {
+        for tranquilizer in [long, short] {
+            app.world_mut().write_message(TranquilizeRequest {
+                animal,
+                tranquilizer,
+                source,
+            });
+        }
+    }
+    app.update();
+    for animal in [untranquilized, tranquilized] {
+        assert_eq!(
+            app.world().get::<Tranquilized>(animal),
+            Some(&Tranquilized {
+                remaining_ticks: 120,
+                recovery_ticks: 5
+            })
+        );
+    }
+}
+
 fn capture_app() -> (App, CaptureAnimalRequest) {
     let mut app = App::new();
     app.add_message::<CaptureAnimalRequest>()
@@ -27,7 +119,7 @@ fn capture_app() -> (App, CaptureAnimalRequest) {
         .world_mut()
         .spawn((
             StaffJob {
-                kind: StaffJobKind::Capture,
+                kind: Some(StaffJobKind::Capture),
                 target: animal,
                 urgency: 0,
                 token: Some(AssetId::from_key("t_crateanimal")),

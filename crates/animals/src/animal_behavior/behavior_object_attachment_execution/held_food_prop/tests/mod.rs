@@ -81,7 +81,6 @@ fn food_prop_attach_and_detach_keys_share_one_request_and_cancel_with_the_task()
         .entity_mut(actor)
         .insert(HeldFoodPropAttachment {
             origin,
-            item: Some(item),
             attached: false,
             detached: false,
             completed: false,

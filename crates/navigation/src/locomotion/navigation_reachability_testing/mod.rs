@@ -4,7 +4,7 @@ use openzt2_zoo_state::animal_lifecycle::types::AnimalVariant;
 use openzt2_zoo_state::aquatic::tank_navigation_water::TankNavigationWater;
 
 use crate::locomotion::animal_navigation_policy::AnimalNavigationPolicy;
-use crate::locomotion::fence_navigation_crossing_types::FenceNavigationCrossingIndex;
+use crate::locomotion::fence_navigation_crossing_types::FenceNavigationCrossingQueries;
 use crate::locomotion::fence_navigation_policy::FenceNavigationPolicy;
 use crate::locomotion::pathfinding::plan_route;
 use openzt2_zoo_state::locomotion::locomotion_types::ActiveTerrainDerivedNavigationGraph;
@@ -22,7 +22,7 @@ pub(super) fn test_requested_navigation_destination_reachability(
     mut reachability_test_results: MessageWriter<ReachabilityTested>,
     active_navigation_graph: Option<Res<ActiveTerrainDerivedNavigationGraph>>,
     water: Query<&TankNavigationWater, With<WorldRoot>>,
-    fence_crossing_index: Res<FenceNavigationCrossingIndex>,
+    fence_crossing_index: FenceNavigationCrossingQueries,
     locomotion_capacity: Option<Res<LocomotionCapacity>>,
     navigation_agents: Query<(
         &NavAgent,
@@ -100,18 +100,17 @@ pub(super) fn test_requested_navigation_destination_reachability(
                                         terrain_derived_navigation_graph,
                                         tank_water,
                                         |from, to| {
-                                            fence_crossing_index
-                                                .crossing_fences(from, to)
-                                                .iter()
-                                                .any(|fence| {
+                                            fence_crossing_index.crossing_fences(from, to).any(
+                                                |fence| {
                                                     fence_policy.fence_blocks_actor(
-                                                        *fence,
+                                                        fence,
                                                         navigation_agent.capabilities,
                                                         fence_policy.actor_types.actor_types(
                                                             reachability_test_request.entity,
                                                         ),
                                                     )
-                                                })
+                                                },
+                                            )
                                         },
                                         |from, to| {
                                             fence_policy.world_segment_blocks_actor(

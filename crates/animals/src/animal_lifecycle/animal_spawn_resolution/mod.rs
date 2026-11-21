@@ -29,6 +29,7 @@ pub(super) fn resolve_animal_spawn_request_to_identifiers_and_components(
     definitions: WorldDefinitionsView<'_>,
     allocator: &mut PersistentIdAllocator,
     placement_sites: &PlacementSiteQueries<'_, '_>,
+    habitat: Option<bevy::prelude::Entity>,
 ) -> Result<(PersistentId, WorldMember, ResolvedAnimalSpawnComponents), AnimalSpawnFailure> {
     let species = species_index
         .find(request.species)
@@ -39,26 +40,38 @@ pub(super) fn resolve_animal_spawn_request_to_identifiers_and_components(
     let world = WorldMember {
         root: request.world,
     };
-    if !allocator.owns_world(world.root) {
-        return Err(AnimalSpawnFailure::PersistentId(
-            openzt2_world_state::world_spawn::persistent_id_types::PersistentIdError::WrongWorld,
-        ));
-    }
     let preview_id = PersistentId(allocator.next());
     let mut rng = DeterministicRng::from_entity(*seed, preview_id, RngDomain::Reproduction);
-    let desired_stage = request
-        .variant
-        .and_then(|variant| {
-            find_species_variant_by_identifier(species_index, request.species, variant)
-        })
-        .map(|variant| variant.life_stage)
-        .unwrap_or(LifeStage::Adult);
-    let resolved = resolve_species_and_variant_to_animal_spawn_components(
-        species_index,
+    let (variant, sex) = if let Some(id) = request.variant {
+        let variant = find_species_variant_by_identifier(species_index, request.species, id)
+            .ok_or(AnimalSpawnFailure::InvalidVariant)?;
+        let sex = resolve_exact_variant_sex(variant, request.sex, variant.life_stage)
+            .ok_or(AnimalSpawnFailure::InvalidVariant)?;
+        (variant, sex)
+    } else {
+        select_species_spawn_variant(
+            species_index,
+            species,
+            None,
+            request.sex,
+            LifeStage::Adult,
+            &mut rng,
+        )
+        .ok_or(AnimalSpawnFailure::InvalidSex)?
+    };
+    placement_sites
+        .validate(
+            variant.placement_surface_policy,
+            request.world,
+            habitat,
+            request.transform.translation,
+        )
+        .map_err(|_| AnimalSpawnFailure::InvalidHabitat)?;
+    let resolved = lower_species_and_variant_to_animal_spawn_components(
         species,
-        request.variant,
-        request.sex,
-        desired_stage,
+        variant,
+        sex,
+        variant.life_stage,
         definitions.timing().ticks_per_day,
         &mut rng,
     )
@@ -67,19 +80,8 @@ pub(super) fn resolve_animal_spawn_request_to_identifiers_and_components(
     } else {
         AnimalSpawnFailure::InvalidSex
     })?;
-    let variant = species_index
-        .find_variant(resolved.variant)
-        .ok_or(AnimalSpawnFailure::InvalidVariant)?;
-    placement_sites
-        .validate(
-            variant.placement_surface_policy,
-            request.world,
-            request.habitat,
-            request.transform.translation,
-        )
-        .map_err(|_| AnimalSpawnFailure::InvalidHabitat)?;
     let id = allocator
-        .allocate(world.root)
+        .allocate()
         .map_err(AnimalSpawnFailure::PersistentId)?;
     Ok((id, world, resolved))
 }
@@ -93,27 +95,36 @@ pub(super) fn resolve_species_and_variant_to_animal_spawn_components(
     ticks_per_day: u32,
     rng: &mut DeterministicRng,
 ) -> Option<ResolvedAnimalSpawnComponents> {
+    let (variant, sex) = select_species_spawn_variant(
+        species_index,
+        species,
+        requested_variant,
+        requested_sex,
+        stage,
+        rng,
+    )?;
+    lower_species_and_variant_to_animal_spawn_components(
+        species,
+        variant,
+        sex,
+        stage,
+        ticks_per_day,
+        rng,
+    )
+}
+
+pub(super) fn select_species_spawn_variant<'a>(
+    species_index: SpeciesView<'a>,
+    species: &Species,
+    requested_variant: Option<AssetId>,
+    requested_sex: Option<Sex>,
+    stage: LifeStage,
+    rng: &mut DeterministicRng,
+) -> Option<(&'a SpeciesVariant, Sex)> {
     if let Some(id) = requested_variant {
         let variant = find_species_variant_by_identifier(species_index, species.id, id)?;
-        if variant.probability == 0 {
-            return None;
-        }
-        let variant_sex = variant.sex;
-        let sex = requested_sex.unwrap_or(variant_sex);
-        if sex == Sex::Any
-            || (variant_sex != Sex::Any && variant_sex != sex)
-            || variant.life_stage != stage
-        {
-            return None;
-        }
-        return lower_species_and_variant_to_animal_spawn_components(
-            species,
-            variant,
-            sex,
-            stage,
-            ticks_per_day,
-            rng,
-        );
+        let sex = resolve_exact_variant_sex(variant, requested_sex, stage)?;
+        return Some((variant, sex));
     }
 
     let sex = requested_sex
@@ -135,18 +146,23 @@ pub(super) fn resolve_species_and_variant_to_animal_spawn_components(
     }) {
         let weight = u32::from(variant.probability);
         if roll < weight {
-            return lower_species_and_variant_to_animal_spawn_components(
-                species,
-                variant,
-                sex,
-                stage,
-                ticks_per_day,
-                rng,
-            );
+            return Some((variant, sex));
         }
         roll -= weight;
     }
     None
+}
+
+fn resolve_exact_variant_sex(
+    variant: &SpeciesVariant,
+    requested_sex: Option<Sex>,
+    stage: LifeStage,
+) -> Option<Sex> {
+    let sex = requested_sex.unwrap_or(variant.sex);
+    (variant.probability != 0
+        && sex != Sex::Any
+        && species_variant_matches_sex_and_life_stage(variant, sex, stage))
+    .then_some(sex)
 }
 
 pub fn lower_species_and_variant_to_animal_spawn_components(
@@ -210,9 +226,8 @@ pub(super) fn find_species_variant_by_identifier<'a>(
     species: AssetId,
     id: AssetId,
 ) -> Option<&'a SpeciesVariant> {
-    species_index
-        .variants(species)
-        .find(|variant| variant.id == id)
+    let (owner, variant) = species_index.find_variant_with_species(id)?;
+    (owner.id == species).then_some(variant)
 }
 
 pub(super) fn species_variant_matches_sex_and_life_stage(

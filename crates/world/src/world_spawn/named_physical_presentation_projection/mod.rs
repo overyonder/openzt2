@@ -5,6 +5,7 @@ use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabCausticPo
 use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 use openzt2_world_state::animation_graph::animation_presentation_relationship_types::{AnimationPresentationBinder, AnimationPresentationOwner};
 use bevy::prelude::*;
+use openzt2_world_state::animation_playback::traversal_animation_path_types::PrefabTraversalAnimationManifests;
 use bevy::platform::collections::HashSet;
 use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
@@ -39,17 +40,20 @@ pub(super) fn project_physical_presentation_caustic_policies(
     active_definitions: Res<WorldDefinitions>,
     assets: Res<Assets<WorldDefinitionAsset>>,
     mut asset_events: MessageReader<AssetEvent<WorldDefinitionAsset>>,
+    server: Option<Res<AssetServer>>,
     mut presentations: Query<
         (
             Entity,
             Option<&DefinitionId>,
             Option<&PrefabAuthoredAttachmentIdentifier>,
             Option<&mut PrefabCausticPolicy>,
+            Option<&mut PrefabTraversalAnimationManifests>,
         ),
         Or<(
             With<DefinitionId>,
             With<PrefabPresentation>,
             With<PrefabCausticPolicy>,
+            With<PrefabTraversalAnimationManifests>,
         )>,
     >,
     parents: Query<&ChildOf>,
@@ -92,7 +96,7 @@ pub(super) fn project_physical_presentation_caustic_policies(
     }
     let catalogue = active_definitions.get(&assets);
     let mut changed = presentations.iter_many_mut(affected).matched();
-    while let Some((entity, own_definition, binder, current)) = changed.fetch_next() {
+    while let Some((entity, own_definition, binder, current, manifests)) = changed.fetch_next() {
         let definition = own_definition.or_else(|| {
             parents
                 .iter_ancestors::<ChildOf>(entity)
@@ -103,8 +107,10 @@ pub(super) fn project_physical_presentation_caustic_policies(
         } else {
             binder.map(|binder| binder.0)
         };
-        let projected = definition.zip(binder).and_then(|(id, binder)| {
-            let definition = catalogue.as_ref()?.find_object(id.0)?;
+        let object_binder = definition
+            .zip(binder)
+            .and_then(|(id, binder)| Some((catalogue.as_ref()?.find_object(id.0)?, binder)));
+        let projected = object_binder.and_then(|(definition, binder)| {
             let policy = definition
                 .presentation_caustic_policies
                 .iter()
@@ -113,6 +119,34 @@ pub(super) fn project_physical_presentation_caustic_policies(
                 receives: !policy.no_caustics && !policy.is_decal,
             })
         });
+        if let Some(server) = server.as_ref() {
+            let sources = object_binder
+                .into_iter()
+                .flat_map(|(definition, binder)| {
+                    definition
+                        .traversal_animation_manifests
+                        .iter()
+                        .filter(move |manifest| manifest.binder == binder)
+                })
+                .map(|manifest| server.load(manifest.source_path.clone()))
+                .collect::<Box<[_]>>();
+            match (manifests, sources.is_empty()) {
+                (Some(mut manifests), false) => {
+                    manifests.set_if_neq(PrefabTraversalAnimationManifests(sources));
+                }
+                (None, false) => {
+                    commands
+                        .entity(entity)
+                        .try_insert(PrefabTraversalAnimationManifests(sources));
+                }
+                (Some(_), true) => {
+                    commands
+                        .entity(entity)
+                        .try_remove::<PrefabTraversalAnimationManifests>();
+                }
+                (None, true) => {}
+            }
+        }
         match (current, projected) {
             (Some(mut current), Some(projected)) => {
                 current.set_if_neq(projected);

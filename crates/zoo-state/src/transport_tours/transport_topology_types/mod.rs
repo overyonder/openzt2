@@ -1,4 +1,7 @@
-use bevy::prelude::*;
+use bevy::{
+    ecs::{query::QueryData, system::SystemParam},
+    prelude::*,
+};
 use openzt2_game_data::world_definitions::transportation_and_tours::TransportationTrackKind;
 use openzt2_game_data::AssetId;
 
@@ -89,19 +92,10 @@ pub struct TransportStationAssignmentRejected {
     pub reason: TransportConnectionFailure,
 }
 
-/// Installed by construction when deletion of a circuit member requires the
-/// authored path confirmation.
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TransportPathDeletionPending {
-    pub target: Entity,
-}
-
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TransportStation {
     pub definition: AssetId,
     pub capacity: u16,
-    pub queued: u16,
-    pub occupied: u16,
 }
 
 /// A canonical junction between committed track segments.
@@ -114,10 +108,8 @@ pub struct TransportTrackJunction;
 #[derive(Component, Debug, Clone, PartialEq)]
 pub struct TrackSegment {
     pub definition: AssetId,
-    pub from: Entity,
     pub from_endpoint_index: u8,
     pub from_position: Vec3,
-    pub to: Entity,
     pub to_endpoint_index: u8,
     pub to_position: Vec3,
     pub path_points: Box<[Vec3]>,
@@ -125,8 +117,76 @@ pub struct TrackSegment {
     pub length: f32,
 }
 
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+#[relationship(relationship_target = OutgoingTracks)]
+pub struct TrackStart(pub Entity);
+
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+#[relationship(relationship_target = IncomingTracks)]
+pub struct TrackEnd(pub Entity);
+
+#[derive(Component, Debug)]
+#[relationship_target(relationship = TrackStart)]
+pub struct OutgoingTracks(Vec<Entity>);
+
+#[derive(Component, Debug)]
+#[relationship_target(relationship = TrackEnd)]
+pub struct IncomingTracks(Vec<Entity>);
+
+#[derive(QueryData)]
+pub struct TrackRoute {
+    pub geometry: &'static TrackSegment,
+    pub start: &'static TrackStart,
+    pub end: &'static TrackEnd,
+}
+
+impl TrackRouteItem<'_, '_> {
+    pub fn from(&self) -> Entity {
+        self.start.0
+    }
+    pub fn to(&self) -> Entity {
+        self.end.0
+    }
+}
+
+impl std::ops::Deref for TrackRouteItem<'_, '_> {
+    type Target = TrackSegment;
+
+    fn deref(&self) -> &Self::Target {
+        self.geometry
+    }
+}
+
+#[derive(SystemParam)]
+pub struct TrackIncidence<'w, 's> {
+    outgoing: Query<'w, 's, &'static OutgoingTracks>,
+    incoming: Query<'w, 's, &'static IncomingTracks>,
+}
+
+impl TrackIncidence<'_, '_> {
+    pub fn outgoing(&self, endpoint: Entity) -> impl Iterator<Item = Entity> + '_ {
+        self.outgoing
+            .get(endpoint)
+            .ok()
+            .into_iter()
+            .flat_map(|routes| routes.iter())
+    }
+
+    pub fn incoming(&self, endpoint: Entity) -> impl Iterator<Item = Entity> + '_ {
+        self.incoming
+            .get(endpoint)
+            .ok()
+            .into_iter()
+            .flat_map(|routes| routes.iter())
+    }
+
+    pub fn incident(&self, endpoint: Entity) -> impl Iterator<Item = Entity> + '_ {
+        self.outgoing(endpoint).chain(self.incoming(endpoint))
+    }
+}
+
 /// Construction constraints and movement policy attached to the placed track
-/// entity. Endpoints remain ordinary entity relations on `TrackSegment`.
+/// entity. Endpoints are linked by `TrackStart` and `TrackEnd`.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TrackProfile {
     pub definition: AssetId,
@@ -134,15 +194,29 @@ pub struct TrackProfile {
     pub maximum_grade_permille: u16,
 }
 
-/// Authored lower and upper navigation endpoints for one sky tower.
-///
-/// The endpoints are ordinary entities so navigation and construction retain
-/// ownership of their transforms and topology. The tower stores only the two
-/// directed relationships needed by its up/down behavior.
+/// The committed height of a sky tower above its base.
+#[derive(Component, Debug, Clone, Copy, PartialEq)]
+pub struct SkyTowerHeight(pub f32);
+
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SkyTowerEndpoints {
-    pub lower: Entity,
-    pub upper: Entity,
+pub enum SkyTowerEndpoint {
+    Lower,
+    Upper,
+}
+
+#[derive(SystemParam)]
+pub struct SkyTowerEndpoints<'w, 's> {
+    children: Query<'w, 's, &'static Children>,
+    mounts: Query<'w, 's, (&'static SkyTowerEndpoint, &'static GlobalTransform)>,
+}
+
+impl SkyTowerEndpoints<'_, '_> {
+    pub fn position(&self, tower: Entity, endpoint: SkyTowerEndpoint) -> Option<Vec3> {
+        self.children.get(tower).ok()?.iter().find_map(|entity| {
+            let (mount, transform) = self.mounts.get(entity).ok()?;
+            (*mount == endpoint).then(|| transform.translation())
+        })
+    }
 }
 
 #[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
@@ -151,3 +225,7 @@ pub struct SkyTowerTransitionRequest {
     pub tower: Entity,
     pub travel_to_upper_endpoint: bool,
 }
+
+/// Presentation restoration for a saved station or vehicle with no live prefab.
+#[derive(Component)]
+pub struct RestoredTransportPrefab(pub Handle<openzt2_game_assets::scene_prefab::ScenePrefabAsset>);

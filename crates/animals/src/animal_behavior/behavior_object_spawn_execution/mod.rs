@@ -50,16 +50,26 @@ use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorTaskFailure
 use openzt2_zoo_state::maintenance::maintenance_types::{AnimalHabitatWaste, LooseLitterWaste};
 
 pub(super) fn register_object_spawn_execution(app: &mut App) {
-    app.add_systems(FixedUpdate, prepare_behavior_object_spawns
-        .in_set(FixedGameSet::Think)
-        .after(super::behavior_task_phase_transition_execution::advance_behavior_tasks_through_return_failure_completion_and_final_outcome)
-        .run_if(in_state(GamePhase::InGame)))
-        .add_systems(FixedUpdate, spawn_behavior_objects_at_actor
-            .in_set(FixedGameSet::Think)
-            .after(super::behavior_task_phase_transition_execution::advance_behavior_tasks_through_return_failure_completion_and_final_outcome)
-            .run_if(in_state(GamePhase::InGame)))
-        .add_systems(FixedUpdate, deliver_behavior_object_spawns
+    use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
+        BehaviorStep, BehaviorStepSet,
+    };
+    app.add_systems(
+        BehaviorStep,
+        prepare_behavior_object_spawns
+            .in_set(BehaviorStepSet::Actions)
+            .run_if(in_state(GamePhase::InGame)),
+    )
+    .add_systems(
+        BehaviorStep,
+        spawn_behavior_objects_at_actor
+            .in_set(BehaviorStepSet::Actions)
+            .run_if(in_state(GamePhase::InGame)),
+    )
+    .add_systems(
+        FixedUpdate,
+        deliver_behavior_object_spawns
             .in_set(FixedGameSet::Act)
             .in_set(AnimationObjectCommandDelivery)
-            .run_if(in_state(GamePhase::InGame)));
+            .run_if(in_state(GamePhase::InGame)),
+    );
 }

@@ -35,6 +35,7 @@ impl PhotoChallengeScorer {
         let modules = RefCell::new(std::mem::take(&mut self.modules));
         let active_module_paths = RefCell::new(Vec::new());
         let cursor = Cell::new(0);
+        let initialized = Cell::new(false);
         let result = lua.scope(|scope| {
             install_photo_scoring_logging(lua)?;
             install_lua_script_dependency_loading_functions(
@@ -53,14 +54,21 @@ impl PhotoChallengeScorer {
                 &modules,
                 &active_module_paths,
             )?;
+            initialized.set(true);
             let exposure = create_lua_photo_exposure(lua, scope, evidence, &cursor)?;
             let score: Function = lua.globals().get(entry)?;
             active_module_paths.borrow_mut().push(path.to_owned());
             let globals = lua.globals();
             let predicates = install_photo_count_predicates(lua, scope, evidence)?;
+            let previous_is_kind_of = globals.get::<Value>("isKindOf")?;
+            let is_kind_of = photo_task_target_type_predicate(scope, evidence)?;
+            globals.set("isKindOf", is_kind_of.clone())?;
             let result = score
                 .call::<Value>(exposure)
                 .and_then(convert_lua_photo_score_to_game_score);
+            if globals.get::<Value>("isKindOf")? == Value::Function(is_kind_of) {
+                globals.set("isKindOf", previous_is_kind_of)?;
+            }
             for (name, function) in predicates {
                 if globals.get::<Value>(name)? == Value::Function(function) {
                     globals.set(name, Value::Nil)?;
@@ -68,7 +76,12 @@ impl PhotoChallengeScorer {
             }
             result
         });
-        self.modules = modules.into_inner();
+        if initialized.get() {
+            self.modules = modules.into_inner();
+        } else {
+            self.lua = None;
+            self.modules.clear();
+        }
         result
     }
 }
@@ -93,6 +106,38 @@ fn install_photo_scoring_logging(lua: &Lua) -> mlua::Result<()> {
     Ok(())
 }
 
+fn photo_task_target_type_predicate<'scope, 'env: 'scope>(
+    scope: &'scope Scope<'scope, 'env>,
+    evidence: &'env CapturedPhotoEvidence,
+) -> mlua::Result<Function> {
+    let target_kinds = evidence
+        .subjects
+        .iter()
+        .filter_map(|subject| {
+            let PhotoSubjectTaskEvidence::CurrentTask {
+                target_type,
+                target_definition,
+                target_ancestry,
+                ..
+            } = &subject.semantics.task
+            else {
+                return None;
+            };
+            Some((
+                target_type.as_str(),
+                (*target_definition, target_ancestry.as_slice()),
+            ))
+        })
+        .collect::<std::collections::HashMap<_, _>>();
+    scope.create_function(move |_, (target, kind): (String, String)| {
+        let kind_id = AssetId::from_key(&kind.to_ascii_lowercase());
+        Ok(target.eq_ignore_ascii_case(&kind)
+            || target_kinds
+                .get(target.as_str())
+                .is_some_and(|(id, ancestry)| *id == Some(kind_id) || ancestry.contains(&kind_id)))
+    })
+}
+
 fn create_lua_photo_exposure<'scope, 'env: 'scope>(
     lua: &Lua,
     scope: &'scope Scope<'scope, 'env>,
@@ -105,7 +150,7 @@ fn create_lua_photo_exposure<'scope, 'env: 'scope>(
         lua.create_function(|_, (_, name): (Table, mlua::String)| Ok(name))?,
     )?;
     let subjects = evidence
-        .0
+        .subjects
         .iter()
         .map(|subject| {
             let entity = lua.create_table()?;
@@ -119,6 +164,48 @@ fn create_lua_photo_exposure<'scope, 'env: 'scope>(
                 "getPAC",
                 lua.create_function(|_, entity: Table| Ok(entity))?,
             )?;
+            entity.set("getBM", lua.create_function(|_, entity: Table| Ok(entity))?)?;
+            entity.set(
+                "getCurrentPlaySet",
+                scope.create_function(move |lua, _: Table| {
+                    lua.create_string(subject.semantics.play_set.as_deref().unwrap_or_default())
+                })?,
+            )?;
+            entity.set(
+                "getTaskTarget",
+                scope.create_function(move |lua, _: Table| {
+                    let target = match &subject.semantics.task {
+                        PhotoSubjectTaskEvidence::CurrentTask { target_type, .. } => {
+                            target_type.as_str()
+                        }
+                        _ => "",
+                    };
+                    lua.create_string(target)
+                })?,
+            )?;
+            entity.set(
+                "getSharedVar",
+                scope.create_function(move |_, (_, key): (Table, String)| {
+                    Ok(if key == "f_adoptRarity" {
+                        subject.semantics.rarity_percent
+                    } else {
+                        None
+                    })
+                })?,
+            )?;
+            let distance = (subject.semantics.position_mm.as_vec3() * 0.001)
+                .distance(evidence.camera_position);
+            entity.set(
+                "getDistFromCamera",
+                lua.create_function(move |_, _: Table| Ok(distance))?,
+            )?;
+            for (name, value) in [
+                ("getIsElevatedShot", evidence.view.elevated),
+                ("getIsUnderwaterShot", evidence.view.underwater),
+                ("getVehicleShot", evidence.view.vehicle),
+            ] {
+                entity.set(name, lua.create_function(move |_, _: Table| Ok(value))?)?;
+            }
             entity.set(
                 "getCurrTask",
                 scope.create_function(move |lua, _: Table| {
@@ -184,6 +271,13 @@ fn create_lua_photo_exposure<'scope, 'env: 'scope>(
             Ok(entity)
         })
         .collect::<mlua::Result<Vec<_>>>()?;
+    for (name, value) in [
+        ("getIsElevatedShot", evidence.view.elevated),
+        ("getIsUnderwaterShot", evidence.view.underwater),
+        ("getVehicleShot", evidence.view.vehicle),
+    ] {
+        exposure.set(name, lua.create_function(move |_, _: Table| Ok(value))?)?;
+    }
     let first = subjects.first().cloned();
     exposure.set(
         "getFirstInterestingEntity",
@@ -224,7 +318,7 @@ fn install_photo_count_predicates<'scope, 'env: 'scope>(
             };
             let requested_type = requested_type.to_str()?;
             Ok(evidence
-                .0
+                .subjects
                 .iter()
                 .filter(|subject| {
                     subject_matches_type(subject, &requested_type)
@@ -246,8 +340,12 @@ fn subject_matches_type(subject: &PhotoEvidence, name: &str) -> bool {
         name,
     ) || subject
         .semantics
-        .animal_variant
-        .is_some_and(|id| matches_type(id, false, false, name))
+        .type_ancestry
+        .contains(&AssetId::from_key(&name.to_ascii_lowercase()))
+        || subject
+            .semantics
+            .animal_variant
+            .is_some_and(|id| matches_type(id, false, false, name))
 }
 
 fn matches_type(definition: AssetId, guest: bool, animal: bool, name: &str) -> bool {

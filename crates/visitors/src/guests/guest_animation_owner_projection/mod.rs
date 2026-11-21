@@ -80,12 +80,21 @@ pub(super) fn attach_loaded_animation_sets_to_guest_models(
     world_definitions: Res<WorldDefinitions>,
     animation_sets: Res<Assets<AnimationSetAsset>>,
     pending: Query<(Entity, &GuestBodyAnimationSetPending)>,
+    asset_server: Res<AssetServer>,
 ) {
     let Some(definitions) = world_definitions.get(&definition_assets) else {
         return;
     };
     for (model, request) in &pending {
         let Some(animation_set) = animation_sets.get(&request.animation_set) else {
+            if matches!(
+                asset_server.load_state(request.animation_set.id()),
+                bevy::asset::LoadState::Failed(_)
+            ) {
+                commands
+                    .entity(model)
+                    .remove::<GuestBodyAnimationSetPending>();
+            }
             continue;
         };
         let initial_clip = definitions
@@ -124,14 +133,12 @@ pub(super) fn attach_loaded_animation_sets_to_guest_models(
 /// controller and initial direct-parent owner. Reattachment also changes that
 /// component, so a hot-reloaded model follows the same hierarchy resolution.
 pub(super) fn project_guest_animation_owners(
-    mut controllers: Query<
-        (Entity, &mut AnimationPresentationOwner),
-        Changed<AnimationPresentationOwner>,
-    >,
+    mut commands: Commands,
+    controllers: Query<(Entity, &AnimationPresentationOwner), Changed<AnimationPresentationOwner>>,
     parents: Query<&ChildOf>,
     guests: Query<(), With<Guest>>,
 ) {
-    for (controller, mut owner) in &mut controllers {
+    for (controller, owner) in &controllers {
         if guests.contains(owner.gameplay_entity) {
             continue;
         }
@@ -139,7 +146,11 @@ pub(super) fn project_guest_animation_owners(
             .iter_ancestors::<ChildOf>(controller)
             .find(|ancestor| guests.contains(*ancestor))
         {
-            owner.gameplay_entity = guest;
+            commands
+                .entity(controller)
+                .try_insert(AnimationPresentationOwner {
+                    gameplay_entity: guest,
+                });
         }
     }
 }

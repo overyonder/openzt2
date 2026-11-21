@@ -1,4 +1,6 @@
 use bevy::prelude::*;
+use openzt2_game_assets::animation::animation_clip_source_queries::AnimationClipSources;
+use openzt2_game_assets::animation::animation_set_asset_types::AnimationClipSourceAsset;
 use openzt2_game_assets::animation::animation_set_asset_types::AnimationSetAsset;
 use openzt2_game_assets::source_document::path::AssetPath;
 use openzt2_world_state::animation_graph::animation_graph_playback_state_types::AnimationGraphPlaybackState;
@@ -11,15 +13,17 @@ use openzt2_world_state::animation_graph::model_animation_asset_binding_types::P
 use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackClock;
 use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackController;
 use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackRepetitionPolicy;
-use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackState;
 use openzt2_world_state::model_render::ModelExpanded;
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabModel;
 use openzt2_zoo_state::animal_lifecycle::types::SelectedAnimalPresentationModel;
 
-pub(crate) fn attach_loaded_animation_set_assets_to_animation_subject_entities(
+#[derive(Component)]
+pub(super) struct InitialAnimationSource(Handle<AnimationClipSourceAsset>);
+
+pub(super) fn attach_loaded_animation_set_assets_to_animation_subject_entities(
     mut commands: Commands,
-    asset_server: Res<AssetServer>,
-    mut animation_set_assets: ResMut<Assets<AnimationSetAsset>>,
+    animation_set_assets: Res<Assets<AnimationSetAsset>>,
+    clip_sources: AnimationClipSources,
     presentation_owners: Query<&AnimationPresentationOwner>,
     parents: Query<&ChildOf>,
     pending_animation_subjects: Query<
@@ -29,6 +33,7 @@ pub(crate) fn attach_loaded_animation_set_assets_to_animation_subject_entities(
             Option<&SelectedAnimalPresentationModel>,
             Option<&ChildOf>,
             &PendingModelAnimationAssets,
+            Option<&InitialAnimationSource>,
             Has<ModelExpanded>,
         ),
         (
@@ -44,6 +49,7 @@ pub(crate) fn attach_loaded_animation_set_assets_to_animation_subject_entities(
         animal_model,
         animation_subject_parent,
         pending_model_animation_assets,
+        initial_source,
         expanded,
     ) in &pending_animation_subjects
     {
@@ -124,59 +130,51 @@ pub(crate) fn attach_loaded_animation_set_assets_to_animation_subject_entities(
                 continue;
             }
         };
-        if initial_animation_set_asset
-            .animation_clip_asset_load_has_failed(&initial_animation_clip_asset_key)
-        {
-            commands
-                .entity(animation_subject_entity)
-                .try_insert(ModelAnimationAttachmentResolved)
-                .try_remove::<PendingModelAnimationAssets>();
-            continue;
-        }
-        if initial_animation_set_asset
-            .find_animation_clip_record_by_asset_key(&initial_animation_clip_asset_key)
+        if clip_sources
+            .get(
+                initial_animation_set_asset,
+                &initial_animation_clip_asset_key,
+            )
             .is_none()
         {
-            if !initial_animation_set_asset
-                .animation_clip_asset_load_is_pending(&initial_animation_clip_asset_key)
-            {
-                let animation_clip_asset_load_was_requested = animation_set_assets
-                    .get_mut(&initial_animation_set_asset_handle)
-                    .expect("loaded animation asset disappeared")
-                    .request_animation_clip_asset_load(
-                        &asset_server,
-                        &initial_animation_clip_asset_key,
-                    );
-                if !animation_clip_asset_load_was_requested {
+            let source = initial_source.map(|source| source.0.clone()).or_else(|| {
+                clip_sources.request(
+                    initial_animation_set_asset,
+                    &initial_animation_clip_asset_key,
+                )
+            });
+            match source {
+                Some(source) if !clip_sources.failed(&source) => {
+                    if initial_source.is_none() {
+                        commands
+                            .entity(animation_subject_entity)
+                            .try_insert(InitialAnimationSource(source));
+                    }
+                }
+                _ => {
                     commands
                         .entity(animation_subject_entity)
                         .try_insert(ModelAnimationAttachmentResolved)
-                        .try_remove::<PendingModelAnimationAssets>();
+                        .try_remove::<(PendingModelAnimationAssets, InitialAnimationSource)>();
                 }
             }
             continue;
         }
-        let initial_animation_set_asset = animation_set_assets
-            .get(&initial_animation_set_asset_handle)
-            .expect("loaded animation asset disappeared");
-        let animation_clip_targets_are_external_to_the_model_scene =
-            !initial_animation_set_asset.model_asset_path.is_empty();
-        let initial_animation_graph_playback_state =
-            (!initial_animation_set_asset.animation_graph_nodes.is_empty()).then(|| {
-                let mut state = AnimationGraphPlaybackState::default();
-                if let Some(index) = initial_animation_set_asset
-                    .animation_graph_nodes
-                    .iter()
-                    .position(|node| {
-                        node.animation_clip_asset_keys
-                            .contains(&initial_animation_clip_asset_key)
-                    })
-                    .and_then(|index| u32::try_from(index).ok())
-                {
-                    state.current_animation_graph_node_index = index;
-                }
-                state
-            });
+        let initial_animation_graph_playback_state = {
+            let mut state = AnimationGraphPlaybackState::default();
+            if let Some(index) = initial_animation_set_asset
+                .animation_graph_nodes
+                .iter()
+                .position(|node| {
+                    node.animation_clip_asset_keys
+                        .contains(&initial_animation_clip_asset_key)
+                })
+                .and_then(|index| u32::try_from(index).ok())
+            {
+                state.current_animation_graph_node_index = index;
+            }
+            state
+        };
         let mut animation_subject_commands = commands.entity(animation_subject_entity);
         animation_subject_commands.try_insert((
             ModelAnimationAttachmentResolved,
@@ -203,23 +201,25 @@ pub(crate) fn attach_loaded_animation_set_assets_to_animation_subject_entities(
                 playback_generation: 0,
                 explicit_clip_request_id: None,
                 animation_set_asset: initial_animation_set_asset_handle,
-                animation_clip_asset_key: initial_animation_clip_asset_key,
-                elapsed_milliseconds: 0,
-                fractional_milliseconds: default(),
+                animation_clip_asset_key: initial_animation_clip_asset_key.clone(),
+                preserve_seek_on_restart: false,
                 playback_speed_permille: 1000,
-                playback_state: AnimationPlaybackState::Playing,
+
                 playback_repetition_policy:
                     AnimationPlaybackRepetitionPolicy::UseAuthoredClipPolicy,
                 playback_clock: AnimationPlaybackClock::Simulation,
             },
         ));
-        if animation_clip_targets_are_external_to_the_model_scene {
-            animation_subject_commands.try_insert(AnimationPlayer::default());
+        animation_subject_commands.try_insert(AnimationPlayer::default());
+        animation_subject_commands.try_insert(initial_animation_graph_playback_state);
+        if let Some(source) = clip_sources.retained_handle(
+            initial_animation_set_asset,
+            &initial_animation_clip_asset_key,
+        ) {
+            animation_subject_commands.try_insert(openzt2_world_state::animation_playback::animation_playback_controller_types::RetainedAnimationClipSource(source));
         }
-        if let Some(animation_graph_playback_state) = initial_animation_graph_playback_state {
-            animation_subject_commands.try_insert(animation_graph_playback_state);
-        }
-        animation_subject_commands.try_remove::<PendingModelAnimationAssets>();
+        animation_subject_commands
+            .try_remove::<(PendingModelAnimationAssets, InitialAnimationSource)>();
     }
 }
 

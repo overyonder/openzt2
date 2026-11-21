@@ -51,11 +51,17 @@ pub struct AnimationClipPlaybackRequest {
     pub playback_repetition_policy: AnimationPlaybackRepetitionPolicy,
 }
 
-#[derive(Message, Clone, Copy, Debug)]
-pub struct AnimationClipPresentationSelection {
+#[derive(Message, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AnimationClipActionOptions {
     pub request_id: usize,
-    pub binder: openzt2_game_data::AssetId,
+    pub binder: Option<openzt2_game_data::AssetId>,
+    pub ground_fit: Option<bool>,
+    pub interrupts_current_animation: bool,
+    pub interruptible: bool,
 }
+
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ActiveAnimationClipOptions(pub AnimationClipActionOptions);
 
 #[derive(Message, Clone, Debug, PartialEq, Eq)]
 pub struct AnimationGraphNodePlaybackRequestRejected {
@@ -80,6 +86,7 @@ pub struct CancelAnimationClipPlaybackRequest {
 /// The presentation that actually accepted an explicit request and its prior node.
 #[derive(Message, Clone, Debug)]
 pub struct AnimationClipPlaybackRequestStarted {
+    pub controller_entity: Entity,
     pub animation_subject_entity: Entity,
     pub request_id: usize,
     pub playback_generation: u64,
@@ -93,4 +100,21 @@ pub enum AnimationGraphNodePlaybackRequestRejectionReason {
     MissingAuthoredGraphEdge,
     ActiveTransitionNotInterruptible,
     AnimationGraphDisabled,
+}
+
+#[derive(Message)]
+pub struct AnimationReturnRouteRequest {
+    pub subject: Entity,
+    pub controller: Entity,
+    pub request_id: usize,
+    pub generation: u64,
+    pub node: String,
+}
+
+#[derive(EntityEvent)]
+pub struct AnimationReturnRouteOutcome {
+    #[event_target]
+    pub subject: Entity,
+    pub request_id: usize,
+    pub succeeded: bool,
 }

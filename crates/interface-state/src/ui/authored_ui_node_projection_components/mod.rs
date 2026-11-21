@@ -39,3 +39,10 @@ pub struct UiValueBinding(pub UiIntegerPropertyBindingSource);
 /// Stores the current integer value of one projected authored UI node.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UiValue(pub i64);
+
+/// An authored slider value chosen through pointer or navigation input.
+#[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UiSliderValueChanged {
+    pub slider: Entity,
+    pub value: i64,
+}

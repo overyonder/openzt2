@@ -1,25 +1,22 @@
 //! Fossil recovery and assembly as focused ECS facts and operations.
 
-mod extinct_animal_relationship_cleanup;
 mod extinct_animal_world_hydration;
-mod fossil_assembly_lifecycle;
-use openzt2_zoo_state::extinct_animals::fossil_collection_and_assembly_types;
-mod fossil_collection_rules;
+mod fossil_assembly;
+mod fossil_definition_index;
 mod fossil_dig_target_geometry;
-mod fossil_recovery_lifecycle;
-use openzt2_zoo_state::extinct_animals::fossil_recovery_types;
+mod fossil_discovery;
+mod fossil_sonar;
 mod fossil_sonar_scoring;
+mod fossil_world_objects;
 
-use bevy::prelude::*;
+use bevy::{ecs::schedule::common_conditions::on_message, prelude::*};
 
 use openzt2_game_assets::application_lifecycle::GamePhase;
 use openzt2_world_state::application_schedule::FixedGameSet;
 use openzt2_world_state::application_schedule::GameSet;
-
-use self::{
+use openzt2_zoo_state::extinct_animals::{
     fossil_collection_and_assembly_types::{
-        CollectedFossilPieceInventory, CompletedFossilSetAssembly,
-        PlaceFossilPieceInAssemblyRequest,
+        CompletedFossilSetAssembly, PlaceFossilPieceInAssemblyRequest,
     },
     fossil_recovery_types::{ActivateFossilSiteMarkersRequest, DiscoverFossilAtSiteRequest},
 };
@@ -28,45 +25,40 @@ pub struct ExtinctAnimalsPlugin;
 
 impl Plugin for ExtinctAnimalsPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<CollectedFossilPieceInventory>()
+        app.init_resource::<fossil_definition_index::FossilDefinitionIndex>()
             .add_message::<DiscoverFossilAtSiteRequest>()
             .add_message::<PlaceFossilPieceInAssemblyRequest>()
             .add_message::<ActivateFossilSiteMarkersRequest>()
             .add_message::<CompletedFossilSetAssembly>()
+            .add_observer(fossil_assembly::clear_assembly_when_table_marker_is_removed)
             .add_systems(
                 Update,
                 (
                     extinct_animal_world_hydration::hydrate_extinct_animal_world_state_from_loaded_definitions,
-                    fossil_recovery_lifecycle::activate_all_fossil_site_markers_when_requested,
-                    fossil_recovery_lifecycle::update_active_fossil_search_sonar_tracking,
+                    fossil_definition_index::index_winning_fossil_definitions,
+                    fossil_world_objects::bind_live_fossil_assembly_tables
+                        .before(extinct_animal_world_hydration::hydrate_extinct_animal_world_state_from_loaded_definitions),
+                    fossil_world_objects::spawn_world_fossil_recovery_sites
+                        .after(fossil_definition_index::index_winning_fossil_definitions)
+                        .before(extinct_animal_world_hydration::hydrate_extinct_animal_world_state_from_loaded_definitions),
+                    fossil_assembly::place_requested_fossil_pieces
+                        .after(fossil_definition_index::index_winning_fossil_definitions)
+                        .after(extinct_animal_world_hydration::hydrate_extinct_animal_world_state_from_loaded_definitions),
+                    fossil_assembly::unlock_catalogue_after_fossil_assembly
+                        .after(fossil_assembly::place_requested_fossil_pieces),
+                    fossil_sonar::activate_sonar_markers_for_search_session
+                        .run_if(on_message::<ActivateFossilSiteMarkersRequest>),
+                    fossil_sonar::update_fossil_sonar
+                        .after(fossil_sonar::activate_sonar_markers_for_search_session)
+                        .run_if(any_with_component::<fossil_sonar::ActiveFossilSonar>),
                 )
-                    .in_set(GameSet::Intent)
-                    .run_if(in_state(GamePhase::InGame)),
-            )
-            .add_systems(
-                Update,
-                (
-                    fossil_assembly_lifecycle::initialize_fossil_assembly_from_first_piece_placement_request,
-                    fossil_assembly_lifecycle::place_requested_fossil_pieces_into_assembly_slots,
-                    fossil_assembly_lifecycle::request_authored_catalogue_unlocks_for_completed_fossil_sets,
-                )
-                    .chain()
                     .in_set(GameSet::Intent)
                     .run_if(in_state(GamePhase::InGame)),
             )
             .add_systems(
                 FixedUpdate,
-                fossil_recovery_lifecycle::discover_weighted_fossil_piece_at_requested_site
-                    .run_if(
-                        any_with_component::<openzt2_interface_state::immersive_modes::immersive_mode_state_types::ActiveImmersiveMode>,
-                    )
+                fossil_discovery::discover_requested_fossils
                     .in_set(FixedGameSet::Act)
-                    .run_if(in_state(GamePhase::InGame)),
-            )
-            .add_systems(
-                FixedUpdate,
-                extinct_animal_relationship_cleanup::remove_fossil_assembly_and_piece_links_after_assembly_table_removal
-                    .in_set(FixedGameSet::Cleanup)
                     .run_if(in_state(GamePhase::InGame)),
             );
     }

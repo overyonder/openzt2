@@ -7,6 +7,9 @@ use bevy::{
     picking::{events::PointerPress, hover::DirectlyHovered, pointer::PointerButton},
     ui::Pressed,
 };
+use openzt2_construction::construction::{
+    construction_history::ConstructionHistory, construction_lifecycle::ConstructionActive,
+};
 use openzt2_game_assets::{
     application_lifecycle::GamePhase,
     ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset,
@@ -22,7 +25,7 @@ use openzt2_interface_state::{
     },
 };
 use openzt2_world_state::application_schedule::GameSet;
-use openzt2_zoo_state::construction::construction_edit_history_types::ConstructionEditHistory;
+use openzt2_zoo_state::construction::construction_edit_history_types::ConstructionEditDirection;
 
 pub(super) struct RedoButtonPlugin;
 
@@ -136,7 +139,8 @@ fn attach(
 fn update(
     mut commands: Commands,
     enabled: Res<RedoButtonEnabled>,
-    history: Res<ConstructionEditHistory>,
+    history: ConstructionHistory,
+    pending_edits: Query<(), With<ConstructionActive>>,
     undo_controls: Query<(&Node, &Visibility), Without<RedoButton>>,
     mut buttons: Query<(
         Entity,
@@ -149,7 +153,8 @@ fn update(
         &mut UiInteractionEnabled,
     )>,
 ) {
-    let available = history.entries.get(history.cursor).is_some();
+    let available =
+        pending_edits.is_empty() && history.next(ConstructionEditDirection::Redo).is_some();
     for (entity, button, hovered, pressed, mut node, mut visibility, mut image, mut interactive) in
         &mut buttons
     {

@@ -86,12 +86,11 @@ pub(super) fn cancel_interrupted_transport_queues(
     guests: Query<
         (
             Entity,
-            &WaitingForTransport,
             &GuestPhase,
             Option<&GuestDestination>,
             Option<&GuestNavigationRequest>,
         ),
-        With<Guest>,
+        (With<Guest>, With<WaitingForTransport>),
     >,
     interruptions: Query<
         (),
@@ -101,19 +100,15 @@ pub(super) fn cancel_interrupted_transport_queues(
             With<PendingBehaviorSet>,
         )>,
     >,
-    mut stations: Query<&mut TransportStation>,
     mut commands: Commands,
 ) {
-    for (guest, waiting, phase, destination, navigation) in &guests {
+    for (guest, phase, destination, navigation) in &guests {
         if *phase == GuestPhase::Visiting
             && destination.is_none()
             && navigation.is_none_or(|request| request.0.is_none())
             && !interruptions.contains(guest)
         {
             continue;
-        }
-        if let Ok(mut station) = stations.get_mut(waiting.station) {
-            station.queued = station.queued.saturating_sub(1);
         }
         commands.entity(guest).remove::<WaitingForTransport>();
     }

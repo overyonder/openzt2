@@ -16,8 +16,6 @@ use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabShadowPol
 use crate::model_render::prefab_render_lod_tier_projection::bind_prefab_lod;
 use openzt2_world_state::world_spawn::prefab_authored_attachment_identifier::PrefabAuthoredAttachmentIdentifier;
 use openzt2_world_state::world_spawn::prefab_authored_billboard_orientation_mode::PrefabAuthoredBillboardOrientationMode;
-use openzt2_world_state::world_spawn::prefab_authored_rotation_cycle_advancement::PrefabAuthoredRotationCycle;
-use openzt2_world_state::world_spawn::prefab_authored_transform_animation_advancement::PrefabAuthoredTransformAnimation;
 use openzt2_world_state::world_spawn::prefab_transform_conversion::transform_from_authored;
 
 /// Spawn a prefab for isolated render scenes, such as the shell globe.
@@ -32,7 +30,7 @@ pub fn spawn_prefab_render_tree(
         .entities
         .iter()
         .enumerate()
-        .map(|(_index, row)| {
+        .map(|(index, row)| {
             let transform = transform_from_authored(&row.transform);
             let mut entity = commands.spawn((
                 PrefabAuthoredAttachmentIdentifier(AssetId(row.attachment_id.0)),
@@ -49,16 +47,6 @@ pub fn spawn_prefab_render_tree(
             if let Some(bound) = &row.skin_render_bound {
                 entity.insert(openzt2_world_state::world_spawn::prefab_presentation_types::PrefabSkinRenderBound(bound.clone()));
             }
-            if let Some(cycle) = row.rotation_cycles.first() {
-                entity.insert(PrefabAuthoredRotationCycle::from_authored_rotation_cycle(
-                    cycle,
-                ));
-            }
-            if let Some(animation) = row.transform_animations.first() {
-                entity.insert(
-                    PrefabAuthoredTransformAnimation::from_authored_transform_animation(animation),
-                );
-            }
             if let Some(billboard) = row.billboards.first() {
                 entity.insert(
                     PrefabAuthoredBillboardOrientationMode::from_authored_mode_and_local_rotation(
@@ -67,6 +55,9 @@ pub fn spawn_prefab_render_tree(
                     )
                     .facing_positive_z(billboard.faces_positive_z),
                 );
+            }
+            if let Some(motion) = prefab.motion_for_row(index) {
+                super::prefab_authored_transform_animation_advancement::insert_prefab_motion(&mut entity, motion, transform.rotation);
             }
             entity.id()
         })
@@ -91,6 +82,7 @@ pub fn spawn_prefab_render_tree(
                     prefab, renderable,
                 );
             let renderable_is_the_authored_entity = row.renderables.len() == 1
+                && prefab.motion_for_row(index).is_none()
                 && renderable.visibility.0 & ScenePrefabRenderableVisibilityFlags::VISIBLE.0 != 0;
             let mut renderable_entity = if renderable_is_the_authored_entity {
                 let mut authored_entity = commands.entity(spawned);

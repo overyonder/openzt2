@@ -63,7 +63,7 @@ pub enum AuthoredAnimationTextAction {
     },
     ApplyWhapImpulse {
         impulse_angle_degrees: i32,
-        impulse_duration_frames: i32,
+        impulse_random_offset_degrees: i32,
     },
     RunPresentationEffect {
         presentation_effect_asset_key: String,

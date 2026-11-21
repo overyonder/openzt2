@@ -32,7 +32,11 @@ fn nested_information_row_uses_its_own_subject_until_unbound() {
     })
     .add_systems(
         Update,
-        project_live_world_subject_values_to_information_list_rows,
+        (
+            crate::projection::information_row_field_binding::bind_authored_information_row_fields,
+            project_live_world_subject_values_to_information_list_rows,
+        )
+            .chain(),
     );
     let world = app.world_mut();
     let list = world.spawn_empty().id();

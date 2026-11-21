@@ -1,7 +1,8 @@
+use openzt2_zoo_state::transport_tours::transport_pick_bounds::TransportPickBounds;
+use openzt2_zoo_state::transport_tours::transport_topology_types::{TrackRoute, TrackIncidence};
 use crate::transport_tours::topology::calculate_authored_transport_station_endpoint_world_position;
 use openzt2_zoo_state::transport_tours::transport_circuit_types::CircuitMember;
 use openzt2_zoo_state::transport_tours::transport_topology_types::TrackProfile;
-use openzt2_zoo_state::transport_tours::transport_topology_types::TrackSegment;
 use openzt2_zoo_state::transport_tours::transport_topology_types::TransportStation;
 use openzt2_zoo_state::transport_tours::transport_topology_types::TransportTrackJunction;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
@@ -10,40 +11,24 @@ use bevy::prelude::*;
 use openzt2_game_data::world_definitions::transportation_and_tours::TransportationTrackKind;
 
 const TRANSPORT_STATION_ENDPOINT_POINTER_SNAP_DISTANCE_METRES: f32 = 8.0;
-// A fixed radius covers both stations, read the footprint if a larger one misses.
-const TRANSPORT_STATION_POINTER_PICK_RADIUS_METRES: f32 = 10.0;
-const SKY_TOWER_POINTER_PICK_DISTANCE_METRES: f32 = 2.0;
-// A fixed pick height, read the tower's own height if tall towers miss.
-const SKY_TOWER_POINTER_PICK_HEIGHT_METRES: f32 = 12.0;
-
-/// The pointer ray's closest approach to a tower standing at `base`.
-fn distance_from_ray_to_vertical_pole(ray: Ray3d, base: Vec3) -> f32 {
-    (0_u8..=24)
-        .map(|step| {
-            base + Vec3::Y * (SKY_TOWER_POINTER_PICK_HEIGHT_METRES * f32::from(step) / 24.0)
-        })
-        .map(|point| {
-            let along = (point - ray.origin).dot(*ray.direction).max(0.0);
-            point.distance(ray.origin + *ray.direction * along)
-        })
-        .fold(f32::INFINITY, f32::min)
-}
-
 fn transport_station_endpoint_is_available(
     station: Entity,
     endpoint_index: u8,
-    _outgoing: bool,
     circuit: Entity,
-    segments: &Query<(Entity, &CircuitMember, &TrackSegment, &TrackProfile)>,
+    segments: &Query<(Entity, &CircuitMember, TrackRoute, &TrackProfile)>,
+    incidence: &TrackIncidence,
 ) -> bool {
     // A station end carries one line: a circuit leaves the station from one
     // end and comes back into the other, as the original's sky tram meets
     // both rope wheels.
-    segments.iter().all(|(_, member, segment, _)| {
-        member.0 != circuit
-            || ((segment.from != station || segment.from_endpoint_index != endpoint_index)
-                && (segment.to != station || segment.to_endpoint_index != endpoint_index))
-    })
+    incidence
+        .incident(station)
+        .filter_map(|entity| segments.get(entity).ok())
+        .all(|(_, member, segment, _)| {
+            member.0 != circuit
+                || ((segment.from() != station || segment.from_endpoint_index != endpoint_index)
+                    && (segment.to() != station || segment.to_endpoint_index != endpoint_index))
+        })
 }
 
 #[allow(clippy::type_complexity)]
@@ -52,7 +37,7 @@ pub(super) fn find_nearest_compatible_transport_station_endpoint(
     wanted_kind: TransportationTrackKind,
     wanted_world_root: Entity,
     wanted_circuit: Option<Entity>,
-    outgoing: bool,
+    _outgoing: bool,
     excluded_station: Option<Entity>,
     definitions: WorldDefinitionsView<'_>,
     stations: &Query<(
@@ -62,7 +47,10 @@ pub(super) fn find_nearest_compatible_transport_station_endpoint(
         &GlobalTransform,
         &WorldMember,
     )>,
-    segments: &Query<(Entity, &CircuitMember, &TrackSegment, &TrackProfile)>,
+    segments: &Query<(Entity, &CircuitMember, TrackRoute, &TrackProfile)>,
+    incidence: &TrackIncidence,
+    pointer_ray: Option<Ray3d>,
+    bounds: &TransportPickBounds,
 ) -> Option<(Entity, Entity, u8, Vec3)> {
     stations
         .iter()
@@ -79,9 +67,9 @@ pub(super) fn find_nearest_compatible_transport_station_endpoint(
                 transport_station_endpoint_is_available(
                     entity,
                     endpoint_index,
-                    outgoing,
                     member.0,
                     segments,
+                    incidence,
                 )
                 .then(|| {
                     calculate_authored_transport_station_endpoint_world_position(
@@ -93,20 +81,20 @@ pub(super) fn find_nearest_compatible_transport_station_endpoint(
                     .map(|position| {
                         (
                             (entity, member.0, endpoint_index, position),
-                            transform.translation(),
+                            pointer_ray
+                                .is_some_and(|ray| bounds.hit_distance(entity, ray).is_some()),
                         )
                     })
                 })
                 .flatten()
             })
         })
-        .filter_map(|(endpoint, centre)| {
+        .filter_map(|(endpoint, over_body)| {
             // A free end is taken near itself or with the pointer over its
             // station, as the original takes a click on the station.
             let distance_squared = endpoint.3.distance_squared(pointer_position);
             (distance_squared <= TRANSPORT_STATION_ENDPOINT_POINTER_SNAP_DISTANCE_METRES.powi(2)
-                || centre.xz().distance(pointer_position.xz())
-                    <= TRANSPORT_STATION_POINTER_PICK_RADIUS_METRES)
+                || over_body)
                 .then_some((distance_squared, endpoint))
         })
         .min_by(|left, right| left.0.total_cmp(&right.0))
@@ -127,40 +115,39 @@ pub(super) fn find_nearest_compatible_transport_track_junction(
         &GlobalTransform,
         &WorldMember,
     )>,
-    segments: &Query<(Entity, &CircuitMember, &TrackSegment, &TrackProfile)>,
+    segments: &Query<(Entity, &CircuitMember, TrackRoute, &TrackProfile)>,
+    incidence: &TrackIncidence,
+    bounds: &TransportPickBounds,
 ) -> Option<(Entity, Entity, u8, Vec3)> {
     junctions
         .iter()
         .filter(|(entity, _, member, _, world_member)| {
             world_member.root == wanted_world_root
                 && wanted_circuit.is_none_or(|circuit| member.0 == circuit)
-                && segments.iter().any(|(_, track_member, segment, profile)| {
-                    track_member.0 == member.0
-                        && profile.kind == wanted_kind
-                        && segment.to == *entity
-                })
-                && segments.iter().all(|(_, track_member, segment, _)| {
-                    track_member.0 != member.0 || segment.from != *entity
-                })
+                && incidence
+                    .incoming(*entity)
+                    .filter_map(|track| segments.get(track).ok())
+                    .any(|(_, track_member, segment, profile)| {
+                        track_member.0 == member.0
+                            && profile.kind == wanted_kind
+                            && segment.to() == *entity
+                    })
+                && incidence
+                    .outgoing(*entity)
+                    .filter_map(|track| segments.get(track).ok())
+                    .all(|(_, track_member, segment, _)| {
+                        track_member.0 != member.0 || segment.from() != *entity
+                    })
         })
         .filter_map(|(entity, _, member, transform, _)| {
             let position = transform.translation();
-            // A sky tower is picked anywhere along its height, as the
-            // original takes a click on the pole itself.
-            let pole_distance = pointer_ray
-                .filter(|_| wanted_kind == TransportationTrackKind::Sky)
-                .map(|ray| distance_from_ray_to_vertical_pole(ray, position));
-            let distance_squared = pole_distance.map_or_else(
-                || position.distance_squared(pointer_position),
-                |distance| distance * distance,
-            );
-            let limit = if pole_distance.is_some() {
-                SKY_TOWER_POINTER_PICK_DISTANCE_METRES
-            } else {
-                TRANSPORT_STATION_ENDPOINT_POINTER_SNAP_DISTANCE_METRES
-            };
-            (distance_squared <= limit.powi(2))
-                .then_some((distance_squared, (entity, member.0, 0, position)))
+            let distance_squared = position.distance_squared(pointer_position);
+            let over_tower = wanted_kind == TransportationTrackKind::Sky
+                && pointer_ray.is_some_and(|ray| bounds.hit_distance(entity, ray).is_some());
+            (over_tower
+                || distance_squared
+                    <= TRANSPORT_STATION_ENDPOINT_POINTER_SNAP_DISTANCE_METRES.powi(2))
+            .then_some((distance_squared, (entity, member.0, 0, position)))
         })
         .min_by(|left, right| left.0.total_cmp(&right.0))
         .map(|(_, endpoint)| endpoint)

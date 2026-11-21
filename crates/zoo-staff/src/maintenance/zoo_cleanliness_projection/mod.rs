@@ -1,4 +1,5 @@
-use bevy::prelude::*;
+use bevy::{platform::collections::HashMap, prelude::*};
+use openzt2_world_state::world_spawn::world_membership_types::{WorldMember, WorldRoot};
 
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
@@ -8,7 +9,7 @@ use super::maintenance_types::{
     AnimalHabitatWaste, FacilityContainedWaste, LooseLitterWaste, ZooCleanlinessPermille,
 };
 
-#[derive(Resource, Clone, Copy, Default, Debug, PartialEq, Eq)]
+#[derive(Component, Clone, Copy, Default, Debug, PartialEq, Eq)]
 pub(super) struct ZooCleanlinessTotals {
     pub(super) contained_waste_units: u64,
     pub(super) contained_waste_capacity_units: u64,
@@ -16,58 +17,101 @@ pub(super) struct ZooCleanlinessTotals {
 }
 
 pub(super) fn aggregate_changed_waste_into_zoo_cleanliness_totals(
-    containers: Query<&FacilityContainedWaste>,
-    litter: Query<&LooseLitterWaste>,
-    animal_waste: Query<&AnimalHabitatWaste>,
-    changed_containers: Query<(), Changed<FacilityContainedWaste>>,
-    changed_litter: Query<(), Changed<LooseLitterWaste>>,
-    changed_animal_waste: Query<(), Changed<AnimalHabitatWaste>>,
+    waste: Query<
+        (
+            &WorldMember,
+            Option<&FacilityContainedWaste>,
+            Option<&LooseLitterWaste>,
+            Option<&AnimalHabitatWaste>,
+        ),
+        Or<(
+            With<FacilityContainedWaste>,
+            With<LooseLitterWaste>,
+            With<AnimalHabitatWaste>,
+        )>,
+    >,
+    changed_waste: Query<
+        (),
+        (
+            Or<(
+                With<FacilityContainedWaste>,
+                With<LooseLitterWaste>,
+                With<AnimalHabitatWaste>,
+            )>,
+            Or<(
+                Changed<FacilityContainedWaste>,
+                Changed<LooseLitterWaste>,
+                Changed<AnimalHabitatWaste>,
+                Changed<WorldMember>,
+            )>,
+        ),
+    >,
+    waste_entities: Query<
+        (),
+        Or<(
+            With<FacilityContainedWaste>,
+            With<LooseLitterWaste>,
+            With<AnimalHabitatWaste>,
+        )>,
+    >,
     mut removed_containers: RemovedComponents<FacilityContainedWaste>,
     mut removed_litter: RemovedComponents<LooseLitterWaste>,
     mut removed_animal_waste: RemovedComponents<AnimalHabitatWaste>,
-    mut totals: ResMut<ZooCleanlinessTotals>,
+    mut removed_members: RemovedComponents<WorldMember>,
+    mut world_totals: Query<(Entity, &mut ZooCleanlinessTotals), With<WorldRoot>>,
 ) {
-    let mut current = *totals;
     let containers_removed = removed_containers.read().count() != 0;
     let litter_removed = removed_litter.read().count() != 0;
     let animal_waste_removed = removed_animal_waste.read().count() != 0;
-    if containers_removed || !changed_containers.is_empty() {
-        (
-            current.contained_waste_units,
-            current.contained_waste_capacity_units,
-        ) = containers
-            .iter()
-            .fold((0_u64, 0_u64), |(units, capacity), container| {
-                (
-                    units.saturating_add(u64::from(container.contained_waste_units)),
-                    capacity.saturating_add(u64::from(container.contained_waste_capacity_units)),
-                )
-            });
-    }
-    if litter_removed
-        || animal_waste_removed
-        || !changed_litter.is_empty()
-        || !changed_animal_waste.is_empty()
+    let members_removed = removed_members
+        .read()
+        .any(|entity| waste_entities.contains(entity));
+    if !containers_removed
+        && !litter_removed
+        && !animal_waste_removed
+        && !members_removed
+        && changed_waste.is_empty()
+        && !world_totals.iter_mut().any(|(_, totals)| totals.is_added())
     {
-        current.uncontained_waste_units = litter
-            .iter()
-            .map(|waste| u64::from(waste.uncontained_waste_units))
-            .chain(
-                animal_waste
-                    .iter()
-                    .map(|waste| u64::from(waste.uncontained_waste_units)),
-            )
-            .fold(0, u64::saturating_add);
+        return;
     }
-    totals.set_if_neq(current);
+    let mut totals_by_world = HashMap::<Entity, ZooCleanlinessTotals>::new();
+    for (member, container, litter, animal_waste) in &waste {
+        let totals = totals_by_world.entry(member.root).or_default();
+        if let Some(container) = container {
+            totals.contained_waste_units = totals
+                .contained_waste_units
+                .saturating_add(u64::from(container.contained_waste_units));
+            totals.contained_waste_capacity_units = totals
+                .contained_waste_capacity_units
+                .saturating_add(u64::from(container.contained_waste_capacity_units));
+        }
+        if let Some(litter) = litter {
+            totals.uncontained_waste_units = totals
+                .uncontained_waste_units
+                .saturating_add(u64::from(litter.uncontained_waste_units));
+        }
+        if let Some(animal_waste) = animal_waste {
+            totals.uncontained_waste_units = totals
+                .uncontained_waste_units
+                .saturating_add(u64::from(animal_waste.uncontained_waste_units));
+        }
+    }
+    for (root, mut totals) in &mut world_totals {
+        totals.set_if_neq(totals_by_world.remove(&root).unwrap_or_default());
+    }
 }
 
 pub(super) fn project_zoo_cleanliness_from_totals_and_policy(
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,
-    cleanliness_totals: Res<ZooCleanlinessTotals>,
+    world_totals: Query<Ref<ZooCleanlinessTotals>, With<WorldRoot>>,
     mut zoo_cleanliness: ResMut<ZooCleanlinessPermille>,
 ) {
+    let Ok(cleanliness_totals) = world_totals.single() else {
+        zoo_cleanliness.set_if_neq(ZooCleanlinessPermille(None));
+        return;
+    };
     if !cleanliness_totals.is_changed()
         && !active_world_definitions.is_changed()
         && !world_definition_assets.is_changed()

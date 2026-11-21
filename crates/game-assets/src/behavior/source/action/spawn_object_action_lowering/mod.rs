@@ -59,9 +59,7 @@ pub(super) fn lower_spawn_object_action(
     }))
 }
 
-/// A birth. `subjectNode="Floor"` places the child at the mother's feet.
-/// `fadeInPeriod` and `spawnInTA` (fade-in, placement inside the
-/// habitat) are not applied; the child appears at once beside the mother.
+/// A birth at the mother's feet, with optional fade and habitat placement.
 fn lower_spawn_child_action(
     node: &OrderedSourceDocumentNode,
 ) -> io::Result<Option<BehaviorAction>> {
@@ -97,12 +95,24 @@ fn lower_spawn_child_action(
     };
     let entity = read_optional_trimmed_string_attribute(node, "spawnEntity")
         .ok_or_else(|| invalid_behavior_source_data("BFBehSpawn requires spawnEntity"))?;
-    Ok(Some(BehaviorAction::SpawnChild {
-        entity: AssetId::from_key(&entity.to_ascii_lowercase()),
-        pose: openzt2_game_data::behavior::action::spawn::BehaviorSpawnPosePolicy {
-            random_position_offset_m: offset("randomPosOffset")?,
-            random_rotation_offset_radians: offset("randomRotOffset")?,
-        },
+    let entity = AssetId::from_key(&entity.to_ascii_lowercase());
+    let pose = openzt2_game_data::behavior::action::spawn::BehaviorSpawnPosePolicy {
+        random_position_offset_m: offset("randomPosOffset")?,
+        random_rotation_offset_radians: offset("randomRotOffset")?,
+    };
+    let fade_in = std::time::Duration::try_from_secs_f32(offset("fadeInPeriod")?)
+        .map_err(|_| invalid_behavior_source_data("BFBehSpawn has an invalid fadeInPeriod"))?;
+    let within_habitat =
+        super::source_value_reading::read_boolean_attribute_or_false(node, "spawnInTA")?;
+    Ok(Some(if !fade_in.is_zero() || within_habitat {
+        BehaviorAction::SpawnChildWithPlacement {
+            entity,
+            pose,
+            fade_in,
+            within_habitat,
+        }
+    } else {
+        BehaviorAction::SpawnChild { entity, pose }
     }))
 }
 
@@ -117,7 +127,7 @@ mod tests {
     fn birth_spawn_names_the_young_variant() {
         let document = parse_blue_fang_source_document(AssetPath::new("aardvark.beh"),
             br#"<behaviors><BFBehSpawn spawnEntity="Aardvark_Young_F" spawnRelation="child" subjectNode="Floor" fadeInPeriod="1" randomPosOffset="3" randomRotOffset="180" spawnInTA="true"/></behaviors>"#).expect("source");
-        let Some(BehaviorAction::SpawnChild { entity, pose }) =
+        let Some(BehaviorAction::SpawnChildWithPlacement { entity, pose, .. }) =
             lower_spawn_object_action(document.root.element_children().next().expect("action"))
                 .expect("lower")
         else {

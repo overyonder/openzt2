@@ -1,7 +1,7 @@
 //! Live execution of typed per-document behavior declarations.
 
 mod authored_disease_exposure;
-mod autonomous_task_selection;
+pub(crate) mod autonomous_task_selection;
 
 /// Whether an escaped animal can reach a point: outside every habitat, or in
 /// one whose fence is breached, rather than behind another habitat's intact
@@ -22,6 +22,7 @@ pub(super) fn escaped_animal_reaches(
     })
 }
 mod behavior_animation_clip_execution;
+mod behavior_animation_key_execution;
 use openzt2_zoo_state::animal_behavior::behavior_candidate_selection;
 mod behavior_clothing_delivery;
 mod behavior_container_admission;
@@ -50,6 +51,7 @@ mod behavior_script_execution;
 mod behavior_set_start_request_handling;
 use openzt2_zoo_state::animal_behavior::behavior_set_start_request_types;
 mod behavior_show_event_execution;
+mod behavior_spatial_candidates;
 mod behavior_subject_type_resolution;
 pub(crate) mod behavior_synchronized_set_execution;
 pub(crate) mod behavior_target_placement_execution;
@@ -72,19 +74,41 @@ use behavior_set_start_request_types::StartBehaviorSet;
 use openzt2_game_assets::application_lifecycle::GamePhase;
 use openzt2_world_state::application_schedule::FixedGameSet;
 use openzt2_world_state::simulation_time::deterministic_random_stream::ZooSeed;
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
+    defer_incomplete_behavior_steps, drive_behavior_steps, refresh_running_behavior_instructions,
+    BehaviorStep, BehaviorStepFixedSet, BehaviorStepProgress, BehaviorStepSet,
+};
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorFeedbackDispatched;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskFailed;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskFinished;
+
+fn continue_behavior_steps_after_simulation_effects(world: &mut World) {
+    drive_behavior_steps(world);
+}
 
 pub struct AnimalBehaviorExecutionPlugin;
 
 impl Plugin for AnimalBehaviorExecutionPlugin {
     fn build(&self, application: &mut App) {
+        application.init_schedule(BehaviorStep)
+            .init_resource::<BehaviorStepProgress>()
+            .configure_sets(BehaviorStep, (BehaviorStepSet::Actions, BehaviorStepSet::Finish).chain())
+            .add_systems(
+                BehaviorStep,
+                (
+                    defer_incomplete_behavior_steps,
+                    behavior_task_phase_transition_execution::advance_behavior_tasks_through_return_failure_completion_and_final_outcome,
+                    refresh_running_behavior_instructions,
+                ).chain().in_set(BehaviorStepSet::Finish),
+            );
+
+        behavior_animation_key_execution::register(application);
         behavior_object_attachment_execution::register_object_attachment_execution(application);
         behavior_object_spawn_execution::register_object_spawn_execution(application);
         behavior_queue_wait_execution::register_queue_wait_execution(application);
         behavior_hide_execution::register_hide_execution(application);
         behavior_synchronized_set_execution::register_synchronized_behavior_execution(application);
+        behavior_spatial_candidates::register_behavior_spatial_candidates(application);
         behavior_wander_execution::register_wander_execution(application);
         behavior_pursuit_execution::register_pursuit_execution(application);
         behavior_face_target_execution::register_face_target_execution(application);
@@ -95,26 +119,33 @@ impl Plugin for AnimalBehaviorExecutionPlugin {
         behavior_token_execution::register_token_execution(application);
         behavior_trigger_execution::register_trigger_execution(application);
         behavior_water_docking_execution::register(application);
+        natural_water_targets::register_water_target_projection(application);
+        autonomous_task_selection::target_types::register_target_type_projection(application);
         application.add_systems(
             FixedUpdate,
             authored_disease_exposure::expose_animals_to_authored_diseases
                 .in_set(FixedGameSet::Think)
+                .after(crate::animal_lifecycle::ResolveAnimalLifeStages)
                 .before(autonomous_task_selection::select_idle_animal_tasks)
                 .run_if(in_state(GamePhase::InGame))
-                .run_if(resource_exists::<ZooSeed>),
+                .run_if(openzt2_world_state::simulation_time::simulation_control_queries::simulation_is_running)
+                .run_if(resource_exists::<ZooSeed>)
+                .run_if(authored_disease_exposure::disease_exposure_is_due),
         );
         application
             .add_observer(authored_disease_exposure::clear_authored_disease_tokens_when_cured);
-        application.add_systems(
-            FixedUpdate,
-            (
-                behavior_termination_execution::execute_animal_termination_actions,
-                behavior_termination_execution::hide_animals_after_authored_removal_period,
+        application
+            .add_systems(
+                BehaviorStep,
+                behavior_termination_execution::execute_animal_termination_actions
+                    .in_set(BehaviorStepSet::Actions),
             )
-                .chain()
-                .in_set(FixedGameSet::Think)
-                .run_if(in_state(GamePhase::InGame)),
-        );
+            .add_systems(
+                FixedUpdate,
+                behavior_termination_execution::hide_animals_after_authored_removal_period
+                    .in_set(FixedGameSet::Act)
+                    .run_if(in_state(GamePhase::InGame)),
+            );
         application
             .init_non_send::<behavior_script_execution::BehaviorScriptContexts>()
             .init_resource::<openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionSequence>()
@@ -127,7 +158,6 @@ impl Plugin for AnimalBehaviorExecutionPlugin {
             .add_message::<BehaviorTaskFailed>()
             .add_message::<BehaviorTaskFinished>()
             .add_message::<openzt2_zoo_state::animal_behavior::behavior_birth_notice_types::BehaviorBirthNotice>()
-            .init_resource::<behavior_script_execution::BehaviorBirthNoticeContext>()
             .add_systems(
                 FixedUpdate,
                 (
@@ -173,61 +203,54 @@ impl Plugin for AnimalBehaviorExecutionPlugin {
                 FixedUpdate,
                 autonomous_task_selection::select_idle_animal_tasks
                     .after(openzt2_zoo_state::feeding::ContainerQuantityHydration)
-                    .before(behavior_task_phase_transition_execution::advance_behavior_tasks_through_return_failure_completion_and_final_outcome)
+                    .after(crate::animal_lifecycle::ResolveAnimalLifeStages)
                     .in_set(FixedGameSet::Think)
                     .run_if(in_state(GamePhase::InGame)),
             )
             .add_systems(
                 FixedUpdate,
-                behavior_task_phase_transition_execution::advance_behavior_tasks_through_return_failure_completion_and_final_outcome
-                    .before(openzt2_zoo_state::maintenance::maintenance_types::FacilityWasteBehaviorModification)
+                autonomous_task_selection::start_selected_idle_animal_tasks
+                    .after(autonomous_task_selection::select_idle_animal_tasks)
                     .in_set(FixedGameSet::Think)
                     .run_if(in_state(GamePhase::InGame)),
             )
             .add_systems(
                 FixedUpdate,
-                autonomous_task_selection::task_cooldowns::start_animal_task_cooldowns_after_delayed_tasks_end
-                    .after(behavior_task_phase_transition_execution::advance_behavior_tasks_through_return_failure_completion_and_final_outcome)
+                (
+                    behavior_task_phase_transition_execution::advance_behavior_target_retry_clocks,
+                    drive_behavior_steps.in_set(BehaviorStepFixedSet::Think),
+                    autonomous_task_selection::task_cooldowns::start_animal_task_cooldowns_after_delayed_tasks_end,
+                )
+                    .chain()
+                    .after(autonomous_task_selection::start_selected_idle_animal_tasks)
+                    .after(openzt2_zoo_state::feeding::ContainerQuantityHydration)
+                    .before(openzt2_zoo_state::locomotion::AnimalAnimationNavigationProjection)
                     .in_set(FixedGameSet::Think)
                     .run_if(in_state(GamePhase::InGame)),
             );
         application.add_systems(
-            FixedUpdate,
+            BehaviorStep,
             (
                 behavior_feedback_dispatch_execution::dispatch_current_authored_behavior_feedback_and_advance,
                 behavior_head_look_execution::continue_after_authored_head_look_steps,
-                (
-                    behavior_interaction_container_execution::enter_authored_interaction_containers_and_play_selected_behavior_sets,
-                    behavior_locomotion_switch_set_execution::play_locomotion_medium_behavior_sets,
-                    behavior_locomotion_switch_set_execution::play_animation_node_behavior_sets,
-                ).chain(),
-                (
-                    behavior_docking_execution::start_current_supported_behavior_docking_actions,
-                    behavior_move_execution::start_current_supported_behavior_move_actions,
-                    behavior_animation_clip_execution::start_current_behavior_animation_clip_actions,
-                    behavior_random_animation_execution::start_next_random_behavior_animation,
-                ).chain(),
-                (
-                    behavior_fact_modification::apply_supported_current_behavior_fact_modifications
-                        .after(openzt2_zoo_state::maintenance::maintenance_types::FacilityWasteBehaviorModification),
-                    behavior_trick_learning_execution::apply_current_authored_trick_learning,
-                    behavior_show_event_execution::register_current_authored_animal_show_events,
-                    behavior_script_execution::execute_authored_behavior_script_actions,
-                    behavior_script_execution::remove_settled_behavior_script_transactions,
-                    behavior_clothing_delivery::finish_clothing_delivery,
-                    behavior_target_test_execution::find_target_and_enter_success_or_failure_behavior_set,
-                    behavior_target_placement_execution::prepare_and_finish_behavior_target_placements,
-                ).chain(),
-            )
-                .after(
-                    behavior_task_phase_transition_execution::advance_behavior_tasks_through_return_failure_completion_and_final_outcome
-,
-                )
-                .after(openzt2_zoo_state::feeding::ContainerQuantityHydration)
-                // A stopping walk must see the clip a behavior starts this tick.
-                .before(openzt2_zoo_state::locomotion::AnimalAnimationNavigationProjection)
-                .in_set(FixedGameSet::Think)
-                .run_if(in_state(GamePhase::InGame)),
+                behavior_interaction_container_execution::enter_authored_interaction_containers_and_play_selected_behavior_sets,
+                behavior_locomotion_switch_set_execution::play_locomotion_medium_behavior_sets,
+                behavior_locomotion_switch_set_execution::play_animation_node_behavior_sets,
+                behavior_docking_execution::start_current_supported_behavior_docking_actions,
+                behavior_move_execution::start_current_supported_behavior_move_actions,
+                behavior_animation_clip_execution::start_current_behavior_animation_clip_actions,
+                behavior_random_animation_execution::start_next_random_behavior_animation,
+                behavior_fact_modification::apply_supported_current_behavior_fact_modifications
+                    .after(openzt2_zoo_state::maintenance::maintenance_types::FacilityWasteBehaviorModification),
+                behavior_trick_learning_execution::apply_current_authored_trick_learning,
+                behavior_show_event_execution::register_current_authored_animal_show_events,
+                behavior_script_execution::execute_authored_behavior_script_actions,
+                behavior_script_execution::remove_settled_behavior_script_transactions
+                    .after(behavior_script_execution::execute_authored_behavior_script_actions),
+                behavior_clothing_delivery::finish_clothing_delivery,
+                behavior_target_test_execution::find_target_and_enter_success_or_failure_behavior_set,
+                behavior_target_placement_execution::prepare_and_finish_behavior_target_placements,
+            ).in_set(BehaviorStepSet::Actions),
         );
         application.add_systems(
             FixedUpdate,
@@ -249,6 +272,11 @@ impl Plugin for AnimalBehaviorExecutionPlugin {
                     behavior_animation_clip_execution::finish_behavior_animation_clip_actions_after_play_time,
                 ).chain(),
                 behavior_locomotion_switch_set_execution::switch_medium_following_sets_after_medium_changes,
+                continue_behavior_steps_after_simulation_effects
+                    .in_set(BehaviorStepFixedSet::Act)
+                    .after(behavior_animation_clip_execution::finish_behavior_animation_clip_actions_after_play_time)
+                    .after(behavior_move_execution::finish_behavior_move_actions_after_matching_arrival)
+                    .after(behavior_docking_execution::finish_behavior_docking_actions_after_matching_arrival),
             )
                 .in_set(FixedGameSet::Act)
                 .run_if(in_state(GamePhase::InGame)),

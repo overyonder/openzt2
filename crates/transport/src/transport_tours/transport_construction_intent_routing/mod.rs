@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use openzt2_zoo_state::economy::{facility_economy_types::Price, money_types::Money};
 
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
@@ -7,7 +8,7 @@ use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator;
 
-use openzt2_zoo_state::transport_tours::transport_circuit_types::CircuitMember;
+use openzt2_zoo_state::transport_tours::transport_circuit_types::CircuitMembers;
 use openzt2_zoo_state::transport_tours::transport_circuit_types::TransportCircuit;
 use openzt2_zoo_state::transport_tours::transport_topology_types::AttachTransportStationRequest;
 use openzt2_zoo_state::transport_tours::transport_topology_types::TransportStation;
@@ -19,9 +20,9 @@ pub(super) fn attach_committed_transport_stations_to_compatible_or_new_circuits(
     mut committed_objects: MessageReader<ObjectPlacementCommitted>,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,
-    placed_stations: Query<(&TransportStation, &WorldMember)>,
-    transport_circuits: Query<(Entity, &WorldMember), With<TransportCircuit>>,
-    existing_station_members: Query<(&TransportStation, &CircuitMember)>,
+    placed_stations: Query<(&TransportStation, &WorldMember, Option<&Price>)>,
+    transport_circuits: Query<(Entity, &WorldMember, &CircuitMembers), With<TransportCircuit>>,
+    existing_station_members: Query<&TransportStation>,
     mut station_attachments: MessageWriter<AttachTransportStationRequest>,
     mut ids: ResMut<PersistentIdAllocator>,
     mut commands: Commands,
@@ -30,7 +31,7 @@ pub(super) fn attach_committed_transport_stations_to_compatible_or_new_circuits(
         return;
     };
     for committed_object in committed_objects.read() {
-        let Ok((transport_station, station_world_member)) =
+        let Ok((transport_station, station_world_member, fare)) =
             placed_stations.get(committed_object.entity)
         else {
             continue;
@@ -40,18 +41,18 @@ pub(super) fn attach_committed_transport_stations_to_compatible_or_new_circuits(
             continue;
         };
         let compatible_circuit = transport_circuits.iter().find_map(
-            |(transport_circuit_entity, circuit_world_member)| {
+            |(transport_circuit_entity, circuit_world_member, members)| {
                 (circuit_world_member.root == station_world_member.root
-                    && existing_station_members.iter().any(
-                        |(existing_station, existing_member)| {
-                            existing_member.0 == transport_circuit_entity
-                                && world_definitions
-                                    .find_station(existing_station.definition)
-                                    .is_some_and(|existing_definition| {
-                                        existing_definition.kind == station_definition.kind
-                                    })
-                        },
-                    ))
+                    && existing_station_members
+                        .iter_many(members.iter())
+                        .filter_map(Result::ok)
+                        .any(|existing_station| {
+                            world_definitions
+                                .find_station(existing_station.definition)
+                                .is_some_and(|existing_definition| {
+                                    existing_definition.kind == station_definition.kind
+                                })
+                        }))
                 .then_some(transport_circuit_entity)
             },
         );
@@ -65,6 +66,7 @@ pub(super) fn attach_committed_transport_stations_to_compatible_or_new_circuits(
                 .spawn((
                     id,
                     DefinitionId(transport_station.definition),
+                    fare.copied().unwrap_or(Price(Money::ZERO)),
                     TransportCircuit {
                         definition: transport_station.definition,
                         closed: true,

@@ -310,7 +310,7 @@ pub(super) fn refresh_authored_research_availability(
         Option<&ResearchAvailabilityUnlockCountdown>,
     )>,
     added: Query<
-        (),
+        Entity,
         Or<(
             Added<ResearchProjectAvailability>,
             Added<ResearchAvailabilityUnlockCountdown>,
@@ -327,35 +327,42 @@ pub(super) fn refresh_authored_research_availability(
     let Some(identity) = roots.iter().next() else {
         return;
     };
-    if !asset_changed
-        && !identity.is_changed()
-        && *last_maximum == fame.maximum_percent_reached
-        && added.is_empty()
-        && expired.is_empty()
-    {
-        return;
-    }
+    let refresh_world =
+        asset_changed || identity.is_changed() || *last_maximum != fame.maximum_percent_reached;
     *last_maximum = fame.maximum_percent_reached;
-    expired.clear();
     let research_mode = matches!(
         identity.mode,
         openzt2_world_state::game_session_types::WorldSessionMode::Campaign
             | openzt2_world_state::game_session_types::WorldSessionMode::Challenge
     );
-    for (mut availability, countdown) in &mut availability {
-        let available = research_mode
-            && countdown.is_none()
-            && definitions
-                .find_research(availability.item)
-                .is_some_and(|research| {
-                    research.minimum_fame_percent == 0.0
-                        || fame
-                            .maximum_percent_reached
-                            .is_some_and(|maximum| maximum >= research.minimum_fame_percent)
-                });
-        if availability.available != available {
-            availability.available = available;
-            changed.write(ProgressionFactChanged::Research(availability.item));
+    let mut project =
+        |mut availability: Mut<ResearchProjectAvailability>,
+         countdown: Option<&ResearchAvailabilityUnlockCountdown>| {
+            let available = research_mode
+                && countdown.is_none()
+                && definitions
+                    .find_research(availability.item)
+                    .is_some_and(|research| {
+                        research.minimum_fame_percent == 0.0
+                            || fame
+                                .maximum_percent_reached
+                                .is_some_and(|maximum| maximum >= research.minimum_fame_percent)
+                    });
+            if availability.available != available {
+                availability.available = available;
+                changed.write(ProgressionFactChanged::Research(availability.item));
+            }
+        };
+    if refresh_world {
+        expired.clear();
+        for (availability, countdown) in &mut availability {
+            project(availability, countdown);
+        }
+    } else {
+        for entity in added.iter().chain(expired.read()) {
+            if let Ok((availability, countdown)) = availability.get_mut(entity) {
+                project(availability, countdown);
+            }
         }
     }
 }

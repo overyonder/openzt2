@@ -148,7 +148,7 @@ pub(super) struct BehaviorTargetPlacementCreation<'w, 's> {
     >,
     stomp_targets: Query<'w, 's, StompablePlacedObject>,
     scratch: ResMut<'w, ObjectPlacementCellCollectionScratch>,
-    allocator: ResMut<'w, PersistentIdAllocator>,
+    allocators: Query<'w, 's, &'static mut PersistentIdAllocator>,
     committed: MessageWriter<'w, ObjectPlacementCommitted>,
     payments: MessageWriter<'w, TransactionRequest>,
 }
@@ -825,7 +825,7 @@ fn create_behavior_target_placement_object(
             _ => None,
         })
         .collect::<std::collections::BTreeMap<_, _>>();
-    let id = creation.allocator.allocate(root).ok()?;
+    let id = creation.allocators.get_mut(root).ok()?.allocate().ok()?;
     let mut edit = PreparedObjectPlacementMutation {
         entity: id,
         definition: pending.definition,

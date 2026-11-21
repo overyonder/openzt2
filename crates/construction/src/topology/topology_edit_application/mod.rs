@@ -1,8 +1,8 @@
 use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 use openzt2_game_data::AssetId;
+use openzt2_world_state::world_spawn::persistent_id_index::PersistentIdIndex;
 use openzt2_zoo_state::topology::habitat_boundary_queries::HabitatBoundaryQueries;
-use openzt2_zoo_state::topology::persistent_edit_lookup::PersistentEditLookup;
 use openzt2_zoo_state::topology::topology_graph_types::FenceSegment;
 
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
@@ -228,7 +228,7 @@ fn apply_one_committed_topology_edit(
     )>,
     (roots, boundaries): (Query<Entity, With<WorldRoot>>, HabitatBoundaryQueries),
     members: Query<&WorldMember>,
-    persistent: Res<PersistentEditLookup>,
+    persistent: Res<PersistentIdIndex>,
     topology: Query<(
         Option<&TopologyNode>,
         Option<FenceSegment>,

@@ -1,152 +1,108 @@
 use bevy::prelude::*;
-
-use openzt2_game_assets::animation::animation_set_asset_types::AnimationSetAsset;
-
-use crate::animation_playback::authored_animation_event_cursor_types::AuthoredAnimationEventCursor;
-use crate::animation_playback::authored_animation_text_action_execution_context::AuthoredAnimationTextActionExecutionContext;
+use openzt2_game_assets::animation::animation_set_asset_types::{
+    AnimationClipSourceAsset, AnimationTimelineKey,
+};
 use openzt2_world_state::animation_playback::animation_playback_controller_types::{
-    AnimationPlaybackClock, AnimationPlaybackController,
+    AnimationPlaybackController, RetainedAnimationClipSource,
 };
 
-pub(super) fn execute_crossed_authored_animation_events<const REAL_TIME: bool>(
-    animation_set_assets: Res<Assets<AnimationSetAsset>>,
-    mut changed_animation_playback_controllers: Query<
-        (
-            Entity,
-            &mut AnimationPlaybackController,
-            &mut AuthoredAnimationEventCursor,
-        ),
-        Changed<AnimationPlaybackController>,
-    >,
-    mut authored_animation_text_action_execution: AuthoredAnimationTextActionExecutionContext,
-) {
-    let playback_clock = if REAL_TIME {
-        AnimationPlaybackClock::RealTime
-    } else {
-        AnimationPlaybackClock::Simulation
-    };
-    for (
-        animation_playback_controller_entity,
-        mut animation_playback_controller,
-        mut authored_animation_event_cursor,
-    ) in &mut changed_animation_playback_controllers
-    {
-        if animation_playback_controller.playback_clock != playback_clock {
-            continue;
-        }
-        let animation_playback_clip_changed = authored_animation_event_cursor
-            .requires_initial_event_sample
-            || authored_animation_event_cursor.playback_generation
-                != animation_playback_controller.playback_generation
-            || authored_animation_event_cursor.animation_clip_asset_key
-                != animation_playback_controller.animation_clip_asset_key;
-        if !animation_playback_clip_changed
-            && authored_animation_event_cursor.previous_elapsed_milliseconds
-                == animation_playback_controller.elapsed_milliseconds
-        {
-            continue;
-        }
-        let Some(animation_clip) = animation_set_assets
-            .get(&animation_playback_controller.animation_set_asset)
-            .and_then(|animation_set_asset| {
-                animation_set_asset.find_animation_clip_record_by_asset_key(
-                    &animation_playback_controller.animation_clip_asset_key,
-                )
-            })
-        else {
-            continue;
-        };
-        let animation_playback_moves_forward =
-            animation_playback_controller.playback_speed_permille >= 0;
-        let animation_playback_time_wrapped = !animation_playback_clip_changed
-            && if animation_playback_moves_forward {
-                animation_playback_controller.elapsed_milliseconds
-                    < authored_animation_event_cursor.previous_elapsed_milliseconds
-            } else {
-                animation_playback_controller.elapsed_milliseconds
-                    > authored_animation_event_cursor.previous_elapsed_milliseconds
-            };
-        let Some(authored_animation_clip_metadata) =
-            animation_clip.authored_animation_clip_metadata.as_ref()
-        else {
-            update_authored_animation_event_cursor_after_execution(
-                &mut authored_animation_event_cursor,
-                &animation_playback_controller,
-            );
-            continue;
-        };
+use super::authored_animation_text_action_execution_context::AuthoredAnimationTextActionExecutionContext;
+use super::player_clock_lanes::AnimationPlaybackInterval;
 
-        for (&event_time_milliseconds, text_key) in animation_clip
-            .text_key_times_milliseconds
-            .iter()
-            .zip(&authored_animation_clip_metadata.authored_animation_text_keys)
-        {
-            if authored_animation_event_time_was_crossed_by_playback(
-                event_time_milliseconds,
-                animation_playback_controller.elapsed_milliseconds,
-                authored_animation_event_cursor.previous_elapsed_milliseconds,
-                animation_playback_clip_changed,
-                animation_playback_moves_forward,
-                animation_playback_time_wrapped,
-            ) {
-                for command in &text_key.animation_text_commands {
-                    authored_animation_text_action_execution
-                        .execute_one_crossed_authored_animation_text_command(
-                            animation_playback_controller_entity,
-                            &mut animation_playback_controller,
-                            event_time_milliseconds,
-                            command,
-                        );
-                }
-            }
+pub(super) fn execute_crossed_authored_animation_events<const REAL_TIME: bool>(
+    mut intervals: MessageReader<AnimationPlaybackInterval<REAL_TIME>>,
+    sources: Res<Assets<AnimationClipSourceAsset>>,
+    mut controllers: Query<(
+        &mut AnimationPlaybackController,
+        &RetainedAnimationClipSource,
+    )>,
+    mut actions: AuthoredAnimationTextActionExecutionContext<REAL_TIME>,
+) {
+    for step in intervals.read() {
+        let Ok((mut controller, source)) = controllers.get_mut(step.controller) else {
+            continue;
+        };
+        if controller.playback_generation != step.generation {
+            continue;
         }
-        update_authored_animation_event_cursor_after_execution(
-            &mut authored_animation_event_cursor,
-            &animation_playback_controller,
-        );
+        let Some(source) = sources.get(&source.0) else {
+            continue;
+        };
+        visit_interval(step, &source.timeline, &mut |key| {
+            for command in &key.commands {
+                actions.execute_one_crossed_authored_animation_text_command(
+                    step.controller,
+                    &mut controller,
+                    key.milliseconds,
+                    command,
+                );
+            }
+        });
     }
 }
 
-fn update_authored_animation_event_cursor_after_execution(
-    authored_animation_event_cursor: &mut AuthoredAnimationEventCursor,
-    animation_playback_controller: &AnimationPlaybackController,
+fn visit_interval<const REAL_TIME: bool>(
+    step: &AnimationPlaybackInterval<REAL_TIME>,
+    keys: &[AnimationTimelineKey],
+    visit: &mut impl FnMut(&AnimationTimelineKey),
 ) {
-    authored_animation_event_cursor
-        .animation_clip_asset_key
-        .clone_from(&animation_playback_controller.animation_clip_asset_key);
-    authored_animation_event_cursor.previous_elapsed_milliseconds =
-        animation_playback_controller.elapsed_milliseconds;
-    authored_animation_event_cursor.requires_initial_event_sample = false;
-    authored_animation_event_cursor.playback_generation =
-        animation_playback_controller.playback_generation;
-}
-
-fn authored_animation_event_time_was_crossed_by_playback(
-    animation_event_time_milliseconds: u32,
-    current_elapsed_milliseconds: u32,
-    previous_elapsed_milliseconds: u32,
-    animation_playback_clip_changed: bool,
-    animation_playback_moves_forward: bool,
-    animation_playback_time_wrapped: bool,
-) -> bool {
-    if animation_playback_clip_changed {
-        if animation_playback_moves_forward {
-            animation_event_time_milliseconds <= current_elapsed_milliseconds
+    let at_or_after = |seconds: f32| {
+        keys.partition_point(|key| {
+            f64::from(key.milliseconds) < f64::from(seconds) * 1000.0 - 0.0001
+        })
+    };
+    let after = |seconds: f32| {
+        keys.partition_point(|key| {
+            f64::from(key.milliseconds) <= f64::from(seconds) * 1000.0 + 0.0001
+        })
+    };
+    let first = at_or_after(step.cycle_start);
+    let last = after(step.cycle_end);
+    let mut play_range = |mut start: usize, end: usize| {
+        let end = end.min(keys.len());
+        start = start.min(end);
+        if step.forward {
+            for index in start..end {
+                visit(&keys[index]);
+            }
         } else {
-            animation_event_time_milliseconds >= current_elapsed_milliseconds
+            let mut right = end;
+            while right > start {
+                let time = keys[right - 1].milliseconds;
+                let left = start
+                    + keys[start..right].partition_point(|candidate| candidate.milliseconds < time);
+                for key in &keys[left..right] {
+                    visit(key);
+                }
+                right = left;
+            }
         }
-    } else if animation_playback_moves_forward && animation_playback_time_wrapped {
-        animation_event_time_milliseconds > previous_elapsed_milliseconds
-            || animation_event_time_milliseconds <= current_elapsed_milliseconds
-    } else if animation_playback_moves_forward {
-        animation_event_time_milliseconds > previous_elapsed_milliseconds
-            && animation_event_time_milliseconds <= current_elapsed_milliseconds
-    } else if animation_playback_time_wrapped {
-        animation_event_time_milliseconds < previous_elapsed_milliseconds
-            || animation_event_time_milliseconds >= current_elapsed_milliseconds
+    };
+    if step.forward {
+        let start = if step.clip_entry { 0 } else { after(step.from) };
+        if step.cycles <= 0 {
+            play_range(start, after(step.to));
+        } else {
+            play_range(start, last);
+            for _ in 1..step.cycles {
+                play_range(first, last);
+            }
+            play_range(first, after(step.to));
+        }
+    } else if step.cycles >= 0 {
+        let end = if step.clip_entry {
+            last
+        } else {
+            at_or_after(step.from)
+        };
+        play_range(at_or_after(step.to), end);
     } else {
-        animation_event_time_milliseconds < previous_elapsed_milliseconds
-            && animation_event_time_milliseconds >= current_elapsed_milliseconds
+        let end = at_or_after(step.from);
+        play_range(first, end);
+        for _ in 1..step.cycles.unsigned_abs() {
+            play_range(first, last);
+        }
+        play_range(at_or_after(step.to), last);
     }
 }
 

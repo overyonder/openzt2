@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
 
 use super::action;
+use crate::{animation::animation_text_key::AuthoredAnimationTextCommand, AssetId};
+
+pub type BehaviorAnimationTextKeyAliases = Vec<(AssetId, Vec<AuthoredAnimationTextCommand>)>;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum BehaviorAction {
@@ -28,8 +31,21 @@ pub enum BehaviorAction {
         period: std::time::Duration,
     },
     AnimationClip(action::animation::BehaviorAnimationClipAction),
+    AnimationWithTextKeys {
+        animation: action::animation::BehaviorAnimationClipAction,
+        keys: BehaviorAnimationTextKeyAliases,
+    },
     AttachObject(action::attach_object::BehaviorAttachObjectAction),
+    AttachWithTextKeys {
+        attachment: action::attach_object::BehaviorAttachObjectAction,
+        keys: BehaviorAnimationTextKeyAliases,
+    },
     DetachObject(action::attach_object::BehaviorDetachObjectAction),
+    DetachWithAnimation {
+        detach: action::attach_object::BehaviorDetachObjectAction,
+        animation: action::animation::BehaviorAnimationClipAction,
+        keys: BehaviorAnimationTextKeyAliases,
+    },
     /// `BFBehHide`: the actor is out of sight, as inside a gift shop, for a
     /// duration drawn once between these bounds.
     Hide {
@@ -49,6 +65,12 @@ pub enum BehaviorAction {
         entity: crate::AssetId,
         #[serde(default)]
         pose: action::spawn::BehaviorSpawnPosePolicy,
+    },
+    SpawnChildWithPlacement {
+        entity: AssetId,
+        pose: action::spawn::BehaviorSpawnPosePolicy,
+        fade_in: std::time::Duration,
+        within_habitat: bool,
     },
     /// `BFBehSpawn` without a node or clip, such as the `TrashGround` a guest
     /// drops on a path: the object appears at once beside the actor.
@@ -83,8 +105,23 @@ pub enum BehaviorAction {
     },
     CureDisease,
     PlaySet(action::play_set::BehaviorPlaySetAction),
+    PlaySetWithInterrupt {
+        set: action::play_set::BehaviorPlaySetAction,
+        interrupt: AssetId,
+    },
     TargetTest(action::target_test::BehaviorTargetTestAction),
     Termination(action::termination::BehaviorTerminationAction),
+    AnimationKill {
+        animation: Option<action::animation::BehaviorAnimationClipAction>,
+        termination: action::termination::BehaviorTerminationAction,
+        radius: Option<(f32, AssetId)>,
+        destroy: bool,
+    },
+    Whap {
+        animation: Option<action::animation::BehaviorAnimationClipAction>,
+        angle_degrees: Option<f32>,
+        random_offset_degrees: Option<f32>,
+    },
     Economy {
         transaction: crate::AssetId,
         cost_override: Option<f32>,
@@ -104,12 +141,6 @@ pub enum BehaviorAction {
         looping: bool,
     },
     PlaceTarget(action::place_target::BehaviorPlaceTargetAction),
-    /// `ZTBehMorph` on the target: it becomes the type its attribute names,
-    /// as a fence an animal bashes becomes its `s_Broken` variant.
-    MorphTarget(crate::AssetId),
-    /// `BFBehKill killUsingDestroyEntity` on the target: a fence breaks and a
-    /// building gives way to its ruin.
-    DestroyTarget,
     LocomotionSwitchSet(action::locomotion_switch_set::BehaviorLocomotionSwitchSetAction),
     AnimationSwitchSet(action::locomotion_switch_set::BehaviorAnimationSwitchSetAction),
     AnimalShowEvent(action::show_event::BehaviorShowEventAction),

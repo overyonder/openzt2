@@ -26,87 +26,6 @@ pub enum EditApplication {
     FailureRollback,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DomainAckStatus {
-    NotExpected,
-    Pending,
-    Applied,
-    Reverted,
-    Rejected,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EditCommitPhase {
-    Preparing,
-    AwaitingEconomy,
-    Applying,
-    RollingBack,
-    AwaitingCompensation,
-    Complete,
-    Failed,
-}
-
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct EditCommitProgress {
-    pub phase: EditCommitPhase,
-    pub application: EditApplication,
-    pub cost: Money,
-    pub terrain: DomainAckStatus,
-    pub topology: DomainAckStatus,
-    pub placement: DomainAckStatus,
-    pub shows: DomainAckStatus,
-    pub aquatic: DomainAckStatus,
-}
-
-impl EditCommitProgress {
-    pub fn preparing() -> Self {
-        Self {
-            phase: EditCommitPhase::Preparing,
-            application: EditApplication::InitialCommit,
-            cost: Money(0),
-            terrain: DomainAckStatus::NotExpected,
-            topology: DomainAckStatus::NotExpected,
-            placement: DomainAckStatus::NotExpected,
-            shows: DomainAckStatus::NotExpected,
-            aquatic: DomainAckStatus::NotExpected,
-        }
-    }
-
-    pub fn expects_domain(&self) -> bool {
-        self.terrain != DomainAckStatus::NotExpected
-            || self.topology != DomainAckStatus::NotExpected
-            || self.placement != DomainAckStatus::NotExpected
-            || self.shows != DomainAckStatus::NotExpected
-            || self.aquatic != DomainAckStatus::NotExpected
-    }
-
-    pub fn all_expected_are(&self, wanted: DomainAckStatus) -> bool {
-        [
-            self.terrain,
-            self.topology,
-            self.placement,
-            self.shows,
-            self.aquatic,
-        ]
-        .into_iter()
-        .all(|status| status == DomainAckStatus::NotExpected || status == wanted)
-    }
-
-    pub fn reset_expected_to_pending(&mut self) {
-        for status in [
-            &mut self.terrain,
-            &mut self.topology,
-            &mut self.placement,
-            &mut self.shows,
-            &mut self.aquatic,
-        ] {
-            if *status != DomainAckStatus::NotExpected {
-                *status = DomainAckStatus::Pending;
-            }
-        }
-    }
-}
-
 #[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PrepareConstruction {
     pub transaction: Entity,
@@ -155,9 +74,3 @@ pub struct RollbackContext {
     pub failed_application: EditApplication,
     pub failure: ConstructionCommitFailure,
 }
-
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CompensationRequested;
-
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RollbackDispatched;

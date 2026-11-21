@@ -2,7 +2,8 @@ mod animation_graph_blend_timer_advancement;
 mod animation_graph_clip_request_execution;
 mod animation_graph_node_request_execution;
 mod animation_graph_transition_completion;
-mod embedded_gltf_animation_asset_resolution;
+mod animation_return_route;
+mod embedded_model_animation_binding;
 mod model_animation_asset_attachment;
 
 use bevy::prelude::*;
@@ -15,36 +16,41 @@ use crate::animation_graph::animation_graph_blend_timer_advancement::advance_ani
 use crate::animation_graph::animation_graph_clip_request_execution::execute_explicit_animation_clip_playback_requests;
 use crate::animation_graph::animation_graph_node_request_execution::execute_animation_graph_node_playback_requests;
 use crate::animation_graph::animation_graph_transition_completion::complete_animation_graph_transitions_after_animation_clip_completion;
-use crate::animation_graph::embedded_gltf_animation_asset_resolution::resolve_loaded_gltf_animations_into_animation_set_assets;
 use crate::animation_graph::model_animation_asset_attachment::attach_loaded_animation_set_assets_to_animation_subject_entities;
+use openzt2_world_state::animation_graph::animation_graph_playback_message_types::AnimationClipActionOptions;
 use openzt2_world_state::animation_graph::animation_graph_playback_message_types::AnimationClipPlaybackRequest;
 use openzt2_world_state::animation_graph::animation_graph_playback_message_types::AnimationClipPlaybackRequestRejected;
-use openzt2_world_state::animation_graph::animation_graph_playback_message_types::AnimationClipPresentationSelection;
 use openzt2_world_state::animation_graph::animation_graph_playback_message_types::AnimationGraphNodePlaybackRequest;
 use openzt2_world_state::animation_graph::animation_graph_playback_message_types::AnimationGraphNodePlaybackRequestRejected;
-use openzt2_world_state::animation_graph::model_animation_asset_binding_types::EmbeddedModelAnimationSetAssetHandlesByGltfAsset;
 
 pub struct AnimationGraphPlugin;
 
 impl Plugin for AnimationGraphPlugin {
     fn build(&self, application: &mut App) {
         application
-            .init_resource::<EmbeddedModelAnimationSetAssetHandlesByGltfAsset>()
             .add_message::<AnimationGraphNodePlaybackRequest>()
             .add_message::<AnimationClipPlaybackRequest>()
-            .add_message::<AnimationClipPresentationSelection>()
+            .add_message::<AnimationClipActionOptions>()
+            .add_message::<openzt2_world_state::animation_graph::animation_graph_playback_message_types::AnimationReturnRouteRequest>()
             .add_message::<openzt2_world_state::animation_graph::animation_graph_playback_message_types::CancelAnimationClipPlaybackRequest>()
             .add_message::<AnimationClipPlaybackRequestRejected>()
             .add_message::<openzt2_world_state::animation_graph::animation_graph_playback_message_types::AnimationClipPlaybackRequestStarted>()
             .add_message::<AnimationGraphNodePlaybackRequestRejected>()
             .add_systems(
+                PreUpdate,
+                animation_graph_clip_request_execution::wake_animation_clip_requests_after_asset_loading
+                    .after(bevy::asset::AssetTrackingSystems),
+            )
+            .add_systems(
                 Update,
                 (
-                    resolve_loaded_gltf_animations_into_animation_set_assets,
-                    attach_loaded_animation_set_assets_to_animation_subject_entities,
-                )
-                    .chain()
-                    .in_set(GameSet::Intent),
+                    embedded_model_animation_binding::request_embedded_model_animation_sets,
+                    embedded_model_animation_binding::refresh_embedded_model_animation_bindings,
+                ).before(attach_loaded_animation_set_assets_to_animation_subject_entities).in_set(GameSet::Intent),
+            )
+            .add_systems(
+                Update,
+                attach_loaded_animation_set_assets_to_animation_subject_entities.in_set(GameSet::Intent),
             )
             .add_systems(
                 FixedUpdate,
@@ -59,8 +65,11 @@ impl Plugin for AnimationGraphPlugin {
             )
             .add_systems(
                 FixedUpdate,
-                complete_animation_graph_transitions_after_animation_clip_completion
-                    .in_set(FixedGameSet::Cleanup),
+                (
+                    animation_return_route::receive_return_route_requests,
+                    animation_return_route::advance_return_routes,
+                    complete_animation_graph_transitions_after_animation_clip_completion,
+                ).chain().in_set(FixedGameSet::Cleanup),
             );
     }
 }

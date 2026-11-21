@@ -346,7 +346,7 @@ pub(crate) fn project_selected_catalogue_entry_to_purchase_information_document(
                                 })
                         })
                         .unwrap_or("");
-                    replace_projected_ui_text_if_changed(&mut text.0, selected_name);
+                    replace_projected_ui_text_if_changed(text, selected_name);
                 }
                 UiTextPropertyBindingSource::CatalogueEntryPrice {
                     format,

@@ -1,9 +1,9 @@
-use std::{collections::BTreeMap, path::Path, sync::Arc};
+use std::{collections::BTreeMap, path::Path};
 
 use bevy::prelude::*;
 
 use super::lua_script_asset_loading::LuaScriptAsset;
-use crate::asset_source::{ArchiveCatalogue, AssetArchives};
+use crate::asset_source::{ArchiveCatalogue, ArchiveOverlayChanged, AssetArchives};
 
 struct IndexedLuaScriptAssetHandle {
     path: String,
@@ -30,6 +30,11 @@ impl FromWorld for LuaScriptArchivePathIndex {
 }
 
 impl LuaScriptArchivePathIndex {
+    pub(super) fn contains_path(&self, path: &str) -> bool {
+        self.handles_by_normalized_path
+            .contains_key(&normalized_lua_script_archive_path(Path::new(path)))
+    }
+
     pub fn has_pending_script_loads(
         &self,
         asset_server: &AssetServer,
@@ -65,15 +70,17 @@ pub(super) fn discover_lua_script_archive_paths(
     archives: Res<AssetArchives>,
     server: Res<AssetServer>,
     mut index: ResMut<LuaScriptArchivePathIndex>,
-    mut previous: Local<Option<Arc<[z2f::ResolvedArchiveEntry]>>>,
+    mut overlay_changes: MessageReader<ArchiveOverlayChanged>,
 ) {
-    let sources = archives.catalogue_sources(ArchiveCatalogue::Scripts);
-    if previous
-        .as_ref()
-        .is_some_and(|previous| Arc::ptr_eq(previous, &sources))
-    {
+    let changed = overlay_changes
+        .read()
+        .flat_map(|change| &change.changes)
+        .any(|change| path_has_lua_script_asset_extension(&change.normalized_asset_path));
+    overlay_changes.clear();
+    if index.discovered && !changed {
         return;
     }
+    let sources = archives.catalogue_sources(ArchiveCatalogue::Scripts);
     index.handles_by_normalized_path = sources
         .iter()
         .map(|source| {
@@ -83,7 +90,6 @@ pub(super) fn discover_lua_script_archive_paths(
         })
         .collect();
     index.discovered = true;
-    *previous = Some(sources);
 }
 
 pub(crate) fn path_has_lua_script_asset_extension(path: &Path) -> bool {

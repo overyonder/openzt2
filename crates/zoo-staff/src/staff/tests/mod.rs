@@ -156,6 +156,7 @@ fn missing_staff_releases_assignment_and_preserves_live_request() {
         );
     let root = app.world_mut().spawn_empty().id();
     let target = app.world_mut().spawn(WorldMember { root }).id();
+    let staff = app.world_mut().spawn((Staff, WorldMember { root })).id();
     let job = app
         .world_mut()
         .spawn((
@@ -165,11 +166,10 @@ fn missing_staff_releases_assignment_and_preserves_live_request() {
                 urgency: 1,
                 token: None,
             },
-            JobClaim {
-                staff: Entity::from_bits(99),
-            },
+            JobClaim { staff },
         ))
         .id();
+    app.world_mut().entity_mut(staff).despawn();
     app.update();
     assert!(app.world().get::<StaffJob>(job).is_some());
     assert!(app.world().get::<JobClaim>(job).is_none());

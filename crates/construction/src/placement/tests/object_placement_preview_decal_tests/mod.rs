@@ -49,6 +49,7 @@ fn unchanged_placement_preview_keeps_its_footprint_and_grid_decals() {
     let definition = placeable.id;
     let document = WorldDefinitionDocument {
         objects: vec![WorldObjectDefinition {
+            authored_runtime: Default::default(),
             audio_cue_prefixes: Vec::new(),
             surface_effect_strength: None,
             presentation_caustic_policies: Vec::new(),

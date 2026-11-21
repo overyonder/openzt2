@@ -10,7 +10,7 @@ pub(super) fn deliver_behavior_object_spawns(
     definition_assets: Res<Assets<WorldDefinitionAsset>>,
     prefabs: Res<Assets<ScenePrefabAsset>>,
     clock: Res<ZooClock>,
-    mut ids: ResMut<PersistentIdAllocator>,
+    mut ids: Query<&mut PersistentIdAllocator>,
     mut events: MessageReader<AnimationObjectCommand>,
     mut completed: MessageReader<AnimationCompleted>,
     mut rejected: MessageReader<AnimationClipPlaybackRequestRejected>,
@@ -100,7 +100,7 @@ pub(super) fn deliver_behavior_object_spawns(
                 let handle = pending.prefab.as_ref()?;
                 Some((handle, prefabs.get(handle)?))
             };
-            let id = ids.allocate(world.root).ok()?;
+            let id = ids.get_mut(world.root).ok()?.allocate().ok()?;
             let placement = pose_validation.select_spawn_pose(
                 actor,
                 *world,

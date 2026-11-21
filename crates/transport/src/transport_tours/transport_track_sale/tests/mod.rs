@@ -6,6 +6,7 @@ use crate::transport_tours::transport_track_sale_steps::{
     begin_requested_transport_track_sales, settle_acknowledged_transport_track_sale_steps,
     ApplyTransportTrackSaleStep, TransportTrackSaleStepAcknowledged,
 };
+use openzt2_construction::construction::construction_history::ConstructionHistoryPolicy;
 use openzt2_construction::construction::deletion_transaction_preparation::begin_deletion_transaction_preparation;
 use openzt2_game_data::world_definitions::document::WorldDefinitionDocument;
 use openzt2_game_data::world_definitions::economy_transactions::*;
@@ -19,21 +20,25 @@ use openzt2_interface_state::information::entity_selection_types::SelectedSubjec
 use openzt2_interface_state::ui::ui_document_lifecycle_contracts::InGameUiOwner;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
-use openzt2_zoo_state::construction::construction_edit_history_types::ConstructionEditHistory;
 use openzt2_zoo_state::construction::construction_interaction_types::DeleteEntity;
 use openzt2_zoo_state::construction::construction_transaction_types::EditApplication;
 use openzt2_zoo_state::economy::facility_economy_types::CurrentSellQuote;
 use openzt2_zoo_state::transport_tours::transport_circuit_types::{
     CircuitMember, TransportCircuit,
 };
+use openzt2_zoo_state::transport_tours::transport_topology_types::TrackRoute;
 use openzt2_zoo_state::transport_tours::transport_topology_types::*;
+use openzt2_zoo_state::transport_tours::transport_topology_types::{TrackEnd, TrackStart};
 use openzt2_zoo_state::transport_tours::transport_track_construction_types::*;
 
 fn sale_application(refund_percent: f32) -> (App, Entity, [Entity; 2], Entity, Entity) {
     let mut app = App::new();
+    app.add_plugins(
+        openzt2_zoo_state::topology::persistent_edit_lookup::PersistentEditLookupPlugin,
+    );
     app.init_resource::<Assets<WorldDefinitionAsset>>()
         .init_resource::<WorldDefinitions>()
-        .init_resource::<ConstructionEditHistory>()
+        .init_resource::<ConstructionHistoryPolicy>()
         .add_message::<DeleteEntity>()
         .add_message::<PrepareDeletion>()
         .add_message::<TransportTrackConstructionEditPrepared>()
@@ -70,6 +75,7 @@ fn sale_application(refund_percent: f32) -> (App, Entity, [Entity; 2], Entity, E
             audio_cue_prefixes: Vec::new(),
             surface_effect_strength: None,
             presentation_caustic_policies: Vec::new(),
+            traversal_animation_manifests: Vec::new(),
             id: definition,
             kind: WorldObjectKind::Scenery,
             water_filter: None,
@@ -171,8 +177,6 @@ fn sale_application(refund_percent: f32) -> (App, Entity, [Entity; 2], Entity, E
             TransportStation {
                 definition,
                 capacity: 4,
-                queued: 0,
-                occupied: 0,
             },
             CircuitMember(circuit),
             world,
@@ -209,12 +213,14 @@ fn sale_application(refund_percent: f32) -> (App, Entity, [Entity; 2], Entity, E
             piece_index: 0,
         },
         CircuitMember(circuit),
+        TrackStart(station),
+        TrackEnd(junction),
         TrackSegment {
             definition,
-            from: station,
+
             from_endpoint_index: 0,
             from_position: Vec3::ZERO,
-            to: junction,
+
             to_endpoint_index: 0,
             to_position: Vec3::X * 2.0,
             path_points: vec![Vec3::ZERO, Vec3::X, Vec3::X * 2.0].into_boxed_slice(),
@@ -324,15 +330,12 @@ fn removing_tail_preserves_the_incoming_route_and_its_tower_attachment() {
             TransportStation {
                 definition,
                 capacity: 4,
-                queued: 0,
-                occupied: 0,
             },
             world,
         ))
         .id();
-    let mut incoming = app.world().get::<TrackSegment>(pieces[0]).unwrap().clone();
-    incoming.from = station;
-    incoming.to = source;
+    let incoming = app.world().get::<TrackSegment>(pieces[0]).unwrap().clone();
+    let incoming = (incoming, TrackStart(station), TrackEnd(source));
     let incoming = app
         .world_mut()
         .spawn((incoming, CircuitMember(circuit), world))
@@ -367,9 +370,8 @@ fn removing_a_middle_route_keeps_the_road_beyond_it() {
         .world_mut()
         .spawn((TransportTrackJunction, PersistentId(5), world))
         .id();
-    let mut onward = app.world().get::<TrackSegment>(pieces[0]).unwrap().clone();
-    onward.from = junction;
-    onward.to = end;
+    let onward = app.world().get::<TrackSegment>(pieces[0]).unwrap().clone();
+    let onward = (onward, TrackStart(junction), TrackEnd(end));
     let onward = app
         .world_mut()
         .spawn((onward, CircuitMember(circuit), world))
@@ -410,9 +412,8 @@ fn removing_one_piece_leaves_a_gap_and_undo_restores_the_route() {
             PersistentId(4),
             CircuitMember(circuit),
         ));
-    let mut incoming = app.world().get::<TrackSegment>(pieces[0]).unwrap().clone();
-    incoming.from = junction;
-    incoming.to = source;
+    let incoming = app.world().get::<TrackSegment>(pieces[0]).unwrap().clone();
+    let incoming = (incoming, TrackStart(junction), TrackEnd(source));
     app.world_mut()
         .spawn((incoming, CircuitMember(circuit), world));
     for entity in [source, junction] {
@@ -464,9 +465,9 @@ fn removing_one_piece_leaves_a_gap_and_undo_restores_the_route() {
     // The second piece is laid again from a junction at its start.
     let routes = app
         .world_mut()
-        .query::<&TrackSegment>()
+        .query::<TrackRoute>()
         .iter(app.world())
-        .filter(|route| route.from != junction)
+        .filter(|route| route.from() != junction)
         .map(|route| route.path_points.clone())
         .collect::<Vec<_>>();
     assert_eq!(routes, [vec![Vec3::X, Vec3::X * 2.0].into_boxed_slice()]);
@@ -475,9 +476,9 @@ fn removing_one_piece_leaves_a_gap_and_undo_restores_the_route() {
     assert_eq!(apply(&mut app, EditApplication::Undo), [true]);
     let routes = app
         .world_mut()
-        .query::<&TrackSegment>()
+        .query::<TrackRoute>()
         .iter(app.world())
-        .filter(|route| route.from != junction)
+        .filter(|route| route.from() != junction)
         .map(|route| route.path_points.len())
         .collect::<Vec<_>>();
     assert_eq!(routes, [3]);
@@ -493,9 +494,8 @@ fn undo_lays_again_a_leg_or_piece_removed_after_a_gap() {
             .world_mut()
             .spawn((TransportTrackJunction, PersistentId(5), world))
             .id();
-        let mut onward = app.world().get::<TrackSegment>(pieces[0]).unwrap().clone();
-        onward.from = junction;
-        onward.to = end;
+        let onward = app.world().get::<TrackSegment>(pieces[0]).unwrap().clone();
+        let onward = (onward, TrackStart(junction), TrackEnd(end));
         app.world_mut()
             .spawn((onward, CircuitMember(circuit), world));
         // The leg starts at a junction nothing leads into, as a road after a gap.
@@ -554,9 +554,9 @@ fn undo_lays_again_a_leg_or_piece_removed_after_a_gap() {
         assert_eq!(apply(&mut app, EditApplication::Undo), [true]);
         let restored = app
             .world_mut()
-            .query::<&TrackSegment>()
+            .query::<TrackRoute>()
             .iter(app.world())
-            .filter(|route| route.to == junction)
+            .filter(|route| route.to() == junction)
             .count();
         assert_eq!(restored, 1);
     }

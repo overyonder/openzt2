@@ -1,3 +1,4 @@
+use openzt2_zoo_state::transport_tours::transport_highlight_style::TransportHighlightStyle;
 use bevy::prelude::*;
 use bevy::render::storage::ShaderBuffer;
 use openzt2_game_data::world_definitions::transportation_and_tours::TransportationTrackKind;
@@ -18,7 +19,7 @@ use openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementPrevie
 
 pub(super) fn project_transport_track_construction_preview_authored_prefabs(
     mut commands: Commands,
-    asset_server: Res<AssetServer>,
+    (style, asset_server): (Res<TransportHighlightStyle>, Res<AssetServer>),
     definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     authored_materials: Res<Assets<MaterialAsset>>,
@@ -127,7 +128,7 @@ pub(super) fn project_transport_track_construction_preview_authored_prefabs(
         let Some(template) = terrain_decal_pass.as_ref() else {
             continue;
         };
-        let tint = invalid_track_preview_tint(preview.validity);
+        let tint = invalid_track_preview_tint(preview.validity, &style);
         for (piece_index, points) in track_preview.path_points.windows(2).enumerate() {
             let world_transform =
                 crate::transport_tours::transport_track_construction_transaction::transport_track_piece_transform(
@@ -224,23 +225,19 @@ pub(super) fn project_transport_track_construction_preview_authored_prefabs(
     }
 }
 
-/// `ZTGroundTrackMode` in `UI/modes/modes.xml` colours a road that can't be
-/// placed `place_no` (200, 20, 10, 90) and one that is too steep `too_steep`
-/// (255, 255, 0, 255). The road decal ignores vertex colour, so the preview
-/// draws with a copy of its material lit only by that colour, which
-/// multiplies the road texture; it stays as opaque as the road.
-// The two colours are copied from modes.xml, not lowered from it.
 fn invalid_track_preview_tint(
     validity: openzt2_zoo_state::construction::construction_interaction_types::PlacementValidity,
+    style: &TransportHighlightStyle,
 ) -> Option<[f32; 4]> {
     use openzt2_zoo_state::construction::construction_interaction_types::{
         PlacementFailure, PlacementValidity,
     };
-    match validity {
-        PlacementValidity::Valid { .. } | PlacementValidity::Pending => None,
-        PlacementValidity::Invalid(PlacementFailure::TooSteep) => Some([1.0, 1.0, 0.0, 1.0]),
-        PlacementValidity::Invalid(_) => Some([200.0 / 255.0, 20.0 / 255.0, 10.0 / 255.0, 1.0]),
-    }
+    let color = match validity {
+        PlacementValidity::Valid { .. } | PlacementValidity::Pending => return None,
+        PlacementValidity::Invalid(PlacementFailure::TooSteep) => style.steep,
+        PlacementValidity::Invalid(_) => style.invalid,
+    };
+    Some(color.to_srgba().to_vec4().to_array())
 }
 
 /// The assets a sky tower preview adds.
@@ -298,10 +295,9 @@ fn spawn_sky_track_preview(
         &track_preview.path_points,
         1,
         1,
-        presentation.initial_height_metres.max(
-            track_preview.path_points[0].y - track_preview.path_points[1].y
-                + track.sky_rope_clearance_metres.unwrap_or_default(),
-        ),
+        track_preview
+            .tower_height_m
+            .unwrap_or(presentation.initial_height_metres),
         presentation,
     );
     // The tower's footprint and the placement grid, as for objects.
@@ -318,12 +314,12 @@ fn spawn_sky_track_preview(
     }
     // As in the original, a line runs from the last tower top (or
     // station wheel) to the top of the tower being placed.
-    let clearance = track.sky_rope_clearance_metres.unwrap_or_default();
-    let height = presentation
-        .initial_height_metres
-        .max(track_preview.path_points[0].y - track_preview.path_points[1].y + clearance);
+    let height = track_preview
+        .tower_height_m
+        .unwrap_or(presentation.initial_height_metres);
     let start = rope_anchors
         .station_wheel(track_preview.from_endpoint, track_preview.path_points[0])
+        .or_else(|| rope_anchors.tower_top(track_preview.from_endpoint))
         .unwrap_or(track_preview.path_points[0] + Vec3::Y * presentation.initial_height_metres);
     let end = track_preview
         .to_station

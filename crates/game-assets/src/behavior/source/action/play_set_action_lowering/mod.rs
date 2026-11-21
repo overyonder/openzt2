@@ -20,13 +20,7 @@ pub(super) fn lower_play_set_action_source_node(
     if source_node
         .attributes
         .iter()
-        // A bash plays its set out; stopping it when the animal meets the
-        // fence it bashes changes nothing there.
-        .any(|attribute| {
-            attribute.name() != "behSet"
-                && !(attribute.name() == "interruptEvent"
-                    && attribute.value().trim() == "collideWithTarget")
-        })
+        .any(|attribute| !matches!(attribute.name(), "behSet" | "interruptEvent"))
         || source_node.element_children().next().is_some()
     {
         return Err(invalid_behavior_source_data(
@@ -36,7 +30,13 @@ pub(super) fn lower_play_set_action_source_node(
     let behavior_set_asset_id = read_optional_trimmed_string_attribute(source_node, "behSet")
         .map(|name| AssetId::from_key(&name.to_ascii_lowercase()))
         .ok_or_else(|| invalid_behavior_source_data("BFBehPlaySet has no behSet"))?;
-    Ok(Some(BehaviorAction::PlaySet(BehaviorPlaySetAction {
+    let set = BehaviorPlaySetAction {
         behavior_set_asset_id,
-    })))
+    };
+    let interrupt = read_optional_trimmed_string_attribute(source_node, "interruptEvent")
+        .map(|name| AssetId::from_key(&name.to_ascii_lowercase()));
+    Ok(Some(match interrupt {
+        Some(interrupt) => BehaviorAction::PlaySetWithInterrupt { set, interrupt },
+        None => BehaviorAction::PlaySet(set),
+    }))
 }

@@ -13,8 +13,8 @@ use openzt2_interface_state::ui::authored_ui_node_projection_components::{UiDocu
 use openzt2_world_state::world_spawn::world_terrain_hydration::WorldTerrainHorizontalBounds;
 use openzt2_zoo_state::{
     terrain::{terrain_chunk_types::TerrainChunk, terrain_edit_types::TerrainChanged},
-    topology::topology_graph_types::{FenceEdge, PathTile, TopologyNode},
-    transport_tours::transport_topology_types::TrackSegment,
+    topology::topology_graph_types::{FenceEdge, FenceEnd, FenceSegment, FenceStart, PathTile, TopologyNode},
+    transport_tours::transport_topology_types::{TrackEnd, TrackRoute, TrackSegment, TrackStart},
 };
 
 use super::topology_rasterization_operations::{
@@ -40,7 +40,7 @@ pub(super) fn blank_overview_map_pixels() -> Vec<u8> {
 
 #[derive(SystemParam)]
 pub(crate) struct OverviewMapTopologyChanges<'w, 's> {
-    fences: Query<'w, 's, (), Changed<FenceEdge>>,
+    fences: Query<'w, 's, (), Or<(Changed<FenceEdge>, Changed<FenceStart>, Changed<FenceEnd>)>>,
     paths: Query<
         'w,
         's,
@@ -50,7 +50,16 @@ pub(crate) struct OverviewMapTopologyChanges<'w, 's> {
             Or<(Changed<PathTile>, Changed<GlobalTransform>)>,
         ),
     >,
-    tracks: Query<'w, 's, (), Changed<TrackSegment>>,
+    tracks: Query<
+        'w,
+        's,
+        (),
+        Or<(
+            Changed<TrackSegment>,
+            Changed<TrackStart>,
+            Changed<TrackEnd>,
+        )>,
+    >,
     nodes: Query<'w, 's, (), (With<TopologyNode>, Changed<GlobalTransform>)>,
     fences_removed: RemovedComponents<'w, 's, FenceEdge>,
     paths_removed: RemovedComponents<'w, 's, PathTile>,
@@ -156,9 +165,9 @@ pub(crate) fn rasterize_dirty_overview_topology_canvases(
     world_bounds: Query<&WorldTerrainHorizontalBounds>,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,
-    fence_edges: Query<&FenceEdge>,
+    fence_edges: Query<FenceSegment>,
     path_tiles: Query<(&PathTile, &GlobalTransform)>,
-    tracks: Query<&TrackSegment>,
+    tracks: Query<TrackRoute>,
     nodes: Query<&GlobalTransform>,
 ) {
     let (Ok(bounds), Some(definitions)) = (

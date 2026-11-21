@@ -9,3 +9,14 @@ pub(super) struct PhotoChallengeScorer {
     pub(super) lua: Option<Lua>,
     pub(super) modules: BTreeSet<bevy::asset::AssetId<LuaScriptAsset>>,
 }
+
+#[derive(Component)]
+pub(super) struct PhotoChallengeScript(pub(super) Handle<LuaScriptAsset>);
+
+#[derive(Component)]
+#[relationship(relationship_target = PhotoRulesUsingScript)]
+pub(super) struct PhotoRuleScriptContext(pub(super) Entity);
+
+#[derive(Component)]
+#[relationship_target(relationship = PhotoRuleScriptContext)]
+pub(super) struct PhotoRulesUsingScript(Vec<Entity>);

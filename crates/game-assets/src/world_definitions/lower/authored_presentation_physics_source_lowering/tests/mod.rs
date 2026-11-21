@@ -36,7 +36,7 @@ fn inherited_physics_stays_with_its_presentation_binder() -> Result<(), Box<dyn 
     )?;
     let index = SourceIndex::build([&base, &child, &direct])?;
     let child = index.find("child").ok_or("child source record missing")?;
-    let (policies, strength) = lower_authored_presentation_physics(&child)?;
+    let (policies, strength, _) = lower_authored_presentation_physics(&child)?;
     assert_eq!(strength, Some(3.0));
     let policy = |name| {
         policies
@@ -52,7 +52,7 @@ fn inherited_physics_stays_with_its_presentation_binder() -> Result<(), Box<dyn 
     let other = policy("other").ok_or("other policy missing")?;
     assert!(!other.no_caustics && !other.is_decal);
     let direct = index.find("direct").ok_or("direct source record missing")?;
-    let (policies, strength) = lower_authored_presentation_physics(&direct)?;
+    let (policies, strength, _) = lower_authored_presentation_physics(&direct)?;
     assert_eq!(strength, None);
     assert_eq!(policies.len(), 1);
     assert_eq!(policies[0].binder, AssetId::from_key("mainobj"));

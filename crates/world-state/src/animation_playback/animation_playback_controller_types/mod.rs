@@ -1,6 +1,20 @@
 use bevy::prelude::*;
 
-use openzt2_game_assets::animation::animation_set_asset_types::AnimationSetAsset;
+use openzt2_game_assets::animation::animation_set_asset_types::{
+    AnimationClipSourceAsset, AnimationSetAsset,
+};
+
+#[derive(Component, Debug)]
+pub struct RetainedAnimationClipSource(pub Handle<AnimationClipSourceAsset>);
+
+#[derive(Component, Clone, Debug, PartialEq, Eq)]
+pub struct AnimationHeadLook {
+    pub target: Entity,
+    pub target_node: Option<String>,
+}
+
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AnimationGroundFitMode(pub i32);
 
 #[derive(Component, Clone, Debug)]
 pub struct AnimationPlaybackController {
@@ -10,11 +24,8 @@ pub struct AnimationPlaybackController {
     pub explicit_clip_request_id: Option<usize>,
     pub animation_set_asset: Handle<AnimationSetAsset>,
     pub animation_clip_asset_key: String,
-    pub elapsed_milliseconds: u32,
-    pub fractional_milliseconds:
-        super::fractional_animation_milliseconds::FractionalAnimationMilliseconds,
+    pub preserve_seek_on_restart: bool,
     pub playback_speed_permille: i16,
-    pub playback_state: AnimationPlaybackState,
     pub playback_repetition_policy: AnimationPlaybackRepetitionPolicy,
     pub playback_clock: AnimationPlaybackClock,
 }
@@ -25,14 +36,6 @@ pub enum AnimationPlaybackRepetitionPolicy {
     UseAuthoredClipPolicy,
     PlayOnce,
     Loop,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum AnimationPlaybackState {
-    #[default]
-    Playing,
-    Paused,
-    Finished,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

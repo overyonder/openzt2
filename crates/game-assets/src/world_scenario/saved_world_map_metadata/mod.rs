@@ -36,7 +36,20 @@ pub fn lower_saved_world_map_metadata(
     if environment.is_empty() {
         return Err(at(document, world, "saved ZTWorldMgr environment is empty"));
     }
-    let terrain = dependency_path(document, terrain_path)?;
+    let mut terrain = dependency_path(document, terrain_path)?;
+    let stable_terrain =
+        crate::original_saved_game_source::stable_original_saved_game_member_path(terrain_path);
+    let source_asset_id = if let Some(stable_terrain) = stable_terrain {
+        terrain.id = AssetId::from_virtual_path(&stable_terrain);
+        let stable_world = stable_terrain
+            .strip_suffix("terrain.dat")
+            .map(|prefix| format!("{prefix}world.zt2"));
+        stable_world
+            .as_deref()
+            .map_or(source_asset_id, AssetId::from_virtual_path)
+    } else {
+        source_asset_id
+    };
     let thumbnail = thumbnail_path
         .map(|path| dependency_path(document, path))
         .transpose()?;

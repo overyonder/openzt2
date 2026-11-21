@@ -16,6 +16,49 @@ use bevy::{
 };
 
 impl EffectPassMaterial {
+    /// Installs the opacity lane on a material owned by one fading draw.
+    pub fn configure_for_morph_fade(&mut self) {
+        let pipeline = &mut self.pipeline_specialization_key;
+        let (scale_colour, opaque_alpha, coverage) =
+            pipeline.blend_state.map_or((0.0, 1.0, 0.0), |blend| {
+                let linear = matches!(blend.color.operation, BlendOperation::Add)
+                    && matches!(
+                        blend.color.src_factor,
+                        BlendFactor::One | BlendFactor::SrcAlpha
+                    )
+                    && matches!(
+                        blend.color.dst_factor,
+                        BlendFactor::One | BlendFactor::OneMinusSrcAlpha
+                    );
+                if linear {
+                    let scale_colour = if blend.color.src_factor == BlendFactor::One {
+                        1.0
+                    } else {
+                        0.0
+                    };
+                    (scale_colour, 0.0, 0.0)
+                } else {
+                    (0.0, 0.0, 1.0)
+                }
+            });
+        pipeline.blend_state = Some(pipeline.blend_state.unwrap_or(BlendState::ALPHA_BLENDING));
+        pipeline.independent_opaque = false;
+        pipeline.depth_write_enabled = false;
+        self.morph_opacity.y = scale_colour;
+        self.morph_opacity.z = opaque_alpha;
+        self.morph_opacity.w = coverage;
+    }
+
+    pub fn set_morph_opacity(&mut self, opacity: f32) {
+        if self.morph_opacity.x.to_bits() != opacity.to_bits() {
+            self.morph_opacity.x = opacity;
+        }
+    }
+
+    pub fn morph_opacity(&self) -> f32 {
+        self.morph_opacity.x
+    }
+
     pub fn has_texture_coordinate_animation(&self) -> bool {
         !self.texture_coordinate_animations.is_empty()
     }
@@ -265,6 +308,10 @@ impl EffectPassMaterial {
         projected.uniform_buffer_assets.fixed_function =
             buffers.add(shader_buffer_from_uniform_value(&projected.fixed_function));
         projected
+    }
+
+    pub fn netimmerse_texture_coordinate_set(&self, stage: usize) -> u32 {
+        self.fixed_function.values[stage * 5 + 3].y as u32
     }
 
     pub fn configure_for_authored_blue_fang_line(&mut self, texture: Handle<Image>) -> bool {

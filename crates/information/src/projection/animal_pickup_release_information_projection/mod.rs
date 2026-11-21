@@ -161,14 +161,14 @@ pub(crate) fn project_selected_animal_pickup_release_and_conservation_controls(
                 active_localization.find_plain_localized_text(localization_key)
             })
             .unwrap_or_default();
-        for (document_owner, text_binding, mut text) in &mut conservation_text_nodes {
+        for (document_owner, text_binding, text) in &mut conservation_text_nodes {
             if document_owner.0 == panel_entity
                 && matches!(
                     text_binding.0,
                     UiTextPropertyBindingSource::AnimalConservationStatus
                 )
             {
-                replace_projected_ui_text_if_changed(&mut text.0, conservation_label);
+                replace_projected_ui_text_if_changed(text, conservation_label);
             }
         }
         let pickup_should_be_visible = is_adoptable && !is_dead;

@@ -4,6 +4,7 @@ use super::conversion_error::ConversionError;
 
 const NETIMMERSE_CURVE_SAMPLE_INTERVAL_SECONDS: f32 = 0.008;
 
+#[derive(Clone)]
 pub(super) struct NetImmerseSourceKeyframe<const N: usize> {
     pub(super) time_seconds: f32,
     pub(super) value: [f32; N],
@@ -164,34 +165,6 @@ fn interpolate_netimmerse_tension_bias_continuity_value<const N: usize>(
     })
 }
 
-pub(super) fn sample_netimmerse_linear_scalar_keyframes(
-    sampled_keyframes: &[(f32, f32)],
-    requested_time_seconds: f32,
-) -> f32 {
-    let Some(first_sampled_keyframe) = sampled_keyframes.first() else {
-        return 0.0;
-    };
-    let Some(containing_keyframe_pair) = sampled_keyframes
-        .windows(2)
-        .find(|keyframe_pair| requested_time_seconds <= keyframe_pair[1].0)
-    else {
-        return sampled_keyframes
-            .last()
-            .map_or(first_sampled_keyframe.1, |sampled_keyframe| {
-                sampled_keyframe.1
-            });
-    };
-    let keyframe_time_span_seconds = containing_keyframe_pair[1].0 - containing_keyframe_pair[0].0;
-    if keyframe_time_span_seconds <= 0.0 {
-        containing_keyframe_pair[1].1
-    } else {
-        containing_keyframe_pair[0].1
-            + (containing_keyframe_pair[1].1 - containing_keyframe_pair[0].1)
-                * ((requested_time_seconds - containing_keyframe_pair[0].0)
-                    / keyframe_time_span_seconds)
-    }
-}
-
 pub(super) fn convert_netimmerse_xyz_euler_angles_to_quaternion(
     x_axis_radians: f32,
     y_axis_radians: f32,
@@ -232,4 +205,88 @@ pub(super) const fn convert_wxyz_quaternion_to_xyzw(wxyz_quaternion: [f32; 4]) -
         wxyz_quaternion[3],
         wxyz_quaternion[0],
     ]
+}
+
+#[derive(Clone)]
+pub(super) struct NetImmerseKeyCurve<const N: usize> {
+    keys: Vec<NetImmerseSourceKeyframe<N>>,
+    interpolation: Option<u32>,
+}
+
+impl<const N: usize> NetImmerseKeyCurve<N> {
+    pub(super) fn new(
+        interpolation: Option<u32>,
+        keys: Vec<NetImmerseSourceKeyframe<N>>,
+    ) -> Result<Self, ConversionError> {
+        if !matches!(interpolation, None | Some(1 | 2 | 3 | 5)) {
+            return Err(ConversionError::InvalidValue(
+                "unsupported KF interpolation",
+            ));
+        }
+        if keys.iter().any(|key| !key.time_seconds.is_finite())
+            || keys
+                .windows(2)
+                .any(|pair| pair[1].time_seconds < pair[0].time_seconds)
+        {
+            return Err(ConversionError::InvalidValue(
+                "KF key times are not monotonic",
+            ));
+        }
+        Ok(Self {
+            keys,
+            interpolation,
+        })
+    }
+
+    pub(super) fn end(&self) -> f32 {
+        self.keys.last().map_or(0.0, |key| key.time_seconds)
+    }
+
+    pub(super) fn sample(&self, time: f32) -> [f32; N] {
+        self.sample_with(time, |left, right, fraction| {
+            std::array::from_fn(|axis| (right[axis] - left[axis]).mul_add(fraction, left[axis]))
+        })
+    }
+
+    pub(super) fn sample_with(
+        &self,
+        time: f32,
+        linear: impl FnOnce([f32; N], [f32; N], f32) -> [f32; N],
+    ) -> [f32; N] {
+        let end = self.keys.partition_point(|key| key.time_seconds <= time);
+        let Some(left_index) = end.checked_sub(1) else {
+            return self.keys.first().map_or([0.0; N], |key| key.value);
+        };
+        let left = &self.keys[left_index];
+        let Some(right) = self.keys.get(end) else {
+            return left.value;
+        };
+        let fraction = (time - left.time_seconds) / (right.time_seconds - left.time_seconds);
+        match self.interpolation {
+            Some(5) => left.value,
+            Some(2) => {
+                let outgoing = left.outgoing_bezier_control_value.unwrap_or(left.value);
+                let incoming = right.incoming_bezier_control_value.unwrap_or(right.value);
+                std::array::from_fn(|axis| {
+                    let a = left.value[axis];
+                    let b = outgoing[axis];
+                    let c = incoming[axis];
+                    let d = right.value[axis];
+                    bevy::curve::cubic_splines::CubicSegment {
+                        coeff: [
+                            a,
+                            3.0 * (b - a),
+                            3.0 * (a - 2.0 * b + c),
+                            d - a + 3.0 * (b - c),
+                        ],
+                    }
+                    .position(fraction)
+                })
+            }
+            Some(3) => interpolate_netimmerse_tension_bias_continuity_value(
+                &self.keys, left_index, fraction,
+            ),
+            _ => linear(left.value, right.value, fraction),
+        }
+    }
 }

@@ -115,6 +115,7 @@ fn single_piece_removal_steps(
         destination_junction_entity: None,
         source_junction_entity: None,
         path_points: points.into(),
+        tower_height_m: None,
         applied_entities: Vec::new(),
         preview: None,
         application_in_flight: None,

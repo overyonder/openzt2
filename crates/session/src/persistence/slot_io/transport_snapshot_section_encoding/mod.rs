@@ -8,8 +8,8 @@ use super::super::{
     snapshot_container_types::WorldSnapshotSectionDirectoryEntry,
 };
 use super::transport_snapshot_types::{
-    TransportCircuitMemberSnapshotRecord, TransportCircuitSnapshotRecord, TransportSnapshotRecords,
-    TransportVehicleSnapshotRecord,
+    TransportCircuitMemberSnapshotRecord, TransportCircuitSnapshotRecord, TransportGraphSnapshot,
+    TransportSnapshotRecords, TransportVehicleSnapshotRecord,
 };
 
 const TRANSPORT_CIRCUIT_SNAPSHOT_RECORD_BYTE_COUNT: usize = 28;
@@ -20,10 +20,10 @@ const TRANSPORT_CIRCUIT_SNAPSHOT_RECORD_TAG: u8 = 1;
 const TRANSPORT_CIRCUIT_MEMBER_SNAPSHOT_RECORD_TAG: u8 = 2;
 const TRANSPORT_VEHICLE_SNAPSHOT_RECORD_TAG: u8 = 3;
 
-pub(super) fn append_encoded_transport_snapshot_section(
-    bytes: &mut Vec<u8>,
+pub(super) fn encode_transport_snapshot_section(
     transport: &TransportSnapshotRecords,
-) {
+) -> Result<Vec<u8>, WorldSnapshotPersistenceFailure> {
+    let mut bytes = Vec::new();
     for circuit in &transport.circuit_records {
         bytes.push(TRANSPORT_CIRCUIT_SNAPSHOT_RECORD_TAG);
         bytes.extend_from_slice(&circuit.persistent_identifier.0.to_le_bytes());
@@ -47,6 +47,13 @@ pub(super) fn append_encoded_transport_snapshot_section(
         bytes.extend_from_slice(&vehicle.transport_definition_identifier.0);
         bytes.extend_from_slice(&vehicle.circuit_persistent_identifier.0.to_le_bytes());
     }
+    validate_graph(transport)?;
+    bytes.push(1);
+    bytes.extend(
+        postcard::to_allocvec(&transport.graph)
+            .map_err(|_| WorldSnapshotPersistenceFailure::CorruptSnapshotSection)?,
+    );
+    Ok(bytes)
 }
 
 pub(super) fn decode_and_validate_transport_snapshot_section(
@@ -137,7 +144,16 @@ pub(super) fn decode_and_validate_transport_snapshot_section(
         cursor += record_bytes;
     }
     if cursor != payload.len() {
-        return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection);
+        let remaining = payload[cursor..]
+            .strip_prefix(&[1])
+            .ok_or(WorldSnapshotPersistenceFailure::CorruptSnapshotSection)?;
+        let (graph, trailing): (TransportGraphSnapshot, _) =
+            postcard::take_from_bytes(remaining)
+                .map_err(|_| WorldSnapshotPersistenceFailure::CorruptSnapshotSection)?;
+        if !trailing.is_empty() {
+            return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection);
+        }
+        transport.graph = graph;
     }
     if !transport
         .circuit_records
@@ -192,6 +208,7 @@ pub(super) fn decode_and_validate_transport_snapshot_section(
     {
         return Err(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference);
     }
+    validate_graph(&transport)?;
     Ok(transport)
 }
 
@@ -203,4 +220,92 @@ fn decode_snapshot_boolean_byte(
         1 => Ok(true),
         _ => Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection),
     }
+}
+
+fn validate_graph(
+    records: &TransportSnapshotRecords,
+) -> Result<(), WorldSnapshotPersistenceFailure> {
+    use WorldSnapshotPersistenceFailure::{
+        BrokenPersistentEntityReference, CorruptSnapshotSection,
+    };
+    let graph = &records.graph;
+    let member = |id| {
+        records
+            .circuit_member_records
+            .binary_search_by_key(&id, |row| row.persistent_identifier.0)
+            .ok()
+            .map(|index| records.circuit_member_records[index].circuit_persistent_identifier)
+    };
+    let known_vehicle = |id| {
+        records
+            .vehicle_records
+            .binary_search_by_key(&id, |row| row.persistent_identifier.0)
+            .is_ok()
+    };
+    let known_circuit = |id| {
+        records
+            .circuit_records
+            .binary_search_by_key(&id, |row| row.persistent_identifier.0)
+            .is_ok()
+    };
+    if !graph.poses.windows(2).all(|rows| rows[0].0 < rows[1].0)
+        || !graph.fares.windows(2).all(|rows| rows[0].0 < rows[1].0)
+        || !graph.junctions.windows(2).all(|rows| rows[0].0 < rows[1].0)
+        || graph.poses.iter().any(|(id, pose)| {
+            member(*id).is_none() && !known_vehicle(*id)
+                || !pose.translation.is_finite()
+                || !pose.scale.is_finite()
+                || pose.scale.min_element() <= 0.0
+                || !pose.rotation.is_finite()
+                || (pose.rotation.length_squared() - 1.0).abs() > 0.001
+        })
+        || graph
+            .fares
+            .iter()
+            .any(|(id, fare)| !known_circuit(*id) || *fare < 0)
+        || graph.junctions.iter().any(|(id, height)| {
+            member(*id).is_none()
+                || height.is_some_and(|height| !height.is_finite() || height <= 0.0)
+        })
+    {
+        return Err(CorruptSnapshotSection);
+    }
+    let mut used_pieces = std::collections::BTreeSet::new();
+    for route in &graph.routes {
+        let Some(&id) = route.pieces.first() else {
+            return Err(CorruptSnapshotSection);
+        };
+        let Some(circuit) = member(id) else {
+            return Err(BrokenPersistentEntityReference);
+        };
+        if member(route.from) != Some(circuit) || member(route.to) != Some(circuit) {
+            return Err(BrokenPersistentEntityReference);
+        }
+        if route.from == route.to
+            || route.from_socket >= 2
+            || route.to_socket >= 2
+            || route.definition == AssetId::default()
+            || route.pieces.len() > usize::from(u16::MAX)
+            || route.points.len() != route.pieces.len() + 1
+            || route.travel_points.len() < 2
+            || route
+                .points
+                .iter()
+                .chain(&route.travel_points)
+                .any(|point| !point.is_finite())
+            || route.points.first() != route.travel_points.first()
+            || route.points.last() != route.travel_points.last()
+            || !route.length.is_finite()
+            || route.length <= 0.0
+            || route.pieces.iter().enumerate().any(|(index, &piece)| {
+                matches!(piece, 0 | u64::MAX)
+                    || !used_pieces.insert(piece)
+                    || index != 0
+                        && (member(piece).is_some() || known_vehicle(piece) || known_circuit(piece))
+            })
+        {
+            return Err(CorruptSnapshotSection);
+        }
+    }
+    Ok(())
 }

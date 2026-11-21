@@ -80,7 +80,8 @@ fn translated_shader_asset(
     path: String,
 ) -> io::Result<Shader> {
     let sampler_biases = sampler_biases.filter(|biases| biases.iter().any(|&bias| bias != 0.0));
-    if registers.is_empty() && !forward_instance_index && sampler_biases.is_none() {
+    let fragment = uniform_binding == EFFECT_SHADER_BINDING_LAYOUT.pixel_uniform_binding;
+    if !fragment && registers.is_empty() && !forward_instance_index && sampler_biases.is_none() {
         return Ok(Shader::from_spirv(
             shader.spirv_bytecode,
             format!("{path}.spv"),
@@ -101,6 +102,9 @@ fn translated_shader_asset(
             EFFECT_SHADER_BINDING_LAYOUT,
             biases,
         )?;
+    }
+    if fragment {
+        super::morph_fragment_opacity::apply_morph_opacity_to_translated_fragment(&mut source)?;
     }
     Ok(Shader::from_wesl(source, format!("{path}.wesl")))
 }
@@ -519,7 +523,10 @@ fn create_effect_pass_material_asset(
             .map_err(|error| io::Error::new(error.kind(), format!("{label}: {error}")))?;
         let shader = context.add_labeled_asset(
             label.clone(),
-            Shader::from_wesl(source, format!("{}#{label}.wesl", context.path())),
+            Shader::from_wesl(
+                super::morph_fragment_opacity::fixed_function_source_with_morph_opacity(&source),
+                format!("{}#{label}.wesl", context.path()),
+            ),
         );
         (shader.clone(), shader)
     };
@@ -528,6 +535,7 @@ fn create_effect_pass_material_asset(
         transform_inputs.push(Vec4::ZERO);
     }
     let material = EffectPassMaterial {
+        morph_opacity: Vec4::X,
         texture_coordinate_animation_geometry: None,
         texture_coordinate_animations: std::sync::Arc::clone(texture_coordinate_animations),
         lighting_state_is_authored: state.lighting_state_is_authored || material_lighting.is_some(),

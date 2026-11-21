@@ -1,3 +1,4 @@
+use bevy::ecs::schedule::SystemCondition;
 use std::{io, path::Path};
 
 use bevy::{
@@ -231,7 +232,10 @@ impl Plugin for GraphicsSettingsPresetAssetPlugin {
             .init_resource::<GraphicsSettingsPresetSource>()
             .add_systems(
                 PreUpdate,
-                resolve_graphics_settings_preset_source.run_if(resource_changed::<AssetArchives>),
+                resolve_graphics_settings_preset_source.run_if(
+                    resource_added::<AssetArchives>
+                        .or_eager(on_message::<crate::asset_source::ArchiveOverlayChanged>),
+                ),
             );
     }
 }

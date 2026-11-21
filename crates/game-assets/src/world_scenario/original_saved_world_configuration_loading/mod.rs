@@ -1,10 +1,15 @@
+mod economy_tracker_lowering;
+
 use std::{io, path::Path};
 
-use bevy::asset::LoadContext;
+use bevy::asset::{Handle, LoadContext};
 use openzt2_game_data::{world_scenario::WorldScenarioDocument, AssetId};
 
 use crate::{
     asset_source::AssetArchives,
+    world_definitions::world_definition_asset_set_refresh_and_indexing::saved_world_economy_asset::{
+        SavedWorldEconomyAsset, SAVED_WORLD_ECONOMY_LABEL,
+    },
     source_document::{
         blue_fang_source_document_parsing::parse_blue_fang_source_document,
         ordered_source_document_types::OrderedSourceDocument, path::AssetPath,
@@ -21,41 +26,10 @@ pub(crate) async fn load_saved_world_configuration(
     saved_map: AssetId,
     archives: &AssetArchives,
     context: &mut LoadContext<'_>,
-) -> io::Result<(WorldScenarioDocument, bool)> {
-    let root = child(&saved.root, "BFContext")
-        .ok_or_else(|| at(saved, &saved.root, "saved world has no BFContext"))?;
-    let template = load_document_reference(
-        archives,
-        context,
-        saved.path.as_str(),
-        required(saved, root, "templateFile")?,
-    )
-    .await?;
-    let economy = child(&template.root, "ZTEconomyMgr").ok_or_else(|| {
-        at(
-            &template,
-            &template.root,
-            "world template has no ZTEconomyMgr",
-        )
-    })?;
-    let economy_config = load_document_reference(
-        archives,
-        context,
-        template.path.as_str(),
-        required(&template, economy, "configData")?,
-    )
-    .await?;
-    let unlimited_cash = match required(&economy_config, &economy_config.root, "active")? {
-        "true" => false,
-        "false" => true,
-        _ => {
-            return Err(at(
-                &economy_config,
-                &economy_config.root,
-                "economy active is not a canonical boolean",
-            ))
-        }
-    };
+) -> io::Result<(WorldScenarioDocument, bool, Handle<SavedWorldEconomyAsset>)> {
+    let (economy, unlimited_cash) = load_saved_world_economy(saved, archives, context).await?;
+    let economy = context.add_labeled_asset(SAVED_WORLD_ECONOMY_LABEL, economy);
+    let root = saved_context(saved)?;
     let manager = child(root, "ZTScenarioMgr")
         .ok_or_else(|| at(saved, root, "saved world has no ZTScenarioMgr"))?;
     let goals = load_document_reference(
@@ -96,7 +70,72 @@ pub(crate) async fn load_saved_world_configuration(
         binding.phase != openzt2_game_data::world_scenario::ScenarioScriptPhase::AlwaysRun
     });
     document.scenario_script_bindings.extend(always_run);
-    Ok((document, unlimited_cash))
+    Ok((document, unlimited_cash, economy))
+}
+
+fn saved_context(
+    saved: &OrderedSourceDocument,
+) -> io::Result<&crate::source_document::ordered_source_document_types::OrderedSourceDocumentNode> {
+    if saved.root.name.as_str() == "BFContext" {
+        return Ok(&saved.root);
+    }
+    child(&saved.root, "BFContext")
+        .ok_or_else(|| at(saved, &saved.root, "saved world has no BFContext"))
+}
+
+pub(crate) async fn load_saved_world_economy(
+    saved: &OrderedSourceDocument,
+    archives: &AssetArchives,
+    context: &mut LoadContext<'_>,
+) -> io::Result<(SavedWorldEconomyAsset, bool)> {
+    if child(&saved.root, "ZTEconomyMgr").is_some()
+        && saved.root.attribute("templateFile").is_none()
+    {
+        return load_template_economy(saved, archives, context).await;
+    }
+    let root = saved_context(saved)?;
+    let template = load_document_reference(
+        archives,
+        context,
+        saved.path.as_str(),
+        required(saved, root, "templateFile")?,
+    )
+    .await?;
+    load_template_economy(&template, archives, context).await
+}
+
+async fn load_template_economy(
+    template: &OrderedSourceDocument,
+    archives: &AssetArchives,
+    context: &mut LoadContext<'_>,
+) -> io::Result<(SavedWorldEconomyAsset, bool)> {
+    let economy = child(&template.root, "ZTEconomyMgr").ok_or_else(|| {
+        at(
+            template,
+            &template.root,
+            "world template has no ZTEconomyMgr",
+        )
+    })?;
+    let economy_config = load_document_reference(
+        archives,
+        context,
+        template.path.as_str(),
+        required(template, economy, "configData")?,
+    )
+    .await?;
+    let unlimited_cash = match required(&economy_config, &economy_config.root, "active")? {
+        "true" => false,
+        "false" => true,
+        _ => {
+            return Err(at(
+                &economy_config,
+                &economy_config.root,
+                "economy active is not a canonical boolean",
+            ))
+        }
+    };
+    let trackers = economy_tracker_lowering::lower_economy_trackers(&economy_config)?;
+    Ok((trackers, unlimited_cash))
 }
 
 async fn load_document_reference(

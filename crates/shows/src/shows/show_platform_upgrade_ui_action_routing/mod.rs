@@ -4,11 +4,10 @@ use openzt2_game_data::ui_document::action::animal_shows::{UiShowAction, UiShowP
 use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
-use openzt2_zoo_state::construction::construction_edit_history_types::ConstructionEditHistory;
-use openzt2_zoo_state::construction::construction_transaction_types::DomainAckStatus;
-use openzt2_zoo_state::construction::construction_transaction_types::EditApplication;
-use openzt2_zoo_state::construction::construction_transaction_types::EditCommitPhase;
-use openzt2_zoo_state::construction::construction_transaction_types::EditCommitProgress;
+use openzt2_construction::construction::{
+    construction_history::ConstructionHistoryPolicy,
+    construction_lifecycle::{PreparedDomain, Preparing},
+};
 use openzt2_zoo_state::construction::construction_transaction_types::EditTransaction;
 use openzt2_zoo_state::construction::construction_transaction_types::TransactionState;
 use openzt2_zoo_state::economy::money_types::Money;
@@ -44,7 +43,7 @@ pub(super) fn route_authored_show_platform_upgrade_actions_into_selection_edits_
     stage_upgrades: Query<&ShowPlatformUpgrades>,
     mut selected_upgrades: Query<&mut SelectedShowPlatformUpgrade>,
     pending_deletions: Query<&ShowPlatformDeletionPending>,
-    mut edit_history: ResMut<ConstructionEditHistory>,
+    mut edit_history: ResMut<ConstructionHistoryPolicy>,
 ) {
     for activation in activations.read() {
         let Ok((authored_actions, document_owner)) = action_nodes.get(activation.node) else {
@@ -111,10 +110,10 @@ pub(super) fn route_authored_show_platform_upgrade_actions_into_selection_edits_
                     if transaction_cost_cents == 0 {
                         continue;
                     }
-                    let Some(sequence) = edit_history.allocate_sequence() else {
+                    let Some(world_member) = world_member else {
                         continue;
                     };
-                    let Some(world_member) = world_member else {
+                    let Some(sequence) = edit_history.allocate_sequence() else {
                         continue;
                     };
                     commands.spawn((
@@ -123,16 +122,10 @@ pub(super) fn route_authored_show_platform_upgrade_actions_into_selection_edits_
                             state: TransactionState::Applied,
                             cost: Money(transaction_cost_cents),
                         },
-                        EditCommitProgress {
-                            phase: EditCommitPhase::AwaitingEconomy,
-                            application: EditApplication::InitialCommit,
-                            cost: Money(transaction_cost_cents),
-                            terrain: DomainAckStatus::NotExpected,
-                            topology: DomainAckStatus::NotExpected,
-                            placement: DomainAckStatus::NotExpected,
-                            shows: DomainAckStatus::Pending,
-                            aquatic: DomainAckStatus::NotExpected,
-                        },
+                        Preparing,
+                        PreparedDomain::<ShowPlatformUpgradeEdit>::new(Money(
+                            transaction_cost_cents,
+                        )),
                         ShowPlatformUpgradeEdit {
                             stage,
                             kind: selected_upgrade.0,

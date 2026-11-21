@@ -54,11 +54,13 @@ fn challenge_identity_codec_agrees_with_literal_wire_records() {
     let records = [
         PhotoChallengeProgressSnapshotRecord {
             challenge_definition_identifier: FIRST_CHALLENGE,
+            completed: true,
             completed_by_photo_persistent_identifier: Some(PersistentId(41)),
             rating_stars: 2,
         },
         PhotoChallengeProgressSnapshotRecord {
             challenge_definition_identifier: SECOND_CHALLENGE,
+            completed: true,
             completed_by_photo_persistent_identifier: Some(PersistentId(42)),
             rating_stars: 5,
         },
@@ -75,17 +77,48 @@ fn challenge_identity_codec_agrees_with_literal_wire_records() {
     assert!(photos.is_empty());
     assert_eq!(decoded.len(), 2);
     assert_eq!(decoded[0].challenge_definition_identifier, FIRST_CHALLENGE);
+    assert!(decoded[0].completed);
     assert_eq!(
         decoded[0].completed_by_photo_persistent_identifier,
         Some(PersistentId(41))
     );
     assert_eq!(decoded[0].rating_stars, 2);
     assert_eq!(decoded[1].challenge_definition_identifier, SECOND_CHALLENGE);
+    assert!(decoded[1].completed);
     assert_eq!(
         decoded[1].completed_by_photo_persistent_identifier,
         Some(PersistentId(42))
     );
     assert_eq!(decoded[1].rating_stars, 5);
+}
+
+#[test]
+fn camera_roll_challenge_completion_preserves_a_zero_star_result() {
+    let records = [
+        PhotoChallengeProgressSnapshotRecord {
+            challenge_definition_identifier: FIRST_CHALLENGE,
+            completed: true,
+            completed_by_photo_persistent_identifier: None,
+            rating_stars: 0,
+        },
+        PhotoChallengeProgressSnapshotRecord {
+            challenge_definition_identifier: SECOND_CHALLENGE,
+            completed: false,
+            completed_by_photo_persistent_identifier: None,
+            rating_stars: 0,
+        },
+    ];
+    let mut encoded = Vec::new();
+    append_encoded_photo_snapshot_section(&mut encoded, &[], &records);
+    let (_, decoded) =
+        decode_and_validate_photo_snapshot_section(&encoded, challenge_section(encoded.len()))
+            .unwrap();
+    assert!(decoded[0].completed);
+    assert_eq!(decoded[0].rating_stars, 0);
+    assert!(decoded[0]
+        .completed_by_photo_persistent_identifier
+        .is_none());
+    assert!(!decoded[1].completed);
 }
 
 #[test]

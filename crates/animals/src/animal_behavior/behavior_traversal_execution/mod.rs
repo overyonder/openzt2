@@ -63,13 +63,16 @@ struct TraversalAnimation {
 }
 
 pub(super) fn register_behavior_traversal_execution(app: &mut App) {
+    use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
+        BehaviorStep, BehaviorStepSet,
+    };
     app.add_systems(
-        FixedUpdate,
+        BehaviorStep,
         (start_traversal_docks, start_traversal_animation)
-            .after(super::behavior_task_phase_transition_execution::advance_behavior_tasks_through_return_failure_completion_and_final_outcome)
-            .in_set(FixedGameSet::Think)
+            .in_set(BehaviorStepSet::Actions)
             .run_if(in_state(GamePhase::InGame)),
-    ).add_systems(
+    )
+    .add_systems(
         FixedUpdate,
         (finish_traversal_docks, animate_traversal)
             .in_set(FixedGameSet::Act)

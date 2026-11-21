@@ -8,10 +8,9 @@ use openzt2_world_state::simulation_time::deterministic_random_stream::ZooSeed;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 
-use super::{
+use openzt2_zoo_state::extinct_animals::{
     fossil_collection_and_assembly_types::{
-        CollectedFossilPieceInventory, FossilAssemblyTable, FossilPlacementScope,
-        FossilPlacementSurface,
+        FossilAssemblyTable, FossilPlacementScope, FossilPlacementSurface,
     },
     fossil_recovery_types::{FossilDiscoveryRandomStream, FossilRecoverySite},
 };
@@ -20,8 +19,8 @@ pub(super) fn hydrate_extinct_animal_world_state_from_loaded_definitions(
     mut commands: Commands,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
+    mut definition_events: MessageReader<AssetEvent<WorldDefinitionAsset>>,
     seed: Res<ZooSeed>,
-    mut collection: ResMut<CollectedFossilPieceInventory>,
     sites: Query<
         (Entity, &PersistentId),
         (
@@ -29,59 +28,16 @@ pub(super) fn hydrate_extinct_animal_world_state_from_loaded_definitions(
             Without<FossilDiscoveryRandomStream>,
         ),
     >,
-    tables: Query<(
+    mut tables: Query<(
         Entity,
         &FossilAssemblyTable,
-        Option<&FossilPlacementSurface>,
+        Option<&mut FossilPlacementSurface>,
     )>,
-    roots: Query<Entity, (With<WorldRoot>, Without<FossilPlacementScope>)>,
-    mut completed_definition_set_has_no_fossil_placement_policy: Local<bool>,
+    changed_tables: Query<Entity, Changed<FossilAssemblyTable>>,
+    mut removed_tables: RemovedComponents<FossilAssemblyTable>,
+    mut roots: Query<(Entity, Option<&mut FossilPlacementScope>), With<WorldRoot>>,
+    new_roots: Query<Entity, Added<WorldRoot>>,
 ) {
-    if active_definitions.is_changed() {
-        *completed_definition_set_has_no_fossil_placement_policy = false;
-    }
-    if !collection.is_uninitialized()
-        && sites.is_empty()
-        && tables.iter().all(|(_, _, surface)| surface.is_some())
-        && (roots.is_empty() || *completed_definition_set_has_no_fossil_placement_policy)
-    {
-        return;
-    }
-    let Some(definitions) = active_definitions.get(&definitions) else {
-        return;
-    };
-    if collection.is_uninitialized() {
-        let Ok(piece_count) = u32::try_from(definitions.fossil_pieces().count()) else {
-            return;
-        };
-        *collection = CollectedFossilPieceInventory::with_global_fossil_piece_count(piece_count);
-    }
-    if let Some(policy) = definitions.fossil_placement() {
-        for root in &roots {
-            commands.entity(root).insert(FossilPlacementScope {
-                puzzle_root: policy.puzzle_root,
-                entity_root: policy.entity_root,
-            });
-        }
-        let authored_placeable_object_identifiers = &policy.placeable_objects;
-        let authored_non_placeable_object_identifiers = &policy.non_placeable_objects;
-        for (entity, table, surface) in &tables {
-            if surface.is_some() {
-                continue;
-            }
-            let accepts_pieces = authored_placeable_object_identifiers
-                .iter()
-                .any(|candidate| candidate.0 == table.object_definition_identifier.0)
-                && !authored_non_placeable_object_identifiers
-                    .iter()
-                    .any(|candidate| candidate.0 == table.object_definition_identifier.0);
-            commands.entity(entity).insert(FossilPlacementSurface {
-                accepts_fossil_pieces: accepts_pieces,
-            });
-        }
-    } else if active_definitions.is_complete() {
-        *completed_definition_set_has_no_fossil_placement_policy = true;
-    }
     for (entity, persistent_identifier) in &sites {
         commands
             .entity(entity)
@@ -90,5 +46,88 @@ pub(super) fn hydrate_extinct_animal_world_state_from_loaded_definitions(
                 *persistent_identifier,
                 RngDomain::Fossil,
             )));
+    }
+    for entity in removed_tables.read() {
+        if !tables.contains(entity) {
+            commands
+                .entity(entity)
+                .try_remove::<FossilPlacementSurface>();
+        }
+    }
+
+    let modified_asset = definition_events.read().any(|event| {
+        matches!(
+            event,
+            AssetEvent::Added { .. } | AssetEvent::Modified { .. } | AssetEvent::Removed { .. }
+        )
+    });
+    definition_events.clear();
+    let all = modified_asset || active_definitions.is_changed();
+    if !all && changed_tables.is_empty() && new_roots.is_empty() {
+        return;
+    }
+    let view = active_definitions.get(&definitions);
+    let policy = view.and_then(|view| view.fossil_placement());
+    if policy.is_none() && !active_definitions.is_complete() {
+        return;
+    }
+    let root_entities: Vec<_> = if all {
+        roots.iter().map(|(entity, _)| entity).collect()
+    } else {
+        new_roots.iter().collect()
+    };
+    let table_entities: Vec<_> = if all {
+        tables.iter().map(|(entity, ..)| entity).collect()
+    } else {
+        changed_tables.iter().collect()
+    };
+    for root in root_entities {
+        let Ok((_, scope)) = roots.get_mut(root) else {
+            continue;
+        };
+        if let Some(policy) = policy {
+            let next = FossilPlacementScope {
+                puzzle_root: policy.puzzle_root,
+                entity_root: policy.entity_root,
+            };
+            if let Some(mut scope) = scope {
+                scope.set_if_neq(next);
+            } else {
+                commands.entity(root).insert(next);
+            }
+        } else if scope.is_some() {
+            commands.entity(root).remove::<FossilPlacementScope>();
+        }
+    }
+    for entity in table_entities {
+        let Ok((_, table, surface)) = tables.get_mut(entity) else {
+            continue;
+        };
+        if let Some(policy) = policy {
+            let id = table.object_definition_identifier;
+            let object = view.and_then(|view| view.find_object(id));
+            let matches = |keys: &[openzt2_game_data::AssetId]| {
+                keys.contains(&id)
+                    || object.is_some_and(|object| {
+                        object
+                            .behavior_type_identifiers
+                            .iter()
+                            .any(|kind| keys.contains(kind))
+                    })
+            };
+            let next = FossilPlacementSurface {
+                accepts_fossil_pieces: !matches(&policy.non_placeable_objects)
+                    && (matches(&policy.placeable_objects)
+                        || object
+                            .is_some_and(|object| object.authored_runtime.fossil_assembly_surface)),
+            };
+            if let Some(mut surface) = surface {
+                surface.set_if_neq(next);
+            } else {
+                commands.entity(entity).insert(next);
+            }
+        } else if surface.is_some() {
+            commands.entity(entity).remove::<FossilPlacementSurface>();
+        }
     }
 }

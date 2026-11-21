@@ -18,6 +18,8 @@ pub(super) fn bind_fossil_set(
     record: &RecordView<'_, '_>,
     output: &mut WorldDefinitionLoweringTables,
 ) -> Result<(), BindError> {
+    let discovery_level = number_or(record, &["discoveryLevel"], 1)?;
+    let pieces_per_location = number_or(record, &["piecesPerLocation"], 1)?;
     let pieces = record
         .value(&["pieces"])
         .map(asset_list)
@@ -27,6 +29,8 @@ pub(super) fn bind_fossil_set(
         species: asset(record, &["species"]),
         pieces,
         completion_unlock: asset(record, &["completionUnlock", "unlock"]),
+        discovery_level,
+        pieces_per_location,
     });
     Ok(())
 }
@@ -108,6 +112,8 @@ pub(super) fn bind_fossil_puzzle(
         species: AssetId::from_virtual_path(&format!("species/{animal}")),
         pieces,
         completion_unlock: AssetId([0; 16]),
+        discovery_level: element_number(root, &["level", "discoveryLevel"], 1)?,
+        pieces_per_location: element_number(root, &["piecesPerLocation"], 1)?,
     });
     Ok(())
 }

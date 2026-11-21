@@ -1,8 +1,6 @@
 use bevy::prelude::*;
 use openzt2_game_assets::application_lifecycle::GamePhase;
-use openzt2_world_state::{
-    application_schedule::FixedGameSet, simulation_time::simulation_clock_types::ZooClock,
-};
+use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_zoo_state::animal_behavior::behavior_target_placement_types::{
     travel_target, BehaviorPlacementTravelSite,
 };
@@ -14,11 +12,13 @@ use openzt2_zoo_state::behavior_task_execution_types::{
 };
 
 pub(super) fn register_face_target_execution(application: &mut App) {
+    use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
+        BehaviorStep, BehaviorStepSet,
+    };
     application.add_systems(
-        FixedUpdate,
+        BehaviorStep,
         face_current_behavior_targets
-            .after(super::behavior_task_phase_transition_execution::advance_behavior_tasks_through_return_failure_completion_and_final_outcome)
-            .in_set(FixedGameSet::Think)
+            .in_set(BehaviorStepSet::Actions)
             .run_if(in_state(GamePhase::InGame)),
     );
 }

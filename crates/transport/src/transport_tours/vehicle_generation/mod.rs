@@ -1,195 +1,417 @@
 use avian3d::prelude::RigidBody;
-use bevy::gltf::Gltf;
-use bevy::prelude::*;
+use bevy::{
+    asset::{AssetLoadFailedEvent, LoadState},
+    ecs::system::SystemParam,
+    gltf::Gltf,
+    platform::collections::HashSet,
+    prelude::*,
+};
 
-use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
-use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
-use openzt2_zoo_state::economy::account_transaction_types::Account;
-use openzt2_zoo_state::economy::account_transaction_types::TransactionCompleted;
-use openzt2_zoo_state::economy::account_transaction_types::TransactionKind;
-use openzt2_zoo_state::economy::account_transaction_types::TransactionRejected;
-use openzt2_zoo_state::economy::account_transaction_types::TransactionRequest;
-use openzt2_zoo_state::economy::money_types::Money;
-use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator;
-use openzt2_world_state::world_spawn::prefab_model_readiness::first_missing_prefab_collider_model_asset_id;
+use openzt2_game_assets::{
+    scene_prefab::ScenePrefabAsset,
+    world_definitions::{
+        world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions,
+        world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
+    },
+};
+use openzt2_game_data::{scene_prefab::PrefabColliderSource, AssetId};
 use openzt2_world::world_spawn::prefab_world_instance_spawning::spawn_loaded_scene_prefab_as_world_instance;
-use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
+use openzt2_world_state::world_spawn::{
+    persistent_id_types::{PersistentId, PersistentIdAllocator},
+    world_membership_types::WorldMember,
+};
+use openzt2_zoo_state::{
+    economy::{account_transaction_types::*, money_types::Money},
+    transport_tours::{
+        transport_circuit_types::{
+            CircuitMember, CircuitMembers, CircuitVehicleDefinition, TransportCircuit,
+        },
+        transport_topology_types::TransportStation,
+        transport_vehicle_types::GenerateTransportVehicleForCircuitRequest,
+    },
+};
 
-use openzt2_zoo_state::transport_tours::transport_circuit_types::CircuitMember;
-use openzt2_zoo_state::transport_tours::transport_circuit_types::CircuitVehicleDefinition;
-use openzt2_zoo_state::transport_tours::transport_circuit_types::TransportCircuit;
-use openzt2_zoo_state::transport_tours::transport_topology_types::TransportStation;
-use openzt2_zoo_state::transport_tours::transport_vehicle_types::GenerateTransportVehicleForCircuitRequest;
-use openzt2_zoo_state::transport_tours::transport_vehicle_types::PendingTransportVehiclePurchase;
+#[derive(Component)]
+#[relationship(relationship_target = VehiclePurchases)]
+struct VehiclePurchaseFor(Entity);
 
-pub(super) fn request_payment_for_generated_transport_vehicles(
-    mut vehicle_generation_requests: MessageReader<GenerateTransportVehicleForCircuitRequest>,
-    circuits: Query<(&WorldMember, &CircuitVehicleDefinition), With<TransportCircuit>>,
+#[derive(Component)]
+#[relationship_target(relationship = VehiclePurchaseFor)]
+struct VehiclePurchases(Vec<Entity>);
+
+#[derive(Component)]
+struct VehiclePurchase {
+    object: AssetId,
+    prefab: Handle<ScenePrefabAsset>,
+    cost: Money,
+}
+
+#[derive(Component)]
+struct ColliderModels(Box<[Handle<Gltf>]>);
+
+#[derive(Component)]
+struct VehicleAssetsReady;
+
+#[derive(Component)]
+struct RequestedVehiclePayment {
+    circuit: Entity,
+    station: Entity,
+    id: PersistentId,
+}
+
+#[derive(Component)]
+struct PaidVehiclePurchase;
+
+#[derive(Component)]
+struct VehiclePurchaseRefund;
+
+#[derive(SystemParam)]
+struct AssetState<'w> {
+    server: Res<'w, AssetServer>,
+    prefabs: Res<'w, Assets<ScenePrefabAsset>>,
+    models: Res<'w, Assets<Gltf>>,
+}
+
+pub(super) fn start_transport_vehicle_purchases(
+    mut requests: MessageReader<GenerateTransportVehicleForCircuitRequest>,
+    circuits: Query<(
+        &WorldMember,
+        &TransportCircuit,
+        &CircuitVehicleDefinition,
+        &CircuitMembers,
+    )>,
+    stations: Query<&TransportStation>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     mut commands: Commands,
-    mut transaction_requests: MessageWriter<TransactionRequest>,
 ) {
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };
-    for request in vehicle_generation_requests.read() {
-        if let Ok((world_member, selected_vehicle_definition)) = circuits.get(request.circuit) {
-            if selected_vehicle_definition.0 != request.definition {
-                continue;
+    for request in requests.read() {
+        let Ok((world, circuit, selected, members)) = circuits.get(request.circuit) else {
+            continue;
+        };
+        let Some(vehicle) = definitions.find_vehicle(request.definition) else {
+            continue;
+        };
+        let same_kind = definitions
+            .find_station(circuit.definition)
+            .map(|station| station.kind)
+            .or_else(|| {
+                definitions
+                    .find_track(circuit.definition)
+                    .map(|track| track.kind)
+            })
+            == Some(vehicle.kind);
+        if selected.0 != vehicle.id
+            || !same_kind
+            || vehicle.purchase_cost_cents <= 0
+            || !members.iter().any(|entity| stations.contains(entity))
+        {
+            continue;
+        }
+        let Some(prefab) = definitions
+            .find_object(vehicle.object)
+            .and_then(|object| definitions.scene(object.prefab))
+        else {
+            continue;
+        };
+        commands.spawn((
+            VehiclePurchaseFor(request.circuit),
+            VehiclePurchase {
+                object: vehicle.object,
+                prefab,
+                cost: Money(vehicle.purchase_cost_cents),
+            },
+            *world,
+        ));
+    }
+}
+
+fn observe_purchase_assets(
+    mut commands: Commands,
+    assets: AssetState,
+    mut prefab_events: MessageReader<AssetEvent<ScenePrefabAsset>>,
+    mut prefab_failures: MessageReader<AssetLoadFailedEvent<ScenePrefabAsset>>,
+    mut model_events: MessageReader<AssetEvent<Gltf>>,
+    mut model_failures: MessageReader<AssetLoadFailedEvent<Gltf>>,
+    new_purchases: Query<Entity, Added<VehiclePurchase>>,
+    purchases: Query<
+        (Entity, Ref<VehiclePurchase>, Option<&ColliderModels>),
+        (
+            Without<VehicleAssetsReady>,
+            Without<RequestedVehiclePayment>,
+        ),
+    >,
+) {
+    let changed_prefabs: HashSet<_> = prefab_events
+        .read()
+        .filter_map(available_asset)
+        .chain(prefab_failures.read().map(|failure| failure.id))
+        .collect();
+    let changed_models: HashSet<_> = model_events
+        .read()
+        .filter_map(available_asset)
+        .chain(model_failures.read().map(|failure| failure.id))
+        .collect();
+    if changed_prefabs.is_empty() && changed_models.is_empty() && new_purchases.is_empty() {
+        return;
+    }
+    for (operation, purchase, retained_models) in &purchases {
+        if !purchase.is_added()
+            && !changed_prefabs.contains(&purchase.prefab.id())
+            && !retained_models.is_some_and(|retained| {
+                retained
+                    .0
+                    .iter()
+                    .any(|model| changed_models.contains(&model.id()))
+            })
+        {
+            continue;
+        }
+        if matches!(
+            assets.server.get_load_state(purchase.prefab.id()),
+            Some(LoadState::Failed(_))
+        ) {
+            commands.entity(operation).try_despawn();
+            continue;
+        }
+        let Some(prefab) = assets.prefabs.get(&purchase.prefab) else {
+            continue;
+        };
+        let Some(models) = prefab
+            .canonical_scene_prefab_document()
+            .entities
+            .iter()
+            .flat_map(|entity| &entity.colliders)
+            .filter_map(|collider| match &collider.source {
+                PrefabColliderSource::Model { model, .. } => Some(AssetId(model.0)),
+                _ => None,
+            })
+            .map(|model| prefab.loaded_model_asset_handle(model).cloned())
+            .collect::<Option<Box<[_]>>>()
+        else {
+            commands.entity(operation).try_despawn();
+            continue;
+        };
+        if models.iter().any(|model| {
+            matches!(
+                assets.server.get_load_state(model.id()),
+                Some(LoadState::Failed(_))
+            )
+        }) {
+            commands.entity(operation).try_despawn();
+        } else {
+            let ready = models
+                .iter()
+                .all(|model| assets.models.contains(model.id()));
+            commands.entity(operation).insert(ColliderModels(models));
+            if ready {
+                commands.entity(operation).insert(VehicleAssetsReady);
             }
-            let purchase_cost_cents = definitions
-                .find_vehicle(request.definition)
-                .map(|vehicle| vehicle.purchase_cost_cents);
-            let Some(purchase_cost_cents) = purchase_cost_cents.filter(|cost| *cost > 0) else {
-                continue;
-            };
-            let purchase_operation = commands
-                .spawn((
-                    PendingTransportVehiclePurchase {
-                        circuit: request.circuit,
-                        definition: request.definition,
-                        cost: Money(purchase_cost_cents),
-                        paid: false,
-                    },
-                    *world_member,
-                ))
-                .id();
-            transaction_requests.write(TransactionRequest {
-                operation: purchase_operation,
-                debit: Account::Zoo,
-                credit: Account::External,
-                amount: Money(purchase_cost_cents),
-                kind: TransactionKind::Purchase,
-                subject: Some(request.circuit),
+        }
+    }
+}
+
+fn available_asset<A: Asset>(event: &AssetEvent<A>) -> Option<bevy::asset::AssetId<A>> {
+    match event {
+        AssetEvent::Added { id }
+        | AssetEvent::Modified { id }
+        | AssetEvent::LoadedWithDependencies { id } => Some(*id),
+        _ => None,
+    }
+}
+
+fn request_payment_for_ready_vehicles(
+    purchases: Query<
+        (Entity, &VehiclePurchaseFor, &VehiclePurchase, &WorldMember),
+        Added<VehicleAssetsReady>,
+    >,
+    circuits: Query<&CircuitMembers, With<TransportCircuit>>,
+    stations: Query<&GlobalTransform, With<TransportStation>>,
+    mut ids: ResMut<PersistentIdAllocator>,
+    mut requests: MessageWriter<TransactionRequest>,
+    mut commands: Commands,
+) {
+    for (operation, owner, purchase, world) in &purchases {
+        let station = circuits
+            .get(owner.0)
+            .ok()
+            .and_then(|members| members.iter().find(|&member| stations.contains(member)));
+        let (Some(station), Ok(id)) = (station, ids.allocate(world.root)) else {
+            commands.entity(operation).try_despawn();
+            continue;
+        };
+        commands.entity(operation).insert(RequestedVehiclePayment {
+            circuit: owner.0,
+            station,
+            id,
+        });
+        requests.write(TransactionRequest {
+            operation,
+            debit: Account::Zoo,
+            credit: Account::External,
+            amount: purchase.cost,
+            kind: TransactionKind::Purchase,
+            subject: Some(owner.0),
+        });
+    }
+}
+
+fn cancel_removed_circuit_purchases(
+    removed: On<Remove<TransportCircuit>>,
+    circuits: Query<&VehiclePurchases>,
+    paying: Query<(), With<RequestedVehiclePayment>>,
+    mut commands: Commands,
+) {
+    if let Ok(purchases) = circuits.get(removed.entity) {
+        for operation in purchases.iter() {
+            if !paying.contains(operation) {
+                commands.entity(operation).try_despawn();
+            }
+        }
+    }
+}
+
+fn record_vehicle_purchase_payments(
+    mut completed: MessageReader<TransactionCompleted>,
+    mut rejected: MessageReader<TransactionRejected>,
+    purchases: Query<(&VehiclePurchase, &RequestedVehiclePayment), Without<PaidVehiclePurchase>>,
+    refunds: Query<(), With<VehiclePurchaseRefund>>,
+    mut commands: Commands,
+) {
+    for operation in completed.read() {
+        if refunds.contains(operation.operation) {
+            commands.entity(operation.operation).try_despawn();
+            continue;
+        }
+        let Ok((purchase, payment)) = purchases.get(operation.operation) else {
+            continue;
+        };
+        if (
+            operation.debit,
+            operation.credit,
+            operation.amount,
+            operation.kind,
+            operation.subject,
+        ) == (
+            Account::Zoo,
+            Account::External,
+            purchase.cost,
+            TransactionKind::Purchase,
+            Some(payment.circuit),
+        ) {
+            commands
+                .entity(operation.operation)
+                .insert(PaidVehiclePurchase);
+        }
+    }
+    for operation in rejected.read() {
+        if refunds.contains(operation.operation) {
+            warn!(reason = ?operation.reason, "vehicle purchase refund rejected");
+            commands.entity(operation.operation).try_despawn();
+            continue;
+        }
+        let Ok((purchase, payment)) = purchases.get(operation.operation) else {
+            continue;
+        };
+        if (
+            operation.debit,
+            operation.credit,
+            operation.amount,
+            operation.kind,
+            operation.subject,
+        ) == (
+            Account::Zoo,
+            Account::External,
+            purchase.cost,
+            TransactionKind::Purchase,
+            Some(payment.circuit),
+        ) {
+            commands.entity(operation.operation).try_despawn();
+        }
+    }
+}
+
+fn spawn_paid_transport_vehicle_prefab_instances(
+    purchases: Query<
+        (
+            Entity,
+            &VehiclePurchase,
+            &RequestedVehiclePayment,
+            &WorldMember,
+            &ColliderModels,
+        ),
+        With<PaidVehiclePurchase>,
+    >,
+    assets: AssetState,
+    circuits: Query<(), With<TransportCircuit>>,
+    stations: Query<(&GlobalTransform, &CircuitMember, &WorldMember), With<TransportStation>>,
+    mut commands: Commands,
+    mut requests: MessageWriter<TransactionRequest>,
+) {
+    for (operation, purchase, payment, world, models) in &purchases {
+        let pose = stations
+            .get(payment.station)
+            .ok()
+            .filter(|(_, member, station_world)| {
+                member.0 == payment.circuit && world.root == station_world.root
+            })
+            .map(|(pose, _, _)| pose.compute_transform());
+        let prefab = assets.prefabs.get(&purchase.prefab);
+        if let (true, Some(pose), Some(prefab)) = (
+            circuits.contains(payment.circuit)
+                && models
+                    .0
+                    .iter()
+                    .all(|model| assets.models.contains(model.id())),
+            pose,
+            prefab,
+        ) {
+            let vehicle = spawn_loaded_scene_prefab_as_world_instance(
+                &mut commands,
+                prefab,
+                purchase.prefab.clone(),
+                world.root,
+                purchase.object,
+                payment.id,
+                pose,
+                true,
+                None,
+                RigidBody::Dynamic,
+            );
+            commands
+                .entity(vehicle)
+                .insert(CircuitMember(payment.circuit));
+        } else {
+            let refund = commands.spawn((*world, VehiclePurchaseRefund)).id();
+            requests.write(TransactionRequest {
+                operation: refund,
+                debit: Account::External,
+                credit: Account::Zoo,
+                amount: purchase.cost,
+                kind: TransactionKind::Refund,
+                subject: None,
             });
         }
+        commands.entity(operation).try_despawn();
     }
 }
 
-pub(super) fn record_transport_vehicle_purchase_results(
-    mut completed_transactions: MessageReader<TransactionCompleted>,
-    mut rejected_transactions: MessageReader<TransactionRejected>,
-    mut pending_purchases: Query<(&mut PendingTransportVehiclePurchase, &WorldMember)>,
-    mut commands: Commands,
-) {
-    for completed_transaction in completed_transactions.read() {
-        let Ok((mut pending_purchase, _world_member)) =
-            pending_purchases.get_mut(completed_transaction.operation)
-        else {
-            continue;
-        };
-        if completed_transaction.debit != Account::Zoo
-            || completed_transaction.credit != Account::External
-            || completed_transaction.amount != pending_purchase.cost
-            || completed_transaction.kind != TransactionKind::Purchase
-            || completed_transaction.subject != Some(pending_purchase.circuit)
-        {
-            continue;
-        }
-        pending_purchase.paid = true;
-    }
-    for rejected_transaction in rejected_transactions.read() {
-        let Ok((pending_purchase, _world_member)) =
-            pending_purchases.get(rejected_transaction.operation)
-        else {
-            continue;
-        };
-        if rejected_transaction.debit != Account::Zoo
-            || rejected_transaction.credit != Account::External
-            || rejected_transaction.amount != pending_purchase.cost
-            || rejected_transaction.kind != TransactionKind::Purchase
-            || rejected_transaction.subject != Some(pending_purchase.circuit)
-        {
-            continue;
-        }
-        commands.entity(rejected_transaction.operation).despawn();
-    }
-}
-
-/// Holds the vehicle prefab load while a paid purchase waits for it.
-#[derive(Component)]
-pub(super) struct PendingTransportVehiclePrefab(Handle<ScenePrefabAsset>);
-
-/// Materializes paid vehicle purchases through the ordinary scene-prefab path.
-///
-/// A purchase remains live while its prefab or models load, so payment cannot
-/// produce a definition-only placeholder without its authored presentation.
-pub(super) fn spawn_paid_transport_vehicle_prefab_instances(
-    pending_purchases: Query<(
-        Entity,
-        &PendingTransportVehiclePurchase,
-        &WorldMember,
-        Option<&PendingTransportVehiclePrefab>,
-    )>,
-    definitions: Res<Assets<WorldDefinitionAsset>>,
-    active_definitions: Res<WorldDefinitions>,
-    prefabs: Res<Assets<ScenePrefabAsset>>,
-    models: Res<Assets<Gltf>>,
-    mut persistent_id_allocator: ResMut<PersistentIdAllocator>,
-    stations: Query<(&GlobalTransform, &CircuitMember), With<TransportStation>>,
-    mut commands: Commands,
-) {
-    let Some(definitions) = active_definitions.get(&definitions) else {
-        return;
-    };
-    for (purchase_operation, pending_purchase, world_member, pending_prefab) in &pending_purchases {
-        if !pending_purchase.paid {
-            continue;
-        }
-        let Some((object_definition, scene_prefab)) = (|| {
-            let vehicle = definitions.find_vehicle(pending_purchase.definition)?;
-            let object_definition = vehicle.object;
-            let object = definitions.find_object(object_definition)?;
-            Some((object_definition, object.prefab))
-        })() else {
-            continue;
-        };
-        let Some(prefab_handle) = pending_prefab
-            .map(|pending| pending.0.clone())
-            .or_else(|| definitions.scene(scene_prefab))
-        else {
-            continue;
-        };
-        let Some(prefab) = prefabs.get(&prefab_handle) else {
-            // The definition set hands out a fresh load handle; keep it on the
-            // purchase, or the load is dropped before the prefab arrives.
-            if pending_prefab.is_none() {
-                commands
-                    .entity(purchase_operation)
-                    .insert(PendingTransportVehiclePrefab(prefab_handle));
-            }
-            continue;
-        };
-        if first_missing_prefab_collider_model_asset_id(prefab, &models).is_some() {
-            continue;
-        }
-        let Ok(persistent_id) = persistent_id_allocator.allocate(world_member.root) else {
-            continue;
-        };
-        let vehicle_entity = spawn_loaded_scene_prefab_as_world_instance(
-            &mut commands,
-            prefab,
-            prefab_handle,
-            world_member.root,
-            object_definition,
-            persistent_id,
-            // "Buy selected vehicle ... which is created at the station". A
-            // circuit with track moves it onto its first edge right after.
-            stations
-                .iter()
-                .find(|(_, member)| member.0 == pending_purchase.circuit)
-                .map_or(Transform::IDENTITY, |(station, _)| {
-                    station.compute_transform()
-                }),
-            true,
-            None,
-            RigidBody::Dynamic,
+pub(super) fn install(app: &mut App) {
+    app.add_observer(cancel_removed_circuit_purchases)
+        .add_systems(
+            Update,
+            (
+                observe_purchase_assets.after(start_transport_vehicle_purchases),
+                request_payment_for_ready_vehicles.after(observe_purchase_assets),
+                record_vehicle_purchase_payments,
+                spawn_paid_transport_vehicle_prefab_instances
+                    .after(record_vehicle_purchase_payments),
+            )
+                .run_if(in_state(
+                    openzt2_game_assets::application_lifecycle::GamePhase::InGame,
+                )),
         );
-        commands
-            .entity(vehicle_entity)
-            .insert(CircuitMember(pending_purchase.circuit));
-        commands.entity(purchase_operation).despawn();
-    }
 }

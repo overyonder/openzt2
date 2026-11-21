@@ -1,5 +1,9 @@
+use super::placed_object_types::IndexedObjectPlacementCells;
 use bevy::platform::collections::HashMap;
-use bevy::prelude::*;
+use bevy::{
+    ecs::{lifecycle::HookContext, world::DeferredWorld},
+    prelude::*,
+};
 
 /// Derived acceleration for occupied footprint cells. Placed-object components
 /// remain authoritative and reconstruct this resource after loading.
@@ -48,14 +52,6 @@ impl PlacedObjectCellOccupants {
 }
 
 impl PlacedObjectFootprintOccupancyIndex {
-    pub fn clear(&mut self) {
-        self.occupied_cells.clear();
-    }
-
-    pub fn reserve(&mut self, additional: usize) {
-        self.occupied_cells.reserve(additional);
-    }
-
     pub fn entities_occupying_cell(&self, cell: IVec2) -> impl Iterator<Item = Entity> + '_ {
         self.occupied_cells
             .get(&cell)
@@ -69,7 +65,7 @@ impl PlacedObjectFootprintOccupancyIndex {
             .is_some_and(|entities| entities.entities().any(|occupant| occupant == entity))
     }
 
-    pub fn insert_entity_into_cell(&mut self, cell: IVec2, entity: Entity) {
+    fn insert_entity_into_cell(&mut self, cell: IVec2, entity: Entity) {
         match self.occupied_cells.entry(cell) {
             bevy::platform::collections::hash_map::Entry::Occupied(mut occupants) => {
                 occupants.get_mut().insert(entity);
@@ -80,13 +76,43 @@ impl PlacedObjectFootprintOccupancyIndex {
         }
     }
 
-    pub fn remove_entity_from_cell(&mut self, cell: IVec2, entity: Entity) {
+    fn remove_entity_from_cell(&mut self, cell: IVec2, entity: Entity) {
         if self
             .occupied_cells
             .get_mut(&cell)
             .is_some_and(|occupants| occupants.remove(entity))
         {
             self.occupied_cells.remove(&cell);
+        }
+    }
+}
+
+pub(super) fn register_occupied_cells(mut world: DeferredWorld, context: HookContext) {
+    let Some(cells) = world
+        .get::<IndexedObjectPlacementCells>(context.entity)
+        .filter(|cells| !cells.0.is_empty())
+        .map(|cells| cells.0.clone())
+    else {
+        return;
+    };
+    if let Some(mut index) = world.get_resource_mut::<PlacedObjectFootprintOccupancyIndex>() {
+        for cell in cells {
+            index.insert_entity_into_cell(cell, context.entity);
+        }
+    }
+}
+
+pub(super) fn discard_occupied_cells(mut world: DeferredWorld, context: HookContext) {
+    let Some(cells) = world
+        .get::<IndexedObjectPlacementCells>(context.entity)
+        .filter(|cells| !cells.0.is_empty())
+        .map(|cells| cells.0.clone())
+    else {
+        return;
+    };
+    if let Some(mut index) = world.get_resource_mut::<PlacedObjectFootprintOccupancyIndex>() {
+        for cell in cells {
+            index.remove_entity_from_cell(cell, context.entity);
         }
     }
 }

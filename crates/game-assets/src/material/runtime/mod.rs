@@ -13,6 +13,7 @@ pub mod evaluated_d3d9_pass_state;
 pub mod evaluated_d3d9_sampler_state;
 mod gpu_semantic_shader_registers;
 mod gpu_texture_transforms;
+mod morph_fragment_opacity;
 pub mod programmable_vertex_fixed_function_fragment_interface;
 
 #[cfg(test)]
@@ -32,7 +33,10 @@ pub(super) fn register_effect_pass_material_asset_and_fixed_function_shader(appl
         application,
         effect_pass_gpu_data::FIXED_FUNCTION_SHADER,
         "../fixed_function.wesl",
-        |source, _| Shader::from_wesl(source, "embedded://openzt2/fixed_function.wesl")
+        |source, _| Shader::from_wesl(
+            morph_fragment_opacity::fixed_function_source_with_morph_opacity(source),
+            "embedded://openzt2/fixed_function.wesl",
+        )
     );
     application
         .add_plugins(MaterialPlugin::<EffectPassMaterial>::default())

@@ -25,3 +25,30 @@ pub struct AnimationTraversalTransitionRequested {
     pub animation_playback_controller_entity: Entity,
     pub animation_graph_node_asset_key: String,
 }
+
+#[derive(Message, Clone, Debug)]
+pub struct AnimationAiCommandRequested {
+    pub controller: Entity,
+    pub target: Entity,
+    pub command: String,
+}
+
+#[derive(Message, Clone, Copy, Debug)]
+pub struct AnimationWhapRequested {
+    pub controller: Entity,
+    pub target: Entity,
+    pub angle_degrees: i32,
+    pub duration_frames: i32,
+}
+
+#[derive(Message, Clone, Copy, Debug)]
+pub struct AnimationDockCommandRequested {
+    pub controller: Entity,
+    pub command: AnimationDockCommand,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum AnimationDockCommand {
+    Enable(bool),
+    GoToNode(i32),
+}

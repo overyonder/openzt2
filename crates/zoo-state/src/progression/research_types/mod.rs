@@ -49,8 +49,16 @@ pub struct ResearchDurationOverride(pub Option<f32>);
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ResearchProjectPersistentId(pub PersistentId);
 
+#[derive(Component)]
+#[relationship(relationship_target = WorldResearchItemMembers)]
+pub struct ResearchItemInWorld(pub Entity);
+
+#[derive(Component)]
+#[relationship_target(relationship = ResearchItemInWorld, linked_spawn)]
+pub struct WorldResearchItemMembers(Vec<Entity>);
+
 /// Lookup for the authored research items of one loaded world.
-#[derive(Component, Debug, Default)]
+#[derive(Component, Debug, Default, PartialEq, Eq)]
 pub struct WorldResearchItems {
     pub definitions: BTreeMap<AssetId, Entity>,
     pub unlocks: BTreeMap<AssetId, Vec<Entity>>,

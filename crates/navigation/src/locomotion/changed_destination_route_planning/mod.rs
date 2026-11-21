@@ -6,7 +6,7 @@ use openzt2_zoo_state::{
 
 use super::{
     animal_navigation_policy::AnimalNavigationPolicy,
-    fence_navigation_crossing_types::FenceNavigationCrossingIndex,
+    fence_navigation_crossing_types::FenceNavigationCrossingQueries,
     fence_navigation_policy::FenceNavigationPolicy,
     pathfinding::{advance_route, RouteSearch, ITERATIONS_PER_SLICE, LONG_PATH_ITERATIONS},
 };
@@ -101,7 +101,7 @@ pub(super) fn prepare_changed_navigation_destinations(
 
 pub(super) fn admit_pending_route_searches(
     graph: Option<Res<ActiveTerrainDerivedNavigationGraph>>,
-    fences: Res<FenceNavigationCrossingIndex>,
+    fences: FenceNavigationCrossingQueries,
     capacity: Option<Res<LocomotionCapacity>>,
     mut pending: Query<(Entity, &Destination, &mut PendingRouteSearch)>,
 ) {
@@ -149,7 +149,7 @@ pub(super) fn advance_active_navigation_searches(
     graph: Option<Res<ActiveTerrainDerivedNavigationGraph>>,
     water: Query<&TankNavigationWater, With<WorldRoot>>,
     grid: Res<SpatialGrid>,
-    fence_crossing_index: Res<FenceNavigationCrossingIndex>,
+    fence_crossing_index: FenceNavigationCrossingQueries,
     animal_policy: AnimalNavigationPolicy,
     fence_policy: FenceNavigationPolicy,
     mut agents: Query<
@@ -248,16 +248,13 @@ pub(super) fn advance_active_navigation_searches(
                         navigation,
                         tank_water,
                         |from, to| {
-                            fence_crossing_index
-                                .crossing_fences(from, to)
-                                .iter()
-                                .any(|fence| {
-                                    fence_policy.fence_blocks_actor(
-                                        *fence,
-                                        agent.capabilities,
-                                        actor_types,
-                                    )
-                                })
+                            fence_crossing_index.crossing_fences(from, to).any(|fence| {
+                                fence_policy.fence_blocks_actor(
+                                    fence,
+                                    agent.capabilities,
+                                    actor_types,
+                                )
+                            })
                         },
                         |from, to| {
                             fence_policy.world_segment_blocks_actor(
@@ -309,7 +306,7 @@ pub(super) fn advance_active_navigation_searches(
         },
     );
 
-    let mut completed: Vec<_> = finished.drain().flatten().collect();
+    let mut completed: Vec<_> = finished.drain().collect();
     completed.sort_unstable_by_key(|(id, entity, _)| (*id, entity.to_bits()));
     for (request_id, entity, failure) in completed {
         let mut actor = commands.entity(entity);

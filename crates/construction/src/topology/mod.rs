@@ -82,9 +82,9 @@ pub struct TopologyPlugin;
 
 impl Plugin for TopologyPlugin {
     fn build(&self, app: &mut App) {
-        use openzt2_zoo_state::topology::persistent_edit_lookup::PersistentEditLookupPlugin;
-        if !app.is_plugin_added::<PersistentEditLookupPlugin>() {
-            app.add_plugins(PersistentEditLookupPlugin);
+        use openzt2_world_state::world_spawn::persistent_id_index::PersistentIdIndexPlugin;
+        if !app.is_plugin_added::<PersistentIdIndexPlugin>() {
+            app.add_plugins(PersistentIdIndexPlugin);
         }
         app.init_resource::<TopologyIndex>()
             .init_resource::<TopologyGrid>()

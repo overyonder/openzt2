@@ -23,13 +23,13 @@ pub struct ShowPlatformUpgradePolicy {
     pub television_definition: AssetId,
     pub television_attachment: AssetId,
 }
-#[derive(Clone, Debug, serde::Deserialize, Eq, PartialEq, serde::Serialize)]
+#[derive(Clone, Debug, serde::Deserialize, PartialEq, serde::Serialize)]
 pub struct TrickDefinition {
     pub id: AssetId,
     pub species: Vec<AssetId>,
     pub animation: AssetId,
     pub training_ticks: u32,
-    pub difficulty: u16,
+    pub difficulty: f32,
     pub welfare_cost: u16,
     pub entertainment: u16,
     pub name_key: AssetId,

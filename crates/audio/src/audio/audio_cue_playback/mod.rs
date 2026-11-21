@@ -1,8 +1,12 @@
+use bevy::ecs::relationship::RelationshipTarget;
+use bevy::platform::collections::HashMap;
 use bevy::{
     audio::{PlaybackMode, PlaybackSettings, Volume},
     prelude::*,
 };
-use openzt2_game_data::audio::{AudioUsage, VARIANT_LOOPED};
+use openzt2_game_data::audio::VARIANT_LOOPED;
+use openzt2_game_data::AssetId;
+use openzt2_zoo_state::terrain::terrain_water_view_state::TerrainWaterViewState;
 
 use openzt2_game_assets::audio::audio_asset_types::{AudioAsset, AudioAssets};
 use openzt2_interface_state::settings::audio_settings_types::AudioSettings;
@@ -10,149 +14,14 @@ use openzt2_world_state::world_spawn::world_membership_types::{WorldMember, Worl
 
 use super::{
     audio_cue_resolution::resolve_weighted_audio_cue_variant,
-    audio_playback_message_types::PlayAudioCue,
-    audio_player_spawning::{spawn_audio_player_or_deferred_playback, AudioCueSelection},
+    audio_playback_message_types::{PlayAudioCue, PlayPositionedAudioCue},
+    audio_player_spawning::{
+        spawn_audio_player_or_deferred_playback, AudioCueSelection, AudioVoiceAdmission,
+        CueVoicePool, CueVoices, NonspatialCueOwner,
+    },
+    audio_request_lanes::AdmitAudioCue,
     deterministic_audio_sampling::sample_deterministic_f32_range,
 };
-
-#[derive(Component)]
-pub(super) struct PositionedAudioCueEmitter {
-    admission_group: Option<openzt2_game_data::AssetId>,
-}
-
-pub(super) fn forward_positioned_audio_cue_playback_requests(
-    view_state: Option<
-        Res<openzt2_zoo_state::terrain::terrain_water_view_state::TerrainWaterViewState>,
-    >,
-    mut commands: Commands,
-    mut requests: MessageReader<
-        openzt2_zoo_state::audio::audio_playback_message_types::PlayPositionedAudioCue,
-    >,
-    mut cues: MessageWriter<PlayAudioCue>,
-    audio_assets: Res<Assets<AudioAsset>>,
-    audio_asset_index: Res<AudioAssets>,
-    emitters: Query<(
-        Entity,
-        &PositionedAudioCueEmitter,
-        &Transform,
-        Option<&Children>,
-    )>,
-    world_roots: Query<Entity, With<WorldRoot>>,
-) {
-    for (entity, _, _, children) in &emitters {
-        if children.is_none_or(|children| children.is_empty()) {
-            commands.entity(entity).despawn();
-        }
-    }
-    if audio_asset_index.get(&audio_assets).is_none() {
-        requests.clear();
-        return;
-    }
-    let listener_is_underwater = view_state
-        .as_ref()
-        .and_then(|view| view.underwater_status());
-    let camera_position = view_state.as_ref().and_then(|view| view.camera_position());
-    let mut pending: Vec<
-        Option<openzt2_zoo_state::audio::audio_playback_message_types::PlayPositionedAudioCue>,
-    > = Vec::new();
-    let mut admitted = Vec::new();
-    if let Some(camera) = camera_position {
-        for (entity, metadata, transform, children) in &emitters {
-            if children.is_some_and(|children| !children.is_empty()) {
-                if let Some(group) = metadata.admission_group {
-                    admitted.push((
-                        group,
-                        transform.translation.distance_squared(camera),
-                        Some(entity),
-                        None,
-                    ));
-                }
-            }
-        }
-    }
-    for request in requests.read() {
-        let audible = match listener_is_underwater {
-            Some(true) => request.listener_below_water,
-            Some(false) => request.listener_above_water,
-            None => request.listener_above_water && request.listener_below_water,
-        };
-        if !audible {
-            continue;
-        }
-        if let Some(policy) = request.admission {
-            let Some(camera) = camera_position else {
-                continue;
-            };
-            let distance_squared = request.world_position.distance_squared(camera);
-            let distances = admitted
-                .iter()
-                .enumerate()
-                .filter(|(_, entry)| entry.0 == policy.group)
-                .map(|(index, entry)| (index, entry.1))
-                .collect::<Vec<_>>();
-            let Some(replacement) = positioned_audio_admission(
-                distance_squared,
-                policy.maximum_distance_squared,
-                policy.maximum_voices,
-                &distances,
-            ) else {
-                continue;
-            };
-            if let Some(index) = replacement {
-                let (_, _, entity, queued): (_, _, Option<Entity>, Option<usize>) =
-                    admitted.swap_remove(index);
-                if let Some(entity) = entity {
-                    commands.entity(entity).despawn();
-                }
-                if let Some(queued) = queued {
-                    pending[queued] = None;
-                }
-            }
-            admitted.push((policy.group, distance_squared, None, Some(pending.len())));
-        }
-        pending.push(Some(*request));
-    }
-    for request in pending.into_iter().flatten() {
-        let Ok(root) = world_roots.single() else {
-            continue;
-        };
-        let emitter = commands
-            .spawn((
-                PositionedAudioCueEmitter {
-                    admission_group: request.admission.map(|policy| policy.group),
-                },
-                WorldMember { root },
-                Transform::from_translation(request.world_position),
-                GlobalTransform::default(),
-            ))
-            .id();
-        cues.write(PlayAudioCue {
-            cue: request.cue,
-            emitter: Some(emitter),
-            selection: request.selection,
-            priority: request.priority,
-            force_looped: request.force_looped,
-        });
-    }
-}
-
-fn positioned_audio_admission(
-    distance_squared: f32,
-    maximum_distance_squared: f32,
-    maximum_voices: u32,
-    existing: &[(usize, f32)],
-) -> Option<Option<usize>> {
-    if maximum_voices == 0 || !(distance_squared < maximum_distance_squared) {
-        return None;
-    }
-    if existing.len() < maximum_voices as usize {
-        return Some(None);
-    }
-    let &(index, farthest) = existing
-        .iter()
-        .max_by(|left, right| left.1.total_cmp(&right.1))?;
-    (distance_squared < farthest).then_some(Some(index))
-}
 
 #[cfg(test)]
 mod positioned_audio_admission_tests {
@@ -161,7 +30,8 @@ mod positioned_audio_admission_tests {
     #[test]
     fn deferred_voice_retains_its_anchor_until_the_voice_is_removed() {
         use crate::audio::audio_player_spawning::{
-            spawn_audio_player_or_deferred_playback, AudioCueSelection, DeferredAudioPlayback,
+            spawn_audio_player_or_deferred_playback, AudioCueSelection, AudioVoiceAdmission,
+            DeferredAudioPlayback,
         };
         use bevy::prelude::*;
         use openzt2_game_data::audio::AudioUsage;
@@ -186,6 +56,7 @@ mod positioned_audio_admission_tests {
             bevy::audio::PlaybackSettings::default(),
             &AudioSettings::default(),
             2.0,
+            AudioVoiceAdmission::default(),
         );
         app.world_mut().flush();
         app.update();
@@ -208,120 +79,357 @@ mod positioned_audio_admission_tests {
     fn capped_voices_accept_only_a_closer_replacement() {
         let voices = [(0, 4.0), (1, 16.0)];
         assert_eq!(
-            positioned_audio_admission(9.0, 100.0, 2, &voices),
+            positioned_audio_admission(9.0, 100.0, 2, voices.iter().copied()),
             Some(Some(1))
         );
-        assert_eq!(positioned_audio_admission(16.0, 100.0, 2, &voices), None);
-        assert_eq!(positioned_audio_admission(25.0, 100.0, 2, &voices), None);
-        assert_eq!(positioned_audio_admission(100.0, 100.0, 3, &voices), None);
+        assert_eq!(
+            positioned_audio_admission(16.0, 100.0, 2, voices.iter().copied()),
+            None
+        );
+        assert_eq!(
+            positioned_audio_admission(25.0, 100.0, 2, voices.iter().copied()),
+            None
+        );
+        assert_eq!(
+            positioned_audio_admission(100.0, 100.0, 3, voices.iter().copied()),
+            None
+        );
     }
 
     #[test]
     fn a_queued_voice_occupies_capacity_before_playback() {
         let queued = [(0, 9.0)];
-        assert_eq!(positioned_audio_admission(16.0, 100.0, 1, &queued), None);
         assert_eq!(
-            positioned_audio_admission(4.0, 100.0, 1, &queued),
+            positioned_audio_admission(16.0, 100.0, 1, queued.iter().copied()),
+            None
+        );
+        assert_eq!(
+            positioned_audio_admission(4.0, 100.0, 1, queued.iter().copied()),
             Some(Some(0))
         );
     }
 }
 
+#[derive(Component)]
+pub(super) struct PositionedAudioCueEmitter;
+
+#[derive(Component, Clone, Copy)]
+pub(super) struct PositionedListenerWater {
+    pub(super) above: bool,
+    pub(super) below: bool,
+}
+
+impl PositionedListenerWater {
+    pub(super) fn allows(self, underwater: Option<bool>) -> bool {
+        match underwater {
+            Some(true) => self.below,
+            Some(false) => self.above,
+            None => self.above && self.below,
+        }
+    }
+}
+
+#[derive(Component)]
+pub(super) struct PositionedAudioGroup(AssetId);
+
+#[derive(Component)]
+#[relationship(relationship_target = PositionedGroupEmitters)]
+pub(super) struct PositionedEmitterOf(Entity);
+
+#[derive(Component)]
+#[relationship_target(relationship = PositionedEmitterOf)]
+pub(super) struct PositionedGroupEmitters(Vec<Entity>);
+
+#[derive(Clone, Copy)]
+enum PositionedVoice {
+    Active(Entity),
+    Admitted(usize),
+}
+
+pub(super) fn retire_empty_positioned_audio_emitters(
+    mut commands: Commands,
+    created: Query<Entity, Added<PositionedAudioCueEmitter>>,
+    mut children_removed: RemovedComponents<Children>,
+    empty: Query<(), (With<PositionedAudioCueEmitter>, Without<Children>)>,
+) {
+    for entity in created.iter().chain(children_removed.read()) {
+        if empty.contains(entity) {
+            commands.entity(entity).try_despawn();
+        }
+    }
+}
+
+pub(super) fn retire_empty_positioned_audio_groups(
+    mut commands: Commands,
+    mut emitters_removed: RemovedComponents<PositionedGroupEmitters>,
+    empty: Query<(), (With<PositionedAudioGroup>, Without<PositionedGroupEmitters>)>,
+) {
+    for entity in emitters_removed.read() {
+        if empty.contains(entity) {
+            commands.entity(entity).try_despawn();
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn forward_positioned_audio_cue_playback_requests(
+    view_state: Option<Res<TerrainWaterViewState>>,
+    mut commands: Commands,
+    mut requests: MessageReader<PlayPositionedAudioCue>,
+    mut cues: MessageWriter<AdmitAudioCue>,
+    audio_assets: Res<Assets<AudioAsset>>,
+    audio_asset_index: Res<AudioAssets>,
+    emitters: Query<(Entity, &Transform, &Children), With<PositionedAudioCueEmitter>>,
+    groups: Query<(
+        Entity,
+        &PositionedAudioGroup,
+        &WorldMember,
+        Option<&PositionedGroupEmitters>,
+    )>,
+    world_roots: Query<Entity, With<WorldRoot>>,
+) {
+    let Ok(root) = world_roots.single() else {
+        requests.clear();
+        return;
+    };
+    if audio_asset_index.get(&audio_assets).is_none() {
+        requests.clear();
+        return;
+    }
+    let underwater = view_state
+        .as_deref()
+        .and_then(TerrainWaterViewState::underwater_status);
+    let camera = view_state
+        .as_deref()
+        .and_then(TerrainWaterViewState::camera_position);
+    let mut active_groups = HashMap::new();
+    for (entity, group, member, emitters) in &groups {
+        if member.root == root {
+            active_groups.insert(group.0, (entity, emitters));
+        }
+    }
+    let mut admissions: HashMap<AssetId, (Entity, Vec<(PositionedVoice, f32)>)> = HashMap::new();
+    let mut pending: Vec<
+        Option<(
+            PlayPositionedAudioCue,
+            PositionedListenerWater,
+            Option<Entity>,
+        )>,
+    > = Vec::new();
+    for &request in requests.read() {
+        let water = PositionedListenerWater {
+            above: request.listener_above_water,
+            below: request.listener_below_water,
+        };
+        if !water.allows(underwater) {
+            continue;
+        }
+        let group = if let Some(policy) = request.admission {
+            let Some(camera) = camera else { continue };
+            let distance = request.world_position.distance_squared(camera);
+            if policy.maximum_voices == 0
+                || distance.partial_cmp(&policy.maximum_distance_squared)
+                    != Some(std::cmp::Ordering::Less)
+            {
+                continue;
+            }
+            let (group, voices) = admissions.entry(policy.group).or_insert_with(|| {
+                if let Some((group, members)) = active_groups.get(&policy.group) {
+                    let voices = members
+                        .iter()
+                        .flat_map(|target| target.iter())
+                        .filter_map(|entity| emitters.get(entity).ok())
+                        .map(|(entity, pose, _)| {
+                            (
+                                PositionedVoice::Active(entity),
+                                pose.translation.distance_squared(camera),
+                            )
+                        })
+                        .collect();
+                    (*group, voices)
+                } else {
+                    let group = commands
+                        .spawn((PositionedAudioGroup(policy.group), WorldMember { root }))
+                        .id();
+                    (group, Vec::new())
+                }
+            });
+            let Some(replacement) = positioned_audio_admission(
+                distance,
+                policy.maximum_distance_squared,
+                policy.maximum_voices,
+                voices
+                    .iter()
+                    .enumerate()
+                    .map(|(index, voice)| (index, voice.1)),
+            ) else {
+                continue;
+            };
+            if let Some(index) = replacement {
+                match voices.swap_remove(index).0 {
+                    PositionedVoice::Active(entity) => {
+                        commands.entity(entity).try_despawn();
+                    }
+                    PositionedVoice::Admitted(index) => pending[index] = None,
+                }
+            }
+            voices.push((PositionedVoice::Admitted(pending.len()), distance));
+            Some(*group)
+        } else {
+            None
+        };
+        pending.push(Some((request, water, group)));
+    }
+    for (request, water, group) in pending.into_iter().flatten() {
+        let pose = Transform::from_translation(request.world_position);
+        let mut emitter = commands.spawn((
+            PositionedAudioCueEmitter,
+            water,
+            WorldMember { root },
+            pose,
+            GlobalTransform::from(pose),
+        ));
+        if let Some(group) = group {
+            emitter.insert(PositionedEmitterOf(group));
+        }
+        cues.write(AdmitAudioCue {
+            cue: PlayAudioCue {
+                cue: request.cue,
+                emitter: Some(emitter.id()),
+                selection: request.selection,
+                priority: request.priority,
+                force_looped: request.force_looped,
+            },
+            lifetime_owner: None,
+        });
+    }
+}
+
+fn positioned_audio_admission(
+    distance_squared: f32,
+    maximum_distance_squared: f32,
+    maximum_voices: u32,
+    existing: impl ExactSizeIterator<Item = (usize, f32)>,
+) -> Option<Option<usize>> {
+    if maximum_voices == 0
+        || distance_squared.partial_cmp(&maximum_distance_squared) != Some(std::cmp::Ordering::Less)
+    {
+        return None;
+    }
+    if existing.len() < maximum_voices as usize {
+        return Some(None);
+    }
+    let (index, farthest) = existing.max_by(|left, right| left.1.total_cmp(&right.1))?;
+    (distance_squared < farthest).then_some(Some(index))
+}
+
+#[allow(clippy::too_many_arguments)]
 pub(super) fn execute_audio_cue_playback_requests(
     mut commands: Commands,
-    mut requests: MessageReader<PlayAudioCue>,
+    mut requests: MessageReader<AdmitAudioCue>,
     asset_server: Res<AssetServer>,
     audio_assets: Res<Assets<AudioAsset>>,
     audio_asset_index: Res<AudioAssets>,
     audio_settings: Res<AudioSettings>,
-    playing_audio: Query<(Entity, &AudioCueSelection)>,
+    pools: Query<(Entity, &CueVoicePool, Option<&CueVoices>)>,
+    owners: Query<Entity, With<NonspatialCueOwner>>,
+    playing: Query<&AudioCueSelection>,
+    listener: super::spatial_cue_distance::SpatialCueListener,
 ) {
-    let Some(audio_asset_view) = audio_asset_index.get(&audio_assets) else {
+    let Some(view) = audio_asset_index.get(&audio_assets) else {
+        requests.clear();
         return;
     };
-    let mut active_voice_pools: [Vec<(Entity, u8)>; 3] = std::array::from_fn(|_| Vec::new());
-    for (playing_entity, active_selection) in &playing_audio {
-        let voice_pool_index = match active_selection.usage {
-            AudioUsage::Ambient => 0,
-            _ if active_selection.emitter.is_some() => 1,
-            _ => 2,
-        };
-        active_voice_pools[voice_pool_index].push((playing_entity, active_selection.priority));
+    let nonspatial_owner = owners.single().ok();
+    let mut pool_entities = [None; 3];
+    for (entity, pool, members) in &pools {
+        pool_entities[pool.index()] = Some((entity, members));
     }
+    let mut admissions: [Option<Vec<(Entity, u8)>>; 3] = Default::default();
     for request in requests.read() {
-        let Some((resolved_cue, variant, usage)) =
-            resolve_weighted_audio_cue_variant(audio_asset_view, request.cue, request.selection, 0)
+        let cue = &request.cue;
+        let Some((resolved, variant, usage)) =
+            resolve_weighted_audio_cue_variant(view, cue.cue, cue.selection, 0)
         else {
-            debug!(cue = ?request.cue, "audio cue has no playable variant");
+            debug!(cue = ?cue.cue, "audio cue has no playable variant");
             continue;
         };
-        let voice_limit = match usage {
-            AudioUsage::Ambient => audio_asset_view
-                .ambient()
-                .map_or(10, |policy| policy.voice_limit),
-            _ if request.emitter.is_some() => audio_asset_view
-                .mixer()
-                .map_or(8, |policy| policy.spatial_voice_limit),
-            _ => audio_asset_view
-                .mixer()
-                .map_or(32, |policy| policy.voice_limit),
+        let spatial = cue.emitter.is_some();
+        let pool = CueVoicePool::for_cue(usage, spatial);
+        let voice_limit = match pool {
+            CueVoicePool::Ambient => view.ambient().map_or(10, |policy| policy.voice_limit),
+            CueVoicePool::Spatial => view.mixer().map_or(8, |policy| policy.spatial_voice_limit),
+            CueVoicePool::Nonspatial => view.mixer().map_or(32, |policy| policy.voice_limit),
         } as usize;
-        if voice_limit == 0 {
+        let Some((pool_entity, members)) = pool_entities[pool.index()].filter(|_| voice_limit != 0)
+        else {
             continue;
-        }
-        let voice_pool_index = match usage {
-            AudioUsage::Ambient => 0,
-            _ if request.emitter.is_some() => 1,
-            _ => 2,
         };
-        let active_voices = &mut active_voice_pools[voice_pool_index];
-        if active_voices.len() >= voice_limit {
-            let Some((lowest_priority_index, &(_, lowest_priority))) = active_voices
-                .iter()
-                .enumerate()
-                .min_by_key(|(_, voice)| voice.1)
+        let voices = admissions[pool.index()].get_or_insert_with(|| {
+            members
+                .into_iter()
+                .flat_map(|members| members.iter())
+                .filter_map(|entity| {
+                    playing
+                        .get(entity)
+                        .ok()
+                        .map(|voice| (entity, voice.priority))
+                })
+                .collect()
+        });
+        if voices.len() >= voice_limit {
+            let Some((lowest_index, &(_, lowest_priority))) =
+                voices.iter().enumerate().min_by_key(|(_, voice)| voice.1)
             else {
                 continue;
             };
-            if lowest_priority >= request.priority {
+            if lowest_priority >= cue.priority {
                 continue;
             }
-            let (displaced_voice_entity, _) = active_voices.swap_remove(lowest_priority_index);
-            commands.entity(displaced_voice_entity).despawn();
+            let (displaced, _) = voices.swap_remove(lowest_index);
+            commands.entity(displaced).try_despawn();
         }
-        let Some(clip) = resolved_cue.clip(&asset_server, variant.source_id) else {
+        let Some(clip) = resolved.clip(&asset_server, variant.source_id) else {
             continue;
         };
-        let playback_settings = PlaybackSettings {
-            mode: if request.force_looped || variant.flags & VARIANT_LOOPED != 0 {
+        let distance = spatial.then(|| {
+            super::spatial_cue_distance::SpatialCueDistance::from_authored_range(variant.distance)
+        });
+        let settings = PlaybackSettings {
+            mode: if cue.force_looped || variant.flags & VARIANT_LOOPED != 0 {
                 PlaybackMode::Loop
             } else {
                 PlaybackMode::Despawn
             },
-            volume: Volume::Linear(sample_deterministic_f32_range(
-                variant.gain,
-                request.selection,
-            )),
-            speed: sample_deterministic_f32_range(variant.pitch, request.selection.rotate_left(7)),
-            spatial: request.emitter.is_some(),
+            volume: Volume::Linear(sample_deterministic_f32_range(variant.gain, cue.selection)),
+            speed: sample_deterministic_f32_range(variant.pitch, cue.selection.rotate_left(7)),
+            spatial,
+            spatial_scale: distance
+                .map(super::spatial_cue_distance::SpatialCueDistance::panning_scale),
             ..default()
         };
-        let playback_entity = spawn_audio_player_or_deferred_playback(
+        let voice = spawn_audio_player_or_deferred_playback(
             &mut commands,
             clip,
             AudioCueSelection {
-                emitter: request.emitter,
-                selection: request.selection,
+                emitter: cue.emitter,
+                selection: cue.selection,
                 usage,
-                priority: request.priority,
+                priority: cue.priority,
             },
-            playback_settings,
+            settings,
             &audio_settings,
-            sample_deterministic_f32_range(
-                variant.delay_seconds,
-                request.selection.rotate_left(17),
-            ),
+            sample_deterministic_f32_range(variant.delay_seconds, cue.selection.rotate_left(17)),
+            AudioVoiceAdmission {
+                pool: Some(pool_entity),
+                nonspatial_owner,
+                lifetime_owner: request.lifetime_owner,
+                distance,
+                distance_gain: distance
+                    .zip(cue.emitter)
+                    .map(|(policy, emitter)| listener.gain(policy, emitter)),
+            },
         );
-        active_voices.push((playback_entity, request.priority));
+        voices.push((voice, cue.priority));
     }
 }

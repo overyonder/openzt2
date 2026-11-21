@@ -1,11 +1,11 @@
 use super::{
-    construction_history::ConstructionHistoryPolicy,
+    construction_history::WorldConstructionHistory,
     construction_lifecycle::{ConstructionActive, Preparing},
 };
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 
-use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
+use openzt2_world_state::world_spawn::world_membership_types::{WorldMember, WorldRoot};
 use openzt2_zoo_state::economy::general_economy_types::GeneralEconomyTransaction;
 use openzt2_zoo_state::economy::money_types::Money;
 use openzt2_zoo_state::terrain::terrain_brush_types::{TerrainBrushKind, TerrainBrushPreview};
@@ -58,7 +58,7 @@ pub(super) fn begin_construction_transaction_from_valid_preview(
     )>,
     submitted: Query<Entity, With<SubmittedPreview<ConstructionPreview>>>,
     pending_transactions: Query<(), With<ConstructionActive>>,
-    mut construction_edit_history: ResMut<ConstructionHistoryPolicy>,
+    mut world_histories: Query<&mut WorldConstructionHistory, With<WorldRoot>>,
     mut construction_preparation_requests: MessageWriter<PrepareConstruction>,
     primary_windows: Query<&Window, With<PrimaryWindow>>,
 ) {
@@ -79,7 +79,10 @@ pub(super) fn begin_construction_transaction_from_valid_preview(
         if !matches!(preview.validity, PlacementValidity::Valid { .. }) {
             continue;
         }
-        let Some(transaction_sequence) = construction_edit_history.allocate_sequence() else {
+        let Ok(mut history) = world_histories.get_mut(world_member.root) else {
+            continue;
+        };
+        let Some(transaction_sequence) = history.allocate_sequence() else {
             continue;
         };
         let mut transaction = commands.spawn((

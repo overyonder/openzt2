@@ -2,7 +2,10 @@ use super::{fence_navigation_policy::FenceNavigationPolicy, pathfinding::plan_ro
 use avian3d::prelude::{LinearVelocity, RigidBody};
 use bevy::prelude::*;
 use openzt2_game_assets::{
-    animation::animation_set_asset_types::AnimationSetAsset,
+    animation::{
+        animation_clip_source_queries::AnimationClipSources,
+        animation_set_asset_types::AnimationSetAsset,
+    },
     world_definitions::{
         world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions,
         world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
@@ -15,11 +18,11 @@ use openzt2_world_state::{
             AnimationClipPlaybackRequest, AnimationClipPlaybackRequestRejected,
             CancelAnimationClipPlaybackRequest,
         },
-        animation_presentation_relationship_types::AnimationPresentationOwner,
+        animation_presentation_relationship_types::AnimationPresentations,
     },
     animation_playback::{
         animation_event_message_types::AnimationCompleted,
-        animation_joint_target_types::AnimationJointTarget,
+        animation_joint_target_types::{AnimationJointTarget, AnimationRigJoints},
         animation_playback_controller_types::{
             AnimationPlaybackController, AnimationPlaybackRepetitionPolicy,
         },
@@ -28,6 +31,8 @@ use openzt2_world_state::{
     world_spawn::world_membership_types::WorldMember,
 };
 use openzt2_zoo_state::aquatic::tank_navigation_water::TankNavigationWater;
+use openzt2_zoo_state::topology::habitat_boundary_queries::HabitatBoundaryQueries;
+use openzt2_zoo_state::topology::topology_graph_types::FenceSegment;
 use openzt2_zoo_state::{
     aquatic::aquatic_simulation_types::{Tank, TankGeometry},
     behavior_task_execution_types::{
@@ -35,7 +40,7 @@ use openzt2_zoo_state::{
     },
     habitat::{
         habitat_membership_and_containment::locate_habitat_at_world_position,
-        habitat_types::{HabitatIndex, HabitatRegion},
+        habitat_types::HabitatIndex,
     },
     locomotion::locomotion_types::{
         ActiveTerrainDerivedNavigationGraph, Arrived, Destination, Docking, LocomotionCapacity,
@@ -46,7 +51,7 @@ use openzt2_zoo_state::{
     terrain::dry_surface_eligibility::DrySurfaceEligibility,
     topology::{
         gate_operation_types::Gate,
-        topology_graph_types::{FenceEdge, TopologyGrid, TopologyNode},
+        topology_graph_types::{TopologyGrid, TopologyNode},
     },
 };
 
@@ -82,7 +87,7 @@ pub(super) struct TankGateResume {
     body: Option<RigidBody>,
 }
 
-use super::fence_navigation_crossing_types::FenceNavigationCrossingIndex;
+use super::fence_navigation_crossing_types::FenceNavigationCrossingQueries;
 
 pub(super) fn resume_completed_staff_tank_gate_journeys(
     mut commands: Commands,
@@ -92,7 +97,7 @@ pub(super) fn resume_completed_staff_tank_gate_journeys(
         Option<(&BehaviorTaskExecutionState, &RunningBehaviorInstruction)>,
         Option<&mut Destination>,
         Option<&mut Docking>,
-        Option<&mut RigidBody>,
+        Option<&RigidBody>,
     )>,
 ) {
     for (actor, resume, task, destination, docking, body) in &mut actors {
@@ -112,12 +117,8 @@ pub(super) fn resume_completed_staff_tank_gate_journeys(
                 }
             }
         }
-        if let Some(original) = resume.body {
-            if let Some(mut body) = body {
-                body.set_if_neq(original);
-            } else {
-                commands.entity(actor).insert(original);
-            }
+        if let Some(original) = resume.body.filter(|original| body != Some(original)) {
+            commands.entity(actor).insert(original);
         }
     }
 }
@@ -131,12 +132,13 @@ pub(super) fn begin_staff_tank_gate_journeys(
     graph: Option<Res<ActiveTerrainDerivedNavigationGraph>>,
     water: Query<&TankNavigationWater, With<WorldRoot>>,
     capacity: Option<Res<LocomotionCapacity>>,
-    fence_crossing_index: Res<FenceNavigationCrossingIndex>,
+    fence_crossing_index: FenceNavigationCrossingQueries,
     fences: FenceNavigationPolicy,
     surfaces: DrySurfaceEligibility,
     habitats: Res<HabitatIndex>,
     grid: Res<TopologyGrid>,
-    gates: Query<(&FenceEdge, &Gate)>,
+    gates: Query<(FenceSegment, &Gate)>,
+    boundaries: HabitatBoundaryQueries,
     mut sequence: ResMut<NavigationRequestSequence>,
     (mut scratch, mut candidate_route): (Local<RouteScratch>, Local<Option<Route>>),
     (terrain_index, terrain_assets, terrain_chunks, tanks, nodes): (
@@ -144,7 +146,7 @@ pub(super) fn begin_staff_tank_gate_journeys(
         Res<Assets<openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset>>,
         Query<(&openzt2_zoo_state::terrain::terrain_chunk_types::TerrainChunk,
             Option<&openzt2_zoo_state::terrain::terrain_chunk_types::EditedTerrainSamples>)>,
-        Query<(&TankGeometry, &HabitatRegion, &WorldMember), With<Tank>>,
+        Query<(&TankGeometry, &WorldMember), With<Tank>>,
         Query<&TopologyNode>,
     ),
     mut actors: Query<
@@ -219,7 +221,7 @@ pub(super) fn begin_staff_tank_gate_journeys(
         let Some(tank) = source_tank.or(target_tank) else {
             continue;
         };
-        let Ok((geometry, region, tank_world)) = tanks.get(tank) else {
+        let Ok((geometry, tank_world)) = tanks.get(tank) else {
             continue;
         };
         if tank_world.root != world.root {
@@ -228,7 +230,7 @@ pub(super) fn begin_staff_tank_gate_journeys(
         let leaving = source_tank.is_some();
         let mut selected: Option<(Entity, Vec3, Vec3, f32)> = None;
 
-        for &gate_entity in &region.boundary_fence_entities {
+        for gate_entity in boundaries.fences(tank) {
             let Ok((edge, gate)) = gates.get(gate_entity) else {
                 continue;
             };
@@ -248,7 +250,7 @@ pub(super) fn begin_staff_tank_gate_journeys(
             if !tank_gate {
                 continue;
             }
-            let (Ok(a), Ok(b)) = (nodes.get(edge.a), nodes.get(edge.b)) else {
+            let (Ok(a), Ok(b)) = (nodes.get(edge.a()), nodes.get(edge.b())) else {
                 continue;
             };
             let a = grid.cell_translation(a.cell);
@@ -293,16 +295,13 @@ pub(super) fn begin_staff_tank_gate_journeys(
                 navigation,
                 tank_water,
                 |from, to| {
-                    fence_crossing_index
-                        .crossing_fences(from, to)
-                        .iter()
-                        .any(|edge| {
-                            fences.fence_blocks_actor(
-                                *edge,
-                                agent.capabilities,
-                                fences.actor_types.actor_types(actor),
-                            )
-                        })
+                    fence_crossing_index.crossing_fences(from, to).any(|edge| {
+                        fences.fence_blocks_actor(
+                            edge,
+                            agent.capabilities,
+                            fences.actor_types.actor_types(actor),
+                        )
+                    })
                 },
                 |from, to| {
                     fences.world_segment_blocks_actor(
@@ -438,6 +437,7 @@ pub(super) fn execute_staff_tank_gate_journeys(
     definitions: Res<WorldDefinitions>,
     definition_assets: Res<Assets<WorldDefinitionAsset>>,
     animations: Res<Assets<AnimationSetAsset>>,
+    clip_sources: AnimationClipSources,
     gates: Query<&Gate>,
     mut actors: Query<(
         Entity,
@@ -449,13 +449,13 @@ pub(super) fn execute_staff_tank_gate_journeys(
         Option<&Destination>,
         Has<PendingBehaviorTaskFailure>,
         &mut TankGateJourney,
-        Option<&mut RigidBody>,
+        Option<&RigidBody>,
         Option<&mut LinearVelocity>,
     )>,
+    presentations: Query<&AnimationPresentations>,
     mut controllers: Query<(
-        Entity,
-        &AnimationPresentationOwner,
         &AnimationPlaybackController,
+        Option<&AnimationRigJoints>,
         Option<&mut ConsumedLocomotionRootMotion>,
     )>,
     joints: Query<(&AnimationJointTarget, &ChildOf)>,
@@ -497,17 +497,18 @@ pub(super) fn execute_staff_tank_gate_journeys(
                 StaffClimbingTankGate,
                 BehaviorHeldAnimationClip,
             )>();
-            if let Some(original) = journey.previous_body {
-                if let Some(mut body) = body {
-                    body.set_if_neq(original);
-                } else {
-                    commands.entity(actor).insert(original);
-                }
+            if let Some(original) = journey
+                .previous_body
+                .filter(|original| body != Some(original))
+            {
+                commands.entity(actor).insert(original);
             }
-            for (controller, owner, playback, _) in &mut controllers {
-                if owner.gameplay_entity == actor
-                    && playback.explicit_clip_request_id == journey.clip_request
-                {
+            for controller in
+                AnimationPresentations::for_subject(actor, presentations.get(actor).ok())
+            {
+                if controllers.get(controller).is_ok_and(|(playback, _, _)| {
+                    playback.explicit_clip_request_id == journey.clip_request
+                }) {
                     commands
                         .entity(controller)
                         .remove::<ConsumedLocomotionRootMotion>();
@@ -530,9 +531,11 @@ pub(super) fn execute_staff_tank_gate_journeys(
             continue;
         };
         if journey.previous_body.is_none() {
-            if let Some(mut body) = body {
+            if let Some(body) = body {
                 journey.previous_body = Some(*body);
-                body.set_if_neq(RigidBody::Kinematic);
+                if *body != RigidBody::Kinematic {
+                    commands.entity(actor).insert(RigidBody::Kinematic);
+                }
             }
         }
         if let Some(mut velocity) = velocity {
@@ -553,10 +556,12 @@ pub(super) fn execute_staff_tank_gate_journeys(
             journey.clip_completed = false;
             let completed_request = journey.clip_request;
             journey.clip_request = None;
-            for (controller, owner, playback, _) in &mut controllers {
-                if owner.gameplay_entity == actor
-                    && playback.explicit_clip_request_id == completed_request
-                {
+            for controller in
+                AnimationPresentations::for_subject(actor, presentations.get(actor).ok())
+            {
+                if controllers.get(controller).is_ok_and(|(playback, _, _)| {
+                    playback.explicit_clip_request_id == completed_request
+                }) {
                     commands
                         .entity(controller)
                         .remove::<ConsumedLocomotionRootMotion>();
@@ -628,38 +633,43 @@ pub(super) fn execute_staff_tank_gate_journeys(
             });
             continue;
         }
-        for (controller_entity, owner, controller, motion) in &mut controllers {
-            if owner.gameplay_entity != actor
-                || controller.explicit_clip_request_id != journey.clip_request
-            {
+        for controller_entity in
+            AnimationPresentations::for_subject(actor, presentations.get(actor).ok())
+        {
+            let Ok((controller, rig, motion)) = controllers.get_mut(controller_entity) else {
+                continue;
+            };
+            if controller.explicit_clip_request_id != journey.clip_request {
                 continue;
             }
             let Some(clip) = animations
                 .get(&controller.animation_set_asset)
-                .and_then(|set| set.find_animation_clip_record_by_asset_key(wanted))
+                .and_then(|set| clip_sources.get(set, wanted))
             else {
                 continue;
             };
             let Some(root) = clip
-                .authored_animation_clip_metadata
-                .as_ref()
+                .metadata
                 .and_then(|metadata| metadata.root_motion_joint.as_ref())
             else {
                 journey.failed = true;
                 break;
             };
-            let Some(parent) = joints.iter().find_map(|(binding, parent)| {
-                (binding.animation_playback_controller_entity == controller_entity
-                    && binding
-                        .joint_asset_key
-                        .eq_ignore_ascii_case(&root.joint_asset_key))
-                .then(|| transforms.get(parent.parent()).ok())
-                .flatten()
+            let joint = openzt2_game_data::AssetId::from_key(&root.joint_asset_key);
+            let Some(parent) = rig.and_then(|rig| {
+                joints
+                    .iter_many(rig.joints())
+                    .matched()
+                    .find_map(|(binding, parent)| {
+                        (binding.authored_joint_id == joint)
+                            .then(|| transforms.get(parent.parent()).ok())
+                            .flatten()
+                    })
             }) else {
                 journey.failed = true;
                 break;
             };
-            if clip_motion_velocity(clip, parent, 1000).is_none_or(|velocity| {
+            if clip_motion_velocity(&clip, parent, 1000).is_none_or(|velocity| {
                 if climb {
                     velocity.y.abs() <= f32::EPSILON
                 } else if journey.stage == StaffTankGateStage::Cross {

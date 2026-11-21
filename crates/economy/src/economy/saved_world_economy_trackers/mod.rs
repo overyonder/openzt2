@@ -1,26 +1,22 @@
 use bevy::{ecs::relationship::RelationshipTarget, prelude::*};
 use openzt2_game_assets::{
     asset_source::AssetArchives,
-    original_saved_game_source::OriginalSavedGameSources,
-    original_saved_game_asset_loading::OriginalSavedGameAsset,
-    world_definitions::world_definition_asset_set_refresh_and_indexing::saved_world_economy_asset::{
-        SavedWorldEconomyAsset, SAVED_WORLD_ECONOMY_LABEL,
-    },
+    world_definitions::world_definition_asset_set_refresh_and_indexing::saved_world_economy_asset::SavedWorldEconomyAsset,
     world_scenario::{
         world_scenario_asset_set_state_and_borrowing_queries::WorldScenarios,
         world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset,
     },
 };
-use openzt2_interface_state::persistence::saved_game_source_types::OriginalSavedGameLoaded;
-use openzt2_world_state::{game_session_types::WorldSessionMode, world_spawn::{
-    world_load_completion_marker::WorldLoadCompleted,
-    selected_world_identity::SelectedWorldIdentity,
-    world_membership_types::{WorldMember, WorldRoot},
-}};
+use openzt2_world_state::{
+    game_session_types::WorldSessionMode,
+    world_spawn::{
+        selected_world_identity::SelectedWorldIdentity,
+        world_membership_types::{WorldMember, WorldRoot},
+    },
+};
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::BehaviorEconomyTracker;
 
-#[derive(Component)]
-pub(super) struct WorldEconomyConfiguration(pub(super) Handle<SavedWorldEconomyAsset>);
+use openzt2_zoo_state::economy::world_economy_configuration::WorldEconomyConfiguration;
 
 #[derive(Component, Default, PartialEq, Eq)]
 pub(super) struct WorldEconomyTrackerIndex(
@@ -30,38 +26,6 @@ pub(super) struct WorldEconomyTrackerIndex(
 #[derive(Component)]
 pub(super) struct AuthoredWorldEconomyTracker;
 
-pub(super) fn use_original_saved_game_economy_source(
-    mut loaded: Option<MessageReader<OriginalSavedGameLoaded>>,
-    roots: Query<Entity, (With<WorldRoot>, With<WorldLoadCompleted>)>,
-    mut configurations: Query<&mut WorldEconomyConfiguration>,
-    server: Res<AssetServer>,
-    mut commands: Commands,
-) {
-    let (Some(loaded), Ok(root)) = (loaded.as_mut(), roots.single()) else {
-        return;
-    };
-    for game in loaded.read() {
-        let member = OriginalSavedGameSources::member_path(
-            game.source_identifier,
-            std::path::Path::new("saved/world.zt2"),
-        );
-        let path = format!("original-saves://{}", member.display());
-        let labeled_path = format!("{path}#{SAVED_WORLD_ECONOMY_LABEL}");
-        let source = server
-            .get_handle::<SavedWorldEconomyAsset>(labeled_path)
-            .unwrap_or_else(|| server.load(path));
-        if let Ok(mut current) = configurations.get_mut(root) {
-            if current.0 != source {
-                current.0 = source;
-            }
-        } else {
-            commands
-                .entity(root)
-                .insert(WorldEconomyConfiguration(source));
-        }
-    }
-}
-
 pub(super) fn load_selected_world_economy(
     roots: Query<
         (Entity, &SelectedWorldIdentity),
@@ -69,7 +33,6 @@ pub(super) fn load_selected_world_economy(
     >,
     scenarios: Res<WorldScenarios>,
     scenario_assets: Res<Assets<WorldScenarioDocumentAsset>>,
-    originals: Res<Assets<OriginalSavedGameAsset>>,
     server: Res<AssetServer>,
     archives: Res<AssetArchives>,
     mut commands: Commands,
@@ -79,39 +42,23 @@ pub(super) fn load_selected_world_economy(
     }
     let view = scenarios.get(&scenario_assets);
     for (root, identity) in &roots {
-        let original = originals.iter().find_map(|(id, asset)| {
-            asset
-                .source
-                .document
-                .find_starting_zoo(identity.start)
-                .and_then(|_| server.get_path(id))
-                .map(|path| path.into_owned().with_label(SAVED_WORLD_ECONOMY_LABEL))
-        });
-        let handle = if let Some(path) = original {
-            let Some(handle) = server.get_handle(path) else {
+        let path = view
+            .as_ref()
+            .and_then(|view| view.start_path(identity.start))
+            .map(str::to_owned);
+        let handle = if let Some(path) = path {
+            server.load::<SavedWorldEconomyAsset>(path)
+        } else {
+            let template = match identity.mode {
+                WorldSessionMode::Freeform => "config/freeform_mode.xml",
+                WorldSessionMode::Challenge => "config/challenge_mode.xml",
+                WorldSessionMode::Campaign => "config/campaign_mode.xml",
+            };
+            let Some(path) = archives.resolve_source_reference(std::path::Path::new(""), template)
+            else {
                 continue;
             };
-            handle
-        } else {
-            let path = view
-                .as_ref()
-                .and_then(|view| view.start_path(identity.start))
-                .map(str::to_owned);
-            if let Some(path) = path {
-                server.load::<SavedWorldEconomyAsset>(path)
-            } else {
-                let template = match identity.mode {
-                    WorldSessionMode::Freeform => "config/freeform_mode.xml",
-                    WorldSessionMode::Challenge => "config/challenge_mode.xml",
-                    WorldSessionMode::Campaign => "config/campaign_mode.xml",
-                };
-                let Some(path) =
-                    archives.resolve_source_reference(std::path::Path::new(""), template)
-                else {
-                    continue;
-                };
-                server.load::<SavedWorldEconomyAsset>(path)
-            }
+            server.load::<SavedWorldEconomyAsset>(path)
         };
         commands
             .entity(root)

@@ -1,5 +1,6 @@
 mod calculations;
 mod habitat_suitability;
+pub(crate) mod need_updates;
 pub(crate) mod systems;
 use openzt2_zoo_state::animal_welfare::types;
 
@@ -15,7 +16,10 @@ pub struct AnimalWelfarePlugin;
 
 impl Plugin for AnimalWelfarePlugin {
     fn build(&self, app: &mut App) {
-        app.add_message::<AdjustHunger>()
+        need_updates::register_animal_need_updates(app);
+        app.add_observer(habitat_suitability::mark_habitat_after_occupant_eligibility_changes)
+            .add_observer(habitat_suitability::mark_habitat_after_occupant_eligibility_is_removed)
+            .add_message::<AdjustHunger>()
             .add_message::<AdjustThirst>()
             .add_message::<AdjustRest>()
             .add_message::<AdjustPrivacy>()
@@ -34,28 +38,9 @@ impl Plugin for AnimalWelfarePlugin {
             .add_message::<AccumulateNeedPoints>()
             .add_systems(
                 FixedUpdate,
-                systems::decay_animal_needs
-                    .in_set(FixedGameSet::Clock)
-                    .run_if(in_state(GamePhase::InGame))
-                    .run_if(simulation_is_running),
-            )
-            .add_systems(
-                FixedUpdate,
                 (
-                    systems::adjust_hunger,
-                    systems::adjust_thirst,
-                    systems::adjust_rest,
-                    systems::adjust_privacy,
-                    systems::adjust_social,
-                    systems::adjust_exercise,
-                    systems::adjust_stimulation,
-                    systems::adjust_environment,
-                    systems::adjust_health_need,
-                    systems::adjust_hygiene,
-                    systems::adjust_bathroom,
-                    systems::adjust_reproduction.after(systems::set_animal_need),
-                    systems::set_animal_need,
-                    systems::update_need_points,
+                    systems::project_need_point_policy,
+                    systems::update_need_points.after(systems::project_need_point_policy),
                     systems::accumulate_need_points.after(systems::update_need_points),
                 )
                     .in_set(FixedGameSet::Act)
@@ -65,7 +50,7 @@ impl Plugin for AnimalWelfarePlugin {
             .add_systems(
                 FixedUpdate,
                 (
-                    habitat_suitability::assess_habitat_suitability,
+                    habitat_suitability::project_changed_habitat_suitability,
                     systems::derive_animal_welfare,
                 )
                     .chain()

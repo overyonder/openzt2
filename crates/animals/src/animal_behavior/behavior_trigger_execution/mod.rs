@@ -5,7 +5,6 @@ use openzt2_game_assets::world_definitions::{
     world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
 };
 use openzt2_world_state::{
-    application_schedule::FixedGameSet,
     simulation_time::simulation_clock_types::ZooClock,
     world_spawn::{world_entity_crating::WorldEntityIsCrated, world_membership_types::WorldMember},
 };
@@ -22,10 +21,13 @@ use openzt2_zoo_state::{
 };
 
 pub(super) fn register_trigger_execution(app: &mut App) {
+    use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
+        BehaviorStep, BehaviorStepSet,
+    };
     app.add_message::<BehaviorSubjectTrigger>().add_systems(
-        FixedUpdate,
+        BehaviorStep,
         deliver_current_subject_triggers
-            .in_set(FixedGameSet::Think)
+            .in_set(BehaviorStepSet::Actions)
             .in_set(BehaviorTriggerDelivery)
             .run_if(in_state(GamePhase::InGame)),
     );
@@ -86,13 +88,21 @@ mod tests {
     use super::*;
     use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
     use openzt2_game_data::AssetId;
-    use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionPhase;
+    use openzt2_zoo_state::behavior_task_execution_types::{
+        running_actions::{
+            apply_behavior_instruction_completion, drive_behavior_steps, BehaviorStep,
+            BehaviorStepProgress,
+        },
+        BehaviorTaskExecutionPhase,
+    };
 
     #[test]
-    fn trigger_delivery_advances_once_and_keeps_the_following_instruction_for_the_next_tick() {
+    fn trigger_delivery_advances_in_authored_order_in_the_same_tick() {
         let mut app = App::new();
-        app.add_observer(openzt2_zoo_state::behavior_task_execution_types::running_actions::apply_behavior_instruction_completion);
-        app.init_resource::<Assets<BehaviorDocumentAsset>>()
+        app.add_observer(apply_behavior_instruction_completion)
+            .init_schedule(BehaviorStep)
+            .init_resource::<BehaviorStepProgress>()
+            .init_resource::<Assets<BehaviorDocumentAsset>>()
             .init_resource::<Assets<WorldDefinitionAsset>>()
             .insert_resource(ZooClock {
                 tick: 7,
@@ -101,7 +111,7 @@ mod tests {
                 tick_in_day: 7,
             })
             .add_message::<BehaviorSubjectTrigger>()
-            .add_systems(Update, deliver_current_subject_triggers);
+            .add_systems(BehaviorStep, deliver_current_subject_triggers);
         let mut definition =
             openzt2_game_data::world_definitions::document::WorldDefinitionDocument::default();
         definition.behavior_selection_policy = Some(openzt2_game_data::world_definitions::behavior_selection_policy::BehaviorSelectionPolicy {
@@ -118,6 +128,7 @@ mod tests {
         let document = app.world_mut().resource_mut::<Assets<BehaviorDocumentAsset>>().add(
             BehaviorDocumentAsset::from_test_source(br#"<BehaviorSets><Leave><behaviors><BFBehSendTrigger subjectTrigger="Adjust_SurveyData"/><BFBehSendTrigger subjectTrigger="Adjust_ZooFame"/></behaviors></Leave></BehaviorSets>"#),
         );
+        let root = app.world_mut().spawn_empty().id();
         let actor = app
             .world_mut()
             .spawn(BehaviorTaskExecutionState {
@@ -135,13 +146,10 @@ mod tests {
                 depth: 0,
             })
             .id();
-        app.world_mut().entity_mut(actor).insert((
-            WorldMember {
-                root: Entity::PLACEHOLDER,
-            },
-            Frozen,
-        ));
-        app.update();
+        app.world_mut()
+            .entity_mut(actor)
+            .insert((WorldMember { root }, Frozen));
+        drive_behavior_steps(app.world_mut());
         assert_eq!(
             app.world()
                 .get::<BehaviorTaskExecutionState>(actor)
@@ -154,34 +162,26 @@ mod tests {
             .resource::<Messages<BehaviorSubjectTrigger>>()
             .is_empty());
         app.world_mut().entity_mut(actor).remove::<Frozen>();
-        app.update();
+        drive_behavior_steps(app.world_mut());
         let task = app
             .world()
             .get::<BehaviorTaskExecutionState>(actor)
             .unwrap();
-        assert_eq!(task.action, 1);
-        assert_eq!(task.next_action_tick, 8);
+        assert_eq!(task.action, 2);
+        assert_eq!(task.next_action_tick, 7);
         let delivered = app
             .world_mut()
             .resource_mut::<Messages<BehaviorSubjectTrigger>>()
             .drain()
             .collect::<Vec<_>>();
-        assert_eq!(delivered.len(), 1);
-        assert_eq!(delivered[0].subject, actor);
+        assert_eq!(delivered.len(), 2);
+        assert!(delivered.iter().all(|delivery| delivery.subject == actor));
         assert_eq!(delivered[0].trigger, AssetId::from_key("adjust_surveydata"));
-        app.update();
+        assert_eq!(delivered[1].trigger, AssetId::from_key("adjust_zoofame"));
+        drive_behavior_steps(app.world_mut());
         assert!(app
             .world()
             .resource::<Messages<BehaviorSubjectTrigger>>()
             .is_empty());
-        app.world_mut().resource_mut::<ZooClock>().tick = 8;
-        app.update();
-        let delivered = app
-            .world_mut()
-            .resource_mut::<Messages<BehaviorSubjectTrigger>>()
-            .drain()
-            .collect::<Vec<_>>();
-        assert_eq!(delivered.len(), 1);
-        assert_eq!(delivered[0].trigger, AssetId::from_key("adjust_zoofame"));
     }
 }

@@ -9,6 +9,7 @@ pub mod behavior_document_queries;
 pub mod source;
 
 use crate::application_lifecycle::GamePhase;
+use crate::asset_source::ArchiveOverlayChanged;
 use behavior_asset_loading::BehaviorDocumentAssetLoader;
 use behavior_asset_types::{BehaviorDocumentAsset, LoadedBehaviorDocumentCollection};
 use behavior_document_indexing::{
@@ -24,6 +25,7 @@ impl Plugin for BehaviorDocumentAssetPlugin {
             .init_asset::<BehaviorDocumentAsset>()
             .init_asset_loader::<BehaviorDocumentAssetLoader>()
             .init_resource::<LoadedBehaviorDocumentCollection>()
+            .add_message::<ArchiveOverlayChanged>()
             .add_systems(
                 PreUpdate,
                 (
@@ -31,7 +33,11 @@ impl Plugin for BehaviorDocumentAssetPlugin {
                     rebuild_behavior_declaration_indexes_after_asset_change,
                 )
                     .chain()
-                    .run_if(in_state(GamePhase::Loading).or_else(in_state(GamePhase::InGame))),
+                    .run_if(
+                        in_state(GamePhase::Loading)
+                            .or_else(in_state(GamePhase::InGame))
+                            .or_else(on_message::<ArchiveOverlayChanged>),
+                    ),
             );
     }
 }

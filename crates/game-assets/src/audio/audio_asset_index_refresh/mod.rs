@@ -1,7 +1,6 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::Path,
-    sync::Arc,
 };
 
 use bevy::{
@@ -12,7 +11,7 @@ use openzt2_game_data::audio::VARIANT_CUE_REFERENCE;
 
 use crate::asset_source::{
     archive_entry_asset_path::{archive_entry_asset_path, archive_entry_asset_source_path},
-    ArchiveCatalogue, AssetArchives,
+    ArchiveCatalogue, ArchiveOverlayChanged, AssetArchives,
 };
 
 use super::audio_asset_types::{
@@ -45,15 +44,16 @@ pub(super) fn discover_audio_catalogue_sources(
     server: Res<AssetServer>,
     assets: Res<Assets<AudioAsset>>,
     mut index: ResMut<AudioAssets>,
-    mut previous: Local<Option<Arc<[z2f::ResolvedArchiveEntry]>>>,
+    mut overlay_changes: MessageReader<ArchiveOverlayChanged>,
 ) {
-    let sources = archives.catalogue_sources(ArchiveCatalogue::Audio);
-    if previous
-        .as_ref()
-        .is_some_and(|previous| Arc::ptr_eq(previous, &sources))
-    {
+    let mut changed_paths = overlay_changes.read().flat_map(|change| &change.changes);
+    let changed =
+        changed_paths.any(|change| is_audio_catalogue_source(&change.normalized_asset_path));
+    overlay_changes.clear();
+    if index.discovered && !changed {
         return;
     }
+    let sources = archives.catalogue_sources(ArchiveCatalogue::Audio);
     let index = &mut *index;
     let mut old_sources = std::mem::take(&mut index.sources);
     for entry in sources.iter() {
@@ -96,7 +96,6 @@ pub(super) fn discover_audio_catalogue_sources(
         forget_audio_source(index, source);
     }
     index.discovered = true;
-    *previous = Some(sources);
 }
 
 pub(super) fn publish_loaded_audio_rows(

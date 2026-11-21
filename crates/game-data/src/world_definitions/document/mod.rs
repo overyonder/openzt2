@@ -59,6 +59,8 @@ use super::{
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 pub struct WorldDefinitionDocument {
+    #[serde(default)]
+    pub animation_binder_rigs: Vec<super::animation_binder_rig::AnimationBinderRig>,
     /// Each object's record key as authored. Scripts compare binder types with it.
     #[serde(default)]
     pub object_record_keys: Vec<(crate::AssetId, String)>,
@@ -118,6 +120,8 @@ pub struct WorldDefinitionDocument {
     pub vehicles: Vec<TransportationVehicleDefinition>,
     pub vehicle_seats: Vec<TransportationVehicleSeatDefinition>,
     pub tour_views: Vec<TourViewDefinition>,
+    #[serde(default)]
+    pub transport_highlight: Option<super::transportation_and_tours::TransportHighlightPolicy>,
     pub fossil_sets: Vec<FossilSetDefinition>,
     pub fossil_pieces: Vec<FossilPieceDefinition>,
     pub fossil_slots: Vec<FossilSlotDefinition>,

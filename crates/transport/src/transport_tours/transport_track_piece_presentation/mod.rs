@@ -1,3 +1,10 @@
+use openzt2_zoo_state::transport_tours::transport_topology_types::TrackRouteItem;
+use openzt2_zoo_state::transport_tours::transport_topology_types::{
+    SkyTowerEndpoint, SkyTowerEndpoints,
+};
+use openzt2_zoo_state::transport_tours::transport_topology_types::{
+    TrackEnd, TrackIncidence, TrackRoute, TrackStart,
+};
 use std::collections::HashSet;
 
 use bevy::asset::RenderAssetUsages;
@@ -29,17 +36,23 @@ use openzt2_zoo_state::transport_tours::transport_topology_types::TrackProfile;
 use openzt2_zoo_state::transport_tours::transport_topology_types::TrackSegment;
 use openzt2_zoo_state::transport_tours::transport_topology_types::TransportStation;
 use openzt2_zoo_state::transport_tours::transport_topology_types::TransportTrackJunction;
-use openzt2_zoo_state::transport_tours::transport_track_construction_types::TransportTrackConstructionPiece;
+use openzt2_zoo_state::transport_tours::transport_track_construction_types::{
+    TrackPieces, TransportTrackConstructionPiece,
+};
 
 #[derive(Component)]
 pub(super) struct AuthoredTransportTrackPiecePresentationProjected;
 
 #[derive(Component)]
-pub(super) struct AuthoredLinkedSkyTowerPresentationProjected {
-    source_route: Entity,
-    root: Entity,
-    top_kind: u8,
-}
+#[relationship(relationship_target = RouteDrawings)]
+pub(super) struct DrawingForRoute(Entity);
+
+#[derive(Component)]
+#[relationship_target(relationship = DrawingForRoute, linked_spawn)]
+pub(super) struct RouteDrawings(Vec<Entity>);
+
+#[derive(Component)]
+pub(super) struct SkyTowerDrawing;
 
 pub(super) const AUTHORED_TERRAIN_DECAL_MATERIAL_PATH: &str = "Materials/terraindecal.bfmat";
 
@@ -187,21 +200,25 @@ pub(super) fn mirror_texture_rows(mut mesh: Mesh) -> Mesh {
     mesh
 }
 
-fn authored_sky_tower_top_kind(route: &TrackSegment, routes: &Query<&TrackSegment>) -> u8 {
+fn authored_sky_tower_top_kind(
+    route: &TrackRouteItem,
+    routes: &Query<TrackRoute>,
+    incidence: &TrackIncidence,
+) -> u8 {
     const U_TURN_MINIMUM_NEIGHBOUR_DIRECTION_DOT_PRODUCT: f32 = 0.258_819_07;
-    routes
-        .iter()
+    incidence.incident(route.to())
+        .filter_map(|entity| routes.get(entity).ok())
         .find(|candidate| {
             #[allow(clippy::suspicious_operation_groupings, reason = "find the adjoining segment at this endpoint, excluding a return to the previous endpoint")]
-            let joins_other_endpoint = (candidate.from == route.to && candidate.to != route.from)
-                || (candidate.to == route.to && candidate.from != route.from);
+            let joins_other_endpoint = (candidate.from() == route.to() && candidate.to() != route.from())
+                || (candidate.to() == route.to() && candidate.from() != route.from());
             joins_other_endpoint
         })
         .map_or(1, |next| {
             let tower_to_previous = (route.from_position - route.to_position)
                 .xz()
                 .normalize_or_zero();
-            let next_neighbour_position = if next.from == route.to {
+            let next_neighbour_position = if next.from() == route.to() {
                 next.to_position
             } else {
                 next.from_position
@@ -222,34 +239,38 @@ fn authored_sky_tower_top_kind(route: &TrackSegment, routes: &Query<&TrackSegmen
 /// joins it, that route's next point, so a piece at a joint turns towards
 /// the road it meets; and the index of the route's first point in them.
 fn ground_route_points_with_joined_neighbours(
-    route: &TrackSegment,
-    routes: &Query<&TrackSegment>,
+    route: &TrackRouteItem,
+    routes: &Query<TrackRoute>,
+    incidence: &TrackIncidence,
 ) -> (Vec<Vec3>, usize) {
     // A station's two ends share its entity, so an end is the pair.
     let neighbour = |junction: (Entity, u8)| {
-        let mut joined = routes.iter().filter_map(|candidate| {
-            if core::ptr::eq(candidate, route) {
-                return None;
-            }
-            let points = &candidate.path_points;
-            if (candidate.from, candidate.from_endpoint_index) == junction {
-                points.get(1).copied()
-            } else if (candidate.to, candidate.to_endpoint_index) == junction {
-                points.len().checked_sub(2).map(|index| points[index])
-            } else {
-                None
-            }
-        });
+        let mut joined = incidence
+            .incident(junction.0)
+            .filter_map(|entity| routes.get(entity).ok())
+            .filter_map(|candidate| {
+                if core::ptr::eq(candidate.geometry, route.geometry) {
+                    return None;
+                }
+                let points = &candidate.path_points;
+                if (candidate.from(), candidate.from_endpoint_index) == junction {
+                    points.get(1).copied()
+                } else if (candidate.to(), candidate.to_endpoint_index) == junction {
+                    points.len().checked_sub(2).map(|index| points[index])
+                } else {
+                    None
+                }
+            });
         match (joined.next(), joined.next()) {
             (Some(point), None) => Some(point),
             _ => None,
         }
     };
-    let before = neighbour((route.from, route.from_endpoint_index));
+    let before = neighbour((route.from(), route.from_endpoint_index));
     let points = before
         .into_iter()
         .chain(route.path_points.iter().copied())
-        .chain(neighbour((route.to, route.to_endpoint_index)))
+        .chain(neighbour((route.to(), route.to_endpoint_index)))
         .collect();
     (points, usize::from(before.is_some()))
 }
@@ -263,26 +284,35 @@ pub(super) struct DiscardedTrackJointEndpoints([Entity; 2]);
 
 pub(super) fn capture_discarded_track_joint_endpoints(
     discarded: On<Discard<TrackSegment>>,
-    routes: Query<&TrackSegment>,
+    routes: Query<TrackRoute>,
     mut joints: MessageWriter<DiscardedTrackJointEndpoints>,
 ) {
     if let Ok(route) = routes.get(discarded.entity) {
-        joints.write(DiscardedTrackJointEndpoints([route.from, route.to]));
+        joints.write(DiscardedTrackJointEndpoints([route.from(), route.to()]));
     }
 }
 
 /// Redraws the road pieces next to a joint a route was added to or removed
 /// from, so they turn towards (or no longer towards) the road there.
-pub(super) fn invalidate_ground_track_pieces_at_changed_joints(
+pub(super) fn invalidate_track_drawings_at_changed_joints(
     mut commands: Commands,
-    changed_routes: Query<&TrackSegment, Changed<TrackSegment>>,
+    changed_routes: Query<
+        TrackRoute,
+        Or<(
+            Changed<TrackSegment>,
+            Changed<TrackStart>,
+            Changed<TrackEnd>,
+        )>,
+    >,
     mut discarded: MessageReader<DiscardedTrackJointEndpoints>,
-    routes: Query<(Entity, &TrackSegment)>,
+    incidence: TrackIncidence,
+    route_pieces: Query<&TrackPieces>,
+    drawings: Query<&RouteDrawings>,
     pieces: Query<(
         Entity,
         &TransportTrackConstructionPiece,
         &TrackProfile,
-        &Children,
+        Option<&Children>,
     )>,
     decals: Query<(), With<GroundTrackPieceDecal>>,
 ) {
@@ -291,56 +321,51 @@ pub(super) fn invalidate_ground_track_pieces_at_changed_joints(
         .flat_map(|endpoints| endpoints.0)
         .collect::<HashSet<_>>();
     for route in &changed_routes {
-        changed.extend([route.from, route.to]);
+        changed.extend([route.from(), route.to()]);
     }
     if changed.is_empty() {
         return;
     }
-    let neighbours = routes
-        .iter()
-        .filter(|(_, route)| changed.contains(&route.from) || changed.contains(&route.to))
-        .map(|(entity, _)| entity)
-        .collect::<HashSet<_>>();
-    for (piece, construction, profile, children) in &pieces {
-        if profile.kind != TransportationTrackKind::Ground
-            || !neighbours.contains(&construction.route_segment)
-        {
-            continue;
+    let neighbours: bevy::ecs::entity::EntityHashSet = changed
+        .into_iter()
+        .flat_map(|endpoint| incidence.incident(endpoint))
+        .collect();
+    for route in neighbours {
+        if let Ok(drawings) = drawings.get(route) {
+            for drawing in drawings.iter() {
+                commands.entity(drawing).try_despawn();
+            }
         }
-        for child in children.iter().filter(|child| decals.contains(*child)) {
-            commands.entity(child).despawn();
+        let Ok(route_pieces) = route_pieces.get(route) else {
+            continue;
+        };
+        for (piece, _, _, children) in pieces.iter_many(route_pieces.iter()).filter_map(Result::ok)
+        {
+            for child in children
+                .into_iter()
+                .flat_map(|children| children.iter())
+                .filter(|child| decals.contains(*child))
+            {
+                commands.entity(child).try_despawn();
+            }
+            commands
+                .entity(piece)
+                .remove::<AuthoredTransportTrackPiecePresentationProjected>();
         }
         commands
-            .entity(piece)
+            .entity(route)
             .remove::<AuthoredTransportTrackPiecePresentationProjected>();
     }
 }
 
-pub(super) fn invalidate_sky_tower_presentations_after_connection_topology_changes(
+pub(super) fn remove_discarded_route_drawings(
+    discarded: On<Discard<TrackSegment>>,
+    drawings: Query<&RouteDrawings>,
     mut commands: Commands,
-    routes: Query<&TrackSegment>,
-    projected: Query<(Entity, &AuthoredLinkedSkyTowerPresentationProjected)>,
 ) {
-    for (tower, projected) in &projected {
-        let Ok(route) = routes.get(projected.source_route) else {
-            commands.entity(projected.root).despawn();
-            commands
-                .entity(tower)
-                .remove::<AuthoredLinkedSkyTowerPresentationProjected>();
-            commands
-                .entity(projected.source_route)
-                .remove::<AuthoredTransportTrackPiecePresentationProjected>();
-            continue;
-        };
-        let wanted = authored_sky_tower_top_kind(route, &routes);
-        if projected.top_kind != wanted {
-            commands.entity(projected.root).despawn();
-            commands
-                .entity(tower)
-                .remove::<AuthoredLinkedSkyTowerPresentationProjected>();
-            commands
-                .entity(projected.source_route)
-                .remove::<AuthoredTransportTrackPiecePresentationProjected>();
+    if let Ok(drawings) = drawings.get(discarded.entity) {
+        for drawing in drawings.iter() {
+            commands.entity(drawing).try_despawn();
         }
     }
 }
@@ -579,23 +604,20 @@ pub(super) struct SkyTowerConstructionMarker;
 /// A sky tower shows its construction marker while no line leaves it, as
 /// the original marks where a line can be continued.
 pub(super) fn show_construction_markers_at_open_sky_towers(
-    towers: Query<(Entity, &AuthoredLinkedSkyTowerPresentationProjected)>,
-    routes: Query<&TrackSegment>,
-    mut markers: Query<(&ChildOf, &mut Visibility), With<SkyTowerConstructionMarker>>,
+    drawings: Query<(&ChildOf, &Children), With<SkyTowerDrawing>>,
+    incidence: TrackIncidence,
+    mut markers: Query<&mut Visibility, With<SkyTowerConstructionMarker>>,
 ) {
-    for (tower, projected) in &towers {
-        let open = !routes.iter().any(|route| route.from == tower);
-        for (parent, mut visibility) in &mut markers {
-            if parent.parent() != projected.root {
-                continue;
-            }
-            let next = if open {
-                Visibility::Inherited
-            } else {
-                Visibility::Hidden
-            };
-            if *visibility != next {
-                *visibility = next;
+    for (tower, children) in &drawings {
+        let open = incidence.outgoing(tower.parent()).next().is_none();
+        let next = if open {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+        for marker in children.iter() {
+            if let Ok(mut visibility) = markers.get_mut(marker) {
+                visibility.set_if_neq(next);
             }
         }
     }
@@ -611,6 +633,7 @@ pub(super) struct SkyTrackRope;
 #[derive(bevy::ecs::system::SystemParam)]
 pub(super) struct SkyRopeAnchors<'w, 's> {
     stations: Query<'w, 's, (), With<TransportStation>>,
+    towers: SkyTowerEndpoints<'w, 's>,
     children: Query<'w, 's, &'static Children>,
     nodes: Query<
         'w,
@@ -623,6 +646,10 @@ pub(super) struct SkyRopeAnchors<'w, 's> {
 }
 
 impl SkyRopeAnchors<'_, '_> {
+    pub(super) fn tower_top(&self, tower: Entity) -> Option<Vec3> {
+        self.towers.position(tower, SkyTowerEndpoint::Upper)
+    }
+
     /// The station's wheel nearest to its rope end at `near`.
     pub(super) fn station_wheel(&self, station: Entity, near: Vec3) -> Option<Vec3> {
         if !self.stations.contains(station) {
@@ -700,12 +727,14 @@ pub(super) fn project_committed_transport_track_piece_authored_prefabs(
     terrain_index: Res<TerrainIndex>,
     terrain_assets: Res<Assets<TerrainAsset>>,
     terrain_chunks: Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
-    (endpoint_transforms, rope_anchors): (
+    (endpoint_transforms, rope_anchors, children, sky_drawings, incidence, routes): (
         Query<&GlobalTransform, With<TransportTrackJunction>>,
         SkyRopeAnchors,
+        Query<&Children>,
+        Query<(), With<SkyTowerDrawing>>,
+        TrackIncidence,
+        Query<TrackRoute>,
     ),
-    existing_sky_towers: Query<&AuthoredLinkedSkyTowerPresentationProjected>,
-    routes: Query<&TrackSegment>,
     pieces: Query<
         (
             Entity,
@@ -744,7 +773,7 @@ pub(super) fn project_committed_transport_track_piece_authored_prefabs(
             };
             if piece.piece_index == 0 && route.path_points.len() == 2 {
                 let tower_world_transform = endpoint_transforms
-                    .get(route.to)
+                    .get(route.to())
                     .ok()
                     .map(GlobalTransform::compute_transform);
                 let Some(template) = terrain_decal_pass.as_ref() else {
@@ -763,29 +792,33 @@ pub(super) fn project_committed_transport_track_piece_authored_prefabs(
                 line_material
                     .recreate_uniform_buffers_for_runtime_material(&mut effect_uniform_buffers);
                 let material = effect_pass_materials.add(line_material);
-                let promoted_height_metres = presentation.initial_height_metres.max(
-                    route.from_position.y - route.to_position.y
-                        + track.sky_rope_clearance_metres.unwrap_or_default(),
+                let promoted_height_metres = rope_anchors.tower_top(route.to()).map_or_else(
+                    || {
+                        super::sky_tower_navigation::authored_sky_tower_height(
+                            track,
+                            route.from_position,
+                            route.to_position,
+                            0,
+                        )
+                        .unwrap_or_default()
+                    },
+                    |top| top.y - route.to_position.y,
                 );
                 if let Some(tower_world_transform) = tower_world_transform.filter(|_| {
-                    existing_sky_towers.get(route.to).is_err()
-                        && tower_targets_projected_this_run.insert(route.to)
+                    !children.get(route.to()).is_ok_and(|children| {
+                        children.iter().any(|child| sky_drawings.contains(child))
+                    }) && tower_targets_projected_this_run.insert(route.to())
                 }) {
-                    let top_kind = authored_sky_tower_top_kind(route, &routes);
+                    let top_kind = authored_sky_tower_top_kind(&route, &routes, &incidence);
                     let tower_presentation_root = commands
                         .spawn((
                             Transform::IDENTITY,
                             Visibility::Inherited,
-                            ChildOf(route.to),
+                            ChildOf(route.to()),
+                            SkyTowerDrawing,
+                            DrawingForRoute(piece.route_segment),
                         ))
                         .id();
-                    commands
-                        .entity(route.to)
-                        .insert(AuthoredLinkedSkyTowerPresentationProjected {
-                            source_route: piece.route_segment,
-                            root: tower_presentation_root,
-                            top_kind,
-                        });
                     spawn_authored_sky_tower(
                         &mut commands,
                         definitions,
@@ -805,16 +838,26 @@ pub(super) fn project_committed_transport_track_piece_authored_prefabs(
                 // The rope runs between tower tops, and at a station over the
                 // wheel (link_wheel) next to the end it leaves from.
                 let start = rope_anchors
-                    .station_wheel(route.from, route.path_points[0])
+                    .station_wheel(route.from(), route.path_points[0])
+                    .or_else(|| rope_anchors.tower_top(route.from()))
                     .unwrap_or(route.path_points[0] + Vec3::Y * source_height_metres);
                 let end = rope_anchors
-                    .station_wheel(route.to, route.path_points[1])
+                    .station_wheel(route.to(), route.path_points[1])
+                    .or_else(|| rope_anchors.tower_top(route.to()))
                     .unwrap_or(route.path_points[1] + Vec3::Y * promoted_height_metres);
+                let rope_root = commands
+                    .spawn((
+                        Transform::IDENTITY,
+                        Visibility::Inherited,
+                        ChildOf(entity),
+                        DrawingForRoute(piece.route_segment),
+                    ))
+                    .id();
                 spawn_authored_sky_track_rope(
                     &mut commands,
                     &mut meshes,
                     material,
-                    entity,
+                    rope_root,
                     transform,
                     start,
                     end,
@@ -827,7 +870,8 @@ pub(super) fn project_committed_transport_track_piece_authored_prefabs(
             else {
                 continue;
             };
-            let (joined_points, first) = ground_route_points_with_joined_neighbours(route, &routes);
+            let (joined_points, first) =
+                ground_route_points_with_joined_neighbours(&route, &routes, &incidence);
             let Some(presentation) = select_authored_ground_track_piece_presentation(
                 &track.ground_piece_presentations,
                 &joined_points,
@@ -996,7 +1040,8 @@ pub(super) fn show_construction_markers_at_unconnected_road_ends(
         ),
         Without<PrefabAuthoredAttachmentIdentifier>,
     >,
-    routes: Query<&TrackSegment>,
+    routes: Query<TrackRoute>,
+    incidence: TrackIncidence,
     junctions: Query<(), With<TransportTrackJunction>>,
     mut markers: Query<
         (
@@ -1019,13 +1064,13 @@ pub(super) fn show_construction_markers_at_unconnected_road_ends(
             if !ground {
                 None
             } else if last
-                && junctions.contains(route.to)
-                && !routes.iter().any(|other| other.from == route.to)
+                && junctions.contains(route.to())
+                && incidence.outgoing(route.to()).next().is_none()
             {
                 Some(route.to_position)
             } else if piece.piece_index == 0
-                && junctions.contains(route.from)
-                && !routes.iter().any(|other| other.to == route.from)
+                && junctions.contains(route.from())
+                && incidence.incoming(route.from()).next().is_none()
             {
                 Some(route.from_position)
             } else {
@@ -1068,12 +1113,7 @@ pub(super) fn show_construction_markers_at_unconnected_road_ends(
 /// Whether a station carries the four markers of a sky station.
 fn names_in_pairs(
     children: &Query<&Children>,
-    markers: &Query<(
-        &PrefabAuthoredAttachmentIdentifier,
-        &ChildOf,
-        &mut Visibility,
-        &mut Transform,
-    )>,
+    markers: &Query<(&PrefabAuthoredAttachmentIdentifier, &mut Visibility)>,
     station: Entity,
     names: [openzt2_game_data::AssetId; 4],
 ) -> bool {
@@ -1091,16 +1131,10 @@ pub(super) fn show_construction_markers_at_unconnected_station_ends(
     definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     stations: Query<(Entity, &TransportStation, &GlobalTransform)>,
-    routes: Query<&TrackSegment>,
+    routes: Query<TrackRoute>,
+    incidence: TrackIncidence,
     children: Query<&Children>,
-    parents: Query<&GlobalTransform>,
-    mut markers: Query<(
-        &PrefabAuthoredAttachmentIdentifier,
-        &ChildOf,
-        &mut Visibility,
-        &mut Transform,
-    )>,
-    rope_anchors: SkyRopeAnchors,
+    mut markers: Query<(&PrefabAuthoredAttachmentIdentifier, &mut Visibility)>,
 ) {
     let Some(definitions) = active_definitions.get(&definition_assets) else {
         return;
@@ -1117,8 +1151,7 @@ pub(super) fn show_construction_markers_at_unconnected_station_ends(
     for (station_entity, station, station_transform) in &stations {
         let pair = names_in_pairs(&children, &markers, station_entity, names);
         for descendant in children.iter_descendants(station_entity) {
-            let Ok((name, parent, mut visibility, mut transform)) = markers.get_mut(descendant)
-            else {
+            let Ok((name, mut visibility)) = markers.get_mut(descendant) else {
                 continue;
             };
             let Some(marker) = (0_u8..)
@@ -1128,10 +1161,13 @@ pub(super) fn show_construction_markers_at_unconnected_station_ends(
                 continue;
             };
             let endpoint = if pair { marker / 2 } else { marker };
-            let connected = routes.iter().any(|route| {
-                (route.from == station_entity && route.from_endpoint_index == endpoint)
-                    || (route.to == station_entity && route.to_endpoint_index == endpoint)
-            });
+            let connected = incidence
+                .incident(station_entity)
+                .filter_map(|entity| routes.get(entity).ok())
+                .any(|route| {
+                    (route.from() == station_entity && route.from_endpoint_index == endpoint)
+                        || (route.to() == station_entity && route.to_endpoint_index == endpoint)
+                });
             let open_end = (!connected)
                 .then(|| {
                     crate::transport_tours::topology::calculate_authored_transport_station_endpoint_world_position(
@@ -1142,31 +1178,6 @@ pub(super) fn show_construction_markers_at_unconnected_station_ends(
                     )
                 })
                 .flatten();
-            if let (Some(end), Ok(parent_transform)) = (open_end, parents.get(parent.parent())) {
-                // Fixed 1.5 m step out of the building, tune if a station hides it
-                let outward = (end - station_transform.translation())
-                    .with_y(0.0)
-                    .normalize_or_zero();
-                // A sky station's pair hangs over its rope wheel, one each side.
-                let position = if pair {
-                    let side = Vec3::Y.cross(outward) * if marker % 2 == 0 { 1.0 } else { -1.0 };
-                    rope_anchors
-                        .station_wheel(station_entity, end)
-                        .unwrap_or(end)
-                        + side
-                        // Fixed lift above the roof; match the original game if a station differs
-                        + Vec3::Y * 3.0
-                } else {
-                    end + outward * 1.5
-                };
-                let local = parent_transform
-                    .affine()
-                    .inverse()
-                    .transform_point3(position);
-                if transform.translation != local {
-                    transform.translation = local;
-                }
-            }
             let next = if open_end.is_some() {
                 Visibility::Inherited
             } else {

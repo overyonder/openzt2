@@ -1,5 +1,12 @@
 use bevy::prelude::*;
 use openzt2_zoo_state::placement::placement_surface_site::PlacementSiteQueries;
+use openzt2_zoo_state::{
+    habitat::{
+        habitat_membership_and_containment::locate_habitat_at_world_position,
+        habitat_types::HabitatIndex,
+    },
+    topology::topology_graph_types::TopologyGrid,
+};
 
 use openzt2_game_assets::species::species_asset_types::SpeciesAsset;
 use openzt2_game_assets::species::species_asset_types::SpeciesAssets;
@@ -24,8 +31,10 @@ pub(super) fn spawn_animals_requested_by_gameplay_operations(
     species_index: Res<SpeciesAssets>,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,
-    mut persistent_identifiers: ResMut<PersistentIdAllocator>,
+    mut persistent_identifiers: Query<&mut PersistentIdAllocator>,
     placement_sites: PlacementSiteQueries,
+    habitats: Res<HabitatIndex>,
+    topology: Res<TopologyGrid>,
     mut spawned_animals: MessageWriter<AnimalSpawned>,
     mut rejected_spawns: MessageWriter<AnimalSpawnRejected>,
 ) {
@@ -36,14 +45,26 @@ pub(super) fn spawn_animals_requested_by_gameplay_operations(
         return;
     };
     for request in requests.read() {
+        let Ok(mut allocator) = persistent_identifiers.get_mut(request.world) else {
+            rejected_spawns.write(AnimalSpawnRejected {
+                operation: request.operation,
+            });
+            continue;
+        };
+        let habitat = locate_habitat_at_world_position(
+            &habitats,
+            request.transform.translation.xz(),
+            *topology,
+        );
         let (persistent_identifier, world_membership, resolved_components) =
             match resolve_animal_spawn_request_to_identifiers_and_components(
                 request,
                 &zoo_seed,
                 species_index,
                 world_definitions,
-                &mut persistent_identifiers,
+                &mut allocator,
                 &placement_sites,
+                habitat,
             ) {
                 Ok(resolved_spawn) => resolved_spawn,
                 Err(_) => {
@@ -59,7 +80,7 @@ pub(super) fn spawn_animals_requested_by_gameplay_operations(
             resolved_components,
             persistent_identifier,
             world_membership,
-            request.habitat,
+            habitat,
             request.transform,
             request.parents,
             zoo_clock.tick,

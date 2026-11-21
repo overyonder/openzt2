@@ -221,6 +221,8 @@ pub(super) fn finish_behavior_animation_clip_actions_after_playback_completion(
             &BehaviorTaskExecutionState,
             &PendingBehaviorAnimationClipCompletion,
             &RunningBehaviorInstruction,
+            Option<&openzt2_zoo_state::behavior_task_execution_types::running_actions::TimedBehaviorAnimationEffect>,
+            Option<&super::behavior_animation_key_execution::CrossedBehaviorAnimationEffect>,
         ),
         Without<PendingBehaviorTaskFailure>,
     >,
@@ -232,12 +234,27 @@ pub(super) fn finish_behavior_animation_clip_actions_after_playback_completion(
             continue;
         };
         let actor = animation_owner.gameplay_entity;
-        let Ok((behavior_task, pending, instruction)) = behavior_tasks.get(actor) else {
+        let Ok((behavior_task, pending, instruction, timed_effect, key)) =
+            behavior_tasks.get(actor)
+        else {
             continue;
         };
         if completed_animation.explicit_clip_request_id != Some(pending.request_id)
             || !pending.owns(behavior_task, instruction)
         {
+            continue;
+        }
+        if let Some(effect) = timed_effect {
+            if key.is_none_or(|key| !key.belongs_to(instruction)) {
+                if matches!(effect.0, openzt2_zoo_state::behavior_task_execution_types::running_actions::BehaviorAnimationEffect::Detach { .. }) {
+                    commands.entity(actor).insert(
+                        super::behavior_animation_key_execution::CrossedBehaviorAnimationEffect::detach(instruction),
+                    );
+                } else {
+                    super::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
+                    commands.entity(actor).try_remove::<PendingBehaviorAnimationClipCompletion>();
+                }
+            }
             continue;
         }
         debug!(

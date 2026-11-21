@@ -3,6 +3,7 @@ use openzt2_zoo_state::behavior_task_execution_types::running_actions::RunningBe
 use openzt2_zoo_state::guests::guest_simulation_types::GuestSpeciesViewCounts;
 use openzt2_zoo_state::guests::guest_survey_types::GuestSurveyExperience;
 use bevy::prelude::*;
+use openzt2_zoo_state::progression::fame_types::GuestSpeciesFameViews;
 use openzt2_game_assets::species::species_asset_types::{SpeciesAsset, SpeciesAssets};
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
@@ -46,6 +47,7 @@ pub(super) fn apply_accepted_view_events_to_view_meters(
         &GlobalTransform,
         &mut GuestSpeciesViewCounts,
         &mut GuestSurveyExperience,
+        &mut GuestSpeciesFameViews,
         Option<(&BehaviorTaskExecutionState, &RunningBehaviorInstruction)>,
         Option<&mut BehaviorViewingProgress>,
     )>,
@@ -60,8 +62,16 @@ pub(super) fn apply_accepted_view_events_to_view_meters(
         return;
     };
     for reaction in reactions.read() {
-        let Ok((archetype, favourite, position, mut counts, mut experience, task, meter)) =
-            guests.get_mut(reaction.guest)
+        let Ok((
+            archetype,
+            favourite,
+            position,
+            mut counts,
+            mut experience,
+            mut fame_views,
+            task,
+            meter,
+        )) = guests.get_mut(reaction.guest)
         else {
             continue;
         };
@@ -116,8 +126,12 @@ pub(super) fn apply_accepted_view_events_to_view_meters(
             }
         }
         experience.saw_favorite_animal |= favourite.0 == Some(species.species);
-        experience.observe_entertainment(reaction.entertainment_score * distance_factor);
-        if reaction.entertainment_score * distance_factor != 0.0 {
+        let entertainment = reaction.entertainment_score * distance_factor;
+        experience.observe_entertainment(entertainment);
+        let fame = fame_views.0.entry(species.species).or_default();
+        fame.events = fame.events.saturating_add(1);
+        fame.entertainment += entertainment;
+        if entertainment != 0.0 {
             *count = count.saturating_add(1);
         }
     }

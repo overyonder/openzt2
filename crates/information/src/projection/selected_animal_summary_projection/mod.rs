@@ -104,7 +104,10 @@ pub(crate) fn project_selected_animal_identity_health_and_action_summary(
         With<Animal>,
     >,
     panels: Query<(), With<InfoPanel>>,
-    mut text_nodes: Query<(&UiDocumentOwner, &UiTextBinding, &mut Text)>,
+    mut text_nodes: Query<
+        (&UiDocumentOwner, &UiTextBinding, &mut Text),
+        Without<super::panel_binding_families::IdentityTextFieldOf>,
+    >,
     mut visibility_nodes: Query<(&UiDocumentOwner, &UiVisibleBinding, &mut Visibility)>,
     mut interaction_nodes: Query<(
         &UiEnabledBinding,
@@ -136,7 +139,7 @@ pub(crate) fn project_selected_animal_identity_health_and_action_summary(
         })
     };
 
-    for (owner, text_binding, mut text) in &mut text_nodes {
+    for (owner, text_binding, text) in &mut text_nodes {
         let projected_text = match &text_binding.0 {
             UiTextPropertyBindingSource::SelectedEntityName if !panels.contains(owner.0) => {
                 name.map(Name::as_str).or(selected_definition_name)
@@ -155,7 +158,7 @@ pub(crate) fn project_selected_animal_identity_health_and_action_summary(
             _ => None,
         };
         if let Some(projected_text) = projected_text {
-            replace_projected_ui_text_if_changed(&mut text.0, projected_text);
+            replace_projected_ui_text_if_changed(text, projected_text);
         }
     }
 
@@ -192,12 +195,19 @@ pub(crate) fn project_selected_animal_identity_health_and_action_summary(
         };
         interaction_enabled.set_if_neq(UiInteractionEnabled(should_be_enabled));
         if let Some(mut focusable) = focusable {
-            focusable.enabled = should_be_enabled;
+            if focusable.enabled != should_be_enabled {
+                focusable.enabled = should_be_enabled;
+            }
         }
-        *pickable = if should_be_enabled {
+        let next = if should_be_enabled {
             Pickable::default()
         } else {
             Pickable::IGNORE
         };
+        if pickable.should_block_lower != next.should_block_lower
+            || pickable.is_hoverable != next.is_hoverable
+        {
+            *pickable = next;
+        }
     }
 }

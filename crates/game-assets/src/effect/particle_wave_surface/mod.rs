@@ -89,14 +89,20 @@ color = vec4<f32>(mix(in.{fog_varying}.rgb, color.rgb, in.{fog_varying}.a), colo
     }
 }
 
-#[derive(Component, Clone, Copy, Debug)]
-pub struct ParticleEffectWaveSurfaceFog {
+#[derive(Component, Default)]
+pub struct ParticleWaveFogCamera;
+
+#[derive(Resource, Default, PartialEq)]
+pub(super) struct ParticleWaveCameraFog(Option<ParticleEffectWaveSurfaceFog>);
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ParticleEffectWaveSurfaceFog {
     registers: [Vec4; 2],
     colour: Vec4,
 }
 
 impl ParticleEffectWaveSurfaceFog {
-    pub fn from_camera(
+    fn from_camera(
         transform: &GlobalTransform,
         projection: &Projection,
         fog: &bevy::pbr::DistanceFog,
@@ -122,6 +128,7 @@ impl ParticleEffectWaveSurfaceFog {
 /// Mesh positions are `(source_x, displacement_weight, -source_y)`;
 /// UV0 retains the unscaled, centred authored projection.
 #[derive(Component, Clone, Copy, Debug)]
+#[require(EffectProperties, Visibility)]
 pub struct ParticleEffectWaveSurface {
     pub frequency: Vec4,
     pub phase: Vec4,
@@ -152,31 +159,67 @@ impl ParticleEffectWaveSurface {
     }
 }
 
-pub(crate) fn upload_particle_wave_surface_uniforms(
-    mut commands: Commands,
-    mut emitters: Query<(
+pub(super) fn publish_particle_wave_camera_fog(
+    cameras: Query<
+        (
+            &Camera,
+            &GlobalTransform,
+            &Projection,
+            &bevy::pbr::DistanceFog,
+        ),
+        With<ParticleWaveFogCamera>,
+    >,
+    mut fog: ResMut<ParticleWaveCameraFog>,
+) {
+    let sample = cameras
+        .iter()
+        .find(|(camera, ..)| camera.is_active)
+        .and_then(|(_, transform, projection, fog)| {
+            ParticleEffectWaveSurfaceFog::from_camera(transform, projection, fog)
+        });
+    fog.set_if_neq(ParticleWaveCameraFog(sample));
+}
+
+pub(super) fn upload_particle_wave_surface_uniforms(
+    fog: Res<ParticleWaveCameraFog>,
+    changed: Query<
         Entity,
+        (
+            With<ParticleEffectWaveSurface>,
+            Or<(Changed<ParticleEffectWaveSurface>, Added<EffectProperties>)>,
+        ),
+    >,
+    mut emitters: Query<(
         &ParticleEffectWaveSurface,
-        Option<&ParticleEffectWaveSurfaceFog>,
-        Option<&mut EffectProperties>,
+        &mut Visibility,
+        &mut EffectProperties,
     )>,
 ) {
-    for (entity, wave, fog, properties) in &mut emitters {
-        let Some(fog) = fog else {
-            commands.entity(entity).insert(Visibility::Hidden);
-            continue;
-        };
-        commands.entity(entity).insert(Visibility::Inherited);
-        if let Some(mut properties) = properties {
-            for (name, value) in wave.uniforms().into_iter().chain(fog.uniforms()) {
-                properties = EffectProperties::set_if_changed(properties, name, value.into());
-            }
-        } else {
-            let mut properties = EffectProperties::default();
-            for (name, value) in wave.uniforms().into_iter().chain(fog.uniforms()) {
-                properties.set(name, value.into());
-            }
-            commands.entity(entity).insert(properties);
+    if fog.is_changed() {
+        for (wave, visibility, properties) in &mut emitters {
+            write_wave_surface_uniforms(*wave, fog.0, visibility, properties);
         }
+    } else {
+        for entity in &changed {
+            if let Ok((wave, visibility, properties)) = emitters.get_mut(entity) {
+                write_wave_surface_uniforms(*wave, fog.0, visibility, properties);
+            }
+        }
+    }
+}
+
+fn write_wave_surface_uniforms(
+    wave: ParticleEffectWaveSurface,
+    fog: Option<ParticleEffectWaveSurfaceFog>,
+    mut visibility: Mut<Visibility>,
+    mut properties: Mut<EffectProperties>,
+) {
+    let Some(fog) = fog else {
+        visibility.set_if_neq(Visibility::Hidden);
+        return;
+    };
+    visibility.set_if_neq(Visibility::Inherited);
+    for (name, value) in wave.uniforms().into_iter().chain(fog.uniforms()) {
+        properties = EffectProperties::set_if_changed(properties, name, value.into());
     }
 }

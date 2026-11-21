@@ -94,6 +94,7 @@ pub(in crate::persistence) struct WorldSnapshotApplicationState<'w, 's> {
             With<TransportCircuit>,
             With<CircuitMember>,
             With<TransportVehicle>,
+            With<openzt2_zoo_state::transport_tours::transport_track_construction_types::TransportTrackConstructionPiece>,
         )>,
     >,
     pub(super) show_stages_with_mutable_snapshot_state: Query<

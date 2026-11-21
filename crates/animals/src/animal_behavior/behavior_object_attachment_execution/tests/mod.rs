@@ -14,6 +14,7 @@ use openzt2_world_state::world_spawn::persistent_id_types::{PersistentId, Persis
 
 fn object(id: AssetId) -> WorldObjectDefinition {
     WorldObjectDefinition {
+        authored_runtime: Default::default(),
         audio_cue_prefixes: Vec::new(),
         surface_effect_strength: None,
         presentation_caustic_policies: Vec::new(),
@@ -109,24 +110,18 @@ fn detach_transfers_inventory_and_kills_only_on_the_later_detach_event() {
     };
     let mut app = App::new();
     events::register_attachment_animation_observers(&mut app);
-    app.insert_resource(PersistentIdAllocator::new(Entity::PLACEHOLDER))
-        .init_resource::<WorldDefinitions>()
+    let root = app.world_mut().spawn(PersistentIdAllocator::default()).id();
+    app.init_resource::<WorldDefinitions>()
         .init_resource::<Assets<WorldDefinitionAsset>>()
         .init_resource::<Assets<ScenePrefabAsset>>()
-        .add_observer(detach::record_slots_of_destroyed_holders)
+        .add_observer(detach::retire_owned_objects_when_holder_is_destroyed)
+        .add_observer(detach::release_detached_object_presentation)
         .add_observer(admission::apply_object_attachment_admissions)
         .add_message::<AnimationClipPlaybackRequest>()
         .add_message::<AnimationObjectCommand>()
         .add_message::<AnimationCompleted>()
         .add_message::<AnimationClipPlaybackRequestRejected>()
-        .add_systems(
-            FixedUpdate,
-            (
-                events::receive_object_animation_commands,
-                detach::release_objects_from_destroyed_holders,
-            )
-                .chain(),
-        );
+        .add_systems(FixedUpdate, events::receive_object_animation_commands);
     let handle = app
         .world_mut()
         .resource_mut::<Assets<WorldDefinitionAsset>>()
@@ -278,9 +273,7 @@ fn detach_transfers_inventory_and_kills_only_on_the_later_detach_event() {
         .world_mut()
         .spawn((
             DefinitionId(item_id),
-            WorldMember {
-                root: Entity::PLACEHOLDER,
-            },
+            WorldMember { root },
             ContainedObject {
                 holder_definition: holder_id,
                 detach_rule: replace,

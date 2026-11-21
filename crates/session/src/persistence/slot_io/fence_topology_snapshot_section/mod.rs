@@ -1,3 +1,4 @@
+use openzt2_zoo_state::topology::topology_graph_types::FenceSegment;
 use std::collections::{BTreeMap, BTreeSet};
 
 use bevy::{ecs::system::SystemParam, prelude::*};
@@ -42,7 +43,7 @@ pub(super) struct FenceTopologySnapshotEntities<'w, 's> {
         (
             Entity,
             &'static PersistentId,
-            &'static FenceEdge,
+            FenceSegment,
             Option<&'static Gate>,
             Option<&'static TankWallTopHeight>,
             &'static WorldMember,
@@ -85,7 +86,7 @@ pub(super) fn capture_fence_topology_records(
         })
         .collect();
     for (_, id, edge, gate, top, member) in &entities.fences {
-        for entity in [edge.a, edge.b] {
+        for entity in [edge.a(), edge.b()] {
             let (node_id, node, node_member) = nodes
                 .get(&entity)
                 .ok_or(Failure::BrokenPersistentEntityReference)?;
@@ -106,8 +107,8 @@ pub(super) fn capture_fence_topology_records(
                 TopologySnapshot::Fence {
                     id: *id,
                     definition: edge.definition,
-                    a: nodes[&edge.a].0,
-                    b: nodes[&edge.b].0,
+                    a: nodes[&edge.a()].0,
+                    b: nodes[&edge.b()].0,
                     gate: gate.copied(),
                     wall_top: top.copied(),
                 },
@@ -372,12 +373,12 @@ pub(super) fn apply_fence_topology_records(
             let (_, _, a, _) = application
                 .entities
                 .nodes
-                .get(edge.a)
+                .get(edge.a())
                 .map_err(|_| Failure::BrokenPersistentEntityReference)?;
             let (_, _, b, _) = application
                 .entities
                 .nodes
-                .get(edge.b)
+                .get(edge.b())
                 .map_err(|_| Failure::BrokenPersistentEntityReference)?;
             EdgeKey::new(a.cell, b.cell).ok_or(Failure::CorruptSnapshotSection)?;
             Ok((
@@ -425,7 +426,11 @@ pub(super) fn apply_fence_topology_records(
     for (entity, id, edge_bounds) in baseline_edges {
         bounds = merge_topology_changed_cell_bounds(bounds, edge_bounds);
         if ids.contains(&id.0) {
-            commands.entity(entity).remove::<FenceEdge>();
+            commands.entity(entity).remove::<(
+                FenceEdge,
+                openzt2_zoo_state::topology::topology_graph_types::FenceStart,
+                openzt2_zoo_state::topology::topology_graph_types::FenceEnd,
+            )>();
         } else {
             commands.entity(entity).despawn();
         }
@@ -474,11 +479,7 @@ pub(super) fn apply_fence_topology_records(
             .unwrap_or_else(|| commands.spawn_empty().id());
         commands.entity(entity).insert((
             *id,
-            FenceEdge {
-                definition: *definition,
-                a: a.0,
-                b: b.0,
-            },
+            FenceEdge::between(*definition, a.0, b.0),
             WorldMember { root },
             calculate_topology_edge_world_transform(a.1, b.1, *application.grid),
         ));

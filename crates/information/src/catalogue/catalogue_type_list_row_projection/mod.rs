@@ -9,7 +9,6 @@ use openzt2_zoo_state::progression::catalogue_entry_availability::catalogue_entr
 use openzt2_zoo_state::progression::unlock_types::UnlockedCatalogueDefinitionSet;
 use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::UiListRow;
 use openzt2_ui::authored_tooltip_presentation::UiDisplayNameKey;
-use openzt2_ui::authored_tooltip_presentation::UiLongTooltipKey;
 use openzt2_ui::authored_tooltip_presentation::UiShortTooltipKey;
 use openzt2_interface_state::ui::authored_ui_interaction_enabled_state::UiInteractionEnabled;
 use openzt2_interface_state::ui::authored_ui_selection_state::UiSelected;
@@ -21,7 +20,7 @@ use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 use super::catalogue_type_list_row_count_operations::OrderedCatalogueEntries;
 use super::catalogue_world_availability_context::{
     catalogue_world_session_or_scenario_availability_changed,
-    resolve_catalogue_world_session_mode_and_scenario_availability,
+    resolve_catalogue_world_session_mode_and_scenario_availability, CatalogueResearchAccess,
 };
 use openzt2_interface_state::information::catalogue_types::CatalogueRowEntry;
 use openzt2_interface_state::information::catalogue_types::SelectedCatalogueEntry;
@@ -30,9 +29,7 @@ pub(crate) fn project_catalogue_entries_to_authored_type_list_rows(
     mut commands: Commands,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
-    research_availability: Query<
-        Ref<openzt2_zoo_state::progression::research_types::ResearchProjectAvailability>,
-    >,
+    research_availability: CatalogueResearchAccess,
     unlocks: Res<UnlockedCatalogueDefinitionSet>,
     worlds: Query<
         (
@@ -66,9 +63,7 @@ pub(crate) fn project_catalogue_entries_to_authored_type_list_rows(
 ) {
     let definitions_changed = active_definitions.is_changed() || definitions.is_changed();
     let availability_changed = scenario_disabled.is_changed()
-        || research_availability
-            .iter()
-            .any(|availability| availability.is_changed())
+        || research_availability.changed()
         || unlocks.is_changed()
         || catalogue_world_session_or_scenario_availability_changed(&worlds);
     let details_changed = selected_entry.is_changed();
@@ -127,9 +122,7 @@ pub(crate) fn project_catalogue_entries_to_authored_type_list_rows(
                 && (catalogue_entry_can_be_researched(
                     catalog,
                     entry,
-                    research_availability
-                        .iter()
-                        .map(|item| (item.item, item.available)),
+                    research_availability.available_for(entry.definition),
                 ) || catalogue_entry_is_available(
                     catalog,
                     catalogue_index,

@@ -12,17 +12,11 @@ use openzt2_game_data::ui_document::document::UiDocumentRole;
 use openzt2_game_data::ui_document::timed_presentation::{UiTimedEventAction, UiTimedEventRecord};
 use openzt2_game_data::ui_document::widget::UiWidgetRecord;
 use openzt2_game_data::AssetId;
-use std::io;
+use std::{io, time::Duration};
 
-fn convert_authored_presentation_delay_seconds_to_milliseconds(
-    seconds: f32,
-    input: &AuthoredUiDocument,
-) -> io::Result<u32> {
-    if !seconds.is_finite() || seconds < 0.0 {
-        return Err(invalid_at(input, "timed presentation delay is invalid"));
-    }
-    u32::try_from((seconds * 1_000.0).round() as u64)
-        .map_err(|_| invalid_at(input, "timed presentation delay is too large"))
+fn authored_presentation_delay(seconds: f32, input: &AuthoredUiDocument) -> io::Result<Duration> {
+    Duration::try_from_secs_f32(seconds)
+        .map_err(|_| invalid_at(input, "timed presentation delay is invalid"))
 }
 
 pub(super) fn lower_source_ui_timed_events_to_canonical_focused_presentation_widget_record(
@@ -34,13 +28,10 @@ pub(super) fn lower_source_ui_timed_events_to_canonical_focused_presentation_wid
     input: &AuthoredUiDocument,
 ) -> io::Result<UiWidgetRecord> {
     let mut actions = Vec::with_capacity(events.len());
-    let mut due_ms = 0u32;
+    let mut due = Duration::ZERO;
     for timed in events {
-        due_ms = due_ms
-            .checked_add(convert_authored_presentation_delay_seconds_to_milliseconds(
-                timed.delay_seconds,
-                input,
-            )?)
+        due = due
+            .checked_add(authored_presentation_delay(timed.delay_seconds, input)?)
             .ok_or_else(|| invalid_at(input, "timed UI sequence duration overflow"))?;
         let event = &timed.event;
         let mut message = event;
@@ -64,7 +55,7 @@ pub(super) fn lower_source_ui_timed_events_to_canonical_focused_presentation_wid
                 .parse::<i64>()
                 .map_err(|_| invalid_at(input, "replacement text requires an integer"))?;
             actions.push(UiTimedEventRecord {
-                due_ms,
+                due,
                 action: UiTimedEventAction::Ui(UiActionRecord::Presentation(
                     UiPresentationActionRecord {
                         trigger: UiTrigger::Press,
@@ -95,14 +86,14 @@ pub(super) fn lower_source_ui_timed_events_to_canonical_focused_presentation_wid
         if output.actions.len() == first_action {
             if let Some(script) = script {
                 actions.push(UiTimedEventRecord {
-                    due_ms,
+                    due,
                     action: UiTimedEventAction::ScenarioScript(script.to_owned()),
                 });
             }
         }
         for action in output.actions.drain(first_action..) {
             actions.push(UiTimedEventRecord {
-                due_ms,
+                due,
                 action: UiTimedEventAction::Ui(action),
             });
         }

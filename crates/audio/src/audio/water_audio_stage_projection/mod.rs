@@ -10,50 +10,63 @@ pub(super) fn project_changed_water_regions_and_tanks_into_audio_stages(
     mut commands: Commands,
     audio_assets: Res<Assets<AudioAsset>>,
     audio_asset_index: Res<AudioAssets>,
-    natural_water_regions: Query<(Entity, Ref<NaturalWaterRegion>)>,
-    tanks: Query<(Entity, Ref<TankGeometry>)>,
+    regions: Query<
+        (Entity, Option<&NaturalWaterRegion>, Option<&TankGeometry>),
+        Or<(With<NaturalWaterRegion>, With<TankGeometry>)>,
+    >,
+    changed: Query<Entity, Or<(Changed<NaturalWaterRegion>, Changed<TankGeometry>)>>,
+    mut removed_water: RemovedComponents<NaturalWaterRegion>,
+    mut removed_tanks: RemovedComponents<TankGeometry>,
+    mut stages: Query<&mut AudioStage>,
 ) {
-    let audio_assets_changed = audio_asset_index.is_changed();
-    let Some(audio_asset_view) = audio_asset_index.get(&audio_assets) else {
+    let Some(view) = audio_asset_index.get(&audio_assets) else {
         return;
     };
-    let water_policy = audio_asset_view.water();
-    for (water_region_entity, water_region) in &natural_water_regions {
-        if !audio_assets_changed && !water_region.is_added() && !water_region.is_changed() {
-            continue;
-        }
-        let Some(water_policy) = water_policy else {
-            commands.entity(water_region_entity).remove::<AudioStage>();
-            continue;
-        };
-        if water_region.area_m2 < water_policy.lapping_minimum_area {
-            commands.entity(water_region_entity).remove::<AudioStage>();
-            continue;
-        }
-        let stage_index = usize::from(water_region.area_m2 >= water_policy.area_thresholds[0])
-            + usize::from(water_region.area_m2 >= water_policy.area_thresholds[1]);
-        if let Some(stage) = water_policy.natural_stages[stage_index] {
-            commands
-                .entity(water_region_entity)
-                .insert(AudioStage(stage));
-        } else {
-            commands.entity(water_region_entity).remove::<AudioStage>();
-        }
-    }
-    for (tank_entity, tank_geometry) in &tanks {
-        if !audio_assets_changed && !tank_geometry.is_added() && !tank_geometry.is_changed() {
-            continue;
-        }
-        let Some(water_policy) = water_policy else {
-            commands.entity(tank_entity).remove::<AudioStage>();
-            continue;
-        };
-        let stage_index = usize::from(tank_geometry.area >= water_policy.area_thresholds[0])
-            + usize::from(tank_geometry.area >= water_policy.area_thresholds[1]);
-        if let Some(stage) = water_policy.tank_stages[stage_index] {
-            commands.entity(tank_entity).insert(AudioStage(stage));
-        } else {
-            commands.entity(tank_entity).remove::<AudioStage>();
+    let policy = view.water();
+    let changed_catalogue = audio_asset_index.is_changed();
+    let mut seen = bevy::ecs::entity::EntityHashSet::new();
+    let candidates = changed_catalogue
+        .then(|| regions.iter().map(|(entity, ..)| entity))
+        .into_iter()
+        .flatten()
+        .chain(
+            (!changed_catalogue)
+                .then(|| changed.iter())
+                .into_iter()
+                .flatten(),
+        )
+        .chain(removed_water.read())
+        .chain(removed_tanks.read())
+        .filter(|&entity| seen.insert(entity));
+    for entity in candidates {
+        let next = policy
+            .and_then(|policy| {
+                let (_, region, tank) = regions.get(entity).ok()?;
+                let stage_index = |area| {
+                    usize::from(area >= policy.area_thresholds[0])
+                        + usize::from(area >= policy.area_thresholds[1])
+                };
+                if let Some(tank) = tank {
+                    policy.tank_stages[stage_index(tank.area)]
+                } else {
+                    let region = region?;
+                    (region.area_m2 >= policy.lapping_minimum_area)
+                        .then(|| policy.natural_stages[stage_index(region.area_m2)])
+                        .flatten()
+                }
+            })
+            .map(AudioStage);
+        match (next, stages.get_mut(entity)) {
+            (Some(next), Ok(mut stage)) => {
+                stage.set_if_neq(next);
+            }
+            (Some(next), Err(_)) => {
+                commands.entity(entity).insert(next);
+            }
+            (None, Ok(_)) => {
+                commands.entity(entity).remove::<AudioStage>();
+            }
+            (None, Err(_)) => {}
         }
     }
 }

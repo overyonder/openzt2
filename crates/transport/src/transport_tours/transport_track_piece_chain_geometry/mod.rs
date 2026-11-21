@@ -14,7 +14,7 @@ pub(super) fn build_authored_axis_and_diagonal_transport_track_piece_chain(
 
     if definition.kind == TransportationTrackKind::Sky {
         let maximum_distance = definition.sky_maximum_connection_distance_metres?;
-        let distance = from_position.distance(to_position);
+        let distance = from_position.xz().distance(to_position.xz());
         return (distance.is_finite()
             && distance > TRACK_ALIGNMENT_EPSILON_METRES
             && distance <= maximum_distance
@@ -146,7 +146,8 @@ pub(super) fn build_projected_authored_axis_or_diagonal_transport_track_piece_ch
     if definition.kind == TransportationTrackKind::Sky {
         let maximum_distance = definition.sky_maximum_connection_distance_metres?;
         let displacement = pointer_position - from_position;
-        let distance = displacement.length().min(maximum_distance);
+        let horizontal = displacement.xz().length();
+        let distance = horizontal.min(maximum_distance);
         return (distance.is_finite()
             && distance > TRACK_ALIGNMENT_EPSILON_METRES
             && definition.purchase_cost_cents >= 0)
@@ -154,7 +155,7 @@ pub(super) fn build_projected_authored_axis_or_diagonal_transport_track_piece_ch
                 (
                     vec![
                         from_position,
-                        from_position + displacement.normalize() * distance,
+                        from_position + displacement * (distance / horizontal),
                     ],
                     Money(definition.purchase_cost_cents),
                 )

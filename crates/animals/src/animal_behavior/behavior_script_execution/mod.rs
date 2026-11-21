@@ -618,8 +618,6 @@ pub(super) fn execute_authored_behavior_script_actions(
     }
 }
 
-pub(super) use world_access::BehaviorBirthNoticeContext;
-
 fn birth_notice_text(arguments: mlua::MultiValue) -> Option<String> {
     arguments
         .into_iter()

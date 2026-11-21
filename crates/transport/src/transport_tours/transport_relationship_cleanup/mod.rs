@@ -1,143 +1,195 @@
 use bevy::prelude::*;
 
-use openzt2_zoo_state::guests::guest_simulation_types::Guest;
-use openzt2_zoo_state::locomotion::locomotion_types::LocomotionMode;
+use openzt2_zoo_state::{
+    locomotion::locomotion_types::LocomotionMode,
+    transport_tours::{
+        tour_scoring_types::{TourObservationCadence, TourObservationMemory, TourScore},
+        transport_circuit_types::{CircuitMember, CircuitMembers, TransportCircuit},
+        transport_rider_types::*,
+        transport_topology_types::{TrackEnd, TrackSegment, TrackStart, TransportStation},
+        transport_vehicle_types::{
+            RoutePosition, TransportVehicle, VehicleOnTrack, VehiclesOnTrack,
+        },
+    },
+};
 
-use openzt2_zoo_state::transport_tours::tour_scoring_types::TourObservationCadence;
-use openzt2_zoo_state::transport_tours::tour_scoring_types::TourObservationMemory;
-use openzt2_zoo_state::transport_tours::tour_scoring_types::TourScore;
-use openzt2_zoo_state::transport_tours::transport_circuit_types::CircuitMember;
-use openzt2_zoo_state::transport_tours::transport_circuit_types::TransportCircuit;
-use openzt2_zoo_state::transport_tours::transport_rider_types::PlayerRidingSeatIndex;
-use openzt2_zoo_state::transport_tours::transport_rider_types::TransportRider;
-use openzt2_zoo_state::transport_tours::transport_rider_types::WaitingForTransport;
-use openzt2_zoo_state::transport_tours::transport_topology_types::TrackSegment;
-use openzt2_zoo_state::transport_tours::transport_topology_types::TransportStation;
-use openzt2_zoo_state::transport_tours::transport_vehicle_types::RoutePosition;
-use openzt2_zoo_state::transport_tours::transport_vehicle_types::TransportVehicle;
-
-fn return_transport_rider_to_ground_locomotion(rider_entity: Entity, commands: &mut Commands) {
-    commands
-        .entity(rider_entity)
-        .remove::<(
-            TransportRider,
-            TourScore,
-            TourObservationMemory,
-            TourObservationCadence,
-            PlayerRidingSeatIndex,
-        )>()
-        .insert(LocomotionMode::Ground);
+pub(super) fn install(app: &mut App) {
+    app.add_observer(remove_circuit_membership)
+        .add_observer(detach_removed_circuit_member)
+        .add_observer(detach_removed_station)
+        .add_observer(detach_removed_track)
+        .add_observer(close_disconnected_track)
+        .add_observer(detach_removed_vehicle)
+        .add_observer(remove_retired_seats)
+        .add_observer(unseat_riders)
+        .add_observer(detach_unseated_rider)
+        .add_observer(return_rider_to_ground);
 }
 
-pub(super) fn remove_transport_relationships_broken_by_removed_circuits_stations_tracks_or_vehicles(
-    mut removed_transport_circuits: RemovedComponents<TransportCircuit>,
-    mut removed_transport_stations: RemovedComponents<TransportStation>,
-    mut removed_track_segments: RemovedComponents<TrackSegment>,
-    mut removed_transport_vehicles: RemovedComponents<TransportVehicle>,
-    circuit_members: Query<(Entity, &CircuitMember)>,
-    waiting_guests: Query<(Entity, &WaitingForTransport), With<Guest>>,
-    transport_riders: Query<(Entity, &TransportRider), With<Guest>>,
-    vehicle_routes: Query<(Entity, &RoutePosition)>,
-    mut transport_stations: Query<&mut TransportStation>,
-    mut transport_vehicles: Query<&mut TransportVehicle>,
-    mut transport_circuits: Query<&mut TransportCircuit>,
+fn remove_circuit_membership(
+    removed: On<Remove<TransportCircuit>>,
+    circuits: Query<&CircuitMembers>,
     mut commands: Commands,
 ) {
-    for removed_circuit_entity in removed_transport_circuits.read() {
-        for (member_entity, circuit_member) in &circuit_members {
-            if circuit_member.0 == removed_circuit_entity {
-                commands.entity(member_entity).remove::<CircuitMember>();
-            }
-        }
-        for (guest_entity, waiting_relation) in &waiting_guests {
-            if waiting_relation.circuit == removed_circuit_entity {
-                if let Ok(mut transport_station) =
-                    transport_stations.get_mut(waiting_relation.station)
-                {
-                    transport_station.queued = transport_station.queued.saturating_sub(1);
-                }
-                commands
-                    .entity(guest_entity)
-                    .remove::<WaitingForTransport>();
-            }
-        }
-        for (rider_entity, transport_rider) in &transport_riders {
-            if circuit_members
-                .get(transport_rider.vehicle)
-                .is_ok_and(|(_, circuit_member)| circuit_member.0 == removed_circuit_entity)
-            {
-                return_transport_rider_to_ground_locomotion(rider_entity, &mut commands);
-                if let Ok(mut transport_vehicle) =
-                    transport_vehicles.get_mut(transport_rider.vehicle)
-                {
-                    transport_vehicle.occupied = transport_vehicle.occupied.saturating_sub(1);
-                }
-            }
+    if let Ok(members) = circuits.get(removed.entity) {
+        for member in members.iter() {
+            commands.entity(member).try_remove::<CircuitMember>();
         }
     }
+}
 
-    for removed_station_entity in removed_transport_stations.read() {
-        if let Ok((_, circuit_member)) = circuit_members.get(removed_station_entity) {
-            if let Ok(mut transport_circuit) = transport_circuits.get_mut(circuit_member.0) {
-                transport_circuit.closed = true;
-            }
-        }
-        for (guest_entity, waiting_relation) in &waiting_guests {
-            if waiting_relation.station == removed_station_entity {
-                commands
-                    .entity(guest_entity)
-                    .remove::<WaitingForTransport>();
-            }
-        }
-        for (rider_entity, transport_rider) in &transport_riders {
-            if transport_rider.boarded_station == removed_station_entity {
-                return_transport_rider_to_ground_locomotion(rider_entity, &mut commands);
-                if let Ok(mut transport_vehicle) =
-                    transport_vehicles.get_mut(transport_rider.vehicle)
-                {
-                    transport_vehicle.occupied = transport_vehicle.occupied.saturating_sub(1);
-                }
-            }
-        }
+fn detach_removed_circuit_member(
+    removed: On<Discard<CircuitMember>>,
+    members: Query<&CircuitMember>,
+    stations: Query<(Option<&StationQueue>, Option<&StationBoardedRiders>), With<TransportStation>>,
+    vehicles: Query<&VehicleRiders>,
+    mut circuits: Query<&mut TransportCircuit>,
+    mut commands: Commands,
+) {
+    close_owner(removed.entity, &members, &mut circuits);
+    if let Ok((queue, boarded)) = stations.get(removed.entity) {
+        detach_station_riders(queue, boarded, &mut commands);
     }
+    if let Ok(riders) = vehicles.get(removed.entity) {
+        dismount(riders.iter(), &mut commands);
+    }
+}
 
-    for removed_track_segment_entity in removed_track_segments.read() {
-        if let Ok((_, circuit_member)) = circuit_members.get(removed_track_segment_entity) {
-            if let Ok(mut transport_circuit) = transport_circuits.get_mut(circuit_member.0) {
-                transport_circuit.closed = true;
-            }
-        }
-        for (vehicle_entity, route_position) in &vehicle_routes {
-            if route_position.segment != removed_track_segment_entity {
-                continue;
-            }
-            commands.entity(vehicle_entity).remove::<RoutePosition>();
-            for (rider_entity, transport_rider) in &transport_riders {
-                if transport_rider.vehicle == vehicle_entity {
-                    return_transport_rider_to_ground_locomotion(rider_entity, &mut commands);
-                }
-            }
-            if let Ok(mut transport_vehicle) = transport_vehicles.get_mut(vehicle_entity) {
-                transport_vehicle.occupied = 0;
-            }
-            if let Ok((_, circuit_member)) = circuit_members.get(vehicle_entity) {
-                if let Ok(mut transport_circuit) = transport_circuits.get_mut(circuit_member.0) {
-                    transport_circuit.closed = true;
-                }
-            }
-        }
+fn detach_removed_station(
+    removed: On<Remove<TransportStation>>,
+    stations: Query<(Option<&StationQueue>, Option<&StationBoardedRiders>)>,
+    members: Query<&CircuitMember>,
+    mut circuits: Query<&mut TransportCircuit>,
+    mut commands: Commands,
+) {
+    close_owner(removed.entity, &members, &mut circuits);
+    if let Ok((queue, boarded)) = stations.get(removed.entity) {
+        detach_station_riders(queue, boarded, &mut commands);
     }
+}
 
-    for removed_vehicle_entity in removed_transport_vehicles.read() {
-        for (rider_entity, transport_rider) in &transport_riders {
-            if transport_rider.vehicle == removed_vehicle_entity {
-                return_transport_rider_to_ground_locomotion(rider_entity, &mut commands);
-            }
+fn detach_station_riders(
+    queue: Option<&StationQueue>,
+    boarded: Option<&StationBoardedRiders>,
+    commands: &mut Commands,
+) {
+    if let Some(waiting) = queue {
+        for guest in waiting.iter() {
+            commands.entity(guest).try_remove::<WaitingForTransport>();
         }
-        if let Ok((_, circuit_member)) = circuit_members.get(removed_vehicle_entity) {
-            if let Ok(mut transport_circuit) = transport_circuits.get_mut(circuit_member.0) {
-                transport_circuit.closed = true;
+    }
+    if let Some(boarded) = boarded {
+        dismount(boarded.iter(), commands);
+    }
+}
+
+fn detach_removed_vehicle(
+    removed: On<Remove<TransportVehicle>>,
+    vehicles: Query<&VehicleRiders>,
+    members: Query<&CircuitMember>,
+    mut circuits: Query<&mut TransportCircuit>,
+    mut commands: Commands,
+) {
+    close_owner(removed.entity, &members, &mut circuits);
+    if let Ok(riders) = vehicles.get(removed.entity) {
+        dismount(riders.iter(), &mut commands);
+    }
+}
+
+fn remove_retired_seats(
+    removed: On<Remove<TransportVehicle>>,
+    vehicles: Query<&Children>,
+    seats: Query<(), With<TransportSeat>>,
+    mut commands: Commands,
+) {
+    if let Ok(children) = vehicles.get(removed.entity) {
+        for seat in children.iter().filter(|&child| seats.contains(child)) {
+            commands.entity(seat).try_despawn();
+        }
+    }
+    commands
+        .entity(removed.entity)
+        .try_remove::<super::transport_passenger_mounts::VehicleSeatsHydrated>();
+}
+
+fn unseat_riders(
+    removed: On<Remove<TransportSeat>>,
+    seats: Query<&RidersAtSeat>,
+    mut commands: Commands,
+) {
+    if let Ok(riders) = seats.get(removed.entity) {
+        dismount(riders.iter(), &mut commands);
+    }
+}
+
+fn detach_unseated_rider(removed: On<Remove<TransportSeatRider>>, mut commands: Commands) {
+    commands
+        .entity(removed.entity)
+        .try_remove::<TransportRider>();
+}
+
+fn detach_removed_track(
+    removed: On<Remove<TrackSegment>>,
+    vehicles_on_track: Query<&VehiclesOnTrack>,
+    riders: Query<&VehicleRiders>,
+    members: Query<&CircuitMember>,
+    mut circuits: Query<&mut TransportCircuit>,
+    mut commands: Commands,
+) {
+    close_owner(removed.entity, &members, &mut circuits);
+    if let Ok(vehicles) = vehicles_on_track.get(removed.entity) {
+        for vehicle in vehicles.iter() {
+            commands
+                .entity(vehicle)
+                .try_remove::<(RoutePosition, VehicleOnTrack)>();
+            close_owner(vehicle, &members, &mut circuits);
+            if let Ok(riders) = riders.get(vehicle) {
+                dismount(riders.iter(), &mut commands);
             }
         }
     }
+}
+
+fn close_disconnected_track(removed: On<Remove<(TrackStart, TrackEnd)>>, mut commands: Commands) {
+    commands
+        .entity(removed.entity)
+        .try_remove::<(TrackSegment, TrackStart, TrackEnd, CircuitMember)>();
+}
+
+fn close_owner(
+    entity: Entity,
+    members: &Query<&CircuitMember>,
+    circuits: &mut Query<&mut TransportCircuit>,
+) {
+    if let Ok(member) = members.get(entity) {
+        if let Ok(mut circuit) = circuits.get_mut(member.0) {
+            if !circuit.closed {
+                circuit.closed = true;
+            }
+        }
+    }
+}
+
+fn dismount(riders: impl Iterator<Item = Entity>, commands: &mut Commands) {
+    for rider in riders {
+        commands.entity(rider).try_remove::<TransportRider>();
+    }
+}
+
+fn return_rider_to_ground(
+    removed: On<Remove<TransportRider>>,
+    mut modes: Query<&mut LocomotionMode>,
+    mut commands: Commands,
+) {
+    if let Ok(mut mode) = modes.get_mut(removed.entity) {
+        mode.set_if_neq(LocomotionMode::Ground);
+    }
+    commands.entity(removed.entity).try_remove::<(
+        BoardedAtStation,
+        TransportSeatRider,
+        TourScore,
+        TourObservationMemory,
+        TourObservationCadence,
+        PlayerRidingSeatIndex,
+    )>();
 }

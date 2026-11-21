@@ -36,8 +36,8 @@ pub(super) fn reserve_detach_created_objects(
                     BehaviorWorldReleaseMotion::Fall
                 };
                 commands.queue(move |state: &mut World| {
-                    let Some(mut ids) = state.get_resource_mut::<openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator>() else { return; };
-                    let Ok(id) = ids.allocate(world.root) else { return; };
+                    let Some(mut ids) = state.get_mut::<openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator>(world.root) else { return; };
+                    let Ok(id) = ids.allocate() else { return; };
                     state.spawn((
                         id, world, DefinitionId(definition), joint_transform.compute_transform(),
                         joint_transform, motion, PendingDetachCreatedObject::default(),

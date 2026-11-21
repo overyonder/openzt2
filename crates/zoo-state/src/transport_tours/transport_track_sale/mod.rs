@@ -1,3 +1,4 @@
+use crate::topology::persistent_edit_lookup::PersistentEditLookup;
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
@@ -11,11 +12,13 @@ use openzt2_game_data::world_definitions::world_objects::WorldObjectPropertyFlag
 use crate::transport_tours::transport_circuit_types::CircuitMember;
 use crate::transport_tours::transport_circuit_types::TransportCircuit;
 use crate::transport_tours::transport_topology_types::TrackProfile;
-use crate::transport_tours::transport_topology_types::TrackSegment;
 use crate::transport_tours::transport_topology_types::TransportStation;
 use crate::transport_tours::transport_topology_types::TransportTrackJunction;
+use crate::transport_tours::transport_topology_types::{TrackIncidence, TrackRoute, TrackSegment};
 use crate::transport_tours::transport_track_construction_types::PreparedTransportTrackConstructionEdit;
-use crate::transport_tours::transport_track_construction_types::TransportTrackConstructionPiece;
+use crate::transport_tours::transport_track_construction_types::{
+    TrackPieces, TransportTrackConstructionPiece,
+};
 use crate::transport_tours::transport_vehicle_types::TransportVehicle;
 
 #[derive(SystemParam)]
@@ -36,15 +39,19 @@ pub struct TransportTrackSaleQueries<'w, 's> {
         's,
         (
             Entity,
-            &'static TrackSegment,
+            TrackRoute,
             &'static CircuitMember,
             &'static WorldMember,
         ),
     >,
     junctions:
         Query<'w, 's, (&'static PersistentId, &'static WorldMember), With<TransportTrackJunction>>,
+    tower_heights: Query<'w, 's, &'static super::transport_topology_types::SkyTowerHeight>,
     stations: Query<'w, 's, &'static WorldMember, With<TransportStation>>,
     circuits: Query<'w, 's, &'static WorldMember, With<TransportCircuit>>,
+    incidence: TrackIncidence<'w, 's>,
+    route_pieces: Query<'w, 's, &'static TrackPieces>,
+    identities: Res<'w, PersistentEditLookup>,
     transport: Query<
         'w,
         's,
@@ -60,6 +67,8 @@ pub struct TransportTrackSaleQueries<'w, 's> {
 
 struct TerminalTrackSale<'a> {
     route: &'a TrackSegment,
+    from: Entity,
+    to: Entity,
     profile: &'a TrackProfile,
     circuit: Entity,
     destination_junction: Option<PersistentId>,
@@ -75,9 +84,9 @@ impl TransportTrackSaleQueries<'_, '_> {
     pub fn requires_transport_sale(&self, target: Entity) -> bool {
         self.transport.contains(target)
             || self
-                .routes
-                .iter()
-                .any(|(_, route, _, _)| route.from == target || route.to == target)
+                .incidence
+                .incident(target)
+                .any(|route| self.routes.contains(route))
     }
 
     // A terminal route owns its destination junction and every projected piece.
@@ -93,49 +102,48 @@ impl TransportTrackSaleQueries<'_, '_> {
                 self.junctions
                     .contains(target)
                     .then(|| {
-                        self.routes
-                            .iter()
-                            .find(|(_, route, _, _)| route.to == target)
-                            .map(|(entity, _, _, _)| entity)
+                        self.incidence
+                            .incoming(target)
+                            .find(|&route| self.routes.contains(route))
                     })
                     .flatten()
             })?;
         let (_, route, member, world) = self.routes.get(route_entity).ok()?;
         let destination =
-            if let Ok((destination_id, destination_world)) = self.junctions.get(route.to) {
+            if let Ok((destination_id, destination_world)) = self.junctions.get(route.to()) {
                 (destination_world.root == world.root).then_some(())?;
                 let continues = self
-                    .routes
-                    .iter()
-                    .any(|(entity, other, _, _)| entity != route_entity && other.from == route.to);
+                    .incidence
+                    .outgoing(route.to())
+                    .any(|entity| entity != route_entity && self.routes.contains(entity));
                 if self
-                    .routes
-                    .iter()
-                    .any(|(entity, other, _, _)| entity != route_entity && other.to == route.to)
+                    .incidence
+                    .incoming(route.to())
+                    .any(|entity| entity != route_entity && self.routes.contains(entity))
                 {
                     return None;
                 }
                 if continues {
-                    (None, Some(route.to))
+                    (None, Some(route.to()))
                 } else {
                     (Some(*destination_id), None)
                 }
             } else {
-                (self.stations.get(route.to).ok()?.root == world.root).then_some(())?;
-                (None, Some(route.to))
+                (self.stations.get(route.to()).ok()?.root == world.root).then_some(())?;
+                (None, Some(route.to()))
             };
         if self.circuits.get(member.0).ok()?.root != world.root {
             return None;
         }
         let source_is_station = self
             .stations
-            .get(route.from)
+            .get(route.from())
             .is_ok_and(|source| source.root == world.root);
         // A road left after a gap can be removed from its first
         // piece too; undoing that is refused, since nothing leads into it.
         let source_is_junction = self
             .junctions
-            .get(route.from)
+            .get(route.from())
             .is_ok_and(|(_, source)| source.root == world.root);
         if !source_is_station && !source_is_junction {
             return None;
@@ -146,8 +154,8 @@ impl TransportTrackSaleQueries<'_, '_> {
         }
         let mut pieces = self
             .pieces
-            .iter()
-            .filter(|(_, _, piece, _, _)| piece.route_segment == route_entity)
+            .iter_many(self.route_pieces.get(route_entity).ok()?.iter())
+            .filter_map(Result::ok)
             .collect::<Vec<_>>();
         pieces.sort_unstable_by_key(|(_, _, piece, _, _)| piece.piece_index);
         if pieces.is_empty()
@@ -164,7 +172,9 @@ impl TransportTrackSaleQueries<'_, '_> {
             return None;
         }
         Some(TerminalTrackSale {
-            route,
+            route: route.geometry,
+            from: route.from(),
+            to: route.to(),
             profile,
             circuit: member.0,
             destination_junction: destination.0,
@@ -195,11 +205,12 @@ impl TransportTrackSaleQueries<'_, '_> {
             kind: sale.profile.kind,
             maximum_grade_permille: sale.profile.maximum_grade_permille,
             circuit: sale.circuit,
-            from_endpoint: route.from,
+            from_endpoint: sale.from,
             from_endpoint_index: route.from_endpoint_index,
             to_endpoint: sale.destination_endpoint,
             to_endpoint_index: route.to_endpoint_index,
             path_points: route.path_points.clone(),
+            tower_height_m: self.tower_heights.get(sale.to).ok().map(|height| height.0),
             applied_entities: sale.pieces.into_iter().map(|(entity, _)| entity).collect(),
             preview: None,
             application_in_flight: None,
@@ -237,11 +248,11 @@ impl TransportTrackSaleQueries<'_, '_> {
     }
 
     pub fn removal_still_matches(&self, edit: &PreparedTransportTrackConstructionEdit) -> bool {
-        let Some(target) = self.pieces.iter().find_map(|(entity, id, _, _, _)| {
-            (Some(id) == edit.piece_entities.first()).then_some(entity)
-        }) else {
-            return false;
-        };
+        let target = self.circuits.get(edit.circuit).ok().and_then(|world| {
+            self.identities
+                .get(world.root, *edit.piece_entities.first()?)
+        });
+        let Some(target) = target else { return false };
         self.terminal_route_edit(target).is_some_and(|current| {
             current.piece_entities == edit.piece_entities
                 && current.destination_junction_entity == edit.destination_junction_entity

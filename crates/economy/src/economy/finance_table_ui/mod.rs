@@ -33,128 +33,155 @@ use openzt2_interface_state::information::entity_selection_types::Inspectable;
 use openzt2_zoo_state::donations::donation_opportunity_types::DonationAcceptor;
 use openzt2_zoo_state::economy::facility_economy_types::ServiceFacility;
 
-#[derive(Default)]
-pub(super) struct OrderedFinanceReportSubjects {
-    buildings: Vec<Entity>,
-    donation_boxes: Vec<Entity>,
-}
+#[derive(Component)]
+#[relationship(relationship_target = FinanceReportRows)]
+pub(super) struct FinanceReportSubject(Entity);
 
-pub(super) fn request_authored_finance_report_list_row_counts_and_bind_world_subjects(
+#[derive(Component)]
+#[relationship_target(relationship = FinanceReportSubject)]
+pub(super) struct FinanceReportRows(Vec<Entity>);
+
+pub(super) fn bind_finance_report_rows(
     mut commands: Commands,
-    history: Res<MonthlyFinanceHistory>,
-    documents: Res<Assets<UiDocumentAsset>>,
-    roots: Query<&UiDocumentRoot>,
-    owners: Query<&UiDocumentOwner>,
-    parents: Query<&ChildOf>,
-    lists: Query<(Entity, Ref<UiListPolicy>, Option<Ref<Children>>)>,
+    lists: Query<(Entity, Ref<UiListPolicy>, Option<&Children>)>,
     mut counts: Query<&mut RequestedUiListRowCount>,
-    mut rows: Query<(Ref<UiListRow>, Option<&mut InformationEntitySource>)>,
-    buildings: Query<
-        Entity,
+    rows: Query<(Entity, Ref<UiListRow>, Option<&FinanceReportSubject>)>,
+    subjects: Query<
+        (Entity, Has<DonationAcceptor>),
         (
             With<Inspectable>,
-            With<ServiceFacility>,
-            Without<DonationAcceptor>,
+            Or<(With<ServiceFacility>, With<DonationAcceptor>)>,
         ),
     >,
-    donation_boxes: Query<Entity, (With<Inspectable>, With<DonationAcceptor>)>,
-    added: Query<
+    changed_subjects: Query<
         (),
-        Or<(
-            Added<Inspectable>,
-            Added<ServiceFacility>,
-            Added<DonationAcceptor>,
-        )>,
+        (
+            With<Inspectable>,
+            Or<(
+                Added<Inspectable>,
+                Added<ServiceFacility>,
+                Added<DonationAcceptor>,
+            )>,
+        ),
     >,
     mut removed: (
         RemovedComponents<Inspectable>,
         RemovedComponents<ServiceFacility>,
         RemovedComponents<DonationAcceptor>,
     ),
-    mut subjects: Local<OrderedFinanceReportSubjects>,
 ) {
-    let membership_changed = !added.is_empty()
-        || !removed.0.is_empty()
-        || !removed.1.is_empty()
-        || !removed.2.is_empty();
-    removed.0.clear();
-    removed.1.clear();
-    removed.2.clear();
-    if membership_changed {
-        subjects.buildings.clear();
-        subjects.buildings.extend(buildings.iter());
-        subjects
-            .buildings
-            .sort_unstable_by_key(|entity| entity.to_bits());
-        subjects.donation_boxes.clear();
-        subjects.donation_boxes.extend(donation_boxes.iter());
-        subjects
-            .donation_boxes
-            .sort_unstable_by_key(|entity| entity.to_bits());
-    }
+    let removed_count =
+        removed.0.read().count() + removed.1.read().count() + removed.2.read().count();
+    let membership_changed = removed_count != 0 || !changed_subjects.is_empty();
+    let mut ordered_subjects = None;
     for (list, policy, children) in &lists {
-        use UiWidgetLiveCollectionSource::*;
-        let Some(subjects) = (match policy.source {
-            FinanceBuildings => Some(&subjects.buildings),
-            FinanceDonationBoxes => Some(&subjects.donation_boxes),
-            _ => None,
-        }) else {
-            let count = match policy.source {
-                FinanceBalanceSheetCategories | FinanceBalanceSheetMonthValues
-                    if policy.is_changed() || documents.is_changed() =>
-                {
-                    finance_categories_for(list, &parents, &owners, &roots, &documents)
-                        .map_or(0, <[_]>::len)
-                }
-                FinanceBalanceSheetMonths | FinanceBalanceSheetMonthColumns
-                    if policy.is_changed() || history.is_changed() =>
-                {
-                    history.retained_month_finance_records().len()
-                }
-                _ => continue,
-            };
-            if let Ok(mut count_field) = counts.get_mut(list) {
-                count_field.set_if_neq(RequestedUiListRowCount(Some(
-                    count.min(usize::from(u16::MAX)) as u16,
-                )));
-            }
-            continue;
+        let donation_box = match policy.source {
+            UiWidgetLiveCollectionSource::FinanceBuildings => false,
+            UiWidgetLiveCollectionSource::FinanceDonationBoxes => true,
+            _ => continue,
         };
-        if membership_changed || policy.is_changed() {
-            if let Ok(mut count) = counts.get_mut(list) {
-                count.set_if_neq(RequestedUiListRowCount(Some(
-                    subjects.len().min(usize::from(u16::MAX)) as u16,
-                )));
+        if !membership_changed
+            && !policy.is_changed()
+            && children.is_none_or(|children| {
+                rows.iter_many(children.iter())
+                    .flatten()
+                    .all(|(_, row, subject)| !row.is_changed() && subject.is_some())
+            })
+        {
+            continue;
+        }
+        let ordered = ordered_subjects.get_or_insert_with(|| {
+            let mut ordered = [Vec::new(), Vec::new()];
+            for (subject, acceptor) in &subjects {
+                ordered[usize::from(acceptor)].push(subject);
             }
+            for subjects in &mut ordered {
+                subjects.sort_unstable_by_key(|subject: &Entity| subject.to_bits());
+            }
+            ordered
+        });
+        let subjects = &ordered[usize::from(donation_box)];
+        if let Ok(mut count) = counts.get_mut(list) {
+            count.set_if_neq(RequestedUiListRowCount(Some(
+                subjects.len().min(usize::from(u16::MAX)) as u16,
+            )));
         }
         if let Some(children) = children {
-            for entity in RelationshipTarget::iter(&*children) {
-                let Ok((row, source)) = rows.get_mut(entity) else {
-                    continue;
-                };
-                if !membership_changed
-                    && !policy.is_changed()
-                    && !row.is_changed()
-                    && source.is_some()
-                {
+            for (entity, row, current) in rows.iter_many(children.iter()).flatten() {
+                let subject = subjects.get(usize::from(row.index)).copied();
+                if subject == current.map(|current| current.0) {
                     continue;
                 }
-                match (subjects.get(usize::from(row.index)), source) {
-                    (Some(&subject), Some(mut source)) => {
-                        source.set_if_neq(InformationEntitySource(subject));
-                    }
-                    (Some(&subject), None) => {
-                        commands
-                            .entity(entity)
-                            .insert(InformationEntitySource(subject));
-                    }
-                    (None, Some(_)) => {
-                        commands.entity(entity).remove::<InformationEntitySource>();
-                    }
-                    (None, None) => {}
+                if let Some(subject) = subject {
+                    commands
+                        .entity(entity)
+                        .insert(FinanceReportSubject(subject));
+                } else {
+                    commands.entity(entity).remove::<FinanceReportSubject>();
                 }
             }
         }
+    }
+}
+
+pub(super) fn project_finance_report_subjects(
+    mut commands: Commands,
+    mut rows: Query<
+        (
+            Entity,
+            &FinanceReportSubject,
+            Option<&mut InformationEntitySource>,
+        ),
+        Changed<FinanceReportSubject>,
+    >,
+    linked_rows: Query<(), With<FinanceReportSubject>>,
+    mut removed: RemovedComponents<FinanceReportSubject>,
+) {
+    for entity in removed
+        .read()
+        .filter(|&entity| !linked_rows.contains(entity))
+    {
+        commands
+            .entity(entity)
+            .try_remove::<InformationEntitySource>();
+    }
+    for (entity, subject, source) in &mut rows {
+        let next = InformationEntitySource(subject.0);
+        if let Some(mut source) = source {
+            source.set_if_neq(next);
+        } else {
+            commands.entity(entity).insert(next);
+        }
+    }
+}
+
+pub(super) fn request_finance_balance_sheet_list_sizes(
+    history: Res<MonthlyFinanceHistory>,
+    documents: Res<Assets<UiDocumentAsset>>,
+    roots: Query<&UiDocumentRoot>,
+    owners: Query<&UiDocumentOwner>,
+    parents: Query<&ChildOf>,
+    mut lists: Query<(Entity, Ref<UiListPolicy>, &mut RequestedUiListRowCount)>,
+) {
+    use UiWidgetLiveCollectionSource::*;
+    for (list, policy, mut count) in &mut lists {
+        let rows = match policy.source {
+            FinanceBalanceSheetCategories | FinanceBalanceSheetMonthValues
+                if policy.is_changed() || documents.is_changed() =>
+            {
+                finance_categories_for(list, &parents, &owners, &roots, &documents)
+                    .map_or(0, <[_]>::len)
+            }
+            FinanceBalanceSheetMonths | FinanceBalanceSheetMonthColumns
+                if policy.is_changed() || history.is_changed() =>
+            {
+                history.retained_month_finance_records().len()
+            }
+            _ => continue,
+        };
+        count.set_if_neq(RequestedUiListRowCount(Some(
+            rows.min(usize::from(u16::MAX)) as u16,
+        )));
     }
 }
 

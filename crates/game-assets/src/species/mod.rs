@@ -8,6 +8,7 @@ pub mod species_asset_types;
 use bevy::{asset::AssetApp, prelude::*};
 
 use crate::application_lifecycle::GamePhase;
+use crate::asset_source::ArchiveOverlayChanged;
 use crate::world_asset_preparation::WorldAssetPreparation;
 
 use self::{
@@ -26,13 +27,15 @@ impl Plugin for SpeciesAssetPlugin {
         app.init_asset::<SpeciesAsset>()
             .init_asset_loader::<SpeciesAssetLoader>()
             .init_resource::<SpeciesAssets>()
+            .add_message::<ArchiveOverlayChanged>()
             .add_systems(
                 PreUpdate,
                 (
                     discover_species_catalogue_sources.run_if(
                         in_state(GamePhase::Loading)
                             .or_else(in_state(GamePhase::InGame))
-                            .or_else(any_with_component::<WorldAssetPreparation>),
+                            .or_else(any_with_component::<WorldAssetPreparation>)
+                            .or_else(on_message::<ArchiveOverlayChanged>),
                     ),
                     index_loaded_species_assets_by_species_and_variant_identifier,
                 )

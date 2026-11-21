@@ -3,7 +3,7 @@
 use bevy::animation::{animated_field, AnimationTargetId};
 use bevy::math::Affine3A;
 use bevy::prelude::*;
-use openzt2_game_assets::animation::animation_set_asset_types::AnimationClipRecord;
+use openzt2_game_assets::animation::animation_clip_source_queries::LoadedAnimationClip;
 
 #[derive(Component)]
 pub struct ConsumedLocomotionRootMotion {
@@ -64,7 +64,7 @@ impl ConsumedLocomotionRootMotion {
         root: &str,
         interval: std::ops::Range<f32>,
         complete_cycles: i64,
-        duration_seconds: f32,
+        cycle: std::ops::Range<f32>,
     ) {
         let target = AnimationTargetId::from_name(&Name::new(root.to_ascii_lowercase()));
         let sample = |time| {
@@ -76,8 +76,8 @@ impl ConsumedLocomotionRootMotion {
                 .unwrap_or(Quat::IDENTITY);
             Affine3A::from_rotation_translation(rotation, translation)
         };
-        let first = sample(0.0);
-        let last = sample(duration_seconds);
+        let first = sample(cycle.start);
+        let last = sample(cycle.end);
         self.mean_translation = self
             .actor_from_root_parent
             .transform_vector3(Vec3::from(last.translation - first.translation));
@@ -118,11 +118,11 @@ impl ConsumedLocomotionRootMotion {
 /// Mean transformed clip velocity used by route planning and steering.
 #[must_use]
 pub fn clip_motion_velocity(
-    clip: &AnimationClipRecord,
+    clip: &LoadedAnimationClip,
     root_parent: &GlobalTransform,
     playback_speed_permille: i16,
 ) -> Option<Vec3> {
-    let metadata = clip.authored_animation_clip_metadata.as_ref()?;
+    let metadata = clip.metadata?;
     let motion = metadata.root_motion_transform?;
     metadata.root_motion_joint.as_ref()?;
     let duration =

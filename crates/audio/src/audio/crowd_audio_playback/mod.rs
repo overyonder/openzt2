@@ -1,3 +1,4 @@
+use super::audio_request_lanes::{ProducedAudioRequest, CROWD};
 use bevy::prelude::*;
 use openzt2_game_assets::audio::audio_asset_types::{AudioAsset, AudioAssets};
 use openzt2_game_data::{audio::AudioCrowdPolicy, AssetId as CueId};
@@ -9,7 +10,7 @@ use openzt2_zoo_state::{
 
 use super::audio_playback_message_types::{PlayAudioCue, StopAudioCue};
 
-#[derive(Component)]
+#[derive(Component, PartialEq, Eq)]
 pub(super) struct CrowdCuePlayback {
     band: Option<u8>,
     cue: Option<CueId>,
@@ -46,14 +47,13 @@ pub(super) fn project_current_crowd_into_audio_playback(
     catalogue: Res<AudioAssets>,
     finance: Option<Res<MonthlyFinanceHistory>>,
     presets: Query<&WorldAudioPreset>,
-    soundscapes: Query<(
+    mut soundscapes: Query<(
         Entity,
         &AudioSoundscape,
         &WorldMember,
-        Option<&CrowdCuePlayback>,
+        Option<&mut CrowdCuePlayback>,
     )>,
-    mut play: MessageWriter<PlayAudioCue>,
-    mut stop: MessageWriter<StopAudioCue>,
+    mut requests: MessageWriter<ProducedAudioRequest<CROWD>>,
 ) {
     let Some(count) =
         finance.and_then(|history| history.current_month_finance().map(|row| row.active_users))
@@ -63,7 +63,7 @@ pub(super) fn project_current_crowd_into_audio_playback(
     let catalogue_policy = catalogue
         .get(&assets)
         .and_then(|catalogue| catalogue.crowd());
-    for (entity, soundscape, member, playback) in &soundscapes {
+    for (entity, soundscape, member, playback) in &mut soundscapes {
         let policy = match presets.get(member.root) {
             Ok(preset) => {
                 let Some(preset) = assets.get(&preset.0) else {
@@ -74,35 +74,42 @@ pub(super) fn project_current_crowd_into_audio_playback(
             Err(_) => catalogue_policy,
         };
         let band = policy.and_then(|policy| {
-            select_crowd_band(count, playback.and_then(|playback| playback.band), policy)
+            select_crowd_band(
+                count,
+                playback.as_deref().and_then(|playback| playback.band),
+                policy,
+            )
         });
         let cue = band.and_then(|band| policy.and_then(|policy| policy.cues[usize::from(band)]));
         let selection = soundscape.selection ^ 0xc7d2_63a5_80e1_b49f;
-        if playback.is_some_and(|playback| {
-            playback.band == band && playback.cue == cue && playback.selection == selection
-        }) {
+        let next = CrowdCuePlayback {
+            band,
+            cue,
+            selection,
+        };
+        if playback.as_deref() == Some(&next) {
             continue;
         }
-        if let Some(playback) = playback {
-            stop.write(StopAudioCue {
+        if let Some(playback) = playback.as_deref() {
+            requests.write(ProducedAudioRequest::Stop(StopAudioCue {
                 emitter: Some(entity),
                 selection: playback.selection,
-            });
+            }));
         }
         if let Some(cue) = cue {
-            play.write(PlayAudioCue {
+            requests.write(ProducedAudioRequest::Play(PlayAudioCue {
                 cue,
                 emitter: Some(entity),
                 selection,
                 priority: 48,
                 force_looped: true,
-            });
+            }));
         }
-        commands.entity(entity).insert(CrowdCuePlayback {
-            band,
-            cue,
-            selection,
-        });
+        if let Some(mut playback) = playback {
+            *playback = next;
+        } else {
+            commands.entity(entity).insert(next);
+        }
     }
 }
 
@@ -132,8 +139,7 @@ mod tests {
         app.init_resource::<Assets<AudioAsset>>()
             .init_resource::<AudioAssets>()
             .insert_resource(history)
-            .add_message::<PlayAudioCue>()
-            .add_message::<StopAudioCue>()
+            .add_message::<ProducedAudioRequest<CROWD>>()
             .add_systems(Update, project_current_crowd_into_audio_playback);
         let cues = ["quiet", "small", "medium", "large", "huge"].map(CueId::from_key);
         let preset = app.world_mut().resource_mut::<Assets<AudioAsset>>().add(
@@ -162,9 +168,12 @@ mod tests {
         app.update();
         let drain = |app: &mut App| {
             app.world_mut()
-                .resource_mut::<Messages<PlayAudioCue>>()
+                .resource_mut::<Messages<ProducedAudioRequest<CROWD>>>()
                 .drain()
-                .map(|request| request.cue)
+                .filter_map(|request| match request {
+                    ProducedAudioRequest::Play(request) => Some(request.cue),
+                    _ => None,
+                })
                 .collect::<Vec<_>>()
         };
         assert_eq!(drain(&mut app), vec![cues[2]]);

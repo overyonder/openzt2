@@ -12,7 +12,6 @@ pub(super) fn detach_slot_objects(
     objects: &Query<(&ContainedObject, &DefinitionId, Option<&WorldMember>)>,
     transforms: &Query<&GlobalTransform>,
     memberships: &InteractionContainerMemberships,
-    world_releases: Option<&BehaviorWorldReleaseSupport>,
     commands: &mut Commands,
 ) -> bool {
     memberships.members_in_slot(holder, slot).all(|item| {
@@ -23,7 +22,6 @@ pub(super) fn detach_slot_objects(
             definitions,
             objects,
             transforms,
-            world_releases,
             commands,
         )
     })
@@ -38,7 +36,6 @@ pub(super) fn detach_object(
     definitions: &WorldDefinitionsView<'_>,
     objects: &Query<(&ContainedObject, &DefinitionId, Option<&WorldMember>)>,
     transforms: &Query<&GlobalTransform>,
-    world_releases: Option<&BehaviorWorldReleaseSupport>,
     commands: &mut Commands,
 ) -> bool {
     let Ok((contained, definition, world)) = objects.get(item) else {
@@ -75,16 +72,7 @@ pub(super) fn detach_object(
     if rule
         .created_objects
         .iter()
-        .any(|(_, destination)| match destination {
-            WorldObjectDetachDestination::Container(_) => false,
-            WorldObjectDetachDestination::Drop => {
-                !BehaviorWorldReleaseMotion::Drop.available(world_releases)
-            }
-            WorldObjectDetachDestination::Fall => {
-                !BehaviorWorldReleaseMotion::Fall.available(world_releases)
-            }
-            WorldObjectDetachDestination::Kill => true,
-        })
+        .any(|(_, destination)| *destination == WorldObjectDetachDestination::Kill)
         || (!rule.created_objects.is_empty() && world.is_none())
     {
         return false;
@@ -167,7 +155,7 @@ pub(super) fn detach_object(
                 } else {
                     BehaviorWorldReleaseMotion::Fall
                 };
-                let Some(world) = world.filter(|_| motion.available(world_releases)) else {
+                let Some(world) = world else {
                     return false;
                 };
                 let pose = prepared_pose
@@ -222,61 +210,64 @@ pub(super) fn detach_object(
     true
 }
 
-#[derive(Component)]
-pub(super) struct DestroyedHolderSlot(pub(super) usize);
-
-pub(super) fn record_slots_of_destroyed_holders(
+pub(super) fn retire_owned_objects_when_holder_is_destroyed(
     despawn: On<Despawn<InteractionContainerSlots>>,
-    memberships: InteractionContainerMemberships,
-    carried: Query<(), With<ContainedObject>>,
-    mut commands: Commands,
-) {
-    // Slot despawn releases the relationships before the next scheduled system.
-    for member in memberships.members_of_container(despawn.entity) {
-        if !carried.contains(member) {
-            continue;
-        }
-        if let Some(slot) = memberships.actor_slot(despawn.entity, member) {
-            commands
-                .entity(member)
-                .try_insert(DestroyedHolderSlot(slot));
-        }
-    }
-}
-
-pub(super) fn release_objects_from_destroyed_holders(
-    mut commands: Commands,
     definitions: Res<WorldDefinitions>,
     definition_assets: Res<Assets<WorldDefinitionAsset>>,
-    objects: Query<
-        (Entity, &ContainedObject, Option<&DestroyedHolderSlot>),
-        Without<InteractionContainerMember>,
-    >,
+    memberships: InteractionContainerMemberships,
+    mut carried: Query<(&ContainedObject, Option<&mut Transform>)>,
+    anchors: Query<&GlobalTransform>,
+    mut commands: Commands,
 ) {
     let Some(definitions) = definitions.get(&definition_assets) else {
         return;
     };
-    for (item, contained, destroyed_slot) in &objects {
-        let owned = if let Some(slot) = destroyed_slot {
-            let Some(policy) =
-                super::holder::AttachmentHolder::find(&definitions, contained.holder_definition)
-                    .and_then(|holder| holder.place(slot.0))
-            else {
-                continue;
-            };
-            policy.owns_contents
-        } else {
-            false
+    for item in memberships.members_of_container(despawn.entity) {
+        let (Ok((contained, pose)), Some(slot)) = (
+            carried.get_mut(item),
+            memberships.actor_slot(despawn.entity, item),
+        ) else {
+            continue;
         };
-        if owned {
-            commands.entity(item).despawn();
-        } else {
-            commands
-                .entity(item)
-                .remove::<(ContainedObject, DestroyedHolderSlot)>()
-                .insert(Visibility::Inherited);
+        if super::holder::AttachmentHolder::find(&definitions, contained.holder_definition)
+            .and_then(|holder| holder.place(slot))
+            .is_some_and(|policy| policy.owns_contents)
+        {
+            commands.entity(item).try_despawn();
+        } else if let Ok(anchor) = anchors.get(contained.joint.unwrap_or(despawn.entity)) {
+            if let Some(mut pose) = pose {
+                pose.set_if_neq(
+                    anchor
+                        .mul_transform(contained.relative_transform)
+                        .compute_transform(),
+                );
+            }
         }
     }
+}
+
+pub(super) fn release_detached_object_presentation(
+    removed: On<Remove<InteractionContainerMember>>,
+    carried: Query<(), With<ContainedObject>>,
+    mut commands: Commands,
+) {
+    if !carried.contains(removed.entity) {
+        return;
+    }
+    commands.entity(removed.entity).queue_silenced(
+        |mut item: bevy::ecs::world::EntityWorldMut<'_>| {
+            if item.contains::<InteractionContainerMember>() || !item.contains::<ContainedObject>()
+            {
+                return;
+            }
+            item.remove::<ContainedObject>();
+            if let Some(mut visibility) = item.get_mut::<Visibility>() {
+                visibility.set_if_neq(Visibility::Inherited);
+            } else {
+                item.insert(Visibility::Inherited);
+            }
+        },
+    );
 }
 
 /// Text-key traversal may cross attach and detach in one simulation step. The
@@ -284,7 +275,6 @@ pub(super) fn release_objects_from_destroyed_holders(
 /// the later key cannot disappear merely because its item did not exist yet.
 pub(super) fn apply_delivered_detach_after_object_admission(
     mut commands: Commands,
-    world_releases: Option<Res<BehaviorWorldReleaseSupport>>,
     definitions: Res<WorldDefinitions>,
     definition_assets: Res<Assets<WorldDefinitionAsset>>,
     delivered: Query<Entity, With<DeliveredAttachmentDetach>>,
@@ -316,7 +306,6 @@ pub(super) fn apply_delivered_detach_after_object_admission(
             &objects,
             &transforms,
             &memberships,
-            world_releases.as_deref(),
             &mut commands,
         ) {
             mark_behavior_task_for_failure_and_stop_navigation(holder, &mut commands);

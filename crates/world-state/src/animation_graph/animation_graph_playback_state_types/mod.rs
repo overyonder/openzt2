@@ -35,7 +35,7 @@ impl AnimationGraphPlaybackState {
     pub fn active_blend_duration_milliseconds(&self) -> Option<u32> {
         self.active_animation_graph_blend
             .as_ref()
-            .map(|animation_graph_blend| animation_graph_blend.duration_milliseconds)
+            .map(|blend| blend.timer.duration().as_millis().min(u128::from(u32::MAX)) as u32)
     }
 }
 
@@ -44,9 +44,18 @@ pub struct AnimationGraphTransition {
     pub target_animation_graph_node_index: u32,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct AnimationGraphBlend {
-    pub fractional_milliseconds: crate::animation_playback::fractional_animation_milliseconds::FractionalAnimationMilliseconds,
-    pub elapsed_milliseconds: u32,
-    pub duration_milliseconds: u32,
+    pub timer: Timer,
+}
+
+impl AnimationGraphBlend {
+    pub fn from_duration_milliseconds(milliseconds: u32) -> Option<Self> {
+        (milliseconds != 0).then(|| Self {
+            timer: Timer::new(
+                std::time::Duration::from_millis(u64::from(milliseconds)),
+                TimerMode::Once,
+            ),
+        })
+    }
 }

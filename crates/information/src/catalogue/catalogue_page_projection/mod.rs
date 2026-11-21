@@ -187,7 +187,7 @@ pub(crate) fn project_catalogue_page(
                             localization.find_plain_localized_text(AssetId(entry.name_key.0))
                         })
                         .unwrap_or("");
-                    replace_projected_ui_text_if_changed(&mut text.0, value);
+                    replace_projected_ui_text_if_changed(text, value);
                 }
                 UiTextPropertyBindingSource::CatalogueEntryPrice {
                     row,

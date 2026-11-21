@@ -24,7 +24,7 @@ use super::{
     },
     tank_snapshot_section_encoding::append_encoded_tank_snapshot_record,
     tank_snapshot_types::TankSnapshotRecord,
-    transport_snapshot_section_encoding::append_encoded_transport_snapshot_section,
+    transport_snapshot_section_encoding::encode_transport_snapshot_section,
     transport_snapshot_types::TransportSnapshotRecords,
     world_snapshot_section_encoding::append_encoded_world_snapshot_section,
     world_snapshot_types::WorldSnapshotRecord,
@@ -292,6 +292,7 @@ pub(super) fn append_captured_world_snapshot_sections_and_finalize_container(
                 },
             ),
             WorldSnapshotSectionKind::Transport => {
+                let payload = encode_transport_snapshot_section(transport_snapshot_records)?;
                 append_encoded_world_snapshot_section_to_container(
                     snapshot_container_bytes,
                     snapshot_section,
@@ -301,12 +302,7 @@ pub(super) fn append_captured_world_snapshot_sections_and_finalize_container(
                         .saturating_add(transport_snapshot_records.circuit_member_records.len())
                         .saturating_add(transport_snapshot_records.vehicle_records.len())
                         as u32,
-                    |section_bytes| {
-                        append_encoded_transport_snapshot_section(
-                            section_bytes,
-                            transport_snapshot_records,
-                        );
-                    },
+                    |section_bytes| section_bytes.extend(payload),
                 )
             }
             WorldSnapshotSectionKind::Photos => append_encoded_world_snapshot_section_to_container(

@@ -18,6 +18,7 @@ use openzt2_game_data::{
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
     RunBehaviorExitTankGate, RunningBehaviorInstruction,
 };
+use openzt2_zoo_state::topology::habitat_boundary_queries::HabitatBoundaryQueries;
 
 use openzt2_game_assets::behavior::behavior_asset_types::{
     BehaviorDocumentAsset, LoadedBehaviorDocumentCollection,
@@ -359,9 +360,10 @@ pub(crate) fn execute_staff_exit_tank_gate_actions(
     clock: Res<ZooClock>,
     habitats: Res<HabitatIndex>,
     topology: Res<TopologyGrid>,
-    tanks: Query<&openzt2_zoo_state::habitat::habitat_types::HabitatRegion, With<Tank>>,
+    tanks: Query<(), With<Tank>>,
+    boundaries: HabitatBoundaryQueries,
     gates: Query<(
-        &openzt2_zoo_state::topology::topology_graph_types::FenceEdge,
+        openzt2_zoo_state::topology::topology_graph_types::FenceSegment,
         &openzt2_zoo_state::topology::gate_operation_types::Gate,
     )>,
     nodes: Query<&openzt2_zoo_state::topology::topology_graph_types::TopologyNode>,
@@ -421,19 +423,15 @@ pub(crate) fn execute_staff_exit_tank_gate_actions(
             instruction.complete(actor, clock.tick, &mut commands);
             continue;
         };
-        let Ok(region) = tanks.get(tank) else {
-            continue;
-        };
-        let endpoint = region
-            .boundary_fence_entities
-            .iter()
+        let endpoint = boundaries
+            .fences(tank)
             .filter_map(|gate| {
-                let (edge, gate) = gates.get(*gate).ok()?;
+                let (edge, gate) = gates.get(gate).ok()?;
                 if gate.locked {
                     return None;
                 }
-                let a = topology.cell_translation(nodes.get(edge.a).ok()?.cell);
-                let b = topology.cell_translation(nodes.get(edge.b).ok()?.cell);
+                let a = topology.cell_translation(nodes.get(edge.a()).ok()?.cell);
+                let b = topology.cell_translation(nodes.get(edge.b()).ok()?.cell);
                 let middle = (a + b) * 0.5;
                 let tangent = (b - a).xz().normalize_or_zero();
                 let normal = Vec2::new(-tangent.y, tangent.x) * topology.spacing_m;

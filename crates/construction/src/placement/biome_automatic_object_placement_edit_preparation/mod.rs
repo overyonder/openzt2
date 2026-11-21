@@ -84,7 +84,7 @@ pub(super) struct BiomeAutomaticObjectPlacementPreparationParameters<'w, 's> {
     placement: Res<'w, PlacedObjectFootprintOccupancyIndex>,
     ground_paths: GroundPathPlacementStomp<'w, 's>,
     placed: Query<'w, 's, StompablePlacedObject>,
-    allocator: ResMut<'w, PersistentIdAllocator>,
+    allocator: Query<'w, 's, &'static mut PersistentIdAllocator>,
     scratch: ResMut<'w, ObjectPlacementCellCollectionScratch>,
 }
 
@@ -443,7 +443,11 @@ pub(super) fn prepare_biome_automatic_object_placement_edits(
             ) else {
                 continue;
             };
-            let Ok(entity) = allocator.allocate(member.root) else {
+            let Some(entity) = allocator
+                .get_mut(member.root)
+                .ok()
+                .and_then(|mut allocator| allocator.allocate().ok())
+            else {
                 continue;
             };
             let Some(cost) = total_cost.checked_add(definition.price_cents) else {

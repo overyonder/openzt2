@@ -136,6 +136,7 @@ pub(super) enum SingletonKind {
     NeedAdjustment,
     TranquilizerMode,
     AdmissionPriceBands,
+    TransportHighlight,
     TankSurface,
     TankDepth,
     TankEdit,
@@ -1032,6 +1033,12 @@ impl<'a> WorldDefinitionsView<'a> {
         AdmissionPriceBands,
         admission_price_bands_cents,
         [i32; 4]
+    );
+    singleton!(
+        transport_highlight,
+        TransportHighlight,
+        transport_highlight,
+        TransportHighlightPolicy
     );
     singleton!(
         tank_surface_policy,

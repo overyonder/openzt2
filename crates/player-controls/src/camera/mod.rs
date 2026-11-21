@@ -55,6 +55,7 @@ impl Plugin for ZooCameraPlugin {
             .add_message::<PositionFreeCamera>()
             .add_message::<AimFreeCameraAt>()
             .add_message::<CameraMoved>()
+            .add_message::<openzt2_interface_state::ui::authored_ui_node_projection_components::UiSliderValueChanged>()
             .add_systems(
                 Update,
                 (
@@ -85,8 +86,8 @@ impl Plugin for ZooCameraPlugin {
                         .after(spawn_zoo_camera)
                         .after(photo_zoom::apply_photo_camera_zoom),
                     advance_overhead_camera.after(apply_overhead_camera_zoom_graphics_setting),
-                    photo_zoom::apply_photo_camera_zoom
-                        .after(spawn_zoo_camera),
+                    photo_zoom::bind_photo_zoom_sliders.after(spawn_zoo_camera),
+                    photo_zoom::apply_photo_camera_zoom.after(photo_zoom::bind_photo_zoom_sliders),
                     advance_camera_transition
                         .after(spawn_zoo_camera),
                     update_subject_camera_pose

@@ -1,8 +1,10 @@
+use bevy::ecs::relationship::RelationshipTarget;
+
 use super::super::persistence_failure_types::WorldSnapshotPersistenceFailure;
 use super::{
     transport_snapshot_types::{
         TransportCircuitMemberSnapshotRecord, TransportCircuitSnapshotRecord,
-        TransportSnapshotRecords, TransportVehicleSnapshotRecord,
+        TransportRouteSnapshot, TransportSnapshotRecords, TransportVehicleSnapshotRecord,
     },
     world_snapshot_capture_system_parameters::WorldSnapshotCaptureQueries,
 };
@@ -20,13 +22,22 @@ pub(super) fn capture_sorted_transport_snapshot_records_from_live_world(
     let mut transport_snapshot_records = TransportSnapshotRecords::default();
 
     for (
-        _circuit_entity,
+        circuit_entity,
         persistent_identifier,
         transport_circuit,
         optional_running_state,
         optional_travel_direction,
     ) in &world_snapshot_capture_queries.transport_circuits_with_snapshot_state
     {
+        if let Ok(price) = world_snapshot_capture_queries
+            .transport_fares
+            .get(circuit_entity)
+        {
+            transport_snapshot_records
+                .graph
+                .fares
+                .push((persistent_identifier.0, price.0 .0));
+        }
         transport_snapshot_records
             .circuit_records
             .push(TransportCircuitSnapshotRecord {
@@ -37,13 +48,22 @@ pub(super) fn capture_sorted_transport_snapshot_records_from_live_world(
                 travel_direction: optional_travel_direction.copied().unwrap_or_default(),
             });
     }
-    for (persistent_identifier, circuit_member, definition_identifier) in
+    for (entity, persistent_identifier, circuit_member, definition_identifier) in
         &world_snapshot_capture_queries.transport_circuit_members_with_definition_identifiers
     {
         let Some(circuit_persistent_identifier) = entity_persistent_identifier(circuit_member.0)
         else {
             return Err(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference);
         };
+        if let Ok(pose) = world_snapshot_capture_queries
+            .transport_entity_poses
+            .get(entity)
+        {
+            transport_snapshot_records
+                .graph
+                .poses
+                .push((persistent_identifier.0, *pose));
+        }
         transport_snapshot_records.circuit_member_records.push(
             TransportCircuitMemberSnapshotRecord {
                 persistent_identifier: *persistent_identifier,
@@ -52,13 +72,22 @@ pub(super) fn capture_sorted_transport_snapshot_records_from_live_world(
             },
         );
     }
-    for (persistent_identifier, circuit_member, definition_identifier) in
+    for (entity, persistent_identifier, circuit_member, definition_identifier) in
         &world_snapshot_capture_queries.transport_vehicles_with_definition_identifiers
     {
         let Some(circuit_persistent_identifier) = entity_persistent_identifier(circuit_member.0)
         else {
             return Err(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference);
         };
+        if let Ok(pose) = world_snapshot_capture_queries
+            .transport_entity_poses
+            .get(entity)
+        {
+            transport_snapshot_records
+                .graph
+                .poses
+                .push((persistent_identifier.0, *pose));
+        }
         transport_snapshot_records
             .vehicle_records
             .push(TransportVehicleSnapshotRecord {
@@ -77,5 +106,43 @@ pub(super) fn capture_sorted_transport_snapshot_records_from_live_world(
     transport_snapshot_records
         .vehicle_records
         .sort_unstable_by_key(|record| record.persistent_identifier.0);
+    let graph = &mut transport_snapshot_records.graph;
+    for (id, tower) in &world_snapshot_capture_queries.transport_junctions {
+        graph.junctions.push((id.0, tower.map(|tower| tower.0)));
+    }
+    for (id, route, profile, pieces) in &world_snapshot_capture_queries.transport_track_routes {
+        let mut saved_pieces = world_snapshot_capture_queries
+            .transport_track_pieces
+            .iter_many(pieces.iter())
+            .filter_map(Result::ok)
+            .collect::<Vec<_>>();
+        saved_pieces.sort_unstable_by_key(|(_, piece)| piece.piece_index);
+        if saved_pieces.first().is_none_or(|(first, _)| *first != id)
+            || saved_pieces.len() + 1 != route.path_points.len()
+        {
+            return Err(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference);
+        }
+        graph.routes.push(TransportRouteSnapshot {
+            pieces: saved_pieces.into_iter().map(|(id, _)| id.0).collect(),
+            definition: route.definition,
+            kind: profile.kind,
+            maximum_grade_permille: profile.maximum_grade_permille,
+            from: entity_persistent_identifier(route.from())
+                .ok_or(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference)?
+                .0,
+            from_socket: route.from_endpoint_index,
+            to: entity_persistent_identifier(route.to())
+                .ok_or(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference)?
+                .0,
+            to_socket: route.to_endpoint_index,
+            points: route.path_points.to_vec(),
+            travel_points: route.travel_path_points.to_vec(),
+            length: route.length,
+        });
+    }
+    graph.fares.sort_unstable_by_key(|(id, _)| *id);
+    graph.poses.sort_unstable_by_key(|(id, _)| *id);
+    graph.junctions.sort_unstable_by_key(|(id, _)| *id);
+    graph.routes.sort_unstable_by_key(|route| route.pieces[0]);
     Ok(transport_snapshot_records)
 }

@@ -21,6 +21,7 @@ pub(crate) fn request_authored_initial_staff_animation_for_newly_resolved_prefab
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     animation_set_assets: Res<Assets<AnimationSetAsset>>,
+    clip_sources: openzt2_game_assets::animation::animation_clip_source_queries::AnimationClipSources,
     newly_resolved_prefab_models: Query<
         (Entity, Option<&AnimationPlaybackController>),
         Added<ModelAnimationAttachmentResolved>,
@@ -88,9 +89,12 @@ pub(crate) fn request_authored_initial_staff_animation_for_newly_resolved_prefab
                     animation_set_assets
                         .get(&animation_set_asset_handle)
                         .is_some_and(|animation_set_asset| {
-                            animation_set_asset.animation_clip_asset_load_has_failed(
-                                initial_animation_clip_asset_key,
-                            )
+                            clip_sources
+                                .retained_handle(
+                                    animation_set_asset,
+                                    initial_animation_clip_asset_key,
+                                )
+                                .is_some_and(|source| clip_sources.failed(&source))
                         })
                 })
             {

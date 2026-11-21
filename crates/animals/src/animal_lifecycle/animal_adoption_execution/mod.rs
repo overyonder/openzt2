@@ -20,13 +20,13 @@ use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 
 use super::{
-    adoption_offer_inventory_types::AnimalAdoptionOfferInventory,
+    adoption_offer_execution::{AdoptionOfferClaim, AdoptionOfferClaims},
     animal_adoption_contracts::{
         AdoptAnimal, AnimalAdopted, AnimalAdoptionRefund, PendingAdoption,
     },
     animal_adoption_pricing::resolve_nonnegative_animal_adoption_cost,
     animal_spawn_operation_contracts::{AnimalSpawnRejected, AnimalSpawned, SpawnAnimalRequest},
-    animal_spawn_resolution::resolve_species_and_variant_to_animal_spawn_components,
+    animal_spawn_resolution::select_species_spawn_variant,
     types::Parents,
 };
 
@@ -45,7 +45,7 @@ pub(super) fn request_animal_adoption_payment_or_unpaid_spawn(
     active_world_definitions: Res<WorldDefinitions>,
     worlds: Query<Entity, With<WorldRoot>>,
     adoption_policy: Query<&AnimalAdoptionAvailabilityPolicy, With<WorldRoot>>,
-    adoption_offer_inventories: Query<&AnimalAdoptionOfferInventory, With<WorldRoot>>,
+    mut offers: AdoptionOfferClaims,
     placement_sites: PlacementSiteQueries,
     mut transaction_requests: MessageWriter<TransactionRequest>,
     mut spawn_requests: MessageWriter<SpawnAnimalRequest>,
@@ -72,36 +72,14 @@ pub(super) fn request_animal_adoption_payment_or_unpaid_spawn(
         let preview_identifier = PersistentId(operation_entity.to_bits().max(1));
         let mut random_stream =
             DeterministicRng::from_entity(*zoo_seed, preview_identifier, RngDomain::Reproduction);
-        let Some(resolved_components) = resolve_species_and_variant_to_animal_spawn_components(
+        let Some((variant, sex)) = select_species_spawn_variant(
             species_index,
             species,
             adoption_request.variant,
             adoption_request.sex,
             LifeStage::Adult,
-            world_definitions.timing().ticks_per_day,
             &mut random_stream,
         ) else {
-            commands.entity(operation_entity).despawn();
-            continue;
-        };
-        if let Some(offer_slot_index) = adoption_request.offer_slot_index.map(usize::from) {
-            let offer_is_actionable = adoption_offer_inventories
-                .get(world_membership.root)
-                .ok()
-                .is_some_and(|inventory| {
-                    inventory.offer_is_actionable(
-                        offer_slot_index,
-                        adoption_request.species,
-                        resolved_components.sex,
-                    )
-                });
-            if !offer_is_actionable {
-                commands.entity(operation_entity).despawn();
-                continue;
-            }
-        }
-
-        let Some(variant) = species_index.find_variant(resolved_components.variant) else {
             commands.entity(operation_entity).despawn();
             continue;
         };
@@ -134,10 +112,17 @@ pub(super) fn request_animal_adoption_payment_or_unpaid_spawn(
                 .saturating_mul(i64::from(policy.multiplier_permille))
                 / 1000;
         }
+        if let Some(slot) = adoption_request.offer_slot_index {
+            let Some(claim) = offers.reserve(world, slot, adoption_request.species, sex) else {
+                commands.entity(operation_entity).despawn();
+                continue;
+            };
+            commands.entity(operation_entity).insert(claim);
+        }
         commands.entity(operation_entity).insert(PendingAdoption {
             species: adoption_request.species,
-            variant: resolved_components.variant,
-            sex: resolved_components.sex,
+            variant: variant.id,
+            sex,
             offer_slot_index: adoption_request.offer_slot_index,
             world,
             habitat: adoption_request.habitat,
@@ -157,10 +142,9 @@ pub(super) fn request_animal_adoption_payment_or_unpaid_spawn(
             spawn_requests.write(SpawnAnimalRequest {
                 operation: operation_entity,
                 species: adoption_request.species,
-                variant: Some(resolved_components.variant),
-                sex: Some(resolved_components.sex),
+                variant: Some(variant.id),
+                sex: Some(sex),
                 world,
-                habitat: adoption_request.habitat,
                 transform: adoption_request.transform,
                 parents: Parents::NONE,
             });
@@ -190,7 +174,6 @@ pub(super) fn request_paid_animal_adoption_spawns_after_completed_transactions(
             variant: Some(adoption.variant),
             sex: Some(adoption.sex),
             world: adoption.world,
-            habitat: adoption.habitat,
             transform: adoption.transform,
             parents: Parents::NONE,
         });
@@ -200,27 +183,43 @@ pub(super) fn request_paid_animal_adoption_spawns_after_completed_transactions(
 pub(super) fn reject_animal_adoptions_after_rejected_transactions(
     mut commands: Commands,
     mut rejected_transactions: MessageReader<TransactionRejected>,
-    pending_adoptions: Query<(), With<PendingAdoption>>,
+    mut pending_adoptions: Query<Option<&mut AdoptionOfferClaim>, With<PendingAdoption>>,
+    mut offers: AdoptionOfferClaims,
 ) {
     for transaction in rejected_transactions.read() {
-        if transaction.kind == TransactionKind::AnimalAdoption
-            && pending_adoptions.contains(transaction.operation)
-        {
-            commands.entity(transaction.operation).despawn();
+        if transaction.kind != TransactionKind::AnimalAdoption {
+            continue;
         }
+        let Ok(claim) = pending_adoptions.get_mut(transaction.operation) else {
+            continue;
+        };
+        if let Some(mut claim) = claim {
+            if claim.settled() {
+                continue;
+            }
+            offers.settle(&mut claim, false, &mut commands);
+        }
+        commands.entity(transaction.operation).try_despawn();
     }
 }
 
 pub(super) fn complete_animal_adoptions_after_successful_spawns(
     mut commands: Commands,
     mut spawned_animals: MessageReader<AnimalSpawned>,
-    pending_adoptions: Query<&PendingAdoption>,
+    mut pending_adoptions: Query<(&PendingAdoption, Option<&mut AdoptionOfferClaim>)>,
+    mut offers: AdoptionOfferClaims,
     mut adopted_animals: MessageWriter<AnimalAdopted>,
 ) {
     for spawned_animal in spawned_animals.read() {
-        let Ok(adoption) = pending_adoptions.get(spawned_animal.operation) else {
+        let Ok((adoption, claim)) = pending_adoptions.get_mut(spawned_animal.operation) else {
             continue;
         };
+        if let Some(mut claim) = claim {
+            if claim.settled() {
+                continue;
+            }
+            offers.settle(&mut claim, true, &mut commands);
+        }
         adopted_animals.write(AnimalAdopted {
             operation: spawned_animal.operation,
             animal: spawned_animal.animal,
@@ -229,21 +228,33 @@ pub(super) fn complete_animal_adoptions_after_successful_spawns(
             sex: adoption.sex,
             offer_slot_index: adoption.offer_slot_index,
         });
-        commands.entity(spawned_animal.operation).despawn();
+        commands.entity(spawned_animal.operation).try_despawn();
     }
 }
 
 pub(super) fn refund_paid_animal_adoptions_after_rejected_spawns(
     mut commands: Commands,
     mut rejected_spawns: MessageReader<AnimalSpawnRejected>,
-    pending_adoptions: Query<(&PendingAdoption, Has<CompletedAnimalAdoptionPayment>)>,
+    mut pending_adoptions: Query<(
+        &PendingAdoption,
+        Has<CompletedAnimalAdoptionPayment>,
+        Option<&mut AdoptionOfferClaim>,
+    )>,
+    mut offers: AdoptionOfferClaims,
     mut refund_requests: MessageWriter<TransactionRequest>,
 ) {
     for rejected_spawn in rejected_spawns.read() {
-        let Ok((adoption, payment_completed)) = pending_adoptions.get(rejected_spawn.operation)
+        let Ok((adoption, payment_completed, claim)) =
+            pending_adoptions.get_mut(rejected_spawn.operation)
         else {
             continue;
         };
+        if let Some(mut claim) = claim {
+            if claim.settled() {
+                continue;
+            }
+            offers.settle(&mut claim, false, &mut commands);
+        }
         if payment_completed {
             let operation = commands
                 .spawn((
@@ -262,7 +273,7 @@ pub(super) fn refund_paid_animal_adoptions_after_rejected_spawns(
                 subject: None,
             });
         }
-        commands.entity(rejected_spawn.operation).despawn();
+        commands.entity(rejected_spawn.operation).try_despawn();
     }
 }
 

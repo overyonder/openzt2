@@ -15,9 +15,8 @@ use openzt2_game_data::{
     species::{LifeStage, Sex, SpeciesFlags},
     AssetId,
 };
-use openzt2_world_state::{
-    animation_playback::animation_playback_controller_types::AnimationPlaybackController,
-    world_spawn::{prefab_presentation_types::PrefabModel, world_membership_types::WorldRoot},
+use openzt2_world_state::world_spawn::{
+    prefab_presentation_types::PrefabModel, world_membership_types::WorldRoot,
 };
 use openzt2_zoo_state::{
     animal_lifecycle::{
@@ -78,7 +77,7 @@ fn exercise(
     mut adopted: MessageReader<AnimalAdopted>,
     variants: Query<&AnimalVariant>,
     models: Query<(&AnimalPresentationOwner, &PrefabModel)>,
-    playback: Query<&AnimationPlaybackController>,
+    playback: Query<&AnimationPlayer>,
     server: Res<AssetServer>,
 ) {
     if batch.finished {
@@ -117,9 +116,11 @@ fn exercise(
                     .as_ref()
                     .is_some_and(|handle| server.is_loaded_with_dependencies(handle.id()))
         });
-        trial.animation_verified |= playback
-            .get(animal)
-            .is_ok_and(|controller| controller.elapsed_milliseconds > 0);
+        trial.animation_verified |= playback.get(animal).is_ok_and(|player| {
+            player
+                .playing_animations()
+                .any(|(_, active)| active.seek_time() > 0.0)
+        });
     }
 
     if started.elapsed() >= Duration::from_secs(30)

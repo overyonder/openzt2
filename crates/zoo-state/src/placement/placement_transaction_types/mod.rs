@@ -7,13 +7,6 @@ use crate::economy::money_types::Money;
 use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 
-#[derive(Message, Debug, Clone, Copy, PartialEq)]
-pub struct EvaluateObjectPlacementPreviewRequest {
-    pub preview: Entity,
-    pub definition: AssetId,
-    pub transform: Transform,
-}
-
 #[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CommitObjectPlacementPreviewRequest {
     pub preview: Entity,

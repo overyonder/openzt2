@@ -3,6 +3,9 @@ use bevy::animation::AnimationTargetId;
 use bevy::ecs::system::SystemParam;
 use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
+use openzt2_game_assets::animation::animation_set_asset_types::AnimationSetAsset;
+use openzt2_world_state::world_spawn::prefab_authored_rotation_cycle_advancement::PrefabRealTimeRotationClock;
+use openzt2_world_state::world_spawn::prefab_authored_transform_animation_advancement::PrefabTransformPlaybackClock;
 
 use openzt2_world_state::animation_graph::animation_graph_playback_state_types::AnimationGraphPlaybackState;
 
@@ -31,12 +34,20 @@ pub(super) struct AnimationJointBindingChanges<'w, 's> {
 pub(super) fn bind_new_named_model_entities_and_new_animation_playback_controller_descendants(
     mut commands: Commands,
     mut changes: AnimationJointBindingChanges,
-    named_entities: Query<(
-        &Name,
-        Option<&AnimationJointTarget>,
-        Option<&AnimatedBy>,
-        Option<&StandardBevyAnimationJointBlendPose>,
-    )>,
+    named_entities: Query<
+        (
+            &Name,
+            Option<&AnimationJointTarget>,
+            Option<&AnimatedBy>,
+            Option<&AnimationTargetId>,
+            Option<&StandardBevyAnimationJointBlendPose>,
+        ),
+        (
+            Without<PrefabTransformPlaybackClock>,
+            Without<PrefabRealTimeRotationClock>,
+        ),
+    >,
+    sets: Option<Res<Assets<AnimationSetAsset>>>,
     children: Query<&Children>,
     entity_parents: Query<&ChildOf>,
     animation_players: Query<(), With<AnimationPlayer>>,
@@ -77,10 +88,12 @@ pub(super) fn bind_new_named_model_entities_and_new_animation_playback_controlle
         if !visited_entities.insert(named_entity) {
             continue;
         }
-        let Ok((entity_name, binding, animated_by, _)) = named_entities.get(named_entity) else {
+        let Ok((entity_name, binding, animated_by, previous_target, _)) =
+            named_entities.get(named_entity)
+        else {
             continue;
         };
-        let Some((animation_playback_controller_entity, _, _)) =
+        let Some((animation_playback_controller_entity, controller, _)) =
             find_animation_playback_controller_ancestor(
                 named_entity,
                 &entity_parents,
@@ -98,6 +111,10 @@ pub(super) fn bind_new_named_model_entities_and_new_animation_playback_controlle
             continue;
         };
         let has_player = animation_players.contains(animation_playback_controller_entity);
+        let embedded = sets
+            .as_ref()
+            .and_then(|sets| sets.get(&controller.animation_set_asset))
+            .is_some_and(|set| set.embedded_animation_graph.is_some());
         if binding.is_some_and(|binding| {
             binding.animation_playback_controller_entity == animation_playback_controller_entity
                 && binding.joint_asset_key == entity_name.as_str()
@@ -106,8 +123,13 @@ pub(super) fn bind_new_named_model_entities_and_new_animation_playback_controlle
         {
             continue;
         }
-        let target_id =
-            AnimationTargetId::from_name(&Name::new(entity_name.as_str().to_ascii_lowercase()));
+        let joint_target =
+            || AnimationTargetId::from_name(&Name::new(entity_name.as_str().to_ascii_lowercase()));
+        let target_id = if embedded {
+            previous_target.copied().unwrap_or_else(joint_target)
+        } else {
+            joint_target()
+        };
         let blend_poses = inherited_blend_poses
             .entry(animation_playback_controller_entity)
             .or_insert_with(|| {
@@ -115,12 +137,14 @@ pub(super) fn bind_new_named_model_entities_and_new_animation_playback_controlle
                     .get(animation_playback_controller_entity)
                     .into_iter()
                     .flat_map(|rig| named_entities.iter_many(rig.joints()).matched())
-                    .filter_map(|(name, _, _, snapshot)| {
+                    .filter_map(|(name, _, _, previous_target, snapshot)| {
                         let snapshot = snapshot?;
                         Some((
-                            AnimationTargetId::from_name(&Name::new(
-                                name.as_str().to_ascii_lowercase(),
-                            )),
+                            previous_target.copied().unwrap_or_else(|| {
+                                AnimationTargetId::from_name(&Name::new(
+                                    name.as_str().to_ascii_lowercase(),
+                                ))
+                            }),
                             *snapshot,
                         ))
                     })
@@ -156,6 +180,9 @@ fn insert_animation_joint_target_binding(
     named_entity_commands.insert(AnimationJointTarget {
         animation_playback_controller_entity,
         joint_asset_key: entity_name.as_str().to_owned(),
+        authored_joint_id: openzt2_game_data::AssetId::from_key(
+            &entity_name.as_str().to_ascii_lowercase(),
+        ),
     });
     if animation_players.contains(animation_playback_controller_entity) {
         named_entity_commands.insert((target_id, AnimatedBy(animation_playback_controller_entity)));
@@ -169,7 +196,6 @@ mod tests {
     use super::*;
     use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackClock;
     use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackRepetitionPolicy;
-    use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackState;
 
     fn controller() -> AnimationPlaybackController {
         AnimationPlaybackController {
@@ -177,10 +203,9 @@ mod tests {
             explicit_clip_request_id: None,
             animation_set_asset: Handle::default(),
             animation_clip_asset_key: "idle".to_owned(),
-            elapsed_milliseconds: 0,
-            fractional_milliseconds: default(),
+            preserve_seek_on_restart: false,
             playback_speed_permille: 1000,
-            playback_state: AnimationPlaybackState::default(),
+
             playback_repetition_policy: AnimationPlaybackRepetitionPolicy::default(),
             playback_clock: AnimationPlaybackClock::default(),
         }

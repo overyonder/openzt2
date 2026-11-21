@@ -14,5 +14,4 @@ pub mod behavior_token_types;
 pub mod behavior_trigger_types;
 pub mod interaction_container_membership;
 
-pub mod behavior_traversal_types;
 pub mod behavior_world_release_types;

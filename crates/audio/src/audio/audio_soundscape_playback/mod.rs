@@ -1,3 +1,4 @@
+use super::audio_request_lanes::{ProducedAudioRequest, SOUNDSCAPE_SETUP, SOUNDSCAPE_TIMER};
 use bevy::prelude::*;
 
 use openzt2_game_assets::audio::audio_asset_types::{AudioAsset, AudioAssets};
@@ -10,12 +11,12 @@ use super::{
     deterministic_audio_sampling::sample_deterministic_f32_range,
 };
 
-#[derive(Component)]
+#[derive(Component, PartialEq, Eq)]
 pub(super) struct AppliedSoundscapePreset(Option<bevy::asset::AssetId<AudioAsset>>);
 
-#[derive(Component, Clone, Copy, Debug)]
+#[derive(Component, Debug)]
 pub(super) struct SoundscapeCueSchedule {
-    remaining_seconds: f32,
+    delay: Timer,
     selection: u64,
 }
 
@@ -46,39 +47,45 @@ pub(super) fn project_changed_audio_soundscapes_into_playback_and_schedules(
     mut commands: Commands,
     audio_assets: Res<Assets<AudioAsset>>,
     audio_asset_index: Res<AudioAssets>,
-    soundscapes: Query<(
+    mut soundscapes: Query<(
         Entity,
         Ref<AudioSoundscape>,
         &WorldMember,
-        Option<&AppliedSoundscapePreset>,
+        Option<&mut AppliedSoundscapePreset>,
+        Option<&mut SoundscapeCueSchedule>,
     )>,
     presets: Query<Ref<WorldAudioPreset>>,
-    mut play_requests: MessageWriter<PlayAudioCue>,
-    mut stop_requests: MessageWriter<StopAudioCue>,
+    mut requests: MessageWriter<ProducedAudioRequest<SOUNDSCAPE_SETUP>>,
 ) {
     let audio_assets_changed = audio_asset_index.is_changed();
     let audio_asset_view = audio_asset_index.get(&audio_assets);
     let delay_range = audio_asset_view
         .and_then(|view| view.ambient())
         .map_or([4.0, 6.0], |policy| policy.delay_seconds);
-    for (soundscape_owner, selected_soundscape, member, applied) in &soundscapes {
+    for (soundscape_owner, selected_soundscape, member, applied, schedule) in &mut soundscapes {
         let preset = presets.get(member.root).ok();
         let preset_id = preset.as_ref().map(|preset| preset.0.id());
         if !audio_assets_changed
             && !selected_soundscape.is_added()
             && !selected_soundscape.is_changed()
             && !preset.as_ref().is_some_and(|preset| preset.is_changed())
-            && applied.is_some_and(|applied| applied.0 == preset_id)
+            && applied
+                .as_deref()
+                .is_some_and(|applied| applied.0 == preset_id)
         {
             continue;
         }
-        stop_requests.write(StopAudioCue {
+        requests.write(ProducedAudioRequest::Stop(StopAudioCue {
             emitter: Some(soundscape_owner),
             selection: selected_soundscape.selection,
-        });
-        commands
-            .entity(soundscape_owner)
-            .insert(AppliedSoundscapePreset(preset_id));
+        }));
+        if let Some(mut applied) = applied {
+            applied.set_if_neq(AppliedSoundscapePreset(preset_id));
+        } else {
+            commands
+                .entity(soundscape_owner)
+                .insert(AppliedSoundscapePreset(preset_id));
+        }
         let soundscape = match preset {
             Some(preset) => audio_assets
                 .get(&preset.0)
@@ -86,19 +93,21 @@ pub(super) fn project_changed_audio_soundscapes_into_playback_and_schedules(
             None => audio_asset_view.and_then(|view| view.soundscape(selected_soundscape.biome)),
         };
         let Some(soundscape) = soundscape else {
-            commands
-                .entity(soundscape_owner)
-                .remove::<SoundscapeCueSchedule>();
+            if schedule.is_some() {
+                commands
+                    .entity(soundscape_owner)
+                    .remove::<SoundscapeCueSchedule>();
+            }
             continue;
         };
         if let Some(loop_cue) = soundscape.loop_cue {
-            play_requests.write(PlayAudioCue {
+            requests.write(ProducedAudioRequest::Play(PlayAudioCue {
                 cue: loop_cue,
                 emitter: Some(soundscape_owner),
                 selection: selected_soundscape.selection,
                 priority: 48,
                 force_looped: true,
-            });
+            }));
         }
         if select_weighted_soundscape_cue(
             &soundscape.cues,
@@ -107,19 +116,24 @@ pub(super) fn project_changed_audio_soundscapes_into_playback_and_schedules(
         )
         .is_some()
         {
-            commands
-                .entity(soundscape_owner)
-                .insert(SoundscapeCueSchedule {
-                    remaining_seconds: sample_deterministic_f32_range(
-                        delay_range,
-                        selected_soundscape.selection,
-                    ),
-                    selection: selected_soundscape.selection,
-                });
+            let next = SoundscapeCueSchedule {
+                delay: Timer::new(
+                    soundscape_delay(delay_range, selected_soundscape.selection),
+                    TimerMode::Once,
+                ),
+                selection: selected_soundscape.selection,
+            };
+            if let Some(mut schedule) = schedule {
+                *schedule = next;
+            } else {
+                commands.entity(soundscape_owner).insert(next);
+            }
         } else {
-            commands
-                .entity(soundscape_owner)
-                .remove::<SoundscapeCueSchedule>();
+            if schedule.is_some() {
+                commands
+                    .entity(soundscape_owner)
+                    .remove::<SoundscapeCueSchedule>();
+            }
         }
     }
 }
@@ -135,7 +149,7 @@ pub(super) fn advance_audio_soundscape_cue_schedules(
         &mut SoundscapeCueSchedule,
     )>,
     presets: Query<&WorldAudioPreset>,
-    mut play_requests: MessageWriter<PlayAudioCue>,
+    mut requests: MessageWriter<ProducedAudioRequest<SOUNDSCAPE_TIMER>>,
 ) {
     let audio_asset_view = audio_asset_index.get(&audio_assets);
     let ambient = audio_asset_view.and_then(|view| view.ambient());
@@ -144,8 +158,7 @@ pub(super) fn advance_audio_soundscape_cue_schedules(
         .map_or(1.0, |policy| policy.probability)
         .clamp(0.0, 1.0);
     for (soundscape_owner, selected_soundscape, member, mut schedule) in &mut soundscapes {
-        schedule.remaining_seconds -= time.delta_secs();
-        if schedule.remaining_seconds > 0.0 {
+        if !schedule.delay.tick(time.delta()).is_finished() {
             continue;
         }
         let soundscape = match presets.get(member.root) {
@@ -167,21 +180,27 @@ pub(super) fn advance_audio_soundscape_cue_schedules(
         if sample_deterministic_f32_range([0.0, 1.0], schedule.selection.rotate_left(41))
             <= playback_probability
         {
-            play_requests.write(PlayAudioCue {
+            requests.write(ProducedAudioRequest::Play(PlayAudioCue {
                 cue: cue.cue,
                 emitter: Some(soundscape_owner),
                 selection: schedule.selection,
                 priority: 24,
                 force_looped: false,
-            });
+            }));
         }
         schedule.selection = schedule
             .selection
             .wrapping_add(0x9e37_79b9_7f4a_7c15)
             .rotate_left(27);
-        schedule.remaining_seconds =
-            sample_deterministic_f32_range(delay_range, schedule.selection);
+        let next_delay = soundscape_delay(delay_range, schedule.selection);
+        schedule.delay.set_duration(next_delay);
+        schedule.delay.reset();
     }
+}
+
+fn soundscape_delay(range: [f32; 2], selection: u64) -> std::time::Duration {
+    let seconds = sample_deterministic_f32_range(range, selection);
+    std::time::Duration::try_from_secs_f32(seconds).unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -198,8 +217,8 @@ mod tests {
         app.init_resource::<Assets<AudioAsset>>()
             .init_resource::<AudioAssets>()
             .init_resource::<Time>()
-            .add_message::<PlayAudioCue>()
-            .add_message::<StopAudioCue>()
+            .add_message::<ProducedAudioRequest<SOUNDSCAPE_SETUP>>()
+            .add_message::<ProducedAudioRequest<SOUNDSCAPE_TIMER>>()
             .add_systems(
                 Update,
                 (
@@ -240,8 +259,12 @@ mod tests {
         app.update();
         let initial = app
             .world_mut()
-            .resource_mut::<Messages<PlayAudioCue>>()
+            .resource_mut::<Messages<ProducedAudioRequest<SOUNDSCAPE_SETUP>>>()
             .drain()
+            .filter_map(|request| match request {
+                ProducedAudioRequest::Play(cue) => Some(cue),
+                _ => None,
+            })
             .collect::<Vec<_>>();
         assert_eq!(initial.len(), 1);
         assert_eq!(initial[0].cue, loop_cue);
@@ -252,8 +275,12 @@ mod tests {
         app.update();
         let ambient = app
             .world_mut()
-            .resource_mut::<Messages<PlayAudioCue>>()
+            .resource_mut::<Messages<ProducedAudioRequest<SOUNDSCAPE_TIMER>>>()
             .drain()
+            .filter_map(|request| match request {
+                ProducedAudioRequest::Play(cue) => Some(cue),
+                _ => None,
+            })
             .collect::<Vec<_>>();
         assert_eq!(ambient.len(), 1);
         assert_eq!(ambient[0].cue, cue);

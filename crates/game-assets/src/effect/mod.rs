@@ -109,6 +109,7 @@ pub struct ParticleEffectAssetAndRuntimePlugin;
 impl Plugin for ParticleEffectAssetAndRuntimePlugin {
     fn build(&self, app: &mut App) {
         app.init_asset::<ParticleEffectDocumentAsset>()
+            .init_resource::<particle_wave_surface::ParticleWaveCameraFog>()
             .add_plugins(particle_plane_binding::ParticleEffectPlaneBindingPlugin)
             .add_systems(
                 PostUpdate,
@@ -178,8 +179,19 @@ impl Plugin for ParticleEffectAssetAndRuntimePlugin {
             )
             .add_systems(
                 PostUpdate,
-                particle_wave_surface::upload_particle_wave_surface_uniforms
-                    .before(bevy_hanabi::EffectSystems::UpdatePropertiesFromAsset),
+                (
+                    particle_wave_surface::publish_particle_wave_camera_fog
+                        .after(TransformSystems::Propagate)
+                        .run_if(
+                            any_match_filter::<
+                                With<particle_wave_surface::ParticleEffectWaveSurface>,
+                            >,
+                        ),
+                    particle_wave_surface::upload_particle_wave_surface_uniforms
+                        .after(particle_wave_surface::publish_particle_wave_camera_fog)
+                        .before(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate)
+                        .before(bevy_hanabi::EffectSystems::UpdatePropertiesFromAsset),
+                ),
             );
     }
 }

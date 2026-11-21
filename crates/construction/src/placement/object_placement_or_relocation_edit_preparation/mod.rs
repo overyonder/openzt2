@@ -88,7 +88,7 @@ pub(super) fn prepare_object_placement_or_relocation_edit(
         GroundPathPlacementStomp,
         Res<ScenePlacementFootprints>,
     ),
-    mut allocator: ResMut<PersistentIdAllocator>,
+    mut allocators: Query<&mut PersistentIdAllocator>,
     mut scratch: ResMut<ObjectPlacementCellCollectionScratch>,
     (mut prepared, mut topology_prepared): (
         MessageWriter<ObjectPlacementEditPrepared>,
@@ -309,7 +309,11 @@ pub(super) fn prepare_object_placement_or_relocation_edit(
                     Money(0),
                 )
             } else {
-                let Ok(id) = allocator.allocate(member.root) else {
+                let Some(id) = allocators
+                    .get_mut(member.root)
+                    .ok()
+                    .and_then(|mut allocator| allocator.allocate().ok())
+                else {
                     reject_object_placement_edit_preparation(
                         &mut rejected,
                         request.transaction,

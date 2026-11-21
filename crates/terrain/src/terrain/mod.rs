@@ -153,9 +153,8 @@ impl Plugin for TerrainPlugin {
                             .after(project_natural_water_regions)
                             .after(water_regions::mark_edited_water_targets_pending)
                             .run_if(water_regions::water_target_refresh_is_ready),
-                        water_regions::edit_retention::release_water_owners_from_failed_transactions,
-                        water_regions::edit_retention::reclaim_unretained_retired_water_owners
-                            .after(water_regions::edit_retention::release_water_owners_from_failed_transactions),
+
+                        water_regions::edit_retention::reclaim_unretained_retired_water_owners,
                         water_regions::authored_membership::project_terrain_water_membership
                             .after(project_natural_water_regions)
                             .after(water_regions::edit_retention::reclaim_unretained_retired_water_owners),
@@ -330,6 +329,7 @@ impl Plugin for TerrainPlugin {
                 FixedUpdate,
                 terrain_edit_application::dispatch_committed_terrain_edits
                     .after(openzt2_zoo_state::construction::ConstructionDomainApplicationDispatchSet)
+                    .after(openzt2_zoo_state::construction::ConstructionFailureRollbackDispatchSet)
                     .in_set(FixedConstructionSet::Apply),
             )
             .add_systems(

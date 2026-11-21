@@ -30,7 +30,6 @@ fn shore_candidates_respect_water_clearance_capabilities_and_terrain_changes() {
         ]
         .into(),
         area_square_metres: 4.0,
-        boundary_fence_entities: Box::default(),
     };
     let agent = NavAgent {
         radius_m: 0.5,

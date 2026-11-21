@@ -172,8 +172,8 @@ impl Default for GameActionInputBindings {
                 },
                 GameActionInputBinding {
                     action: UseObject,
-                    primary: Gamepad(Pad::South),
-                    alternate: None,
+                    primary: KeyPair(KeyCode::Space, KeyCode::KeyE),
+                    alternate: Some(Gamepad(Pad::South)),
                 },
                 GameActionInputBinding {
                     action: OverheadView,

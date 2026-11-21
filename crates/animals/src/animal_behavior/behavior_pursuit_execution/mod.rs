@@ -27,18 +27,20 @@ use openzt2_zoo_state::placement::placement_preview_types::RelocatingPlacedObjec
 use super::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation;
 
 pub(super) fn register_pursuit_execution(application: &mut App) {
+    use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
+        BehaviorStep, BehaviorStepSet,
+    };
     application.add_systems(
-        FixedUpdate,
+        BehaviorStep,
         (
             record_pursuit_navigation_results,
             fail_pursuits_of_unavailable_targets,
-            advance_current_pursuit_actions,
+            advance_current_pursuit_actions
+                .after(record_pursuit_navigation_results)
+                .after(fail_pursuits_of_unavailable_targets),
             discard_pursuits_without_tasks,
         )
-            .chain()
-            .after(super::behavior_task_phase_transition_execution::advance_behavior_tasks_through_return_failure_completion_and_final_outcome)
-            .before(openzt2_zoo_state::locomotion::AnimalAnimationNavigationProjection)
-            .in_set(FixedGameSet::Think)
+            .in_set(BehaviorStepSet::Actions)
             .run_if(in_state(GamePhase::InGame)),
     );
     application.add_systems(

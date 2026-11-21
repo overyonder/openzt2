@@ -27,7 +27,7 @@ use openzt2_zoo_state::animal_behavior::behavior_task_effective_score_types::Beh
 use openzt2_zoo_state::animal_behavior::behavior_set_start_request_types::PendingBehaviorSet;
 use openzt2_zoo_state::behavior_task_execution_types::SynchronizedBehaviorParticipant;
 use openzt2_world_state::animation_graph::animation_graph_playback_state_types::AnimationGraphPlaybackState;
-use openzt2_world_state::animation_graph::animation_presentation_relationship_types::AnimationPresentationOwner;
+use openzt2_world_state::animation_graph::animation_presentation_relationship_types::AnimationPresentations;
 use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackController;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionPhase;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionSequence;
@@ -110,11 +110,12 @@ pub(super) fn select_idle_guest_tasks(
         Query<(Entity, &BehaviorSelfToken), Without<ClaimedBehaviorSelfToken>>,
     ),
     memberships: InteractionContainerMemberships,
-    (paths, viewable_animals, controllers): (
+    (paths, viewable_animals, presentations, controllers): (
         Query<(Entity, &GlobalTransform, &WorldMember, &PathTile)>,
         Query<(&GlobalTransform, &Visibility, &WorldMember), (With<Animal>, With<HabitatMember>)>,
+        Query<&AnimationPresentations>,
         Query<
-            &AnimationPresentationOwner,
+            (),
             (
                 With<AnimationPlaybackController>,
                 With<AnimationGraphPlaybackState>,
@@ -193,9 +194,8 @@ pub(super) fn select_idle_guest_tasks(
         // Gate refusals are reported by the per-guest task progress diagnostics.
         if !transform.translation().is_finite()
             || *phase != GuestPhase::Visiting
-            || !controllers
-                .iter()
-                .any(|owner| owner.gameplay_entity == guest)
+            || !AnimationPresentations::for_subject(guest, presentations.get(guest).ok())
+                .any(|controller| controllers.contains(controller))
         {
             continue;
         }

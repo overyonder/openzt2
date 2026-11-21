@@ -217,7 +217,17 @@ pub(super) fn enter_authored_interaction_containers_and_play_selected_behavior_s
                 guest,
                 world_definitions,
                 animal_types.borrow_for(actor),
-            );
+            )
+            .chain(target_definitions.get(actor).ok().into_iter().flat_map(
+                |definition| {
+                    std::iter::once(definition.0).chain(
+                        world_definitions
+                            .find_object(definition.0)
+                            .into_iter()
+                            .flat_map(|object| object.behavior_type_identifiers.iter().copied()),
+                    )
+                },
+            ));
         let Some((document, declaration)) = behavior_declarations
             .find_behavior_set_location(requested_behavior_set, subject_type_identifiers)
         else {

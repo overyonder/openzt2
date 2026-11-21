@@ -18,8 +18,9 @@ use openzt2_game_data::world_definitions::object_placement::{
     PlacementConstraints,
 };
 use openzt2_game_data::world_definitions::world_objects::{
-    WorldObjectAffordanceFlags, WorldObjectBiomeAutomaticPlacementClass, WorldObjectDefinition,
-    WorldObjectDestructionDefinition, WorldObjectPropertyFlags,
+    AuthoredWorldObjectRuntime, WorldObjectAffordanceFlags,
+    WorldObjectBiomeAutomaticPlacementClass, WorldObjectDefinition,
+    WorldObjectDestructionDefinition, WorldObjectEggDefinition, WorldObjectPropertyFlags,
     WorldObjectRealPhysicsWaterImpactDefinition, WorldObjectVirtualNode,
 };
 use openzt2_game_data::AssetId;
@@ -146,6 +147,170 @@ pub(crate) fn lower_world_object_virtual_nodes(
         .collect()
 }
 
+pub(crate) fn lower_authored_world_object_runtime(
+    record: &RecordView<'_, '_>,
+) -> Result<AuthoredWorldObjectRuntime, BindError> {
+    use super::source_element_tree_search::authored_type_family_elements_named;
+
+    let mut morph_targets = std::collections::BTreeMap::new();
+    let shared = authored_type_family_elements_named(record, "BFAIEntityDataShared");
+    let clip = |attribute| {
+        shared
+            .iter()
+            .find_map(|group| group.attribute_named_any(&[attribute]))
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+    };
+    let fall_animation_clips =
+        openzt2_game_data::world_definitions::world_objects::WorldObjectFallAnimationClips {
+            airborne: clip("s_FallAnim"),
+            land_impact: clip("s_LandImpactAnim"),
+            water_impact: clip("s_WaterImpactAnim"),
+        };
+    let prop_rotation_offset_radians = shared
+        .iter()
+        .find_map(|group| group.attribute_named_any(&["f_PropRotationOffset"]))
+        .map(|degrees| {
+            parse_blue_fang_source_numeric_lexeme::<f32>(degrees)
+                .filter(|degrees| degrees.is_finite())
+                .map(|degrees| -degrees.to_radians())
+                .ok_or_else(|| BindError::record(record, "invalid prop rotation offset"))
+        })
+        .transpose()?
+        .unwrap_or_default();
+    for group in shared {
+        for attribute in &group.attributes {
+            let name = attribute.name();
+            if name
+                .get(..2)
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case("s_"))
+            {
+                morph_targets
+                    .entry(id(name))
+                    .or_insert_with(|| id(attribute.value()));
+            }
+        }
+    }
+    let is_egg = record
+        .type_tokens()
+        .iter()
+        .any(|name| name.eq_ignore_ascii_case("egg"));
+    let mut egg = None;
+    if is_egg {
+        let incubation = authored_type_family_elements_named(record, "BFAIStateVar")
+            .into_iter()
+            .find(|variable| {
+                variable
+                    .attribute_named_any(&["Name"])
+                    .is_some_and(|name| name.eq_ignore_ascii_case("incubation"))
+            });
+        if let Some(incubation) = incubation {
+            let rate = authored_type_family_elements_named(record, "BFAINeedAdjusts")
+                .into_iter()
+                .find_map(|adjusts| adjusts.attribute_named_any(&["incubation"]));
+            let number = |text: Option<&str>| {
+                text.filter(|value| !value.trim().is_empty())
+                    .map(|value| {
+                        parse_blue_fang_source_numeric_lexeme::<f32>(value)
+                            .filter(|value| value.is_finite())
+                            .ok_or_else(|| BindError::record(record, "invalid incubation value"))
+                    })
+                    .transpose()
+            };
+            let initial_incubation = number(incubation.attribute_named_any(&["Value"]))?
+                .or(number(incubation.attribute_named_any(&["ValueMin"]))?)
+                .unwrap_or_default();
+            let trigger_incubation = number(incubation.attribute_named_any(&["TriggerThreshold"]))?
+                .ok_or_else(|| BindError::record(record, "incubation has no trigger threshold"))?;
+            egg = Some(WorldObjectEggDefinition {
+                initial_incubation,
+                incubation_per_update: number(rate)?.unwrap_or_default(),
+                trigger_incubation,
+            });
+        }
+    }
+    let fossil_assembly_surface =
+        !super::source_element_tree_search::authored_type_family_components(
+            record,
+            "ZTFossilSkeletonComponent",
+        )
+        .is_empty();
+    let whap_physics = lower_whap_physics(record)?;
+    Ok(AuthoredWorldObjectRuntime {
+        whap_physics,
+        fall_animation_clips,
+        prop_rotation_offset_radians,
+        morph_targets: morph_targets.into_iter().collect(),
+        egg,
+        fossil_assembly_surface,
+    })
+}
+
+fn lower_whap_physics(
+    record: &RecordView<'_, '_>,
+) -> Result<
+    Option<openzt2_game_data::world_definitions::world_objects::WorldObjectWhapPhysics>,
+    BindError,
+> {
+    use super::source_element_tree_search::authored_type_family_elements_named;
+    use openzt2_game_data::world_definitions::world_objects::WorldObjectWhapPhysics;
+
+    if let Some(physics) = authored_type_family_elements_named(record, "BFRealPhysicsComponent")
+        .into_iter()
+        .next()
+    {
+        let number = |name, fallback| {
+            physics
+                .attribute_named_any(&[name])
+                .map(|value| {
+                    parse_blue_fang_source_numeric_lexeme::<f32>(value)
+                        .filter(|value| value.is_finite())
+                        .ok_or_else(|| BindError::record(record, format!("invalid {name}")))
+                })
+                .transpose()
+                .map(|value| value.unwrap_or(fallback))
+        };
+        if physics
+            .attribute_named_any(&["shapeType"])
+            .is_some_and(|shape| shape.eq_ignore_ascii_case("box"))
+        {
+            return Ok(None);
+        }
+        let speed = [number("minWhackSpeed", 4.0)?, number("maxWhackSpeed", 4.0)?];
+        let lob_pitch_degrees = physics
+            .attribute_named_any(&["doLobWhack"])
+            .is_some_and(|value| value.eq_ignore_ascii_case("true"))
+            .then(|| {
+                Ok::<_, BindError>([number("minLobPitch", 80.0)?, number("maxLobPitch", 85.0)?])
+            })
+            .transpose()?;
+        return Ok(Some(WorldObjectWhapPhysics::Real {
+            speed,
+            lob_pitch_degrees,
+            fit_state: physics
+                .attribute_named_any(&["state"])
+                .and_then(parse_blue_fang_source_numeric_lexeme)
+                .unwrap_or_default(),
+        }));
+    }
+    Ok(
+        authored_type_family_elements_named(record, "BFFakePhysicsComponent")
+            .into_iter()
+            .find_map(|physics| {
+                Some(WorldObjectWhapPhysics::Animated {
+                    motion_clip: physics
+                        .attribute_named_any(&["moveAnim"])?
+                        .trim()
+                        .to_owned(),
+                    rotate_to_heading: !physics
+                        .attribute_named_any(&["rotate"])
+                        .is_some_and(|value| value.eq_ignore_ascii_case("false")),
+                })
+            }),
+    )
+}
+
 pub(super) fn bind_object(
     record: &RecordView<'_, '_>,
     output: &mut WorldDefinitionLoweringTables,
@@ -195,7 +360,7 @@ pub(super) fn bind_object(
         .transpose()?
         .unwrap_or_default()
         .map(|metres| (metres * 100.0).round() as i16);
-    let (presentation_caustic_policies, surface_effect_strength) =
+    let (presentation_caustic_policies, surface_effect_strength, traversal_animation_manifests) =
         super::authored_presentation_physics_source_lowering::lower_authored_presentation_physics(
             record,
         )?;
@@ -215,6 +380,7 @@ pub(super) fn bind_object(
         record.key.to_string(),
     ));
     output.document.objects.push(WorldObjectDefinition {
+        authored_runtime: lower_authored_world_object_runtime(record)?,
         audio_cue_prefixes: super::authored_audio_cue_prefixes(record),
         behavior_type_identifiers: crate::source_document::authored_behavior_type_identifiers::authored_behavior_type_identifiers(record),
         selected_ui_broadcasts: super::object_selected_ui_broadcast_source_lowering::lower_object_selected_ui_broadcasts(record),
@@ -248,6 +414,7 @@ pub(super) fn bind_object(
         prefab_scale: 1.0,
         surface_effect_strength,
         presentation_caustic_policies,
+        traversal_animation_manifests,
         icon: asset(record, &["icon", "iconPath", "purchaseIcon"]),
         biomes,
         location: biome_data

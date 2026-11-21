@@ -23,13 +23,18 @@ struct HiddenForBehavior {
 
 pub(super) fn register_hide_execution(application: &mut App) {
     use openzt2_game_assets::application_lifecycle::GamePhase;
-    use openzt2_world_state::application_schedule::FixedGameSet;
+    use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
+        BehaviorStep, BehaviorStepSet,
+    };
+
     application.add_systems(
-        FixedUpdate,
-        (show_actors_whose_hiding_ended, hide_actors_for_current_hide_actions)
+        BehaviorStep,
+        (
+            show_actors_whose_hiding_ended,
+            hide_actors_for_current_hide_actions,
+        )
             .chain()
-            .before(super::behavior_task_phase_transition_execution::advance_behavior_tasks_through_return_failure_completion_and_final_outcome)
-            .in_set(FixedGameSet::Think)
+            .in_set(BehaviorStepSet::Actions)
             .run_if(in_state(GamePhase::InGame)),
     );
 }

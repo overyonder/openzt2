@@ -1,4 +1,8 @@
-use bevy::{ecs::entity::EntityHashSet, platform::collections::HashMap, prelude::*};
+use bevy::{
+    ecs::{entity::EntityHashSet, relationship::RelationshipTarget},
+    platform::collections::HashMap,
+    prelude::*,
+};
 use openzt2_game_assets::world_definitions::{
     world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions,
     world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
@@ -8,7 +12,10 @@ use openzt2_zoo_state::{
     habitat::habitat_types::RebuildHabitatRegionsWithinTopologyBounds,
     topology::{
         gate_operation_types::Gate,
-        topology_graph_types::{FenceEdge, TopologyNode},
+        topology_graph_types::{
+            FenceEdge, FenceEnd, FenceSegment, FenceStart, FencesEndingHere, FencesStartingHere,
+            TopologyNode,
+        },
     },
 };
 
@@ -52,26 +59,21 @@ fn raster_nodes(raster: &HabitatBoundaryRaster) -> impl Iterator<Item = IVec2> +
         .flat_map(|edge| [edge.first_topology_node, edge.second_topology_node])
 }
 
-#[derive(Component)]
-#[relationship(relationship_target = HabitatFencesAtEndpoint)]
-pub(super) struct HabitatFenceEndpoint(Entity);
-
-#[derive(Component)]
-#[relationship_target(relationship = HabitatFenceEndpoint, linked_spawn)]
-pub(super) struct HabitatFencesAtEndpoint(Vec<Entity>);
-
 #[derive(Message)]
 pub(super) struct HabitatFenceInputDiscarded(Entity);
 
 pub(super) fn discard_habitat_fence_node(
     discarded: On<Discard<TopologyNode>>,
-    links: Query<&HabitatFencesAtEndpoint>,
-    fences: Query<&ChildOf>,
+    links: Query<(Option<&FencesStartingHere>, Option<&FencesEndingHere>)>,
     mut changes: MessageWriter<HabitatFenceInputDiscarded>,
 ) {
-    if let Ok(links) = links.get(discarded.entity) {
-        for fence in fences.iter_many(links.iter()).flatten() {
-            changes.write(HabitatFenceInputDiscarded(fence.parent()));
+    if let Ok((starts, ends)) = links.get(discarded.entity) {
+        for fence in starts
+            .into_iter()
+            .flat_map(RelationshipTarget::iter)
+            .chain(ends.into_iter().flat_map(RelationshipTarget::iter))
+        {
+            changes.write(HabitatFenceInputDiscarded(fence));
         }
     }
 }
@@ -108,16 +110,28 @@ pub(super) fn project_changed_habitat_fence_inputs(
     mut lattice: ResMut<HabitatFenceLattice>,
     mut fences: Query<(
         Entity,
-        &FenceEdge,
+        FenceSegment,
         Option<&Gate>,
-        Option<&Children>,
         Option<&mut HabitatBoundaryRaster>,
     )>,
-    changed_fences: Query<Entity, (With<FenceEdge>, Or<(Changed<FenceEdge>, Changed<Gate>)>)>,
+    changed_fences: Query<
+        Entity,
+        (
+            With<FenceEdge>,
+            Or<(
+                Changed<FenceEdge>,
+                Changed<FenceStart>,
+                Changed<FenceEnd>,
+                Changed<Gate>,
+            )>,
+        ),
+    >,
     unprepared_fences: Query<Entity, (With<FenceEdge>, Without<HabitatBoundaryRaster>)>,
     nodes: Query<&TopologyNode>,
-    changed_nodes: Query<&HabitatFencesAtEndpoint, Changed<TopologyNode>>,
-    edges: Query<(&ChildOf, &HabitatFenceEndpoint)>,
+    changed_nodes: Query<
+        (Option<&FencesStartingHere>, Option<&FencesEndingHere>),
+        Changed<TopologyNode>,
+    >,
     mut removed_gates: RemovedComponents<Gate>,
     mut discarded_nodes: MessageReader<HabitatFenceInputDiscarded>,
     mut removed_fences: RemovedComponents<FenceEdge>,
@@ -132,12 +146,12 @@ pub(super) fn project_changed_habitat_fence_inputs(
         .chain(removed_gates.read())
         .chain(discarded_nodes.read().map(|change| change.0))
         .collect();
-    for links in &changed_nodes {
+    for (starts, ends) in &changed_nodes {
         affected.extend(
-            edges
-                .iter_many(links.iter())
-                .flatten()
-                .map(|(fence, _)| fence.parent()),
+            starts
+                .into_iter()
+                .flat_map(RelationshipTarget::iter)
+                .chain(ends.into_iter().flat_map(RelationshipTarget::iter)),
         );
     }
     if catalogue.is_changed() || assets.is_changed() {
@@ -149,26 +163,10 @@ pub(super) fn project_changed_habitat_fence_inputs(
         }
     }
     for entity in affected {
-        let Ok((_, edge, gate, children, old)) = fences.get_mut(entity) else {
+        let Ok((_, edge, gate, old)) = fences.get_mut(entity) else {
             continue;
         };
-        let desired = [edge.a, edge.b];
-        let mut retained = EntityHashSet::default();
-        for link in children.into_iter().flat_map(|children| children.iter()) {
-            if let Ok((_, endpoint)) = edges.get(link) {
-                if desired.contains(&endpoint.0) {
-                    retained.insert(endpoint.0);
-                } else {
-                    commands.entity(link).try_despawn();
-                }
-            }
-        }
-        for node in desired {
-            if nodes.contains(node) && retained.insert(node) {
-                commands.spawn((ChildOf(entity), HabitatFenceEndpoint(node)));
-            }
-        }
-        let (Ok(a), Ok(b)) = (nodes.get(edge.a), nodes.get(edge.b)) else {
+        let (Ok(a), Ok(b)) = (nodes.get(edge.a()), nodes.get(edge.b())) else {
             if old.is_some() {
                 commands.entity(entity).remove::<HabitatBoundaryRaster>();
             }

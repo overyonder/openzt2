@@ -63,6 +63,7 @@ fn document() -> WorldDefinitionDocument {
             audio_cue_prefixes: Vec::new(),
             surface_effect_strength: None,
             presentation_caustic_policies: Vec::new(),
+            traversal_animation_manifests: Vec::new(),
             id,
             kind: WorldObjectKind::DonationBox,
             water_filter: None,

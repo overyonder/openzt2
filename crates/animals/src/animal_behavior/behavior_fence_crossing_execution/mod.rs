@@ -1,106 +1,188 @@
-//! An animal that jumps, climbs, flies over or tunnels under a fence ends on
-//! the far side of it once its task completes.
+//! A fence action moves its actor along the authored clip's root trajectory.
 
 use bevy::prelude::*;
-use openzt2_game_assets::application_lifecycle::GamePhase;
-use openzt2_world_state::application_schedule::FixedGameSet;
+use openzt2_game_assets::{
+    animation::animation_set_asset_types::AnimationClipSourceAsset,
+    application_lifecycle::GamePhase,
+};
+use openzt2_game_data::AssetId;
+use openzt2_world_state::{
+    animation_graph::animation_presentation_relationship_types::AnimationPresentationOwner,
+    animation_playback::{
+        animation_playback_controller_types::{
+            AnimationPlaybackController, RetainedAnimationClipSource,
+        },
+        locomotion_root_motion::{AnimationLocomotionMotionSampling, ConsumedLocomotionRootMotion},
+    },
+    application_schedule::FixedGameSet,
+};
 use openzt2_zoo_state::{
-    behavior_task_execution_types::{BehaviorTaskFailed, BehaviorTaskFinished},
-    topology::topology_graph_types::{FenceSegment, TopologyGrid, TopologyNode},
+    animal_lifecycle::types::Animal,
+    behavior_task_execution_types::{
+        running_actions::{RunBehaviorAnimationClip, RunningBehaviorInstruction},
+        BehaviorTaskExecutionState, PendingBehaviorAnimationClipCompletion,
+        PendingBehaviorTaskFailure,
+    },
+    locomotion::locomotion_types::{Destination, Docking},
+    topology::topology_graph_types::FenceEdge,
 };
 
-/// The fence the animal's current task crosses.
-#[derive(Component, Debug, Clone, Copy)]
-pub(crate) struct CrossingFence {
-    pub(crate) execution_id: u64,
-    pub(crate) fence: Entity,
+use openzt2_world_state::animation_playback::animation_event_message_types::AnimationObjectCommandDelivery;
+use openzt2_world_state::animation_playback::animation_joint_target_types::{
+    AnimationJointTarget, AnimationRigJoints,
+};
+
+#[derive(Component)]
+struct FenceAnimationMotion {
+    animal: Entity,
+    request: usize,
 }
 
-/// Whether a fence task, by its name, takes the animal across the fence:
-/// `JumpLowFence`, `ClimbFence_*`, `ClimbUnderFence`, `FlyLowFence` and
-/// `RunThroughRailFence`, rather than bashing or examining it.
-// Told apart by name, as the bash tasks are; the clips that carry
-// an animal over aren't root motion here.
-pub(crate) fn fence_task_crosses(task_name: &str) -> bool {
-    ["Jump", "Climb", "Fly", "RunThrough"]
-        .iter()
-        .any(|prefix| task_name.starts_with(prefix))
-}
-
-pub(super) fn register_fence_crossing_execution(application: &mut App) {
-    application.add_systems(
+pub(super) fn register_fence_crossing_execution(app: &mut App) {
+    app.add_systems(
         FixedUpdate,
-        carry_animals_across_their_crossed_fences
-            .after(super::behavior_task_phase_transition_execution::advance_behavior_tasks_through_return_failure_completion_and_final_outcome)
-            .in_set(FixedGameSet::Think)
+        (
+            bind_fence_action_root_motion.before(AnimationLocomotionMotionSampling),
+            apply_fence_action_root_motion
+                .after(AnimationLocomotionMotionSampling)
+                .before(AnimationObjectCommandDelivery),
+        )
+            .in_set(FixedGameSet::Act)
             .run_if(in_state(GamePhase::InGame)),
     );
 }
 
-/// The point mirrored across the fence line through `first` and `second`.
-pub(crate) fn mirror_across_fence(point: Vec3, first: Vec3, second: Vec3) -> Vec3 {
-    let along = (second - first).xz().normalize_or_zero();
-    let normal = Vec2::new(-along.y, along.x);
-    let offset = (point.xz() - first.xz()).dot(normal);
-    let mirrored = point.xz() - normal * (2.0 * offset);
-    Vec3::new(mirrored.x, point.y, mirrored.y)
-}
-
-fn carry_animals_across_their_crossed_fences(
+fn bind_fence_action_root_motion(
+    controllers: Query<(
+        Entity,
+        &AnimationPlaybackController,
+        &RetainedAnimationClipSource,
+        &AnimationRigJoints,
+        Option<&AnimationPresentationOwner>,
+        Option<&FenceAnimationMotion>,
+        Option<&ConsumedLocomotionRootMotion>,
+    )>,
+    animals: Query<
+        (
+            &GlobalTransform,
+            &BehaviorTaskExecutionState,
+            &RunningBehaviorInstruction,
+            &PendingBehaviorAnimationClipCompletion,
+        ),
+        (
+            With<Animal>,
+            With<RunBehaviorAnimationClip>,
+            Without<PendingBehaviorTaskFailure>,
+            Without<Docking>,
+            Without<Destination>,
+        ),
+    >,
+    fences: Query<(), With<FenceEdge>>,
+    clips: Res<Assets<AnimationClipSourceAsset>>,
+    joints: Query<(&AnimationJointTarget, &ChildOf)>,
+    transforms: Query<&GlobalTransform>,
     mut commands: Commands,
-    mut finished: MessageReader<BehaviorTaskFinished>,
-    mut failed: MessageReader<BehaviorTaskFailed>,
-    mut animals: Query<(&CrossingFence, &mut Transform)>,
-    fences: Query<FenceSegment>,
-    nodes: Query<&TopologyNode>,
-    grid: Res<TopologyGrid>,
 ) {
-    for outcome in failed.read() {
-        if animals
-            .get(outcome.actor)
-            .is_ok_and(|(crossing, _)| crossing.execution_id == outcome.execution_id)
-        {
-            commands.entity(outcome.actor).remove::<CrossingFence>();
+    for (controller, playback, source, rig, owner, current, motion) in &controllers {
+        let animal = owner.map_or(controller, |owner| owner.gameplay_entity);
+        let active = animals
+            .get(animal)
+            .ok()
+            .filter(|(_, task, instruction, pending)| {
+                task.target().is_some_and(|fence| fences.contains(fence))
+                    && pending.owns(task, instruction)
+                    && playback.explicit_clip_request_id == Some(pending.request_id)
+            });
+        if current.is_some_and(|current| {
+            active.is_some_and(|(_, _, _, pending)| current.request == pending.request_id)
+        }) {
+            continue;
         }
-    }
-    for outcome in finished.read() {
-        let Ok((crossing, mut transform)) = animals.get_mut(outcome.actor) else {
+        if let Some(current) = current {
+            commands.entity(controller).remove::<FenceAnimationMotion>();
+            if playback.explicit_clip_request_id == Some(current.request)
+                && motion.is_some_and(|motion| motion.owns_playback(playback))
+            {
+                commands
+                    .entity(controller)
+                    .remove::<ConsumedLocomotionRootMotion>();
+            }
+        }
+        let Some((actor_pose, _, _, pending)) = active else {
             continue;
         };
-        if crossing.execution_id != outcome.execution_id {
+        let Some(joint) = clips.get(&source.0).and_then(|clip| {
+            clip.authored_animation_clip_metadata
+                .root_motion_joint
+                .as_ref()
+        }) else {
             continue;
-        }
-        let ends = fences.get(crossing.fence).ok().and_then(|edge| {
-            Some((
-                grid.cell_translation(nodes.get(edge.a()).ok()?.cell),
-                grid.cell_translation(nodes.get(edge.b()).ok()?.cell),
-            ))
-        });
-        if let Some((first, second)) = ends {
-            // The animal docked short of the fence on its side; it lands as
-            // far beyond it.
-            transform.translation = mirror_across_fence(transform.translation, first, second);
-        }
-        commands.entity(outcome.actor).remove::<CrossingFence>();
+        };
+        let root = AssetId::from_key(&joint.joint_asset_key);
+        let Some(parent) =
+            joints
+                .iter_many(rig.joints())
+                .flatten()
+                .find_map(|(binding, parent)| {
+                    (binding.authored_joint_id == root)
+                        .then(|| transforms.get(parent.parent()).ok())
+                        .flatten()
+                })
+        else {
+            continue;
+        };
+        commands.entity(controller).insert((
+            FenceAnimationMotion {
+                animal,
+                request: pending.request_id,
+            },
+            ConsumedLocomotionRootMotion::new(
+                pending.request_id,
+                actor_pose.affine().inverse() * parent.affine(),
+            ),
+        ));
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_crossing_animal_lands_as_far_beyond_the_fence_as_it_stood_before_it() {
-        // A fence along X; the animal stands 2 m to its north (-Z).
-        let landed = mirror_across_fence(
-            Vec3::new(1.5, 3.0, -2.0),
-            Vec3::ZERO,
-            Vec3::new(3.0, 0.0, 0.0),
-        );
-        assert!(landed.abs_diff_eq(Vec3::new(1.5, 3.0, 2.0), 1.0e-5));
-        assert!(fence_task_crosses("JumpLowFence"));
-        assert!(fence_task_crosses("ClimbUnderFence"));
-        assert!(!fence_task_crosses("BashFence"));
-        assert!(!fence_task_crosses("SniffElectricFence"));
+fn apply_fence_action_root_motion(
+    motions: Query<(
+        &FenceAnimationMotion,
+        &ConsumedLocomotionRootMotion,
+        &AnimationPlaybackController,
+    )>,
+    mut animals: Query<
+        (
+            &mut Transform,
+            Option<&mut avian3d::prelude::Position>,
+            Option<&mut avian3d::prelude::Rotation>,
+        ),
+        With<Animal>,
+    >,
+) {
+    for (owner, motion, playback) in &motions {
+        if !motion.owns_playback(playback)
+            || playback.explicit_clip_request_id != Some(owner.request)
+        {
+            continue;
+        }
+        let Ok((mut pose, position, rotation)) = animals.get_mut(owner.animal) else {
+            continue;
+        };
+        let delta = pose.rotation * (pose.scale * motion.translation());
+        let turn = motion.rotation();
+        if !delta.is_finite()
+            || !turn.is_finite()
+            || (delta == Vec3::ZERO && turn == Quat::IDENTITY)
+        {
+            continue;
+        }
+        pose.translation += delta;
+        pose.rotation = (pose.rotation * turn).normalize();
+        if let Some(mut position) = position {
+            position.0 = pose.translation;
+        }
+        if let Some(mut rotation) = rotation {
+            rotation.0 = pose.rotation;
+        }
     }
 }

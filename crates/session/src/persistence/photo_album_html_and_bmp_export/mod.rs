@@ -3,13 +3,14 @@
 use std::io;
 
 use bevy::{
+    ecs::relationship::RelationshipTarget,
     prelude::*,
     tasks::{block_on, poll_once, IoTaskPool, Task},
 };
 
-use openzt2_interface_state::photos::photo_album_types::AlbumMember;
 use openzt2_interface_state::photos::photo_album_types::ExportPhotoAlbum;
 use openzt2_interface_state::photos::photo_album_types::PhotoAlbumOrder;
+use openzt2_interface_state::photos::photo_album_types::{AlbumPhotos, PhotoAlbum};
 use openzt2_interface_state::photos::photo_capture_types::Photo;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 
@@ -40,14 +41,8 @@ pub(super) fn begin_photo_album_html_and_bmp_exports(
     mut requests: MessageReader<ExportPhotoAlbum>,
     directories: Option<Res<PersistenceFilesystemPaths>>,
     profile: Res<ProfileOptions>,
-    albums: Query<&PersistentId>,
-    photos: Query<(
-        Entity,
-        &PersistentId,
-        &Photo,
-        &AlbumMember,
-        Option<&PhotoAlbumOrder>,
-    )>,
+    albums: Query<(&PersistentId, Option<&AlbumPhotos>), With<PhotoAlbum>>,
+    photos: Query<(&PersistentId, &Photo, Option<&PhotoAlbumOrder>)>,
     images: Res<Assets<Image>>,
     mut commands: Commands,
     mut failed: MessageWriter<PhotoAlbumHtmlAndBmpExportFailed>,
@@ -59,16 +54,17 @@ pub(super) fn begin_photo_album_html_and_bmp_exports(
             });
             continue;
         };
-        let Ok(album_id) = albums.get(request.album) else {
+        let Ok((album_id, members)) = albums.get(request.album) else {
             failed.write(PhotoAlbumHtmlAndBmpExportFailed {
                 album: request.album,
             });
             continue;
         };
-        let mut entries = photos
-            .iter()
-            .filter(|(_, _, _, member, _)| member.0 == request.album)
-            .filter_map(|(_, id, photo, _, order)| {
+        let mut entries = members
+            .into_iter()
+            .flat_map(RelationshipTarget::iter)
+            .filter_map(|entity| {
+                let (id, photo, order) = photos.get(entity).ok()?;
                 let image = images.get(&photo.image)?;
                 let data = image.data.as_deref()?;
                 let size = image.texture_descriptor.size;

@@ -8,19 +8,21 @@ use openzt2_world_state::animation_graph::animation_graph_playback_state_types::
 use openzt2_zoo_state::audio::audio_playback_message_types::PlayAudioCue;
 
 use openzt2_world_state::animation_playback::animation_event_message_types::AnimationTraversalTransitionRequested;
+use openzt2_world_state::animation_playback::animation_event_message_types::{
+    AnimationAiCommandRequested, AnimationDockCommandRequested, AnimationWhapRequested,
+};
 use openzt2_world_state::animation_playback::animation_joint_target_types::{
     AnimationJointTarget, AnimationRigJoints,
 };
 
 #[derive(SystemParam)]
-pub(super) struct AuthoredAnimationTextActionExecutionContext<'w, 's> {
+pub(super) struct AuthoredAnimationTextActionExecutionContext<'w, 's, const REAL_TIME: bool> {
     pub(super) object_commands:
         MessageWriter<'w, openzt2_world_state::animation_playback::animation_event_message_types::AnimationObjectCommand>,
     pub(super) named_animation_joint_targets:
         Query<'w, 's, (Entity, &'static AnimationJointTarget)>,
     pub(super) animation_rig_joints: Query<'w, 's, &'static AnimationRigJoints>,
-    pub(super) audio_and_effect_text_action_execution:
-        AuthoredAnimationAudioAndEffectTextActionExecutionContext<'w, 's>,
+    pub(super) presentation_actions: MessageWriter<'w, super::authored_animation_presentation_action_delivery::AnimationPresentationTextAction<REAL_TIME>>,
     pub(super) animation_control_text_action_execution:
         AuthoredAnimationControlTextActionExecutionContext<'w, 's>,
 }
@@ -46,6 +48,10 @@ pub(super) struct AuthoredAnimationAudioAndEffectTextActionExecutionContext<'w, 
 pub(super) struct AuthoredAnimationControlTextActionExecutionContext<'w, 's> {
     pub(super) commands: Commands<'w, 's>,
     pub(super) graphs_enabled: Query<'w, 's, &'static mut AnimationGraphEnabled>,
+    pub(super) ground_fit: Query<'w, 's, &'static mut openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationGroundFitMode>,
+    pub(super) ai_commands: MessageWriter<'w, AnimationAiCommandRequested>,
+    pub(super) dock_commands: MessageWriter<'w, AnimationDockCommandRequested>,
+    pub(super) whap_requests: MessageWriter<'w, AnimationWhapRequested>,
     pub(super) animation_node_messages: MessageWriter<'w, AnimationGraphNodePlaybackRequest>,
     pub(super) traversal_messages: MessageWriter<'w, AnimationTraversalTransitionRequested>,
 }

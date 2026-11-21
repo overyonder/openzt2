@@ -39,12 +39,16 @@ pub(super) fn bind_trick(
         .value(&["species", "eligibleSpecies"])
         .map(asset_list)
         .unwrap_or_default();
+    let difficulty: f32 = required_number(record, &["difficulty"])?;
+    if !difficulty.is_finite() || difficulty < 0.0 {
+        return Err(BindError::record(record, "invalid trick difficulty"));
+    }
     output.document.tricks.push(TrickDefinition {
         id: id(record.key),
         species,
         animation: asset(record, &["animation", "behavior"]),
         training_ticks: required_number(record, &["trainingTicks"])?,
-        difficulty: required_number(record, &["difficulty"])?,
+        difficulty,
         welfare_cost: number_or(record, &["welfareCost"], 0)?,
         entertainment: required_number(record, &["entertainment", "entertainmentValue"])?,
         name_key: asset(record, &["nameKey", "displayName", "displayNameToken"]),

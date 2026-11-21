@@ -60,6 +60,7 @@ pub(super) fn install_definitions(
             authored_species_name_override: None,
             authored_product_name_override: None,
             variant: SpeciesVariant {
+                need_points: Default::default(),
                 placement_surface_policy: Default::default(),
                 id: variant_id,
                 behavior_subject_type_identifiers: ["b_carnivore", "b_fooddisheater"]
@@ -130,6 +131,7 @@ pub(super) fn install_definitions(
     ]
     .into_iter()
     .map(|(name, content)| WorldObjectDefinition {
+        authored_runtime: Default::default(),
         audio_cue_prefixes: Vec::new(),
         surface_effect_strength: None,
         presentation_caustic_policies: Vec::new(),

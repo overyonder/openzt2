@@ -11,9 +11,7 @@ pub fn resolve_animation_clip_or_graph_node_asset_key(
     animation_set_asset: &AnimationSetAsset,
     key: &str,
 ) -> Option<String> {
-    if animation_set_asset
-        .find_animation_clip_record_by_asset_key(key)
-        .is_some()
+    if animation_set_asset.embedded_clip(key).is_some()
         || animation_set_asset
             .find_animation_clip_source_reference_by_asset_key(key)
             .is_some()
@@ -34,7 +32,12 @@ pub fn select_initial_animation_clip_asset_key_from_graph_node(
     animation_set_asset: &AnimationSetAsset,
     graph_node: &openzt2_game_data::animation::animation_set::AuthoredAnimationGraphNode,
 ) -> Option<String> {
-    select_preferred_animation_clip_from_graph_node(animation_set_asset, graph_node).or_else(|| {
+    select_preferred_animation_clip_from_graph_node(
+        animation_set_asset,
+        |key| animation_set_asset.embedded_clip(key).is_some(),
+        graph_node,
+    )
+    .or_else(|| {
         select_preferred_unloaded_animation_clip_from_graph_node(animation_set_asset, graph_node)
     })
 }

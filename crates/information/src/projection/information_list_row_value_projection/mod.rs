@@ -16,10 +16,13 @@ use openzt2_zoo_state::economy::facility_economy_types::FacilityProfit;
 use openzt2_zoo_state::economy::facility_economy_types::OperatingSinceDay;
 use openzt2_zoo_state::economy::service_types::FacilityReservations;
 use openzt2_zoo_state::guests::guest_simulation_types::GuestSatisfaction;
-use openzt2_zoo_state::staff::staff_assignment_types::StaffAssignment;
+use openzt2_zoo_state::staff::staff_assignment_types::{
+    StaffAssignmentArea, StaffAssignmentTarget,
+};
+use openzt2_zoo_state::transport_tours::transport_rider_types::VehicleRiders;
 use openzt2_zoo_state::transport_tours::transport_vehicle_types::TransportVehicle;
 
-use super::{visit_information_row, InformationRows};
+use super::InformationRows;
 
 #[derive(SystemParam)]
 pub(crate) struct InformationValueInvalidation<'w, 's> {
@@ -32,12 +35,14 @@ pub(crate) struct InformationValueInvalidation<'w, 's> {
             Added<Disease>,
             Added<Pregnancy>,
             Changed<GuestSatisfaction>,
-            Changed<StaffAssignment>,
+            Changed<StaffAssignmentArea>,
+            Changed<StaffAssignmentTarget>,
             Changed<FacilityReservations>,
             Changed<OperatingSinceDay>,
             Changed<FacilityProfit>,
             Changed<DonationTotal>,
             Changed<TransportVehicle>,
+            Changed<VehicleRiders>,
         )>,
     >,
     removed: (
@@ -45,53 +50,34 @@ pub(crate) struct InformationValueInvalidation<'w, 's> {
         RemovedComponents<'w, 's, Disease>,
         RemovedComponents<'w, 's, Pregnancy>,
         RemovedComponents<'w, 's, GuestSatisfaction>,
-        RemovedComponents<'w, 's, StaffAssignment>,
+        RemovedComponents<'w, 's, StaffAssignmentArea>,
+        RemovedComponents<'w, 's, StaffAssignmentTarget>,
         RemovedComponents<'w, 's, FacilityReservations>,
         RemovedComponents<'w, 's, OperatingSinceDay>,
         RemovedComponents<'w, 's, FacilityProfit>,
         RemovedComponents<'w, 's, DonationTotal>,
         RemovedComponents<'w, 's, TransportVehicle>,
+        RemovedComponents<'w, 's, VehicleRiders>,
     ),
-    row_sources_removed: RemovedComponents<
-        'w,
-        's,
-        openzt2_interface_state::information::entity_selection_types::InformationEntitySource,
-    >,
-    rows_removed: RemovedComponents<
-        'w,
-        's,
-        openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::UiListRow,
-    >,
-    bindings: Query<
-        'w,
-        's,
-        Entity,
-        (
-            With<UiValueBinding>,
-            Or<(Changed<UiValueBinding>, Changed<ChildOf>, Added<Text>)>,
-        ),
-    >,
-    parents: Query<'w, 's, &'static ChildOf>,
     last_day: Local<'s, u32>,
 }
 
 /// Updates information-list values from the referenced entities.
 pub(crate) fn project_live_world_subject_values_to_information_list_rows(
     information_entity_sources: InformationRows,
-    children: Query<&Children>,
-    mut scratch: Local<(Vec<Entity>, String)>,
+    mut formatted: Local<String>,
     animal_need_points: Query<&CumulativeNeedPoints>,
     animal_diseases: Query<(), With<Disease>>,
     animal_pregnancies: Query<(), With<Pregnancy>>,
     guest_satisfaction: Query<&GuestSatisfaction>,
-    staff_assignments: Query<&StaffAssignment>,
+    staff_assignments: Query<(Has<StaffAssignmentArea>, Has<StaffAssignmentTarget>)>,
     facility_reservations: Query<&FacilityReservations>,
     facility_operating_dates: Query<&OperatingSinceDay>,
     facility_profits: Query<&FacilityProfit>,
     donation_totals: Query<&DonationTotal>,
-    transport_vehicles: Query<&TransportVehicle>,
+    transport_vehicles: Query<(&TransportVehicle, Option<&VehicleRiders>)>,
     zoo_clock: Res<ZooClock>,
-    mut bound_values: Query<(&UiValueBinding, &mut UiValue, Option<&mut Text>)>,
+    mut bound_values: Query<(Ref<UiValueBinding>, &mut UiValue, Option<&mut Text>)>,
     mut invalidation: InformationValueInvalidation,
 ) {
     let removed = &mut invalidation.removed;
@@ -108,76 +94,61 @@ pub(crate) fn project_live_world_subject_values_to_information_list_rows(
         .chain(removed.7.read())
         .chain(removed.8.read())
         .chain(removed.9.read())
+        .chain(removed.10.read())
+        .chain(removed.11.read())
         .collect::<std::collections::HashSet<_>>();
-    let mut dirty_rows = std::collections::HashSet::new();
-    for node in invalidation
-        .bindings
-        .iter()
-        .chain(invalidation.row_sources_removed.read())
-        .chain(invalidation.rows_removed.read())
-    {
-        if let Some(row) = std::iter::once(node)
-            .chain(invalidation.parents.iter_ancestors::<ChildOf>(node))
-            .find(|&candidate| information_entity_sources.contains(candidate))
-        {
-            dirty_rows.insert(row);
-        }
-    }
     let day_changed = *invalidation.last_day != zoo_clock.absolute_day;
     *invalidation.last_day = zoo_clock.absolute_day;
-    let (stack, formatted) = &mut *scratch;
-    for (row, source) in &information_entity_sources {
-        if !source.is_changed()
-            && !dirty_subjects.contains(&source.0)
-            && !dirty_rows.contains(&row)
-            && !(day_changed && facility_operating_dates.contains(source.0))
-        {
-            continue;
-        }
-        visit_information_row(
-            row,
-            &children,
-            &information_entity_sources,
-            stack,
-            |entity| {
-                let Ok((value_binding, mut projected_value, text)) = bound_values.get_mut(entity)
-                else {
-                    return;
-                };
-                let Some((next_value, currency)) = project_information_list_value(
-                    &value_binding.0,
-                    source.0,
-                    &animal_need_points,
-                    &animal_diseases,
-                    &animal_pregnancies,
-                    &guest_satisfaction,
-                    &staff_assignments,
-                    &facility_reservations,
-                    &facility_operating_dates,
-                    &facility_profits,
-                    &donation_totals,
-                    &transport_vehicles,
-                    zoo_clock.absolute_day,
-                ) else {
-                    return;
-                };
-                projected_value.set_if_neq(UiValue(next_value));
-                if let Some(mut text) = text {
-                    formatted.clear();
-                    if currency {
-                        write_whole_dollar_currency_with_thousands_separators(
-                            formatted, next_value,
-                        );
-                    } else {
-                        use std::fmt::Write;
-                        let _ = write!(formatted, "{next_value}");
-                    }
-                    if text.0 != *formatted {
-                        text.0.clone_from(formatted);
-                    }
+    for (source, fields) in &information_entity_sources {
+        let refresh_row = source.is_changed()
+            || dirty_subjects.contains(&source.0)
+            || fields.is_changed()
+            || (day_changed && facility_operating_dates.contains(source.0));
+        for entity in fields.iter() {
+            let Ok((value_binding, mut projected_value, text)) = bound_values.get_mut(entity)
+            else {
+                continue;
+            };
+            if !refresh_row
+                && !value_binding.is_changed()
+                && !text.as_ref().is_some_and(|text| text.is_added())
+            {
+                continue;
+            }
+            let Some((next_value, currency)) = project_information_list_value(
+                &value_binding.0,
+                source.0,
+                &animal_need_points,
+                &animal_diseases,
+                &animal_pregnancies,
+                &guest_satisfaction,
+                &staff_assignments,
+                &facility_reservations,
+                &facility_operating_dates,
+                &facility_profits,
+                &donation_totals,
+                &transport_vehicles,
+                zoo_clock.absolute_day,
+            ) else {
+                continue;
+            };
+            projected_value.set_if_neq(UiValue(next_value));
+            if let Some(mut text) = text {
+                formatted.clear();
+                if currency {
+                    write_whole_dollar_currency_with_thousands_separators(
+                        &mut formatted,
+                        next_value,
+                    );
+                } else {
+                    use std::fmt::Write;
+                    let _ = write!(&mut formatted, "{next_value}");
                 }
-            },
-        );
+                if text.0 != *formatted {
+                    text.0.clone_from(&formatted);
+                }
+            }
+        }
     }
 }
 
@@ -189,12 +160,12 @@ fn project_information_list_value(
     animal_diseases: &Query<(), With<Disease>>,
     animal_pregnancies: &Query<(), With<Pregnancy>>,
     guest_satisfaction: &Query<&GuestSatisfaction>,
-    staff_assignments: &Query<&StaffAssignment>,
+    staff_assignments: &Query<(Has<StaffAssignmentArea>, Has<StaffAssignmentTarget>)>,
     facility_reservations: &Query<&FacilityReservations>,
     facility_operating_dates: &Query<&OperatingSinceDay>,
     facility_profits: &Query<&FacilityProfit>,
     donation_totals: &Query<&DonationTotal>,
-    transport_vehicles: &Query<&TransportVehicle>,
+    transport_vehicles: &Query<(&TransportVehicle, Option<&VehicleRiders>)>,
     absolute_day: u32,
 ) -> Option<(i64, bool)> {
     let value = match binding {
@@ -214,9 +185,7 @@ fn project_information_list_value(
             .unwrap_or(0),
         UiIntegerPropertyBindingSource::InformationListStaffAssignmentCount => staff_assignments
             .get(subject)
-            .map(|assignment| {
-                i64::from(assignment.area.is_some()) + i64::from(assignment.target.is_some())
-            })
+            .map(|(area, target)| i64::from(area) + i64::from(target))
             .unwrap_or(0),
         UiIntegerPropertyBindingSource::FacilityOperatingMonths => facility_operating_dates
             .get(subject)
@@ -267,11 +236,13 @@ fn project_information_list_value(
             .unwrap_or(0),
         UiIntegerPropertyBindingSource::TransportVehicleOccupied => transport_vehicles
             .get(subject)
-            .map(|vehicle| i64::from(vehicle.occupied))
+            .ok()
+            .and_then(|(_, riders)| riders)
+            .map(|riders| riders.len() as i64)
             .unwrap_or(0),
         UiIntegerPropertyBindingSource::TransportVehicleSeats => transport_vehicles
             .get(subject)
-            .map(|vehicle| i64::from(vehicle.seats))
+            .map(|(vehicle, _)| i64::from(vehicle.seats))
             .unwrap_or(0),
         _ => return None,
     };

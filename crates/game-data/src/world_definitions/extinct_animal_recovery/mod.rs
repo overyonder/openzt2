@@ -8,7 +8,19 @@ pub struct FossilSetDefinition {
     pub species: AssetId,
     pub pieces: Vec<AssetId>,
     pub completion_unlock: AssetId,
+    #[serde(default = "first_discovery_level")]
+    pub discovery_level: u8,
+    #[serde(default = "one_piece_per_location")]
+    pub pieces_per_location: u16,
 }
+const fn first_discovery_level() -> u8 {
+    1
+}
+
+const fn one_piece_per_location() -> u16 {
+    1
+}
+
 #[derive(Clone, Copy, Debug, serde::Deserialize, Eq, PartialEq, serde::Serialize)]
 pub struct FossilPieceDefinition {
     pub id: AssetId,

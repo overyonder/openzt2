@@ -9,7 +9,6 @@ pub struct Habitat;
 pub struct HabitatRegion {
     pub topology_cells: Box<[IVec2]>,
     pub area_square_metres: f32,
-    pub boundary_fence_entities: Box<[Entity]>,
 }
 
 #[derive(Component)]

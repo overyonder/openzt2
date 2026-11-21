@@ -6,7 +6,6 @@ use openzt2_world_state::animation_playback::animation_event_message_types::Anim
 use openzt2_world_state::animation_playback::animation_event_message_types::AnimationObjectCommand;
 use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackController;
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::RunningBehaviorInstruction;
-use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorAnimationClipCompletion;
 
 #[derive(Event)]
 struct ObjectAttachmentAnimationCommand(AnimationObjectCommand);
@@ -86,6 +85,7 @@ struct AttachmentAnimationQueries<'w, 's> {
                 &'static RunningBehaviorInstruction,
             )>,
             Has<PendingBehaviorTaskFailure>,
+            Option<&'static TimedBehaviorAnimationEffect>,
         ),
     >,
     pending: Query<
@@ -117,7 +117,6 @@ fn apply_object_animation_command(
     mut commands: Commands,
     definitions: Res<WorldDefinitions>,
     definition_assets: Res<Assets<WorldDefinitionAsset>>,
-    world_releases: Option<Res<BehaviorWorldReleaseSupport>>,
     queries: AttachmentAnimationQueries,
 ) {
     let AttachmentAnimationQueries {
@@ -153,10 +152,14 @@ fn apply_object_animation_command(
             }
         }
         AuthoredAnimationTextAction::DetachObject => {
-            let Ok((task, animation, failing)) = tasks.get(actor) else {
+            let Ok((task, animation, failing, timed)) = tasks.get(actor) else {
                 return;
             };
-            if failing {
+            if failing
+                || timed.is_some_and(|effect| {
+                    matches!(effect.0, BehaviorAnimationEffect::Detach { .. })
+                })
+            {
                 return;
             }
             // Graph-owned playback has no task request. Explicit clips
@@ -214,7 +217,6 @@ fn apply_object_animation_command(
                     &objects,
                     &transforms,
                     &memberships,
-                    world_releases.as_deref(),
                     &mut commands,
                 ) {
                     warn!(

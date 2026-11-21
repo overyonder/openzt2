@@ -1,29 +1,322 @@
-use bevy::prelude::*;
+use bevy::{ecs::relationship::RelationshipTarget, prelude::*};
+use openzt2_game_assets::{
+    behavior::behavior_asset_types::{BehaviorDocumentAsset, LoadedBehaviorDocumentCollection},
+    world_definitions::{
+        world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions,
+        world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
+    },
+};
+use openzt2_game_data::{behavior::action::watch_show::ShowEventScoring, AssetId};
+use openzt2_world_state::{
+    simulation_time::simulation_clock_types::ZooClock,
+    world_spawn::world_membership_types::WorldMember,
+};
+use openzt2_zoo_state::{
+    animal_behavior::behavior_set_start_request_types::PendingBehaviorSet,
+    animal_lifecycle::types::{Animal, SpeciesHandle},
+    behavior_task_execution_types::{
+        running_actions::{RunBehaviorWatchShow, RunningBehaviorInstruction, SelectedBehaviorSet},
+        BehaviorTaskExecutionPhase, BehaviorTaskExecutionState, PendingBehaviorTaskFailure,
+    },
+    guests::{
+        guest_simulation_types::{GuestArchetype, GuestFavouriteAnimal, GuestRng},
+        guest_survey_types::GuestSurveyExperience,
+    },
+    shows::running_show_types::{
+        AnimalPerformingShowTrick, RunningShow, RunningShowOnStage, RunningShowTrick,
+        ShowAudienceReaction, ShowPhase,
+    },
+};
 
-use super::show_event_types::AuthoredAnimalShowEvent;
-use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
-use openzt2_zoo_state::animal_behavior::behavior_set_start_request_types::PendingBehaviorSet;
-use openzt2_zoo_state::animal_lifecycle::types::Animal;
-use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionPhase;
-use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
-use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorTaskFailure;
+use super::{
+    show_audience_types::{GuestShowExperience, GuestWatchingStage, StageShowAudience},
+    show_event_types::AuthoredAnimalShowEvent,
+};
 
-pub(crate) fn remove_expired_animal_show_events(
+#[derive(Component)]
+#[relationship(relationship_target = RunShowEvents)]
+pub(crate) struct ShowEventForRun(Entity);
+
+#[derive(Component)]
+#[relationship_target(relationship = ShowEventForRun, linked_spawn)]
+pub(crate) struct RunShowEvents(Vec<Entity>);
+
+#[derive(Component)]
+pub(crate) struct ShowEventWindow {
+    release: u64,
+    expires: Option<u64>,
+    trick: AssetId,
+}
+
+pub(crate) fn schedule_authored_animal_show_events(
     mut commands: Commands,
-    events: Query<(Entity, &WorldMember, &AuthoredAnimalShowEvent)>,
-    performers: Query<(&WorldMember, &BehaviorTaskExecutionState), With<Animal>>,
-    interruptions: Query<(), Or<(With<PendingBehaviorTaskFailure>, With<PendingBehaviorSet>)>>,
+    clock: Res<ZooClock>,
+    definitions: Res<WorldDefinitions>,
+    assets: Res<Assets<WorldDefinitionAsset>>,
+    events: Query<(Entity, &AuthoredAnimalShowEvent), Without<ShowEventWindow>>,
+    performers: Query<&AnimalPerformingShowTrick, With<Animal>>,
+    tricks: Query<&RunningShowTrick>,
 ) {
-    for (entity, world, event) in &events {
-        if event.policy.expire_with_task
+    if events.is_empty() {
+        return;
+    }
+    let Some(definitions) = definitions.get(&assets) else {
+        return;
+    };
+    let ticks = |seconds: f32| {
+        (f64::from(seconds) * f64::from(definitions.timing().fixed_hz)).ceil() as u64
+    };
+    for (entity, event) in &events {
+        let Ok(run) = performers.get(event.performer) else {
+            commands.entity(entity).try_despawn();
+            continue;
+        };
+        let Ok(trick) = tricks.get(*run.collection()) else {
+            commands.entity(entity).try_despawn();
+            continue;
+        };
+        let release = clock
+            .tick
+            .saturating_add(event.policy.time_in_seconds.map_or(0, ticks));
+        commands.entity(entity).insert((
+            ShowEventForRun(*run.collection()),
+            ShowEventWindow {
+                release,
+                trick: trick.definition,
+                expires: event
+                    .policy
+                    .timeout_seconds
+                    .map(|seconds| release.saturating_add(ticks(seconds))),
+            },
+        ));
+    }
+}
+
+pub(super) fn dispatch_released_animal_show_events(
+    mut commands: Commands,
+    clock: Res<ZooClock>,
+    definitions: Res<WorldDefinitions>,
+    assets: Res<Assets<WorldDefinitionAsset>>,
+    behavior_documents: Res<Assets<BehaviorDocumentAsset>>,
+    behavior_index: Res<LoadedBehaviorDocumentCollection>,
+    events: Query<(
+        Entity,
+        &WorldMember,
+        &AuthoredAnimalShowEvent,
+        &ShowEventWindow,
+        &ShowEventForRun,
+    )>,
+    performers: Query<
+        (
+            &WorldMember,
+            Option<&BehaviorTaskExecutionState>,
+            Option<&SpeciesHandle>,
+        ),
+        With<Animal>,
+    >,
+    interruptions: Query<(), Or<(With<PendingBehaviorTaskFailure>, With<PendingBehaviorSet>)>>,
+    shows: Query<(&RunningShowOnStage, &RunningShow)>,
+    audiences: Query<&StageShowAudience>,
+    mut guests: Query<(
+        &GuestWatchingStage,
+        &RunningBehaviorInstruction,
+        &RunBehaviorWatchShow,
+        &GuestArchetype,
+        &GuestFavouriteAnimal,
+        &mut GuestShowExperience,
+        Option<&mut GuestRng>,
+        Option<&mut GuestSurveyExperience>,
+    )>,
+    mut reactions: MessageWriter<ShowAudienceReaction>,
+) {
+    let Some(definitions) = definitions.get(&assets) else {
+        return;
+    };
+    let behavior = behavior_index.create_declaration_index_view(&behavior_documents);
+    let mut released = std::collections::BTreeMap::<Entity, Vec<Entity>>::new();
+    for (entity, world, event, window, run) in &events {
+        let Ok((performer_world, task, _)) = performers.get(event.performer) else {
+            commands.entity(entity).try_despawn();
+            continue;
+        };
+        let interrupted = event.policy.expire_with_task
             && (interruptions.contains(event.performer)
-                || !performers.get(event.performer).is_ok_and(|(owner, task)| {
-                    owner.root == world.root
-                        && task.execution_id == event.execution_id
-                        && task.phase != BehaviorTaskExecutionPhase::Failure
-                }))
+                || task.is_none_or(|task| {
+                    task.execution_id != event.execution_id
+                        || task.phase == BehaviorTaskExecutionPhase::Failure
+                }));
+        if world.root != performer_world.root
+            || interrupted
+            || window.expires.is_some_and(|expiry| clock.tick > expiry)
         {
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
+            continue;
+        }
+        if clock.tick >= window.release {
+            released.entry(run.0).or_default().push(entity);
         }
     }
+    for (show_entity, released) in released {
+        let Ok((stage, show)) = shows.get(show_entity) else {
+            continue;
+        };
+        if show.phase == ShowPhase::BetweenShows {
+            for entity in released {
+                commands.entity(entity).try_despawn();
+            }
+            continue;
+        }
+        let stage = stage.0;
+        let quality = show.trick_quality_q16;
+        if let Ok(audience) = audiences.get(stage) {
+            for guest in audience.iter() {
+                let Ok((
+                    watch,
+                    instruction,
+                    action,
+                    archetype,
+                    favorite,
+                    mut history,
+                    random,
+                    survey,
+                )) = guests.get_mut(guest)
+                else {
+                    continue;
+                };
+                if watch.instruction != Some(instruction.id()) {
+                    continue;
+                }
+                if history.show != Some(show_entity) {
+                    history.show = Some(show_entity);
+                    history.reactions.clear();
+                    history.delivered_events.clear();
+                }
+                let policies = &action.0.events;
+                let default = policies
+                    .iter()
+                    .find(|rule| rule.event == AssetId::from_key("defaultevent"));
+                let candidate = released
+                    .iter()
+                    .filter(|entity| !history.delivered_events.contains(*entity))
+                    .filter_map(|&entity| {
+                        let (_, _, event, window, _) = events.get(entity).ok()?;
+                        let rule = policies
+                            .iter()
+                            .find(|rule| rule.event == event.policy.name)
+                            .or(default)?;
+                        Some((entity, event, window, rule))
+                    })
+                    .max_by_key(|(entity, event, _, rule)| {
+                        (
+                            event.policy.interrupt,
+                            (i64::from(event.policy.priority) << 16)
+                                + i64::from(rule.priority_q16.unwrap_or_default()),
+                            std::cmp::Reverse(*entity),
+                        )
+                    });
+                let Some((entity, event, window, policy)) = candidate else {
+                    continue;
+                };
+                if window.expires.is_some() {
+                    history.delivered_events.insert(entity);
+                }
+                let previous = history.reactions.entry(event.policy.name).or_default();
+                let popularity = definitions
+                    .find_trick(window.trick)
+                    .map_or(0, |trick| trick.popularity_q16);
+                let species = performers
+                    .get(event.performer)
+                    .ok()
+                    .and_then(|(_, _, species)| species.map(|species| species.species));
+                let score = score_show_event(
+                    policy,
+                    popularity,
+                    quality,
+                    species.is_some_and(|species| favorite.0 == Some(species)),
+                    *previous,
+                    random,
+                );
+                *previous = previous.saturating_add(1);
+                let reaction = policy
+                    .reactions
+                    .iter()
+                    .filter(|reaction| score >= reaction.minimum_score_q16)
+                    .max_by_key(|reaction| reaction.minimum_score_q16);
+                let Some(reaction) = reaction else { continue };
+                let types = definitions
+                    .find_guest(archetype.0)
+                    .map_or(&[][..], |guest| {
+                        guest.behavior_subject_type_identifiers.as_slice()
+                    });
+                let Some((document, declaration)) = behavior.as_ref().and_then(|view| {
+                    view.find_behavior_set_location(reaction.behavior_set, types.iter().copied())
+                }) else {
+                    continue;
+                };
+                if let Some(mut survey) = survey {
+                    survey.observe_entertainment(score as f32 / 65_536.0);
+                }
+                reactions.write(ShowAudienceReaction {
+                    guest,
+                    show: show_entity,
+                    stage,
+                    event: event.policy.name,
+                    score_q16: score,
+                });
+                instruction.enter_set(
+                    guest,
+                    SelectedBehaviorSet {
+                        program: reaction.behavior_set,
+                        document,
+                        declaration,
+                        tick: clock.tick,
+                        repeat: None,
+                        target: None,
+                    },
+                    &mut commands,
+                );
+            }
+        }
+        for entity in released {
+            if events
+                .get(entity)
+                .is_ok_and(|(_, _, _, window, _)| window.expires.is_none())
+            {
+                commands.entity(entity).try_despawn();
+            }
+        }
+    }
+}
+
+fn score_show_event(
+    policy: &ShowEventScoring,
+    popularity: i32,
+    quality: i32,
+    favorite: bool,
+    previous: u32,
+    random: Option<Mut<GuestRng>>,
+) -> i32 {
+    let product = |value: i32, multiplier: Option<i32>| {
+        i64::from(value) * i64::from(multiplier.unwrap_or_default()) / 65_536
+    };
+    let ignore = (policy.ignore_previous_q16.unwrap_or_default() >> 16).max(0) as u32;
+    let counted = previous.saturating_sub(ignore);
+    let fuzz = random
+        .zip(policy.fuzzy_factor_q16.filter(|&range| range != 0))
+        .map_or(0, |(mut random, range)| {
+            let sample = i64::from(random.0.next_u32() >> 16);
+            (sample * 2 - 65_535) * i64::from(range) / 65_535
+        });
+    let score = i64::from(policy.base_score_q16.unwrap_or_default())
+        + fuzz
+        + i64::from(
+            policy
+                .favorite_animal_bonus_q16
+                .filter(|_| favorite)
+                .unwrap_or_default(),
+        )
+        + product(popularity, policy.trick_popularity_multiplier_q16)
+        + product(quality, policy.show_quality_multiplier_q16)
+        + i64::from(counted) * i64::from(policy.per_previous_q16.unwrap_or_default());
+    score.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
 }

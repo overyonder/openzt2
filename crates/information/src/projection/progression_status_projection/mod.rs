@@ -97,7 +97,7 @@ pub(crate) fn project_progression_status_to_authored_information_bindings(
     else {
         return;
     };
-    for (property_binding, mut projected_text) in &mut authored_text {
+    for (property_binding, projected_text) in &mut authored_text {
         let localization_key = match &property_binding.0 {
             UiTextPropertyBindingSource::ResearchName => active_research_project
                 .and_then(|project| world_definitions.find_research(project.definition))
@@ -110,7 +110,7 @@ pub(crate) fn project_progression_status_to_authored_information_bindings(
         if let Some(localized_text) =
             localization_key.and_then(|key| localization_catalogue.find_plain_localized_text(key))
         {
-            replace_projected_ui_text_if_changed(&mut projected_text.0, localized_text);
+            replace_projected_ui_text_if_changed(projected_text, localized_text);
         }
     }
 }

@@ -177,6 +177,8 @@ impl Default for AnimalNavigationCollisionPolicy {
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct SpeciesVariant {
     #[serde(default)]
+    pub need_points: AnimalNeedPointPolicy,
+    #[serde(default)]
     pub placement_surface_policy:
         crate::world_definitions::object_placement::PlacementSurfacePolicy,
     pub id: AssetId,
@@ -218,6 +220,29 @@ pub struct SpeciesVariant {
     pub probability: u16,
     pub flags: SpeciesVariantFlags,
     pub adoption_count_range: [u16; 2],
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+pub struct AnimalNeedPointPolicy {
+    pub interval_seconds: f32,
+    pub maximum: f32,
+    pub good_delta: f32,
+    pub bad_delta: f32,
+    pub factor: f32,
+    pub factor_delta: f32,
+}
+
+impl Default for AnimalNeedPointPolicy {
+    fn default() -> Self {
+        Self {
+            interval_seconds: 0.0,
+            maximum: 100.0,
+            good_delta: 0.0,
+            bad_delta: 0.0,
+            factor: 1.0,
+            factor_delta: 0.0,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]

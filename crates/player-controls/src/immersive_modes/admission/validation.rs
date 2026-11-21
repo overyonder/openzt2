@@ -1,4 +1,4 @@
-use bevy::ecs::system::SystemParam;
+use bevy::ecs::{relationship::RelationshipTarget, system::SystemParam};
 use bevy::prelude::*;
 
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::{
@@ -7,7 +7,7 @@ use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_interface_state::camera::camera_runtime_state_types::ZooCamera;
 use openzt2_interface_state::information::entity_selection_types::{InfoPanel, WorldUiSelection};
-use openzt2_interface_state::photos::photo_capture_types::PhotoReadback;
+use openzt2_interface_state::photos::photo_capture_types::AlbumPhotoReadbacks;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_world_state::world_spawn::world_terrain_hydration::WorldTerrainHorizontalBounds;
 use openzt2_zoo_state::animal_health::types::Dead;
@@ -15,7 +15,7 @@ use openzt2_zoo_state::extinct_animals::fossil_collection_and_assembly_types::Fo
 use openzt2_zoo_state::extinct_animals::fossil_recovery_types::FossilRecoverySite;
 use openzt2_zoo_state::guests::guest_simulation_types::Guest;
 use openzt2_zoo_state::locomotion::locomotion_types::NavFlags;
-use openzt2_zoo_state::shows::show_schedule_types::ScheduledShowPerformancePlan;
+use openzt2_zoo_state::shows::show_schedule_types::{ScheduledShowPerformancePlan, ShowStageRows};
 use openzt2_zoo_state::shows::show_stage_types::ShowStage;
 use openzt2_zoo_state::transport_tours::transport_vehicle_types::TransportVehicle;
 
@@ -135,7 +135,7 @@ pub(in crate::immersive_modes) fn validate_assembly(
 
 pub(in crate::immersive_modes) fn validate_photo(
     mut request: Query<&mut PendingMode<PhotoControl>>,
-    readback: Option<Res<PhotoReadback>>,
+    readbacks: Query<&AlbumPhotoReadbacks>,
     definitions: ModeDefinitions,
     cameras: Query<Entity, With<ZooCamera>>,
 ) {
@@ -143,16 +143,21 @@ pub(in crate::immersive_modes) fn validate_photo(
         return;
     };
     request.result = (|| {
-        if readback.as_ref().ok_or(ModeEntryFailure::MissingTool)?.busy {
+        let camera = camera(&cameras)?;
+        if readbacks
+            .get(camera)
+            .is_ok_and(|pending| !pending.is_empty())
+        {
             return Err(ModeEntryFailure::RuleDenied);
         }
-        Admission::from_authored(definitions.get()?, ImmersiveMode::Photo, camera(&cameras)?)
+        Admission::from_authored(definitions.get()?, ImmersiveMode::Photo, camera)
     })();
 }
 
 pub(in crate::immersive_modes) fn validate_show(
     mut request: Query<&mut PendingMode<ShowEditControl>>,
-    stages: Query<(), (With<ShowStage>, With<ScheduledShowPerformancePlan>)>,
+    stages: Query<&ShowStageRows, With<ShowStage>>,
+    performances: Query<(), With<ScheduledShowPerformancePlan>>,
     panels: Query<&InheritedVisibility, With<InfoPanel>>,
     selection: WorldUiSelection,
     definitions: ModeDefinitions,
@@ -163,7 +168,9 @@ pub(in crate::immersive_modes) fn validate_show(
     };
     request.result = (|| {
         let subject = subject(request.subject)?;
-        if !stages.contains(subject)
+        if !stages
+            .get(subject)
+            .is_ok_and(|rows| rows.iter().any(|row| performances.contains(row)))
             || selection.subject() != Some(subject)
             || !panels.iter().any(|visible| visible.get())
         {

@@ -1,20 +1,23 @@
-use bevy::text::EditableText;
+use bevy::{
+    prelude::{Mut, Text},
+    text::EditableText,
+};
 
 /// Replaces projected UI text while retaining the existing allocation when
 /// the projected value has not changed.
 pub(crate) fn replace_projected_ui_text_if_changed(
-    projected_ui_text: &mut String,
+    mut projected_ui_text: Mut<Text>,
     current_domain_text: &str,
 ) {
-    if projected_ui_text == current_domain_text {
+    if projected_ui_text.0 == current_domain_text {
         return;
     }
-    projected_ui_text.clear();
-    projected_ui_text.push_str(current_domain_text);
+    projected_ui_text.0.clear();
+    projected_ui_text.0.push_str(current_domain_text);
 }
 
 pub(crate) fn replace_projected_editable_ui_text_if_changed(
-    projected_ui_text: &mut EditableText,
+    mut projected_ui_text: Mut<EditableText>,
     current_domain_text: &str,
 ) {
     if projected_ui_text.value() == current_domain_text {

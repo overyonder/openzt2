@@ -438,7 +438,17 @@ fn parse_trick(
     let localized_name =
         required(document, data, "locname", diagnostics).map(|value| asset(value, resolve))?;
     let icon = required(document, data, "icon", diagnostics).map(|value| asset(value, resolve))?;
-    let difficulty = number::<u16>(document, data, owner, "Difficulty", diagnostics)?;
+    let difficulty = number::<f32>(document, data, owner, "Difficulty", diagnostics)?;
+    if !difficulty.is_finite() || difficulty < 0.0 {
+        diagnostics.push(invalid(
+            document,
+            data.span,
+            owner,
+            "Difficulty",
+            &difficulty.to_string(),
+        ));
+        return None;
+    }
     let popularity_q16 = fixed_q16(document, data, owner, "PopularityMult", diagnostics)?;
     let animals = child(node, "Animals").or_else(|| {
         diagnostics.push(missing(document, Some(node.span), owner, "Animals"));

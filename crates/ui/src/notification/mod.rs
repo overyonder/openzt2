@@ -1,5 +1,8 @@
 use bevy::{ecs::system::SystemParam, prelude::*};
-use openzt2_game_data::ui_document::document::*;
+use openzt2_game_data::{
+    localization::LocalizationFormatArgument, ui_document::document::*, AssetId,
+};
+use openzt2_world_state::world_spawn::world_membership_types::{WorldMember, WorldRoot};
 
 use openzt2_game_assets::localization::localization_asset_types::LocalizationAsset;
 use openzt2_game_assets::localization::localization_precedence_index::LocalizationPrecedenceIndex;
@@ -37,7 +40,8 @@ struct PendingBirthNotification(String);
 #[derive(SystemParam)]
 pub(super) struct BirthNotifications<'w, 's> {
     notices: Option<MessageReader<'w, 's, BehaviorBirthNotice>>,
-    names: Query<'w, 's, &'static Name>,
+    subjects: Query<'w, 's, (Option<&'static Name>, Option<&'static WorldMember>)>,
+    roots: Query<'w, 's, Entity, With<WorldRoot>>,
     pending: Query<'w, 's, (Entity, &'static PendingBirthNotification)>,
     messages: Option<ResMut<'w, ZooMessages>>,
     time: Option<Res<'w, Time<Real>>>,
@@ -63,25 +67,40 @@ pub(super) fn request_notifications(
     let localization = active_localization.borrow_loaded_localization_view(&localizations);
     if let Some(notices) = &mut births.notices {
         for notice in notices.read() {
+            let subject = births.subjects.get(notice.subject).ok();
             let name = notice
                 .mother_name
                 .as_deref()
-                .or_else(|| births.names.get(notice.subject).ok().map(Name::as_str));
-            if let Some(name) = name {
-                commands.spawn(PendingBirthNotification(name.to_owned()));
+                .or_else(|| subject.and_then(|(name, _)| name).map(Name::as_str));
+            let root = subject
+                .and_then(|(_, world)| world.map(|world| world.root))
+                .or_else(|| births.roots.single().ok());
+            if let (Some(name), Some(root)) = (name, root) {
+                commands.spawn((PendingBirthNotification(name.to_owned()), ChildOf(root)));
             }
         }
     }
     if !births.pending.is_empty() {
-        let birth_key = openzt2_game_data::AssetId::from_key("zoomessages:AnimalBirth");
-        if let (Some(format), Some(messages), Some(time)) = (
-            localization.and_then(|view| localized(view, birth_key)),
+        if let (Some(locale), Some(messages), Some(time)) = (
+            localization,
             births.messages.as_deref_mut(),
             births.time.as_deref(),
         ) {
+            let key = AssetId::from_key("zoomessages:AnimalBirth");
             for (entity, notice) in &births.pending {
+                let mut text = String::new();
+                if locale
+                    .write_localized_text_with_format_arguments(
+                        key,
+                        &[LocalizationFormatArgument::Text(&notice.0)],
+                        &mut text,
+                    )
+                    .is_err()
+                {
+                    continue;
+                }
                 messages.messages.push(ZooMessage {
-                    text: format.replacen("%s", &notice.0, 1),
+                    text,
                     expires_at_seconds: time.elapsed_secs_f64() + 10.0,
                 });
                 commands.entity(entity).despawn();

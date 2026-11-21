@@ -16,9 +16,8 @@ use openzt2_zoo_state::economy::account_transaction_types::{
 use openzt2_zoo_state::economy::authored_transaction_amount::authored_currency_to_money;
 use openzt2_zoo_state::animal_behavior::behavior_token_types::BehaviorSelfToken;
 use openzt2_game_assets::species::species_asset_types::{SpeciesAsset, SpeciesAssets};
-use openzt2_zoo_state::animal_lifecycle::types::{
-    AnimalLifeStage, AnimalSex, Mate, Parents, SpeciesHandle,
-};
+use openzt2_zoo_state::animal_lifecycle::types::{AnimalLifeStage, AnimalSex, SpeciesHandle};
+use openzt2_zoo_state::animal_behavior::animal_lineage::{AnimalLineage, AnimalMate};
 use openzt2_zoo_state::animal_health::types::Disease;
 use openzt2_zoo_state::maintenance::maintenance_types::CompostPooLevel;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
@@ -36,11 +35,6 @@ pub(super) enum BehaviorScriptEffect {
     Disease(Entity, DiseaseAttribute),
     BirthMotherName(Option<String>),
     NotifyBirth(Option<openzt2_game_data::species::Sex>),
-}
-
-#[derive(Resource, Default)]
-pub(in crate::animal_behavior) struct BehaviorBirthNoticeContext {
-    mother_name: Option<String>,
 }
 
 /// Structural changes only, visible to later scripts before Commands apply.
@@ -87,7 +81,6 @@ pub(super) enum DiseaseAttribute {
 
 #[derive(SystemParam)]
 pub(in crate::animal_behavior) struct BehaviorScriptWorldAccess<'w, 's> {
-    birth_notice: ResMut<'w, BehaviorBirthNoticeContext>,
     definition_assets: Res<'w, Assets<WorldDefinitionAsset>>,
     definitions: Res<'w, WorldDefinitions>,
     objects: Query<
@@ -102,12 +95,12 @@ pub(in crate::animal_behavior) struct BehaviorScriptWorldAccess<'w, 's> {
     >,
     poo_levels: Query<'w, 's, &'static mut CompostPooLevel>,
     killed: Query<'w, 's, &'static BehaviorKilledTarget>,
-    mates: Query<'w, 's, &'static mut Mate>,
+    mates: Query<'w, 's, &'static AnimalMate>,
     diseases: Query<'w, 's, &'static mut Disease>,
     clock: Res<'w, ZooClock>,
     tokens: Query<'w, 's, &'static BehaviorSelfToken>,
     token_owners: Query<'w, 's, &'static Children>,
-    lineage: Query<'w, 's, (Entity, &'static Parents)>,
+    lineage: AnimalLineage<'w, 's>,
     life_stages: Query<'w, 's, &'static AnimalLifeStage>,
     animals: Query<
         'w,
@@ -206,19 +199,14 @@ impl BehaviorScriptWorldAccess<'_, '_> {
     /// `BFAI_GET_RELATED_ENTITIES` `child`: the animals whose mother or father
     /// is this entity.
     pub(super) fn children(&self, entity: Entity) -> Vec<Entity> {
-        self.lineage
-            .iter()
-            .filter(|(_, parents)| parents.mother == Some(entity) || parents.father == Some(entity))
-            .map(|(child, _)| child)
-            .collect()
+        self.lineage.children(entity)
     }
 
-    /// `BFAI_GET_RELATED_ENTITY` `mother` and `father`. Parentage
-    /// comes from `Parents`, as do the relations derived from it.
+    /// `BFAI_GET_RELATED_ENTITY` `mother` and `father`.
     pub(super) fn related(&self, entity: Entity, relation: &str) -> Option<Entity> {
         match relation {
-            "mother" => self.lineage.get(entity).ok()?.1.mother,
-            "father" => self.lineage.get(entity).ok()?.1.father,
+            "mother" => self.lineage.parents(entity).mother,
+            "father" => self.lineage.parents(entity).father,
             _ => None,
         }
     }
@@ -274,6 +262,7 @@ impl BehaviorScriptWorldAccess<'_, '_> {
         effects: Vec<BehaviorScriptEffect>,
         pending: &mut BehaviorScriptStructuralEdits,
     ) {
+        let mut birth_mother_name = None;
         for effect in effects {
             match effect {
                 BehaviorScriptEffect::Presentation(request) => {
@@ -296,15 +285,17 @@ impl BehaviorScriptWorldAccess<'_, '_> {
                 }
                 BehaviorScriptEffect::Mate(entity, mate) => {
                     if let Some(mate) = mate {
-                        if !pending.mates.contains_key(&entity) {
-                            if let Ok(mut current) = self.mates.get_mut(entity) {
-                                current.set_if_neq(Mate(mate));
-                                continue;
-                            }
+                        if !pending.mates.contains_key(&entity)
+                            && self
+                                .mates
+                                .get(entity)
+                                .is_ok_and(|current| current.0 == mate)
+                        {
+                            continue;
                         }
-                        commands.entity(entity).try_insert(Mate(mate));
+                        commands.entity(entity).try_insert(AnimalMate(mate));
                     } else {
-                        commands.entity(entity).try_remove::<Mate>();
+                        commands.entity(entity).try_remove::<AnimalMate>();
                     }
                     pending.mates.insert(entity, mate);
                 }
@@ -317,13 +308,13 @@ impl BehaviorScriptWorldAccess<'_, '_> {
                     );
                 }
                 BehaviorScriptEffect::BirthMotherName(name) => {
-                    self.birth_notice.mother_name = name;
+                    birth_mother_name = name;
                 }
                 BehaviorScriptEffect::NotifyBirth(sex) => {
                     commands.write_message(
                         openzt2_zoo_state::animal_behavior::behavior_birth_notice_types::BehaviorBirthNotice {
                             subject: actor,
-                            mother_name: self.birth_notice.mother_name.clone(),
+                            mother_name: birth_mother_name.clone(),
                             sex,
                         },
                     );

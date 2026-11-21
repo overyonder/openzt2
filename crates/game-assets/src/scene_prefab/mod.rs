@@ -1,5 +1,7 @@
 //! Scene-prefab asset registration.
 
+pub mod transform_animation_lowering;
+
 use bevy::{
     asset::{AssetApp, LoadContext},
     gltf::Gltf,
@@ -14,6 +16,7 @@ use std::collections::BTreeMap;
 use crate::{
     animation::animation_set_asset_types::AnimationSetAsset, effect::ParticleEffectDocumentAsset,
 };
+use transform_animation_lowering::{lower_prefab_motion, PrefabMotion};
 
 #[derive(Asset, TypePath, Debug)]
 pub struct ScenePrefabAsset {
@@ -24,6 +27,8 @@ pub struct ScenePrefabAsset {
     material_paths: Box<[(AssetId, Box<str>)]>,
     effects: Box<[(AssetId, Handle<ParticleEffectDocumentAsset>)]>,
     animations: Box<[(AssetId, Handle<AnimationSetAsset>)]>,
+    #[dependency]
+    motion: Vec<PrefabMotion>,
 }
 
 impl ScenePrefabAsset {
@@ -37,6 +42,7 @@ impl ScenePrefabAsset {
             material_paths: Box::new([]),
             effects: Box::new([]),
             animations: Box::new([]),
+            motion: Vec::new(),
         }
     }
 
@@ -84,10 +90,18 @@ impl ScenePrefabAsset {
     ) -> impl Iterator<Item = &Handle<AnimationSetAsset>> {
         self.animations.iter().map(|(_, handle)| handle)
     }
+
+    pub fn motion_for_row(&self, index: usize) -> Option<&PrefabMotion> {
+        let position = self
+            .motion
+            .binary_search_by_key(&index, |motion| motion.row)
+            .ok()?;
+        self.motion.get(position)
+    }
 }
 
 pub fn create_scene_prefab_asset_and_load_dependencies(
-    document: ScenePrefabDocument,
+    mut document: ScenePrefabDocument,
     load_context: &mut LoadContext<'_>,
 ) -> ScenePrefabAsset {
     let (model_paths, collider_models) =
@@ -109,6 +123,12 @@ pub fn create_scene_prefab_asset_and_load_dependencies(
         &document,
         ScenePrefabAssetDependencyKind::Animation,
     );
+    let motion = document
+        .entities
+        .iter_mut()
+        .enumerate()
+        .filter_map(|(index, row)| lower_prefab_motion(index, row, load_context))
+        .collect();
     ScenePrefabAsset {
         attachment_transforms: collect_prefab_attachment_transforms(&document),
         document,
@@ -117,6 +137,7 @@ pub fn create_scene_prefab_asset_and_load_dependencies(
         material_paths,
         effects,
         animations,
+        motion,
     }
 }
 

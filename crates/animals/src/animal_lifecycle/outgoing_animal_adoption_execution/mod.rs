@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use openzt2_world_state::world_spawn::world_entity_crating::{AnimalCrate, ContainedCratedAnimal};
+use openzt2_world_state::world_spawn::world_entity_crating::AnimalCrate;
 use openzt2_zoo_state::animal_health::types::Dead;
 use openzt2_zoo_state::animal_lifecycle::{
     animal_adoption_contracts::PlaceAnimalForAdoption,
@@ -9,21 +9,25 @@ use openzt2_zoo_state::animal_lifecycle::{
 pub(super) fn transfer_animals_out_for_adoption(
     mut commands: Commands,
     mut requests: MessageReader<PlaceAnimalForAdoption>,
-    animals: Query<Option<&AnimalCrate>, (With<Animal>, Without<Dead>, Without<ReleaseRestricted>)>,
-    crates: Query<&ContainedCratedAnimal>,
+    animals: Query<(), (With<Animal>, Without<Dead>, Without<ReleaseRestricted>)>,
 ) {
     for request in requests.read() {
-        let Ok(crate_link) = animals.get(request.0) else {
-            continue;
-        };
-        if let Some(crate_link) = crate_link {
-            if crates
-                .get(crate_link.0)
-                .is_ok_and(|contained| contained.0 == request.0)
-            {
-                commands.entity(crate_link.0).try_despawn();
-            }
+        let animal = request.0;
+        if animals.contains(animal) {
+            commands.queue(move |world: &mut World| {
+                despawn_departing_animal_and_its_crate(world, animal);
+            });
         }
-        commands.entity(request.0).try_despawn();
     }
+}
+
+pub(super) fn despawn_departing_animal_and_its_crate(world: &mut World, animal: Entity) -> bool {
+    let crate_entity = world.get::<AnimalCrate>(animal).map(|link| link.0);
+    if world.try_despawn(animal).is_err() {
+        return false;
+    }
+    if let Some(crate_entity) = crate_entity {
+        let _ = world.try_despawn(crate_entity);
+    }
+    true
 }

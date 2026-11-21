@@ -34,12 +34,12 @@ pub(super) struct FossilSonarPolicy {
     pub minimum_view_dot: f32,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct SourceTrickDefinition {
     pub id: AssetId,
     pub localized_name: AssetId,
     pub icon: AssetId,
-    pub difficulty: u16,
+    pub difficulty: f32,
     pub popularity_q16: i32,
     /// Source-only ordering token. Integration compiles this to a dense display ordinal.
     pub sort_key: Option<String>,

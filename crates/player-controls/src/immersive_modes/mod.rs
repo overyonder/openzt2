@@ -106,6 +106,13 @@ impl Plugin for ImmersiveModesPlugin {
             )
             .add_systems(
                 Update,
+                photo_mode_control_execution::project_live_photo_camera_view
+                    .after(openzt2_world_state::application_schedule::WaterPresentationSet::View)
+                    .in_set(GameSet::Presentation)
+                    .run_if(active_mode_is(ImmersiveMode::Photo)),
+            )
+            .add_systems(
+                Update,
                 (
                     first_person_mode_control_execution::update_subject_relative_first_person_camera_transform
                         .run_if(active_view_mode),

@@ -1,5 +1,6 @@
 //! In-memory sources reconstructed from the selected save container.
 
+use crate::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use crate::world_scenario::{
     world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset,
     world_scenario_document_source::WorldScenarioDocumentSource,
@@ -13,6 +14,12 @@ use bevy::{
 };
 use openzt2_game_data::{terrain::TerrainGrid, AssetId};
 use std::{io, path::Path};
+
+#[derive(Component)]
+pub struct SavedWorldTerrainAsset {
+    pub identifier: AssetId,
+    pub handle: Handle<TerrainAsset>,
+}
 
 #[derive(Resource)]
 pub struct SavedWorldAssetSource {
@@ -41,7 +48,7 @@ impl SavedWorldAssetSource {
         terrain_identifier: AssetId,
         terrain: &TerrainGrid,
         server: &AssetServer,
-    ) -> io::Result<Handle<WorldScenarioDocumentAsset>> {
+    ) -> io::Result<(Handle<WorldScenarioDocumentAsset>, SavedWorldTerrainAsset)> {
         let mut matches = source
             .terrains
             .iter_mut()
@@ -90,9 +97,16 @@ impl SavedWorldAssetSource {
         hash.update(&document);
         hash.update(&terrain);
         let key = hash.finalize().to_hex().to_string();
+        let terrain_path = format!("saved-worlds://{key}/terrain.ozterrain");
         if let Some((current, handle)) = &self.current {
             if current == &key {
-                return Ok(handle.clone());
+                return Ok((
+                    handle.clone(),
+                    SavedWorldTerrainAsset {
+                        identifier: terrain_identifier,
+                        handle: server.load(terrain_path),
+                    },
+                ));
             }
         }
         self.reader
@@ -115,6 +129,12 @@ impl SavedWorldAssetSource {
                     .remove_asset(Path::new(&format!("{previous}/terrain.ozterrain"))),
             );
         }
-        Ok(handle)
+        Ok((
+            handle,
+            SavedWorldTerrainAsset {
+                identifier: terrain_identifier,
+                handle: server.load(terrain_path),
+            },
+        ))
     }
 }

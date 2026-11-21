@@ -1,3 +1,4 @@
+use super::audio_request_lanes::{ProducedAudioRequest, AMBIENT_EMITTER};
 use bevy::prelude::*;
 
 use openzt2_game_assets::audio::audio_asset_types::{AudioAsset, AudioAssets};
@@ -13,7 +14,7 @@ pub(super) fn play_changed_allowed_ambient_audio_emitters(
     audio_asset_index: Res<AudioAssets>,
     emitters: Query<(Entity, Ref<AmbientAudioEmitter>, &WorldMember)>,
     soundscapes: Query<(&AudioSoundscape, &WorldMember)>,
-    mut play_requests: MessageWriter<PlayAudioCue>,
+    mut requests: MessageWriter<ProducedAudioRequest<AMBIENT_EMITTER>>,
 ) {
     let audio_assets_changed = audio_asset_index.is_changed();
     let Some(audio_asset_view) = audio_asset_index.get(&audio_assets) else {
@@ -37,13 +38,13 @@ pub(super) fn play_changed_allowed_ambient_audio_emitters(
             .allowed_entities
             .contains(&emitter.definition)
         {
-            play_requests.write(PlayAudioCue {
+            requests.write(ProducedAudioRequest::Play(PlayAudioCue {
                 cue: emitter.cue,
                 emitter: Some(emitter_entity),
                 selection: emitter.selection,
                 priority: 16,
                 force_looped: false,
-            });
+            }));
         }
     }
 }

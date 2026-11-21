@@ -28,6 +28,8 @@ use openzt2_interface_state::information::catalogue_types::{
 use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::UiTypeListPolicy;
 use openzt2_interface_state::ui::authored_ui_activation_contracts::UiNodeActivated;
 
+use super::catalogue_world_availability_context::CatalogueResearchAccess;
+
 pub(crate) fn choose_catalogue_entry_from_activated_type_list_row(
     mut commands: Commands,
     mut ui_node_activations: MessageReader<UiNodeActivated>,
@@ -42,9 +44,7 @@ pub(crate) fn choose_catalogue_entry_from_activated_type_list_row(
     >,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,
-    research_availability: Query<
-        &openzt2_zoo_state::progression::research_types::ResearchProjectAvailability,
-    >,
+    research_availability: CatalogueResearchAccess,
     unlocked_catalogue_definitions: Res<UnlockedCatalogueDefinitionSet>,
     selected_worlds: Query<
         (
@@ -79,9 +79,7 @@ pub(crate) fn choose_catalogue_entry_from_activated_type_list_row(
                     !catalogue_entry_can_be_researched(
                         world_definitions,
                         catalogue_entry,
-                        research_availability
-                            .iter()
-                            .map(|item| (item.item, item.available)),
+                        research_availability.available_for(catalogue_entry.definition),
                     ) && !catalogue_entry_is_available(
                         world_definitions,
                         catalogue_index,

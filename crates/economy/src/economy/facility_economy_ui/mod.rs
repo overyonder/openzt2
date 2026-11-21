@@ -17,6 +17,12 @@ use super::facility_economy_types::{
 use openzt2_interface_state::ui::authored_ui_action_projection_components::UiEconomyActions;
 use openzt2_interface_state::ui::authored_ui_activation_contracts::UiNodeActivated;
 
+use openzt2_zoo_state::transport_tours::{
+    authored_station_fare::station_fare,
+    transport_circuit_types::{CircuitMember, SetTransportCircuitFare, TransportCircuit},
+    transport_topology_types::TransportStation,
+};
+
 pub(super) fn route_selected_facility_economy_ui_actions(
     mut commands: Commands,
     mut activations: MessageReader<UiNodeActivated>,
@@ -28,6 +34,11 @@ pub(super) fn route_selected_facility_economy_ui_actions(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     transport_sales: openzt2_zoo_state::transport_tours::transport_track_sale::TransportTrackSaleQueries,
+    transport: (
+        Query<&TransportCircuit>,
+        Query<(&TransportStation, &CircuitMember)>,
+    ),
+    mut fare_requests: MessageWriter<SetTransportCircuitFare>,
     mut prices: Query<&mut FacilityPriceIndex>,
     mut schedules: Query<&mut MaintenanceScheduleIndex>,
     mut quotes: Query<&mut CurrentSellQuote>,
@@ -51,6 +62,27 @@ pub(super) fn route_selected_facility_economy_ui_actions(
             }
             match &record.action {
                 UiEconomyAction::SetSelectedFacilityPriceIndex { price_index } => {
+                    let (circuits, stations) = &transport;
+                    let circuit = circuits
+                        .get(subject)
+                        .ok()
+                        .map(|circuit| (subject, circuit.definition))
+                        .or_else(|| {
+                            let (station, member) = stations.get(subject).ok()?;
+                            circuits.get(member.0).ok()?;
+                            Some((member.0, station.definition))
+                        });
+                    if let Some((circuit, station)) = circuit {
+                        let fare = active_definitions
+                            .get(&definitions)
+                            .and_then(|definitions| {
+                                station_fare(definitions, station, Some(*price_index))
+                            });
+                        if let Some(fare) = fare {
+                            fare_requests.write(SetTransportCircuitFare { circuit, fare });
+                        }
+                        continue;
+                    }
                     let value = FacilityPriceIndex(*price_index);
                     if let Ok(mut current) = prices.get_mut(subject) {
                         current.set_if_neq(value);

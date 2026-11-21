@@ -10,7 +10,9 @@ use openzt2_game_data::behavior::document::BehaviorTaskActionPhase;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_game_data::world_definitions::behavior_selection_policy::BehaviorSelectionPolicy;
-use openzt2_zoo_state::animal_behavior::behavior_target_retry_delays::{BehaviorTargetRetryClock, update_behavior_target_retry};
+use openzt2_zoo_state::animal_behavior::behavior_target_retry_delays::{
+    BehaviorTargetRetryClock, BehaviorTargetRetryOutcomes,
+};
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
@@ -37,6 +39,43 @@ pub(super) fn begin_behavior_target_candidate_selection_updates(
     }
 }
 
+pub(super) fn advance_behavior_target_retry_clocks(
+    definitions: Res<WorldDefinitions>,
+    assets: Res<Assets<WorldDefinitionAsset>>,
+    mut actors: Query<
+        (
+            &mut BehaviorTargetRetryClock,
+            Option<&BehaviorTaskExecutionState>,
+            Option<&RunningBehaviorInstruction>,
+        ),
+        (
+            With<WorldMember>,
+            Without<Dead>,
+            Without<Frozen>,
+            Without<Tranquilized>,
+            Without<WorldEntityIsCrated>,
+            Without<SynchronizedBehaviorParticipant>,
+            Without<PendingBehaviorSet>,
+            Without<PendingBehaviorTaskFailure>,
+        ),
+    >,
+) {
+    if !definitions
+        .get(&assets)
+        .and_then(|view| view.behavior_selection_policy())
+        .is_some_and(|policy| policy.enabled)
+    {
+        return;
+    }
+    for (mut retry, task, instruction) in &mut actors {
+        if task
+            .is_none_or(|task| instruction.is_some_and(|instruction| instruction.is_current(task)))
+        {
+            retry.advance_cognitive_update();
+        }
+    }
+}
+
 pub(super) fn advance_behavior_tasks_through_return_failure_completion_and_final_outcome(
     behavior_document_assets: Res<Assets<BehaviorDocumentAsset>>,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
@@ -46,27 +85,17 @@ pub(super) fn advance_behavior_tasks_through_return_failure_completion_and_final
         &mut BehaviorTaskExecutionState,
         Option<&PendingBehaviorTaskFailure>,
         Option<&RunningBehaviorInstruction>,
-        Option<&mut BehaviorTargetRetryClock>,
+        Option<&BehaviorTargetRetryClock>,
     )>,
     target_definitions: Query<&DefinitionId>,
     continuations: BehaviorContinuationFrames,
-    thinking_actors: Query<
-        (),
-        (
-            With<WorldMember>,
-            Without<Dead>,
-            Without<Frozen>,
-            Without<Tranquilized>,
-            Without<WorldEntityIsCrated>,
-            Without<SynchronizedBehaviorParticipant>,
-            Without<PendingBehaviorSet>,
-        ),
-    >,
-    mut idle_retry_delays: Query<
-        (Entity, &mut BehaviorTargetRetryClock),
-        Without<BehaviorTaskExecutionState>,
-    >,
     mut commands: Commands,
+    mut retry_outcomes: BehaviorTargetRetryOutcomes,
+    mut step_progress: Option<
+        ResMut<
+            openzt2_zoo_state::behavior_task_execution_types::running_actions::BehaviorStepProgress,
+        >,
+    >,
     simulation_clock: Res<ZooClock>,
     mut failed_behavior_tasks: MessageWriter<BehaviorTaskFailed>,
     mut finished_behavior_tasks: MessageWriter<BehaviorTaskFinished>,
@@ -74,34 +103,22 @@ pub(super) fn advance_behavior_tasks_through_return_failure_completion_and_final
     let retry_policy = world_definitions
         .get(&world_definition_assets)
         .and_then(|definitions| definitions.behavior_selection_policy().copied());
-    let thinking_enabled = retry_policy.is_some_and(|policy| policy.enabled);
-    // An idle thinker still updates when all its current candidates are rejected.
-    // No task is created just to keep its rejection counters moving.
-    for (actor, mut retry_delays) in &mut idle_retry_delays {
-        if thinking_enabled && thinking_actors.contains(actor) {
-            retry_delays.advance_cognitive_update();
+    let mut record_advance = || {
+        if let Some(progress) = step_progress.as_deref_mut() {
+            progress.record_advance();
         }
-    }
-    for (actor_entity, mut behavior_task, pending_failure, instruction, mut retry_delays) in
+    };
+    for (actor_entity, mut behavior_task, pending_failure, instruction, retry_delays) in
         &mut behavior_tasks
     {
-        // Region and terrain-point stand-ins are not individual target entities.
         let retry_target = behavior_task
             .target()
             .filter(|target| target_definitions.contains(*target));
-        if let Some(retry_delays) = retry_delays.as_deref_mut() {
-            if thinking_enabled
-                && thinking_actors.contains(actor_entity)
-                && pending_failure.is_none()
-                && instruction.is_some_and(|instruction| instruction.is_current(&behavior_task))
-            {
-                retry_delays.advance_cognitive_update();
-            }
-        }
-        if behavior_task.next_action_tick > simulation_clock.tick {
+        if pending_failure.is_none() && behavior_task.next_action_tick > simulation_clock.tick {
             continue;
         }
         if pending_failure.is_some() {
+            record_advance();
             if behavior_task.phase == BehaviorTaskExecutionPhase::Set {
                 if let Some(return_frame) = continuations.pop(actor_entity, &mut commands) {
                     behavior_task.depth = behavior_task.depth.saturating_sub(1);
@@ -111,7 +128,7 @@ pub(super) fn advance_behavior_tasks_through_return_failure_completion_and_final
                     behavior_task.phase = return_frame.phase;
                     behavior_task.action = return_frame.action;
                     behavior_task.repetitions = return_frame.repetitions;
-                    behavior_task.next_action_tick = simulation_clock.tick.saturating_add(1);
+                    behavior_task.next_action_tick = simulation_clock.tick;
                     continue;
                 }
             }
@@ -127,7 +144,7 @@ pub(super) fn advance_behavior_tasks_through_return_failure_completion_and_final
                 behavior_task.repetitions = 0;
                 continuations.truncate(actor_entity, 0, &mut commands);
                 behavior_task.depth = 0;
-                behavior_task.next_action_tick = simulation_clock.tick.saturating_add(1);
+                behavior_task.next_action_tick = simulation_clock.tick;
                 commands
                     .entity(actor_entity)
                     .remove::<PendingBehaviorTaskFailure>();
@@ -137,6 +154,8 @@ pub(super) fn advance_behavior_tasks_through_return_failure_completion_and_final
                     retry_target,
                     true,
                     retry_policy,
+                    retry_delays,
+                    &mut retry_outcomes,
                     &mut commands,
                 );
                 failed_behavior_tasks.write(BehaviorTaskFailed {
@@ -197,6 +216,7 @@ pub(super) fn advance_behavior_tasks_through_return_failure_completion_and_final
                 .next()
                 .map(|frame| frame.program)
                 .unwrap_or(behavior_task.program);
+            record_advance();
             warn!(actor = ?actor_entity, program = ?behavior_task.program, name,
                 phase = ?behavior_task.phase, action = first_unsupported_action,
                 ?enclosing_task,
@@ -207,6 +227,7 @@ pub(super) fn advance_behavior_tasks_through_return_failure_completion_and_final
             continue;
         }
         if let Some(return_frame) = continuations.pop(actor_entity, &mut commands) {
+            record_advance();
             behavior_task.depth = behavior_task.depth.saturating_sub(1);
             behavior_task.program = return_frame.program;
             behavior_task.document = return_frame.document;
@@ -214,7 +235,7 @@ pub(super) fn advance_behavior_tasks_through_return_failure_completion_and_final
             behavior_task.phase = return_frame.phase;
             behavior_task.action = return_frame.action;
             behavior_task.repetitions = return_frame.repetitions;
-            behavior_task.next_action_tick = simulation_clock.tick.saturating_add(1);
+            behavior_task.next_action_tick = simulation_clock.tick;
             continue;
         }
         if behavior_task.phase == BehaviorTaskExecutionPhase::Execution
@@ -222,10 +243,11 @@ pub(super) fn advance_behavior_tasks_through_return_failure_completion_and_final
                 .behavior_task_at_index(behavior_task.declaration)
                 .is_some_and(|task| !task.completion.is_empty())
         {
+            record_advance();
             behavior_task.phase = BehaviorTaskExecutionPhase::Completion;
             behavior_task.action = 0;
             behavior_task.repetitions = 0;
-            behavior_task.next_action_tick = simulation_clock.tick.saturating_add(1);
+            behavior_task.next_action_tick = simulation_clock.tick;
             continue;
         }
         if behavior_task.phase == BehaviorTaskExecutionPhase::Failure {
@@ -234,6 +256,8 @@ pub(super) fn advance_behavior_tasks_through_return_failure_completion_and_final
                 retry_target,
                 true,
                 retry_policy,
+                retry_delays,
+                &mut retry_outcomes,
                 &mut commands,
             );
             failed_behavior_tasks.write(BehaviorTaskFailed {
@@ -246,6 +270,8 @@ pub(super) fn advance_behavior_tasks_through_return_failure_completion_and_final
                 retry_target,
                 false,
                 retry_policy,
+                retry_delays,
+                &mut retry_outcomes,
                 &mut commands,
             );
             finished_behavior_tasks.write(BehaviorTaskFinished {
@@ -268,6 +294,8 @@ fn finish_target_retry_outcome(
     target: Option<Entity>,
     failed: bool,
     policy: Option<BehaviorSelectionPolicy>,
+    clock: Option<&BehaviorTargetRetryClock>,
+    outcomes: &mut BehaviorTargetRetryOutcomes,
     commands: &mut Commands,
 ) {
     let Some(target) = target.filter(|target| *target != actor) else {
@@ -276,7 +304,5 @@ fn finish_target_retry_outcome(
     if failed && policy.is_none() {
         return;
     }
-    commands.queue(move |world: &mut World| {
-        update_behavior_target_retry(world, actor, target, policy.filter(|_| failed));
-    });
+    outcomes.settle(commands, actor, target, clock, policy.filter(|_| failed));
 }

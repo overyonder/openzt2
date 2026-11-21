@@ -9,7 +9,7 @@ mod openzt2_game_plugin_group;
 
 use bevy::{
     asset::{io::AssetSourceId, AssetApp, AssetPlugin},
-    picking::mesh_picking::MeshPickingSettings,
+    picking::mesh_picking::{MeshPickingCamera, MeshPickingPlugin, MeshPickingSettings},
     prelude::*,
     render::{
         settings::{RenderCreation, WgpuFeatures, WgpuSettings},
@@ -162,7 +162,17 @@ fn add_default_bevy_platform_plugins(game_application: &mut App) {
             exit_condition: ExitCondition::OnAllClosed,
             ..default()
         });
-    game_application.add_plugins(default_plugins);
+    game_application
+        .add_plugins(default_plugins)
+        .add_plugins(MeshPickingPlugin)
+        .register_required_components::<
+            openzt2_interface_state::camera::camera_runtime_state_types::ZooCamera,
+            MeshPickingCamera,
+        >()
+        .register_required_components::<
+            openzt2_interface_state::camera::camera_runtime_state_types::ZooCamera,
+            openzt2_game_assets::effect::particle_wave_surface::ParticleWaveFogCamera,
+        >();
     game_application.insert_resource(MeshPickingSettings {
         require_markers: true,
         ..default()

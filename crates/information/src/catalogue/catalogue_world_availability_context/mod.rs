@@ -47,3 +47,38 @@ pub(crate) fn catalogue_world_session_or_scenario_availability_changed(
                 || scenario_availability.is_some_and(|availability| availability.is_changed())
         })
 }
+
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct CatalogueResearchAccess<'w, 's> {
+    items: Query<
+        'w,
+        's,
+        Ref<'static, openzt2_zoo_state::progression::research_types::ResearchProjectAvailability>,
+    >,
+    active: Query<
+        'w,
+        's,
+        Ref<'static, openzt2_zoo_state::progression::research_types::WorldResearchItems>,
+        With<WorldRoot>,
+    >,
+}
+
+impl CatalogueResearchAccess<'_, '_> {
+    pub(crate) fn available_for(
+        &self,
+        definition: openzt2_game_data::AssetId,
+    ) -> impl Iterator<Item = (openzt2_game_data::AssetId, bool)> + '_ {
+        self.active
+            .iter()
+            .next()
+            .into_iter()
+            .flat_map(move |index| index.into_inner().unlocking(definition))
+            .filter_map(|entity| self.items.get(entity).ok())
+            .map(|item| (item.item, item.available))
+    }
+
+    pub(crate) fn changed(&self) -> bool {
+        self.active.iter().any(|index| index.is_changed())
+            || self.items.iter().any(|item| item.is_changed())
+    }
+}

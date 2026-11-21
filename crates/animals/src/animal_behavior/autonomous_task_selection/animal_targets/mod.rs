@@ -7,6 +7,7 @@ use openzt2_game_data::behavior::eligibility::{
     BehaviorEntityStateEligibilityFact, BehaviorSpatialEligibilityFact,
 };
 use openzt2_world_state::world_spawn::world_entity_crating::WorldEntityIsCrated;
+use openzt2_zoo_state::animal_behavior::animal_lineage::AnimalLineage;
 use openzt2_zoo_state::animal_health::types::Dead;
 use openzt2_zoo_state::animal_lifecycle::types::{Animal, Parents};
 use openzt2_zoo_state::animal_welfare::types::Q16_ONE;
@@ -21,7 +22,7 @@ pub(crate) struct AnimalTargetSources<'w, 's> {
         (Entity, AnimalCandidateFacts),
         (With<Animal>, Without<Dead>, Without<WorldEntityIsCrated>),
     >,
-    parents: Query<'w, 's, &'static Parents>,
+    lineage: AnimalLineage<'w, 's>,
 }
 
 impl AnimalTargetSources<'_, '_> {
@@ -33,14 +34,8 @@ impl AnimalTargetSources<'_, '_> {
         target: Entity,
         target_facts: &AnimalCandidateFactsItem,
     ) -> bool {
-        let lineage = |animal| {
-            self.parents
-                .get(animal)
-                .ok()
-                .copied()
-                .unwrap_or(Parents::NONE)
-        };
-        let (subject_parents, target_parents) = (lineage(subject), lineage(target));
+        let (subject_parents, target_parents) =
+            (self.lineage.parents(subject), self.lineage.parents(target));
         let parent_of = |parents: Parents, animal| {
             parents.mother == Some(animal) || parents.father == Some(animal)
         };

@@ -33,6 +33,8 @@ use openzt2_zoo_state::animal_behavior::behavior_token_types::{
 #[derive(Component)]
 struct EndedBehaviorTokenClaim;
 
+use super::behavior_spatial_candidates::BehaviorSpatialCandidates;
+
 fn release_claimed_token_when_task_is_discarded(
     discarded: On<Discard<BehaviorTaskExecutionState>>,
     tasks: Query<&BehaviorTaskExecutionState>,
@@ -158,18 +160,21 @@ impl Command for DeliverBehaviorSelfToken {
 }
 
 pub(super) fn register_token_execution(application: &mut App) {
+    use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
+        BehaviorStep, BehaviorStepSet,
+    };
     application
         .add_observer(release_claimed_token_when_task_is_discarded)
         .add_systems(
             FixedUpdate,
-            (
-                discard_expired_and_consumed_tokens,
-                execute_current_self_token_deliveries,
-            )
-                .chain()
+            discard_expired_and_consumed_tokens
                 .before(super::autonomous_task_selection::select_idle_animal_tasks)
                 .in_set(FixedGameSet::Think)
                 .run_if(in_state(GamePhase::InGame)),
+        )
+        .add_systems(
+            BehaviorStep,
+            execute_current_self_token_deliveries.in_set(BehaviorStepSet::Actions),
         );
 }
 
@@ -192,6 +197,8 @@ fn execute_current_self_token_deliveries(
         (Without<Dead>, Without<PendingBehaviorTaskFailure>),
     >,
     recipients: Query<(), Without<Dead>>,
+    spatial: BehaviorSpatialCandidates,
+    mut candidates: Local<Vec<Entity>>,
     animals: Query<(Entity, &GlobalTransform, &SpeciesHandle), (With<Animal>, Without<Dead>)>,
     animal_types: super::behavior_subject_type_resolution::AnimalBehaviorSubjectTypes,
     staff: Query<
@@ -255,7 +262,17 @@ fn execute_current_self_token_deliveries(
                 let Ok((_, origin, _)) = animals.get(actor) else {
                     continue;
                 };
-                for (animal, transform, species) in &animals {
+                let position = origin.translation();
+                let margin = Vec2::splat(nearby.radius_m.abs());
+                spatial.in_bounds(
+                    position.xz() - margin,
+                    position.xz() + margin,
+                    &mut candidates,
+                );
+                spatial.preserve_query_order(&mut candidates);
+                for (animal, transform, species) in
+                    animals.iter_many(candidates.iter().copied()).flatten()
+                {
                     let is_type = animal_types
                         .borrow_for(animal)
                         .contains(&nearby.entity_type)
@@ -277,7 +294,8 @@ fn execute_current_self_token_deliveries(
                 }
                 // An attacking animal warns staff nearby (`GiveTo="Staff"`).
                 if nearby.entity_type == AssetId::from_key("staff") {
-                    for (member, transform) in &staff {
+                    for (member, transform) in staff.iter_many(candidates.iter().copied()).flatten()
+                    {
                         if transform.translation().distance(origin.translation()) > nearby.radius_m
                         {
                             continue;

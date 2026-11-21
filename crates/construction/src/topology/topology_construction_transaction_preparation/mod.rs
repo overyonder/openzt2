@@ -63,7 +63,6 @@ fn prepare_fence_construction_snapshots(
     terrain_assets: &Assets<TerrainAsset>,
     terrain_chunks: &Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
     ids: &mut PersistentIdAllocator,
-    root: Entity,
     joined_tank_water_height: impl Fn(IVec3) -> Option<f32>,
     ground: &TankWallGroundSampling,
     paths: &Query<&PathTile>,
@@ -160,7 +159,7 @@ fn prepare_fence_construction_snapshots(
             node_ids.push((cell, id));
         } else {
             let id = ids
-                .allocate(root)
+                .allocate()
                 .map_err(|_| PlacementFailure::InvalidTopology)?;
             snapshots.push(TopologySnapshot::Node { id, cell });
             node_ids.push((cell, id));
@@ -208,7 +207,7 @@ fn prepare_fence_construction_snapshots(
         };
         snapshots.push(TopologySnapshot::Fence {
             id: ids
-                .allocate(root)
+                .allocate()
                 .map_err(|_| PlacementFailure::InvalidTopology)?,
             definition: preview.definition,
             a,
@@ -231,7 +230,6 @@ fn prepare_gate_replacement_snapshots(
     wall_tops: &Query<&TankWallTopHeight>,
     persistent: &Query<&PersistentId>,
     ids: &mut PersistentIdAllocator,
-    root: Entity,
 ) -> Result<(TopologySnapshot, TopologySnapshot, Money), PlacementFailure> {
     let (edge, cost) = if let Some((edge, (cost, ..))) =
         submitted.and_then(|plan| plan.replaced.zip(plan.quote.as_ref()))
@@ -260,7 +258,7 @@ fn prepare_gate_replacement_snapshots(
     };
     let created = TopologySnapshot::Fence {
         id: ids
-            .allocate(root)
+            .allocate()
             .map_err(|_| PlacementFailure::InvalidTopology)?,
         definition: fence.definition,
         a,
@@ -284,7 +282,6 @@ fn prepare_path_construction_snapshots(
     terrain_assets: &Assets<TerrainAsset>,
     terrain_chunks: &Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
     ids: &mut PersistentIdAllocator,
-    root: Entity,
 ) -> Result<(Vec<TopologySnapshot>, Money), PlacementFailure> {
     let (cells, cost) = if let Some((plan, cost)) = submitted.and_then(|plan| {
         if let openzt2_zoo_state::construction::construction_interaction_types::PlacementValidity::Valid { cost } = plan.validity {
@@ -309,7 +306,7 @@ calculate_path_construction_plan(
     for cell in cells {
         snapshots.push(TopologySnapshot::Path {
             id: ids
-                .allocate(root)
+                .allocate()
                 .map_err(|_| PlacementFailure::InvalidTopology)?,
             definition: preview.definition,
             cell,
@@ -393,7 +390,7 @@ pub(super) fn prepare_topology_construction_transaction(
     ),
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
-    mut ids: ResMut<PersistentIdAllocator>,
+    mut allocators: Query<&mut PersistentIdAllocator>,
     previews: Query<
         (
             Option<&FencePreview>,
@@ -462,6 +459,14 @@ pub(super) fn prepare_topology_construction_transaction(
             continue;
         }
 
+        let Ok(mut ids) = allocators.get_mut(member.root) else {
+            write_topology_edit_preparation_rejection(
+                request.transaction,
+                PlacementFailure::InvalidTopology,
+                &mut rejected,
+            );
+            continue;
+        };
         let result = match (fence, path) {
             (Some(preview), None) if fence_definition_is_gate(definitions, preview.definition) => {
                 prepare_gate_replacement_snapshots(
@@ -473,7 +478,6 @@ pub(super) fn prepare_topology_construction_transaction(
                     &wall_tops,
                     &persistent,
                     &mut ids,
-                    member.root,
                 )
                 .map(|(created, removed, cost)| (vec![created], vec![removed], cost))
             }
@@ -488,7 +492,6 @@ pub(super) fn prepare_topology_construction_transaction(
                 &terrain_assets,
                 &terrain_chunks,
                 &mut ids,
-                member.root,
                 |cell| {
                     let node = *index.nodes.get(&cell)?;
                     let (starting, ending) = incident.get(node).ok()?;
@@ -519,7 +522,6 @@ pub(super) fn prepare_topology_construction_transaction(
                 &terrain_assets,
                 &terrain_chunks,
                 &mut ids,
-                member.root,
             )
             .map(|(created, cost)| (created, Vec::new(), cost)),
             _ => Err(PlacementFailure::InvalidTopology),

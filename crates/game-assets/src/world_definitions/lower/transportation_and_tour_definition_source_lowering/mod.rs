@@ -340,6 +340,21 @@ pub(super) fn bind_station(
             ];
             (Some(seeds), Some(seeds))
         };
+    let exit = |key| {
+        authored_type_family_component_attribute(record, "BFAIEntityDataShared", key)
+            .map(|source| {
+                let position = parse_f32_triplet(source)?;
+                if position.into_iter().all(f32::is_finite) {
+                    Ok(position)
+                } else {
+                    Err(BindError::record(
+                        record,
+                        format!("authored transport exit {key} is not finite"),
+                    ))
+                }
+            })
+            .transpose()
+    };
     output
         .document
         .stations
@@ -353,6 +368,7 @@ pub(super) fn bind_station(
                 authored_transportation_planar_offset_centimetres(record, "p_PassengerEnterA")?,
                 authored_transportation_planar_offset_centimetres(record, "p_PassengerEnterB")?,
             ],
+            passenger_exits: [exit("p_PassengerExitA")?, exit("p_PassengerExitB")?],
             capacity,
         });
     Ok(())
@@ -648,6 +664,32 @@ pub(super) fn bind_authored_vehicle_seats(
     else {
         return Ok(());
     };
+    let passenger_mounts = authored_type_family_elements_named(record, "BFNamedBinder")
+        .into_iter()
+        .filter(|binder| {
+            binder
+                .attribute_named_any(&["binderName"])
+                .is_some_and(|name| name.eq_ignore_ascii_case("Passenger_Cabin"))
+        })
+        .find_map(|binder| find_descendant(binder, "BFGEntityContainer"))
+        .and_then(|container| find_descendant(container, "slots"))
+        .map(|slots| {
+            slots
+                .element_children()
+                .filter(|slot| {
+                    source_document_names_are_semantically_equal(
+                        &slot.name,
+                        "BFGEntityContainerSlot",
+                    )
+                })
+                .map(|slot| slot.attribute_named_any(&["targetNode"]).map(id))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let seat_count = vehicle_data
+        .element_children()
+        .filter(|child| source_document_names_are_semantically_equal(child.name.as_str(), "seat"))
+        .count();
     for (seat_index, seat) in vehicle_data
         .element_children()
         .filter(|child| source_document_names_are_semantically_equal(child.name.as_str(), "seat"))
@@ -730,6 +772,14 @@ pub(super) fn bind_authored_vehicle_seats(
                 vehicle: id(record.key),
                 index,
                 back_facing: element_bool(&seat, &["isBackFacing"], false)?,
+                mount_node: seat
+                    .attribute_named_any(&["targetNode"])
+                    .map(id)
+                    .or_else(|| {
+                        (seat_count == passenger_mounts.len())
+                            .then(|| passenger_mounts[seat_index])
+                            .flatten()
+                    }),
                 view_limits_degrees: [
                     required_element_number(&view_limit, &["LeftForward"])?,
                     required_element_number(&view_limit, &["LeftBack"])?,

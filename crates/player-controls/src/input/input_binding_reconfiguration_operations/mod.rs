@@ -72,21 +72,25 @@ pub(super) fn rebind_game_action_input(
     Ok(())
 }
 
-/// Reports whether two action bindings collide in a context where both actions
-/// can fire. Escape is deliberately shared by the original cancellation/menu
-/// flow: focused UI consumes `Cancel`, while the otherwise-idle in-game shell
-/// consumes `OpenMenu`.
+/// Reports binding collisions. The shipped bindings share cancellation with
+/// the menu and share E between rotation and first-person object interaction.
 pub fn game_action_input_bindings_conflict(
     left_action: GameAction,
     left_chord: InputChord,
     right_action: GameAction,
     right_chord: InputChord,
 ) -> bool {
-    use GameAction::{Cancel, OpenMenu};
+    use GameAction::{Cancel, OpenMenu, RotateRight, UseObject};
+    use InputChord::{Key, KeyPair};
+    use KeyCode::{KeyE, Space};
 
     !matches!(
         (left_action, right_action),
         (Cancel, OpenMenu) | (OpenMenu, Cancel)
+    ) && !matches!(
+        (left_action, left_chord, right_action, right_chord),
+        (RotateRight, Key(KeyE), UseObject, KeyPair(Space, KeyE))
+            | (UseObject, KeyPair(Space, KeyE), RotateRight, Key(KeyE))
     ) && input_chords_overlap(left_chord, right_chord)
 }
 

@@ -45,7 +45,6 @@ impl Plugin for HabitatPlugin {
                     habitat_region_rebuilding::request_habitat_region_rebuilds_after_topology_changes,
                     habitat_fence_inputs::project_changed_habitat_fence_inputs,
                     habitat_region_rebuilding::rebuild_changed_habitat_regions_from_fence_topology_and_terrain,
-                    habitat_region_rebuilding::link_changed_habitat_boundaries,
                 )
                     .chain()
                     .in_set(GameSet::Intent)
@@ -58,7 +57,6 @@ impl Plugin for HabitatPlugin {
                     crate::habitat::habitat_region_rebuilding::request_habitat_region_rebuilds_after_topology_changes,
                     habitat_fence_inputs::project_changed_habitat_fence_inputs,
                     crate::habitat::habitat_region_rebuilding::rebuild_changed_habitat_regions_from_fence_topology_and_terrain,
-                    habitat_region_rebuilding::link_changed_habitat_boundaries,
                     habitat_membership_and_containment::resolve_changed_habitat_membership_and_containment,
                 )
                     .chain()
@@ -81,7 +79,6 @@ impl Plugin for HabitatPlugin {
                     crate::habitat::habitat_region_rebuilding::request_initial_habitat_region_rebuild_from_loaded_topology,
                     habitat_fence_inputs::project_changed_habitat_fence_inputs,
                     crate::habitat::habitat_region_rebuilding::rebuild_changed_habitat_regions_from_fence_topology_and_terrain,
-                    habitat_region_rebuilding::link_changed_habitat_boundaries,
                     habitat_membership_and_containment::resolve_changed_habitat_membership_and_containment,
                 ).chain(),
             )

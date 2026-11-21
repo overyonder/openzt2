@@ -1,23 +1,10 @@
 //! Placed world objects as concrete targets of authored animal tasks.
 
-use openzt2_zoo_state::topology::habitat_boundary_queries::HabitatBoundaryQueries;
 use super::candidate_facts::compare_q16;
-use openzt2_zoo_state::animal_lifecycle::types::Animal;
-use openzt2_zoo_state::feeding::container_quantity::DrinkContainer;
-use openzt2_zoo_state::feeding::container_quantity::FoodContainer;
-use openzt2_zoo_state::habitat::habitat_membership_and_containment::locate_habitat_at_world_position;
-use openzt2_zoo_state::habitat::habitat_types::HabitatIndex;
-use openzt2_zoo_state::terrain::dry_surface_eligibility::DrySurfaceEligibility;
-use openzt2_zoo_state::topology::topology_graph_types::TopologyGrid;
-use openzt2_world_state::world_spawn::world_entity_crating::WorldEntityIsCrated;
-use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
-use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use bevy::{
     ecs::{query::QueryData, system::SystemParam},
-    platform::collections::HashMap,
     prelude::*,
 };
-use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
 use openzt2_game_data::{
     behavior::eligibility::{
         BehaviorCandidateEligibilityFact, BehaviorCandidateEligibilityRequirements,
@@ -28,17 +15,23 @@ use openzt2_game_data::{
     world_definitions::world_objects::{WorldObjectContainerContent, WorldObjectDefinition},
     AssetId,
 };
+use openzt2_world_state::world_spawn::world_entity_crating::WorldEntityIsCrated;
+use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
+use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
+use openzt2_zoo_state::animal_lifecycle::types::Animal;
+use openzt2_zoo_state::feeding::container_quantity::DrinkContainer;
+use openzt2_zoo_state::feeding::container_quantity::FoodContainer;
+use openzt2_zoo_state::habitat::habitat_membership_and_containment::locate_habitat_at_world_position;
+use openzt2_zoo_state::habitat::habitat_types::HabitatIndex;
+use openzt2_zoo_state::terrain::dry_surface_eligibility::DrySurfaceEligibility;
+use openzt2_zoo_state::topology::habitat_boundary_queries::HabitatBoundaryQueries;
+use openzt2_zoo_state::topology::topology_graph_types::TopologyGrid;
 
 /// World object candidates and the location queries their qualifiers use.
 #[derive(SystemParam)]
 pub(crate) struct WorldObjectTargetSources<'w, 's> {
     pub(super) objects:
         Query<'w, 's, WorldObjectTargetFacts, (Without<Animal>, Without<WorldEntityIsCrated>)>,
-    pub(super) indexed_objects: Query<'w, 's, (Entity, &'static DefinitionId), Without<Animal>>,
-    pub(super) changed_objects: Query<'w, 's, (), (Changed<DefinitionId>, Without<Animal>)>,
-    pub(super) removed_objects: RemovedComponents<'w, 's, DefinitionId>,
-    pub(super) index: Local<'s, WorldObjectTargetTypeIndex>,
-    pub(super) candidates: Local<'s, Vec<Entity>>,
     pub(super) habitat_index: Res<'w, HabitatIndex>,
     pub(super) topology_grid: Res<'w, TopologyGrid>,
     pub(super) terrain_surfaces: DrySurfaceEligibility<'w, 's>,
@@ -59,26 +52,6 @@ pub(crate) struct WorldObjectTargetSources<'w, 's> {
 }
 
 impl WorldObjectTargetSources<'_, '_> {
-    /// Marks the type index stale when objects change type, appear or disappear. Runs
-    /// every update so removals don't accumulate while no animal is idle.
-    pub(super) fn note_object_changes(&mut self) {
-        if self.index.current
-            && (!self.removed_objects.is_empty() || !self.changed_objects.is_empty())
-        {
-            self.index.mark_stale();
-        }
-        self.removed_objects.clear();
-    }
-
-    pub(super) fn refresh_index(&mut self, definitions: WorldDefinitionsView<'_>) {
-        self.index.rebuild_if_stale(
-            definitions,
-            self.indexed_objects
-                .iter()
-                .map(|(entity, definition)| (entity, definition.0)),
-        );
-    }
-
     /// The middle of a fence segment, whose origin is its first end, on the
     /// ground there.
     pub(super) fn fence_middle(
@@ -193,7 +166,7 @@ impl WorldObjectTargetFactsItem<'_, '_> {
             }
             BehaviorEligibilityFactInput::Spatial(
                 BehaviorSpatialEligibilityFact::SupportedSurface,
-            ) => truth(true),
+            ) => truth((location.on_land)().is_some()),
             BehaviorEligibilityFactInput::Spatial(BehaviorSpatialEligibilityFact::OnLand) => {
                 let Some(on_land) = (location.on_land)() else {
                     return false;
@@ -277,78 +250,4 @@ pub(super) fn indexed_world_object_target_requirement(
         }
     }
     indexed
-}
-
-/// Placed objects by every behavior type they answer to, rebuilt when objects
-/// appear or disappear. Live facts are read from the canonical components.
-#[derive(Default)]
-pub(super) struct WorldObjectTargetTypeIndex {
-    targets_by_type: HashMap<AssetId, Vec<Entity>>,
-    current: bool,
-}
-
-impl WorldObjectTargetTypeIndex {
-    /// Objects appeared or disappeared since the index was built.
-    pub(super) const fn mark_stale(&mut self) {
-        self.current = false;
-    }
-
-    pub(super) fn rebuild_if_stale(
-        &mut self,
-        definitions: WorldDefinitionsView<'_>,
-        objects: impl Iterator<Item = (Entity, AssetId)>,
-    ) {
-        if self.current {
-            return;
-        }
-        self.targets_by_type.clear();
-        for (entity, definition) in objects {
-            let Some(object) = definitions.find_object(definition) else {
-                continue;
-            };
-            for type_identifier in std::iter::once(&definition).chain(
-                object
-                    .behavior_type_identifiers
-                    .iter()
-                    .filter(|type_identifier| **type_identifier != definition),
-            ) {
-                self.targets_by_type
-                    .entry(*type_identifier)
-                    .or_default()
-                    .push(entity);
-            }
-        }
-        // Objects whose definitions are still loading join on a later rebuild.
-        self.current = !definitions.has_pending_assets();
-    }
-
-    /// Candidate objects for one target requirement, in a stable order and
-    /// without duplicates. Every candidate must still pass the full check.
-    pub(super) fn collect_candidates(
-        &self,
-        requirement: &BehaviorCandidateEligibilityRequirements,
-        candidates: &mut Vec<Entity>,
-    ) {
-        candidates.clear();
-        match requirement.candidate_type_junction {
-            // Every candidate answers to the first type, among the others.
-            BehaviorEligibilityFactJunction::All => {
-                if let Some(first) = requirement.candidate_type_identifiers.first() {
-                    candidates.extend(self.targets_by_type.get(first).into_iter().flatten());
-                }
-            }
-            BehaviorEligibilityFactJunction::Any => {
-                for type_identifier in &requirement.candidate_type_identifiers {
-                    candidates.extend(
-                        self.targets_by_type
-                            .get(type_identifier)
-                            .into_iter()
-                            .flatten(),
-                    );
-                }
-                candidates.sort_unstable();
-                candidates.dedup();
-            }
-        }
-    }
 }

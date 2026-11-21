@@ -12,20 +12,9 @@ use openzt2_zoo_state::economy::guest_admission_types::AdmissionPrice;
 use openzt2_zoo_state::economy::guest_admission_types::ZooAdmissionsOpen;
 use openzt2_zoo_state::economy::monthly_finance_types::MonthlyFinanceHistory;
 use openzt2_zoo_state::economy::zoo_cash_types::ZooCash;
-use openzt2_interface_state::photos::photo_album_types::AlbumMember;
-use openzt2_interface_state::photos::photo_album_types::PhotoAlbum;
-use openzt2_interface_state::photos::photo_album_types::PhotoAlbumOrder;
-use openzt2_interface_state::photos::photo_capture_types::Photo;
-use openzt2_interface_state::photos::photo_challenge_types::PhotoChallenge;
-use openzt2_interface_state::photos::photo_challenge_types::PhotoChallengeProgress;
 use openzt2_zoo_state::progression::fame_types::Fame;
 use openzt2_zoo_state::shows::show_platform_upgrade_types::InstalledShowPlatformUpgrade;
 use openzt2_zoo_state::shows::show_platform_upgrade_types::InstalledShowPlatformUpgradeStage;
-use openzt2_zoo_state::shows::show_schedule_types::ScheduledShowBreakRow;
-use openzt2_zoo_state::shows::show_schedule_types::ScheduledShowPerformancePlan;
-use openzt2_zoo_state::shows::show_schedule_types::ScheduledShowRow;
-use openzt2_zoo_state::shows::show_schedule_types::ScheduledShowRowActivationState;
-use openzt2_zoo_state::shows::show_schedule_types::ShowScheduleRowOrder;
 use openzt2_zoo_state::shows::show_stage_types::ShowName;
 use openzt2_zoo_state::shows::show_stage_types::ShowStage;
 use openzt2_zoo_state::shows::show_stage_types::ShowStageOpenState;
@@ -38,8 +27,6 @@ use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 use openzt2_world_state::world_spawn::selected_world_identity::SelectedWorldIdentity;
 use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
-
-use openzt2_interface_state::persistence::generated_photo_persistence_types::DurableChallengePhotoFileIdentifiers;
 
 use super::super::{
     progression_snapshot_capture::ProgressionSnapshotCaptureQueries,
@@ -121,43 +108,18 @@ pub(in crate::persistence) struct WorldSnapshotCaptureQueries<'w, 's> {
     >,
     pub(super) show_platform_upgrades_without_persistent_identifiers:
         Query<'w, 's, (), (With<InstalledShowPlatformUpgrade>, Without<PersistentId>)>,
-    pub(super) scheduled_show_rows_with_snapshot_state: Query<
-        'w,
-        's,
-        (
-            &'static PersistentId,
-            &'static ScheduledShowRow,
-            &'static ShowScheduleRowOrder,
-            &'static ScheduledShowPerformancePlan,
-            Option<&'static ScheduledShowRowActivationState>,
-        ),
-    >,
-    pub(super) scheduled_show_break_rows: Query<
-        'w,
-        's,
-        (
-            &'static PersistentId,
-            &'static ScheduledShowBreakRow,
-            &'static ShowScheduleRowOrder,
-        ),
-    >,
     pub(super) entities_with_persistent_identifiers: Query<'w, 's, &'static PersistentId>,
-    pub(super) photos_with_album_membership: Query<
-        'w,
-        's,
-        (
-            &'static PersistentId,
-            &'static Photo,
-            &'static AlbumMember,
-            Option<&'static PhotoAlbumOrder>,
-            Option<&'static DurableChallengePhotoFileIdentifiers>,
-        ),
-    >,
-    pub(super) photo_album_persistent_identifiers:
-        Query<'w, 's, &'static PersistentId, With<PhotoAlbum>>,
-    pub(super) photo_challenges_with_progress:
-        Query<'w, 's, (&'static PhotoChallenge, &'static PhotoChallengeProgress)>,
-    pub(super) loaded_photo_images: Res<'w, Assets<Image>>,
+    pub(super) transport_entity_poses: Query<'w, 's, &'static Transform>,
+    pub(super) transport_fares: Query<'w, 's, &'static openzt2_zoo_state::economy::facility_economy_types::Price>,
+    pub(super) transport_track_routes: Query<'w, 's, (
+        &'static PersistentId,
+        openzt2_zoo_state::transport_tours::transport_topology_types::TrackRoute,
+        &'static openzt2_zoo_state::transport_tours::transport_topology_types::TrackProfile,
+        &'static openzt2_zoo_state::transport_tours::transport_track_construction_types::TrackPieces,
+    )>,
+    pub(super) transport_track_pieces: Query<'w, 's, (&'static PersistentId, &'static openzt2_zoo_state::transport_tours::transport_track_construction_types::TransportTrackConstructionPiece)>,
+    pub(super) transport_junctions: Query<'w, 's, (&'static PersistentId, Option<&'static openzt2_zoo_state::transport_tours::transport_topology_types::SkyTowerHeight>),
+        With<openzt2_zoo_state::transport_tours::transport_topology_types::TransportTrackJunction>>,
     pub(super) transport_circuits_with_snapshot_state: Query<
         'w,
         's,
@@ -173,6 +135,7 @@ pub(in crate::persistence) struct WorldSnapshotCaptureQueries<'w, 's> {
         'w,
         's,
         (
+            Entity,
             &'static PersistentId,
             &'static CircuitMember,
             &'static DefinitionId,
@@ -183,6 +146,7 @@ pub(in crate::persistence) struct WorldSnapshotCaptureQueries<'w, 's> {
         'w,
         's,
         (
+            Entity,
             &'static PersistentId,
             &'static CircuitMember,
             &'static DefinitionId,

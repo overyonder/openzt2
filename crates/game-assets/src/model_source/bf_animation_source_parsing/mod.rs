@@ -1,21 +1,18 @@
 //! Binary parsing and interpolation for Blue Fang `.bf` animation clips.
 
 use super::{
+    bf_animation_cubic_keyframe_sampling::BlueFangScalarCurve,
     bf_animation_keyframe_decoding::{
         parse_blue_fang_quaternion_rotation_track, parse_blue_fang_scalar_axis_keyframes,
         parse_blue_fang_scale_track, parse_blue_fang_translation_vector_track,
-    },
-    bf_animation_keyframe_interpolation::{
-        combine_blue_fang_euler_axes_into_quaternion_track,
-        combine_blue_fang_scalar_axes_into_vector_track,
     },
     bf_animation_primitive_reading::{
         read_blue_fang_f32, read_blue_fang_fixed_width_name, read_blue_fang_source_byte_range,
         read_blue_fang_u16, read_blue_fang_u32,
     },
     bf_animation_source_types::{
-        BlueFangAnimationMarker, BlueFangAnimationNode, BlueFangAnimationProperty,
-        BlueFangAnimationTrack, ParsedBlueFangAnimation,
+        BlueFangAnimationMarker, BlueFangAnimationNode, BlueFangAnimationTrack,
+        ParsedBlueFangAnimation,
     },
     conversion_error::ConversionError,
 };
@@ -65,13 +62,12 @@ pub(super) fn parse_blue_fang_animation_source_bytes(
     let authored_duration_seconds = animation_nodes
         .iter()
         .flat_map(|node| &node.animation_tracks)
-        .flat_map(|track| track.keyframe_times_seconds.last())
+        .filter_map(BlueFangAnimationTrack::end_seconds)
         .chain(
             animation_markers
                 .iter()
-                .map(|marker| &marker.event_time_seconds),
+                .map(|marker| marker.event_time_seconds),
         )
-        .copied()
         .fold(authored_duration_seconds, f32::max);
     Ok(ParsedBlueFangAnimation {
         animation_nodes,
@@ -159,8 +155,8 @@ fn parse_blue_fang_animation_node(
         .ok_or(ConversionError::InvalidSource("invalid BF node header"))?;
 
     let mut animation_tracks = Vec::new();
-    let mut translation_axis_keyframes: [Option<Vec<(u16, f32)>>; 3] = [None, None, None];
-    let mut euler_axis_keyframes: [Option<Vec<(u16, f32)>>; 3] = [None, None, None];
+    let mut translation_axis_keyframes: [Option<BlueFangScalarCurve<1>>; 3] = [None, None, None];
+    let mut euler_axis_keyframes: [Option<BlueFangScalarCurve<1>>; 3] = [None, None, None];
     for _ in 0..animation_track_count {
         parse_blue_fang_animation_track(
             source_bytes,
@@ -172,20 +168,17 @@ fn parse_blue_fang_animation_node(
         )?;
     }
     if translation_axis_keyframes.iter().any(Option::is_some) {
-        animation_tracks.push(combine_blue_fang_scalar_axes_into_vector_track(
-            &translation_axis_keyframes,
-            BlueFangAnimationProperty::Translation,
-        )?);
+        animation_tracks.push(BlueFangAnimationTrack::TranslationAxes(
+            translation_axis_keyframes,
+        ));
     }
     if euler_axis_keyframes.iter().any(Option::is_some) {
-        animation_tracks.push(combine_blue_fang_euler_axes_into_quaternion_track(
-            &euler_axis_keyframes,
-        )?);
+        animation_tracks.push(BlueFangAnimationTrack::Euler(euler_axis_keyframes));
     }
-    animation_tracks.sort_by_key(|track| track.animated_property);
+    animation_tracks.sort_by_key(BlueFangAnimationTrack::property);
     if animation_tracks
         .windows(2)
-        .any(|pair| pair[0].animated_property == pair[1].animated_property)
+        .any(|pair| pair[0].property() == pair[1].property())
     {
         return Err(ConversionError::InvalidSource(
             "multiple BF tracks target one node property",
@@ -203,8 +196,8 @@ fn parse_blue_fang_animation_track(
     source_byte_cursor: &mut usize,
     animation_node_end_byte_offset: usize,
     animation_tracks: &mut Vec<BlueFangAnimationTrack>,
-    translation_axis_keyframes: &mut [Option<Vec<(u16, f32)>>; 3],
-    euler_axis_keyframes: &mut [Option<Vec<(u16, f32)>>; 3],
+    translation_axis_keyframes: &mut [Option<BlueFangScalarCurve<1>>; 3],
+    euler_axis_keyframes: &mut [Option<BlueFangScalarCurve<1>>; 3],
 ) -> Result<(), ConversionError> {
     let animation_track_start_byte_offset = *source_byte_cursor;
     let track_format_identifier = read_blue_fang_u16(source_bytes, source_byte_cursor)?;

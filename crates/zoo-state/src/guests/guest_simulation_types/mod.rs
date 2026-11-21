@@ -14,6 +14,7 @@ use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdError;
 #[require(
     super::guest_survey_types::GuestCriticalNeedObservations,
     super::guest_survey_types::GuestSurveyExperience,
+    crate::progression::fame_types::GuestSpeciesFameViews,
     GuestFoodPurchaseCounts,
     crate::donations::donation_guest_decision_types::GuestDonationMeters
 )]

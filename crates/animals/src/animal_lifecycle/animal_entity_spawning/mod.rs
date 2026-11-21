@@ -82,7 +82,6 @@ pub fn insert_animal_entity_from_resolved_components(
         ))
         .insert((
             Age { born_tick },
-            parents,
             persistent_identifier,
             world_membership,
             HabitatLocatable,
@@ -95,6 +94,10 @@ pub fn insert_animal_entity_from_resolved_components(
             .insert(HabitatMember { habitat_entity });
     }
     let mut animal_entity_commands = commands.entity(animal_entity);
+    openzt2_zoo_state::animal_behavior::animal_lineage::insert_animal_parentage(
+        &mut animal_entity_commands,
+        parents,
+    );
     insert_authored_species_classification_markers(
         &mut animal_entity_commands,
         resolved_components.species_flags,

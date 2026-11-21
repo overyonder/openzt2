@@ -3,6 +3,7 @@
 use bevy::prelude::*;
 
 #[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[require(PhotoView)]
 pub struct PhotoMode;
 
 #[derive(Component, Debug, Clone)]
@@ -43,3 +44,11 @@ pub struct AlbumPhotoReadbackOf(pub Entity);
 #[derive(Component)]
 #[relationship_target(relationship = AlbumPhotoReadbackOf, linked_spawn)]
 pub struct AlbumPhotoReadbacks(Vec<Entity>);
+
+/// Camera position context recorded with each exposure.
+#[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PhotoView {
+    pub elevated: bool,
+    pub underwater: bool,
+    pub vehicle: bool,
+}

@@ -1,125 +1,147 @@
 use bevy::prelude::*;
 
-use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
-use openzt2_zoo_state::economy::account_transaction_types::Account;
-use openzt2_zoo_state::economy::account_transaction_types::TransactionKind;
-use openzt2_zoo_state::economy::account_transaction_types::TransactionRequest;
-use openzt2_zoo_state::economy::facility_economy_types::Price;
-use openzt2_zoo_state::guests::guest_simulation_types::Guest;
-use openzt2_zoo_state::locomotion::locomotion_types::Arrived;
-use openzt2_zoo_state::locomotion::locomotion_types::LocomotionMode;
+use openzt2_game_assets::world_definitions::{
+    world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions,
+    world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
+};
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
+use openzt2_zoo_state::{
+    economy::{
+        account_transaction_types::{Account, TransactionKind, TransactionRequest},
+        facility_economy_types::Price,
+    },
+    guests::guest_simulation_types::{Guest, GuestReaction},
+    locomotion::locomotion_types::Arrived,
+    transport_tours::{
+        tour_scoring_types::{StationRatingPermille, TourScore, TransportTripCompleted},
+        transport_circuit_types::{CircuitMember, TransportCircuit},
+        transport_rider_types::{
+            BoardedAtStation, TransportRider, TransportStationExit, VehicleRiders,
+        },
+        transport_topology_types::TransportStation,
+        transport_vehicle_types::TransportVehicle,
+    },
+};
 
-use crate::transport_tours::tour_view_scoring::calculate_tour_rating_from_authored_score_ranges;
-use crate::transport_tours::transport_fare_types::PendingTransportFare;
-use crate::transport_tours::transport_fare_types::QueuedFare;
-use openzt2_zoo_state::transport_tours::tour_scoring_types::StationRatingPermille;
-use openzt2_zoo_state::transport_tours::tour_scoring_types::TourObservationCadence;
-use openzt2_zoo_state::transport_tours::tour_scoring_types::TourObservationMemory;
-use openzt2_zoo_state::transport_tours::tour_scoring_types::TourScore;
-use openzt2_zoo_state::transport_tours::transport_circuit_types::CircuitMember;
-use openzt2_zoo_state::transport_tours::transport_circuit_types::TransportCircuit;
-use openzt2_zoo_state::transport_tours::transport_rider_types::PlayerRidingSeatIndex;
-use openzt2_zoo_state::transport_tours::transport_rider_types::TransportRider;
-use openzt2_zoo_state::transport_tours::transport_topology_types::TransportStation;
-use openzt2_zoo_state::transport_tours::transport_vehicle_types::TransportVehicle;
+use crate::transport_tours::{
+    tour_view_scoring::calculate_tour_rating_from_authored_score_ranges,
+    transport_fare_settlement::publish_transport_trip,
+    transport_fare_types::{FareGuest, FareOperations, PendingTransportFare, QueuedFare},
+};
 
 pub(super) fn disembark_transport_riders_and_request_service_fare_transactions(
-    mut vehicle_arrivals: MessageReader<Arrived>,
-    world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
-    active_world_definitions: Res<WorldDefinitions>,
-    mut transport_vehicles: Query<(&mut TransportVehicle, &CircuitMember)>,
-    transport_stations: Query<(&TransportStation, &CircuitMember)>,
-    transport_riders: Query<(Entity, &TransportRider, &TourScore, &WorldMember), With<Guest>>,
-    transport_circuits: Query<&Price, With<TransportCircuit>>,
-    pending_transport_fares: Query<&PendingTransportFare>,
-    mut ratings: Query<&mut StationRatingPermille>,
-    mut locomotion_modes: Query<&mut LocomotionMode>,
-    mut transaction_requests: MessageWriter<TransactionRequest>,
+    mut arrivals: MessageReader<Arrived>,
     mut commands: Commands,
 ) {
-    let Some(world_definitions) = active_world_definitions.get(&world_definition_assets) else {
+    for arrival in arrivals.read() {
+        if let Some(station) = arrival.target {
+            commands.run_system_cached_with(disembark_transport_riders, (arrival.entity, station));
+        }
+    }
+}
+
+fn disembark_transport_riders(
+    In((vehicle, station)): In<(Entity, Entity)>,
+    definitions: Res<Assets<WorldDefinitionAsset>>,
+    active_definitions: Res<WorldDefinitions>,
+    vehicles: Query<(&CircuitMember, &VehicleRiders, &Transform), With<TransportVehicle>>,
+    stations: Query<(&CircuitMember, Option<&Children>), With<TransportStation>>,
+    exits: Query<&GlobalTransform, With<TransportStationExit>>,
+    mut poses: Query<&mut Transform, (With<TransportRider>, Without<TransportVehicle>)>,
+    riders: Query<
+        (
+            &BoardedAtStation,
+            &TourScore,
+            &WorldMember,
+            Has<FareOperations>,
+        ),
+        With<Guest>,
+    >,
+    circuits: Query<&Price, With<TransportCircuit>>,
+    mut ratings: Query<&mut StationRatingPermille>,
+    mut transactions: MessageWriter<TransactionRequest>,
+    mut trips: MessageWriter<TransportTripCompleted>,
+    mut reactions: MessageWriter<GuestReaction>,
+    mut commands: Commands,
+) {
+    let (
+        Some(catalogue),
+        Ok((member, aboard, vehicle_pose)),
+        Ok((station_circuit, exits_at_station)),
+    ) = (
+        active_definitions.get(&definitions),
+        vehicles.get(vehicle),
+        stations.get(station),
+    )
+    else {
         return;
     };
-    for vehicle_arrival in vehicle_arrivals.read() {
-        let Some(station_entity) = vehicle_arrival.target else {
+    if member.0 != station_circuit.0 {
+        return;
+    }
+    let Ok(price) = circuits.get(member.0) else {
+        return;
+    };
+    if price.0 .0 < 0 {
+        return;
+    }
+    let exit = exits_at_station
+        .into_iter()
+        .flat_map(|children| children.iter())
+        .filter_map(|child| exits.get(child).ok())
+        .min_by(|left, right| {
+            vehicle_pose
+                .translation
+                .distance_squared(left.translation())
+                .total_cmp(
+                    &vehicle_pose
+                        .translation
+                        .distance_squared(right.translation()),
+                )
+        });
+    let mut last_rating = None;
+    for guest in aboard.iter() {
+        let Ok((boarded, score, world, paying)) = riders.get(guest) else {
             continue;
         };
-        let Ok((mut transport_vehicle, vehicle_circuit_member)) =
-            transport_vehicles.get_mut(vehicle_arrival.entity)
-        else {
-            continue;
-        };
-        let Ok((_, station_circuit_member)) = transport_stations.get(station_entity) else {
-            continue;
-        };
-        if station_circuit_member.0 != vehicle_circuit_member.0 {
+        if boarded.0 == station || paying {
             continue;
         }
-        let Ok(admission_price) = transport_circuits.get(vehicle_circuit_member.0) else {
-            continue;
+        let rating = calculate_tour_rating_from_authored_score_ranges(catalogue, score.value);
+        last_rating = Some(StationRatingPermille(
+            (rating.clamp(0.0, 1.0) * 1000.0).round() as u16,
+        ));
+        let fare = PendingTransportFare {
+            circuit: member.0,
+            score: score.value,
+            rating,
         };
-        let mut last_rating = None;
-        for (guest_entity, transport_rider, tour_score, world_member) in &transport_riders {
-            if transport_vehicle.occupied == 0 {
-                break;
-            }
-            if transport_rider.vehicle != vehicle_arrival.entity
-                || transport_rider.boarded_station == station_entity
-                || pending_transport_fares
-                    .iter()
-                    .any(|pending_fare| pending_fare.guest == guest_entity)
-            {
-                continue;
-            }
-            transport_vehicle.occupied = transport_vehicle.occupied.saturating_sub(1);
-            let tour_rating = calculate_tour_rating_from_authored_score_ranges(
-                world_definitions,
-                tour_score.value,
-            );
-            last_rating = Some(StationRatingPermille(
-                (tour_rating.clamp(0.0, 1.0) * 1000.0).round() as u16,
-            ));
-            let fare_operation = commands
-                .spawn((
-                    *world_member,
-                    PendingTransportFare {
-                        guest: guest_entity,
-                        circuit: vehicle_circuit_member.0,
-                        score: tour_score.value,
-                        rating: tour_rating,
-                    },
-                    QueuedFare::pending(admission_price.0),
-                ))
+        if price.0.is_positive() {
+            let operation = commands
+                .spawn((*world, FareGuest(guest), fare, QueuedFare::pending(price.0)))
                 .id();
-            transaction_requests.write(TransactionRequest {
-                operation: fare_operation,
-                debit: Account::Entity(guest_entity),
+            transactions.write(TransactionRequest {
+                operation,
+                debit: Account::Entity(guest),
                 credit: Account::Zoo,
-                amount: admission_price.0,
+                amount: price.0,
                 kind: TransactionKind::Service,
-                subject: Some(vehicle_circuit_member.0),
+                subject: Some(member.0),
             });
-            commands.entity(guest_entity).remove::<(
-                TransportRider,
-                TourScore,
-                TourObservationMemory,
-                TourObservationCadence,
-                PlayerRidingSeatIndex,
-            )>();
-            if let Ok(mut mode) = locomotion_modes.get_mut(guest_entity) {
-                mode.set_if_neq(LocomotionMode::Ground);
-            } else {
-                commands.entity(guest_entity).insert(LocomotionMode::Ground);
-            }
+        } else {
+            publish_transport_trip(guest, &fare, &mut trips, &mut reactions);
         }
-        if let Some(rating) = last_rating {
-            if let Ok(mut current) = ratings.get_mut(station_entity) {
-                current.set_if_neq(rating);
-            } else {
-                commands.entity(station_entity).insert(rating);
-            }
+        if let (Some(exit), Ok(mut pose)) = (exit, poses.get_mut(guest)) {
+            pose.translation = exit.translation();
+            pose.rotation = exit.rotation();
+        }
+        commands.entity(guest).remove::<TransportRider>();
+    }
+    if let Some(rating) = last_rating {
+        if let Ok(mut current) = ratings.get_mut(station) {
+            current.set_if_neq(rating);
+        } else {
+            commands.entity(station).insert(rating);
         }
     }
 }

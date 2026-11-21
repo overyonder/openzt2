@@ -14,7 +14,9 @@ use openzt2_zoo_state::progression::rating_types::ZooRating;
 use openzt2_zoo_state::progression::research_types::ResearchAvailabilityUnlockCountdown;
 use openzt2_zoo_state::progression::research_types::ResearchProject;
 use openzt2_zoo_state::progression::research_types::ResearchProjectAvailability;
-use openzt2_zoo_state::progression::research_types::ResearchProjectPaused;
+use openzt2_zoo_state::progression::research_types::{
+    ResearchItemInWorld, ResearchProjectPaused, ResearchProjectPersistentId, WorldResearchItems,
+};
 use openzt2_zoo_state::progression::unlock_types::UnlockedCatalogueDefinitionSet;
 
 use super::{
@@ -29,6 +31,15 @@ pub(super) struct ProgressionSnapshotApplicationParameters<'w, 's> {
     unlocked_catalogue_definitions: ResMut<'w, UnlockedCatalogueDefinitionSet>,
     scenario_award_points: ResMut<'w, ScenarioAwardPointTotal>,
     endangered_animal_birth_count: ResMut<'w, TotalEndangeredAnimalBirthCount>,
+    research_items: Query<'w, 's, &'static WorldResearchItems>,
+    active_research: Query<
+        'w,
+        's,
+        (
+            &'static ResearchProjectPersistentId,
+            &'static mut ResearchProject,
+        ),
+    >,
     fame_history: ResMut<'w, FameHistory>,
     progression_entities_with_persistent_identifiers: Query<
         'w,
@@ -36,14 +47,12 @@ pub(super) struct ProgressionSnapshotApplicationParameters<'w, 's> {
         (
             Entity,
             &'static PersistentId,
-            Option<&'static ResearchProject>,
             Option<&'static EarnedProgressionAward>,
             Option<&'static ProgressionAwardConditionDurationProgress>,
             Option<&'static ResearchProjectAvailability>,
             Option<&'static SpeciesAdoptionChanceMultiplier>,
         ),
         Or<(
-            With<ResearchProject>,
             With<EarnedProgressionAward>,
             With<ProgressionAwardConditionDurationProgress>,
             With<ResearchProjectAvailability>,
@@ -62,6 +71,10 @@ impl ProgressionSnapshotApplicationParameters<'_, '_> {
             .any(|(_, candidate_persistent_identifier, ..)| {
                 *candidate_persistent_identifier == persistent_identifier
             })
+            || self
+                .active_research
+                .iter()
+                .any(|(id, _)| id.0 == persistent_identifier)
     }
 }
 
@@ -117,32 +130,6 @@ pub(super) fn apply_progression_snapshot_records_to_live_world(
         }
     }
 
-    for research_project_snapshot_record in progression_snapshot_records.research_projects {
-        let research_project_entity = find_existing_or_spawn_progression_snapshot_entity(
-            commands,
-            world_root_entity,
-            persistent_identifier_allocator,
-            &progression_snapshot_application_parameters
-                .progression_entities_with_persistent_identifiers,
-            research_project_snapshot_record.persistent_identifier,
-        )?;
-        commands
-            .entity(research_project_entity)
-            .insert(ResearchProject {
-                definition: research_project_snapshot_record.definition_identifier,
-                elapsed_ticks: research_project_snapshot_record.elapsed_simulation_ticks,
-                required_ticks: research_project_snapshot_record.required_simulation_ticks,
-            });
-        if research_project_snapshot_record.paused {
-            commands
-                .entity(research_project_entity)
-                .insert(ResearchProjectPaused);
-        } else {
-            commands
-                .entity(research_project_entity)
-                .remove::<ResearchProjectPaused>();
-        }
-    }
     for earned_award_snapshot_record in progression_snapshot_records.earned_progression_awards {
         let earned_award_entity = find_existing_or_spawn_progression_snapshot_entity(
             commands,
@@ -178,6 +165,7 @@ pub(super) fn apply_progression_snapshot_records_to_live_world(
                 satisfied_ticks: award_duration_snapshot_record.satisfied_simulation_ticks,
             });
     }
+    let mut restored_research_items = std::collections::BTreeMap::new();
     for research_availability_snapshot_record in
         progression_snapshot_records.research_project_availability
     {
@@ -189,12 +177,15 @@ pub(super) fn apply_progression_snapshot_records_to_live_world(
                 .progression_entities_with_persistent_identifiers,
             research_availability_snapshot_record.persistent_identifier,
         )?;
-        commands
-            .entity(research_availability_entity)
-            .insert(ResearchProjectAvailability {
-                item: research_availability_snapshot_record.catalogue_item_identifier,
+        let definition = research_availability_snapshot_record.catalogue_item_identifier;
+        restored_research_items.insert(definition, research_availability_entity);
+        commands.entity(research_availability_entity).insert((
+            ResearchItemInWorld(world_root_entity),
+            ResearchProjectAvailability {
+                item: definition,
                 available: research_availability_snapshot_record.available,
-            });
+            },
+        ));
         if let Some(remaining_unlock_ticks) =
             research_availability_snapshot_record.remaining_unlock_ticks
         {
@@ -208,6 +199,79 @@ pub(super) fn apply_progression_snapshot_records_to_live_world(
             commands
                 .entity(research_availability_entity)
                 .remove::<ResearchAvailabilityUnlockCountdown>();
+        }
+    }
+    for project in progression_snapshot_records.research_projects {
+        let definition = project.definition_identifier;
+        let item = restored_research_items
+            .get(&definition)
+            .copied()
+            .or_else(|| {
+                progression_snapshot_application_parameters
+                    .research_items
+                    .get(world_root_entity)
+                    .ok()?
+                    .definitions
+                    .get(&definition)
+                    .copied()
+            });
+        let item = if let Some(item) = item {
+            item
+        } else {
+            let id = persistent_identifier_allocator
+                .allocate(world_root_entity)
+                .map_err(|_| {
+                    WorldSnapshotPersistenceFailure::DuplicatePersistentEntityIdentifier
+                })?;
+            commands
+                .spawn((
+                    id,
+                    WorldMember {
+                        root: world_root_entity,
+                    },
+                    ResearchItemInWorld(world_root_entity),
+                    ResearchProjectAvailability {
+                        item: definition,
+                        available: true,
+                    },
+                ))
+                .id()
+        };
+        let current = progression_snapshot_application_parameters
+            .active_research
+            .get_mut(item)
+            .ok();
+        let progress = ResearchProject {
+            definition,
+            elapsed_ticks: project.elapsed_simulation_ticks,
+            required_ticks: project.required_simulation_ticks,
+        };
+        let mut entity = commands.entity(item);
+        if let Some((id, mut state)) = current {
+            state.set_if_neq(progress);
+            if id.0 != project.persistent_identifier {
+                persistent_identifier_allocator
+                    .reserve_imported(world_root_entity, project.persistent_identifier)
+                    .map_err(|_| {
+                        WorldSnapshotPersistenceFailure::DuplicatePersistentEntityIdentifier
+                    })?;
+                entity.insert(ResearchProjectPersistentId(project.persistent_identifier));
+            }
+        } else {
+            persistent_identifier_allocator
+                .reserve_imported(world_root_entity, project.persistent_identifier)
+                .map_err(|_| {
+                    WorldSnapshotPersistenceFailure::DuplicatePersistentEntityIdentifier
+                })?;
+            entity.insert((
+                ResearchProjectPersistentId(project.persistent_identifier),
+                progress,
+            ));
+        }
+        if project.paused {
+            entity.insert_if_new(ResearchProjectPaused);
+        } else {
+            entity.remove::<ResearchProjectPaused>();
         }
     }
     for species_adoption_chance_snapshot_record in
@@ -240,14 +304,12 @@ fn find_existing_or_spawn_progression_snapshot_entity(
         (
             Entity,
             &PersistentId,
-            Option<&ResearchProject>,
             Option<&EarnedProgressionAward>,
             Option<&ProgressionAwardConditionDurationProgress>,
             Option<&ResearchProjectAvailability>,
             Option<&SpeciesAdoptionChanceMultiplier>,
         ),
         Or<(
-            With<ResearchProject>,
             With<EarnedProgressionAward>,
             With<ProgressionAwardConditionDurationProgress>,
             With<ResearchProjectAvailability>,

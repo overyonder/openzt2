@@ -1,4 +1,5 @@
 use super::*;
+use openzt2_game_data::AssetId;
 
 #[test]
 fn replacement_definition_hides_old_quantity_before_the_registry_is_available() {
@@ -15,9 +16,6 @@ fn replacement_definition_hides_old_quantity_before_the_registry_is_available() 
         .world_mut()
         .spawn((
             DefinitionId(original),
-            ContainerQuantityResolved {
-                definition_id: original,
-            },
             FoodContainer {
                 food: original,
                 amount_q16: 25 << 16,
@@ -34,8 +32,4 @@ fn replacement_definition_hides_old_quantity_before_the_registry_is_available() 
     app.update();
     assert!(app.world().get::<FoodContainer>(entity).is_none());
     assert!(app.world().get::<DrinkContainer>(entity).is_none());
-    assert!(app
-        .world()
-        .get::<ContainerQuantityResolved>(entity)
-        .is_none());
 }

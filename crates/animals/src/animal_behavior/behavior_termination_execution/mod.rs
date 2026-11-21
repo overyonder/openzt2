@@ -7,6 +7,7 @@ use openzt2_game_assets::world_definitions::world_definition_document_asset_and_
 #[cfg(test)]
 use openzt2_game_data::behavior::action_record::BehaviorAction;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
+use openzt2_world_state::world_spawn::world_membership_types::{DefinitionId, WorldMember};
 use openzt2_zoo_state::animal_health::types::{AnimalDied, Dead, DeathCause, Disease};
 use openzt2_zoo_state::animal_lifecycle::types::Animal;
 use openzt2_zoo_state::behavior_task_execution_types::{
@@ -21,7 +22,7 @@ use crate::animal_health::disease_mortality_execution::finalize_animal_death;
 mod tests;
 
 #[derive(Component)]
-pub(super) struct AuthoredAnimalRemovalTick(u64);
+pub(super) struct AuthoredAnimalRemovalTick(pub(super) u64);
 
 pub(super) fn execute_animal_termination_actions(
     mut commands: Commands,
@@ -36,6 +37,7 @@ pub(super) fn execute_animal_termination_actions(
                 &RunningBehaviorInstruction,
                 &RunBehaviorTermination,
             ),
+            Option<&WorldMember>,
         ),
         (
             With<Animal>,
@@ -43,14 +45,15 @@ pub(super) fn execute_animal_termination_actions(
             Without<PendingBehaviorTaskFailure>,
         ),
     >,
-    animals: Query<Option<&Disease>, (With<Animal>, Without<Dead>)>,
+    animals: Query<(Option<&Disease>, Option<&WorldMember>), (With<Animal>, Without<Dead>)>,
+    objects: Query<&WorldMember, (With<DefinitionId>, Without<Animal>)>,
     mut deaths: MessageWriter<AnimalDied>,
 ) {
     let Some(definitions) = definitions.get(&definition_assets) else {
         return;
     };
     let mut killed = std::collections::HashSet::new();
-    for (actor, (task, instruction, running_action)) in &mut actors {
+    for (actor, (task, instruction, running_action), membership) in &mut actors {
         if task.next_action_tick > clock.tick || killed.contains(&actor) {
             continue;
         }
@@ -59,7 +62,17 @@ pub(super) fn execute_animal_termination_actions(
         }
         let policy = &running_action.0;
         let target = policy.kill_target.then(|| task.target()).flatten();
-        if policy.kill_target && target.is_none_or(|entity| animals.get(entity).is_err()) {
+        let target_is_animal = target.is_some_and(|entity| {
+            animals.get(entity).is_ok_and(|(_, world)| {
+                world.map(|world| world.root) == membership.map(|world| world.root)
+            })
+        });
+        let target_is_object = target.is_some_and(|entity| {
+            objects
+                .get(entity)
+                .is_ok_and(|world| Some(world.root) == membership.map(|world| world.root))
+        });
+        if policy.kill_target && !target_is_animal && !target_is_object {
             mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
             continue;
         }
@@ -80,7 +93,14 @@ pub(super) fn execute_animal_termination_actions(
             if !killed.insert(animal) {
                 continue;
             }
-            let Ok(disease) = animals.get(animal) else {
+            let Ok((disease, _)) = animals.get(animal) else {
+                super::behavior_animation_key_execution::fade_and_remove_authored_object(
+                    &mut commands,
+                    animal,
+                    clock.tick,
+                    definitions.timing().fixed_hz,
+                    policy.fade_out_period,
+                );
                 continue;
             };
             let cause = disease.map_or(DeathCause::Authored(task.program), |disease| {
@@ -92,7 +112,7 @@ pub(super) fn execute_animal_termination_actions(
                 .insert(AuthoredAnimalRemovalTick(until));
         }
         if !policy.kill_subject {
-            instruction.complete(actor, clock.tick, &mut commands);
+            instruction.complete_with_target(actor, None, clock.tick, &mut commands);
         }
     }
 }

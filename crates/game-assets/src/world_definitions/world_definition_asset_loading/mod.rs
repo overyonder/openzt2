@@ -16,6 +16,7 @@ use bevy::{
 use std::{io, path::Path, sync::Arc};
 
 pub mod authored_binder_reference_resolution;
+mod fossil_puzzle_slots;
 pub mod presentation_dependencies;
 pub mod source_documents;
 pub mod source_reference_discovery;
@@ -77,7 +78,7 @@ impl AssetLoader for WorldDefinitionAssetLoader {
                 &documents,
             )
             .await?;
-        let document =
+        let mut document =
             lower_resolved_world_definition_source_document_closure_to_canonical_document(
                 &documents,
                 &actor_manifest_resolution_index,
@@ -90,6 +91,15 @@ impl AssetLoader for WorldDefinitionAssetLoader {
                     format!("unsupported world-definition source {path}"),
                 )
             })?;
+        let uses_puzzle_background = fossil_puzzle_slots::lower_fossil_puzzle_background_slots(
+            &self.archives,
+            &binder_sources,
+            context,
+            &path,
+            &documents,
+            &mut document,
+        )
+        .await?;
         let mut asset =
             presentation_dependencies::register_world_definition_presentation_dependencies(
                 &self.archives,
@@ -99,7 +109,7 @@ impl AssetLoader for WorldDefinitionAssetLoader {
                 &actor_manifest_resolution_index,
                 &resolved_models,
             )?;
-        if uses_binder_sources {
+        if uses_binder_sources || uses_puzzle_background {
             if !Arc::ptr_eq(&binder_sources, &self.archives.authored_binder_sources()) {
                 return Err(io::Error::other(
                     "authored binder sources changed while loading",

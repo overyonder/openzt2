@@ -9,6 +9,7 @@ use super::{
     },
 };
 use bevy::prelude::*;
+use openzt2_world_state::world_spawn::world_membership_types::{WorldMember, WorldRoot};
 
 #[test]
 fn trash_level_is_derived_from_authoritative_container_thirds() {
@@ -49,11 +50,18 @@ fn trash_level_is_derived_from_authoritative_container_thirds() {
 #[test]
 fn cleanliness_reduction_tracks_spawn_and_despawn() {
     let mut app = App::new();
-    app.init_resource::<ZooCleanlinessTotals>()
+    app.register_required_components::<WorldRoot, ZooCleanlinessTotals>()
         .add_systems(Update, aggregate_changed_waste_into_zoo_cleanliness_totals);
+    let root = app
+        .world_mut()
+        .spawn(WorldRoot {
+            scenario: Default::default(),
+        })
+        .id();
     let entity = app
         .world_mut()
         .spawn((
+            WorldMember { root },
             FacilityContainedWaste {
                 contained_waste_units: 2,
                 contained_waste_capacity_units: 8,
@@ -64,7 +72,10 @@ fn cleanliness_reduction_tracks_spawn_and_despawn() {
         ))
         .id();
     app.update();
-    let totals = *app.world().resource::<ZooCleanlinessTotals>();
+    let totals = *app
+        .world()
+        .get::<ZooCleanlinessTotals>(root)
+        .expect("world cleanliness totals");
     assert_eq!(totals.contained_waste_units, 2);
     assert_eq!(totals.contained_waste_capacity_units, 8);
     assert_eq!(totals.uncontained_waste_units, 3);
@@ -72,7 +83,9 @@ fn cleanliness_reduction_tracks_spawn_and_despawn() {
     app.world_mut().despawn(entity);
     app.update();
     assert_eq!(
-        *app.world().resource::<ZooCleanlinessTotals>(),
+        *app.world()
+            .get::<ZooCleanlinessTotals>(root)
+            .expect("world cleanliness totals"),
         ZooCleanlinessTotals::default()
     );
 }

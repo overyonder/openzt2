@@ -24,14 +24,11 @@ use openzt2_world_state::{
 };
 use openzt2_zoo_state::{
     animal_behavior::{
-        behavior_random_stream_state::BehaviorRandomStream,
+        animal_lineage::AnimalLineage, behavior_random_stream_state::BehaviorRandomStream,
         behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation,
     },
     animal_health::types::{AnimalDied, Dead, DeathCause},
-    animal_lifecycle::{
-        animal_birth_and_release_contracts::AnimalBorn,
-        types::{Animal, Parents},
-    },
+    animal_lifecycle::{animal_birth_and_release_contracts::AnimalBorn, types::Animal},
     behavior_task_execution_types::{
         running_actions::{
             BehaviorInstructionId, RunBehaviorMorphEntity, RunBehaviorTermination,
@@ -62,11 +59,10 @@ pub(super) fn morph_authored_entities(
     clock: Res<ZooClock>,
     catalogue: Res<WorldDefinitions>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
-    species: Res<SpeciesAssets>,
-    species_assets: Res<Assets<SpeciesAsset>>,
-    server: Res<AssetServer>,
-    prefabs: Res<Assets<ScenePrefabAsset>>,
-    mut allocator: ResMut<PersistentIdAllocator>,
+    (species, species_assets): (Res<SpeciesAssets>, Res<Assets<SpeciesAsset>>),
+    (server, prefabs): (Res<AssetServer>, Res<Assets<ScenePrefabAsset>>),
+    mut allocators: Query<&mut PersistentIdAllocator>,
+    fences: Query<(), With<openzt2_zoo_state::topology::topology_graph_types::FenceEdge>>,
     seed: Option<Res<ZooSeed>>,
     mut actions: Query<
         (
@@ -85,12 +81,12 @@ pub(super) fn morph_authored_entities(
         &WorldMember,
         &GlobalTransform,
         Option<&PersistentId>,
-        Option<&Parents>,
         Option<&HabitatMember>,
         Option<&Name>,
         Has<Animal>,
         Has<Dead>,
     )>,
+    lineage: AnimalLineage,
     mut deaths: MessageWriter<AnimalDied>,
     mut births: MessageWriter<AnimalBorn>,
     mut visibility: Query<&mut Visibility>,
@@ -107,6 +103,11 @@ pub(super) fn morph_authored_entities(
         let recipient = match action.recipient {
             BehaviorMorphRecipient::Subject => Some(actor),
             BehaviorMorphRecipient::Target => task.target,
+            BehaviorMorphRecipient::NamedChild(definition)
+                if definition == openzt2_game_data::AssetId::from_key("object") =>
+            {
+                task.object
+            }
             BehaviorMorphRecipient::NamedChild(definition) => {
                 [Some(actor), task.object, task.target]
                     .into_iter()
@@ -117,13 +118,12 @@ pub(super) fn morph_authored_entities(
                             .is_ok_and(|(_, id, ..)| id.0 == definition)
                     })
                     .or_else(|| {
-                        recipients
-                            .iter()
-                            .find_map(|(child, id, _, _, _, parents, ..)| {
-                                (id.0 == definition
-                                    && parents.is_some_and(|parents| parents.mother == Some(actor)))
-                                .then_some(child)
-                            })
+                        lineage.children(actor).into_iter().find(|child| {
+                            lineage.parents(*child).mother == Some(actor)
+                                && recipients
+                                    .get(*child)
+                                    .is_ok_and(|(_, id, ..)| id.0 == definition)
+                        })
                     })
             }
         };
@@ -131,7 +131,10 @@ pub(super) fn morph_authored_entities(
             mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
             continue;
         };
-        let Ok((_, _, world, transform, persistent_id, parents, habitat, name, is_animal, dead)) =
+        if fences.contains(recipient) {
+            continue;
+        }
+        let Ok((_, definition, world, transform, persistent_id, habitat, name, is_animal, dead)) =
             recipients.get(recipient)
         else {
             mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
@@ -169,9 +172,17 @@ pub(super) fn morph_authored_entities(
             continue;
         }
         let position = transform.compute_transform();
-        if let Some((species_record, variant)) =
-            species.find_variant_with_species(action.definition)
-        {
+        let replacement = catalogue_view
+            .find_object(definition.0)
+            .and_then(|object| {
+                object
+                    .authored_runtime
+                    .morph_targets
+                    .iter()
+                    .find_map(|(key, value)| (*key == action.definition).then_some(*value))
+            })
+            .unwrap_or(action.definition);
+        if let Some((species_record, variant)) = species.find_variant_with_species(replacement) {
             let mut fallback;
             let mut random = random;
             let random = if let Some(random) = random.as_deref_mut() {
@@ -196,7 +207,11 @@ pub(super) fn morph_authored_entities(
                 mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
                 continue;
             };
-            let Ok(id) = allocator.allocate(world.root) else {
+            let Some(id) = allocators
+                .get_mut(world.root)
+                .ok()
+                .and_then(|mut allocator| allocator.allocate().ok())
+            else {
                 mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
                 continue;
             };
@@ -212,7 +227,7 @@ pub(super) fn morph_authored_entities(
                     scale: Vec3::ONE,
                     ..position
                 },
-                parents.copied().unwrap_or(Parents::NONE),
+                lineage.parents(recipient),
                 clock.tick,
             );
             if action.fade && !action.period.is_zero() {
@@ -226,7 +241,7 @@ pub(super) fn morph_authored_entities(
                 }
             }
             births.write(AnimalBorn { child: young });
-        } else if let Some(object) = catalogue_view.find_object(action.definition) {
+        } else if let Some(object) = catalogue_view.find_object(replacement) {
             let handle = pending
                 .as_ref()
                 .and_then(|pending| pending.prefab.clone())
@@ -254,7 +269,11 @@ pub(super) fn morph_authored_entities(
                 }
                 continue;
             };
-            let Ok(id) = allocator.allocate(world.root) else {
+            let Some(id) = allocators
+                .get_mut(world.root)
+                .ok()
+                .and_then(|mut allocator| allocator.allocate().ok())
+            else {
                 mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
                 continue;
             };

@@ -1,36 +1,33 @@
 use bevy::animation::{animated_field, AnimationTargetId};
 use bevy::prelude::*;
-use openzt2_game_assets::animation::animation_set_asset_types::AnimationSetAsset;
+use openzt2_game_assets::animation::animation_set_asset_types::AnimationClipSourceAsset;
 use openzt2_world_state::animation_playback::animation_joint_target_types::{
     AnimationJointTarget, AnimationRigJoints,
 };
-use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackController;
+use openzt2_world_state::animation_playback::animation_playback_controller_types::{
+    AnimationPlaybackController, RetainedAnimationClipSource,
+};
 use openzt2_world_state::animation_playback::locomotion_root_motion::ConsumedLocomotionRootMotion;
 
 pub(crate) fn remove_consumed_root_trajectory(
-    assets: Res<Assets<AnimationSetAsset>>,
+    sources: Res<Assets<AnimationClipSourceAsset>>,
     clips: Res<Assets<AnimationClip>>,
     controllers: Query<(
         &AnimationPlaybackController,
         &ConsumedLocomotionRootMotion,
+        &RetainedAnimationClipSource,
         &AnimationRigJoints,
     )>,
     mut joints: Query<(&AnimationJointTarget, &mut Transform)>,
 ) {
-    for (controller, consumed, rig) in &controllers {
+    for (controller, consumed, retained, rig) in &controllers {
         if !consumed.owns_playback(controller) {
             continue;
         }
-        let Some(record) = assets.get(&controller.animation_set_asset).and_then(|set| {
-            set.find_animation_clip_record_by_asset_key(&controller.animation_clip_asset_key)
-        }) else {
+        let Some(record) = sources.get(&retained.0) else {
             continue;
         };
-        let Some(root) = record
-            .authored_animation_clip_metadata
-            .as_ref()
-            .and_then(|metadata| metadata.root_motion_joint.as_ref())
-        else {
+        let Some(root) = &record.authored_animation_clip_metadata.root_motion_joint else {
             continue;
         };
         let Some(clip) = clips.get(&record.animation_clip_handle) else {

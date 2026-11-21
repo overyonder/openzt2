@@ -107,15 +107,15 @@ pub(super) fn photo_rank_for_album_display_slot(
 }
 
 pub(super) fn sort_changed_album_photo_memberships(
-    changed_memberships: Query<Entity, Changed<AlbumPhotos>>,
     changed_orders: Query<&AlbumMember, Or<(Added<Photo>, Changed<PhotoAlbumOrder>)>>,
     mut removed_orders: RemovedComponents<PhotoAlbumOrder>,
     memberships: Query<&AlbumMember>,
     photo_order: Query<(&Photo, Option<&PhotoAlbumOrder>)>,
-    mut albums: Query<&mut AlbumPhotos>,
+    mut albums: Query<(Entity, &mut AlbumPhotos)>,
 ) {
-    let changed = changed_memberships
-        .iter()
+    let changed = albums
+        .iter_mut()
+        .filter_map(|(album, members)| members.is_changed().then_some(album))
         .chain(changed_orders.iter().map(|member| member.0))
         .chain(
             removed_orders
@@ -132,7 +132,7 @@ pub(super) fn sort_changed_album_photo_memberships(
         )
     };
     for album in changed {
-        if let Ok(mut members) = albums.get_mut(album) {
+        if let Ok((_, mut members)) = albums.get_mut(album) {
             if !members.collection().is_sorted_by_key(&key) {
                 // Reorder the relationship's existing membership in place.
                 members.collection_mut_risky().sort_unstable_by_key(&key);

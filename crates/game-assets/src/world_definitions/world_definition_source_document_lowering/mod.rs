@@ -55,24 +55,23 @@ pub(super) fn lower_resolved_world_definition_source_document_closure_to_canonic
                     .element_children()
                     .any(|child| contains(child, "ZTFossilFindingMode"))
         });
-    let fossil_mode_document = source_documents
+    let gameplay_modes = source_documents
         .iter()
         .find(|document| document.path.key() == "ui/modes/modes.xml");
-    let auxiliary = lower_behavior_auxiliary_source_document(
-        auxiliary_document,
-        fossil_mode_document,
-        |path| Some(openzt2_game_data::AssetId::from_virtual_path(path)),
-    )
-    .map_err(|diagnostics| {
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            diagnostics
-                .into_iter()
-                .map(|diagnostic| format!("{}: {:?}", diagnostic.virtual_path, diagnostic.kind))
-                .collect::<Vec<_>>()
-                .join("; "),
-        )
-    })?;
+    let auxiliary =
+        lower_behavior_auxiliary_source_document(auxiliary_document, gameplay_modes, |path| {
+            Some(openzt2_game_data::AssetId::from_virtual_path(path))
+        })
+        .map_err(|diagnostics| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                diagnostics
+                    .into_iter()
+                    .map(|diagnostic| format!("{}: {:?}", diagnostic.virtual_path, diagnostic.kind))
+                    .collect::<Vec<_>>()
+                    .join("; "),
+            )
+        })?;
     let documents = source_documents
         .iter()
         .filter(|document| {
@@ -103,10 +102,15 @@ pub(super) fn lower_resolved_world_definition_source_document_closure_to_canonic
         actor_scene_paths,
         authored_type_registry_source_order,
     )
-    .map(|document| {
+    .and_then(|mut document| {
+        if let Some(modes) = gameplay_modes.filter(|_| primary_path == "ui/modes/modes.xml") {
+            document.transport_highlight = lower_transport_highlight_policy(modes)?;
+        }
         // Abstract binders supply inherited data without requiring a standalone definition.
-        (document != WorldDefinitionDocument::default() || primary_is_abstract_binder)
-            .then_some(document)
+        Ok(
+            (document != WorldDefinitionDocument::default() || primary_is_abstract_binder)
+                .then_some(document),
+        )
     })
     .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))
 }
@@ -126,4 +130,90 @@ fn is_auxiliary(root: &str) -> bool {
 fn contains(node: &OrderedSourceDocumentNode, wanted: &str) -> bool {
     node.name.eq_ignore_ascii_case(wanted)
         || node.element_children().any(|child| contains(child, wanted))
+}
+
+fn lower_transport_highlight_policy(
+    document: &OrderedSourceDocument,
+) -> Result<
+    Option<
+        openzt2_game_data::world_definitions::transportation_and_tours::TransportHighlightPolicy,
+    >,
+    crate::source_document::resolved_source_record_index::BindError,
+> {
+    use openzt2_game_data::world_definitions::transportation_and_tours::{
+        TrackHighlightPolicy, TransportDeletionHighlightPolicy, TransportHighlightPolicy,
+    };
+    let invalid = |node: &OrderedSourceDocumentNode, field: &str| {
+        crate::source_document::resolved_source_record_index::BindError {
+            virtual_path: document.path.key(),
+            span: node.span,
+            message: format!("{} has malformed {field}", node.name),
+        }
+    };
+    let interval = |node: &OrderedSourceDocumentNode| {
+        node.attribute_named_any(&["colorAnimationCycle"])
+            .and_then(|value| value.trim_end_matches(['f', 'F']).parse::<f32>().ok())
+            .filter(|value| value.is_finite() && *value > 0.0)
+            .ok_or_else(|| invalid(node, "colorAnimationCycle"))
+    };
+    let color = |owner: &OrderedSourceDocumentNode,
+                 name: &str|
+     -> Result<
+        [u8; 4],
+        crate::source_document::resolved_source_record_index::BindError,
+    > {
+        let node = owner
+            .element_children()
+            .find(|child| child.name.eq_ignore_ascii_case("colors"))
+            .and_then(|colors| {
+                colors
+                    .element_children()
+                    .find(|child| child.name.eq_ignore_ascii_case(name))
+            })
+            .ok_or_else(|| invalid(owner, name))?;
+        let mut channels = [0, 0, 0, 255];
+        for (channel, attribute) in channels.iter_mut().zip(["r", "g", "b", "a"]) {
+            if let Some(value) = node.attribute_named_any(&[attribute]) {
+                *channel = value.parse::<u8>().map_err(|_| invalid(node, attribute))?;
+            }
+        }
+        Ok(channels)
+    };
+    let mut policy = TransportHighlightPolicy::default();
+    fn find_mode<'a>(
+        node: &'a OrderedSourceDocumentNode,
+        mode: &str,
+    ) -> Option<&'a OrderedSourceDocumentNode> {
+        if node.name.eq_ignore_ascii_case(mode) {
+            return Some(node);
+        }
+        node.element_children()
+            .find_map(|child| find_mode(child, mode))
+    }
+    if let Some(track) = find_mode(&document.root, "ZTGroundTrackMode")
+        .filter(|mode| mode.attribute_named_any(&["colorAnimationCycle"]).is_some())
+    {
+        policy.track = Some(TrackHighlightPolicy {
+            place: [color(track, "place_yes")?, color(track, "place_no")?],
+            steep: color(track, "too_steep")?,
+            endpoint: [
+                color(track, "endpoint_highlight1")?,
+                color(track, "endpoint_highlight2")?,
+            ],
+            station: [
+                color(track, "station_highlight1")?,
+                color(track, "station_highlight2")?,
+            ],
+            color_interval_seconds: interval(track)?,
+        });
+    }
+    if let Some(deletion) = find_mode(&document.root, "ZTDeleteMode")
+        .filter(|mode| mode.attribute_named_any(&["colorAnimationCycle"]).is_some())
+    {
+        policy.deletion = Some(TransportDeletionHighlightPolicy {
+            colors: [color(deletion, "mouseover")?, color(deletion, "alternate")?],
+            color_interval_seconds: interval(deletion)?,
+        });
+    }
+    Ok((policy != TransportHighlightPolicy::default()).then_some(policy))
 }

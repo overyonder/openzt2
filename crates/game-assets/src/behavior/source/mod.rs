@@ -249,21 +249,13 @@ fn lower_behavior_action_nodes<'a>(
 
     let mut lowered_actions = Vec::new();
     for action_node in nodes {
-        // An animated detach lowers to its clip and then the detach itself.
         let lowered =
-            match action::attach_object_action_lowering::lower_animated_detach_object_actions(
+            match action::attach_object_action_lowering::lower_animated_detach_object_action(
                 action_node,
             ) {
-                Ok(Some(actions)) => Ok(actions.to_vec()),
-                Ok(None) => {
-                    match action::termination_action_lowering::lower_fence_kill_actions(action_node)
-                    {
-                        Ok(Some(actions)) => Ok(actions.to_vec()),
-                        Ok(None) => action::lower_one_behavior_action_source_node(action_node)
-                            .map(|action| vec![action]),
-                        Err(error) => Err(error),
-                    }
-                }
+                Ok(Some(action)) => Ok(vec![action]),
+                Ok(None) => action::lower_one_behavior_action_source_node(action_node)
+                    .map(|action| vec![action]),
                 Err(error) => Err(error),
             };
         match lowered {

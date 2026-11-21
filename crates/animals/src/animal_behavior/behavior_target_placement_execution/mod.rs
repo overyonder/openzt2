@@ -1,7 +1,7 @@
 //! Choose the authored carried object, run its delivery set, then put it down.
 
 use super::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation;
-use bevy::{ecs::message::MessageCursor, prelude::*};
+use bevy::prelude::*;
 use openzt2_game_assets::{
     behavior::behavior_asset_types::{BehaviorDocumentAsset, LoadedBehaviorDocumentCollection},
     scene_prefab::ScenePrefabAsset,
@@ -39,8 +39,7 @@ use super::behavior_target_placement_types::{
 
 pub(super) fn invalidate_obsolete_behavior_target_placement_sites(
     (definitions, definition_assets): (Res<WorldDefinitions>, Res<Assets<WorldDefinitionAsset>>),
-    prefab_events: Option<Res<Messages<AssetEvent<ScenePrefabAsset>>>>,
-    mut cursor: Local<MessageCursor<AssetEvent<ScenePrefabAsset>>>,
+    prefab_events: Option<MessageReader<AssetEvent<ScenePrefabAsset>>>,
     placements: Query<(
         Entity,
         &BehaviorPlacementOf,
@@ -52,10 +51,9 @@ pub(super) fn invalidate_obsolete_behavior_target_placement_sites(
     mut commands: Commands,
 ) {
     let changed_prefabs = prefab_events
-        .as_deref()
-        .map(|events| {
-            cursor
-                .read(events)
+        .map(|mut events| {
+            events
+                .read()
                 .filter_map(|event| match *event {
                     AssetEvent::Modified { id } | AssetEvent::Removed { id } => Some(id),
                     _ => None,

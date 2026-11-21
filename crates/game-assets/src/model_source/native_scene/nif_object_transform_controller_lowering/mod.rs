@@ -33,117 +33,176 @@ type Result<T> = std::result::Result<T, NativeSceneLoweringError>;
 const NETIMMERSE_CONTROLLER_ACTIVE_FLAG: u16 = 1 << 3;
 const NETIMMERSE_XYZ_ROTATION_KEY_TYPE: u32 = 4;
 
-/// What an object's first transform controller does to its local transform.
-pub(super) enum NetImmerseObjectTransformMotion {
-    None,
-    RotationCycle([f32; 3]),
-    /// Every keyed channel holds one value for the whole controller interval,
-    /// so the controller only replaces the authored pose.
-    ConstantPose {
-        translation_m: Option<[f32; 3]>,
-        rotation_xyzw: Option<[f32; 4]>,
-        uniform_scale: Option<f32>,
-    },
-    Animation(Box<PrefabTransformAnimation>),
+#[derive(Default)]
+pub(super) struct NetImmerseObjectTransformMotion {
+    pub(super) translation_m: Option<[f32; 3]>,
+    pub(super) rotation_xyzw: Option<[f32; 4]>,
+    pub(super) uniform_scale: Option<f32>,
+    pub(super) spin: Option<[f32; 3]>,
+    pub(super) animations: Vec<PrefabTransformAnimation>,
 }
 
 pub(super) fn lower_netimmerse_object_transform_motion(
     document: &NetImmerseNifDocument,
     object: &NetImmerseNiAvObject,
 ) -> Result<NetImmerseObjectTransformMotion> {
-    let Some(controller) = first_keyframe_controller_in_object_chain(document, object)? else {
-        return Ok(NetImmerseObjectTransformMotion::None);
-    };
-    let duration = controller.controller.stop_time - controller.controller.start_time;
-    if controller.controller.flags & NETIMMERSE_CONTROLLER_ACTIVE_FLAG == 0 || duration <= 0.0 {
-        return Ok(NetImmerseObjectTransformMotion::None);
-    }
-    let data_block = document.block(controller.data_ref).ok_or_else(|| {
-        NativeSceneLoweringError::new(
-            &document.source_path,
-            format!(
-                "references missing NIF keyframe data block {}",
-                controller.data_ref
-            ),
-        )
-    })?;
-    let NetImmerseNifBlockPayload::NiKeyframeData(data) = &data_block.payload else {
-        return Err(NativeSceneLoweringError::new(
-            &document.source_path,
-            format!(
-                "keyframe controller references {:?} instead of NiKeyframeData",
-                data_block.payload
-            ),
-        ));
-    };
-    if let Some(speed) = constant_xyz_rotation_cycle(controller, data, duration) {
-        return Ok(NetImmerseObjectTransformMotion::RotationCycle(speed));
-    }
-    lower_netimmerse_keyframe_data_transform_motion(&document.source_path, controller, data)
-}
-
-fn first_keyframe_controller_in_object_chain<'document>(
-    document: &'document NetImmerseNifDocument,
-    object: &NetImmerseNiAvObject,
-) -> Result<Option<&'document NetImmerseNiKeyframeController>> {
-    let mut controller_reference = object.object.controller_ref;
+    let mut motion = NetImmerseObjectTransformMotion::default();
+    let mut reference = object.object.controller_ref;
     let mut visited = BTreeSet::new();
-    loop {
-        if controller_reference < 0 {
-            return Ok(None);
-        }
-        if !visited.insert(controller_reference) {
+    while reference >= 0 {
+        if !visited.insert(reference) {
             return Err(NativeSceneLoweringError::new(
                 &document.source_path,
                 "contains a cyclic NIF object controller chain",
             ));
         }
-        let block = document.block(controller_reference).ok_or_else(|| {
+        let block = document.block(reference).ok_or_else(|| {
             NativeSceneLoweringError::new(
                 &document.source_path,
-                format!("references missing NIF controller block {controller_reference}"),
+                format!("references missing NIF controller block {reference}"),
             )
         })?;
-        match &block.payload {
-            NetImmerseNifBlockPayload::NiKeyframeController(value) => return Ok(Some(value)),
-            NetImmerseNifBlockPayload::NiUVController(value) => {
-                // UV controllers are lowered with their geometry material and
-                // evaluated through its persistent texture-transform buffer.
-                let target = document.block(value.controller.target_ref).ok_or_else(|| {
-                    NativeSceneLoweringError::new(
-                        &document.source_path,
-                        "missing UV controller target",
-                    )
-                })?;
-                if !matches!(
-                    target.payload,
-                    NetImmerseNifBlockPayload::NiTriShape(_)
-                        | NetImmerseNifBlockPayload::NiTriStrips(_)
-                ) {
+        reference = match &block.payload {
+            NetImmerseNifBlockPayload::NiKeyframeController(keyframe) => {
+                if keyframe.controller.flags & NETIMMERSE_CONTROLLER_ACTIVE_FLAG != 0 {
+                    motion.apply_keyframe_controller(document, keyframe)?;
+                }
+                keyframe.controller.next_controller_ref
+            }
+            NetImmerseNifBlockPayload::NiUVController(uv) => {
+                let is_geometry = document
+                    .block(uv.controller.target_ref)
+                    .is_some_and(|target| {
+                        matches!(
+                            target.payload,
+                            NetImmerseNifBlockPayload::NiTriShape(_)
+                                | NetImmerseNifBlockPayload::NiTriStrips(_)
+                        )
+                    });
+                if !is_geometry {
                     return Err(NativeSceneLoweringError::new(
                         &document.source_path,
                         "UV controller target is not supported geometry",
                     ));
                 }
-                controller_reference = value.controller.next_controller_ref;
+                uv.controller.next_controller_ref
             }
-            NetImmerseNifBlockPayload::NiVisController(value)
-                if value.controller.flags & NETIMMERSE_CONTROLLER_ACTIVE_FLAG == 0 =>
+            NetImmerseNifBlockPayload::NiVisController(visibility)
+                if visibility.controller.flags & NETIMMERSE_CONTROLLER_ACTIVE_FLAG == 0 =>
             {
-                // An inactive visibility controller does not animate visibility,
-                // but its linked successor can still own a transform controller.
-                controller_reference = value.controller.next_controller_ref;
+                visibility.controller.next_controller_ref
             }
-            NetImmerseNifBlockPayload::NiBoneLODController(_) => return Ok(None),
+            NetImmerseNifBlockPayload::NiBoneLODController(lod) => {
+                lod.controller.next_controller_ref
+            }
             other => {
                 return Err(NativeSceneLoweringError::new(
                     &document.source_path,
-                    format!(
-                        "uses unsupported object controller {other:?} at block {controller_reference}"
-                    ),
+                    format!("uses unsupported object controller {other:?} at block {reference}"),
                 ));
             }
+        };
+    }
+    motion.animations.retain(|animation| {
+        animation.translation_m.is_some()
+            || animation.rotation.is_some()
+            || animation.uniform_scale.is_some()
+    });
+    Ok(motion)
+}
+
+impl NetImmerseObjectTransformMotion {
+    fn apply_keyframe_controller(
+        &mut self,
+        document: &NetImmerseNifDocument,
+        keyframe: &NetImmerseNiKeyframeController,
+    ) -> Result<()> {
+        let Some(data_block) = document.block(keyframe.data_ref) else {
+            if keyframe.data_ref < 0 {
+                return Ok(());
+            }
+            return Err(NativeSceneLoweringError::new(
+                &document.source_path,
+                format!(
+                    "references missing NIF keyframe data block {}",
+                    keyframe.data_ref
+                ),
+            ));
+        };
+        let NetImmerseNifBlockPayload::NiKeyframeData(data) = &data_block.payload else {
+            return Err(NativeSceneLoweringError::new(
+                &document.source_path,
+                format!(
+                    "keyframe controller references {:?} instead of NiKeyframeData",
+                    data_block.payload
+                ),
+            ));
+        };
+        let duration = keyframe.controller.stop_time - keyframe.controller.start_time;
+        let spin = (duration > 0.0)
+            .then(|| constant_xyz_rotation_cycle(keyframe, data, duration))
+            .flatten();
+        let animation =
+            lower_netimmerse_keyframe_data_transform_motion(&document.source_path, keyframe, data)?;
+        let replaces_translation = animation.translation_m.is_some();
+        let replaces_rotation = animation.rotation.is_some();
+        let replaces_scale = animation.uniform_scale.is_some();
+
+        // The linked controllers write in order. Only a channel with keys
+        // in a later controller supersedes a write to that channel.
+        for earlier in &mut self.animations {
+            if replaces_translation {
+                earlier.translation_m = None;
+            }
+            if replaces_rotation {
+                earlier.rotation = None;
+            }
+            if replaces_scale {
+                earlier.uniform_scale = None;
+            }
         }
+        if replaces_rotation {
+            self.spin = spin;
+        }
+        if spin.is_some() {
+            return Ok(());
+        }
+
+        let fixed_translation = animation.translation_m.as_ref().map(|[x, y, z]| {
+            Some([
+                constant_prefab_curve_value(x)?,
+                constant_prefab_curve_value(y)?,
+                constant_prefab_curve_value(z)?,
+            ])
+        });
+        let fixed_rotation = animation.rotation.as_ref().map(constant_prefab_rotation);
+        let fixed_scale = animation
+            .uniform_scale
+            .as_ref()
+            .map(constant_prefab_curve_value);
+        if fixed_translation.as_ref().is_none_or(Option::is_some)
+            && fixed_rotation.as_ref().is_none_or(Option::is_some)
+            && fixed_scale.as_ref().is_none_or(Option::is_some)
+        {
+            self.translation_m = fixed_translation.flatten().or(self.translation_m);
+            self.rotation_xyzw = fixed_rotation.flatten().or(self.rotation_xyzw);
+            self.uniform_scale = fixed_scale.flatten().or(self.uniform_scale);
+        } else if let Some(earlier) = self
+            .animations
+            .iter_mut()
+            .find(|earlier| earlier.clock == animation.clock)
+        {
+            earlier.translation_m = animation
+                .translation_m
+                .or_else(|| earlier.translation_m.take());
+            earlier.rotation = animation.rotation.or_else(|| earlier.rotation.take());
+            earlier.uniform_scale = animation
+                .uniform_scale
+                .or_else(|| earlier.uniform_scale.take());
+        } else {
+            self.animations.push(animation);
+        }
+        Ok(())
     }
 }
 
@@ -171,7 +230,7 @@ fn lower_netimmerse_keyframe_data_transform_motion(
     source_path: &str,
     controller: &NetImmerseNiKeyframeController,
     data: &NetImmerseNiKeyframeData,
-) -> Result<NetImmerseObjectTransformMotion> {
+) -> Result<PrefabTransformAnimation> {
     let lower_curve = |group: &NetImmerseFloatKeyGroup| {
         lower_netimmerse_float_key_group_to_prefab_curve(source_path, group)
     };
@@ -217,40 +276,18 @@ fn lower_netimmerse_keyframe_data_transform_motion(
     } else {
         Some(lower_curve(&data.scales)?)
     };
-    let constant_translation = translation_m.as_ref().map(|curves| {
-        curves
-            .iter()
-            .map(constant_prefab_curve_value)
-            .collect::<Option<Vec<_>>>()
-    });
-    let constant_rotation = rotation.as_ref().map(constant_prefab_rotation);
-    let constant_scale = uniform_scale.as_ref().map(constant_prefab_curve_value);
-    if constant_translation.as_ref().is_none_or(Option::is_some)
-        && constant_rotation.as_ref().is_none_or(Option::is_some)
-        && constant_scale.as_ref().is_none_or(Option::is_some)
-    {
-        return Ok(NetImmerseObjectTransformMotion::ConstantPose {
-            translation_m: constant_translation
-                .flatten()
-                .map(|values| [values[0], values[1], values[2]]),
-            rotation_xyzw: constant_rotation.flatten(),
-            uniform_scale: constant_scale.flatten(),
-        });
-    }
-    Ok(NetImmerseObjectTransformMotion::Animation(Box::new(
-        PrefabTransformAnimation {
-            clock: PrefabControllerClock {
-                flags: controller.controller.flags,
-                frequency: controller.controller.frequency,
-                phase: controller.controller.phase,
-                start_time_s: controller.controller.start_time,
-                stop_time_s: controller.controller.stop_time,
-            },
-            translation_m,
-            rotation,
-            uniform_scale,
+    Ok(PrefabTransformAnimation {
+        clock: PrefabControllerClock {
+            flags: controller.controller.flags,
+            frequency: controller.controller.frequency,
+            phase: controller.controller.phase,
+            start_time_s: controller.controller.start_time,
+            stop_time_s: controller.controller.stop_time,
         },
-    )))
+        translation_m,
+        rotation,
+        uniform_scale,
+    })
 }
 
 fn float_key_group_from_vector3_component(

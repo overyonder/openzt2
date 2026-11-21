@@ -3,12 +3,9 @@ use bevy::{
     prelude::*,
 };
 
-use openzt2_zoo_state::{
-    construction::construction_transaction_types::{EditCommitPhase, EditCommitProgress},
-    terrain::{
-        terrain_edit_types::TerrainEdit,
-        terrain_water_presentation_types::{TerrainWaterRegionRetired, TerrainWaterRegionSource},
-    },
+use openzt2_zoo_state::terrain::{
+    terrain_edit_types::TerrainEdit,
+    terrain_water_presentation_types::{TerrainWaterRegionRetired, TerrainWaterRegionSource},
 };
 
 #[derive(Component)]
@@ -46,23 +43,6 @@ pub(in crate::terrain) fn release_water_owners_from_discarded_terrain_edit(
     if let Ok(children) = children.get(discarded.entity) {
         for edge in children.iter().filter(|&edge| retainers.contains(edge)) {
             commands.entity(edge).try_despawn();
-        }
-    }
-}
-
-pub(in crate::terrain) fn release_water_owners_from_failed_transactions(
-    mut commands: Commands,
-    edits: Query<
-        (&EditCommitProgress, &Children),
-        (With<TerrainEdit>, Changed<EditCommitProgress>),
-    >,
-    retainers: Query<(), With<WaterRegionRetainedByEdit>>,
-) {
-    for (progress, children) in &edits {
-        if progress.phase == EditCommitPhase::Failed {
-            for edge in children.iter().filter(|&edge| retainers.contains(edge)) {
-                commands.entity(edge).try_despawn();
-            }
         }
     }
 }

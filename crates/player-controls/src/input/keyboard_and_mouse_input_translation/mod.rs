@@ -7,6 +7,7 @@ use bevy::{
 use openzt2_interface_state::input::input_chord_queries::either_keyboard_modifier_key_is_pressed;
 use openzt2_interface_state::input::input_chord_queries::input_chord_was_just_pressed_by_keyboard_or_mouse;
 
+use openzt2_interface_state::camera::camera_runtime_state_types::{CameraMode, ZooCamera};
 use openzt2_interface_state::input::input_types::GameAction;
 
 use super::input_types::GameActionInputBinding;
@@ -31,6 +32,7 @@ pub(super) fn sample_keyboard_and_mouse(
     accumulated_mouse_motion: Res<AccumulatedMouseMotion>,
     accumulated_mouse_scroll: Res<AccumulatedMouseScroll>,
     bindings: Res<GameActionInputBindings>,
+    cameras: Query<&CameraMode, With<ZooCamera>>,
     mut sample: ResMut<KeyboardMouseSample>,
 ) {
     sample.actions.clear();
@@ -51,6 +53,9 @@ pub(super) fn sample_keyboard_and_mouse(
             sample.actions.push(GameAction::Cancel);
         }
     }
+    let first_person = cameras
+        .single()
+        .is_ok_and(|mode| matches!(mode, CameraMode::FirstPerson(_)));
     let mut magnitude = [None; 6];
     for binding in bindings.entries.iter() {
         let axis = match binding.action {
@@ -73,11 +78,13 @@ pub(super) fn sample_keyboard_and_mouse(
                 }),
             ));
         }
-        if game_action_binding_was_just_pressed_by_keyboard_or_mouse(
-            binding,
-            keyboard,
-            &mouse_buttons,
-        ) {
+        if (first_person || binding.action != GameAction::UseObject)
+            && game_action_binding_was_just_pressed_by_keyboard_or_mouse(
+                binding,
+                keyboard,
+                &mouse_buttons,
+            )
+        {
             sample.actions.push(binding.action);
         }
     }

@@ -70,21 +70,27 @@ fn welfare_uses_canonical_need_mean_and_habitat_cap() {
 }
 
 #[test]
-fn need_points_grow_on_one_branch_and_shrink_the_other() {
+fn need_points_follow_the_authored_branch_rates_and_maximum() {
+    use openzt2_game_data::species::AnimalNeedPointPolicy;
+
+    let policy = AnimalNeedPointPolicy {
+        interval_seconds: 3.0,
+        maximum: 90.0,
+        good_delta: 0.4,
+        bad_delta: 0.2,
+        ..Default::default()
+    };
     let mut points = NeedPoints::default();
-    // 150 updates of 3 s with an unmet need reach a fence bash's 30.
+    let mut branch = Default::default();
     for _ in 0..150 {
-        super::systems::step_need_points(&mut points, true);
+        super::systems::step_need_points(&mut points, &mut branch, &policy, true);
     }
     assert!((points.bad - 30.0).abs() < 1.0e-3);
-    assert_eq!(points.good, 0.0);
-    // A met need takes back one update's worth, not the whole spell.
-    super::systems::step_need_points(&mut points, false);
-    assert!((points.bad - 29.8).abs() < 1.0e-3);
-    assert!((points.good - 0.2).abs() < 1.0e-6);
-    for _ in 0..1000 {
-        super::systems::step_need_points(&mut points, false);
-    }
-    assert_eq!(points.good, 100.0);
+    let credited = super::systems::step_need_points(&mut points, &mut branch, &policy, false);
     assert_eq!(points.bad, 0.0);
+    assert_eq!(credited, (0.4, 0.0));
+    for _ in 0..300 {
+        super::systems::step_need_points(&mut points, &mut branch, &policy, false);
+    }
+    assert_eq!(points.good, 90.0);
 }

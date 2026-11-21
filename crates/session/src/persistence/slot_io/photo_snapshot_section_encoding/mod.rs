@@ -11,6 +11,7 @@ use super::photo_snapshot_types::{PhotoChallengeProgressSnapshotRecord, PhotoSna
 
 const PHOTO_TAG: u8 = 1;
 const PHOTO_CHALLENGE_TAG: u8 = 2;
+const CHALLENGE_COMPLETED_WITHOUT_ALBUM_PHOTO: u8 = 1 << 7;
 
 pub(super) fn append_encoded_photo_snapshot_section(
     bytes: &mut Vec<u8>,
@@ -52,7 +53,11 @@ pub(super) fn append_encoded_photo_snapshot_section(
                 .0
                 .to_le_bytes(),
         );
-        bytes.push(challenge.rating_stars);
+        let mut rating = challenge.rating_stars;
+        if challenge.completed && challenge.completed_by_photo_persistent_identifier.is_none() {
+            rating |= CHALLENGE_COMPLETED_WITHOUT_ALBUM_PHOTO;
+        }
+        bytes.push(rating);
     }
 }
 
@@ -174,9 +179,11 @@ pub(super) fn decode_and_validate_photo_snapshot_section(
             let completed = PersistentId(u64::from_le_bytes(
                 record[16..24].try_into().unwrap_or([0; 8]),
             ));
-            let rating_stars = record[24];
+            let completed_without_photo = record[24] & CHALLENGE_COMPLETED_WITHOUT_ALBUM_PHOTO != 0;
+            let rating_stars = record[24] & !CHALLENGE_COMPLETED_WITHOUT_ALBUM_PHOTO;
             cursor += 25;
             if rating_stars > 5
+                || (completed_without_photo && completed.0 != 0)
                 || challenges
                     .last()
                     .is_some_and(|prior: &PhotoChallengeProgressSnapshotRecord| {
@@ -187,6 +194,7 @@ pub(super) fn decode_and_validate_photo_snapshot_section(
             }
             challenges.push(PhotoChallengeProgressSnapshotRecord {
                 challenge_definition_identifier,
+                completed: completed.0 != 0 || completed_without_photo,
                 completed_by_photo_persistent_identifier: (completed.0 != 0).then_some(completed),
                 rating_stars,
             });

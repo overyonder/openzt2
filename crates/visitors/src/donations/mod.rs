@@ -15,6 +15,7 @@ mod zoo_donation_summary_presentation;
 use bevy::prelude::*;
 
 use openzt2_world_state::application_schedule::FixedGameSet;
+use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 
 use self::{
     donation_candidate_selection::choose_donation_candidates_from_new_guest_observations,
@@ -54,7 +55,7 @@ impl Plugin for GuestDonationDecisionAndPaymentPlugin {
             .add_message::<DonationRequest>()
             .add_message::<DonationCompleted>()
             .add_message::<DonationRejected>()
-            .init_resource::<ZooDonationSummary>()
+            .register_required_components::<WorldRoot, ZooDonationSummary>()
             .add_systems(
                 Update,
                 (aggregate_zoo_donations_by_category, project_zoo_donation_summary.after_ignore_deferred(aggregate_zoo_donations_by_category)),

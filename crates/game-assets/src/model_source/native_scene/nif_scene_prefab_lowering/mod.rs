@@ -117,20 +117,15 @@ fn visit_netimmerse_scene_block(
         NetImmerseNifBlockPayload::NiParticles(_) | NetImmerseNifBlockPayload::NiParticleMeshes(_)
     );
     let transform_motion = if object_controller_is_owned_by_particle_simulation {
-        NetImmerseObjectTransformMotion::None
+        NetImmerseObjectTransformMotion::default()
     } else {
         lower_netimmerse_object_transform_motion(document, object)?
     };
-    if let NetImmerseObjectTransformMotion::ConstantPose {
-        translation_m: constant_translation_m,
-        rotation_xyzw: constant_rotation_xyzw,
-        uniform_scale: constant_uniform_scale,
-    } = &transform_motion
-    {
-        translation_m = constant_translation_m.unwrap_or(translation_m);
-        rotation_xyzw = constant_rotation_xyzw.unwrap_or(rotation_xyzw);
-        scale = constant_uniform_scale.map_or(scale, |value| [value; 3]);
-    }
+    translation_m = transform_motion.translation_m.unwrap_or(translation_m);
+    rotation_xyzw = transform_motion.rotation_xyzw.unwrap_or(rotation_xyzw);
+    scale = transform_motion
+        .uniform_scale
+        .map_or(scale, |value| [value; 3]);
     let node_lod = bone_lod.nodes.get(&block_ref);
     let shape_lod = bone_lod.shapes.get(&block_ref);
     let visible = node_lod.map_or_else(
@@ -314,18 +309,11 @@ fn visit_netimmerse_scene_block(
         }
         _ => {}
     }
-    match transform_motion {
-        NetImmerseObjectTransformMotion::RotationCycle(speed) => builder.rotation_cycle(
-            entity,
-            PrefabRotationCycle {
-                radians_per_second: speed,
-            },
-        ),
-        NetImmerseObjectTransformMotion::Animation(animation) => {
-            builder.transform_animation(entity, *animation);
-        }
-        NetImmerseObjectTransformMotion::None
-        | NetImmerseObjectTransformMotion::ConstantPose { .. } => {}
+    if let Some(radians_per_second) = transform_motion.spin {
+        builder.rotation_cycle(entity, PrefabRotationCycle { radians_per_second });
+    }
+    for animation in transform_motion.animations {
+        builder.transform_animation(entity, animation);
     }
     if object.collision_object_ref >= 0 {
         if let Some(NetImmerseNifBlockPayload::NiCollisionData(collision)) = document

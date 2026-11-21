@@ -17,7 +17,7 @@ use openzt2_interface_state::photos::photo_challenge_types::{
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
 use super::photo_capture_types::{CapturedPhotoEvidence, PendingPhotoScore, PhotoCaptured};
-use super::photo_challenge_lua_scoring_types::PhotoChallengeScorer;
+use super::photo_challenge_lua_scoring_types::{PhotoChallengeScorer, PhotoRuleScriptContext};
 
 pub(super) fn score_pending_photos_against_incomplete_lua_challenges(
     assets: Res<Assets<WorldScenarioDocumentAsset>>,
@@ -28,8 +28,9 @@ pub(super) fn score_pending_photos_against_incomplete_lua_challenges(
     mut challenges: Query<(
         &PhotoChallenge,
         &mut PhotoChallengeProgress,
-        &mut PhotoChallengeScorer,
+        &PhotoRuleScriptContext,
     )>,
+    mut scoring_contexts: Query<&mut PhotoChallengeScorer>,
     mut photos: Query<
         (Entity, &WorldMember, &mut Photo, &CapturedPhotoEvidence),
         With<PendingPhotoScore>,
@@ -51,7 +52,7 @@ pub(super) fn score_pending_photos_against_incomplete_lua_challenges(
         let mut best = 0;
         if let Ok(entries) = worlds.get(world.root) {
             let selected = evidence
-                .1
+                .challenge_set
                 .and_then(|id| entries.sets.get(&id))
                 .and_then(|&entity| sets.get(entity).ok());
             if let Some(record) = selected.and_then(|set| {
@@ -61,7 +62,7 @@ pub(super) fn score_pending_photos_against_incomplete_lua_challenges(
                     .find_photo_challenge_set(set.id)
             }) {
                 let subject = evidence
-                    .0
+                    .subjects
                     .iter()
                     .max_by_key(|item| {
                         u32::from(item.facts.screen_permille)
@@ -72,8 +73,7 @@ pub(super) fn score_pending_photos_against_incomplete_lua_challenges(
                     let Some(&entity) = entries.rules.get(&member.challenge) else {
                         continue;
                     };
-                    let Ok((challenge, mut progress, mut scorer)) = challenges.get_mut(entity)
-                    else {
+                    let Ok((challenge, mut progress, context)) = challenges.get_mut(entity) else {
                         continue;
                     };
                     if progress.completed {
@@ -96,6 +96,9 @@ pub(super) fn score_pending_photos_against_incomplete_lua_challenges(
                     };
                     let Some((path, script)) = asset.photo_script(binding) else {
                         error!(script = %binding.script, "photo challenge Lua scorer is not loaded");
+                        continue;
+                    };
+                    let Ok(mut scorer) = scoring_contexts.get_mut(context.0) else {
                         continue;
                     };
                     let score = match scorer.score(

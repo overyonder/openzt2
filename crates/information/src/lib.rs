@@ -28,6 +28,7 @@ pub struct InformationPlugin;
 
 impl Plugin for InformationPlugin {
     fn build(&self, app: &mut App) {
+        projection::information_list_membership::install_management_list_memberships(app);
         app.add_observer(overview::overview_map_marker_operations::retire_overview_markers_when_subject_loses_inspectability);
         app.add_observer(projection::entity_editor_data_root_projection::unlink_retired_inspectable_world_subjects)
             .add_systems(
@@ -131,13 +132,13 @@ impl Plugin for InformationPlugin {
                         catalogue::catalogue_preview_scene_projection::apply_authored_catalogue_preview_initial_animation_repetition_policy_after_attachment,
                     ).chain(),
                     catalogue::catalogue_page_projection::project_catalogue_page,
-                    projection::selected_entity_identity_projection::project_selected_entity_identity_to_authored_panel_members,
-                    projection::selected_entity_identity_projection::project_selected_entity_name_to_authored_editable_fields,
+                    projection::selected_entity_identity_projection::project_selected_entity_identity_to_authored_panel_members.after(projection::panel_binding_families::bind_information_panel_fields),
+                    projection::selected_entity_identity_projection::project_selected_entity_name_to_authored_editable_fields.after(projection::panel_binding_families::bind_information_panel_fields),
                     projection::selected_entity_identity_projection::project_live_zoo_name_to_authored_editable_fields,
                     projection::selected_animal_need_list_projection::request_selected_animal_need_list_row_counts,
                     projection::selected_animal_need_list_projection::project_selected_animal_needs_to_authored_list_rows,
-                    projection::animal_need_and_health_projection::project_live_animal_needs_to_visible_information_panels,
-                    projection::animal_need_and_health_projection::project_live_animal_health_to_visible_information_panels,
+                    projection::animal_need_and_health_projection::project_live_animal_needs_to_visible_information_panels.after(projection::panel_binding_families::bind_information_panel_fields),
+                    projection::animal_need_and_health_projection::project_live_animal_health_to_visible_information_panels.after(projection::panel_binding_families::bind_information_panel_fields),
                     (
                         (
                             selected_entity_ui_broadcasts::index_projected_selected_entity_ui_broadcast_targets,
@@ -154,19 +155,40 @@ impl Plugin for InformationPlugin {
             .add_systems(
                 Update,
                 (
+                    projection::fame_presentation::bind_authored_fame_fields,
+                    projection::fame_presentation::project_fame_values_into_authored_fields,
+                ).chain()
+                    .after(openzt2_interface_state::ui::UiSet::Projection)
+                    .before(openzt2_interface_state::ui::UiSet::Behavior)
+                    .in_set(GameSet::Ui)
+                    .run_if(in_state(GamePhase::InGame)),
+            )
+            .add_systems(
+                Update,
+                projection::panel_binding_families::bind_information_panel_fields
+                    .after(openzt2_interface_state::ui::UiSet::Projection)
+                    .before(openzt2_interface_state::ui::UiSet::Behavior)
+                    .in_set(GameSet::Ui)
+                    .run_if(in_state(GamePhase::InGame)),
+            )
+            .add_systems(
+                Update,
+                (
                     projection::selected_animal_summary_projection::project_selected_entity_information_section_visibility,
-                    projection::selected_animal_summary_projection::project_selected_animal_identity_health_and_action_summary,
+                    projection::selected_animal_summary_projection::project_selected_animal_identity_health_and_action_summary.after(projection::panel_binding_families::bind_information_panel_fields),
                     projection::animal_pickup_release_information_projection::project_selected_animal_pickup_release_and_conservation_controls,
-                    projection::guest_status_projection::project_live_guest_status_to_visible_information_panels,
-                    projection::staff_status_projection::project_maintenance_worker_duties_to_information_panel_controls,
-                    projection::staff_status_projection::project_live_staff_status_to_visible_information_panels,
+                    projection::guest_status_projection::project_live_guest_status_to_visible_information_panels.after(projection::panel_binding_families::bind_information_panel_fields),
+                    projection::staff_status_projection::project_maintenance_worker_duties_to_information_panel_controls.after(projection::panel_binding_families::bind_information_panel_fields),
+                    projection::staff_status_projection::project_live_staff_status_to_visible_information_panels.after(projection::panel_binding_families::bind_information_panel_fields),
                     projection::zoo_status_projection::project_live_zoo_status_to_authored_information_bindings,
                     projection::animal_alert_button_projection::project_animal_alerts_to_find_animal_buttons,
                     (
                         projection::information_list_projection::project_live_world_entities_to_visible_information_list_rows,
                         projection::entity_editor_data_root_projection::project_inspectable_entities_to_visible_entity_editor_data_roots,
-                    ).before(projection::information_list_row_identity_projection::project_world_subject_identity_to_information_list_rows)
-                     .before(projection::information_list_row_value_projection::project_live_world_subject_values_to_information_list_rows),
+                    ).before(projection::information_row_field_binding::bind_authored_information_row_fields),
+                    projection::information_row_field_binding::bind_authored_information_row_fields
+                        .before(projection::information_list_row_identity_projection::project_world_subject_identity_to_information_list_rows)
+                        .before(projection::information_list_row_value_projection::project_live_world_subject_values_to_information_list_rows),
                     projection::information_list_row_identity_projection::project_world_subject_identity_to_information_list_rows,
                     projection::information_list_row_value_projection::project_live_world_subject_values_to_information_list_rows,
                 )
@@ -228,11 +250,11 @@ impl Plugin for InformationPlugin {
                     ).chain().after(openzt2_interface_state::ui::UiSet::Projection),
                     overview::overview_map_marker_operations::project_overhead_camera_position_to_overview_map_marker,
                     overview::overview_map_marker_operations::request_entity_selection_from_pressed_overview_map_markers,
-                    projection::maintenance_status_projection::project_live_maintenance_status_to_visible_information_panels,
-                    projection::facility_status_projection::project_selected_facility_status_to_visible_information_panels,
-                    projection::habitat_and_tank_status_projection::project_selected_habitat_and_tank_status_to_visible_information_panels,
-                    projection::show_status_projection::project_selected_show_schedule_status_to_visible_information_panels,
-                    projection::transport_status_projection::project_selected_transport_status_to_visible_information_panels,
+                    projection::maintenance_status_projection::project_live_maintenance_status_to_visible_information_panels.after(projection::panel_binding_families::bind_information_panel_fields),
+                    projection::facility_status_projection::project_selected_facility_status_to_visible_information_panels.after(projection::panel_binding_families::bind_information_panel_fields),
+                    projection::habitat_and_tank_status_projection::project_selected_habitat_and_tank_status_to_visible_information_panels.after(projection::panel_binding_families::bind_information_panel_fields),
+                    projection::show_status_projection::project_selected_show_schedule_status_to_visible_information_panels.after(projection::panel_binding_families::bind_information_panel_fields),
+                    projection::transport_status_projection::project_selected_transport_status_to_visible_information_panels.after(projection::panel_binding_families::bind_information_panel_fields),
                     projection::scenario_status_projection::project_active_scenario_status_to_authored_information_bindings,
                     projection::progression_status_projection::project_progression_status_to_authored_information_bindings,
                 )

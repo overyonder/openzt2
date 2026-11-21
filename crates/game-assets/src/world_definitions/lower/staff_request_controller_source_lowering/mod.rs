@@ -383,7 +383,13 @@ pub(super) fn lower_authored_staff_request_data(
                 })
         })?,
         target: authored_reference(target),
-        staff: authored_reference(staff),
+        staff: staff
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| {
+                parse_blue_fang_source_numeric_lexeme::<u64>(value)
+                    .map_or_else(|| id(value), |identifier| id(&identifier.to_string()))
+            }),
     })
 }
 

@@ -6,6 +6,7 @@ pub struct AnimationJointTarget {
     #[relationship]
     pub animation_playback_controller_entity: Entity,
     pub joint_asset_key: String,
+    pub authored_joint_id: openzt2_game_data::AssetId,
 }
 
 #[derive(Component, Debug)]

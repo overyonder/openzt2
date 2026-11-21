@@ -50,6 +50,11 @@ pub(super) fn lower_one_behavior_action_source_node(
     {
         return Ok(action);
     }
+    if let Some(action) =
+        termination_action_lowering::lower_whap_action_source_node(behavior_action_source_node)?
+    {
+        return Ok(action);
+    }
     if let Some(action) = face_target_action_lowering::lower_face_target_action_source_node(
         behavior_action_source_node,
     )? {
@@ -276,11 +281,6 @@ fn lower_traversal_or_morph(node: &DataNode) -> io::Result<Option<BehaviorAction
             let definition = openzt2_game_data::AssetId::from_key(
                 &required("morphTargetEntityType")?.to_ascii_lowercase(),
             );
-            if matches!(recipient, BehaviorMorphRecipient::Target)
-                && definition == openzt2_game_data::AssetId::from_key("s_broken")
-            {
-                return Ok(Some(BehaviorAction::MorphTarget(definition)));
-            }
             let seconds = read_optional_float_attribute(node, "morphPeriod")?.unwrap_or_default();
             let period = std::time::Duration::try_from_secs_f32(seconds)
                 .map_err(|_| invalid_behavior_source_data("invalid morphPeriod"))?;

@@ -131,6 +131,12 @@ impl FenceTerrainFittingObservation<'_, '_> {
         }
     }
 
+    pub fn is_active(&self) -> bool {
+        self.history
+            .as_ref()
+            .is_some_and(|history| history.lifetime.is_some())
+    }
+
     pub fn observes_owner(&self, entity: Entity) -> bool {
         let Some((_, _, root)) = self.history.as_ref().and_then(|history| history.lifetime) else {
             return false;

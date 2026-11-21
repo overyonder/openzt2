@@ -50,12 +50,20 @@ impl ActiveQueueWait {
 
 pub(super) fn register_queue_wait_execution(application: &mut App) {
     use openzt2_game_assets::application_lifecycle::GamePhase;
-    use openzt2_world_state::application_schedule::FixedGameSet;
-    application.add_observer(start::apply_queue_wait_admission).add_systems(FixedUpdate, (
-        update::update_queue_wait_deadlines_and_service_readiness,
-        start::start_or_repeat_authored_queue_wait,
-    ).chain()
-        .before(super::behavior_task_phase_transition_execution::advance_behavior_tasks_through_return_failure_completion_and_final_outcome)
-        .in_set(FixedGameSet::Think)
-        .run_if(in_state(GamePhase::InGame)));
+    use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
+        BehaviorStep, BehaviorStepSet,
+    };
+
+    application
+        .add_observer(start::apply_queue_wait_admission)
+        .add_systems(
+            BehaviorStep,
+            (
+                update::update_queue_wait_deadlines_and_service_readiness,
+                start::start_or_repeat_authored_queue_wait,
+            )
+                .chain()
+                .in_set(BehaviorStepSet::Actions)
+                .run_if(in_state(GamePhase::InGame)),
+        );
 }

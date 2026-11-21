@@ -5,6 +5,7 @@ pub mod audio_asset_types;
 pub mod audio_document_asset_loader;
 pub mod source;
 
+use bevy::ecs::schedule::SystemCondition;
 use bevy::{asset::AssetApp, prelude::*};
 
 use self::{
@@ -23,8 +24,10 @@ impl Plugin for AudioAssetPlugin {
             .add_systems(
                 PreUpdate,
                 (
-                    discover_audio_catalogue_sources
-                        .run_if(resource_changed::<crate::asset_source::AssetArchives>),
+                    discover_audio_catalogue_sources.run_if(
+                        resource_added::<crate::asset_source::AssetArchives>
+                            .or_eager(on_message::<crate::asset_source::ArchiveOverlayChanged>),
+                    ),
                     publish_loaded_audio_rows,
                 )
                     .chain()

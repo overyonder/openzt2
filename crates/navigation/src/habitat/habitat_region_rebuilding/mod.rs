@@ -32,27 +32,6 @@ use openzt2_zoo_state::habitat::habitat_types::HabitatSummary;
 use openzt2_zoo_state::habitat::habitat_types::RebuildHabitatRegionsWithinTopologyBounds;
 use openzt2_zoo_state::habitat::habitat_types::{Habitat, HabitatBoundaryFence};
 
-pub(super) fn link_changed_habitat_boundaries(
-    mut commands: Commands,
-    habitats: Query<(Entity, &HabitatRegion, Option<&Children>), Changed<HabitatRegion>>,
-    edges: Query<&HabitatBoundaryFence>,
-) {
-    for (habitat, region, children) in &habitats {
-        let mut desired: bevy::ecs::entity::EntityHashSet =
-            region.boundary_fence_entities.iter().copied().collect();
-        for edge in children.into_iter().flat_map(|children| children.iter()) {
-            if let Ok(fence) = edges.get(edge) {
-                if !desired.remove(&fence.0) {
-                    commands.entity(edge).try_despawn();
-                }
-            }
-        }
-        for fence in desired {
-            commands.spawn((ChildOf(habitat), HabitatBoundaryFence(fence)));
-        }
-    }
-}
-
 #[derive(Component)]
 pub(super) struct HabitatTopologyProjected;
 
@@ -106,6 +85,8 @@ pub(super) fn rebuild_changed_habitat_regions_from_fence_topology_and_terrain(
     rasters: Query<&HabitatBoundaryRaster>,
     terrain_chunks: Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
     world_roots: Query<Entity, With<WorldRoot>>,
+    habitat_children: Query<&Children>,
+    boundary_links: Query<&HabitatBoundaryFence>,
     mut existing_habitats: Query<
         (
             Entity,
@@ -285,7 +266,6 @@ pub(super) fn rebuild_changed_habitat_regions_from_fence_topology_and_terrain(
             area_square_metres: topology_cell_area_square_metres
                 * derived_region.topology_cells.len() as f32,
             topology_cells: derived_region.topology_cells.into_boxed_slice(),
-            boundary_fence_entities: derived_region.boundary_fence_entities.into_boxed_slice(),
         };
         for topology_cell in habitat_region.topology_cells.iter().copied() {
             habitat_index.record_habitat_for_topology_cell(topology_cell, habitat_entity);
@@ -320,6 +300,24 @@ pub(super) fn rebuild_changed_habitat_regions_from_fence_topology_and_terrain(
             if let Some(climate) = habitat_climate {
                 spawned.insert(climate);
             }
+        }
+        let existing_links = habitat_children
+            .get(habitat_entity)
+            .ok()
+            .into_iter()
+            .flat_map(|children| children.iter())
+            .filter_map(|link| Some((link, boundary_links.get(link).ok()?.0)));
+        let desired_fences = &derived_region.boundary_fence_entities;
+        let shared_prefix = existing_links
+            .clone()
+            .zip(desired_fences)
+            .take_while(|((_, existing), desired)| existing == *desired)
+            .count();
+        for (link, _) in existing_links.skip(shared_prefix) {
+            commands.entity(link).try_despawn();
+        }
+        for &fence in &desired_fences[shared_prefix..] {
+            commands.spawn((ChildOf(habitat_entity), HabitatBoundaryFence(fence)));
         }
         habitat_changes.write(HabitatChanged {
             habitat_entity,

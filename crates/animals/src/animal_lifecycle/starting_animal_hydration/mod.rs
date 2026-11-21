@@ -43,7 +43,7 @@ pub(super) fn hydrate_starting_animals(
         ),
         Without<Animal>,
     >,
-    mut worlds: Query<&mut WorldHydration>,
+    worlds: Query<(), (With<WorldHydration>, Without<WorldLoadFailure>)>,
 ) {
     let (Some(seed), Some(clock), Some(species), Some(definitions)) = (
         seed,
@@ -54,9 +54,9 @@ pub(super) fn hydrate_starting_animals(
         return;
     };
     for (entity, saved, id, world, transform, crated) in &pending {
-        let Ok(mut hydration) = worlds.get_mut(world.root) else {
+        if !worlds.contains(world.root) {
             continue;
-        };
+        }
         let mut random = DeterministicRng::from_entity(*seed, *id, RngDomain::AnimalNeeds);
         let Some((species, mut components)) = resolve_scripted_animal_spawn(
             species,
@@ -64,7 +64,9 @@ pub(super) fn hydrate_starting_animals(
             definitions.timing().ticks_per_day,
             &mut random,
         ) else {
-            hydration.record_failure(WorldLoadFailure::MissingDependency(saved.variant));
+            commands
+                .entity(world.root)
+                .try_insert_if_new(WorldLoadFailure::MissingDependency(saved.variant));
             continue;
         };
         // Saved presentation scale already includes the authored variant scale.

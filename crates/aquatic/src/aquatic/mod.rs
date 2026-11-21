@@ -22,6 +22,7 @@ mod water_filter_operation;
 use bevy::prelude::*;
 
 use openzt2_game_assets::application_lifecycle::GamePhase;
+use openzt2_interface_state::ui::UiSet;
 use openzt2_world_state::application_schedule::FixedGameSet;
 use openzt2_world_state::application_schedule::GameSet;
 use openzt2_zoo_state::construction::FixedConstructionPreparedDomainEditMaterializationSet;
@@ -66,8 +67,9 @@ impl Plugin for AquaticPlugin {
             .add_systems(
                 Update,
                 tank_scripted_wall_height::apply_scripted_tank_wall_heights
-                    .after(GameSet::Intent)
-                    .before(GameSet::Ui)
+                    .after(UiSet::DomainProjection)
+                    .before(UiSet::Interaction)
+                    .in_set(GameSet::Ui)
                     .run_if(in_state(GamePhase::InGame)),
             )
             .add_systems(

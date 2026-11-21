@@ -3,7 +3,7 @@ use openzt2_game_data::AssetId;
 
 use openzt2_zoo_state::guests::guest_simulation_types::Guest;
 
-use crate::transport_tours::transport_relationship_cleanup::remove_transport_relationships_broken_by_removed_circuits_stations_tracks_or_vehicles;
+use crate::transport_tours::transport_relationship_cleanup;
 use openzt2_zoo_state::transport_tours::tour_scoring_types::TourObservationCadence;
 use openzt2_zoo_state::transport_tours::tour_scoring_types::TourObservationMemory;
 use openzt2_zoo_state::transport_tours::tour_scoring_types::TourScore;
@@ -14,16 +14,13 @@ use openzt2_zoo_state::transport_tours::transport_vehicle_types::TransportVehicl
 #[test]
 fn removing_transport_vehicle_clears_every_rider_relationship() {
     let mut application = App::new();
-    application.add_systems(
-        Update,
-        remove_transport_relationships_broken_by_removed_circuits_stations_tracks_or_vehicles,
-    );
+    transport_relationship_cleanup::install(&mut application);
     let vehicle_entity = application
         .world_mut()
         .spawn(TransportVehicle {
             definition: AssetId::from_key("vehicle"),
             seats: 2,
-            occupied: 1,
+
             maximum_speed_metres_per_second: 0.25,
         })
         .id();
@@ -32,8 +29,6 @@ fn removing_transport_vehicle_clears_every_rider_relationship() {
         .spawn(TransportStation {
             definition: AssetId::from_key("station"),
             capacity: 4,
-            queued: 0,
-            occupied: 0,
         })
         .id();
     let guest_entity = application
@@ -42,9 +37,10 @@ fn removing_transport_vehicle_clears_every_rider_relationship() {
             Guest,
             TransportRider {
                 vehicle: vehicle_entity,
-                boarded_station: station_entity,
-                seat_index: 0,
             },
+            openzt2_zoo_state::transport_tours::transport_rider_types::BoardedAtStation(
+                station_entity,
+            ),
             TourScore::default(),
             TourObservationMemory::default(),
             TourObservationCadence::default(),

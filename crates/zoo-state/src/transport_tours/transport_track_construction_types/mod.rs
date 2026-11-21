@@ -17,13 +17,20 @@ pub struct TransportTrackConstructionPreview {
     pub to_endpoint_index: u8,
     pub to_position: Vec3,
     pub path_points: Vec<Vec3>,
+    pub tower_height_m: Option<f32>,
 }
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+#[relationship(relationship_target = TrackPieces, allow_self_referential)]
 pub struct TransportTrackConstructionPiece {
+    #[relationship]
     pub route_segment: Entity,
     pub piece_index: u16,
 }
+
+#[derive(Component, Debug)]
+#[relationship_target(relationship = TransportTrackConstructionPiece)]
+pub struct TrackPieces(Vec<Entity>);
 
 #[derive(Component, Debug, Clone)]
 pub struct PreparedTransportTrackConstructionEdit {
@@ -42,6 +49,7 @@ pub struct PreparedTransportTrackConstructionEdit {
     pub to_endpoint: Option<Entity>,
     pub to_endpoint_index: u8,
     pub path_points: Box<[Vec3]>,
+    pub tower_height_m: Option<f32>,
     pub applied_entities: Vec<Entity>,
     pub preview: Option<Entity>,
     pub application_in_flight: Option<EditApplication>,

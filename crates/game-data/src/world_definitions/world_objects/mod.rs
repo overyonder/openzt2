@@ -259,6 +259,12 @@ const fn named_physical_presentation_is_initially_visible() -> bool {
     true
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct AuthoredTraversalAnimationManifest {
+    pub binder: AssetId,
+    pub source_path: String,
+}
+
 #[derive(Clone, Copy, Debug, serde::Deserialize, PartialEq, Eq, serde::Serialize)]
 pub struct WorldObjectPresentationCausticPolicy {
     pub binder: AssetId,
@@ -280,12 +286,54 @@ pub struct WaterFilterPolicy {
     pub maintenance_thresholds: Option<[[f32; 2]; 3]>,
 }
 
+#[derive(Clone, Debug, Default, serde::Deserialize, PartialEq, serde::Serialize)]
+pub struct AuthoredWorldObjectRuntime {
+    /// Effective entity-type string attributes, such as a fence's broken binder.
+    pub morph_targets: Vec<(AssetId, AssetId)>,
+    pub egg: Option<WorldObjectEggDefinition>,
+    pub fossil_assembly_surface: bool,
+    pub whap_physics: Option<WorldObjectWhapPhysics>,
+    #[serde(default)]
+    pub fall_animation_clips: WorldObjectFallAnimationClips,
+    #[serde(default)]
+    pub prop_rotation_offset_radians: f32,
+}
+
+#[derive(Clone, Debug, Default, serde::Deserialize, PartialEq, Eq, serde::Serialize)]
+pub struct WorldObjectFallAnimationClips {
+    pub airborne: Option<String>,
+    pub land_impact: Option<String>,
+    pub water_impact: Option<String>,
+}
+
+#[derive(Clone, Debug, serde::Deserialize, PartialEq, serde::Serialize)]
+pub enum WorldObjectWhapPhysics {
+    Real {
+        speed: [f32; 2],
+        lob_pitch_degrees: Option<[f32; 2]>,
+        fit_state: u8,
+    },
+    Animated {
+        motion_clip: String,
+        rotate_to_heading: bool,
+    },
+}
+
+#[derive(Clone, Copy, Debug, serde::Deserialize, PartialEq, serde::Serialize)]
+pub struct WorldObjectEggDefinition {
+    pub initial_incubation: f32,
+    pub incubation_per_update: f32,
+    pub trigger_incubation: f32,
+}
+
 #[allow(
     clippy::derive_partial_eq_without_eq,
     reason = "schema records may contain floats"
 )]
 #[derive(Clone, Debug, serde::Deserialize, PartialEq, serde::Serialize)]
 pub struct WorldObjectDefinition {
+    #[serde(default)]
+    pub authored_runtime: AuthoredWorldObjectRuntime,
     pub id: AssetId,
     /// Most-specific authored sound-name prefixes, followed by their base types.
     #[serde(default)]
@@ -328,6 +376,8 @@ pub struct WorldObjectDefinition {
     /// Caustic eligibility belongs to physical binders, independently of shared models.
     #[serde(default)]
     pub presentation_caustic_policies: Vec<WorldObjectPresentationCausticPolicy>,
+    #[serde(default)]
+    pub traversal_animation_manifests: Vec<AuthoredTraversalAnimationManifest>,
     /// Authored `BFGEntityContainerSlot` interactions, grouped by their named
     /// reservation binder and retaining the model node used for docking.
     #[serde(default)]

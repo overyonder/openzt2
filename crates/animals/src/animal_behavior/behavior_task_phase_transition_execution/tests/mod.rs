@@ -3,7 +3,9 @@ use openzt2_game_data::{
     behavior::document::{BehaviorDocument, BehaviorSet, BehaviorTaskActionPhase},
     AssetId,
 };
-use openzt2_zoo_state::animal_behavior::behavior_target_retry_delays::BehaviorTargetRejections;
+use openzt2_zoo_state::animal_behavior::behavior_target_retry_delays::{
+    restore_behavior_target_retry, BehaviorTargetRejections,
+};
 
 #[derive(Component)]
 struct SelectionAttempts {
@@ -99,6 +101,7 @@ fn check_guest_and_staff_selection_window(interval: u32, cap: u32) {
             FixedUpdate,
             (
                 record_staff_selection_attempts,
+                advance_behavior_target_retry_clocks,
                 advance_behavior_tasks_through_return_failure_completion_and_final_outcome,
                 record_guest_selection_attempts,
             )
@@ -122,7 +125,7 @@ fn check_guest_and_staff_selection_window(interval: u32, cap: u32) {
     let guest = app.world_mut().spawn((Guest, rejected())).id();
     let staff = app.world_mut().spawn((Staff, rejected())).id();
     for actor in [guest, staff] {
-        update_behavior_target_retry(app.world_mut(), actor, target, Some(policy));
+        restore_behavior_target_retry(app.world_mut(), actor, target, 1, interval.min(cap));
     }
     let document = app
         .world_mut()
@@ -330,4 +333,141 @@ fn unsupported_nested_set_fails_instead_of_returning_success_to_its_parent() {
         .world()
         .resource::<Messages<BehaviorTaskFinished>>()
         .is_empty());
+}
+
+#[test]
+fn consecutive_instructions_finish_in_authored_order_and_a_wait_runs_once() {
+    use openzt2_game_data::behavior::{
+        action::head_look::BehaviorHeadLookAction, action_record::BehaviorAction,
+    };
+    use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
+        apply_behavior_instruction_completion, defer_incomplete_behavior_steps,
+        drive_behavior_steps, BehaviorStep, BehaviorStepProgress, BehaviorStepSet,
+        RunBehaviorHeadLook, RunBehaviorSendSubjectTrigger,
+    };
+
+    #[derive(Component, Default)]
+    struct Trace(Vec<usize>);
+
+    fn head_look(
+        clock: Res<ZooClock>,
+        mut actors: Query<
+            (
+                Entity,
+                &BehaviorTaskExecutionState,
+                &RunningBehaviorInstruction,
+                &mut Trace,
+            ),
+            With<RunBehaviorHeadLook>,
+        >,
+        mut commands: Commands,
+    ) {
+        for (actor, task, instruction, mut trace) in &mut actors {
+            if task.next_action_tick <= clock.tick {
+                trace.0.push(task.action);
+                instruction.complete(actor, clock.tick, &mut commands);
+            }
+        }
+    }
+
+    fn subject_trigger(
+        clock: Res<ZooClock>,
+        mut actors: Query<
+            (
+                Entity,
+                &BehaviorTaskExecutionState,
+                &RunningBehaviorInstruction,
+                &mut Trace,
+            ),
+            With<RunBehaviorSendSubjectTrigger>,
+        >,
+        mut commands: Commands,
+    ) {
+        for (actor, task, instruction, mut trace) in &mut actors {
+            if task.next_action_tick <= clock.tick {
+                trace.0.push(task.action);
+                if task.action == 1 {
+                    instruction.complete(actor, clock.tick, &mut commands);
+                }
+            }
+        }
+    }
+
+    let mut app = App::new();
+    app.init_resource::<Assets<BehaviorDocumentAsset>>()
+        .init_resource::<BehaviorStepProgress>()
+        .insert_resource(ZooClock {
+            tick: 7,
+            fractional_tick: Default::default(),
+            absolute_day: 0,
+            tick_in_day: 7,
+        })
+        .init_schedule(BehaviorStep)
+        .configure_sets(
+            BehaviorStep,
+            (BehaviorStepSet::Actions, BehaviorStepSet::Finish).chain(),
+        )
+        .add_observer(apply_behavior_instruction_completion)
+        .add_systems(
+            BehaviorStep,
+            (subject_trigger, head_look).in_set(BehaviorStepSet::Actions),
+        )
+        .add_systems(
+            BehaviorStep,
+            defer_incomplete_behavior_steps.in_set(BehaviorStepSet::Finish),
+        );
+    let look = BehaviorAction::HeadLook(BehaviorHeadLookAction {
+        disengage: false,
+        target_node: None,
+    });
+    let trigger = BehaviorAction::SendSubjectTrigger(AssetId::from_key("trigger"));
+    let program = AssetId::from_key("sequence");
+    let document = app
+        .world_mut()
+        .resource_mut::<Assets<BehaviorDocumentAsset>>()
+        .add(BehaviorDocumentAsset::from_test_document(
+            BehaviorDocument::Sets(vec![BehaviorSet {
+                id: program,
+                name: "sequence".to_owned(),
+                subjects: Vec::new(),
+                actions: BehaviorTaskActionPhase::Supported(vec![
+                    look.clone(),
+                    trigger.clone(),
+                    look,
+                    trigger,
+                ]),
+            }]),
+        ));
+    let actor = app
+        .world_mut()
+        .spawn((
+            Trace::default(),
+            BehaviorTaskExecutionState {
+                execution_id: 1,
+                program,
+                target: None,
+                object: None,
+                document,
+                declaration: 0,
+                phase: BehaviorTaskExecutionPhase::Set,
+                action: 0,
+                repetitions: 0,
+                next_action_tick: 7,
+                interaction_slot: None,
+                depth: 0,
+            },
+        ))
+        .id();
+    app.world_mut().flush();
+
+    drive_behavior_steps(app.world_mut());
+    drive_behavior_steps(app.world_mut());
+    assert_eq!(app.world().get::<Trace>(actor).unwrap().0, [0, 1, 2, 3]);
+    assert_eq!(
+        app.world()
+            .get::<BehaviorTaskExecutionState>(actor)
+            .unwrap()
+            .next_action_tick,
+        8
+    );
 }

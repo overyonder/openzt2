@@ -1,9 +1,9 @@
 pub mod game_context_binder_directory_loading;
+pub mod saved_world_economy_asset;
 
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
-    sync::Arc,
 };
 
 use bevy::{
@@ -14,7 +14,7 @@ use openzt2_game_data::{world_definitions::document::WorldDefinitionDocument, As
 
 use crate::asset_source::{
     archive_entry_asset_path::{archive_entry_asset_path, archive_entry_asset_source_path},
-    ArchiveCatalogue, AssetArchives,
+    ArchiveOverlayChanged, AssetArchives,
 };
 
 use super::{
@@ -120,55 +120,47 @@ pub(crate) fn world_definition_source_path(
     )
 }
 
-#[derive(Default)]
-pub(super) struct WorldDefinitionDiscovery {
-    sources: Option<Arc<[z2f::ResolvedArchiveEntry]>>,
-    supplements: Option<Arc<[z2f::ResolvedArchiveEntry]>>,
-}
-
 pub(super) fn discover_world_definition_catalogue_sources(
     archives: Res<AssetArchives>,
     server: Res<AssetServer>,
     assets: Res<Assets<WorldDefinitionAsset>>,
     mut definitions: ResMut<WorldDefinitions>,
-    mut previous: Local<WorldDefinitionDiscovery>,
+    mut overlay_changes: MessageReader<ArchiveOverlayChanged>,
 ) {
-    if !archives.is_changed() && previous.sources.is_some() {
+    if definitions.binder_sources.is_some() && overlay_changes.is_empty() {
         return;
     }
     let (binder_sources, sources) = archives.world_definition_sources();
-    let supplements = archives.catalogue_sources(ArchiveCatalogue::WorldDefinitionSupplements);
-    let changed_sources = previous
-        .sources
-        .as_ref()
-        .is_none_or(|old| !Arc::ptr_eq(old, &sources));
-    let changed_supplements = previous
-        .supplements
-        .as_ref()
-        .is_none_or(|old| !Arc::ptr_eq(old, &supplements));
-    if !changed_sources && !changed_supplements {
+    let mut sources_changed = definitions.binder_sources.is_none();
+    let mut binder_inputs_changed = false;
+    let mut zoopedia_changed = false;
+    let mut adoption_changed = false;
+    let mut biome_changed = false;
+    let mut show_timer_changed = false;
+    for change in overlay_changes.read().flat_map(|change| &change.changes) {
+        let path = &change.normalized_asset_path;
+        sources_changed |= world_definition_source_path(path, binder_sources.directories());
+        binder_inputs_changed |= path == Path::new("config/gamectxt.xml")
+            || binder_sources.contains_path(path)
+            || definitions
+                .binder_sources
+                .as_ref()
+                .is_some_and(|old| old.contains_path(path));
+        zoopedia_changed |= path.starts_with("ui/zoopedia/entries");
+        if path.extension().is_some_and(|extension| extension == "xml") {
+            adoption_changed |= path.parent() == Some(Path::new("xpinfo"));
+            biome_changed |= path.starts_with("biomes/autoplacement");
+            show_timer_changed |= path == Path::new("config/ztshowtimermanager.xml");
+        }
+    }
+    if !(sources_changed
+        || binder_inputs_changed
+        || adoption_changed
+        || biome_changed
+        || show_timer_changed)
+    {
         return;
     }
-    let paths_changed_under = |old: &[z2f::ResolvedArchiveEntry],
-                               new: &[z2f::ResolvedArchiveEntry],
-                               directory: &str| {
-        let within =
-            |entry: &&z2f::ResolvedArchiveEntry| entry.normalized_asset_path.starts_with(directory);
-        old.iter().filter(within).ne(new.iter().filter(within))
-    };
-    let zoopedia_changed = previous.sources.as_ref().is_some_and(|old| {
-        changed_sources && paths_changed_under(old, &sources, "ui/zoopedia/entries")
-    });
-    let changed_supplement = |path| {
-        changed_supplements
-            && previous
-                .supplements
-                .as_ref()
-                .is_some_and(|old| paths_changed_under(old, &supplements, path))
-    };
-    let adoption_changed = changed_supplement("xpinfo");
-    let biome_changed = changed_supplement("biomes/autoplacement");
-    let show_timer_changed = changed_supplement("config/ztshowtimermanager.xml");
     if definitions.server.is_none() {
         definitions.server = Some(server.clone());
     }
@@ -225,10 +217,6 @@ pub(super) fn discover_world_definition_catalogue_sources(
         .filter_map(|path| routed_paths.get(path).cloned())
         .collect::<Vec<_>>();
     let wanted = paths.iter().map(PathBuf::as_path).collect::<BTreeSet<_>>();
-    let binder_inputs_changed = definitions
-        .binder_sources
-        .as_ref()
-        .is_some_and(|previous| !std::sync::Arc::ptr_eq(previous, &binder_sources));
     let mut reload_queue = std::mem::take(&mut definitions.reload_queue);
     reload_queue.retain(|_, path| wanted.contains(path.path()));
     for handle in &definitions.handles {
@@ -265,8 +253,6 @@ pub(super) fn discover_world_definition_catalogue_sources(
         ),
     );
     definitions.binder_sources = Some(binder_sources);
-    previous.sources = Some(sources);
-    previous.supplements = Some(supplements);
 }
 
 pub(super) fn index_loaded_world_definition_assets_by_identifier_and_singleton_kind(
@@ -671,6 +657,7 @@ pub(super) fn index_world_definition_document_records_and_singletons(
     singleton!(NeedAdjustment, need_adjustment);
     singleton!(TranquilizerMode, tranquilizer_mode);
     singleton!(AdmissionPriceBands, admission_price_bands_cents);
+    singleton!(TransportHighlight, transport_highlight);
     singleton!(TankSurface, tank_surface_policy);
     singleton!(TankDepth, tank_depth_policy);
     singleton!(TankEdit, tank_edit_policy);

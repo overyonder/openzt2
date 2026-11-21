@@ -2302,6 +2302,9 @@ impl SpecializedRenderPipeline for ParticlesRenderPipeline {
             if let Some(state) = &key.authored_state {
                 depth.depth_write_enabled = Some(state.depth_write_enabled);
                 depth.depth_compare = Some(state.depth_compare);
+                if depth.format.has_stencil_aspect() {
+                    depth.stencil = state.stencil.clone();
+                }
             }
             depth
         });
@@ -5613,6 +5616,10 @@ fn emit_sorted_draw<T, F>(
         let Some(render_phase) = render_phases.get_mut(&view.retained_view_entity) else {
             continue;
         };
+        let stencil_attachment =
+            cfg!(feature = "3d") && view.depth_stencil_format.has_stencil_aspect();
+        #[cfg(all(feature = "2d", feature = "3d"))]
+        let stencil_attachment = stencil_attachment && pipeline_mode == PipelineMode::Camera3d;
 
         {
             #[cfg(feature = "trace")]
@@ -5750,7 +5757,7 @@ fn emit_sorted_draw<T, F>(
                             local_space_simulation,
                             alpha_mask: ParticleRenderAlphaMaskPipelineKey::from(pass.flags),
                             alpha_mode: pass.alpha_mode,
-                            authored_state: pass.state,
+                            authored_state: pass.state.clone(),
                             distance_sorted: sorted,
                             flipbook: pass.flags.contains(LayoutFlags::FLIPBOOK),
                             needs_uv: pass.flags.contains(LayoutFlags::NEEDS_UV),
@@ -5772,6 +5779,7 @@ fn emit_sorted_draw<T, F>(
                         pipeline: id,
                         properties: pass.property_key(effect_batch),
                         sorted,
+                        stencil_reference: pass.stencil_reference.filter(|_| stencil_attachment),
                     });
                 }
                 if let Some(first) = queued.passes.first() {
@@ -7186,6 +7194,7 @@ fn draw<'w>(
         pipeline: pipeline_id,
         properties: effect_batch.property_key.clone(),
         sorted: false,
+        stencil_reference: None,
     };
     let passes = authored.map_or(std::slice::from_ref(&single), |draw| draw.passes.as_slice());
     if passes.iter().any(|draw| {
@@ -7240,6 +7249,9 @@ fn draw<'w>(
         let pipeline = pipeline_cache.get_render_pipeline(draw.pipeline).unwrap();
         let property_bind_group = property_bind_groups.get(&draw.properties, false).unwrap();
         pass.set_render_pipeline(pipeline);
+        if let Some(reference) = draw.stencil_reference {
+            pass.set_stencil_reference(reference);
+        }
         if draw.sorted {
             if let Some(sort) = authored.and_then(|draw| draw.sort.as_ref()) {
                 pass.set_bind_group(3, &sort.render_binding, &[]);

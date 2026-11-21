@@ -22,8 +22,7 @@ pub(super) fn blend_sampled_animation_joint_poses(
             .filter(|(controller, _)| {
                 controller.playback_generation == snapshot.playback_generation
             })
-            .and_then(|(_, graph)| graph.active_animation_graph_blend)
-            .filter(|blend| blend.duration_milliseconds > 0);
+            .and_then(|(_, graph)| graph.active_animation_graph_blend.as_ref());
         let Some(blend) = blend else {
             commands
                 .entity(entity)
@@ -32,11 +31,7 @@ pub(super) fn blend_sampled_animation_joint_poses(
         };
         // The simulation graph owns blend time. Bevy samples the incoming clip
         // once, and this rendering snapshot supplies the outgoing pose.
-        let fraction = (std::time::Duration::from_millis(u64::from(blend.elapsed_milliseconds))
-            .as_secs_f32()
-            / std::time::Duration::from_millis(u64::from(blend.duration_milliseconds))
-                .as_secs_f32())
-        .clamp(0.0, 1.0);
+        let fraction = blend.timer.fraction();
         transform.translation = snapshot
             .pose
             .translation

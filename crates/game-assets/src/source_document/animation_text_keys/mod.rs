@@ -217,7 +217,7 @@ fn parse_command(command: &str) -> Option<AuthoredAnimationTextCommand> {
         let mut values = rest("whap")?.split_ascii_whitespace();
         AuthoredAnimationTextAction::ApplyWhapImpulse {
             impulse_angle_degrees: values.next()?.parse().ok()?,
-            impulse_duration_frames: values
+            impulse_random_offset_degrees: values
                 .next()
                 .and_then(|value| value.parse().ok())
                 .unwrap_or(0),

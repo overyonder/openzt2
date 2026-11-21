@@ -1,18 +1,18 @@
 //! Live animal identity, ageing, reproduction, lineage, adoption and release.
 
-mod adoption_offer_inventory_execution;
-pub mod adoption_offer_inventory_types;
+mod adoption_offer_execution;
+pub mod adoption_offer_types;
 mod adoption_placement_execution;
 use openzt2_zoo_state::animal_lifecycle::animal_adoption_contracts;
 mod animal_adoption_execution;
 mod animal_adoption_pricing;
 mod animal_age_resolution;
 mod animal_ageing_execution;
+pub(crate) use animal_ageing_execution::ResolveAnimalLifeStages;
 mod outgoing_animal_adoption_execution;
 use openzt2_zoo_state::animal_lifecycle::animal_birth_and_release_contracts;
 mod animal_birth_execution;
 pub mod animal_entity_spawning;
-mod animal_lineage_reference_cleanup;
 pub mod animal_presentation_attachment;
 mod animal_release_execution;
 mod animal_spawn_operation_contracts;
@@ -20,6 +20,7 @@ mod animal_spawn_request_execution;
 pub mod animal_spawn_resolution;
 pub mod animal_spawn_resolution_types;
 mod authored_entity_morph;
+mod egg_incubation;
 pub mod scripted_animal_spawning;
 mod starting_animal_hydration;
 use openzt2_zoo_state::animal_lifecycle::types;
@@ -46,6 +47,11 @@ pub struct AnimalLifecyclePlugin;
 impl Plugin for AnimalLifecyclePlugin {
     fn build(&self, app: &mut App) {
         app.add_observer(authored_entity_morph::cancel_interrupted_morph_fade);
+        app.add_observer(
+            openzt2_zoo_state::animal_behavior::animal_lineage::end_live_animal_relationships,
+        );
+        adoption_offer_execution::register_adoption_offers(app);
+        animal_ageing_execution::register_animal_ageing(app);
         app.add_systems(Update, (
             starting_animal_hydration::hydrate_starting_animals,
             crate::animal_welfare::systems::initialize_animal_needs
@@ -77,34 +83,29 @@ impl Plugin for AnimalLifecyclePlugin {
             .add_systems(
                 Update,
                 (
-                    ui_actions::consume_animal_ui_actions,
-                    adoption_placement_execution::
-                        begin_selected_species_adoption_placement_on_construction_cursor,
-                    adoption_placement_execution::begin_animal_relocation_on_construction_cursor,
-                    adoption_placement_execution::
-                        validate_selected_species_adoption_placement_preview,
-                    adoption_placement_execution::
-                        confirm_selected_species_adoption_into_habitat,
-                    adoption_placement_execution::
-                        clear_animal_adoption_placement_after_construction_tool_change,
-                    animal_presentation_attachment::
-                        attach_selected_species_variant_models_to_animal_entities,
-                    animal_presentation_attachment::
-                        apply_authored_initial_animal_animation_repetition_policy_after_attachment,
-                    adoption_offer_inventory_execution::
-                        initialize_animal_adoption_offer_inventory_from_loaded_authored_content,
+                    (
+                        ui_actions::consume_animal_ui_actions,
+                        adoption_placement_execution::
+                            begin_selected_species_adoption_placement_on_construction_cursor,
+                        adoption_placement_execution::begin_animal_relocation_on_construction_cursor,
+                        adoption_placement_execution::
+                            validate_selected_species_adoption_placement_preview,
+                        adoption_placement_execution::
+                            confirm_selected_species_adoption_into_habitat,
+                        adoption_placement_execution::
+                            clear_animal_adoption_placement_after_construction_tool_change,
+                    )
+                        .chain()
+                        .after(ObjectPlacementPreviewUpdateSet),
+                    (
+                        animal_presentation_attachment::
+                            attach_selected_species_variant_models_to_animal_entities,
+                        animal_presentation_attachment::
+                            apply_authored_initial_animal_animation_repetition_policy_after_attachment,
+                    )
+                        .chain(),
                 )
-                    .chain()
-                    .in_set(GameSet::Intent)
-                    .after(ObjectPlacementPreviewUpdateSet),
-            )
-            .add_systems(
-                FixedUpdate,
-                animal_ageing_execution::
-                    advance_animal_life_stages_from_elapsed_simulation_time
-                    .in_set(FixedGameSet::Clock)
-                    .run_if(in_state(GamePhase::InGame))
-                    .run_if(simulation_is_running),
+                    .in_set(GameSet::Intent),
             )
             .add_systems(
                 FixedUpdate,
@@ -133,33 +134,39 @@ impl Plugin for AnimalLifecyclePlugin {
                 FixedUpdate,
                 (
                     animal_adoption_execution::complete_animal_adoptions_after_successful_spawns,
-                    adoption_offer_inventory_execution::consume_completed_animal_adoption_offer_counts,
                     animal_adoption_execution::refund_paid_animal_adoptions_after_rejected_spawns,
                 )
-                    .chain()
                     .in_set(FixedConstructionSet::Cleanup)
                     .run_if(in_state(GamePhase::InGame)),
             )
             .add_systems(
                 FixedUpdate,
                 (
-                    adoption_offer_inventory_execution::advance_and_repopulate_animal_adoption_offer_inventory,
+                    egg_incubation::initialize_live_eggs,
+                    egg_incubation::index_egg_tasks.after(egg_incubation::initialize_live_eggs),
+                    egg_incubation::update_egg_incubation.after(egg_incubation::initialize_live_eggs),
+                    egg_incubation::start_idle_egg_tasks
+                        .after(egg_incubation::index_egg_tasks)
+                        .after(egg_incubation::update_egg_incubation)
+                        .before(openzt2_zoo_state::behavior_task_execution_types::running_actions::BehaviorStepFixedSet::Think),
+                )
+                    .in_set(FixedGameSet::Think)
+                    .run_if(in_state(GamePhase::InGame))
+                    .run_if(simulation_is_running),
+            )
+            .add_systems(
+                openzt2_zoo_state::behavior_task_execution_types::running_actions::BehaviorStep,
+                (
                     animal_birth_execution::spawn_children_for_authored_births,
                     authored_entity_morph::morph_authored_entities,
                     authored_entity_morph::remove_authored_morph_shells,
-                )
-                    .chain()
-                    .in_set(FixedGameSet::Act)
-                    .run_if(in_state(GamePhase::InGame))
-                    .run_if(simulation_is_running),
+                ).in_set(openzt2_zoo_state::behavior_task_execution_types::running_actions::BehaviorStepSet::Actions),
             )
             .add_systems(
                 FixedUpdate,
                 (
                     animal_release_execution::release_eligible_adult_animals_from_the_zoo,
                     outgoing_animal_adoption_execution::transfer_animals_out_for_adoption,
-                    animal_lineage_reference_cleanup::
-                        clear_lineage_references_to_deleted_animal_entities,
                 )
                     .chain()
                     .in_set(FixedGameSet::Cleanup)

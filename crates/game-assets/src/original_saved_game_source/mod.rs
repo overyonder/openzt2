@@ -1,166 +1,117 @@
-//! Read-only member access for saved zoos outside the installation archives.
+//! Read-only member access for selected original saved zoos.
 
 use std::{
     collections::BTreeMap,
     io,
     path::{Component, Path, PathBuf},
-    sync::{Arc, Mutex, RwLock},
-    time::SystemTime,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, RwLock,
+    },
 };
 
 use bevy::{
-    asset::io::{
-        AssetReader, AssetReaderError, AssetSourceBuilder, AssetSourceEvent, AssetWatcher,
-        PathStream, Reader, VecReader,
-    },
+    asset::io::{AssetReader, AssetReaderError, AssetSourceBuilder, PathStream, Reader, VecReader},
     prelude::Resource,
     tasks::futures_lite::stream,
 };
 use openzt2_game_data::AssetId;
 
+const WORLD_MEMBER: &str = "saved/world.zt2";
+const TERRAIN_MEMBER: &str = "saved/terrain.dat";
+
 #[derive(Resource, Clone)]
 pub struct OriginalSavedGameSources {
-    archives: Arc<RwLock<BTreeMap<String, OriginalSavedGameArchive>>>,
-    events: Arc<Mutex<Option<async_channel::Sender<AssetSourceEvent>>>>,
+    packages: Arc<RwLock<BTreeMap<String, Arc<z2f::ArchiveSet>>>>,
+    next_load: Arc<AtomicU64>,
     maximum_member_byte_count: usize,
 }
 
-struct OriginalSavedGameArchive {
-    path: PathBuf,
-    length: u64,
-    modified: Option<SystemTime>,
-    files: Arc<z2f::ArchiveSet>,
+pub struct OpenOriginalSavedGamePackage {
+    sources: OriginalSavedGameSources,
+    key: String,
+}
+
+impl OpenOriginalSavedGamePackage {
+    pub fn world_asset_path(&self) -> String {
+        format!("original-saves://{}/{WORLD_MEMBER}", self.key)
+    }
+}
+
+impl Drop for OpenOriginalSavedGamePackage {
+    fn drop(&mut self) {
+        self.sources
+            .packages
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&self.key);
+    }
 }
 
 impl OriginalSavedGameSources {
     pub fn new(maximum_member_byte_count: usize) -> Self {
         Self {
-            archives: Default::default(),
-            events: Default::default(),
+            packages: Default::default(),
+            next_load: Default::default(),
             maximum_member_byte_count,
         }
     }
 
     pub fn asset_source(&self) -> AssetSourceBuilder {
         let sources = self.clone();
-        let events = Arc::clone(&self.events);
         AssetSourceBuilder::new(move || {
             Box::new(OriginalSavedGameReader {
                 sources: sources.clone(),
             })
         })
-        .with_watcher(move |sender| {
-            *events
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(sender);
-            Some(Box::new(OriginalSavedGameWatcher))
-        })
     }
 
-    /// Registers the original file without extracting or changing any member.
-    pub fn register(&self, path: &Path) -> io::Result<AssetId> {
+    pub fn source_identifier(path: &Path) -> io::Result<AssetId> {
         let path = path.canonicalize()?;
-        let metadata = path.metadata()?;
-        if !metadata.is_file() {
+        Ok(original_saved_game_path_identifier(&path))
+    }
+
+    pub fn read_catalogue_world(
+        &self,
+        path: &Path,
+        maximum_bytes: usize,
+    ) -> io::Result<(AssetId, Vec<u8>)> {
+        let path = path.canonicalize()?;
+        let identifier = original_saved_game_path_identifier(&path);
+        let archive = open_saved_game_archive(path)?;
+        let bytes = archive.read_with_maximum_byte_count(
+            Path::new(WORLD_MEMBER),
+            maximum_bytes.min(self.maximum_member_byte_count),
+        )?;
+        Ok((identifier, bytes))
+    }
+
+    pub fn open_selected_package(
+        &self,
+        path: &Path,
+        expected: AssetId,
+    ) -> io::Result<OpenOriginalSavedGamePackage> {
+        let path = path.canonicalize()?;
+        if original_saved_game_path_identifier(&path) != expected {
             return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "saved zoo is not a file",
+                io::ErrorKind::NotFound,
+                "saved zoo path changed",
             ));
         }
-        let mut hash = blake3::Hasher::new();
-        hash.update(b"original-saved-game\0");
-        hash.update(path.as_os_str().as_encoded_bytes());
-        let mut identifier = [0; 16];
-        identifier.copy_from_slice(&hash.finalize().as_bytes()[..16]);
-        let identifier = AssetId(identifier);
-        let key = identifier.to_lowercase_hexadecimal_string();
-        let length = metadata.len();
-        let modified = metadata.modified().ok();
-        {
-            let archives = self
-                .archives
-                .read()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if archives.get(&key).is_some_and(|archive| {
-                archive.path == path && archive.length == length && archive.modified == modified
-            }) {
-                return Ok(identifier);
-            }
-        }
-        let files = Arc::new(z2f::ArchiveSet::open([path.clone()])?);
-        if !files.contains(Path::new("saved/world.zt2"))
-            || !files.contains(Path::new("saved/terrain.dat"))
-        {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "saved zoo has no world or terrain member",
-            ));
-        }
-        let replaced = self
-            .archives
+        let archive = open_saved_game_archive(path)?;
+        let load = self.next_load.fetch_add(1, Ordering::Relaxed);
+        let key = format!(
+            "{}-load-{load:x}",
+            expected.to_lowercase_hexadecimal_string()
+        );
+        self.packages
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(
-                key.clone(),
-                OriginalSavedGameArchive {
-                    path,
-                    length,
-                    modified,
-                    files,
-                },
-            );
-        if replaced.is_some() {
-            if let Some(sender) = self
-                .events
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .as_ref()
-            {
-                for member in [
-                    "saved/world.zt2",
-                    "saved/terrain.dat",
-                    "saved/thumbnail.jpg",
-                ] {
-                    sender
-                        .try_send(AssetSourceEvent::ModifiedAsset(
-                            PathBuf::from(&key).join(member),
-                        ))
-                        .map_err(io::Error::other)?;
-                }
-            }
-        }
-        Ok(identifier)
-    }
-
-    pub fn member_path(identifier: AssetId, member: &Path) -> PathBuf {
-        PathBuf::from(identifier.to_lowercase_hexadecimal_string()).join(member)
-    }
-
-    pub fn read_member(
-        &self,
-        identifier: AssetId,
-        member: &Path,
-        maximum_byte_count: usize,
-    ) -> io::Result<Vec<u8>> {
-        let files = self.archive(&identifier.to_lowercase_hexadecimal_string())?;
-        files.read_with_maximum_byte_count(
-            member,
-            maximum_byte_count.min(self.maximum_member_byte_count),
-        )
-    }
-
-    fn archive(&self, key: &str) -> io::Result<Arc<z2f::ArchiveSet>> {
-        self.archives
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .get(key)
-            .map(|archive| Arc::clone(&archive.files))
-            .ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::NotFound,
-                    "saved zoo source is not registered",
-                )
-            })
+            .insert(key.clone(), Arc::new(archive));
+        Ok(OpenOriginalSavedGamePackage {
+            sources: self.clone(),
+            key,
+        })
     }
 
     fn resolve(&self, path: &Path) -> io::Result<(Arc<z2f::ArchiveSet>, PathBuf)> {
@@ -184,12 +135,44 @@ impl OriginalSavedGameSources {
             };
             member.push(name);
         }
-        Ok((self.archive(key)?, member))
+        let archive = self
+            .packages
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(key)
+            .cloned()
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::NotFound, "saved zoo package is closed")
+            })?;
+        Ok((archive, member))
     }
 }
 
-struct OriginalSavedGameWatcher;
-impl AssetWatcher for OriginalSavedGameWatcher {}
+pub(crate) fn stable_original_saved_game_member_path(path: &str) -> Option<String> {
+    let (package, member) = path.strip_prefix("original-saves://")?.split_once('/')?;
+    let (identifier, _) = package.split_once("-load-")?;
+    Some(format!("original-saves://{identifier}/{member}"))
+}
+
+fn original_saved_game_path_identifier(path: &Path) -> AssetId {
+    let mut hash = blake3::Hasher::new();
+    hash.update(b"original-saved-game\0");
+    hash.update(path.as_os_str().as_encoded_bytes());
+    let mut identifier = [0; 16];
+    identifier.copy_from_slice(&hash.finalize().as_bytes()[..16]);
+    AssetId(identifier)
+}
+
+fn open_saved_game_archive(path: PathBuf) -> io::Result<z2f::ArchiveSet> {
+    let archive = z2f::ArchiveSet::open([path])?;
+    if !archive.contains(Path::new(WORLD_MEMBER)) || !archive.contains(Path::new(TERRAIN_MEMBER)) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "saved zoo has no world or terrain member",
+        ));
+    }
+    Ok(archive)
+}
 
 struct OriginalSavedGameReader {
     sources: OriginalSavedGameSources,
@@ -215,15 +198,7 @@ impl AssetReader for OriginalSavedGameReader {
         path: &'a Path,
     ) -> Result<Box<PathStream>, AssetReaderError> {
         if path.as_os_str().is_empty() {
-            let paths = self
-                .sources
-                .archives
-                .read()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .keys()
-                .map(PathBuf::from)
-                .collect::<Vec<_>>();
-            return Ok(Box::new(stream::iter(paths)));
+            return Ok(Box::new(stream::iter(Vec::<PathBuf>::new())));
         }
         let (files, member) = self
             .sources

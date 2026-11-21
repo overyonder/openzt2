@@ -163,7 +163,6 @@ fn current_arrival_hands_off_service_once_without_rechecking_render_transform() 
             ServiceFacility {
                 definition: AssetId([1; 16]),
                 capacity: 1,
-                occupied: 0,
                 payment_trigger: FacilityPaymentTrigger::TimedTicks,
             },
         ))

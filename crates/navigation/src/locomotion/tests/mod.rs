@@ -15,13 +15,14 @@ fn physics_navigation_faces_authored_forward_and_stays_stopped_after_arrival() {
     use openzt2_zoo_state::locomotion::locomotion_types::Arrived;
     use openzt2_zoo_state::locomotion::locomotion_types::Destination;
     use openzt2_zoo_state::locomotion::locomotion_types::Steering;
-    use openzt2_zoo_state::topology::topology_graph_types::TopologyGrid;
+    use openzt2_zoo_state::topology::topology_graph_types::{TopologyGrid, TopologyIndex};
 
     let mut app = App::new();
     let mut time = Time::<Fixed>::default();
     time.advance_by(std::time::Duration::from_millis(20));
     app.insert_resource(time)
         .init_resource::<TopologyGrid>()
+        .init_resource::<TopologyIndex>()
         .add_message::<Arrived>()
         .add_systems(
             Update,
@@ -217,30 +218,33 @@ fn cell_mapping_rejects_world_exterior() {
 
 #[test]
 fn fence_crossing_index_tracks_replacement_removal_and_despawn() {
-    use super::fence_navigation_crossing_types::{
-        index_inserted_fence_crossings, unindex_discarded_fence_crossings,
-        FenceNavigationCrossingIndex, FenceNavigationCrossings,
-    };
+    use super::fence_navigation_crossing_types::*;
     use bevy::prelude::*;
 
     let mut app = App::new();
-    app.init_resource::<FenceNavigationCrossingIndex>()
-        .add_observer(index_inserted_fence_crossings)
-        .add_observer(unindex_discarded_fence_crossings);
+    app.init_resource::<FenceNavigationCrossingIndex>();
     let world = app.world_mut();
-    let first = world.spawn(FenceNavigationCrossings(vec![(0, 1)])).id();
-    let second = world.spawn(FenceNavigationCrossings(vec![(0, 1)])).id();
+    let first = world.spawn_empty().id();
+    let second = world.spawn_empty().id();
+    let forward = world.spawn(NavigationEdgeKey((0, 1))).id();
+    let reverse = world.spawn(NavigationEdgeKey((1, 0))).id();
+    let moved = world
+        .spawn((CrossingOfFence(first), CrossingOfEdge(forward)))
+        .id();
+    world.spawn((CrossingOfFence(second), CrossingOfEdge(forward)));
+    world.entity_mut(moved).insert(CrossingOfEdge(reverse));
 
-    world
-        .entity_mut(first)
-        .insert(FenceNavigationCrossings(vec![(1, 0)]));
-    let index = world.resource::<FenceNavigationCrossingIndex>();
-    assert_eq!(index.crossing_fences(0, 1), [second]);
-    assert_eq!(index.crossing_fences(1, 0), [first]);
-
-    world.entity_mut(first).remove::<FenceNavigationCrossings>();
+    fn routes(crossings: FenceNavigationCrossingQueries) -> (Vec<Entity>, Vec<Entity>) {
+        (
+            crossings.crossing_fences(0, 1).collect(),
+            crossings.crossing_fences(1, 0).collect(),
+        )
+    }
+    assert_eq!(
+        world.run_system_cached(routes).unwrap(),
+        (vec![second], vec![first])
+    );
+    world.entity_mut(moved).despawn();
     world.entity_mut(second).despawn();
-    let index = world.resource::<FenceNavigationCrossingIndex>();
-    assert!(index.crossing_fences(0, 1).is_empty());
-    assert!(index.crossing_fences(1, 0).is_empty());
+    assert_eq!(world.run_system_cached(routes).unwrap(), (vec![], vec![]));
 }

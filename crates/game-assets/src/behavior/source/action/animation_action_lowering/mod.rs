@@ -65,16 +65,9 @@ pub(super) fn lower_animation_action_source_node(
                     | "maxAnimSpeed"
             )
         })
-        // The diseases' inline `diseaseon`/`diseaseoff` text keys
-        // only start and stop a particle effect, which is not drawn yet.
         || animation_action_source_node
             .element_children()
-            .any(|child| {
-                child.name != "textkeys"
-                    || child.element_children().any(|key| {
-                        !matches!(key.name.as_str(), "diseaseon" | "diseaseoff")
-                    })
-            })
+            .any(|child| !child.name.eq_ignore_ascii_case("textkeys"))
     {
         return Err(invalid_behavior_source_data(
             "BFBehAnimate playback policy is not yet mapped",
@@ -133,27 +126,54 @@ pub(super) fn lower_animation_action_source_node(
         .attribute("groundFit")
         .map(|_| read_boolean_attribute_or_false(animation_action_source_node, "groundFit"))
         .transpose()?;
-    Ok(Some(BehaviorAction::AnimationClip(
-        BehaviorAnimationClipAction {
-            animation_clip_asset_key,
-            looping: read_boolean_attribute_or_false(animation_action_source_node, "loopFlag")?,
-            physical_object: animation_action_source_node
-                .attribute("physObj")
-                .map(str::trim)
-                .filter(|name| !name.is_empty())
-                .map(str::to_owned),
-            play_duration_seconds,
-            interrupts_current_animation: read_boolean_attribute_or_false(
-                animation_action_source_node,
-                "interruptFlag",
-            )?,
-            interruptible: read_boolean_attribute_or_false(
-                animation_action_source_node,
-                "interruptible",
-            )?,
-            ground_fit,
-            blend_duration_seconds,
-            playback_speed,
-        },
-    )))
+    let animation = BehaviorAnimationClipAction {
+        animation_clip_asset_key,
+        looping: read_boolean_attribute_or_false(animation_action_source_node, "loopFlag")?,
+        physical_object: animation_action_source_node
+            .attribute("physObj")
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(str::to_owned),
+        play_duration_seconds,
+        interrupts_current_animation: read_boolean_attribute_or_false(
+            animation_action_source_node,
+            "interruptFlag",
+        )?,
+        interruptible: read_boolean_attribute_or_false(
+            animation_action_source_node,
+            "interruptible",
+        )?,
+        ground_fit,
+        blend_duration_seconds,
+        playback_speed,
+    };
+    let keys = lower_behavior_animation_text_keys(animation_action_source_node)?;
+    Ok(Some(if keys.is_empty() {
+        BehaviorAction::AnimationClip(animation)
+    } else {
+        BehaviorAction::AnimationWithTextKeys { animation, keys }
+    }))
+}
+
+pub(super) fn lower_behavior_animation_text_keys(
+    node: &DataNode,
+) -> io::Result<openzt2_game_data::behavior::action_record::BehaviorAnimationTextKeyAliases> {
+    use crate::source_document::animation_text_keys::parse_blue_fang_embedded_animation_text_key;
+    use openzt2_game_data::AssetId;
+
+    node.element_children()
+        .filter(|child| child.name.eq_ignore_ascii_case("textkeys"))
+        .flat_map(DataNode::element_children)
+        .map(|entry| {
+            let text = entry
+                .attribute("text")
+                .ok_or_else(|| invalid_behavior_source_data("behavior text key has no text"))?;
+            let key = parse_blue_fang_embedded_animation_text_key(0.0, text)
+                .ok_or_else(|| invalid_behavior_source_data("behavior text key has no commands"))?;
+            Ok((
+                AssetId::from_key(&entry.name.to_ascii_lowercase()),
+                key.animation_text_commands,
+            ))
+        })
+        .collect()
 }

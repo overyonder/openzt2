@@ -6,6 +6,8 @@ use openzt2_game_data::{
     world_definitions::world_objects::WorldObjectPresentationCausticPolicy, AssetId,
 };
 
+use openzt2_game_data::world_definitions::world_objects::AuthoredTraversalAnimationManifest;
+
 use crate::source_document::{
     blue_fang_source_numeric_lexeme::parse_blue_fang_source_numeric_lexeme,
     ordered_source_document_types::OrderedSourceDocumentNode,
@@ -27,11 +29,19 @@ struct AuthoredBinderPhysics {
     no_caustics: Option<bool>,
     splash_scale: Option<f32>,
     is_decal: bool,
+    traversal_manifest: Option<String>,
 }
 
 pub(super) fn lower_authored_presentation_physics(
     record: &RecordView<'_, '_>,
-) -> Result<(Vec<WorldObjectPresentationCausticPolicy>, Option<f32>), BindError> {
+) -> Result<
+    (
+        Vec<WorldObjectPresentationCausticPolicy>,
+        Option<f32>,
+        Vec<AuthoredTraversalAnimationManifest>,
+    ),
+    BindError,
+> {
     let mut binders = BTreeMap::<String, AuthoredBinderPhysics>::new();
     // Source families arrive most-specific first. An omitted attribute inherits
     // independently of the other attributes on the same component.
@@ -72,6 +82,15 @@ pub(super) fn lower_authored_presentation_physics(
     let surface_effect_strength = binders
         .get("mainobj")
         .and_then(|physics| physics.splash_scale);
+    let traversal_manifests = binders
+        .iter()
+        .filter_map(|(name, physics)| {
+            Some(AuthoredTraversalAnimationManifest {
+                binder: AssetId::from_key(name),
+                source_path: physics.traversal_manifest.clone()?,
+            })
+        })
+        .collect::<Vec<_>>();
     let policies = binders
         .into_iter()
         .map(|(name, physics)| WorldObjectPresentationCausticPolicy {
@@ -80,7 +99,7 @@ pub(super) fn lower_authored_presentation_physics(
             is_decal: physics.is_decal,
         })
         .collect();
-    Ok((policies, surface_effect_strength))
+    Ok((policies, surface_effect_strength, traversal_manifests))
 }
 
 fn has_direct_decal_presentation(node: &OrderedSourceDocumentNode) -> bool {
@@ -121,6 +140,14 @@ fn read_binder_local_physics_children(
                     })
                     .transpose()?;
             }
+        }
+        if physics.traversal_manifest.is_none()
+            && source_document_names_are_semantically_equal(&child.name, "BFTravAnimPathComponent")
+        {
+            physics.traversal_manifest = child
+                .attribute_named_any(&["actorfile"])
+                .map(canonicalize_source_document_record_key)
+                .filter(|path| !path.is_empty());
         }
         physics.is_decal |=
             source_document_names_are_semantically_equal(&child.name, "BFDecalComponent")

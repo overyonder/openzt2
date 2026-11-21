@@ -1,27 +1,38 @@
-use crate::animation_playback::authored_animation_event_execution::authored_animation_event_time_was_crossed_by_playback;
+use super::*;
+use openzt2_game_assets::animation::animation_set_asset_types::AnimationTimelineCommand;
+use openzt2_game_data::animation::animation_text_key::AuthoredAnimationTextAction;
 
 #[test]
-fn first_sample_covers_elapsed_prefix_without_treating_restart_as_wrap() {
-    let keys = [0, 10, 30, 90];
-    let crossed: Vec<_> = keys
-        .into_iter()
-        .filter(|time| {
-            authored_animation_event_time_was_crossed_by_playback(*time, 20, 80, true, true, false)
-        })
-        .collect();
-    assert_eq!(crossed, [0, 10]);
-    let next: Vec<_> = keys
-        .into_iter()
-        .filter(|time| {
-            authored_animation_event_time_was_crossed_by_playback(*time, 40, 20, false, true, false)
-        })
-        .collect();
-    assert_eq!(next, [30]);
-    let reversed: Vec<_> = keys
-        .into_iter()
-        .filter(|time| {
-            authored_animation_event_time_was_crossed_by_playback(*time, 80, 20, true, false, false)
-        })
-        .collect();
-    assert_eq!(reversed, [90]);
+fn reverse_playback_reverses_timestamps_and_preserves_same_time_order() {
+    let keys = [(0, "a"), (10, "b"), (10, "c"), (40, "d")].map(|(milliseconds, label)| {
+        AnimationTimelineKey {
+            milliseconds,
+            commands: Box::new([AnimationTimelineCommand {
+                joint: None,
+                action: std::sync::Arc::new(
+                    AuthoredAnimationTextAction::RequestAnimationGraphNode(label.to_owned()),
+                ),
+            }]),
+        }
+    });
+    let interval = AnimationPlaybackInterval::<false> {
+        controller: Entity::PLACEHOLDER,
+        generation: 0,
+        from: 0.04,
+        to: 0.0,
+        cycle_start: 0.0,
+        cycle_end: 0.04,
+        cycles: 0,
+        forward: false,
+        clip_entry: false,
+    };
+    let mut visited = Vec::new();
+    visit_interval(&interval, &keys, &mut |key| {
+        if let AuthoredAnimationTextAction::RequestAnimationGraphNode(label) =
+            &*key.commands[0].action
+        {
+            visited.push(label.clone());
+        }
+    });
+    assert_eq!(visited, ["b", "c", "a"]);
 }

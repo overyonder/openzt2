@@ -8,14 +8,20 @@ use openzt2_interface_state::settings::audio_settings_types::AudioSettings;
 
 use super::{
     audio_playback_message_types::PlayAudioClip,
-    audio_player_spawning::{spawn_audio_player_or_deferred_playback, AudioCueSelection},
+    audio_player_spawning::{
+        spawn_audio_player_or_deferred_playback, AudioCueSelection, AudioVoiceAdmission,
+        CueVoicePool, NonspatialCueOwner,
+    },
 };
 
 pub(super) fn execute_direct_audio_clip_playback_requests(
     mut commands: Commands,
     mut requests: MessageReader<PlayAudioClip>,
     audio_settings: Res<AudioSettings>,
+    pools: Query<(Entity, &CueVoicePool)>,
+    owners: Query<Entity, With<NonspatialCueOwner>>,
 ) {
+    let nonspatial_owner = owners.single().ok();
     for request in requests.read() {
         let playback_settings = PlaybackSettings {
             mode: if request.force_looped {
@@ -38,6 +44,15 @@ pub(super) fn execute_direct_audio_clip_playback_requests(
             playback_settings,
             &audio_settings,
             0.0,
+            AudioVoiceAdmission {
+                pool: pools.iter().find_map(|(entity, pool)| {
+                    (pool.index()
+                        == CueVoicePool::for_cue(AudioUsage::Ui, request.emitter.is_some()).index())
+                    .then_some(entity)
+                }),
+                nonspatial_owner,
+                ..default()
+            },
         );
     }
 }

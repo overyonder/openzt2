@@ -632,6 +632,8 @@ pub(super) fn decode_validate_and_apply_snapshot_to_loaded_baseline_world(
     apply_transport_snapshot_records_to_live_transport_entities(
         commands,
         transport_snapshot_records,
+        world_definitions,
+        &restored_placements,
         world_root_entity,
         &entities_with_persistent_identifiers,
         &transport_entities_with_persistent_identifiers,

@@ -1,7 +1,7 @@
 use super::guest_simulation_types::ViewingOpportunityClassified;
 use avian3d::prelude::SpatialQuery;
 use avian3d::prelude::SpatialQueryFilter;
-use bevy::prelude::*;
+use bevy::{ecs::relationship::RelationshipTarget, prelude::*};
 use openzt2_game_data::world_definitions::guest_simulation_definitions::GuestMemoryKind;
 use openzt2_game_data::world_definitions::guest_simulation_definitions::GuestVisitPurpose;
 use openzt2_game_data::AssetId;
@@ -55,7 +55,7 @@ use super::guest_simulation_types::Viewing;
 use super::guest_simulation_types::ViewingOpportunity;
 
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
-use openzt2_zoo_state::economy::service_types::ServiceReservation;
+use openzt2_zoo_state::economy::service_types::{FacilityReservations, ServiceReservation};
 
 use super::guest_definition_queries::find_guest_definition;
 use super::guest_definition_queries::find_reaction;
@@ -109,6 +109,7 @@ pub(crate) fn choose_guest_destination(
         &GlobalTransform,
         &Inspectable,
         Option<&ServiceFacility>,
+        Option<&FacilityReservations>,
         &WorldMember,
     )>,
     transport_stations: Query<&TransportStation>,
@@ -219,7 +220,7 @@ pub(crate) fn choose_guest_destination(
             let mut candidates: Vec<_> = inspectables
                 .iter()
                 .filter_map(|candidate| {
-                    let (entity, transform, _, _, member) = candidate;
+                    let (entity, transform, _, _, _, member) = candidate;
                     if entity == guest || member.root != world.root {
                         return None;
                     }
@@ -229,10 +230,12 @@ pub(crate) fn choose_guest_destination(
                 })
                 .collect();
             candidates.sort_unstable_by_key(|(row, column, id, _)| (*row, *column, *id));
-            for (_, _, _, (entity, transform, inspectable, facility, _)) in candidates {
+            for (_, _, _, (entity, transform, inspectable, facility, reservations, _)) in candidates
+            {
                 if !supports_purpose(asset, inspectable.definition, purpose)
                     || facility.is_some_and(|facility| {
-                        facility.capacity == 0 || facility.occupied >= facility.capacity
+                        reservations.map_or(0, RelationshipTarget::len)
+                            >= usize::from(facility.capacity)
                     })
                     || transform.translation().xz().distance_squared(origin.xz())
                         > radius_m * radius_m

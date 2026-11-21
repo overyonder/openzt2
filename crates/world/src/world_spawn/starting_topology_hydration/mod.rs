@@ -140,7 +140,7 @@ pub(super) fn hydrate_all_starting_fence_nodes_and_edges_into_topology_once(
         let entity = commands
             .spawn((
                 Name::new("starting fence"),
-                FenceEdge { definition, a, b },
+                FenceEdge::between(definition, a, b),
                 PersistentId(fence.persistent_id),
                 calculate_topology_edge_world_transform(a_cell, b_cell, *grid),
                 Visibility::Inherited,
