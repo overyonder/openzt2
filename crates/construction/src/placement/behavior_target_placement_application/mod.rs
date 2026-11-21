@@ -58,6 +58,7 @@ use bevy::ecs::system::SystemParam;
 use bevy::gltf::Gltf;
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
+use openzt2_zoo_state::placement::object_placement_definition_queries::object_placement_prefab_identifier;
 use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
@@ -158,7 +159,8 @@ pub(super) fn apply_behavior_target_placements(
                 if prefab.is_none() {
                     let prefab = catalogue
                         .find_object(pending.definition)
-                        .and_then(|object| catalogue.scene(object.prefab));
+                        .and_then(object_placement_prefab_identifier)
+                        .and_then(|prefab| catalogue.scene(prefab));
                     pending.stage = BehaviorTargetPlacementStage::Siting { prefab };
                 }
                 match choose_behavior_target_placement_site(
@@ -352,7 +354,12 @@ fn choose_behavior_target_placement_site(
     if !behavior_placement_supports_definition(definition) {
         return SiteChoice::Rejected;
     }
-    let Some(handle) = catalogue.scene(object.prefab) else {
+    // Food laid on the ground, such as hay or meat, has no main model, only
+    // its full, partly eaten and empty states; it is put down as its full one,
+    // as the player places it.
+    let Some(handle) =
+        object_placement_prefab_identifier(object).and_then(|prefab| catalogue.scene(prefab))
+    else {
         return if catalogue_is_complete {
             SiteChoice::Rejected
         } else {
