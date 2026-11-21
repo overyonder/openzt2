@@ -12,7 +12,7 @@ use crate::ui_document::source::lower::authored_ui_document_lowering::{
     FINANCE_VALUE_ROW_DOCUMENT, GRAPHICS_DETAIL_SETTING_ROW_DOCUMENT, LOAD_SLOT_ROW_DOCUMENT,
     MULTILIST_ROW_DOCUMENTS, OVERVIEW_LEGEND_ROW_DOCUMENT, PHOTO_ALBUM_CHOICE_ROW_DOCUMENT,
     PHOTO_CAMERA_ROLL_ROW_DOCUMENT, PROFILE_ROW_DOCUMENT, SELECTED_ANIMAL_NEED_ROW_DOCUMENT,
-    SELECTED_ENTITY_INVENTORY_ROW_DOCUMENT,
+    SELECTED_ENTITY_INVENTORY_ROW_DOCUMENT, SELECTED_ENTITY_THOUGHT_ROW_DOCUMENT,
 };
 use crate::ui_document::source::lower::authored_ui_node_tree_lowering::BuildOutput;
 use crate::ui_document::source::lower::authored_ui_scalar_value_lowering::invalid_at;
@@ -269,6 +269,9 @@ pub(super) fn unbound_list_source(
         {
             UiWidgetLiveCollectionSource::SelectedAnimalAdvancedNeeds
         }
+        (UiDocumentRole::EntityInfo, Some(name)) if name.eq_ignore_ascii_case("thoughts") => {
+            UiWidgetLiveCollectionSource::SelectedEntityThoughts
+        }
         (UiDocumentRole::EntityInfo, Some(name)) if name.eq_ignore_ascii_case("state display") => {
             UiWidgetLiveCollectionSource::SelectedAnimalStates
         }
@@ -354,6 +357,9 @@ pub(super) fn list_row_document(
             | UiWidgetLiveCollectionSource::SelectedAnimalAdvancedNeeds
             | UiWidgetLiveCollectionSource::SelectedAnimalStates => {
                 AssetId::from_virtual_path(SELECTED_ANIMAL_NEED_ROW_DOCUMENT)
+            }
+            UiWidgetLiveCollectionSource::SelectedEntityThoughts => {
+                AssetId::from_virtual_path(SELECTED_ENTITY_THOUGHT_ROW_DOCUMENT)
             }
             UiWidgetLiveCollectionSource::DisplayResolutions => {
                 AssetId::from_virtual_path(DISPLAY_RESOLUTION_ROW_DOCUMENT)
