@@ -4,6 +4,7 @@ use openzt2_game_data::{
 };
 use openzt2_interface_state::ui::pointer_capture_types::UiPointerInteraction;
 use openzt2_ui::authored_tooltip_presentation::UiShortTooltipKey;
+use openzt2_ui::authored_tooltip_presentation::UiTooltipStatusKey;
 
 use openzt2_game_assets::species::species_asset_types::{SpeciesAsset, SpeciesAssets};
 use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::SetUiListRowCount;
@@ -141,14 +142,19 @@ pub(crate) fn project_selected_animal_states_to_authored_list_rows(
         ),
         With<Animal>,
     >,
-    rows: Query<(Entity, &UiListRow, Option<&UiShortTooltipKey>)>,
+    rows: Query<(
+        Entity,
+        &UiListRow,
+        Option<&UiShortTooltipKey>,
+        Option<&UiTooltipStatusKey>,
+    )>,
     mut commands: Commands,
     mut multi_icons: Query<(&UiDocumentOwner, &mut UiValue), With<UiMultiIconPolicy>>,
     mut foreground_layouts: Query<(Entity, &Name, &UiDocumentOwner, &mut Node)>,
     mut foreground_visuals: Query<(&ChildOf, &mut ImageNode), With<UiVisualLayer>>,
 ) {
     let species_view = species_index.get(&species_assets);
-    for (row_entity, row, tooltip) in &rows {
+    for (row_entity, row, tooltip, status) in &rows {
         let Ok((list_policy, document_owner)) = lists.get(row.list) else {
             continue;
         };
@@ -213,6 +219,20 @@ pub(crate) fn project_selected_animal_states_to_authored_list_rows(
                 "entityneeds:animal_pregnant",
             ),
         };
+        // Happiness reads Satisfied, Pressing or Critical; health Healthy,
+        // Unhealthy or Sick; pregnancy names itself in full.
+        let status_key = match row.index {
+            0 => Some(status_label(color)),
+            1 => Some(if sick {
+                "entityneeds:sick"
+            } else if color == SATISFIED_COLOR {
+                "entityneeds:healthy"
+            } else {
+                "entityneeds:unhealthy"
+            }),
+            _ => None,
+        };
+        set_tooltip_status(&mut commands, row_entity, status, status_key);
         let tooltip_key = AssetId::from_key(tooltip_key);
         if tooltip.map(|tooltip| tooltip.0) != Some(tooltip_key) {
             // A plain icon item takes no hits; its tooltip needs the pointer.
@@ -234,6 +254,37 @@ pub(crate) fn project_selected_animal_states_to_authored_list_rows(
             &mut foreground_layouts,
             &mut foreground_visuals,
         );
+    }
+}
+
+/// The `needs.xml` word for a need's colour band.
+fn status_label(color: Color) -> &'static str {
+    if color == SATISFIED_COLOR {
+        "entityneeds:satisfied"
+    } else if color == PRESSING_COLOR {
+        "entityneeds:pressing"
+    } else {
+        "entityneeds:critical"
+    }
+}
+
+fn set_tooltip_status(
+    commands: &mut Commands,
+    row: Entity,
+    current: Option<&UiTooltipStatusKey>,
+    next: Option<&str>,
+) {
+    let next = next.map(|key| UiTooltipStatusKey(AssetId::from_key(key)));
+    if current.copied() == next {
+        return;
+    }
+    match next {
+        Some(status) => {
+            commands.entity(row).insert(status);
+        }
+        None => {
+            commands.entity(row).remove::<UiTooltipStatusKey>();
+        }
     }
 }
 
@@ -284,7 +335,12 @@ pub(crate) fn project_selected_animal_needs_to_authored_list_rows(
         ),
         With<Animal>,
     >,
-    rows: Query<(Entity, &UiListRow, Option<&UiShortTooltipKey>)>,
+    rows: Query<(
+        Entity,
+        &UiListRow,
+        Option<&UiShortTooltipKey>,
+        Option<&UiTooltipStatusKey>,
+    )>,
     mut commands: Commands,
     mut multi_icons: Query<(&UiDocumentOwner, &mut UiValue), With<UiMultiIconPolicy>>,
     mut foreground_layouts: Query<(Entity, &Name, &UiDocumentOwner, &mut Node)>,
@@ -293,7 +349,7 @@ pub(crate) fn project_selected_animal_needs_to_authored_list_rows(
     let Some(species_view) = species_index.get(&species_assets) else {
         return;
     };
-    for (row_entity, row, tooltip) in &rows {
+    for (row_entity, row, tooltip, status) in &rows {
         let Ok((list_policy, document_owner)) = lists.get(row.list) else {
             continue;
         };
@@ -338,14 +394,20 @@ pub(crate) fn project_selected_animal_needs_to_authored_list_rows(
         let foreground_color = if wellness_permille
             <= species_need.critical_wellness_threshold.unwrap_or_default()
         {
-            Color::srgb(1.0, 0.0, 20.0 / 255.0)
+            CRITICAL_COLOR
         } else if wellness_permille <= species_need.pressing_wellness_threshold.unwrap_or_default()
         {
-            Color::srgb(1.0, 1.0, 0.0)
+            PRESSING_COLOR
         } else {
-            Color::srgb(0.0, 1.0, 0.0)
+            SATISFIED_COLOR
         };
 
+        set_tooltip_status(
+            &mut commands,
+            row_entity,
+            status,
+            Some(status_label(foreground_color)),
+        );
         set_need_icon_fill(
             row_entity,
             foreground_height_percent,
