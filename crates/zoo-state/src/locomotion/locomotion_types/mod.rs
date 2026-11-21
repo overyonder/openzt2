@@ -586,7 +586,7 @@ pub enum CaffeineMode {
 }
 
 impl CaffeineMode {
-    // ponytail: `people.xml` and `animal.xml` author both factors as 3.0;
+    // `people.xml` and `animal.xml` author both factors as 3.0;
     // lower `f_CaffeineModeFactor` per binder if a mod changes them.
     const AUTHORED_FACTOR: f32 = 3.0;
 

@@ -144,7 +144,7 @@ impl DiseaseExposureWorld<'_, '_, '_> {
                 .is_some_and(|object| object.behavior_type_identifiers.contains(&required))
     }
 
-    // ponytail: every test must pass; `singleQualifier` and `different`
+    // Every test must pass; `singleQualifier` and `different`
     // are kept unused until the manager's use of them is confirmed.
     fn passes(&self, test: &DiseaseZooTest) -> bool {
         match *test {

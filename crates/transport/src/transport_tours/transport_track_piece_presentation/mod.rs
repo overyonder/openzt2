@@ -129,7 +129,7 @@ pub(super) fn select_authored_ground_track_piece_presentation<'a>(
 /// How far a straight piece turning at one end is painted towards that end:
 /// its turn texture's strip stops short of the joint, where the diagonal's
 /// curve texture meets it.
-// ponytail: 0.75 m was fitted against the shipped textures, not read from zt.exe.
+// 0.75 m was fitted against the shipped textures, not read from zt.exe.
 const AUTHORED_GROUND_TRACK_TURN_SHIFT_METRES: f32 = 0.75;
 
 fn authored_ground_track_paint_shift(route: &[Vec3], index: usize) -> Vec3 {
@@ -471,7 +471,7 @@ pub(super) fn ground_track_piece_is_elevated_above_terrain(
             })
             // A road end at a station on a slope sits a little off the
             // ground; only a real gap gets the elevated strip.
-            // ponytail: fixed 1 m; read a clearance from the track if one exists.
+            // Fixed 1 m; read a clearance from the track if one exists.
             .is_some_and(|terrain| point.y > terrain.height_m + 1.0)
     })
 }
@@ -1129,7 +1129,7 @@ pub(super) fn show_construction_markers_at_unconnected_station_ends(
                 })
                 .flatten();
             if let (Some(end), Ok(parent_transform)) = (open_end, parents.get(parent.parent())) {
-                // ponytail: fixed 1.5 m step out of the building, tune if a station hides it
+                // Fixed 1.5 m step out of the building, tune if a station hides it
                 let outward = (end - station_transform.translation())
                     .with_y(0.0)
                     .normalize_or_zero();
@@ -1140,7 +1140,7 @@ pub(super) fn show_construction_markers_at_unconnected_station_ends(
                         .station_wheel(station_entity, end)
                         .unwrap_or(end)
                         + side
-                        // ponytail: fixed lift above the roof, match zt.exe if a station differs
+                        // Fixed lift above the roof, match zt.exe if a station differs
                         + Vec3::Y * 3.0
                 } else {
                     end + outward * 1.5

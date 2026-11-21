@@ -120,7 +120,7 @@ fn nearest_sky_tower(
     routes: &Query<(&TrackSegment, &TrackProfile)>,
     sales: &TransportTrackSaleQueries,
 ) -> Option<Entity> {
-    // ponytail: a fixed 12 m pick height, read the tower's height if tall towers miss.
+    // A fixed 12 m pick height, read the tower's height if tall towers miss.
     towers
         .iter()
         .filter(|(entity, _)| {

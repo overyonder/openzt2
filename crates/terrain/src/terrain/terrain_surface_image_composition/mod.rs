@@ -29,7 +29,7 @@ struct TerrainSurfacePaint {
     water: TerrainSurfaceWater,
 }
 
-// ponytail: the shore band is any dry sample next to water and no higher than
+// The shore band is any dry sample next to water and no higher than
 // that water plus its biome shoreOffset; the native rule is unknown.
 fn classify_terrain_surface_water<'a>(
     paint: &TerrainSurfacePaint,

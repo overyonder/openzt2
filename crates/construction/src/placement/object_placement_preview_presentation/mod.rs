@@ -160,7 +160,7 @@ pub(super) fn hydrate_object_placement_preview_materials_from_ui_document(
 }
 
 const ENTRANCE_ARROW_IMAGE: &str = "ui/fx/footprint/entrance_arrow.tga";
-// ponytail: the pulse was matched by eye to the original.
+// The pulse was matched by eye to the original.
 const ENTRANCE_ARROW_PULSE_M: f32 = 0.3;
 const ENTRANCE_ARROW_PULSE_SECONDS: f32 = 1.0;
 
@@ -367,7 +367,7 @@ pub(super) fn rebuild_object_placement_preview_footprint_and_grid_decals(
         };
         // As the original, one footprint image spans the whole footprint, so
         // its border outlines the footprint rather than every cell.
-        // ponytail: a diagonal footprint keeps one image per cell; span it
+        // A diagonal footprint keeps one image per cell; span it
         // with a rotated rectangle if the diagonal outline matters.
         let rectangle = (turns & 1 == 0)
             .then(|| footprint_rectangle(footprint, pivot, turns, inverse_rotation))

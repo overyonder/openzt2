@@ -174,7 +174,7 @@ pub(super) fn execute_authored_behavior_script_actions(
                             )?;
                         }
                         // `justgavebirth.lua` reports an endangered birth.
-                        // ponytail: births already raise `AnimalBorn`; the
+                        // Births already raise `AnimalBorn`; the
                         // endangered-birth message and mother name are not shown.
                         "ZTWorldMgr" => {
                             for method in ["ZT_SET_BIRTH_MOTHER_NAME", "ZT_NOTIFY_OF_BIRTH"] {

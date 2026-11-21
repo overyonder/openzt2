@@ -65,7 +65,7 @@ pub(super) fn lower_animation_action_source_node(
                     | "maxAnimSpeed"
             )
         })
-        // ponytail: the diseases' inline `diseaseon`/`diseaseoff` text keys
+        // The diseases' inline `diseaseon`/`diseaseoff` text keys
         // only start and stop a particle effect, which is not drawn yet.
         || animation_action_source_node
             .element_children()
