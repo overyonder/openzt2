@@ -140,6 +140,56 @@ pub(super) fn apply_behavior_clip_root_motion(
     }
 }
 
+/// Keeps every body part of one person, such as a guest's upper and lower
+/// body, at the same point of a shared clip. Parts that started it a few
+/// frames apart would otherwise step out of phase and twist at the waist.
+pub(super) fn align_person_body_part_clocks(
+    mut parts: Query<(
+        Entity,
+        &openzt2_world_state::animation_graph::animation_presentation_relationship_types::AnimationPresentationOwner,
+        &mut AnimationPlaybackController,
+    )>,
+    people: Query<(), Or<(With<Guest>, With<Staff>)>>,
+    mut leaders: Local<
+        bevy::platform::collections::HashMap<
+            (Entity, String),
+            (Entity, AnimationPlaybackController),
+        >,
+    >,
+) {
+    leaders.clear();
+    for (entity, owner, controller) in &parts {
+        if !people.contains(owner.gameplay_entity) {
+            continue;
+        }
+        let leader = leaders
+            .entry((
+                owner.gameplay_entity,
+                controller.animation_clip_asset_key.clone(),
+            ))
+            .or_insert_with(|| (entity, controller.clone()));
+        if entity < leader.0 {
+            *leader = (entity, controller.clone());
+        }
+    }
+    for (entity, owner, mut controller) in &mut parts {
+        let Some((leader, clock)) = leaders.get(&(
+            owner.gameplay_entity,
+            controller.animation_clip_asset_key.clone(),
+        )) else {
+            continue;
+        };
+        if *leader == entity
+            || controller.playback_speed_permille != clock.playback_speed_permille
+            || controller.elapsed_milliseconds == clock.elapsed_milliseconds
+        {
+            continue;
+        }
+        controller.elapsed_milliseconds = clock.elapsed_milliseconds;
+        controller.fractional_milliseconds = clock.fractional_milliseconds.clone();
+    }
+}
+
 pub(super) fn project_person_motion_to_walk_animation(
     mut commands: Commands,
     mut assets: PersonAnimationAssets,
@@ -590,6 +640,45 @@ mod tests {
     use openzt2_world_state::animation_playback::animation_playback_controller_types::{
         AnimationPlaybackClock, AnimationPlaybackState,
     };
+
+    #[test]
+    fn body_parts_of_one_person_share_the_clip_clock() {
+        let mut world = World::new();
+        let guest = world.spawn(Guest).id();
+        let part = |world: &mut World, elapsed| {
+            world
+                .spawn((
+                    openzt2_world_state::animation_graph::animation_presentation_relationship_types::AnimationPresentationOwner {
+                        gameplay_entity: guest,
+                    },
+                    AnimationPlaybackController {
+                        playback_generation: 0,
+                        explicit_clip_request_id: None,
+                        animation_set_asset: Handle::default(),
+                        animation_clip_asset_key: WALK_CLIP.to_owned(),
+                        elapsed_milliseconds: elapsed,
+                        fractional_milliseconds: default(),
+                        playback_speed_permille: 1000,
+                        playback_state: AnimationPlaybackState::Playing,
+                        playback_repetition_policy: AnimationPlaybackRepetitionPolicy::Loop,
+                        playback_clock: AnimationPlaybackClock::Simulation,
+                    },
+                ))
+                .id()
+        };
+        let upper = part(&mut world, 400);
+        let lower = part(&mut world, 250);
+        let mut system = IntoSystem::into_system(align_person_body_part_clocks);
+        system.initialize(&mut world);
+        system.run((), &mut world).unwrap();
+        let elapsed = |entity| {
+            world
+                .get::<AnimationPlaybackController>(entity)
+                .unwrap()
+                .elapsed_milliseconds
+        };
+        assert_eq!(elapsed(upper), elapsed(lower));
+    }
 
     #[test]
     fn a_walking_behavior_clip_moves_the_person_along_its_facing() {
