@@ -106,6 +106,12 @@ pub(super) struct BehaviorTargetPlacementWorld<'w, 's> {
     habitats: Res<'w, HabitatIndex>,
     regions: Query<'w, 's, &'static HabitatRegion>,
     grid: Res<'w, TopologyGrid>,
+    animal_variants:
+        Query<'w, 's, &'static openzt2_zoo_state::animal_lifecycle::types::AnimalVariant>,
+    species_assets:
+        Option<Res<'w, Assets<openzt2_game_assets::species::species_asset_types::SpeciesAsset>>>,
+    species_index:
+        Option<Res<'w, openzt2_game_assets::species::species_asset_types::SpeciesAssets>>,
 }
 
 #[derive(SystemParam)]
@@ -449,10 +455,27 @@ fn choose_behavior_target_placement_site(
         .agents
         .get(pending.recipient)
         .map_or(0.0, |agent| agent.radius_m);
+    // The recipient walks up to the object and eats or drinks from it, so the
+    // ground around it must not be too steep for that animal, as a keeper
+    // could otherwise leave food on a slope its animal cannot climb.
+    let recipient_minimum_normal_y = recipient_minimum_ground_normal_y(world, pending.recipient);
     for candidate in std::iter::once(recipient.translation()).chain(candidates) {
         let position = candidate.xz();
         if position.distance(recipient.translation().xz()) < clearance + recipient_radius {
             continue;
+        }
+        if let (Some(minimum_normal_y), Some(navigation)) =
+            (recipient_minimum_normal_y, world.navigation.as_ref())
+        {
+            let reach = clearance + recipient_radius * RECIPIENT_REACH_RADII;
+            if !ground_around_meets_slope(
+                navigation.terrain_derived_navigation_graph(),
+                position,
+                reach,
+                minimum_normal_y,
+            ) {
+                continue;
+            }
         }
         let Some(point) = sample_behavior_placement_terrain(world, position) else {
             continue;
@@ -478,6 +501,58 @@ fn choose_behavior_target_placement_site(
         }
     }
     SiteChoice::Rejected
+}
+
+/// How many of its radii from an object an animal may stand to reach it, as
+/// an elephant reaches with its trunk well ahead of its body.
+const RECIPIENT_REACH_RADII: f32 = 4.0;
+
+/// The steepest ground the recipient animal may stand on, as the minimum
+/// surface normal Y, or `None` for a recipient without an authored limit.
+fn recipient_minimum_ground_normal_y(
+    world: &BehaviorTargetPlacementWorld,
+    recipient: Entity,
+) -> Option<f32> {
+    let variant = world.animal_variants.get(recipient).ok()?;
+    let maximum_slope = world
+        .species_index
+        .as_ref()?
+        .get(world.species_assets.as_ref()?)?
+        .find_variant(variant.0)?
+        .navigation_collision_policy
+        .as_ref()?
+        .maximum_slope_radians;
+    maximum_slope.is_finite().then(|| maximum_slope.cos())
+}
+
+/// Whether every terrain cell within `reach` of `centre` is gentle enough.
+fn ground_around_meets_slope(
+    graph: &openzt2_zoo_state::locomotion::terrain_derived_navigation_graph_types::TerrainDerivedNavigationGraph,
+    centre: Vec2,
+    reach: f32,
+    minimum_normal_y: f32,
+) -> bool {
+    let cell_size = f32::from(graph.terrain_cell_size_centimetres) * 0.01;
+    if cell_size <= 0.0 {
+        return true;
+    }
+    let steps = (reach / cell_size).ceil() as i32;
+    (-steps..=steps).all(|dz| {
+        (-steps..=steps).all(|dx| {
+            let point = centre + Vec2::new(dx as f32, dz as f32) * cell_size;
+            if point.distance(centre) > reach || point.x < 0.0 || point.y > 0.0 {
+                return true;
+            }
+            let cell = [
+                (point.x / cell_size).floor() as u32,
+                (-point.y / cell_size).floor() as u32,
+            ];
+            graph
+                .calculate_navigation_node_for_terrain_cell(cell)
+                .and_then(|index| graph.find_navigation_node(index))
+                .is_none_or(|node| node.minimum_triangle_normal_y >= minimum_normal_y)
+        })
+    })
 }
 
 /// How far a placed object reaches from its origin when its prefab gives no
@@ -805,5 +880,73 @@ mod clearance_tests {
         let moved = clear_point(keeper, Vec2::new(0.5, 0.0), 1.5).unwrap();
         assert!((moved - Vec2::new(1.5, 0.0)).length() < 1e-5);
         assert_eq!(clear_point(keeper, Vec2::new(3.0, 0.0), 1.5), None);
+    }
+
+    #[test]
+    fn food_is_kept_off_ground_too_steep_for_its_animal() {
+        use openzt2_game_data::terrain::{
+            TerrainGrid, TerrainPresentation, TerrainSample, TerrainSlopeTile, TerrainUnits,
+            TerrainWaterDepth,
+        };
+        let flat = TerrainSample {
+            height_relative_to_base_metres: 0.0,
+            biome_index: 0,
+            has_ground_cover: false,
+            water_depth: TerrainWaterDepth::Dry,
+            water_surface_flag: false,
+            excludes_elevated_path: false,
+            support_floor_metres: None,
+            height_cap_metres: None,
+            height_is_linked: false,
+            has_child_height_link: false,
+        };
+        let mut samples = vec![flat; 25];
+        // A ridge along the sample column x = 2.
+        for row in 0..5 {
+            samples[row * 5 + 2].height_relative_to_base_metres = 2.0;
+        }
+        let terrain = TerrainGrid {
+            width: 5,
+            height: 5,
+            sector_columns: 1,
+            sector_rows: 1,
+            units: TerrainUnits {
+                cell_size_metres: 1.0,
+                base_height_metres: 0.0,
+                maximum_height_metres: f32::MAX,
+                minimum_water_height_metres: None,
+            },
+            presentation: TerrainPresentation {
+                water_distance_fade: Default::default(),
+                water_editing: Default::default(),
+                detail_texture: String::new(),
+                detail_texture_repetition: 1.0,
+                cliff_rise_per_metre: [0.0; 2],
+                surface_resolution: 1,
+                surface_margin_cells: 0,
+                full_alpha_composition: false,
+            },
+            biomes: Vec::new(),
+            samples,
+            water_regions: Vec::new(),
+            waterfall: None,
+            slope_tiles: vec![TerrainSlopeTile {
+                uses_alternate_diagonal: false,
+            }],
+        };
+        let graph = openzt2_zoo_state::locomotion::terrain_derived_navigation_graph_types::TerrainDerivedNavigationGraph::build_from_authored_terrain_grid(&terrain).unwrap();
+        let gentle = 30.0_f32.to_radians().cos();
+        assert!(ground_around_meets_slope(
+            &graph,
+            Vec2::new(0.5, -1.5),
+            0.4,
+            gentle
+        ));
+        assert!(!ground_around_meets_slope(
+            &graph,
+            Vec2::new(0.5, -1.5),
+            1.2,
+            gentle
+        ));
     }
 }
