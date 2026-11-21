@@ -85,13 +85,19 @@ pub(super) fn start_current_supported_behavior_docking_actions(
         openzt2_zoo_state::locomotion::locomotion_types::NavigationRequestSequence,
     >,
     mut docking_requests: MessageWriter<DockAt>,
-    mut occupancy: ResMut<super::interaction_container_occupancy::InteractionContainerOccupancy>,
+    (mut occupancy, walking_to_their_place): (
+        ResMut<super::interaction_container_occupancy::InteractionContainerOccupancy>,
+        Query<(Entity, &BehaviorTaskExecutionState), With<PendingBehaviorDockingCompletion>>,
+    ),
 ) {
     let world_definitions = active_world_definitions.get(&world_definition_assets);
-    // Everyone already waiting in a queue: running a set that walks up to it.
+    // Everyone in a queue, standing in it or still walking to their place:
+    // running a set that walks up to it.
     let waiting_in_queues = behavior_tasks
         .iter()
-        .filter(|(.., task)| {
+        .map(|(actor, .., task)| (actor, task))
+        .chain(walking_to_their_place.iter())
+        .filter(|(_, task)| {
             behavior_document_assets
                 .get(&task.document)
                 .and_then(|document| document.behavior_set_at_index(task.declaration))
@@ -102,7 +108,7 @@ pub(super) fn start_current_supported_behavior_docking_actions(
                         .any(|action| matches!(action, BehaviorAction::DockQueue(_)))
                 })
         })
-        .filter_map(|(actor, .., task)| Some((actor, task.target()?, task.execution_id)))
+        .filter_map(|(actor, task)| Some((actor, task.target()?, task.execution_id)))
         .collect::<Vec<_>>();
     for (actor, navigation_agent, locomotion_mode, mut behavior_task) in &mut behavior_tasks {
         if behavior_task.next_action_tick > simulation_clock.tick {
