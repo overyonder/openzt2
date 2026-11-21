@@ -8,16 +8,41 @@ use openzt2_world_state::animation_playback::locomotion_root_motion::ConsumedLoc
 pub(crate) fn remove_consumed_root_trajectory(
     assets: Res<Assets<AnimationSetAsset>>,
     clips: Res<Assets<AnimationClip>>,
-    controllers: Query<(&AnimationPlaybackController, &ConsumedLocomotionRootMotion)>,
+    controllers: Query<(
+        Entity,
+        &AnimationPlaybackController,
+        &ConsumedLocomotionRootMotion,
+    )>,
     mut joints: Query<(&AnimationJointTarget, &mut Transform)>,
+    mut last_owned: Local<bevy::platform::collections::HashMap<Entity, Option<usize>>>,
+    owners: Query<&openzt2_world_state::animation_graph::animation_presentation_relationship_types::AnimationPresentationOwner>,
+    animals: Query<(), With<openzt2_zoo_state::animal_lifecycle::types::Animal>>,
 ) {
+    // A new locomotion request takes the root motion at once, but its clip
+    // starts a frame or more later, after a load if it never played. Until
+    // then the previous walk keeps playing and keeps its root pinned too;
+    // released, its root's authored turn shows as a sudden quarter turn.
+    // People step out of their walk on purpose, for a stop or a turn, so only
+    // animals keep the previous walk pinned.
+    for (entity, controller, consumed) in &controllers {
+        let animal = owners
+            .get(entity)
+            .is_ok_and(|owner| animals.contains(owner.gameplay_entity));
+        if animal && consumed.owns_playback(controller) {
+            last_owned.insert(entity, controller.explicit_clip_request_id);
+        }
+    }
+    last_owned.retain(|entity, _| controllers.contains(*entity));
     for (binding, mut transform) in &mut joints {
-        let Ok((controller, consumed)) =
+        let Ok((_, controller, consumed)) =
             controllers.get(binding.animation_playback_controller_entity)
         else {
             continue;
         };
-        if !consumed.owns_playback(controller) {
+        if !consumed.owns_playback(controller)
+            && last_owned.get(&binding.animation_playback_controller_entity)
+                != Some(&controller.explicit_clip_request_id)
+        {
             continue;
         }
         let Some(record) = assets.get(&controller.animation_set_asset).and_then(|set| {

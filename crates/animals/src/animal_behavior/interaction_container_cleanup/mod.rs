@@ -9,3 +9,22 @@ pub(super) fn remove_destroyed_container_memberships(
 ) {
     occupancy.remove_destroyed_entities(&entities, |member| contained.contains(member));
 }
+
+#[allow(clippy::type_complexity)]
+pub(super) fn release_people_whose_task_moved_on(
+    mut occupancy: ResMut<InteractionContainerOccupancy>,
+    people: Query<
+        (
+            Entity,
+            Option<&openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState>,
+        ),
+        Or<(
+            With<openzt2_zoo_state::guests::guest_simulation_types::Guest>,
+            With<openzt2_zoo_state::staff::staff_employment_types::Staff>,
+        )>,
+    >,
+) {
+    for (person, task) in &people {
+        occupancy.release_after_task_moved_on(person, task.and_then(|task| task.target()));
+    }
+}

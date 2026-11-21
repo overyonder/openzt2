@@ -71,6 +71,7 @@ pub(super) fn install_fence_definition_with_broken_variant(
             virtual_nodes: Vec::new(),
         }],
         fences: vec![FenceDefinition {
+            blocks_view: false,
             fitting_curves: Vec::new(),
             broken,
             id: definition,

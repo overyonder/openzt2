@@ -41,7 +41,7 @@ use openzt2_zoo_state::{
 const WALK_CLIP: &str = "Walk_Ahead";
 const STAND_CLIP: &str = "Stand_Idle";
 
-#[derive(Component)]
+#[derive(Component, Clone)]
 pub(super) struct PersonGaitPlayback {
     binder: AssetId,
     row: AssetId,
@@ -68,6 +68,128 @@ use openzt2_world_state::animation_playback::{
 };
 use openzt2_zoo_state::locomotion::locomotion_types::{CaffeineMode, NavAgent};
 
+/// How long a walking person may stand still before the walk becomes a stand.
+const WALK_STOP_GRACE_S: f32 = 0.25;
+
+/// The time left before a paused walk turns into a stand.
+#[derive(Component, Clone, Copy)]
+pub(super) struct PersonStopGrace(f32);
+
+/// Slower than this, a behavior clip's root drift is posture, not a walk.
+const BEHAVIOR_CLIP_MOTION_MIN_MPS: f32 = 0.05;
+
+/// The person whose behavior clip on `controller` walks, so the clip's root
+/// motion moves the person instead of drawing the body away from it.
+#[derive(Component, Clone, Copy)]
+pub(super) struct BehaviorClipRootMotion {
+    controller: Entity,
+}
+
+fn root_parent<'a>(
+    controller: Entity,
+    root: &str,
+    children: &Query<&Children>,
+    joints: &Query<(&AnimationJointTarget, &ChildOf)>,
+    transforms: &'a Query<&GlobalTransform>,
+) -> Option<&'a GlobalTransform> {
+    std::iter::once(controller)
+        .chain(children.iter_descendants_depth_first::<Children>(controller))
+        .find_map(|entity| {
+            let (binding, parent) = joints.get(entity).ok()?;
+            (binding.animation_playback_controller_entity == controller
+                && binding.joint_asset_key.eq_ignore_ascii_case(root))
+            .then(|| transforms.get(parent.parent()).ok())
+            .flatten()
+        })
+}
+
+fn root_parent_in_actor(
+    controller: Entity,
+    actor: Entity,
+    root: &str,
+    children: &Query<&Children>,
+    joints: &Query<(&AnimationJointTarget, &ChildOf)>,
+    transforms: &Query<&GlobalTransform>,
+) -> Option<bevy::math::Affine3A> {
+    let parent = root_parent(controller, root, children, joints, transforms)?;
+    Some(transforms.get(actor).ok()?.affine().inverse() * parent.affine())
+}
+
+/// Moves a person by the root motion of the walking behavior clip it plays.
+pub(super) fn apply_behavior_clip_root_motion(
+    mut commands: Commands,
+    mut people: Query<
+        (Entity, &BehaviorClipRootMotion, &mut Transform),
+        (Without<Destination>, Without<DirectLocomotion>),
+    >,
+    motions: Query<(&ConsumedLocomotionRootMotion, &AnimationPlaybackController)>,
+) {
+    for (person, source, mut transform) in &mut people {
+        let Some((motion, _)) = motions
+            .get(source.controller)
+            .ok()
+            .filter(|(motion, controller)| motion.owns_playback(controller))
+        else {
+            commands.entity(person).remove::<BehaviorClipRootMotion>();
+            continue;
+        };
+        let step = transform.rotation * (transform.scale * motion.translation());
+        transform.translation.x += step.x;
+        transform.translation.z += step.z;
+        transform.rotation = (transform.rotation * motion.rotation()).normalize();
+    }
+}
+
+/// Keeps every body part of one person, such as a guest's upper and lower
+/// body, at the same point of a shared clip. Parts that started it a few
+/// frames apart would otherwise step out of phase and twist at the waist.
+pub(super) fn align_person_body_part_clocks(
+    mut parts: Query<(
+        Entity,
+        &openzt2_world_state::animation_graph::animation_presentation_relationship_types::AnimationPresentationOwner,
+        &mut AnimationPlaybackController,
+    )>,
+    people: Query<(), Or<(With<Guest>, With<Staff>)>>,
+    mut leaders: Local<
+        bevy::platform::collections::HashMap<
+            (Entity, String),
+            (Entity, AnimationPlaybackController),
+        >,
+    >,
+) {
+    leaders.clear();
+    for (entity, owner, controller) in &parts {
+        if !people.contains(owner.gameplay_entity) {
+            continue;
+        }
+        let leader = leaders
+            .entry((
+                owner.gameplay_entity,
+                controller.animation_clip_asset_key.clone(),
+            ))
+            .or_insert_with(|| (entity, controller.clone()));
+        if entity < leader.0 {
+            *leader = (entity, controller.clone());
+        }
+    }
+    for (entity, owner, mut controller) in &mut parts {
+        let Some((leader, clock)) = leaders.get(&(
+            owner.gameplay_entity,
+            controller.animation_clip_asset_key.clone(),
+        )) else {
+            continue;
+        };
+        if *leader == entity
+            || controller.playback_speed_permille != clock.playback_speed_permille
+            || controller.elapsed_milliseconds == clock.elapsed_milliseconds
+        {
+            continue;
+        }
+        controller.elapsed_milliseconds = clock.elapsed_milliseconds;
+        controller.fractional_milliseconds = clock.fractional_milliseconds.clone();
+    }
+}
+
 pub(super) fn project_person_motion_to_walk_animation(
     mut commands: Commands,
     mut assets: PersonAnimationAssets,
@@ -77,6 +199,7 @@ pub(super) fn project_person_motion_to_walk_animation(
         Option<&AnimationGraphEnabled>,
         Option<&mut ConsumedLocomotionRootMotion>,
         Option<&mut PersonGaitPlayback>,
+        Option<&PersonStopGrace>,
     )>,
     parents: Query<&ChildOf>,
     children: Query<&Children>,
@@ -102,8 +225,11 @@ pub(super) fn project_person_motion_to_walk_animation(
     >,
     mut playback_requests: MessageWriter<AnimationClipPlaybackRequest>,
     caffeine_modes: Query<&CaffeineMode>,
+    mut shared_gaits: Local<bevy::platform::collections::HashMap<Entity, PersonGaitPlayback>>,
 ) {
-    for (controller_entity, controller, enabled, mut consumed, mut gait) in &mut controllers {
+    shared_gaits.clear();
+    for (controller_entity, controller, enabled, mut consumed, mut gait, grace) in &mut controllers
+    {
         let Some(person) = parents
             .iter_ancestors(controller_entity)
             .find(|ancestor| people.contains(*ancestor))
@@ -133,6 +259,27 @@ pub(super) fn project_person_motion_to_walk_animation(
         }
         let task_animation = awaited_clip || held_clip;
         let moving = navigating || direct;
+        // A walk that pauses for a moment, such as between two tasks that
+        // both walk, keeps its stride instead of flicking to a stand and back.
+        if !moving
+            && !task_animation
+            && enabled.is_none_or(|enabled| enabled.0)
+            && source.is_some_and(|source| source.controller == controller_entity)
+        {
+            let remaining = grace.map_or(WALK_STOP_GRACE_S, |grace| grace.0)
+                - assets.time.as_ref().map_or(0.0, |time| time.delta_secs());
+            if remaining > 0.0 {
+                commands
+                    .entity(controller_entity)
+                    .insert(PersonStopGrace(remaining));
+                continue;
+            }
+        }
+        if grace.is_some() {
+            commands
+                .entity(controller_entity)
+                .remove::<PersonStopGrace>();
+        }
         if !moving || task_animation || enabled.is_some_and(|enabled| !enabled.0) {
             if source.is_some_and(|source| source.controller == controller_entity) {
                 commands
@@ -141,6 +288,52 @@ pub(super) fn project_person_motion_to_walk_animation(
                 commands
                     .entity(controller_entity)
                     .remove::<ConsumedLocomotionRootMotion>();
+            }
+        }
+        if task_animation && !moving && enabled.is_none_or(|enabled| enabled.0) {
+            // A behavior clip that walks, such as stepping away from a
+            // stand's counter with the food, moves the person itself.
+            let parent = assets
+                .sets
+                .get(&controller.animation_set_asset)
+                .and_then(|set| {
+                    set.find_animation_clip_record_by_asset_key(
+                        &controller.animation_clip_asset_key,
+                    )
+                })
+                .filter(|clip| {
+                    clip_motion_velocity(clip, &GlobalTransform::IDENTITY, 1000)
+                        .is_some_and(|velocity| velocity.length() > BEHAVIOR_CLIP_MOTION_MIN_MPS)
+                })
+                .and_then(|clip| {
+                    let root = clip
+                        .authored_animation_clip_metadata
+                        .as_ref()?
+                        .root_motion_joint
+                        .as_ref()?;
+                    root_parent_in_actor(
+                        controller_entity,
+                        person,
+                        &root.joint_asset_key,
+                        &children,
+                        &joints,
+                        &transforms,
+                    )
+                });
+            if let (Some(parent), Some(request)) = (parent, controller.explicit_clip_request_id) {
+                match consumed.as_deref_mut() {
+                    Some(motion) if motion.owns_playback(controller) => {
+                        motion.update_root_parent_transform(parent);
+                    }
+                    _ => {
+                        commands
+                            .entity(controller_entity)
+                            .insert(ConsumedLocomotionRootMotion::new(request, parent));
+                    }
+                }
+                commands.entity(person).insert(BehaviorClipRootMotion {
+                    controller: controller_entity,
+                });
             }
         }
         if task_animation || enabled.is_some_and(|enabled| !enabled.0) {
@@ -238,7 +431,22 @@ pub(super) fn project_person_motion_to_walk_animation(
             let current = gait.as_deref_mut().unwrap_or(&mut new_gait);
             current.reset_seconds_remaining -=
                 assets.time.as_ref().map_or(0.0, |time| time.delta_secs());
-            if current.binder != table.binder
+            let shared = shared_gaits.get(&person).filter(|shared| {
+                shared.binder == table.binder
+                    && shared.row == row.key
+                    && shared.node == row.node
+                    && shared.rates == row.playback_speed_range
+            });
+            if let Some(shared) = shared {
+                // Every body part of one person walks at the same rate, or
+                // its legs fall out of step with its upper body.
+                current.rate = shared.rate;
+                current.reset_seconds_remaining = shared.reset_seconds_remaining;
+                current.binder = shared.binder;
+                current.row = shared.row;
+                current.node.clone_from(&shared.node);
+                current.rates = shared.rates;
+            } else if current.binder != table.binder
                 || current.row != row.key
                 || current.node != row.node
                 || current.rates != row.playback_speed_range
@@ -261,6 +469,9 @@ pub(super) fn project_person_motion_to_walk_animation(
                 current.rates = row.playback_speed_range;
             }
             let rate = current.rate;
+            shared_gaits
+                .entry(person)
+                .or_insert_with(|| current.clone());
             if newly_projected {
                 commands.entity(controller_entity).insert(new_gait);
             }
@@ -336,17 +547,13 @@ pub(super) fn project_person_motion_to_walk_animation(
                     .as_ref()?
                     .root_motion_joint
                     .as_ref()?;
-                let parent = std::iter::once(controller_entity)
-                    .chain(children.iter_descendants_depth_first::<Children>(controller_entity))
-                    .find_map(|entity| {
-                        let (binding, parent) = joints.get(entity).ok()?;
-                        (binding.animation_playback_controller_entity == controller_entity
-                            && binding
-                                .joint_asset_key
-                                .eq_ignore_ascii_case(&root.joint_asset_key))
-                        .then(|| transforms.get(parent.parent()).ok())
-                        .flatten()
-                    })?;
+                let parent = root_parent(
+                    controller_entity,
+                    &root.joint_asset_key,
+                    &children,
+                    &joints,
+                    &transforms,
+                )?;
                 let actor = transforms.get(person).ok()?;
                 let speed = clip_motion_velocity(clip, parent, 1000)?.length();
                 if speed <= 0.0 {
@@ -433,6 +640,89 @@ mod tests {
     use openzt2_world_state::animation_playback::animation_playback_controller_types::{
         AnimationPlaybackClock, AnimationPlaybackState,
     };
+
+    #[test]
+    fn body_parts_of_one_person_share_the_clip_clock() {
+        let mut world = World::new();
+        let guest = world.spawn(Guest).id();
+        let part = |world: &mut World, elapsed| {
+            world
+                .spawn((
+                    openzt2_world_state::animation_graph::animation_presentation_relationship_types::AnimationPresentationOwner {
+                        gameplay_entity: guest,
+                    },
+                    AnimationPlaybackController {
+                        playback_generation: 0,
+                        explicit_clip_request_id: None,
+                        animation_set_asset: Handle::default(),
+                        animation_clip_asset_key: WALK_CLIP.to_owned(),
+                        elapsed_milliseconds: elapsed,
+                        fractional_milliseconds: default(),
+                        playback_speed_permille: 1000,
+                        playback_state: AnimationPlaybackState::Playing,
+                        playback_repetition_policy: AnimationPlaybackRepetitionPolicy::Loop,
+                        playback_clock: AnimationPlaybackClock::Simulation,
+                    },
+                ))
+                .id()
+        };
+        let upper = part(&mut world, 400);
+        let lower = part(&mut world, 250);
+        let mut system = IntoSystem::into_system(align_person_body_part_clocks);
+        system.initialize(&mut world);
+        system.run((), &mut world).unwrap();
+        let elapsed = |entity| {
+            world
+                .get::<AnimationPlaybackController>(entity)
+                .unwrap()
+                .elapsed_milliseconds
+        };
+        assert_eq!(elapsed(upper), elapsed(lower));
+    }
+
+    #[test]
+    fn a_walking_behavior_clip_moves_the_person_along_its_facing() {
+        use bevy::animation::{animated_field, AnimationTargetId};
+        let mut clip = AnimationClip::default();
+        clip.add_curve_to_target(
+            AnimationTargetId::from_name(&Name::new("bip01")),
+            AnimatableCurve::new(
+                animated_field!(Transform::translation),
+                AnimatableKeyframeCurve::new([(0.0, Vec3::ZERO), (1.0, Vec3::Z * 2.0)]).unwrap(),
+            ),
+        );
+        let mut motion = ConsumedLocomotionRootMotion::new(7, bevy::math::Affine3A::IDENTITY);
+        motion.sample_interval(&clip, "Bip01", 0.0..0.5, 0, 1.0);
+        let mut world = World::new();
+        let controller = world
+            .spawn((
+                motion,
+                AnimationPlaybackController {
+                    playback_generation: 0,
+                    explicit_clip_request_id: Some(7),
+                    animation_set_asset: Handle::default(),
+                    animation_clip_asset_key: "WalkItem_Ahead".to_owned(),
+                    elapsed_milliseconds: 0,
+                    fractional_milliseconds: default(),
+                    playback_speed_permille: 1000,
+                    playback_state: AnimationPlaybackState::Playing,
+                    playback_repetition_policy: AnimationPlaybackRepetitionPolicy::PlayOnce,
+                    playback_clock: AnimationPlaybackClock::Simulation,
+                },
+            ))
+            .id();
+        let person = world
+            .spawn((
+                Transform::from_rotation(Quat::from_rotation_y(std::f32::consts::FRAC_PI_2)),
+                BehaviorClipRootMotion { controller },
+            ))
+            .id();
+        let mut system = IntoSystem::into_system(apply_behavior_clip_root_motion);
+        system.initialize(&mut world);
+        system.run((), &mut world).unwrap();
+        let moved = world.get::<Transform>(person).unwrap().translation;
+        assert!(moved.abs_diff_eq(Vec3::X, 1e-5), "{moved:?}");
+    }
 
     #[test]
     fn navigating_guest_walks_and_stopped_guest_stands() {

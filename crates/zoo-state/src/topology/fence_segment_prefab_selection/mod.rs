@@ -253,6 +253,7 @@ mod tests {
 
     fn fence_definition_with_six_distinct_segment_prefabs() -> FenceDefinition {
         FenceDefinition {
+            blocks_view: false,
             fitting_curves: Vec::new(),
             broken: None,
             id: AssetId::from_virtual_path("test/fence"),
