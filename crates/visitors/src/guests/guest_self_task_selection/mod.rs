@@ -558,7 +558,7 @@ pub(super) fn select_idle_guest_tasks(
     }
 }
 
-/// Whether any of `habitat`'s ground lies within `distance_m` of `path`.
+/// Whether any of `habitat`'s ground lies closer than `distance_m` to `path`.
 fn path_is_beside_habitat(
     habitats: &HabitatIndex,
     topology: TopologyGrid,
@@ -571,7 +571,7 @@ fn path_is_beside_habitat(
     (-steps..=steps).any(|z| {
         (-steps..=steps).any(|x| {
             let offset = Vec2::new(x as f32, z as f32) * step;
-            offset.length_squared() <= distance_m * distance_m
+            offset.length_squared() < distance_m * distance_m
                 && locate_habitat_at_world_position(habitats, path + offset, topology)
                     == Some(habitat)
         })
@@ -592,6 +592,14 @@ mod viewing_path_tests {
             &habitats,
             topology,
             Vec2::new(5.0, 0.5),
+            habitat,
+            6.0
+        ));
+        // Habitat ground exactly at the viewing distance is too far.
+        assert!(!path_is_beside_habitat(
+            &habitats,
+            topology,
+            Vec2::new(6.5, 0.5),
             habitat,
             6.0
         ));
