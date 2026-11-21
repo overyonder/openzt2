@@ -32,6 +32,8 @@ impl AuthoredAnimationAudioAndEffectTextActionExecutionContext<'_, '_> {
             audio_cue_name,
             terrain_sound,
         ) else {
+            debug!(entity = ?animation_playback_controller_entity, cue = audio_cue_name,
+                terrain_sound, "animation sound has no matching audio cue");
             return;
         };
         if update_audio_position {
