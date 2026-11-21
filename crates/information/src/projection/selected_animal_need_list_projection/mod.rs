@@ -2,6 +2,7 @@ use bevy::prelude::*;
 use openzt2_game_data::{
     species::NeedKind, ui_document::widget_live_collection::UiWidgetLiveCollectionSource, AssetId,
 };
+use openzt2_interface_state::ui::pointer_capture_types::UiPointerInteraction;
 use openzt2_ui::authored_tooltip_presentation::UiShortTooltipKey;
 
 use openzt2_game_assets::species::species_asset_types::{SpeciesAsset, SpeciesAssets};
@@ -215,9 +216,11 @@ pub(crate) fn project_selected_animal_states_to_authored_list_rows(
         let tooltip_key = AssetId::from_key(tooltip_key);
         if tooltip.map(|tooltip| tooltip.0) != Some(tooltip_key) {
             // A plain icon item takes no hits; its tooltip needs the pointer.
-            commands
-                .entity(row_entity)
-                .insert((UiShortTooltipKey(tooltip_key), Pickable::default()));
+            commands.entity(row_entity).insert((
+                UiShortTooltipKey(tooltip_key),
+                Pickable::default(),
+                UiPointerInteraction::default(),
+            ));
         }
         for (owner, mut value) in &mut multi_icons {
             if owner.0 == row_entity && value.0 != icon {
@@ -316,9 +319,11 @@ pub(crate) fn project_selected_animal_needs_to_authored_list_rows(
         let tooltip_key = AssetId::from_key(need_tooltip_key(need_kind));
         if tooltip.map(|tooltip| tooltip.0) != Some(tooltip_key) {
             // A plain icon item takes no hits; its tooltip needs the pointer.
-            commands
-                .entity(row_entity)
-                .insert((UiShortTooltipKey(tooltip_key), Pickable::default()));
+            commands.entity(row_entity).insert((
+                UiShortTooltipKey(tooltip_key),
+                Pickable::default(),
+                UiPointerInteraction::default(),
+            ));
         }
 
         for (owner, mut icon_value) in &mut multi_icons {

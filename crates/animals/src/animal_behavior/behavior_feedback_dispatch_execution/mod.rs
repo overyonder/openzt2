@@ -49,7 +49,9 @@ pub(super) fn dispatch_current_authored_behavior_feedback_and_advance(
 }
 
 /// Keeps each actor's latest authored action and its recent thoughts for its
-/// information panel, and clears the action once no task runs.
+/// information panel. The action stays until the next one: an idle animal
+/// starts a new task about every second, so clearing it between tasks made
+/// the panel blink.
 pub(super) fn record_dispatched_behavior_feedback(
     mut commands: Commands,
     mut dispatched: MessageReader<BehaviorFeedbackDispatched>,
@@ -58,15 +60,7 @@ pub(super) fn record_dispatched_behavior_feedback(
     fixed_time: Res<Time<Fixed>>,
     tasks: Query<&BehaviorTaskExecutionState>,
     mut logs: Query<&mut BehaviorFeedbackLog>,
-    mut finished: RemovedComponents<BehaviorTaskExecutionState>,
 ) {
-    for actor in finished.read() {
-        if let Ok(mut log) = logs.get_mut(actor) {
-            if log.action.is_some() && !tasks.contains(actor) {
-                log.action = None;
-            }
-        }
-    }
     let ticks_per_second = 1.0 / fixed_time.timestep().as_secs_f64().max(1e-6);
     for dispatch in dispatched.read() {
         let Some(BehaviorAction::Feedback(feedback)) = behavior_document_assets
