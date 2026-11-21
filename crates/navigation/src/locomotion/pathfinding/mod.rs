@@ -19,7 +19,10 @@ pub(super) struct RouteSearch {
 }
 pub(super) const SHORT_PATH_ITERATIONS: usize = 100;
 pub(super) const PRIORITY_PATH_ITERATIONS: usize = 250;
-pub(super) const ITERATIONS_PER_SLICE: usize = 2;
+/// Search steps per update for the route at the front of the queue. Every
+/// actor waits in one queue, so two steps left a crowd of guests standing
+/// still for seconds before each walk; this many still bounds one update.
+pub(super) const ITERATIONS_PER_SLICE: usize = 64;
 pub(super) const LONG_PATH_ITERATIONS: usize = 1000;
 
 pub(crate) fn plan_route(
