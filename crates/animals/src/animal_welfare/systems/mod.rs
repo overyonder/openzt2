@@ -12,9 +12,8 @@ use openzt2_zoo_state::animal_lifecycle::types::SpeciesHandle;
 
 use super::{
     calculations::{
-        animal_need_crossed_authored_threshold, calculate_mean_animal_welfare_with_habitat_limit,
-        clamp_animal_need_q16_after_delta, classify_animal_welfare_against_authored_thresholds,
-        convert_animal_need_q16_to_permille,
+        animal_need_crossed_authored_threshold, clamp_animal_need_q16_after_delta,
+        convert_animal_need_q16_to_permille, welfare_from_need_points,
     },
     types::*,
 };
@@ -113,22 +112,7 @@ pub(crate) fn initialize_animal_needs(
         }
         // The next assessment uses live membership and species population.
         let suitability = HabitatSuitability::default();
-        let value = calculate_mean_animal_welfare_with_habitat_limit(
-            std::array::from_fn(|index| initial[index]),
-            suitability,
-        );
-        let critical = needs
-            .iter()
-            .take(10)
-            .map(|need| need.critical_wellness_threshold.unwrap_or(0))
-            .sum::<u16>()
-            / 10;
-        let good = needs
-            .iter()
-            .take(10)
-            .map(|need| need.cessation_wellness_threshold.unwrap_or(1000))
-            .sum::<u16>()
-            / 10;
+        let (value, band) = welfare_from_need_points(&NeedPoints::default());
         let mut trigger_state = NeedTriggerState::default();
         for (index, need) in needs.iter().enumerate() {
             trigger_state.observe(
@@ -166,7 +150,7 @@ pub(crate) fn initialize_animal_needs(
             AnimalWelfare(value),
             CumulativeNeedPoints::default(),
             NeedPoints::default(),
-            classify_animal_welfare_against_authored_thresholds(value, critical, good),
+            band,
         ));
         if scripted.is_some() {
             commands.entity(entity).remove::<crate::animal_lifecycle::scripted_animal_spawning::ScriptedAnimalInitialization>();
@@ -181,33 +165,101 @@ const NEED_POINT_UPDATE_SECONDS: f32 = 3.0;
 const NEED_POINT_DELTA: f32 = 0.2;
 const NEED_POINT_MAX: f32 = 100.0;
 
-/// One need-point update: the branch matching the animal's needs grows and
-/// the other shrinks by the same delta, so a moment of a met need doesn't wipe
-/// out a long spell of unhappiness.
+/// One need-point update: the branch matching the animal's needs grows. When
+/// the animal's state flips, the other branch is cleared first, as in the
+/// original.
 pub(super) fn step_need_points(points: &mut NeedPoints, unmet: bool) {
-    let (grows, shrinks) = if unmet {
+    let (grows, cleared) = if unmet {
         (&mut points.bad, &mut points.good)
     } else {
         (&mut points.good, &mut points.bad)
     };
+    if points.unmet != unmet {
+        *cleared = 0.0;
+    }
     *grows = (*grows + NEED_POINT_DELTA).min(NEED_POINT_MAX);
-    *shrinks = (*shrinks - NEED_POINT_DELTA).max(0.0);
+    points.unmet = unmet;
 }
 
-/// Every update an animal with an unmet need gains bad need points and loses
-/// good ones, and an animal whose needs are all met the other way round.
+/// Whether one of the animal's basic needs is at its critical threshold. As in
+/// the original, `Advanced` needs such as social or stimulation don't count.
+fn has_critical_need(values: [i32; 11], needs: [&SpeciesNeed; 11]) -> bool {
+    values.into_iter().zip(needs).any(|(value, need)| {
+        !need.advanced
+            && need
+                .critical_wellness_threshold
+                .is_some_and(|threshold| convert_animal_need_q16_to_permille(value) <= threshold)
+    })
+}
+
+/// Every update an animal with a critical need gains bad need points, and an
+/// animal without one good points. A change of state updates at once.
+#[allow(clippy::type_complexity)]
 pub(super) fn update_need_points(
     time: Res<Time<Fixed>>,
-    mut animals: Query<(Entity, &NeedTriggerState, &mut NeedPoints), (With<Animal>, Without<Dead>)>,
+    assets: Res<Assets<SpeciesAsset>>,
+    index: Res<SpeciesAssets>,
+    mut animals: Query<
+        (
+            Entity,
+            &SpeciesHandle,
+            (
+                &Hunger,
+                &Thirst,
+                &RestNeed,
+                &PrivacyNeed,
+                &SocialNeed,
+                &ExerciseNeed,
+                &StimulationNeed,
+                &EnvironmentNeed,
+                &HealthNeed,
+                &HygieneNeed,
+                &BathroomNeed,
+            ),
+            &mut NeedPoints,
+        ),
+        (With<Animal>, Without<Dead>),
+    >,
     mut outcomes: MessageWriter<AccumulateNeedPoints>,
 ) {
-    for (animal, triggers, mut points) in &mut animals {
+    for (animal, species, needs, mut points) in &mut animals {
+        let Some(rows) = species_needs(&index, &assets, species) else {
+            continue;
+        };
+        let (
+            hunger,
+            thirst,
+            rest,
+            privacy,
+            social,
+            exercise,
+            stimulation,
+            environment,
+            health,
+            hygiene,
+            bathroom,
+        ) = needs;
+        let unmet = has_critical_need(
+            [
+                hunger.0,
+                thirst.0,
+                rest.0,
+                privacy.0,
+                social.0,
+                exercise.0,
+                stimulation.0,
+                environment.0,
+                health.0,
+                hygiene.0,
+                bathroom.0,
+            ],
+            rows,
+        );
         points.seconds_until_update -= time.delta_secs();
-        if points.seconds_until_update > 0.0 {
+        if points.seconds_until_update > 0.0 && unmet == points.unmet {
             continue;
         }
-        points.seconds_until_update += NEED_POINT_UPDATE_SECONDS;
-        let unmet = triggers.0 != 0;
+        points.seconds_until_update = NEED_POINT_UPDATE_SECONDS;
         step_need_points(&mut points, unmet);
         outcomes.write(AccumulateNeedPoints {
             animal,
@@ -672,94 +724,17 @@ pub(super) fn set_animal_need(
 }
 
 pub(super) fn derive_animal_welfare(
-    assets: Res<Assets<SpeciesAsset>>,
-    index: Res<SpeciesAssets>,
-    needs: Query<
-        (
-            Entity,
-            &Hunger,
-            &Thirst,
-            &RestNeed,
-            &PrivacyNeed,
-            &SocialNeed,
-            &ExerciseNeed,
-            &StimulationNeed,
-            &EnvironmentNeed,
-            &HealthNeed,
-            &HygieneNeed,
-            &HabitatSuitability,
-        ),
-        Or<(
-            Changed<Hunger>,
-            Changed<Thirst>,
-            Changed<RestNeed>,
-            Changed<PrivacyNeed>,
-            Changed<SocialNeed>,
-            Changed<ExerciseNeed>,
-            Changed<StimulationNeed>,
-            Changed<EnvironmentNeed>,
-            Changed<HealthNeed>,
-            Changed<HygieneNeed>,
-            Changed<HabitatSuitability>,
-        )>,
-    >,
     mut animals: Query<
-        (&SpeciesHandle, &mut AnimalWelfare, &mut WelfareBand),
-        (With<Animal>, Without<Dead>),
+        (Entity, &NeedPoints, &mut AnimalWelfare, &mut WelfareBand),
+        (With<Animal>, Without<Dead>, Changed<NeedPoints>),
     >,
     mut changed: MessageWriter<WelfareChanged>,
 ) {
-    for (
-        entity,
-        hunger,
-        thirst,
-        rest,
-        privacy,
-        social,
-        exercise,
-        stimulation,
-        environment,
-        health,
-        hygiene,
-        habitat,
-    ) in &needs
-    {
-        let Ok((species, mut welfare, mut band)) = animals.get_mut(entity) else {
-            continue;
-        };
-        let values = [
-            hunger.0,
-            thirst.0,
-            rest.0,
-            privacy.0,
-            social.0,
-            exercise.0,
-            stimulation.0,
-            environment.0,
-            health.0,
-            hygiene.0,
-        ];
-        let next_value = calculate_mean_animal_welfare_with_habitat_limit(values, *habitat);
+    for (entity, points, mut welfare, mut band) in &mut animals {
+        let (next_value, next_band) = welfare_from_need_points(points);
         if welfare.0 != next_value {
             welfare.0 = next_value;
         }
-        let Some(needs) = species_needs(&index, &assets, species) else {
-            continue;
-        };
-        let critical = needs
-            .iter()
-            .take(10)
-            .map(|need| need.critical_wellness_threshold.unwrap_or(0))
-            .sum::<u16>()
-            / 10;
-        let good = needs
-            .iter()
-            .take(10)
-            .map(|need| need.cessation_wellness_threshold.unwrap_or(1000))
-            .sum::<u16>()
-            / 10;
-        let next_band =
-            classify_animal_welfare_against_authored_thresholds(next_value, critical, good);
         if *band != next_band {
             changed.write(WelfareChanged {
                 animal: entity,

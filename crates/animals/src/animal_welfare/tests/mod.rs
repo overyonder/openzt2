@@ -1,7 +1,7 @@
 use super::{
     calculations::{
-        animal_need_crossed_authored_threshold, calculate_mean_animal_welfare_with_habitat_limit,
-        clamp_animal_need_q16_after_delta,
+        animal_need_crossed_authored_threshold, clamp_animal_need_q16_after_delta,
+        welfare_from_need_points,
     },
     types::*,
 };
@@ -47,30 +47,40 @@ fn need_messages_are_threshold_edge_triggered() {
 }
 
 #[test]
-fn welfare_uses_canonical_need_mean_and_habitat_cap() {
-    let mut values = [800 * Q16_ONE; 10];
-    values[0] = 200 * Q16_ONE;
-    let habitat = HabitatSuitability {
-        space: 1000,
-        biome: 1000,
-        overall: 900,
+fn welfare_is_the_need_point_balance() {
+    let points = |good, bad| NeedPoints {
+        good,
+        bad,
+        ..NeedPoints::default()
     };
     assert_eq!(
-        calculate_mean_animal_welfare_with_habitat_limit(values, habitat),
-        740
+        welfare_from_need_points(&points(0.0, 0.0)),
+        (500, WelfareBand::Poor)
     );
-    let capped = HabitatSuitability {
-        overall: 300,
-        ..habitat
-    };
     assert_eq!(
-        calculate_mean_animal_welfare_with_habitat_limit(values, capped),
-        300
+        welfare_from_need_points(&points(10.0, 0.0)),
+        (550, WelfareBand::Good)
+    );
+    assert_eq!(
+        welfare_from_need_points(&points(0.0, 49.8)),
+        (251, WelfareBand::Poor)
+    );
+    assert_eq!(
+        welfare_from_need_points(&points(0.0, 50.0)),
+        (250, WelfareBand::Critical)
+    );
+    assert_eq!(
+        welfare_from_need_points(&points(100.0, 0.0)),
+        (1000, WelfareBand::Good)
+    );
+    assert_eq!(
+        welfare_from_need_points(&points(0.0, 100.0)),
+        (0, WelfareBand::Critical)
     );
 }
 
 #[test]
-fn need_points_grow_on_one_branch_and_shrink_the_other() {
+fn need_points_grow_on_one_branch_and_clear_the_other_on_a_flip() {
     let mut points = NeedPoints::default();
     // 150 updates of 3 s with an unmet need reach a fence bash's 30.
     for _ in 0..150 {
@@ -78,9 +88,9 @@ fn need_points_grow_on_one_branch_and_shrink_the_other() {
     }
     assert!((points.bad - 30.0).abs() < 1.0e-3);
     assert_eq!(points.good, 0.0);
-    // A met need takes back one update's worth, not the whole spell.
+    // Once the needs are met, the bad points are cleared.
     super::systems::step_need_points(&mut points, false);
-    assert!((points.bad - 29.8).abs() < 1.0e-3);
+    assert_eq!(points.bad, 0.0);
     assert!((points.good - 0.2).abs() < 1.0e-6);
     for _ in 0..1000 {
         super::systems::step_need_points(&mut points, false);

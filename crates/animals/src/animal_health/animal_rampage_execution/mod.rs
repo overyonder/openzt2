@@ -145,6 +145,7 @@ mod tests {
             good,
             bad,
             seconds_until_update: 0.0,
+            unmet: false,
         }
     }
 

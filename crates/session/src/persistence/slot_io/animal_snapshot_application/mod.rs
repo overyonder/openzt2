@@ -160,6 +160,15 @@ pub(super) fn apply_animal_snapshot_records(
                     good: welfare.cumulative_points[0],
                     bad: welfare.cumulative_points[1],
                 },
+                welfare.need_points.map_or_else(
+                    NeedPoints::default,
+                    |([good, bad, seconds], unmet)| NeedPoints {
+                        good,
+                        bad,
+                        seconds_until_update: seconds,
+                        unmet,
+                    },
+                ),
                 HabitatSuitability {
                     space: welfare.habitat_suitability[0],
                     biome: welfare.habitat_suitability[1],
