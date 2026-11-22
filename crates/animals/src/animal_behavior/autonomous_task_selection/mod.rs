@@ -263,7 +263,7 @@ pub(super) fn select_idle_animal_tasks(
             }
             // Other animals, by type or as a held token's payload (`fromToken`),
             // each with every held token the task's `Objects` names.
-            // ponytail: scans every animal per task, O(tasks x animals) per idle
+            // Scans every animal per task, O(tasks x animals) per idle
             // animal; index animals by type if large zoos make selection slow.
             let from_token =
                 task.targets.len() == 1 && task.targets[0].eq_ignore_ascii_case("fromtoken");
@@ -492,7 +492,7 @@ pub(super) fn select_idle_animal_tasks(
                 continue;
             }
             // Fence tasks target the fences around the animal's habitat.
-            // ponytail: a fence task is told apart by its name.
+            // A fence task is told apart by its name.
             let task_name = task.name.rsplit(':').next().unwrap_or_default();
             if task_name.contains("Fence") {
                 let fence_types = task

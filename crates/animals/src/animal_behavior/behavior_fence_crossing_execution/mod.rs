@@ -19,7 +19,7 @@ pub(crate) struct CrossingFence {
 /// Whether a fence task, by its name, takes the animal across the fence:
 /// `JumpLowFence`, `ClimbFence_*`, `ClimbUnderFence`, `FlyLowFence` and
 /// `RunThroughRailFence`, rather than bashing or examining it.
-// ponytail: told apart by name, as the bash tasks are; the clips that carry
+// Told apart by name, as the bash tasks are; the clips that carry
 // an animal over aren't root motion here.
 pub(crate) fn fence_task_crosses(task_name: &str) -> bool {
     ["Jump", "Climb", "Fly", "RunThrough"]

@@ -412,7 +412,7 @@ pub(super) fn select_idle_guest_tasks(
                         }
                     }
                 } else if task.sensor_tag == Some(path_sensor) {
-                    // ponytail: the `path` sensor, such as Trash.tsk's
+                    // The `path` sensor, such as Trash.tsk's
                     // ThrowAwayTrashGround, offers the tile nearest the guest;
                     // scan a sensor radius if the native sensor offers more.
                     let here = transform.translation();

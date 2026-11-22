@@ -29,7 +29,7 @@ pub(super) fn apply_accepted_shadow_detail_to_environment_lights(
     mut lights: Query<&mut DirectionalLight, With<EnvironmentLight>>,
 ) {
     let enabled = !matches!(settings.shadow_detail, ShadowDetail::Off);
-    // ponytail: the source tiers publish no map sizes. Medium, the default
+    // The source tiers publish no map sizes. Medium, the default
     // preset, keeps Bevy's 2048 default.
     let size = match settings.shadow_detail {
         ShadowDetail::Off | ShadowDetail::Medium => 2048,

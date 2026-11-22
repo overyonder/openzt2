@@ -124,7 +124,7 @@ impl TransportTrackSaleQueries<'_, '_> {
             .stations
             .get(route.from)
             .is_ok_and(|source| source.root == world.root);
-        // ponytail: a road left after a gap can be removed from its first
+        // A road left after a gap can be removed from its first
         // piece too; undoing that is refused, since nothing leads into it.
         let source_is_junction = self
             .junctions

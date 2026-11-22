@@ -10,10 +10,10 @@ use bevy::prelude::*;
 use openzt2_game_data::world_definitions::transportation_and_tours::TransportationTrackKind;
 
 const TRANSPORT_STATION_ENDPOINT_POINTER_SNAP_DISTANCE_METRES: f32 = 8.0;
-// ponytail: a fixed radius covers both stations, read the footprint if a larger one misses.
+// A fixed radius covers both stations, read the footprint if a larger one misses.
 const TRANSPORT_STATION_POINTER_PICK_RADIUS_METRES: f32 = 10.0;
 const SKY_TOWER_POINTER_PICK_DISTANCE_METRES: f32 = 2.0;
-// ponytail: a fixed pick height, read the tower's own height if tall towers miss.
+// A fixed pick height, read the tower's own height if tall towers miss.
 const SKY_TOWER_POINTER_PICK_HEIGHT_METRES: f32 = 12.0;
 
 /// The pointer ray's closest approach to a tower standing at `base`.
