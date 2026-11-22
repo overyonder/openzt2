@@ -46,7 +46,7 @@ use openzt2_zoo_state::placement::placement_transaction_types::PlacedObjectReloc
 #[derive(SystemParam)]
 pub(super) struct ObjectPlacementHeadroomQueries<'w, 's> {
     spatial_query: SpatialQuery<'w, 's>,
-    terrain_index: Res<'w, TerrainIndex>,
+    terrain_indexes: Query<'w, 's, &'static TerrainIndex>,
     chunks: Query<'w, 's, (&'static TerrainChunk, &'static WorldMember)>,
     surfaces: Query<'w, 's, &'static ChildOf, With<TerrainChunkCollisionSurface>>,
     observed_owners: Query<
@@ -87,7 +87,11 @@ impl ObjectPlacementHeadroomQueries<'_, '_> {
     ) -> Option<RayHitData> {
         let cell = Vec2::new(origin.x, origin.z);
         let flattened_chunk = flattening_world.and_then(|world| {
-            let indexed = terrain_chunk_at(&self.terrain_index, cell);
+            let indexed = self
+                .terrain_indexes
+                .get(world)
+                .ok()
+                .and_then(|index| terrain_chunk_at(index, cell));
             if let Some(record) = observation.as_deref_mut() {
                 record.indexed_entity = indexed;
                 record.lookup_stage = "index unavailable";
@@ -203,17 +207,17 @@ pub(super) struct PlacementSiteChanges<'w, 's> {
 }
 
 pub(super) fn project_authoritative_facts_onto_object_placement_previews(
-    cash: Res<ZooCash>,
-    unlimited_cash: Option<Res<UnlimitedZooCash>>,
-    unlocks: Res<UnlockedCatalogueDefinitionSet>,
     worlds: Query<
         (
-            Ref<SelectedWorldIdentity>,
+            Ref<ZooCash>,
+            Option<Ref<UnlimitedZooCash>>,
+            Ref<UnlockedCatalogueDefinitionSet>,
+            Ref<TopologyIndex>,
+            Option<Ref<SelectedWorldIdentity>>,
             Option<Ref<ScenarioContentAvailability>>,
         ),
         With<WorldRoot>,
     >,
-    topology: Res<TopologyIndex>,
     (headroom, mut changes): (ObjectPlacementHeadroomQueries, PlacementSiteChanges),
     surfaces: openzt2_zoo_state::terrain::dry_surface_eligibility::DrySurfaceEligibility,
     sites: openzt2_zoo_state::placement::placement_surface_site::PlacementSiteQueries,
@@ -243,31 +247,39 @@ pub(super) fn project_authoritative_facts_onto_object_placement_previews(
         || removed_colliders
         || !changes.tanks.is_empty()
         || !changes.water.is_empty()
-        || cash.is_changed()
-        || unlocks.is_changed()
-        || topology.is_changed()
-        || unlimited_cash
-            .as_ref()
-            .is_some_and(|cash| cash.is_changed())
         || definitions.is_changed()
         || active_definitions.is_changed()
         || prefabs.is_changed()
         || footprints.is_changed()
-        || models.is_changed()
-        || worlds.iter().any(|(mode, scenario)| {
-            mode.is_changed() || scenario.is_some_and(|scenario| scenario.is_changed())
-        });
+        || models.is_changed();
     let Some(catalogue) = active_definitions.get(&definitions) else {
         return;
     };
-    let (mode, scenario) = worlds
-        .single()
-        .map_or((None, None), |(selection, availability)| {
-            (Some(selection.mode), availability.map(Ref::into_inner))
-        });
     for (entity, preview, mut permission, prefab_source, relocation, member, habitat) in
         &mut previews
     {
+        let Some(root) = member.map(|member| member.root) else {
+            continue;
+        };
+        let Ok((cash, unlimited_cash, unlocks, topology, selection, scenario)) = worlds.get(root)
+        else {
+            continue;
+        };
+        let inputs_changed = inputs_changed
+            || cash.is_changed()
+            || unlocks.is_changed()
+            || topology.is_changed()
+            || unlimited_cash
+                .as_ref()
+                .is_some_and(|cash| cash.is_changed())
+            || selection
+                .as_ref()
+                .is_some_and(|selection| selection.is_changed())
+            || scenario
+                .as_ref()
+                .is_some_and(|scenario| scenario.is_changed());
+        let mode = selection.map(|selection| selection.mode);
+        let scenario = scenario.map(Ref::into_inner);
         let Some(definition) = resolve_object_placeable_definition(catalogue, preview.definition)
         else {
             continue;
@@ -435,6 +447,7 @@ pub(super) fn project_authoritative_facts_onto_object_placement_previews(
         // site rules deciding the rest; natural water admits it as well.
         let faces_water = surfaces
             .water_surface_height(
+                root,
                 preview.transform.translation.xz()
                     + preview.transform.forward().xz().normalize_or_zero()
                         * openzt2_game_data::world_definitions::object_placement::ADJACENT_WATER_REACH_METRES,
@@ -463,7 +476,7 @@ pub(super) fn project_authoritative_facts_onto_object_placement_previews(
             ),
             // Moving a placed object is free, so only purchases need the cash.
             affordable: relocation.is_some()
-                || unlimited_cash.is_some()
+                || unlimited_cash.is_some_and(|cash| cash.0)
                 || cash.0 .0 >= definition.price_cents,
             topology_valid,
             headroom_valid,

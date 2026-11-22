@@ -3,6 +3,7 @@ use openzt2_game_data::world_definitions::staff_management::StaffRoleKind;
 use openzt2_zoo_state::animal_behavior::behavior_target_placement_types::{
     travel_target, BehaviorPlacementTravelSite,
 };
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::behavior_action_actors;
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
     RunBehaviorMove, RunningBehaviorInstruction,
 };
@@ -17,7 +18,7 @@ use openzt2_zoo_state::locomotion::locomotion_types::Arrived;
 use openzt2_zoo_state::locomotion::locomotion_types::NavAgent;
 use openzt2_zoo_state::locomotion::locomotion_types::NavigateTo;
 use openzt2_zoo_state::locomotion::locomotion_types::NavigationFailed;
-use openzt2_zoo_state::locomotion::locomotion_types::NavigationRequestSequence;
+use openzt2_zoo_state::locomotion::locomotion_types::NavigationRequestGeneration;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_zoo_state::staff::staff_employment_types::StaffRole;
 
@@ -34,9 +35,15 @@ use openzt2_zoo_state::topology::topology_graph_types::TopologyGrid;
 
 #[derive(bevy::ecs::system::SystemParam)]
 pub(super) struct KeeperLandApproach<'w, 's> {
-    graph: Option<Res<'w, ActiveTerrainDerivedNavigationGraph>>,
-    habitats: Res<'w, HabitatIndex>,
-    grid: Res<'w, TopologyGrid>,
+    world_navigation: Query<
+        'w,
+        's,
+        (
+            &'static ActiveTerrainDerivedNavigationGraph,
+            &'static HabitatIndex,
+            &'static TopologyGrid,
+        ),
+    >,
     regions: Query<'w, 's, &'static HabitatRegion>,
     animals: Query<
         'w,
@@ -54,16 +61,18 @@ pub(super) struct KeeperLandApproach<'w, 's> {
 }
 
 pub(super) fn start_current_supported_behavior_move_actions(
+    activation: In<Option<Entity>>,
     mut commands: Commands,
-    simulation_clock: Res<ZooClock>,
-    mut navigation_request_sequence: ResMut<NavigationRequestSequence>,
+    clocks: Query<&ZooClock>,
+    mut navigation_generations: Query<&mut NavigationRequestGeneration>,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,
-    behavior_tasks: Query<
+    mut behavior_tasks: Query<
         (
             Entity,
+            &WorldMember,
             (
-                &BehaviorTaskExecutionState,
+                &mut BehaviorTaskExecutionState,
                 &RunningBehaviorInstruction,
                 &RunBehaviorMove,
             ),
@@ -85,9 +94,21 @@ pub(super) fn start_current_supported_behavior_move_actions(
     water_targets: Query<&openzt2_zoo_state::animal_behavior::behavior_natural_water_target_types::SelectedNaturalWaterTarget>,
     waters: super::natural_water_targets::NaturalWaterTargets,
 ) {
-    for (actor, (behavior_task, instruction, running_action), staff_role, navigation_agent) in
-        &behavior_tasks
+    for (
+        actor,
+        member,
+        (mut behavior_task, instruction, running_action),
+        staff_role,
+        navigation_agent,
+    ) in behavior_action_actors(&mut behavior_tasks, activation.0)
     {
+        let Ok(simulation_clock) = clocks.get(member.root) else {
+            continue;
+        };
+        if activation.0.is_none() && !instruction.can_update_after_activation(simulation_clock.tick)
+        {
+            continue;
+        }
         if behavior_task.next_action_tick > simulation_clock.tick {
             continue;
         }
@@ -110,7 +131,7 @@ pub(super) fn start_current_supported_behavior_move_actions(
             mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
             continue;
         }
-        let Some(target) = travel_target(behavior_task, travel_sites.get(actor).ok()) else {
+        let Some(target) = travel_target(&behavior_task, travel_sites.get(actor).ok()) else {
             mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
             continue;
         };
@@ -147,7 +168,7 @@ pub(super) fn start_current_supported_behavior_move_actions(
                     openzt2_zoo_state::animal_behavior::behavior_natural_water_target_types::NaturalWaterTargetKind::Surface { .. }
                 )
             {
-                if !waters.valid(water) || move_action.target_node_name.is_some() {
+                if !waters.valid(member.root, water) || move_action.target_node_name.is_some() {
                     mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
                     continue;
                 }
@@ -161,14 +182,10 @@ pub(super) fn start_current_supported_behavior_move_actions(
             && land_approach.animals.contains(target)
         {
             let approach = &mut land_approach;
-            let Some(graph) = approach.graph.as_ref() else {
+            let Ok((graph, habitats, grid)) = approach.world_navigation.get(member.root) else {
                 continue;
             };
-            let tank_water = approach
-                .worlds
-                .get(actor)
-                .ok()
-                .and_then(|member| approach.water.get(member.root).ok());
+            let tank_water = approach.water.get(member.root).ok();
             let navigation = graph.terrain_derived_navigation_graph();
             let size = f32::from(navigation.terrain_cell_size_centimetres) * 0.01;
             let target_node = (destination.x >= 0.0 && destination.z <= 0.0 && size > 0.0)
@@ -186,10 +203,8 @@ pub(super) fn start_current_supported_behavior_move_actions(
             if target_node.eligibility_flags.contains(NavFlags::WATER) {
                 let same_world = approach
                     .worlds
-                    .get(actor)
-                    .ok()
-                    .zip(approach.worlds.get(target).ok())
-                    .is_some_and(|(actor, target)| actor.root == target.root);
+                    .get(target)
+                    .is_ok_and(|target| member.root == target.root);
                 let Some(habitat) = approach
                     .animals
                     .get(target)
@@ -210,17 +225,14 @@ pub(super) fn start_current_supported_behavior_move_actions(
                 graph.collect_dry_ground_candidates(
                     tank_water,
                     region,
-                    *approach.grid,
+                    *grid,
                     agent,
                     destination,
                     &mut approach.candidates,
                 );
                 let Some(shore) = approach.candidates.iter().copied().find(|position| {
-                    locate_habitat_at_world_position(
-                        &approach.habitats,
-                        position.xz(),
-                        *approach.grid,
-                    ) == Some(habitat)
+                    locate_habitat_at_world_position(habitats, position.xz(), *grid)
+                        == Some(habitat)
                 }) else {
                     mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
                     continue;
@@ -229,7 +241,10 @@ pub(super) fn start_current_supported_behavior_move_actions(
             }
         }
         let arrival_radius_m = move_action.move_radius_cm as f32 * 0.01;
-        let request_id = navigation_request_sequence.next();
+        let Ok(mut generation) = navigation_generations.get_mut(actor) else {
+            continue;
+        };
+        let request_id = generation.advance();
         navigation_requests.write(NavigateTo {
             entity: actor,
             request_id,
@@ -242,11 +257,7 @@ pub(super) fn start_current_supported_behavior_move_actions(
                 instruction: instruction.id(),
                 request_id,
             });
-        instruction.resume_at(
-            actor,
-            simulation_clock.tick.saturating_add(1),
-            &mut commands,
-        );
+        behavior_task.next_action_tick = simulation_clock.tick.saturating_add(1);
     }
 }
 
@@ -277,7 +288,7 @@ enum BehaviorMoveDestinationResolutionFailure {
 pub(super) fn finish_behavior_move_actions_after_matching_arrival(
     mut commands: Commands,
     mut arrivals: MessageReader<Arrived>,
-    simulation_clock: Res<ZooClock>,
+    clocks: Query<&ZooClock>,
     water_targets: Query<&openzt2_zoo_state::animal_behavior::behavior_natural_water_target_types::SelectedNaturalWaterTarget>,
     water_contact: Query<(
         &openzt2_zoo_state::locomotion::locomotion_types::AnimalTerrainWaterContact,
@@ -289,14 +300,18 @@ pub(super) fn finish_behavior_move_actions_after_matching_arrival(
             &BehaviorTaskExecutionState,
             &RunningBehaviorInstruction,
             &PendingBehaviorMoveCompletion,
+            &WorldMember,
         ),
         Without<PendingBehaviorTaskFailure>,
     >,
 ) {
     for arrival in arrivals.read() {
-        let Ok((actor, behavior_task, instruction, pending_move)) =
+        let Ok((actor, behavior_task, instruction, pending_move, member)) =
             behavior_tasks.get(arrival.entity)
         else {
+            continue;
+        };
+        let Ok(clock) = clocks.get(member.root) else {
             continue;
         };
         if arrival.target.is_some()
@@ -323,10 +338,10 @@ pub(super) fn finish_behavior_move_actions_after_matching_arrival(
                 }
             }
         }
-        instruction.complete(actor, simulation_clock.tick, &mut commands);
         commands
             .entity(actor)
             .remove::<PendingBehaviorMoveCompletion>();
+        instruction.complete(actor, clock.tick, &mut commands);
     }
 }
 
@@ -451,18 +466,22 @@ mod tests {
     #[test]
     fn same_tick_arrival_completes_and_duplicate_arrival_is_ignored() {
         let mut app = App::new();
-        app.insert_resource(ZooClock {
-            fractional_tick: Default::default(),
-            tick: 0,
-            absolute_day: 0,
-            tick_in_day: 0,
-        })
-        .add_message::<Arrived>()
-        .add_systems(Update, finish_behavior_move_actions_after_matching_arrival);
+        let root = app
+            .world_mut()
+            .spawn(ZooClock {
+                fractional_tick: Default::default(),
+                tick: 0,
+                absolute_day: 0,
+                tick_in_day: 0,
+            })
+            .id();
+        app.add_message::<Arrived>()
+            .add_systems(Update, finish_behavior_move_actions_after_matching_arrival);
         let task = test_move_task(&mut app);
         let actor = app
             .world_mut()
             .spawn((
+                WorldMember { root },
                 task,
                 NavAgent {
                     radius_m: 0.5,
@@ -509,20 +528,24 @@ mod tests {
     #[test]
     fn nested_set_move_advances_the_current_nested_action() {
         let mut app = App::new();
-        app.insert_resource(ZooClock {
-            fractional_tick: Default::default(),
-            tick: 0,
-            absolute_day: 0,
-            tick_in_day: 0,
-        })
-        .add_message::<Arrived>()
-        .add_systems(Update, finish_behavior_move_actions_after_matching_arrival);
+        let root = app
+            .world_mut()
+            .spawn(ZooClock {
+                fractional_tick: Default::default(),
+                tick: 0,
+                absolute_day: 0,
+                tick_in_day: 0,
+            })
+            .id();
+        app.add_message::<Arrived>()
+            .add_systems(Update, finish_behavior_move_actions_after_matching_arrival);
         let mut task = test_move_task(&mut app);
         let parent = task.create_return_frame_after_action(7);
         task.depth = 1;
         let actor = app
             .world_mut()
             .spawn((
+                WorldMember { root },
                 task,
                 NavAgent {
                     radius_m: 0.5,
@@ -559,18 +582,22 @@ mod tests {
     #[test]
     fn superseded_move_arrival_is_ignored_and_duplicate_failure_is_consumed_once() {
         let mut app = App::new();
-        app.insert_resource(ZooClock {
-            fractional_tick: Default::default(),
-            tick: 1,
-            absolute_day: 0,
-            tick_in_day: 1,
-        })
-        .add_message::<Arrived>()
-        .add_systems(Update, finish_behavior_move_actions_after_matching_arrival);
+        let root = app
+            .world_mut()
+            .spawn(ZooClock {
+                fractional_tick: Default::default(),
+                tick: 1,
+                absolute_day: 0,
+                tick_in_day: 1,
+            })
+            .id();
+        app.add_message::<Arrived>()
+            .add_systems(Update, finish_behavior_move_actions_after_matching_arrival);
         let task = test_move_task(&mut app);
         let actor = app
             .world_mut()
             .spawn((
+                WorldMember { root },
                 task,
                 NavAgent {
                     radius_m: 0.5,
@@ -638,26 +665,30 @@ mod tests {
     #[test]
     fn same_request_failure_wins_over_same_frame_arrival() {
         let mut app = App::new();
-        app.insert_resource(ZooClock {
-            fractional_tick: Default::default(),
-            tick: 1,
-            absolute_day: 0,
-            tick_in_day: 1,
-        })
-        .add_message::<Arrived>()
-        .add_message::<NavigationFailed>()
-        .add_systems(
-            Update,
-            (
-                fail_behavior_move_actions_after_navigation_failure,
-                finish_behavior_move_actions_after_matching_arrival,
-            )
-                .chain(),
-        );
+        let root = app
+            .world_mut()
+            .spawn(ZooClock {
+                fractional_tick: Default::default(),
+                tick: 1,
+                absolute_day: 0,
+                tick_in_day: 1,
+            })
+            .id();
+        app.add_message::<Arrived>()
+            .add_message::<NavigationFailed>()
+            .add_systems(
+                Update,
+                (
+                    fail_behavior_move_actions_after_navigation_failure,
+                    finish_behavior_move_actions_after_matching_arrival,
+                )
+                    .chain(),
+            );
         let task = test_move_task(&mut app);
         let actor = app
             .world_mut()
             .spawn((
+                WorldMember { root },
                 task,
                 NavAgent {
                     radius_m: 0.5,

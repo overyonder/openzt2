@@ -24,7 +24,7 @@ use openzt2_zoo_state::placement::object_placement_validation::object_placement_
 use openzt2_zoo_state::placement::placed_object_types::PhysicsMovedPlacedObjectFootprint;
 use openzt2_zoo_state::placement::placed_object_types::PlacedObjectDefinitionReference;
 use openzt2_zoo_state::placement::placed_object_types::PlacedObjectFootprintOccupancy;
-use openzt2_zoo_state::placement::placement_occupancy_index::PlacedObjectFootprintOccupancyIndex;
+use openzt2_zoo_state::placement::placement_occupancy_index::PlacedObjectFootprintQueries;
 use openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementCellCollectionScratch;
 use openzt2_zoo_state::placement::placement_transaction_types::ObjectPlacementCommitted;
 use openzt2_zoo_state::placement::placement_transaction_types::PreparedObjectPlacementEditMutationKind;
@@ -35,8 +35,8 @@ pub(super) fn apply_prepared_placed_object_creation_edit(
     transaction: Entity,
     edit: &mut PreparedObjectPlacementMutation,
     catalogue: openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView<'_>,
-    root: Option<Entity>,
-    placement: &PlacedObjectFootprintOccupancyIndex,
+    root: Entity,
+    placement: &PlacedObjectFootprintQueries,
     scratch: &mut ObjectPlacementCellCollectionScratch,
     footprints: &ScenePlacementFootprints,
     prefabs: &Assets<ScenePrefabAsset>,
@@ -62,13 +62,10 @@ pub(super) fn apply_prepared_placed_object_creation_edit(
         &mut scratch.cells,
     )
     .is_some_and(|expected| expected == edit.cells.as_ref());
-    let Some(root) = root else {
-        return false;
-    };
     if !exact_cells
         || edit.cells.iter().any(|cell| {
             placement
-                .entities_occupying_cell(*cell)
+                .entities_occupying_cell(root, *cell)
                 .filter(|occupant| !stomped_occupants.contains(occupant))
                 .any(|entity| {
                     let occupant = placed

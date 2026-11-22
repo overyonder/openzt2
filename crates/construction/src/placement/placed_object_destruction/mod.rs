@@ -23,7 +23,7 @@ use openzt2_zoo_state::placement::object_placement_definition_queries::{
 use openzt2_zoo_state::placement::placed_object_types::{
     PlacedObjectDefinitionReference, PlacedObjectFootprintOccupancy,
 };
-use openzt2_zoo_state::placement::placement_occupancy_index::PlacedObjectFootprintOccupancyIndex;
+use openzt2_zoo_state::placement::placement_occupancy_index::PlacedObjectFootprintQueries;
 use openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementCellCollectionScratch;
 use openzt2_zoo_state::placement::placement_transaction_types::{
     DestroyPlacedObject, ObjectPlacementCommitted, PreparedObjectPlacementEditMutationKind,
@@ -276,7 +276,7 @@ fn ruin_destroyed_placed_object(
     ),
     members: Query<&WorldMember>,
     (placement, mut scratch, mut allocator): (
-        Res<PlacedObjectFootprintOccupancyIndex>,
+        PlacedObjectFootprintQueries,
         ResMut<ObjectPlacementCellCollectionScratch>,
         Query<&mut PersistentIdAllocator>,
     ),
@@ -406,7 +406,7 @@ fn ruin_destroyed_placed_object(
         building,
         &mut edit,
         catalogue,
-        Some(root),
+        root,
         &placement,
         &mut scratch,
         &footprints,

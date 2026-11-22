@@ -9,7 +9,7 @@ use openzt2_zoo_state::habitat::habitat_types::{Containment, HabitatMember};
 use openzt2_zoo_state::animal_health::types::Dead;
 use openzt2_zoo_state::animal_lifecycle::types::Animal;
 use openzt2_zoo_state::topology::topology_graph_types::TopologyGrid;
-use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
+use openzt2_world_state::world_spawn::world_membership_types::{DefinitionId, WorldMember};
 
 use super::aquatic_simulation_types::{
     AddAquaticWaterDirt, AquaticAnimal, Tank, TankGeometry, WaterFilter, WaterQuality,
@@ -77,12 +77,14 @@ pub(super) fn add_animal_dirt_to_home_tank_water(
 /// into itself. A full filter does nothing until a worker cleans it.
 pub(super) fn clean_tank_water_through_filters(
     time: Res<Time>,
-    grid: Res<TopologyGrid>,
-    habitats: Res<HabitatIndex>,
-    mut filters: Query<(&GlobalTransform, &mut WaterFilter)>,
+    roots: Query<(&TopologyGrid, &HabitatIndex)>,
+    mut filters: Query<(&GlobalTransform, &WorldMember, &mut WaterFilter)>,
     mut tanks: Query<(&TankGeometry, &mut WaterQuality), With<Tank>>,
 ) {
-    for (transform, mut filter) in &mut filters {
+    for (transform, member, mut filter) in &mut filters {
+        let Ok((grid, habitats)) = roots.get(member.root) else {
+            continue;
+        };
         filter.seconds_until_cleanup -= time.delta_secs();
         if filter.seconds_until_cleanup > 0.0 {
             continue;
@@ -94,7 +96,7 @@ pub(super) fn clean_tank_water_through_filters(
         let origin = transform.translation().xz();
         let forward = transform.forward().xz().normalize_or_zero();
         let tank = locate_habitat_at_world_position(
-            &habitats,
+            habitats,
             origin + forward * ADJACENT_WATER_REACH_METRES,
             *grid,
         )

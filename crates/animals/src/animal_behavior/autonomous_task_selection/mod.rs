@@ -27,7 +27,7 @@ use openzt2_zoo_state::animal_lifecycle::types::Animal;
 use openzt2_zoo_state::animal_behavior::behavior_task_effective_score_types::BehaviorTaskEffectiveScore;
 use openzt2_zoo_state::animal_behavior::behavior_target_retry_delays::BehaviorTargetRejections;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionPhase;
-use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionSequence;
+use openzt2_zoo_state::behavior_task_execution_types::{allocate_behavior_execution_id, BehaviorTaskGeneration};
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
 use openzt2_zoo_state::locomotion::locomotion_types::Destination;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
@@ -66,7 +66,7 @@ pub(super) type IdleAnimalTaskFilter = (
     Without<openzt2_zoo_state::behavior_task_execution_types::SynchronizedBehaviorParticipant>,
 );
 
-#[derive(Debug)]
+#[derive(Component, Debug)]
 pub(super) struct PendingAnimalTaskStart {
     document: Handle<BehaviorDocumentAsset>,
     program: AssetId,
@@ -89,7 +89,7 @@ pub(super) fn select_idle_animal_tasks(
     world_definitions: Res<WorldDefinitions>,
     species_assets: Res<Assets<SpeciesAsset>>,
     species_index: Res<SpeciesAssets>,
-    clock: Res<ZooClock>,
+    clock: Single<&ZooClock>,
     target_retry_delays: BehaviorTargetRejections,
     mut animals: Query<
         (
@@ -186,7 +186,7 @@ pub(super) fn select_idle_animal_tasks(
         let authored_types = &variant.behavior_subject_type_identifiers;
         let area_restricted = authored_types.contains(&AssetId::from_key("b_generatestraversabilityinfo"))
             || authored_types.contains(&AssetId::from_key("unspecified"));
-        let animal_habitat = world_objects.habitat_at(facts.transform.translation());
+        let animal_habitat = world_objects.habitat_at(facts.world.root, facts.transform.translation());
         let mut ranking = WeightedBehaviorTaskRanking::new(policy.minimum_score);
         let mut considered_candidates = 0_u32;
         let held_tokens: Vec<_> = tokens
@@ -345,7 +345,7 @@ pub(super) fn select_idle_animal_tasks(
                     &facts,
                     policy.outside_range_need_value,
                     distance,
-                    || biomes.at(target_facts.transform.translation()),
+                    || biomes.at(facts.world.root, target_facts.transform.translation()),
                     &mut random,
                 ) else {
                     continue;
@@ -472,7 +472,7 @@ pub(super) fn select_idle_animal_tasks(
                         &facts,
                         policy.outside_range_need_value,
                         distance,
-                        || biomes.at(shore.water),
+                        || biomes.at(facts.world.root, shore.water),
                         &mut random,
                     ) else {
                         continue;
@@ -524,7 +524,7 @@ pub(super) fn select_idle_animal_tasks(
                     }) {
                         continue;
                     }
-                    let position = world_objects.fence_middle(&edge).unwrap_or_else(|| transform.translation());
+                    let position = world_objects.fence_middle(facts.world.root, &edge).unwrap_or_else(|| transform.translation());
                     let distance = facts.transform.translation().distance(position);
                     let electric = object
                         .behavior_type_identifiers
@@ -556,7 +556,7 @@ pub(super) fn select_idle_animal_tasks(
                         &facts,
                         policy.outside_range_need_value,
                         distance,
-                        || biomes.at(position),
+                        || biomes.at(facts.world.root, position),
                         &mut random,
                     ) else {
                         debug!(?animal, task = %task.name, ?fence,
@@ -604,13 +604,13 @@ pub(super) fn select_idle_animal_tasks(
                     // An escaped animal reaches what its breach leads to.
                     in_habitat: !area_restricted
                         || if facts.escaped {
-                            world_objects.escaped_animal_reaches(target_position)
+                            world_objects.escaped_animal_reaches(facts.world.root, target_position)
                         } else {
                             animal_habitat.is_some_and(|habitat| {
-                                world_objects.habitat_at(target_position) == Some(habitat)
+                                world_objects.habitat_at(facts.world.root, target_position) == Some(habitat)
                             })
                         },
-                    on_land: || world_objects.terrain_surfaces.on_land_at_position(target_position),
+                    on_land: || world_objects.terrain_surfaces.on_land_at_position(facts.world.root, target_position),
                     distance: facts.transform.translation().distance(target_position),
                     building_strength: object
                         .destruction
@@ -650,7 +650,7 @@ pub(super) fn select_idle_animal_tasks(
                             .collect::<Vec<_>>();
                         debug!(?animal, task = %task.name, ?candidate,
                             in_habitat = location.in_habitat, area_restricted, ?animal_habitat,
-                            target_habitat = ?world_objects.habitat_at(target_position),
+                            target_habitat = ?world_objects.habitat_at(facts.world.root, target_position),
                             ?refused_target_facts,
                             "animal task target refused by qualifiers");
                     }
@@ -668,7 +668,7 @@ pub(super) fn select_idle_animal_tasks(
                     &facts,
                     policy.outside_range_need_value,
                     distance,
-                    || biomes.at(target_position),
+                    || biomes.at(facts.world.root, target_position),
                     &mut random,
                 ) else {
                     debug!(?animal, task = %task.name, ?candidate,
@@ -713,54 +713,35 @@ pub(super) fn select_idle_animal_tasks(
                     definitions.timing().fixed_hz,
                 )
             });
-        // Unimplemented actions must not promote a lower-ranked alternative.
-        // A delayed task still waits out its delay, as though it had run.
-        if task.execution.has_unsupported_suffix()
-            || task.completion.has_unsupported_suffix()
-            || task.failure.has_unsupported_suffix()
-        {
-            debug!(?animal, task = %task.name, ?target,
-                execution = ?unsupported_action(&task.execution),
-                completion = ?unsupported_action(&task.completion),
-                failure = ?unsupported_action(&task.failure),
-                cooldown_ticks = ?delay_ticks,
-                "animal's chosen task has unsupported actions; no task starts");
-            if let Some(delay_ticks) = delay_ticks {
-                cooldowns.start(task.id, clock.tick, delay_ticks);
-            }
-            return;
-        }
-        cooldowns.pending = Some(PendingAnimalTaskStart {
-            document: document.clone(),
-            program: task.id,
-            declaration,
-            target,
-            object,
-            shore,
-            priority: task.priority.unwrap_or_default(),
-            score,
-            delay_ticks,
+        commands.command_scope(|mut commands| {
+            commands.entity(animal).insert(PendingAnimalTaskStart {
+                document: document.clone(),
+                program: task.id,
+                declaration,
+                target,
+                object,
+                shore,
+                priority: task.priority.unwrap_or_default(),
+                score,
+                delay_ticks,
+            });
         });
     });
 }
 
 pub(super) fn start_selected_idle_animal_tasks(
-    clock: Res<ZooClock>,
-    mut execution_sequence: ResMut<BehaviorTaskExecutionSequence>,
-    mut animals: Query<
-        (
-            Entity,
-            AnimalCandidateFacts,
-            &BehaviorRandomStream,
-            &mut AnimalTaskCooldowns,
-        ),
-        IdleAnimalTaskFilter,
-    >,
+    clock: Single<&ZooClock>,
+    pending_starts: Query<(Entity, &PendingAnimalTaskStart)>,
+    mut idle_animals: Query<Option<&mut BehaviorTaskGeneration>, IdleAnimalTaskFilter>,
     mut commands: Commands,
 ) {
-    for (animal, _, _, mut cooldowns) in &mut animals {
-        let Some(PendingAnimalTaskStart {
-            document,
+    for (animal, pending) in &pending_starts {
+        commands.entity(animal).remove::<PendingAnimalTaskStart>();
+        let Ok(generation) = idle_animals.get_mut(animal) else {
+            continue;
+        };
+        let PendingAnimalTaskStart {
+            ref document,
             program,
             declaration,
             target,
@@ -769,11 +750,8 @@ pub(super) fn start_selected_idle_animal_tasks(
             priority,
             score,
             delay_ticks,
-        }) = cooldowns.pending.take()
-        else {
-            continue;
-        };
-        let execution_id = execution_sequence.next();
+        } = *pending;
+        let execution_id = allocate_behavior_execution_id(animal, generation, &mut commands);
         if let Some(token) = object {
             commands
                 .entity(token)
@@ -795,9 +773,9 @@ pub(super) fn start_selected_idle_animal_tasks(
         }
         started.insert(BehaviorTaskExecutionState {
             execution_id,
-            program: program,
+            program,
             target: Some(target),
-            document,
+            document: document.clone(),
             declaration,
             phase: BehaviorTaskExecutionPhase::Execution,
             action: 0,
@@ -845,22 +823,6 @@ fn fence_satisfies(
             distance < radius as f32 / 65_536.0
         }
         _ => false,
-    }
-}
-
-fn unsupported_action(
-    phase: &openzt2_game_data::behavior::document::BehaviorTaskActionPhase,
-) -> Option<&str> {
-    use openzt2_game_data::behavior::document::BehaviorTaskActionPhase;
-    match phase {
-        BehaviorTaskActionPhase::Supported(_) => None,
-        BehaviorTaskActionPhase::SupportedPrefix {
-            first_unsupported_action,
-            ..
-        }
-        | BehaviorTaskActionPhase::Unsupported {
-            first_unsupported_action,
-        } => Some(first_unsupported_action),
     }
 }
 

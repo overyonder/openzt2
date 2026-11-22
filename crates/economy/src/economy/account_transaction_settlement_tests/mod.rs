@@ -1,4 +1,14 @@
 use bevy::prelude::*;
+use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
+
+fn zoo_root(application: &App) -> Entity {
+    application
+        .world()
+        .iter_entities()
+        .find(|entity| entity.contains::<WorldRoot>())
+        .unwrap()
+        .id()
+}
 
 use super::{
     account_transaction_settlement::{
@@ -18,10 +28,10 @@ fn create_application_with_account_transaction_settlement() -> App {
         .add_message::<TransactionRequest>()
         .add_message::<TransactionCompleted>()
         .add_message::<TransactionRejected>()
-        .insert_resource(ZooCash(Money(1_000)))
         .add_systems(
             Update,
             (
+                super::monthly_finance_recording::enter_published_zoo_finance_month,
                 stage_requested_account_transactions::<false>,
                 settle_requested_account_transactions::<false>,
                 stage_requested_account_transactions::<true>,
@@ -29,6 +39,12 @@ fn create_application_with_account_transaction_settlement() -> App {
             )
                 .chain(),
         );
+    application.world_mut().spawn((
+        WorldRoot {
+            scenario: Default::default(),
+        },
+        ZooCash(Money(1_000)),
+    ));
     application
 }
 
@@ -52,7 +68,14 @@ fn entity_to_zoo_transaction_commits_both_account_balances_once() {
         application.world().get::<Wallet>(guest),
         Some(&Wallet(Money(375)))
     );
-    assert_eq!(application.world().resource::<ZooCash>().0, Money(1_125));
+    assert_eq!(
+        application
+            .world()
+            .get::<ZooCash>(zoo_root(&application))
+            .unwrap()
+            .0,
+        Money(1_125)
+    );
     assert_eq!(
         application
             .world()
@@ -86,7 +109,14 @@ fn rejected_transaction_leaves_every_account_balance_unchanged() {
         application.world().get::<Wallet>(guest),
         Some(&Wallet(Money(20)))
     );
-    assert_eq!(application.world().resource::<ZooCash>().0, Money(1_000));
+    assert_eq!(
+        application
+            .world()
+            .get::<ZooCash>(zoo_root(&application))
+            .unwrap()
+            .0,
+        Money(1_000)
+    );
     assert!(application
         .world()
         .resource::<Messages<TransactionCompleted>>()
@@ -122,7 +152,14 @@ fn transaction_request_order_controls_competing_debits() {
         application.world().get::<Wallet>(guest),
         Some(&Wallet(Money(20)))
     );
-    assert_eq!(application.world().resource::<ZooCash>().0, Money(1_080));
+    assert_eq!(
+        application
+            .world()
+            .get::<ZooCash>(zoo_root(&application))
+            .unwrap()
+            .0,
+        Money(1_080)
+    );
     assert_eq!(
         application
             .world()
@@ -161,7 +198,14 @@ fn repeated_transaction_operation_is_settled_exactly_once() {
         application.world().get::<Wallet>(guest),
         Some(&Wallet(Money(75)))
     );
-    assert_eq!(application.world().resource::<ZooCash>().0, Money(1_025));
+    assert_eq!(
+        application
+            .world()
+            .get::<ZooCash>(zoo_root(&application))
+            .unwrap()
+            .0,
+        Money(1_025)
+    );
     assert_eq!(
         application
             .world()
@@ -173,22 +217,18 @@ fn repeated_transaction_operation_is_settled_exactly_once() {
 
 #[test]
 fn source_global_operations_preserve_independent_ledger_and_atomic_replay() {
-    use openzt2_world_state::simulation_time::simulation_clock_types::ZooCalendar;
+    use openzt2_world_state::simulation_time::simulation_clock_types::ZooMonth;
     use openzt2_zoo_state::economy::general_economy_types::{
         GeneralEconomyLedger, GeneralEconomyTransaction,
     };
     use openzt2_zoo_state::economy::monthly_finance_types::{FinanceMetric, FinancePeriod};
 
     let mut application = create_application_with_account_transaction_settlement();
-    application.insert_resource(ZooCash(Money(3_624_000)));
-    application.insert_resource(ZooCalendar {
-        year: 1,
-        month: 1,
-        day: 1,
-    });
-    application.insert_resource(GeneralEconomyLedger::from_starting_balance(
-        12,
-        Money(3_706_800),
+    let root = zoo_root(&application);
+    application.world_mut().entity_mut(root).insert((
+        ZooCash(Money(3_624_000)),
+        ZooMonth(12),
+        GeneralEconomyLedger::from_starting_balance(12, Money(3_706_800)),
     ));
     let build = application
         .world_mut()
@@ -231,18 +271,23 @@ fn source_global_operations_preserve_independent_ledger_and_atomic_replay() {
     application.world_mut().write_message(build_request);
     application.update();
     assert_eq!(
-        application.world().resource::<ZooCash>().0,
+        application
+            .world()
+            .get::<ZooCash>(zoo_root(&application))
+            .unwrap()
+            .0,
         Money(3_623_500)
     );
     assert_eq!(
         application
             .world()
-            .resource::<GeneralEconomyLedger>()
+            .get::<GeneralEconomyLedger>(root)
+            .unwrap()
             .cash(),
         Some(Money(3_705_800))
     );
 
-    application.world_mut().resource_mut::<ZooCalendar>().month = 2;
+    application.world_mut().get_mut::<ZooMonth>(root).unwrap().0 = 13;
     let compensation = application
         .world_mut()
         .spawn(GeneralEconomyTransaction::Build)
@@ -256,7 +301,10 @@ fn source_global_operations_preserve_independent_ledger_and_atomic_replay() {
         subject: None,
     });
     application.update();
-    let ledger = application.world().resource::<GeneralEconomyLedger>();
+    let ledger = application
+        .world()
+        .get::<GeneralEconomyLedger>(root)
+        .unwrap();
     assert_eq!(ledger.cash(), Some(Money(3_706_800)));
     assert_eq!(ledger.history().retained_month_finance_records().len(), 2);
     assert_eq!(
@@ -284,15 +332,22 @@ fn source_global_operations_preserve_independent_ledger_and_atomic_replay() {
             && month.active_users == 0
             && month.total_users == 0));
 
-    application.insert_resource(GeneralEconomyLedger::from_starting_balance(
-        13,
-        Money(i64::MAX),
-    ));
+    application
+        .world_mut()
+        .entity_mut(root)
+        .insert(GeneralEconomyLedger::from_starting_balance(
+            13,
+            Money(i64::MAX),
+        ));
     let overflow = application
         .world_mut()
         .spawn(GeneralEconomyTransaction::Admission)
         .id();
-    let zoo_before = application.world().resource::<ZooCash>().0;
+    let zoo_before = application
+        .world()
+        .get::<ZooCash>(zoo_root(&application))
+        .unwrap()
+        .0;
     application.world_mut().write_message(TransactionRequest {
         operation: overflow,
         debit: Account::Entity(guest),
@@ -306,11 +361,19 @@ fn source_global_operations_preserve_independent_ledger_and_atomic_replay() {
         application.world().get::<Wallet>(guest).unwrap().0,
         Money(1_500)
     );
-    assert_eq!(application.world().resource::<ZooCash>().0, zoo_before);
     assert_eq!(
         application
             .world()
-            .resource::<GeneralEconomyLedger>()
+            .get::<ZooCash>(zoo_root(&application))
+            .unwrap()
+            .0,
+        zoo_before
+    );
+    assert_eq!(
+        application
+            .world()
+            .get::<GeneralEconomyLedger>(root)
+            .unwrap()
             .cash(),
         Some(Money(i64::MAX))
     );

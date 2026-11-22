@@ -56,7 +56,7 @@ pub(super) fn present_changed_tank_water_and_glass(
     mut shared_materials: Local<TankPresentationMaterials>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
-    grid: Res<TopologyGrid>,
+    grid: Single<Ref<TopologyGrid>>,
     asset_server: Res<AssetServer>,
     tanks: Query<
         (
@@ -89,6 +89,7 @@ pub(super) fn present_changed_tank_water_and_glass(
         &mut Visibility,
     )>,
 ) {
+    let grid = grid.into_inner();
     let definitions_changed = definitions.is_changed() || active_definitions.is_changed();
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;

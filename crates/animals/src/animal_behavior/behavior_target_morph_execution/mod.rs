@@ -10,11 +10,12 @@ use openzt2_game_assets::world_definitions::{
 use openzt2_game_data::{behavior::action_record::BehaviorMorphRecipient, AssetId};
 use openzt2_world::world_spawn::prefab_world_instance_spawning::morph_fade_projection::PrefabMorphFade;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::behavior_action_actors;
 use openzt2_zoo_state::{
-    animal_behavior::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation,
+    behavior_task_execution_types::running_actions::mark_behavior_task_for_failure_and_stop_navigation,
     behavior_task_execution_types::{
         running_actions::{
-            BehaviorInstructionId, BehaviorStep, BehaviorStepSet, RunBehaviorMorphEntity,
+            BehaviorInstructionId, BehaviorStepFixedSet, RunBehaviorMorphEntity,
             RunningBehaviorInstruction,
         },
         BehaviorTaskExecutionState, PendingBehaviorTaskFailure,
@@ -37,9 +38,16 @@ struct PendingFenceMorph {
 }
 
 pub(super) fn register_target_morph_execution(app: &mut App) {
+    use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
+        activated_behavior_actor, update_waiting_behavior_actors,
+    };
+    app.add_observer(activated_behavior_actor::<openzt2_zoo_state::behavior_task_execution_types::running_actions::RunBehaviorMorphEntity>.pipe(execute_fence_morph));
+
     app.add_observer(discard_pending_fence_morph).add_systems(
-        BehaviorStep,
-        execute_fence_morph.in_set(BehaviorStepSet::Actions),
+        FixedUpdate,
+        update_waiting_behavior_actors
+            .pipe(execute_fence_morph)
+            .in_set(BehaviorStepFixedSet::Think),
     );
 }
 
@@ -97,7 +105,7 @@ pub(super) struct FenceTopology<'w, 's> {
         ),
     >,
     nodes: Query<'w, 's, &'static TopologyNode>,
-    index: Res<'w, TopologyIndex>,
+    index: Single<'w, 's, &'static TopologyIndex>,
     gates: Query<'w, 's, &'static mut Gate>,
     changed: MessageWriter<'w, TopologyChanged>,
 }
@@ -166,14 +174,15 @@ impl FenceTopology<'_, '_> {
 }
 
 fn execute_fence_morph(
+    activation: In<Option<Entity>>,
     mut commands: Commands,
-    clock: Res<ZooClock>,
+    clock: Single<&ZooClock>,
     world_assets: Res<Assets<WorldDefinitionAsset>>,
     world_definitions: Res<WorldDefinitions>,
-    actors: Query<
+    mut actors: Query<
         (
             Entity,
-            &BehaviorTaskExecutionState,
+            &mut BehaviorTaskExecutionState,
             &RunningBehaviorInstruction,
             &RunBehaviorMorphEntity,
             Option<&PendingFenceMorph>,
@@ -185,8 +194,13 @@ fn execute_fence_morph(
     let Some(definitions) = world_definitions.get(&world_assets) else {
         return;
     };
-    for (actor, task, instruction, morph, pending) in &actors {
-        if task.next_action_tick > clock.tick || !instruction.is_current(task) {
+    for (actor, mut task, instruction, morph, pending) in
+        behavior_action_actors(&mut actors, activation.0)
+    {
+        if activation.0.is_none() && !instruction.can_update_after_activation(clock.tick) {
+            continue;
+        }
+        if task.next_action_tick > clock.tick || !instruction.is_current(&task) {
             continue;
         }
         let target = match morph.recipient {
@@ -230,7 +244,7 @@ fn execute_fence_morph(
                         .entity(target)
                         .insert(PrefabMorphFade::fade_out(morph.period));
                 }
-                instruction.resume_at(actor, due, &mut commands);
+                task.next_action_tick = due;
                 continue;
             }
         }

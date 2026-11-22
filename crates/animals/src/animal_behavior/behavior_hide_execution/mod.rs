@@ -2,6 +2,7 @@
 //! inside a gift shop, then shows it again where it went in.
 
 use bevy::prelude::*;
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::behavior_action_actors;
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
     BehaviorInstructionId, RunBehaviorHide, RunningBehaviorInstruction,
 };
@@ -22,19 +23,27 @@ struct HiddenForBehavior {
 }
 
 pub(super) fn register_hide_execution(application: &mut App) {
-    use openzt2_game_assets::application_lifecycle::GamePhase;
     use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
-        BehaviorStep, BehaviorStepSet,
+        activated_behavior_actor, update_waiting_behavior_actors,
     };
+    application.add_observer(
+        activated_behavior_actor::<
+            openzt2_zoo_state::behavior_task_execution_types::running_actions::RunBehaviorHide,
+        >
+            .pipe(hide_actors_for_current_hide_actions),
+    );
+
+    use openzt2_game_assets::application_lifecycle::GamePhase;
+    use openzt2_zoo_state::behavior_task_execution_types::running_actions::BehaviorStepFixedSet;
 
     application.add_systems(
-        BehaviorStep,
+        FixedUpdate,
         (
             show_actors_whose_hiding_ended,
-            hide_actors_for_current_hide_actions,
+            update_waiting_behavior_actors.pipe(hide_actors_for_current_hide_actions),
         )
             .chain()
-            .in_set(BehaviorStepSet::Actions)
+            .in_set(BehaviorStepFixedSet::Think)
             .run_if(in_state(GamePhase::InGame)),
     );
 }
@@ -59,15 +68,16 @@ fn show_actors_whose_hiding_ended(
 }
 
 fn hide_actors_for_current_hide_actions(
+    activation: In<Option<Entity>>,
     mut commands: Commands,
-    clock: Res<ZooClock>,
+    clock: Single<&ZooClock>,
     definitions: Res<WorldDefinitions>,
     definition_assets: Res<Assets<WorldDefinitionAsset>>,
     mut actors: Query<
         (
             Entity,
             (
-                &BehaviorTaskExecutionState,
+                &mut BehaviorTaskExecutionState,
                 &RunningBehaviorInstruction,
                 &RunBehaviorHide,
             ),
@@ -84,17 +94,20 @@ fn hide_actors_for_current_hide_actions(
     };
     for (
         actor,
-        (task, instruction, running_action),
+        (mut task, instruction, running_action),
         hiding,
         guest_random,
         behavior_random,
         visibility,
-    ) in &mut actors
+    ) in behavior_action_actors(&mut actors, activation.0)
     {
+        if activation.0.is_none() && !instruction.can_update_after_activation(clock.tick) {
+            continue;
+        }
         if task.next_action_tick > clock.tick {
             continue;
         }
-        if !instruction.is_current(task) {
+        if !instruction.is_current(&task) {
             continue;
         }
         let &RunBehaviorHide { minimum, maximum } = running_action;
@@ -130,7 +143,7 @@ fn hide_actors_for_current_hide_actions(
             until_tick,
         });
         set_hiding_visibility(actor, visibility, Visibility::Hidden, &mut commands);
-        instruction.resume_at(actor, until_tick, &mut commands);
+        task.next_action_tick = until_tick;
     }
 }
 

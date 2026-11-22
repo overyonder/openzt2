@@ -13,7 +13,7 @@ use openzt2_zoo_state::placement::object_placement_validation::calculate_object_
 use openzt2_zoo_state::placement::object_placement_validation::object_placement_cell_is_blocked_by_existing_object;
 use openzt2_zoo_state::placement::placed_object_types::PlacedObjectDefinitionReference;
 use openzt2_zoo_state::placement::placed_object_types::PlacedObjectFootprintOccupancy;
-use openzt2_zoo_state::placement::placement_occupancy_index::PlacedObjectFootprintOccupancyIndex;
+use openzt2_zoo_state::placement::placement_occupancy_index::PlacedObjectFootprintQueries;
 use openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementCellCollectionScratch;
 use openzt2_zoo_state::placement::placement_preview_types::PlacementRotationRequest;
 use openzt2_zoo_state::placement::placement_preview_types::RelocatingPlacedObject;
@@ -26,7 +26,8 @@ pub(super) fn apply_prepared_placed_object_relocation_edit(
     application: EditApplication,
     edit: &PreparedObjectPlacementMutation,
     catalogue: openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView<'_>,
-    placement: &PlacedObjectFootprintOccupancyIndex,
+    root: Entity,
+    placement: &PlacedObjectFootprintQueries,
     scratch: &mut ObjectPlacementCellCollectionScratch,
     footprints: &ScenePlacementFootprints,
     placed: &mut Query<(
@@ -61,6 +62,7 @@ pub(super) fn apply_prepared_placed_object_relocation_edit(
         || cells.iter().any(|cell| {
             object_placement_cell_is_blocked_by_existing_object(
                 placement,
+                root,
                 *cell,
                 Some(target),
                 definition,

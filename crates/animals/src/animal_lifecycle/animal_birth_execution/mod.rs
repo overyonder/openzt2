@@ -27,7 +27,7 @@ use openzt2_zoo_state::animal_behavior::animal_lineage::{
     insert_animal_parentage, AnimalMate, PregnancyFather,
 };
 use openzt2_zoo_state::animal_behavior::behavior_random_stream_state::BehaviorRandomStream;
-use openzt2_zoo_state::animal_behavior::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation;
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::mark_behavior_task_for_failure_and_stop_navigation;
 use openzt2_zoo_state::behavior_task_execution_types::{
     BehaviorTaskExecutionState, PendingBehaviorTaskFailure,
 };
@@ -51,8 +51,9 @@ use super::{
 /// young variant beside the mother.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn spawn_children_for_authored_births(
+    activation: In<Option<Entity>>,
     mut commands: Commands,
-    clock: Res<ZooClock>,
+    clocks: Query<&ZooClock>,
     species_assets: Res<Assets<SpeciesAsset>>,
     species_index: Res<SpeciesAssets>,
     definition_assets: Res<Assets<WorldDefinitionAsset>>,
@@ -60,7 +61,7 @@ pub(super) fn spawn_children_for_authored_births(
     mut identifiers: Query<&mut PersistentIdAllocator>,
     prefabs: Option<Res<Assets<ScenePrefabAsset>>>,
     server: Option<Res<AssetServer>>,
-    habitat_grid: (Option<Res<HabitatIndex>>, Option<Res<TopologyGrid>>),
+    habitat_grid: Query<(&HabitatIndex, &TopologyGrid)>,
     mut mothers: Query<
         (
             Entity,
@@ -97,8 +98,18 @@ pub(super) fn spawn_children_for_authored_births(
         habitat,
         pregnancy,
         mate,
-    ) in &mut mothers
+    ) in
+        openzt2_zoo_state::behavior_task_execution_types::running_actions::behavior_action_actors(
+            &mut mothers,
+            activation.0,
+        )
     {
+        let Ok(clock) = clocks.get(world.root) else {
+            continue;
+        };
+        if activation.0.is_none() && !instruction.can_update_after_activation(clock.tick) {
+            continue;
+        }
         if task.next_action_tick > clock.tick {
             continue;
         }
@@ -113,11 +124,8 @@ pub(super) fn spawn_children_for_authored_births(
         } = running_action;
         let constrain = |mut position: Transform| {
             if within_habitat {
-                if let Some(((habitats, topology), habitat)) = habitat_grid
-                    .0
-                    .as_deref()
-                    .zip(habitat_grid.1.as_deref())
-                    .zip(habitat)
+                if let Some(((habitats, topology), habitat)) =
+                    habitat_grid.get(world.root).ok().zip(habitat)
                 {
                     if locate_habitat_at_world_position(
                         habitats,

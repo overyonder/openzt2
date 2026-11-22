@@ -40,7 +40,7 @@ use openzt2_zoo_state::placement::object_placement_definition_queries::collect_o
 use openzt2_zoo_state::placement::object_placement_definition_queries::resolve_object_placeable_definition;
 use openzt2_zoo_state::placement::object_placement_validation::validate_object_placement_footprint_cells;
 use openzt2_zoo_state::placement::object_placement_validation::ObjectPlacementAuthoritativeFacts;
-use openzt2_zoo_state::placement::placement_occupancy_index::PlacedObjectFootprintOccupancyIndex;
+use openzt2_zoo_state::placement::placement_occupancy_index::PlacedObjectFootprintQueries;
 use openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementCellCollectionScratch;
 use openzt2_zoo_state::placement::placement_transaction_types::ObjectPlacementEditPrepared;
 use openzt2_zoo_state::placement::placement_transaction_types::PreparedObjectPlacementEdit;
@@ -67,7 +67,7 @@ pub(super) struct BiomeAutomaticObjectPlacementPreparationParameters<'w, 's> {
     images: Res<'w, Assets<Image>>,
     prefabs: Res<'w, Assets<ScenePrefabAsset>>,
     models: Res<'w, Assets<Gltf>>,
-    terrain_index: Res<'w, TerrainIndex>,
+    terrain_indexes: Query<'w, 's, &'static TerrainIndex>,
     terrain_assets: Res<'w, Assets<TerrainAsset>>,
     chunks: Query<'w, 's, (&'static TerrainChunk, Option<&'static EditedTerrainSamples>)>,
     previews: Query<
@@ -81,7 +81,7 @@ pub(super) struct BiomeAutomaticObjectPlacementPreparationParameters<'w, 's> {
         ),
     >,
     roots: Query<'w, 's, &'static mut BiomeAutomaticPlacementRandomStream, With<WorldRoot>>,
-    placement: Res<'w, PlacedObjectFootprintOccupancyIndex>,
+    placement: PlacedObjectFootprintQueries<'w, 's>,
     ground_paths: GroundPathPlacementStomp<'w, 's>,
     placed: Query<'w, 's, StompablePlacedObject>,
     allocator: Query<'w, 's, &'static mut PersistentIdAllocator>,
@@ -90,7 +90,7 @@ pub(super) struct BiomeAutomaticObjectPlacementPreparationParameters<'w, 's> {
 
 pub(super) fn hydrate_biome_automatic_placement_state_onto_world_and_terrain_brush_previews(
     mut commands: Commands,
-    seed: Res<ZooSeed>,
+    seed: Single<&ZooSeed>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     roots: Query<
@@ -106,6 +106,7 @@ pub(super) fn hydrate_biome_automatic_placement_state_onto_world_and_terrain_bru
         Option<&BiomeAutomaticPlacementAssetDependencies>,
     )>,
 ) {
+    let seed = seed.into_inner();
     for root in &roots {
         commands
             .entity(root)
@@ -202,7 +203,7 @@ pub(super) fn prepare_biome_automatic_object_placement_edits(
         images,
         prefabs,
         models,
-        terrain_index,
+        terrain_indexes,
         terrain_assets,
         chunks,
         previews,
@@ -218,6 +219,9 @@ pub(super) fn prepare_biome_automatic_object_placement_edits(
     };
     for request in requests.read() {
         let Ok((preview, path, member, dependencies)) = previews.get(request.preview) else {
+            continue;
+        };
+        let Ok(terrain_index) = terrain_indexes.get(member.root) else {
             continue;
         };
         let TerrainBrushKind::Paint { biome, .. } = preview.kind else {
@@ -275,7 +279,7 @@ pub(super) fn prepare_biome_automatic_object_placement_edits(
         let mut removed_entities = HashSet::new();
         let mut mutations = Vec::new();
         for cell in candidate_cells.iter().copied() {
-            for entity in placement.entities_occupying_cell(cell) {
+            for entity in placement.entities_occupying_cell(member.root, cell) {
                 if removed_entities.contains(&entity) {
                     continue;
                 }
@@ -379,7 +383,7 @@ pub(super) fn prepare_biome_automatic_object_placement_edits(
                 continue;
             };
             let geometry = footprints.resolve(definition, Some(&prefab));
-            let path_overlaps = ground_paths.overlaps(definition, catalogue);
+            let path_overlaps = ground_paths.overlaps(member.root, definition, catalogue);
             let validity = validate_object_placement_footprint_cells(
                 geometry,
                 geometry.cells(eighth_turns),
@@ -397,6 +401,7 @@ pub(super) fn prepare_biome_automatic_object_placement_edits(
                             occupied_cell,
                             definition,
                             catalogue,
+                            member.root,
                             &placement,
                             &placed,
                             |entity| removed_entities.contains(&entity),
@@ -437,6 +442,7 @@ pub(super) fn prepare_biome_automatic_object_placement_edits(
                 &cells,
                 definition,
                 catalogue,
+                member.root,
                 &placement,
                 &placed,
                 |entity| removed_entities.contains(&entity),

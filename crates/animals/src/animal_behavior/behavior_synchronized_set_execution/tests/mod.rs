@@ -13,11 +13,13 @@ use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorTaskFailure
 fn paired_tasks() -> (App, Entity, Entity) {
     let mut app = App::new();
     app.add_observer(openzt2_zoo_state::behavior_task_execution_types::running_actions::resume_suspended_behavior_instruction);
-    app.insert_resource(ZooClock {
-        fractional_tick: Default::default(),
-        tick: 20,
-        absolute_day: 0,
-        tick_in_day: 20,
+    app.add_plugins(move |app: &mut App| {
+        app.world_mut().spawn(ZooClock {
+            fractional_tick: Default::default(),
+            tick: 20,
+            absolute_day: 0,
+            tick_in_day: 20,
+        });
     });
     app.add_message::<BehaviorTaskFinished>()
         .add_message::<BehaviorTaskFailed>();

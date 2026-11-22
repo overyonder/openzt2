@@ -1,5 +1,7 @@
 //! Builds authored placement decals and projects preview validity onto visuals.
 
+use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
+
 use bevy::prelude::*;
 use openzt2_game_data::ui_document::document::*;
 use openzt2_game_data::world_definitions::object_placement::FootprintCell;
@@ -256,6 +258,7 @@ pub(super) fn rebuild_object_placement_preview_footprint_and_grid_decals(
     mut previews: Query<(
         Entity,
         Ref<ConstructionPreview>,
+        &WorldMember,
         Ref<ObjectPlacementPreviewMaterials>,
         Option<Ref<ObjectPlacementPrefabSource>>,
         Ref<Visibility>,
@@ -276,7 +279,10 @@ pub(super) fn rebuild_object_placement_preview_footprint_and_grid_decals(
     let edited = terrain.edits.read().count() != 0;
     let restored = terrain.restores.read().count() != 0;
     let terrain_changed = edited || restored;
-    for (entity, preview, materials, prefab, visibility, state, children) in &mut previews {
+    for (entity, preview, member, materials, prefab, visibility, state, children) in &mut previews {
+        let Ok(index) = terrain.indexes.get(member.root) else {
+            continue;
+        };
         if *visibility == Visibility::Hidden {
             if terrain_changed && state.is_some() {
                 commands
@@ -287,6 +293,7 @@ pub(super) fn rebuild_object_placement_preview_footprint_and_grid_decals(
         }
         if state.as_deref().is_some_and(|state| !state.arrow_pending)
             && !terrain_changed
+            && !index.is_changed()
             && !active_definitions.is_changed()
             && !visibility.is_changed()
             && !preview.is_changed()
@@ -385,6 +392,7 @@ pub(super) fn rebuild_object_placement_preview_footprint_and_grid_decals(
             preview: preview.transform.compute_affine(),
             rotation: next.decal_rotation,
             plane: &plane,
+            terrain_index: &index,
         };
         // As the original, one footprint image spans the whole footprint, so
         // its border outlines the footprint rather than every cell.
@@ -613,7 +621,8 @@ pub(super) struct PreviewDecalTerrain<'w, 's> {
         's,
         openzt2_zoo_state::terrain::terrain_edit_types::TerrainPresentationRestored,
     >,
-    index: Res<'w, openzt2_zoo_state::terrain::terrain_chunk_types::TerrainIndex>,
+    indexes:
+        Query<'w, 's, Ref<'static, openzt2_zoo_state::terrain::terrain_chunk_types::TerrainIndex>>,
     assets: Res<
         'w,
         Assets<
@@ -635,6 +644,7 @@ struct PreviewDecals<'a> {
     preview: bevy::math::Affine3A,
     rotation: Quat,
     plane: &'a Handle<Mesh>,
+    terrain_index: &'a openzt2_zoo_state::terrain::terrain_chunk_types::TerrainIndex,
 }
 
 impl PreviewDecals<'_> {
@@ -676,7 +686,7 @@ impl PreviewDecals<'_> {
             size,
             centre,
             texture_rotation,
-            &terrain.index,
+            self.terrain_index,
             &terrain.assets,
             &terrain.chunks,
         )

@@ -65,10 +65,10 @@ use openzt2_zoo_state::topology::topology_edit_types::TopologyChanged;
 use openzt2_zoo_state::topology::topology_edit_types::TopologyEditAcknowledged;
 use openzt2_zoo_state::topology::topology_edit_types::TopologyEditPreparationRejected;
 use openzt2_zoo_state::topology::topology_edit_types::TopologyEditPrepared;
-use openzt2_zoo_state::topology::topology_graph_types::TopologyGrid;
 use openzt2_zoo_state::topology::topology_graph_types::TopologyIndex;
 
 use bevy::prelude::*;
+use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 
 use openzt2_game_assets::application_lifecycle::GamePhase;
 use openzt2_world_state::application_schedule::FixedGameSet;
@@ -86,8 +86,7 @@ impl Plugin for TopologyPlugin {
         if !app.is_plugin_added::<PersistentIdIndexPlugin>() {
             app.add_plugins(PersistentIdIndexPlugin);
         }
-        app.init_resource::<TopologyIndex>()
-            .init_resource::<TopologyGrid>()
+        app.register_required_components::<WorldRoot, TopologyIndex>()
             .add_observer(detach_removed_fence_endpoints)
             .add_observer(despawn_fence_with_removed_endpoint)
             .add_observer(path_support_hydration::remove_supports_when_path_tile_is_removed)
@@ -225,8 +224,7 @@ impl Plugin for TopologyPlugin {
                         .after(invalidate_path_supports_after_topology_or_terrain_changes),
                 )
                     .in_set(FixedGameSet::Cleanup),
-            )
-            .add_systems(OnExit(GamePhase::InGame), reset_topology_grid);
+            );
     }
 }
 
@@ -264,10 +262,6 @@ fn despawn_fence_with_removed_endpoint(
             let _ = world.despawn(entity);
         }
     });
-}
-
-fn reset_topology_grid(mut grid: ResMut<TopologyGrid>) {
-    *grid = default();
 }
 
 #[cfg(test)]

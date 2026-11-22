@@ -13,22 +13,24 @@ use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_zoo_state::animal_behavior::behavior_synchronized_set_types::{
     SynchronizedBehaviorOperation, SynchronizedBehaviorPartner, SynchronizedBehaviorSubject,
 };
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::behavior_action_actors;
 use openzt2_zoo_state::behavior_task_execution_types::{
-    abandon_behavior_task_for_reconsideration,
+    abandon_behavior_task_for_reconsideration, allocate_behavior_execution_id,
     running_actions::{
         BehaviorInstructionId, RunBehaviorSynchronizedSets, RunningBehaviorInstruction,
         SelectedBehaviorSet,
     },
-    BehaviorTaskExecutionPhase, BehaviorTaskExecutionSequence, BehaviorTaskExecutionState,
+    BehaviorTaskExecutionPhase, BehaviorTaskExecutionState, BehaviorTaskGeneration,
     PendingBehaviorTaskFailure, MAXIMUM_BEHAVIOR_TASK_RETURN_FRAME_COUNT,
 };
 
 pub(super) fn start_synchronized_behavior_sets(
+    activation: In<Option<Entity>>,
     mut commands: Commands,
-    clock: Res<ZooClock>,
+    clock: Single<&ZooClock>,
     sources: SynchronizedBehaviorSources,
     animal_types: super::super::behavior_subject_type_resolution::AnimalBehaviorSubjectTypes,
-    actors: Query<
+    mut actors: Query<
         (
             Entity,
             &BehaviorTaskExecutionState,
@@ -50,7 +52,10 @@ pub(super) fn start_synchronized_behavior_sets(
     ) else {
         return;
     };
-    for (actor, task, instruction, running) in &actors {
+    for (actor, task, instruction, running) in behavior_action_actors(&mut actors, activation.0) {
+        if activation.0.is_none() && !instruction.can_update_after_activation(clock.tick) {
+            continue;
+        }
         if task.next_action_tick > clock.tick || !instruction.is_current(task) {
             continue;
         }
@@ -134,7 +139,7 @@ pub(super) fn claim_synchronized_behavior(
         Has<SynchronizedBehaviorParticipant>,
         Has<BehaviorTaskExecutionState>,
     )>,
-    mut sequence: ResMut<BehaviorTaskExecutionSequence>,
+    mut execution_generations: Query<&mut BehaviorTaskGeneration>,
     presentations: Query<&AnimationPresentations>,
     mut players: Query<&mut AnimationPlayer>,
 ) {
@@ -162,7 +167,11 @@ pub(super) fn claim_synchronized_behavior(
     if busy {
         abandon_behavior_task_for_reconsideration(target, &mut commands);
     }
-    let target_execution_id = sequence.next();
+    let target_execution_id = allocate_behavior_execution_id(
+        target,
+        execution_generations.get_mut(target).ok(),
+        &mut commands,
+    );
     commands.spawn((
         SynchronizedBehaviorSubject(actor),
         SynchronizedBehaviorPartner(target),

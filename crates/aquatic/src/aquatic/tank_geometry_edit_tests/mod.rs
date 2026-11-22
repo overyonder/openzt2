@@ -97,8 +97,6 @@ fn tank_geometry_construction_fixture(kind: TankEditKind) -> (App, Entity, Entit
         .add_message::<PointerInput>()
         .init_resource::<UiPointerCapture>()
         .init_resource::<AuthoredModalInputCapture>()
-        .init_resource::<TopologyGrid>()
-        .init_resource::<HabitatIndex>()
         .init_resource::<Assets<TerrainAsset>>()
         .add_message::<CommitTankGeometryEdit>()
         .add_message::<TankGeometryEditPrepared>()
@@ -205,9 +203,13 @@ fn tank_geometry_construction_fixture(kind: TankEditKind) -> (App, Entity, Entit
         .index_test_document(handle, &document);
     let root = app
         .world_mut()
-        .spawn(WorldRoot {
-            scenario: AssetId::default(),
-        })
+        .spawn((
+            WorldRoot {
+                scenario: AssetId::default(),
+            },
+            TopologyGrid::default(),
+            HabitatIndex::default(),
+        ))
         .id();
     let geometry = TankGeometry {
         floor_height: 0.0,
@@ -218,7 +220,7 @@ fn tank_geometry_construction_fixture(kind: TankEditKind) -> (App, Entity, Entit
         area: 4.0,
         volume: 8.0,
     };
-    install_flat_terrain(&mut app, 5);
+    install_flat_terrain(&mut app, root, 5);
     let corners = [
         IVec3::ZERO,
         IVec3::new(2, 0, 0),
@@ -265,7 +267,7 @@ fn tank_geometry_construction_fixture(kind: TankEditKind) -> (App, Entity, Entit
         ));
     }
     let other = app.world_mut().spawn((Tank { definition }, geometry)).id();
-    let mut habitat_index = app.world_mut().resource_mut::<HabitatIndex>();
+    let mut habitat_index = app.world_mut().get_mut::<HabitatIndex>(root).unwrap();
     for cell in [IVec2::ZERO, IVec2::X, IVec2::Y, IVec2::ONE] {
         habitat_index.record_habitat_for_topology_cell(cell, tank);
     }
@@ -277,7 +279,7 @@ fn tank_geometry_construction_fixture(kind: TankEditKind) -> (App, Entity, Entit
     (app, tank, other)
 }
 
-pub(super) fn install_flat_terrain(app: &mut App, side: u16) {
+pub(super) fn install_flat_terrain(app: &mut App, root: Entity, side: u16) -> Entity {
     let asset = app
         .world_mut()
         .resource_mut::<Assets<TerrainAsset>>()
@@ -329,20 +331,24 @@ pub(super) fn install_flat_terrain(app: &mut App, side: u16) {
         }));
     let chunk = app
         .world_mut()
-        .spawn(TerrainChunk {
-            source_coord: IVec2::ZERO,
-            coord: IVec2::ZERO,
-            asset,
-            origin: Vec2::ZERO,
-            spacing_m: 1.0,
-            side,
-        })
+        .spawn((
+            WorldMember { root },
+            TerrainChunk {
+                source_coord: IVec2::ZERO,
+                coord: IVec2::ZERO,
+                asset,
+                origin: Vec2::ZERO,
+                spacing_m: 1.0,
+                side,
+            },
+        ))
         .id();
-    app.insert_resource(TerrainIndex {
+    app.world_mut().entity_mut(root).insert(TerrainIndex {
         chunks: [(IVec2::ZERO, chunk)].into_iter().collect(),
         origin: Vec2::ZERO,
         chunk_span_m: f32::from(side - 1),
     });
+    chunk
 }
 
 fn write_primary_pointer_input(app: &mut App, action: PointerAction) {

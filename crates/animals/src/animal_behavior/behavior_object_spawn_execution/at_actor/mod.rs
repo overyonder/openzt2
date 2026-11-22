@@ -10,12 +10,13 @@ use openzt2_zoo_state::guests::guest_simulation_types::GuestRng;
 /// Spawns the object of a node- and clip-less `BFBehSpawn` beside its actor,
 /// such as the `TrashGround` a guest drops, once its model has loaded.
 pub(super) fn spawn_behavior_objects_at_actor(
+    activation: In<Option<Entity>>,
     mut commands: Commands,
     definitions: Res<WorldDefinitions>,
     definition_assets: Res<Assets<WorldDefinitionAsset>>,
     prefabs: Res<Assets<ScenePrefabAsset>>,
     server: Res<AssetServer>,
-    clock: Res<ZooClock>,
+    clocks: Query<&ZooClock>,
     mut ids: Query<&mut PersistentIdAllocator>,
     pose_validation: super::spawn_pose::SpawnPoseValidation,
     mut actors: Query<
@@ -38,8 +39,17 @@ pub(super) fn spawn_behavior_objects_at_actor(
         return;
     };
     for (actor, (task, instruction, running_action), world, animal_random, guest_random, pending) in
-        &mut actors
+        openzt2_zoo_state::behavior_task_execution_types::running_actions::behavior_action_actors(
+            &mut actors,
+            activation.0,
+        )
     {
+        let Ok(clock) = clocks.get(world.root) else {
+            continue;
+        };
+        if activation.0.is_none() && !instruction.can_update_after_activation(clock.tick) {
+            continue;
+        }
         if task.next_action_tick > clock.tick {
             continue;
         }
@@ -76,10 +86,12 @@ pub(super) fn spawn_behavior_objects_at_actor(
             // Wait for the model rather than spawning an invisible object,
             // holding its handle so the load isn't cancelled meanwhile.
             let Some(prefab) = prefabs.get(&handle) else {
-                commands.entity(actor).insert(PendingAtActorSpawnPrefab {
-                    object: object.id,
-                    prefab: handle,
-                });
+                if pending.is_none_or(|pending| pending.object != object.id) {
+                    commands.entity(actor).insert(PendingAtActorSpawnPrefab {
+                        object: object.id,
+                        prefab: handle,
+                    });
+                }
                 continue;
             };
             Some((handle, prefab))

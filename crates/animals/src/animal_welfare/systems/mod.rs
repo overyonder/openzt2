@@ -69,7 +69,7 @@ fn species_needs<'a>(
 
 pub(crate) fn initialize_animal_needs(
     mut commands: Commands,
-    zoo_seed: Res<ZooSeed>,
+    zoo_seed: Single<&ZooSeed>,
     assets: Res<Assets<SpeciesAsset>>,
     index: Res<SpeciesAssets>,
     animals: Query<
@@ -89,7 +89,7 @@ pub(crate) fn initialize_animal_needs(
             continue;
         };
         let mut random =
-            DeterministicRng::from_entity(*zoo_seed, *persistent_id, RngDomain::AnimalNeeds);
+            DeterministicRng::from_entity(**zoo_seed, *persistent_id, RngDomain::AnimalNeeds);
         let mut sample = |need: &SpeciesNeed| {
             let minimum = need.initial_wellness_permille_range[0];
             let maximum = need.initial_wellness_permille_range[1].max(minimum);
@@ -298,7 +298,7 @@ pub(super) fn accumulate_need_points(
 /// authored initial range.
 pub(crate) fn initialize_missing_reproduction_needs(
     mut commands: Commands,
-    zoo_seed: Res<ZooSeed>,
+    zoo_seed: Single<&ZooSeed>,
     assets: Res<Assets<SpeciesAsset>>,
     index: Res<SpeciesAssets>,
     animals: Query<
@@ -316,7 +316,7 @@ pub(crate) fn initialize_missing_reproduction_needs(
             continue;
         };
         let mut random =
-            DeterministicRng::from_entity(*zoo_seed, *persistent_id, RngDomain::AnimalNeeds);
+            DeterministicRng::from_entity(**zoo_seed, *persistent_id, RngDomain::AnimalNeeds);
         let minimum = need.initial_wellness_permille_range[0];
         let maximum = need.initial_wellness_permille_range[1].max(minimum);
         let sampled = minimum

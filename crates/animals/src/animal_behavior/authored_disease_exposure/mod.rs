@@ -36,7 +36,7 @@ fn disease_check_interval(definitions: WorldDefinitionsView<'_>) -> Option<u64> 
 }
 
 pub(super) fn disease_exposure_is_due(
-    clock: Res<ZooClock>,
+    clock: Single<&ZooClock>,
     worlds: Query<Option<&DiseaseExposureDeadline>, With<WorldRoot>>,
 ) -> bool {
     worlds
@@ -65,8 +65,8 @@ pub(super) type DiseaseAnimals<'w, 's> =
 
 pub(super) fn expose_animals_to_authored_diseases(
     mut commands: Commands,
-    clock: Res<ZooClock>,
-    seed: Res<ZooSeed>,
+    clock: Single<&ZooClock>,
+    seed: Single<&ZooSeed>,
     definition_assets: Res<Assets<WorldDefinitionAsset>>,
     definitions: Res<WorldDefinitions>,
     subject_types: AnimalBehaviorSubjectTypes,
@@ -162,7 +162,7 @@ pub(super) fn expose_animals_to_authored_diseases(
     }
     let funding = funding.map_or_else(|| DiseaseResearchFunding::default().0, |funding| funding.0);
     let mut random =
-        DeterministicRng::from_entity(*seed, PersistentId(clock.tick), RngDomain::Disease);
+        DeterministicRng::from_entity(**seed, PersistentId(clock.tick), RngDomain::Disease);
     let first = random.next_u32() as usize % policy.diseases.len();
     let authored = policy.diseases[first..]
         .iter()
@@ -521,4 +521,155 @@ pub(super) fn clear_authored_disease_tokens_when_cured(
             commands.entity(token).despawn();
         }
     }
+}
+
+pub(super) fn add_authored_disease_target(
+    activation: On<openzt2_zoo_state::behavior_task_execution_types::running_actions::WhenBehaviorAction<
+        openzt2_zoo_state::behavior_task_execution_types::running_actions::RunBehaviorAddSubjectAsDiseaseTarget,
+    >>,
+    clock: Single<&ZooClock>,
+    definitions: Res<WorldDefinitions>,
+    assets: Res<Assets<WorldDefinitionAsset>>,
+    subject_types: AnimalBehaviorSubjectTypes,
+    animals: DiseaseAnimals,
+    actions: Query<(
+        &openzt2_zoo_state::behavior_task_execution_types::running_actions::RunningBehaviorInstruction,
+        &openzt2_zoo_state::behavior_task_execution_types::running_actions::RunBehaviorAddSubjectAsDiseaseTarget,
+    )>,
+    worlds: Query<
+        (
+            Option<&ActiveZooDisease>,
+            Option<&DiseaseExposureDeadline>,
+            &Fame,
+        ),
+        With<WorldRoot>,
+    >,
+    facilities: Query<(&DefinitionId, &WorldMember), Without<Animal>>,
+    infected: Query<&WorldMember, (With<Animal>, With<Disease>, Without<Dead>)>,
+    tokens: Query<&BehaviorSelfToken>,
+    token_owners: Query<&Children>,
+    mut commands: Commands,
+) {
+    let actor = activation.entity;
+    let Ok((instruction, action)) = actions.get(actor) else {
+        return;
+    };
+    let action = &action.0;
+    let Some((root, view, policy, disease)) = (|| {
+        let (_, facts, _) = animals.get(actor).ok()?;
+        let matches = |id| facts.matches_type(id, subject_types.borrow_for(actor));
+        if !facts.is_adult()
+            || (!action.types.is_empty() && !action.types.iter().copied().any(matches))
+            || !action
+                .attributes
+                .iter()
+                .all(|&(id, value)| matches(id) == value)
+        {
+            return None;
+        }
+        let view = definitions.get(&assets)?;
+        let policy = view.disease_exposure()?;
+        let disease = policy
+            .diseases
+            .iter()
+            .find(|disease| disease.name == action.disease)?;
+        Some((facts.world.root, view, policy, disease))
+    })() else {
+        instruction.complete(actor, clock.tick, &mut commands);
+        return;
+    };
+
+    let Ok((active, deadline, fame)) = worlds.get(root) else {
+        super::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation(
+            actor,
+            &mut commands,
+        );
+        return;
+    };
+    let has_cloning_center = || {
+        facilities.iter().any(|(definition, member)| {
+            member.root == root
+                && (view.find_cloning_center(definition.0).is_some()
+                    || view.find_object(definition.0).is_some_and(|object| {
+                        object
+                            .behavior_type_identifiers
+                            .contains(&AssetId::from_key("cloningcenter"))
+                    }))
+        })
+    };
+    let immediate = action.immediate
+        && active.is_none()
+        && fame.half_stars >= policy.half_star_minimum
+        && !infected.iter().any(|member| member.root == root)
+        && has_cloning_center()
+        && disease.zoo_tests.iter().all(|test| match *test {
+            DiseaseZooTest::Fame {
+                half_stars,
+                comparison,
+            } => comparison.holds(u32::from(fame.half_stars), half_stars),
+            DiseaseZooTest::EntityCount {
+                entity_type,
+                attribute,
+                quantity,
+                comparison,
+                different,
+            } => {
+                let animal_keys = animals.iter().filter_map(|(entity, facts, _)| {
+                    let types = subject_types.borrow_for(entity);
+                    (facts.world.root == root
+                        && facts.matches_type(entity_type, types)
+                        && attribute
+                            .is_none_or(|(name, state)| facts.matches_type(name, types) == state))
+                    .then_some(facts.variant_id())
+                });
+                let object_keys = facilities.iter().filter_map(|(definition, member)| {
+                    (member.root == root
+                        && attribute.is_none()
+                        && (definition.0 == entity_type
+                            || view.find_object(definition.0).is_some_and(|object| {
+                                object.behavior_type_identifiers.contains(&entity_type)
+                            })))
+                    .then_some(definition.0)
+                });
+                let matching = animal_keys.chain(object_keys);
+                let count = if different {
+                    matching.collect::<HashSet<_>>().len()
+                } else {
+                    matching.count()
+                };
+                comparison.holds(u32::try_from(count).unwrap_or(u32::MAX), quantity)
+            }
+        });
+    let available_at = if immediate {
+        clock.tick
+    } else {
+        deadline.map_or(clock.tick.saturating_add(1), |deadline| {
+            deadline.0.max(clock.tick.saturating_add(1))
+        })
+    };
+    if !tokens
+        .iter_many(token_owners.get(actor).ok().into_iter().flatten().copied())
+        .flatten()
+        .any(|token| token.name == disease.token)
+    {
+        commands.spawn((
+            BehaviorSelfToken {
+                name: disease.token,
+                available_at,
+                expires_at: u64::MAX,
+                payload: None,
+                retain_on_failure: false,
+            },
+            ChildOf(actor),
+        ));
+    }
+    if immediate {
+        let duration = (f64::from(policy.cure_timeout_seconds) * f64::from(view.timing().fixed_hz))
+            .ceil() as u64;
+        commands.entity(root).insert_if_new(ActiveZooDisease {
+            definition: disease.name,
+            cure_due_tick: clock.tick.saturating_add(duration),
+        });
+    }
+    instruction.complete(actor, clock.tick, &mut commands);
 }

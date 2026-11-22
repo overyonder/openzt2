@@ -17,7 +17,7 @@ use openzt2_zoo_state::topology::topology_grid_geometry::calculate_topology_edge
 /// while definitions are loading.
 pub(super) fn hydrate_save_loaded_topology_definition_facts(
     mut commands: Commands,
-    grid: Res<TopologyGrid>,
+    grid: Single<&TopologyGrid>,
     active_definitions: Res<WorldDefinitions>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     nodes: Query<&TopologyNode>,
@@ -32,6 +32,7 @@ pub(super) fn hydrate_save_loaded_topology_definition_facts(
     )>,
     paths: Query<(Entity, &PathTile, Option<&TileSurface>, Option<&Transform>)>,
 ) {
+    let grid = grid.into_inner();
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };

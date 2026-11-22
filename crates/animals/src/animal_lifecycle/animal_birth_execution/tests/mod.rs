@@ -14,6 +14,9 @@ use openzt2_world_state::simulation_time::deterministic_random_stream::{
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 use openzt2_zoo_state::animal_behavior::animal_lineage::{AnimalFather, AnimalMother};
 use openzt2_zoo_state::animal_lifecycle::types::{AnimalVariant, Pregnancy};
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
+    activate_due_behavior_instructions, activated_behavior_actor, update_waiting_behavior_actors,
+};
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionPhase;
 
 fn document() -> SpeciesDocument {
@@ -109,15 +112,30 @@ fn birth_action_spawns_one_young_variant_with_mother_and_mate() {
         .init_resource::<Assets<WorldDefinitionAsset>>()
         .init_resource::<WorldDefinitions>()
         .init_resource::<Assets<BehaviorDocumentAsset>>()
-        .insert_resource(ZooClock {
-            fractional_tick: Default::default(),
-            tick: 99,
-            absolute_day: 0,
-            tick_in_day: 99,
-        })
         .add_message::<AnimalBorn>()
-        .add_systems(Update, spawn_children_for_authored_births);
-    let root = app.world_mut().spawn(PersistentIdAllocator::default()).id();
+        .add_observer(
+            activated_behavior_actor::<RunBehaviorSpawnChild>
+                .pipe(spawn_children_for_authored_births),
+        )
+        .add_systems(
+            Update,
+            (
+                activate_due_behavior_instructions,
+                update_waiting_behavior_actors.pipe(spawn_children_for_authored_births),
+            ),
+        );
+    let root = app
+        .world_mut()
+        .spawn((
+            PersistentIdAllocator::default(),
+            ZooClock {
+                fractional_tick: Default::default(),
+                tick: 99,
+                absolute_day: 0,
+                tick_in_day: 99,
+            },
+        ))
+        .id();
     let definitions = WorldDefinitionDocument {
         simulation_timing: Some(SimulationTimingDefinition {
             fixed_hz: 10,

@@ -18,7 +18,7 @@ use bevy::picking::pointer::{Location, PointerAction, PointerButton, PointerId, 
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use openzt2_game_assets::terrain::terrain_test_asset::terrain_test_asset;
 use openzt2_interface_state::ui::pointer_capture_types::UiPointerCapture;
-use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
+use openzt2_world_state::world_spawn::world_membership_types::{WorldMember, WorldRoot};
 use openzt2_zoo_state::construction::construction_interaction_types::CommitConstruction;
 use openzt2_zoo_state::construction::construction_interaction_types::ConstructionCursor;
 use openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::ConstructionTool;
@@ -32,8 +32,6 @@ fn fence_preview_app() -> App {
     app.init_resource::<Assets<WorldDefinitionAsset>>()
         .init_resource::<WorldDefinitions>()
         .init_resource::<Assets<TerrainAsset>>()
-        .init_resource::<TopologyIndex>()
-        .init_resource::<TopologyGrid>()
         .add_message::<PointerInput>()
         .init_resource::<UiPointerCapture>()
         .init_resource::<openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::ConstructionPlacementPolicy>()
@@ -104,18 +102,31 @@ fn fence_preview_app() -> App {
                 64
             ],
         }));
+    let root = app
+        .world_mut()
+        .spawn((
+            WorldRoot {
+                scenario: AssetId::default(),
+            },
+            TopologyIndex::default(),
+            TopologyGrid::default(),
+        ))
+        .id();
     let chunk = app
         .world_mut()
-        .spawn(TerrainChunk {
-            source_coord: IVec2::ZERO,
-            coord: IVec2::ZERO,
-            asset,
-            origin: Vec2::ZERO,
-            spacing_m: 1.0,
-            side: 9,
-        })
+        .spawn((
+            WorldMember { root },
+            TerrainChunk {
+                source_coord: IVec2::ZERO,
+                coord: IVec2::ZERO,
+                asset,
+                origin: Vec2::ZERO,
+                spacing_m: 1.0,
+                side: 9,
+            },
+        ))
         .id();
-    app.insert_resource(TerrainIndex {
+    app.world_mut().entity_mut(root).insert(TerrainIndex {
         chunks: [(IVec2::ZERO, chunk)].into_iter().collect(),
         origin: Vec2::ZERO,
         chunk_span_m: 8.0,
@@ -123,30 +134,51 @@ fn fence_preview_app() -> App {
     app
 }
 
+fn preview_world_root(app: &mut App) -> Entity {
+    app.world_mut()
+        .query_filtered::<Entity, With<WorldRoot>>()
+        .single(app.world())
+        .unwrap()
+}
+
 fn insert_fence(app: &mut App, definition: AssetId, first: IVec3, second: IVec3) -> Entity {
+    let root = preview_world_root(app);
     let [a, b] = [first, second].map(|cell| {
-        if let Some(entity) = app.world().resource::<TopologyIndex>().nodes.get(&cell) {
+        if let Some(entity) = app
+            .world()
+            .get::<TopologyIndex>(root)
+            .unwrap()
+            .nodes
+            .get(&cell)
+        {
             return *entity;
         }
-        app.world_mut().spawn(TopologyNode { cell }).id()
+        app.world_mut()
+            .spawn((TopologyNode { cell }, WorldMember { root }))
+            .id()
     });
     app.world_mut()
-        .spawn((FenceEdge::between(definition, a, b), Transform::IDENTITY))
+        .spawn((
+            FenceEdge::between(definition, a, b),
+            WorldMember { root },
+            Transform::IDENTITY,
+        ))
         .id()
 }
 
 fn spawn_preview(app: &mut App, from: IVec3, to: IVec3) -> Entity {
-    app.world_mut().spawn(WorldRoot {
-        scenario: AssetId::default(),
-    });
-    let grid = *app.world().resource::<TopologyGrid>();
+    let root = preview_world_root(app);
+    let grid = *app.world().get::<TopologyGrid>(root).unwrap();
     let cursor = app
         .world_mut()
-        .spawn(ConstructionCursor {
-            world: grid.cell_translation(from),
-            normal: Vec3::Y,
-            over_terrain: true,
-        })
+        .spawn((
+            WorldMember { root },
+            ConstructionCursor {
+                world: grid.cell_translation(from),
+                normal: Vec3::Y,
+                over_terrain: true,
+            },
+        ))
         .id();
     app.world_mut().write_message(PointerInput::new(
         PointerId::Mouse,
@@ -238,14 +270,13 @@ fn a_fence_built_over_a_broken_segment_replaces_it_and_another_fence_occupies_th
     let plan = |app: &mut App, to: i32| {
         app.world_mut()
             .run_system_once(
-                move |index: Res<TopologyIndex>,
-                      grid: Res<TopologyGrid>,
+                move |root: Single<(&TopologyIndex, &TopologyGrid, &TerrainIndex)>,
                       definitions: Res<Assets<WorldDefinitionAsset>>,
                       active: Res<WorldDefinitions>,
-                      terrain: Res<TerrainIndex>,
                       terrain_assets: Res<Assets<TerrainAsset>>,
                       chunks: Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
                       hosts: GateHostEdges| {
+                    let (index, grid, terrain) = root.into_inner();
                     calculate_fence_construction_plan(
                         &FencePreview {
                             definition: AssetId::from_key("fence"),

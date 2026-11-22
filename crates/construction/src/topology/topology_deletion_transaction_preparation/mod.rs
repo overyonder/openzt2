@@ -75,6 +75,7 @@ pub(super) fn prepare_topology_deletion_transaction(
         Option<&IncomingPortals>,
     )>,
     wall_tops: Query<&TankWallTopHeight>,
+    poses: Query<&GlobalTransform>,
     mut prepared: MessageWriter<TopologyEditPrepared>,
     mut rejected: MessageWriter<TopologyEditPreparationRejected>,
 ) {
@@ -151,6 +152,10 @@ pub(super) fn prepare_topology_deletion_transaction(
                 id: *id,
                 destination,
                 bidirectional: portal.bidirectional,
+                endpoint_pose: poses
+                    .get(request.target)
+                    .ok()
+                    .map(GlobalTransform::compute_transform),
             });
         }
 
@@ -203,6 +208,10 @@ pub(super) fn prepare_topology_deletion_transaction(
                         id: *id,
                         destination: *destination,
                         bidirectional: portal.bidirectional,
+                        endpoint_pose: poses
+                            .get(entity)
+                            .ok()
+                            .map(GlobalTransform::compute_transform),
                     });
                 }
                 dependencies.push(entity);

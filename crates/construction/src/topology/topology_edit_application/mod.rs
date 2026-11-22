@@ -226,7 +226,10 @@ fn apply_one_committed_topology_edit(
         &HabitatRegion,
         &WorldMember,
     )>,
-    (roots, boundaries): (Query<Entity, With<WorldRoot>>, HabitatBoundaryQueries),
+    (roots, boundaries): (
+        Query<(&TopologyIndex, &TopologyGrid), With<WorldRoot>>,
+        HabitatBoundaryQueries,
+    ),
     members: Query<&WorldMember>,
     persistent: Res<PersistentIdIndex>,
     topology: Query<(
@@ -236,8 +239,6 @@ fn apply_one_committed_topology_edit(
         Option<&Portal>,
     )>,
     gates: Query<&Gate>,
-    index: Res<TopologyIndex>,
-    grid: Res<TopologyGrid>,
     active_definitions: Res<WorldDefinitions>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     mut acknowledged: MessageWriter<TopologyEditAcknowledged>,
@@ -249,12 +250,12 @@ fn apply_one_committed_topology_edit(
         write_topology_edit_acknowledgement(&request, false, &mut acknowledged);
         return;
     };
-    let root = members
-        .get(request.transaction)
-        .ok()
-        .map(|member| member.root)
-        .or_else(|| roots.iter().next());
-    let Some(root) = root else {
+    let Ok(member) = members.get(request.transaction) else {
+        write_topology_edit_acknowledgement(&request, false, &mut acknowledged);
+        return;
+    };
+    let root = member.root;
+    let Ok((index, grid)) = roots.get(root) else {
         write_topology_edit_acknowledgement(&request, false, &mut acknowledged);
         return;
     };
@@ -500,9 +501,15 @@ fn apply_one_committed_topology_edit(
         }
     }
     for snapshot in add {
-        if let TopologySnapshot::Portal { id, .. } = *snapshot {
-            let entity = commands.spawn((id, WorldMember { root })).id();
-            resolved.insert(id.0, entity);
+        if let TopologySnapshot::Portal {
+            id, endpoint_pose, ..
+        } = *snapshot
+        {
+            let mut endpoint = commands.spawn((id, WorldMember { root }));
+            if let Some(pose) = endpoint_pose {
+                endpoint.insert((pose, GlobalTransform::from(pose)));
+            }
+            resolved.insert(id.0, endpoint.id());
         }
     }
     for snapshot in add {
@@ -510,6 +517,7 @@ fn apply_one_committed_topology_edit(
             id,
             destination,
             bidirectional,
+            ..
         } = *snapshot
         else {
             continue;

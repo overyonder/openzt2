@@ -30,8 +30,6 @@ pub(super) fn hydrate_starting_animals(
     species_index: Res<SpeciesAssets>,
     definitions: Res<WorldDefinitions>,
     definition_assets: Res<Assets<WorldDefinitionAsset>>,
-    seed: Option<Res<ZooSeed>>,
-    clock: Option<Res<ZooClock>>,
     pending: Query<
         (
             Entity,
@@ -43,20 +41,18 @@ pub(super) fn hydrate_starting_animals(
         ),
         Without<Animal>,
     >,
-    worlds: Query<(), (With<WorldHydration>, Without<WorldLoadFailure>)>,
+    worlds: Query<(&ZooSeed, &ZooClock), (With<WorldHydration>, Without<WorldLoadFailure>)>,
 ) {
-    let (Some(seed), Some(clock), Some(species), Some(definitions)) = (
-        seed,
-        clock,
+    let (Some(species), Some(definitions)) = (
         species_index.get(&species_assets),
         definitions.get(&definition_assets),
     ) else {
         return;
     };
     for (entity, saved, id, world, transform, crated) in &pending {
-        if !worlds.contains(world.root) {
+        let Ok((seed, clock)) = worlds.get(world.root) else {
             continue;
-        }
+        };
         let mut random = DeterministicRng::from_entity(*seed, *id, RngDomain::AnimalNeeds);
         let Some((species, mut components)) = resolve_scripted_animal_spawn(
             species,

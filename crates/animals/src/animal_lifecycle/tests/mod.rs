@@ -68,9 +68,14 @@ fn release_emits_one_consumed_outcome_and_removes_the_animal() {
             Update,
             super::animal_release_execution::release_eligible_adult_animals_from_the_zoo,
         );
+    let root = app.world_mut().spawn_empty().id();
     let animal = app
         .world_mut()
-        .spawn((Animal, AnimalLifeStage(LifeStage::Adult)))
+        .spawn((
+            Animal,
+            AnimalLifeStage(LifeStage::Adult),
+            openzt2_world_state::world_spawn::world_membership_types::WorldMember { root },
+        ))
         .id();
     app.world_mut().write_message(ReleaseAnimal(animal));
     app.update();

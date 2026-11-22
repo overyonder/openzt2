@@ -1,3 +1,4 @@
+use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_zoo_state::topology::habitat_boundary_queries::HabitatBoundaryQueries;
 use openzt2_zoo_state::topology::topology_graph_types::FenceSegment;
 use std::collections::BTreeMap;
@@ -76,11 +77,12 @@ pub(super) struct TankHeightBoundsQueries<'w, 's> {
     nodes: Query<'w, 's, &'static TopologyNode>,
     clearance: Res<'w, TankPathClearance>,
     boundaries: HabitatBoundaryQueries<'w, 's>,
-    grid: Res<'w, TopologyGrid>,
+    grids: Query<'w, 's, &'static TopologyGrid>,
+    members: Query<'w, 's, &'static WorldMember>,
     show_stages: Query<
         'w,
         's,
-        &'static Transform,
+        (&'static Transform, &'static WorldMember),
         With<openzt2_zoo_state::shows::show_stage_types::ShowStage>,
     >,
     ground: TankWallGroundSampling<'w, 's>,
@@ -96,6 +98,7 @@ impl TankHeightBoundsQueries<'_, '_> {
         tank: Entity,
         limits: TankGeometryLimits,
     ) -> Option<Box<[TankWallHeightEdit]>> {
+        let root = self.members.get(tank).ok()?.root;
         let mut walls = Vec::new();
         for fence in self.boundaries.fences(tank) {
             let (edge, id, top) = self.fences.get(fence).ok()?;
@@ -107,10 +110,10 @@ impl TankHeightBoundsQueries<'_, '_> {
             let mut highest = f32::NEG_INFINITY;
             let mut maximum = f32::INFINITY;
             for cell in &cells {
-                highest = highest.max(self.ground.ground_height_at_topology_cell(*cell)?);
+                highest = highest.max(self.ground.ground_height_at_topology_cell(root, *cell)?);
                 maximum = maximum.min(
                     self.ground
-                        .terrain_units_at_topology_cell(*cell)?
+                        .terrain_units_at_topology_cell(root, *cell)?
                         .maximum_height_metres
                         + limits.default_wall_height_m,
                 );
@@ -169,9 +172,14 @@ impl TankHeightBoundsQueries<'_, '_> {
     ) -> Option<TankHeightBounds> {
         let (edge, ..) = self.fences.get(self.boundaries.fences(tank).next()?).ok()?;
         let cell = self.nodes.get(edge.a()).ok()?.cell;
-        let units = self.ground.terrain_units_at_topology_cell(cell)?;
-        let is_show_tank = self.show_stages.iter().any(|transform| {
-            let cell = ((transform.translation.xz() - self.grid.origin) / self.grid.spacing_m)
+        let root = self.members.get(tank).ok()?.root;
+        let units = self.ground.terrain_units_at_topology_cell(root, cell)?;
+        let grid = self.grids.get(root).ok()?;
+        let is_show_tank = self.show_stages.iter().any(|(transform, member)| {
+            if member.root != root {
+                return false;
+            }
+            let cell = ((transform.translation.xz() - grid.origin) / grid.spacing_m)
                 .floor()
                 .as_ivec2();
             region

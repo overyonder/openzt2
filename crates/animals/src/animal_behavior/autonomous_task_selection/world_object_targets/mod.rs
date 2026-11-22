@@ -32,8 +32,7 @@ use openzt2_zoo_state::topology::topology_graph_types::TopologyGrid;
 pub(crate) struct WorldObjectTargetSources<'w, 's> {
     pub(super) objects:
         Query<'w, 's, WorldObjectTargetFacts, (Without<Animal>, Without<WorldEntityIsCrated>)>,
-    pub(super) habitat_index: Res<'w, HabitatIndex>,
-    pub(super) topology_grid: Res<'w, TopologyGrid>,
+    roots: Query<'w, 's, (&'static HabitatIndex, &'static TopologyGrid)>,
     pub(super) terrain_surfaces: DrySurfaceEligibility<'w, 's>,
     /// Fences an animal bashes, jumps, climbs or tunnels under.
     pub(super) fences: Query<
@@ -56,42 +55,35 @@ impl WorldObjectTargetSources<'_, '_> {
     /// ground there.
     pub(super) fn fence_middle(
         &self,
+        root: Entity,
         edge: &openzt2_zoo_state::topology::topology_graph_types::FenceSegmentItem<'_, '_>,
     ) -> Option<Vec3> {
-        let first = self
-            .topology_grid
-            .cell_translation(self.topology_nodes.get(edge.a()).ok()?.cell);
-        let second = self
-            .topology_grid
-            .cell_translation(self.topology_nodes.get(edge.b()).ok()?.cell);
+        let (_, grid) = self.roots.get(root).ok()?;
+        let first = grid.cell_translation(self.topology_nodes.get(edge.a()).ok()?.cell);
+        let second = grid.cell_translation(self.topology_nodes.get(edge.b()).ok()?.cell);
         // On the ground, not at the topology layer's height.
         let middle = (first + second) * 0.5;
         Some(
             middle.with_y(
                 self.terrain_surfaces
-                    .ground_height(middle.xz())
+                    .ground_height(root, middle.xz())
                     .unwrap_or(middle.y),
             ),
         )
     }
 
     /// Whether an escaped animal can reach a world position.
-    pub(super) fn escaped_animal_reaches(&self, position: Vec3) -> bool {
-        super::super::escaped_animal_reaches(
-            &self.habitat_index,
-            *self.topology_grid,
-            &self.habitat_summaries,
-            position.xz(),
-        )
+    pub(super) fn escaped_animal_reaches(&self, root: Entity, position: Vec3) -> bool {
+        let Ok((index, grid)) = self.roots.get(root) else {
+            return false;
+        };
+        super::super::escaped_animal_reaches(index, *grid, &self.habitat_summaries, position.xz())
     }
 
     /// The fenced habitat containing a world position, if any.
-    pub(super) fn habitat_at(&self, position: Vec3) -> Option<Entity> {
-        locate_habitat_at_world_position(
-            &self.habitat_index,
-            Vec2::new(position.x, position.z),
-            *self.topology_grid,
-        )
+    pub(super) fn habitat_at(&self, root: Entity, position: Vec3) -> Option<Entity> {
+        let (index, grid) = self.roots.get(root).ok()?;
+        locate_habitat_at_world_position(index, Vec2::new(position.x, position.z), *grid)
     }
 }
 

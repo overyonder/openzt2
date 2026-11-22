@@ -31,18 +31,19 @@ use openzt2_world_state::{
     simulation_time::simulation_clock_types::ZooClock,
     world_spawn::world_membership_types::{DefinitionId, WorldMember},
 };
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::mark_behavior_task_for_failure_and_stop_navigation;
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
+    activated_behavior_actor, behavior_action_actors, update_waiting_behavior_actors,
+};
 use openzt2_zoo_state::{
-    animal_behavior::{
-        behavior_random_stream_state::BehaviorRandomStream,
-        behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation,
-    },
+    animal_behavior::behavior_random_stream_state::BehaviorRandomStream,
     animal_health::types::{AnimalDied, Dead, DeathCause},
     animal_lifecycle::types::Animal,
     behavior_task_execution_types::{
         continuations::BehaviorContinuationFrames,
         running_actions::{
             BehaviorAnimationEffect, BehaviorAnimationKeyDelivery, BehaviorAnimationTextKeys,
-            BehaviorInstructionId, BehaviorStep, BehaviorStepFixedSet, BehaviorStepSet,
+            BehaviorInstructionId, BehaviorResumeOutcome, BehaviorStepFixedSet,
             DispatchBehaviorAnimationTextKeys, ResumeSuspendedBehaviorInstruction,
             RunBehaviorAnimationEffect, RunningBehaviorInstruction, SuspendedBehaviorSetInterrupt,
             TimedBehaviorAnimationEffect,
@@ -80,6 +81,9 @@ impl CrossedBehaviorAnimationEffect {
     }
 }
 
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(super) struct BehaviorAnimationDetachReady;
+
 pub(super) fn register(app: &mut App) {
     app.add_message::<DispatchBehaviorAnimationTextKeys>()
         .add_observer(discard_crossed_animation_keys)
@@ -88,7 +92,7 @@ pub(super) fn register(app: &mut App) {
             (
                 (
                     dispatch_animation_key_handlers.in_set(BehaviorAnimationKeyDelivery),
-                    arm_timed_animation_effects.after(BehaviorAnimationKeyDelivery),
+                    arm_timed_animation_effects.after(BehaviorAnimationKeyDelivery).in_set(BehaviorAnimationDetachReady),
                 )
                     .in_set(AnimationObjectCommandDelivery)
                     .before(super::behavior_animation_clip_execution::finish_behavior_animation_clip_actions_after_playback_completion),
@@ -99,7 +103,11 @@ pub(super) fn register(app: &mut App) {
                 .before(BehaviorStepFixedSet::Act)
                 .run_if(in_state(openzt2_game_assets::application_lifecycle::GamePhase::InGame)),
         )
-        .add_systems(BehaviorStep, apply_behavior_animation_effects.in_set(BehaviorStepSet::Actions));
+        .add_observer(activated_behavior_actor::<RunBehaviorAnimationEffect>.pipe(apply_behavior_animation_effects))
+        .add_systems(FixedUpdate, update_waiting_behavior_actors.pipe(apply_behavior_animation_effects)
+            .in_set(FixedGameSet::Act)
+            .after(arm_timed_animation_effects)
+            .before(super::behavior_animation_clip_execution::finish_behavior_animation_clip_actions_after_playback_completion));
 }
 
 fn discard_crossed_animation_keys(
@@ -284,7 +292,7 @@ fn arm_timed_animation_effects(
 struct BehaviorSetInterruptions<'w, 's> {
     continuations: BehaviorContinuationFrames<'w, 's>,
     rules: Query<'w, 's, &'static SuspendedBehaviorSetInterrupt>,
-    clock: Res<'w, ZooClock>,
+    clock: Single<'w, 's, &'static ZooClock>,
     clips: Query<'w, 's, &'static PendingBehaviorAnimationClipCompletion>,
     cancellations: MessageWriter<'w, CancelAnimationClipPlaybackRequest>,
 }
@@ -335,7 +343,7 @@ impl BehaviorSetInterruptions<'_, '_> {
             depth,
             instruction: origin,
             tick: self.clock.tick,
-            advance: true,
+            outcome: BehaviorResumeOutcome::Advance,
         });
         true
     }
@@ -397,11 +405,12 @@ struct AnimalAnimationEffectTargets<'w, 's> {
 }
 
 fn apply_behavior_animation_effects(
+    activation: In<Option<Entity>>,
     mut commands: Commands,
-    clock: Res<ZooClock>,
+    clock: Single<&ZooClock>,
     definitions: Res<WorldDefinitions>,
     assets: Res<Assets<WorldDefinitionAsset>>,
-    grid: Res<TopologyGrid>,
+    grid: Single<&TopologyGrid>,
     mut topology: FenceTopology,
     mut targets: AnimalAnimationEffectTargets,
     mut actors: Query<
@@ -429,21 +438,22 @@ fn apply_behavior_animation_effects(
     };
     let mut killed = HashSet::<Entity>::default();
     for (actor, task, step, immediate, timed, crossed, mut animal_random, mut guest_random) in
-        &mut actors
+        behavior_action_actors(&mut actors, activation.0)
     {
         if !step.is_current(task) || killed.contains(&actor) {
             continue;
         }
-        let (effect, angles) =
-            if let Some(immediate) = immediate.filter(|_| task.next_action_tick <= clock.tick) {
-                (immediate.0, None)
-            } else if let Some((timed, crossed)) =
-                timed.zip(crossed.filter(|crossed| crossed.step == step.id()))
-            {
-                (timed.0, crossed.angles)
-            } else {
-                continue;
-            };
+        let (effect, angles) = if let Some(immediate) =
+            immediate.filter(|_| activation.0.is_some() && task.next_action_tick <= clock.tick)
+        {
+            (immediate.0, None)
+        } else if let Some((timed, crossed)) =
+            timed.zip(crossed.filter(|crossed| crossed.step == step.id()))
+        {
+            (timed.0, crossed.angles)
+        } else {
+            continue;
+        };
         let Ok((_, member, _, pose, ..)) = targets.entities.get(actor) else {
             mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
             continue;
@@ -465,7 +475,7 @@ fn apply_behavior_animation_effects(
                     let extent = Vec3::splat(radius);
                     if kind == AssetId::from_key("fence") {
                         victims.extend(topology.edges_in_box(
-                            *grid,
+                            **grid,
                             centre - extent,
                             centre + extent,
                         ));
@@ -699,7 +709,7 @@ pub(super) fn fade_and_remove_authored_object(
 struct PendingAnimationKeyRemoval(u64);
 
 fn remove_faded_animation_key_targets(
-    clock: Res<ZooClock>,
+    clock: Single<&ZooClock>,
     victims: Query<(Entity, &PendingAnimationKeyRemoval)>,
     mut commands: Commands,
 ) {

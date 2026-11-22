@@ -72,9 +72,11 @@ pub(crate) fn invalidate_path_curb_presentations_after_topology_or_terrain_chang
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     paths: Query<&PathCurbsHydrated>,
-    index: Res<TopologyIndex>,
-    grid: Res<TopologyGrid>,
+    index: Single<&TopologyIndex>,
+    grid: Single<&TopologyGrid>,
 ) {
+    let index = index.into_inner();
+    let grid = grid.into_inner();
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };
@@ -111,14 +113,17 @@ pub(crate) fn hydrate_authored_path_curb_prefab_presentations(
     mut commands: Commands,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
-    grid: Res<TopologyGrid>,
+    grid: Single<&TopologyGrid>,
     terrain_assets: Res<Assets<TerrainAsset>>,
     terrain_chunks: Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
-    terrain_index: Res<TerrainIndex>,
-    index: Res<TopologyIndex>,
+    terrain_index: Single<&TerrainIndex>,
+    index: Single<&TopologyIndex>,
     paths: Query<&PathTile>,
     dirty_paths: Query<(Entity, &PathTile, &Transform), Without<PathCurbsHydrated>>,
 ) {
+    let grid = grid.into_inner();
+    let terrain_index = terrain_index.into_inner();
+    let index = index.into_inner();
     if dirty_paths.is_empty() {
         return;
     }

@@ -114,7 +114,7 @@ pub(super) fn prepare_tank_geometry_construction_edits(
     mut requests: MessageReader<PrepareConstruction>,
     previews: Query<(&TankGeometryEdit, &TankGeometryGesture, &WorldMember)>,
     transactions: Query<&WorldMember>,
-    habitat_index: Res<HabitatIndex>,
+    habitat_indexes: Query<&HabitatIndex>,
     tanks: Query<(
         &Tank,
         &TankGeometry,
@@ -139,7 +139,8 @@ pub(super) fn prepare_tank_geometry_construction_edits(
             .ok()
             .filter(|member| member.root == preview_member.root && gesture.pending)
             .and_then(|member| {
-                resolve_edited_tank(edit, member.root, &habitat_index, |habitat| {
+                let habitat_index = habitat_indexes.get(member.root).ok()?;
+                resolve_edited_tank(edit, member.root, habitat_index, |habitat| {
                     let (tank, geometry, region, summary, member) = tanks.get(habitat).ok()?;
                     (*geometry == edit.before && region.area_square_metres == geometry.area).then(
                         || {
@@ -200,7 +201,7 @@ pub(super) fn prepare_tank_geometry_construction_edits(
 pub(super) fn apply_tank_geometry_construction_edits(
     mut requests: MessageReader<CommitTankGeometryEdit>,
     transactions: Query<(&TankGeometryEdit, &WorldMember, Option<&RollbackContext>)>,
-    habitat_index: Res<HabitatIndex>,
+    habitat_indexes: Query<&HabitatIndex>,
     mut tanks: Query<(
         &Tank,
         &mut TankGeometry,
@@ -235,42 +236,50 @@ pub(super) fn apply_tank_geometry_construction_edits(
         } else {
             (edit.after, edit.before)
         };
-        let tank = resolve_edited_tank(edit, member.root, &habitat_index, |habitat| {
-            let (tank, geometry, region, summary, member) = tanks.get(habitat).ok()?;
-            (*geometry == expected && region.area_square_metres == expected.area).then(|| {
-                (
-                    habitat,
-                    *tank,
-                    habitat_region_facts(region, summary, member),
-                )
+        let tank = habitat_indexes
+            .get(member.root)
+            .ok()
+            .and_then(|habitat_index| {
+                resolve_edited_tank(edit, member.root, habitat_index, |habitat| {
+                    let (tank, geometry, region, summary, member) = tanks.get(habitat).ok()?;
+                    (*geometry == expected && region.area_square_metres == expected.area).then(
+                        || {
+                            (
+                                habitat,
+                                *tank,
+                                habitat_region_facts(region, summary, member),
+                            )
+                        },
+                    )
+                })
             })
-        })
-        .filter(|tank| {
-            let bounds = wall_access.p0();
-            tanks.get(*tank).is_ok_and(|(_, _, region, ..)| {
-                edit_after_is_reachable(
-                    *tank,
-                    edit,
-                    active_definitions.get(&definitions),
-                    region,
-                    &bounds,
-                    forward,
-                    |walls, limits| {
-                        bounds.include_adjacent_tank_water_in_wall_minima(
-                            walls,
-                            *tank,
-                            limits,
-                            |entity| {
-                                let (_, geometry, adjacent, _, world) = tanks.get(entity).ok()?;
-                                (world.root == member.root
-                                    && tank_habitat_seed_cell(adjacent) != Some(edit.seed_cell))
-                                .then_some(geometry.water_height)
-                            },
-                        );
-                    },
-                )
-            })
-        });
+            .filter(|tank| {
+                let bounds = wall_access.p0();
+                tanks.get(*tank).is_ok_and(|(_, _, region, ..)| {
+                    edit_after_is_reachable(
+                        *tank,
+                        edit,
+                        active_definitions.get(&definitions),
+                        region,
+                        &bounds,
+                        forward,
+                        |walls, limits| {
+                            bounds.include_adjacent_tank_water_in_wall_minima(
+                                walls,
+                                *tank,
+                                limits,
+                                |entity| {
+                                    let (_, geometry, adjacent, _, world) =
+                                        tanks.get(entity).ok()?;
+                                    (world.root == member.root
+                                        && tank_habitat_seed_cell(adjacent) != Some(edit.seed_cell))
+                                    .then_some(geometry.water_height)
+                                },
+                            );
+                        },
+                    )
+                })
+            });
         let accepted = tank.is_some_and(|tank| {
             let Ok((_, mut geometry, ..)) = tanks.get_mut(tank) else {
                 return false;

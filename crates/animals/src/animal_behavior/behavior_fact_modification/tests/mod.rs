@@ -18,6 +18,7 @@ use openzt2_game_data::{
 use crate::animal_behavior::behavior_fact_modification::apply_supported_current_behavior_fact_modifications;
 use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
+use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_zoo_state::animal_health::types::FreezeAnimal;
 use openzt2_zoo_state::animal_health::types::ThawAnimal;
 use openzt2_zoo_state::animal_welfare::types::AdjustBathroom;
@@ -43,12 +44,6 @@ fn install_action_app() -> (App, Entity, Entity) {
         .init_resource::<Assets<BehaviorDocumentAsset>>()
         .init_resource::<Assets<openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset>>()
         .init_resource::<openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions>()
-        .insert_resource(ZooClock {
-            fractional_tick: Default::default(),
-            tick: 0,
-            absolute_day: 0,
-            tick_in_day: 0,
-        })
         .add_message::<AdjustHunger>()
         .add_message::<AdjustBathroom>()
         .add_message::<openzt2_zoo_state::animal_welfare::types::AdjustReproduction>()
@@ -64,15 +59,27 @@ fn install_action_app() -> (App, Entity, Entity) {
         .add_message::<openzt2_zoo_state::guests::guest_simulation_types::AdjustGuestSatisfaction>()
         .add_message::<FreezeAnimal>()
         .add_message::<ThawAnimal>();
-    let target = app
+    let root = app
         .world_mut()
-        .spawn(FoodContainer {
-            food: AssetId::from_key("fooddish_meat"),
-            amount_q16: 0,
-            capacity_q16: AUTHORED_CONTAINER_CAPACITY_Q16,
+        .spawn(ZooClock {
+            fractional_tick: Default::default(),
+            tick: 0,
+            absolute_day: 0,
+            tick_in_day: 0,
         })
         .id();
-    let actor = app.world_mut().spawn(Staff).id();
+    let target = app
+        .world_mut()
+        .spawn((
+            WorldMember { root },
+            FoodContainer {
+                food: AssetId::from_key("fooddish_meat"),
+                amount_q16: 0,
+                capacity_q16: AUTHORED_CONTAINER_CAPACITY_Q16,
+            },
+        ))
+        .id();
+    let actor = app.world_mut().spawn((Staff, WorldMember { root })).id();
     let _ = compatibility_fixtures::install_definitions(&mut app, actor, target);
     (app, actor, target)
 }
@@ -147,7 +154,7 @@ fn keeper_actor_reaches_and_completes_a_saturated_food_level_write() {
         .unwrap()
         .amount_q16 = AUTHORED_CONTAINER_CAPACITY_Q16;
     attach_task(&mut app, actor, target, document);
-    app.add_systems(Update, apply_supported_current_behavior_fact_modifications);
+    app.add_observer(apply_supported_current_behavior_fact_modifications).add_systems(Update, openzt2_zoo_state::behavior_task_execution_types::running_actions::activate_due_behavior_instructions);
     app.update();
     assert_eq!(
         app.world().get::<FoodContainer>(target).unwrap().amount_q16,
@@ -171,7 +178,7 @@ fn keeper_actor_applies_food_level_once_without_a_second_refill_pipeline() {
     let (mut app, actor, target) = install_action_app();
     let document = add_food_level_action(&mut app, 40 << 16);
     attach_task(&mut app, actor, target, document);
-    app.add_systems(Update, apply_supported_current_behavior_fact_modifications);
+    app.add_observer(apply_supported_current_behavior_fact_modifications).add_systems(Update, openzt2_zoo_state::behavior_task_execution_types::running_actions::activate_due_behavior_instructions);
     app.update();
     assert_eq!(
         app.world().get::<FoodContainer>(target).unwrap().amount_q16,
@@ -185,7 +192,7 @@ fn keeper_actor_with_an_unbacked_food_level_target_fails_the_behavior() {
     app.world_mut().entity_mut(target).remove::<FoodContainer>();
     let document = add_food_level_action(&mut app, 40 << 16);
     attach_task(&mut app, actor, target, document);
-    app.add_systems(Update, apply_supported_current_behavior_fact_modifications);
+    app.add_observer(apply_supported_current_behavior_fact_modifications).add_systems(Update, openzt2_zoo_state::behavior_task_execution_types::running_actions::activate_due_behavior_instructions);
     app.update();
     assert!(app
         .world()
@@ -224,7 +231,7 @@ fn non_food_level_operation_still_requires_animal_owner() {
             }]),
         ));
     attach_task(&mut app, actor, target, document);
-    app.add_systems(Update, apply_supported_current_behavior_fact_modifications);
+    app.add_observer(apply_supported_current_behavior_fact_modifications).add_systems(Update, openzt2_zoo_state::behavior_task_execution_types::running_actions::activate_due_behavior_instructions);
     app.update();
     assert!(app
         .world()

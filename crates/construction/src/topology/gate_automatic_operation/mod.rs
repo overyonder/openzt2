@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use bevy::prelude::*;
+use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
 use openzt2_zoo_state::locomotion::locomotion_types::{SpatialGrid, SpatialGridMembership};
 
@@ -57,13 +58,14 @@ pub(super) fn tick_armed_gate_automatic_close_timers(
 pub(super) fn request_open_gates_for_agents_within_authored_trigger_distance(
     mut commands: Commands,
     time: Res<Time<Fixed>>,
-    spatial_grid: Res<SpatialGrid>,
+    grids: Query<&SpatialGrid>,
     spatial_membership: SpatialGridMembership,
     actor_types: GateActorTypeQueries,
     agent_transforms: Query<&GlobalTransform>,
     mut gates: Query<(
         Entity,
         &Gate,
+        &WorldMember,
         &mut GateMechanism,
         &FenceEdge,
         &GlobalTransform,
@@ -71,28 +73,31 @@ pub(super) fn request_open_gates_for_agents_within_authored_trigger_distance(
     )>,
     mut requests: MessageWriter<SetGateState>,
 ) {
-    let Some(maximum_cell) = spatial_grid
-        .width
-        .checked_sub(1)
-        .and_then(|x| i32::try_from(x).ok())
-        .zip(
-            spatial_grid
-                .height
-                .checked_sub(1)
-                .and_then(|y| i32::try_from(y).ok()),
-        )
-        .map(|(x, y)| IVec2::new(x, y))
-    else {
-        return;
-    };
-    if spatial_grid.cell_size_m <= 0.0 {
-        return;
-    }
-
     let Some(definitions) = actor_types.definitions() else {
         return;
     };
-    for (gate_entity, gate, mut mechanism, edge, transform, automatic_close) in &mut gates {
+    for (gate_entity, gate, member, mut mechanism, edge, transform, automatic_close) in &mut gates {
+        let Ok(spatial_grid) = grids.get(member.root) else {
+            continue;
+        };
+        let Some(maximum_cell) = spatial_grid
+            .width
+            .checked_sub(1)
+            .and_then(|x| i32::try_from(x).ok())
+            .zip(
+                spatial_grid
+                    .height
+                    .checked_sub(1)
+                    .and_then(|y| i32::try_from(y).ok()),
+            )
+            .map(|(x, y)| IVec2::new(x, y))
+        else {
+            continue;
+        };
+        if spatial_grid.cell_size_m <= 0.0 {
+            continue;
+        }
+
         let Some(definition) = definitions.find_gate_fence(edge.definition) else {
             continue;
         };
@@ -135,7 +140,7 @@ pub(super) fn request_open_gates_for_agents_within_authored_trigger_distance(
             (minimum.x..=maximum.x).any(|x| {
                 let cell = u32::try_from(y).expect("clamped grid row") * spatial_grid.width
                     + u32::try_from(x).expect("clamped grid column");
-                spatial_membership.members(cell).any(|agent| {
+                spatial_membership.members(member.root, cell).any(|agent| {
                     if policy.open_for_entity_type.is_some_and(|required_type| {
                         !actor_types.actor_types(agent).contains(&required_type)
                     }) {

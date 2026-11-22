@@ -26,6 +26,9 @@ use openzt2_world_state::simulation_time::deterministic_random_stream::{
     DeterministicRng, RngDomain, ZooSeed,
 };
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
+    activate_due_behavior_instructions, activated_behavior_actor, update_waiting_behavior_actors,
+};
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionPhase;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -156,18 +159,8 @@ fn dropped_litter_waits_for_its_model_and_spawns_once() {
     .init_asset::<WorldDefinitionAsset>()
     .init_asset::<openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset>()
     .init_resource::<WorldDefinitions>()
-    .init_resource::<openzt2_zoo_state::topology::topology_graph_types::TopologyGrid>()
-    .init_resource::<openzt2_zoo_state::topology::topology_graph_types::TopologyIndex>()
-    .init_resource::<openzt2_zoo_state::habitat::habitat_types::HabitatIndex>()
-    .init_resource::<openzt2_zoo_state::placement::placement_occupancy_index::PlacedObjectFootprintOccupancyIndex>()
-    .init_resource::<openzt2_zoo_state::terrain::terrain_chunk_types::TerrainIndex>()
-    .insert_resource(ZooClock {
-        tick: 1,
-        absolute_day: 0,
-        tick_in_day: 1,
-        fractional_tick: Default::default(),
-    })
-    .add_systems(Update, spawn_behavior_objects_at_actor);
+    .add_observer(activated_behavior_actor::<RunBehaviorSpawnObjectAtActor>.pipe(spawn_behavior_objects_at_actor))
+        .add_systems(Update, (activate_due_behavior_instructions, update_waiting_behavior_actors.pipe(spawn_behavior_objects_at_actor)));
 
     let trash = AssetId::from_key("TrashGround");
     let definitions = WorldDefinitionDocument {
@@ -218,10 +211,18 @@ fn dropped_litter_waits_for_its_model_and_spawns_once() {
                 ]),
             }]),
         ));
-    let root = app.world_mut().spawn_empty().id();
-    app.world_mut()
-        .entity_mut(root)
-        .insert(PersistentIdAllocator::default());
+    let root = app.world_mut().spawn((PersistentIdAllocator::default(), ZooClock {
+        tick: 1,
+        absolute_day: 0,
+        tick_in_day: 1,
+        fractional_tick: Default::default(),
+    },
+        openzt2_zoo_state::topology::topology_graph_types::TopologyGrid::default(),
+        openzt2_zoo_state::topology::topology_graph_types::TopologyIndex::default(),
+        openzt2_zoo_state::habitat::habitat_types::HabitatIndex::default(),
+        openzt2_zoo_state::placement::placement_occupancy_index::PlacedObjectFootprintOccupancyIndex::default(),
+        openzt2_zoo_state::terrain::terrain_chunk_types::TerrainIndex::default(),
+    )).id();
     let guest = app
         .world_mut()
         .spawn((
@@ -256,9 +257,13 @@ fn dropped_litter_waits_for_its_model_and_spawns_once() {
             .count()
     };
 
+    let tick = |app: &mut App| {
+        app.world_mut().get_mut::<ZooClock>(root).unwrap().tick += 1;
+        app.update();
+    };
     // The model stays unloaded behind the gate for many frames.
     for _ in 0..20 {
-        app.update();
+        tick(&mut app);
     }
     assert_eq!(litter_count(&mut app), 0);
     assert_eq!(
@@ -276,11 +281,11 @@ fn dropped_litter_waits_for_its_model_and_spawns_once() {
     gate.store(true, Ordering::Release);
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     while litter_count(&mut app) == 0 && std::time::Instant::now() < deadline {
-        app.update();
+        tick(&mut app);
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
     for _ in 0..5 {
-        app.update();
+        tick(&mut app);
     }
     assert_eq!(litter_count(&mut app), 1);
     assert_eq!(

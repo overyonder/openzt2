@@ -22,10 +22,11 @@ use openzt2_world_state::{
         world_membership_types::{DefinitionId, WorldMember},
     },
 };
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::behavior_action_actors;
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::mark_behavior_task_for_failure_and_stop_navigation;
 use openzt2_zoo_state::{
     animal_behavior::{
         animal_lineage::AnimalLineage, behavior_random_stream_state::BehaviorRandomStream,
-        behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation,
     },
     animal_health::types::{AnimalDied, Dead, DeathCause},
     animal_lifecycle::{animal_birth_and_release_contracts::AnimalBorn, types::Animal},
@@ -55,19 +56,20 @@ pub(super) struct PendingAuthoredMorph {
 pub(super) struct AuthoredMorphShell;
 
 pub(super) fn morph_authored_entities(
+    activation: In<Option<Entity>>,
     mut commands: Commands,
-    clock: Res<ZooClock>,
+    clock: Single<&ZooClock>,
     catalogue: Res<WorldDefinitions>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     (species, species_assets): (Res<SpeciesAssets>, Res<Assets<SpeciesAsset>>),
     (server, prefabs): (Res<AssetServer>, Res<Assets<ScenePrefabAsset>>),
     mut allocators: Query<&mut PersistentIdAllocator>,
     fences: Query<(), With<openzt2_zoo_state::topology::topology_graph_types::FenceEdge>>,
-    seed: Option<Res<ZooSeed>>,
+    seed: Option<Single<&ZooSeed>>,
     mut actions: Query<
         (
             Entity,
-            &BehaviorTaskExecutionState,
+            &mut BehaviorTaskExecutionState,
             &RunningBehaviorInstruction,
             &RunBehaviorMorphEntity,
             Option<&mut BehaviorRandomStream>,
@@ -96,8 +98,13 @@ pub(super) fn morph_authored_entities(
     else {
         return;
     };
-    for (actor, task, step, action, random, pending) in &mut actions {
-        if task.next_action_tick > clock.tick || !step.is_current(task) {
+    for (actor, mut task, step, action, random, pending) in
+        behavior_action_actors(&mut actions, activation.0)
+    {
+        if activation.0.is_none() && !step.can_update_after_activation(clock.tick) {
+            continue;
+        }
+        if task.next_action_tick > clock.tick || !step.is_current(&task) {
             continue;
         }
         let recipient = match action.recipient {
@@ -168,7 +175,7 @@ pub(super) fn morph_authored_entities(
                     .entity(recipient)
                     .insert(PrefabMorphFade::fade_out(action.period));
             }
-            step.resume_at(actor, due, &mut commands);
+            task.next_action_tick = due;
             continue;
         }
         let position = transform.compute_transform();
@@ -192,7 +199,7 @@ pub(super) fn morph_authored_entities(
                     mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
                     continue;
                 };
-                fallback = DeterministicRng::from_entity(*seed, *id, RngDomain::Reproduction);
+                fallback = DeterministicRng::from_entity(**seed, *id, RngDomain::Reproduction);
                 &mut fallback
             };
             let Some(components) = resolve_species_and_variant_to_animal_spawn_components(
@@ -347,7 +354,7 @@ pub(super) fn cancel_interrupted_morph_fade(
 }
 
 pub(super) fn remove_authored_morph_shells(
-    clock: Res<ZooClock>,
+    clock: Single<&ZooClock>,
     actions: Query<
         (
             Entity,

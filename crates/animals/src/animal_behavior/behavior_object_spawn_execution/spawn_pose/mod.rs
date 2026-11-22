@@ -21,7 +21,7 @@ use openzt2_zoo_state::{
             object_placement_stomp_action, validate_object_placement_footprint_cells,
             ObjectPlacementAuthoritativeFacts,
         },
-        placement_occupancy_index::PlacedObjectFootprintOccupancyIndex,
+        placement_occupancy_index::PlacedObjectFootprintQueries,
     },
     terrain::{
         dry_surface_eligibility::DrySurfaceEligibility,
@@ -41,14 +41,20 @@ pub(super) struct SpawnPoseValidation<'w, 's> {
     surfaces: DrySurfaceEligibility<'w, 's>,
     fences: Query<'w, 's, FenceSegment>,
     nodes: Query<'w, 's, &'static TopologyNode>,
-    grid: Res<'w, TopologyGrid>,
-    topology: Res<'w, TopologyIndex>,
-    habitats: Res<'w, HabitatIndex>,
-    occupancy: Res<'w, PlacedObjectFootprintOccupancyIndex>,
+    roots: Query<
+        'w,
+        's,
+        (
+            &'static TopologyGrid,
+            &'static TopologyIndex,
+            &'static HabitatIndex,
+            &'static TerrainIndex,
+        ),
+    >,
+    occupancy: PlacedObjectFootprintQueries<'w, 's>,
     occupants: Query<'w, 's, (&'static DefinitionId, &'static WorldMember)>,
     agents: Query<'w, 's, &'static NavAgent>,
     transforms: Query<'w, 's, &'static GlobalTransform>,
-    terrain_index: Res<'w, TerrainIndex>,
     terrain_assets: Res<'w, Assets<TerrainAsset>>,
     terrain_chunks: Query<'w, 's, (&'static TerrainChunk, Option<&'static EditedTerrainSamples>)>,
 }
@@ -109,25 +115,26 @@ impl SpawnPoseValidation<'_, '_> {
         if !pose.translation.is_finite() {
             return None;
         }
+        let (grid, topology, habitats, terrain_index) = self.roots.get(world.root).ok()?;
         let point = pose.translation.xz();
         // The spawn clearance probe excludes fence segments within two metres.
-        let spacing = self.grid.spacing_m;
+        let spacing = grid.spacing_m;
         if !spacing.is_finite() || spacing <= 0.0 {
             return None;
         }
-        let min = ((point - Vec2::splat(2.0) - self.grid.origin) / spacing)
+        let min = ((point - Vec2::splat(2.0) - grid.origin) / spacing)
             .floor()
             .as_ivec2();
-        let max = ((point + Vec2::splat(2.0) - self.grid.origin) / spacing)
+        let max = ((point + Vec2::splat(2.0) - grid.origin) / spacing)
             .ceil()
             .as_ivec2();
-        let nearby_fences = self.topology.fences_within(min, max);
+        let nearby_fences = topology.fences_within(min, max);
         if self.fences.iter_many(nearby_fences).flatten().any(|edge| {
             let (Ok(a), Ok(b)) = (self.nodes.get(edge.a()), self.nodes.get(edge.b())) else {
                 return false;
             };
-            let a = self.grid.cell_translation(a.cell).xz();
-            let b = self.grid.cell_translation(b.cell).xz();
+            let a = grid.cell_translation(a.cell).xz();
+            let b = grid.cell_translation(b.cell).xz();
             let delta = b - a;
             let along =
                 ((point - a).dot(delta) / delta.length_squared().max(f32::EPSILON)).clamp(0.0, 1.0);
@@ -135,7 +142,7 @@ impl SpawnPoseValidation<'_, '_> {
         }) {
             return None;
         }
-        let on_land = self.surfaces.on_land(point)?;
+        let on_land = self.surfaces.on_land(world.root, point)?;
         if self
             .agents
             .get(actor)
@@ -148,17 +155,21 @@ impl SpawnPoseValidation<'_, '_> {
         let Some(placeable) = catalogue.find_placeable(object) else {
             return Some(placement);
         };
-        let terrain = |world| {
+        let terrain = |position| {
             let (chunk, edited) = self
                 .terrain_chunks
-                .get(terrain_chunk_at(&self.terrain_index, world)?)
+                .get(terrain_chunk_at(terrain_index, position)?)
                 .ok()?;
-            let mut sample =
-                sample_terrain(chunk, self.terrain_assets.get(&chunk.asset)?, edited, world)?;
-            sample.water_height_m = self.surfaces.water_surface_height(world);
+            let mut sample = sample_terrain(
+                chunk,
+                self.terrain_assets.get(&chunk.asset)?,
+                edited,
+                position,
+            )?;
+            sample.water_height_m = self.surfaces.water_surface_height(world.root, position);
             Some(sample)
         };
-        let path_overlaps = self.paths.overlaps(placeable, catalogue);
+        let path_overlaps = self.paths.overlaps(world.root, placeable, catalogue);
         matches!(validate_object_placement_footprint_cells(placeable, &placeable.footprint, pose, terrain,
             |cell| {
                 for action in path_overlaps.actions_at(cell) {
@@ -170,7 +181,7 @@ impl SpawnPoseValidation<'_, '_> {
                         _ => {}
                     }
                 }
-                self.occupancy.entities_occupying_cell(cell).filter(|entity| *entity != actor).any(|occupant| {
+                self.occupancy.entities_occupying_cell(world.root, cell).filter(|entity| *entity != actor).any(|occupant| {
                 let Ok((definition, member)) = self.occupants.get(occupant) else {
                     return true;
                 };
@@ -185,7 +196,7 @@ impl SpawnPoseValidation<'_, '_> {
                 })
             },
             ObjectPlacementAuthoritativeFacts {
-                habitat: locate_habitat_at_world_position(&self.habitats, point, *self.grid),
+                habitat: locate_habitat_at_world_position(habitats, point, *grid),
                 unlocked: true, affordable: true,
                 topology_valid: !placeable.constraints.contains_any(
                     openzt2_game_data::world_definitions::object_placement::PlacementConstraints::REQUIRE_PATH

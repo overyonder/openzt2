@@ -8,18 +8,22 @@ use openzt2_game_data::{
     },
     AssetId,
 };
+use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
+    activate_due_behavior_instructions, activated_behavior_actor,
+    apply_behavior_instruction_completion,
+};
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionPhase;
 
 #[test]
 fn restarted_clip_ignores_old_outcomes_and_consumes_its_completion_once() {
     let mut app = App::new();
-    app.add_observer(openzt2_zoo_state::behavior_task_execution_types::running_actions::apply_behavior_instruction_completion).init_resource::<Assets<BehaviorDocumentAsset>>()
-        .insert_resource(ZooClock {
-            fractional_tick: Default::default(),
-            tick: 0,
-            absolute_day: 0,
-            tick_in_day: 0,
-        })
+    app.add_observer(apply_behavior_instruction_completion)
+        .init_resource::<Assets<BehaviorDocumentAsset>>()
+        .add_observer(
+            activated_behavior_actor::<RunBehaviorAnimationClip>
+                .pipe(start_current_behavior_animation_clip_actions),
+        )
         .add_message::<AnimationClipPlaybackRequest>()
         .add_message::<AnimationClipActionOptions>()
         .add_message::<AnimationClipPlaybackRequestRejected>()
@@ -27,7 +31,7 @@ fn restarted_clip_ignores_old_outcomes_and_consumes_its_completion_once() {
         .add_systems(
             Update,
             (
-                start_current_behavior_animation_clip_actions,
+                activate_due_behavior_instructions,
                 fail_behavior_animation_actions_after_playback_rejection,
                 finish_behavior_animation_clip_actions_after_playback_completion,
             )
@@ -71,7 +75,19 @@ fn restarted_clip_ignores_old_outcomes_and_consumes_its_completion_once() {
         interaction_slot: None,
         depth: 0,
     };
-    let actor = app.world_mut().spawn(task.clone()).id();
+    let root = app
+        .world_mut()
+        .spawn(ZooClock {
+            fractional_tick: Default::default(),
+            tick: 0,
+            absolute_day: 0,
+            tick_in_day: 0,
+        })
+        .id();
+    let actor = app
+        .world_mut()
+        .spawn((task.clone(), WorldMember { root }))
+        .id();
     let controller = app
         .world_mut()
         .spawn(AnimationPresentationOwner {

@@ -80,8 +80,8 @@ pub(super) fn reconcile_fence_construction_preview_presentation_segments(
     mut commands: Commands,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
-    grid: Res<TopologyGrid>,
-    index: Res<TopologyIndex>,
+    grid: Single<Ref<TopologyGrid>>,
+    index: Single<Ref<TopologyIndex>>,
     previews: Query<
         (
             Entity,
@@ -105,6 +105,8 @@ pub(super) fn reconcile_fence_construction_preview_presentation_segments(
         &mut FenceTerrainEndpointPresentationCells,
     )>,
 ) {
+    let grid = grid.into_inner();
+    let index = index.into_inner();
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };

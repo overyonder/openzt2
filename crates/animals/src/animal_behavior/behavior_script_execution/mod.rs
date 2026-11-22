@@ -19,6 +19,7 @@ use openzt2_game_data::AssetId;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_world_state::world_spawn::physical_presentation_state::PhysicalPresentationOperation;
 use openzt2_world_state::world_spawn::physical_presentation_state::PhysicalPresentationRequest;
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::WhenBehaviorAction;
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
     RunBehaviorScript, RunningBehaviorInstruction,
 };
@@ -64,12 +65,13 @@ pub(super) fn invalidate_changed_behavior_script_contexts(
 }
 
 pub(super) fn execute_authored_behavior_script_actions(
+    activation: On<WhenBehaviorAction<RunBehaviorScript>>,
     mut commands: Commands,
     mut contexts: NonSendMut<BehaviorScriptContexts>,
     documents: Res<Assets<BehaviorDocumentAsset>>,
     scripts: Res<Assets<LuaScriptAsset>>,
     script_index: Res<LuaScriptArchivePathIndex>,
-    clock: Res<ZooClock>,
+    clock: Single<&ZooClock>,
     clothing: ClothingScriptContext,
     mut actors: Query<
         (
@@ -89,7 +91,9 @@ pub(super) fn execute_authored_behavior_script_actions(
     mut world: BehaviorScriptWorldAccess,
 ) {
     let mut structural_edits = BehaviorScriptStructuralEdits::default();
-    for (actor, (task, instruction, running_action)) in &mut actors {
+    for (actor, (task, instruction, running_action)) in
+        std::iter::once(actors.get_mut(activation.entity)).flatten()
+    {
         if task.next_action_tick > clock.tick {
             continue;
         }

@@ -38,12 +38,11 @@ pub(super) struct CompletedAnimalAdoptionPayment;
 pub(super) fn request_animal_adoption_payment_or_unpaid_spawn(
     mut commands: Commands,
     mut adoption_requests: MessageReader<AdoptAnimal>,
-    zoo_seed: Res<ZooSeed>,
     species_assets: Res<Assets<SpeciesAsset>>,
     species_index: Res<SpeciesAssets>,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,
-    worlds: Query<Entity, With<WorldRoot>>,
+    worlds: Query<(Entity, &ZooSeed), With<WorldRoot>>,
     adoption_policy: Query<&AnimalAdoptionAvailabilityPolicy, With<WorldRoot>>,
     mut offers: AdoptionOfferClaims,
     placement_sites: PlacementSiteQueries,
@@ -63,7 +62,7 @@ pub(super) fn request_animal_adoption_payment_or_unpaid_spawn(
         if !species.flags.contains(SpeciesFlags::ADOPTABLE) {
             continue;
         }
-        let Ok(world) = worlds.get(adoption_request.world) else {
+        let Ok((world, seed)) = worlds.get(adoption_request.world) else {
             continue;
         };
 
@@ -71,7 +70,7 @@ pub(super) fn request_animal_adoption_payment_or_unpaid_spawn(
         let operation_entity = commands.spawn(world_membership).id();
         let preview_identifier = PersistentId(operation_entity.to_bits().max(1));
         let mut random_stream =
-            DeterministicRng::from_entity(*zoo_seed, preview_identifier, RngDomain::Reproduction);
+            DeterministicRng::from_entity(*seed, preview_identifier, RngDomain::Reproduction);
         let Some((variant, sex)) = select_species_spawn_variant(
             species_index,
             species,

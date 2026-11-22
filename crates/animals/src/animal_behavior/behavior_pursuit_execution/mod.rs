@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::behavior_action_actors;
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
     RunBehaviorPursuit, RunningBehaviorInstruction,
 };
@@ -18,7 +19,7 @@ use openzt2_zoo_state::locomotion::locomotion_types::NavAgent;
 use openzt2_zoo_state::locomotion::locomotion_types::NavigateTo;
 use openzt2_zoo_state::locomotion::locomotion_types::NavigationFailed;
 use openzt2_zoo_state::locomotion::locomotion_types::NavigationFailure;
-use openzt2_zoo_state::locomotion::locomotion_types::NavigationRequestSequence;
+use openzt2_zoo_state::locomotion::locomotion_types::NavigationRequestGeneration;
 use openzt2_zoo_state::locomotion::locomotion_types::PursueEntity;
 use openzt2_zoo_state::locomotion::locomotion_types::PursuitRefusalRoute;
 use openzt2_zoo_state::locomotion::NavigationRequestAcceptance;
@@ -28,19 +29,28 @@ use super::behavior_task_failure_transition::mark_behavior_task_for_failure_and_
 
 pub(super) fn register_pursuit_execution(application: &mut App) {
     use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
-        BehaviorStep, BehaviorStepSet,
+        activated_behavior_actor, update_waiting_behavior_actors,
     };
+    application.add_observer(
+        activated_behavior_actor::<
+            openzt2_zoo_state::behavior_task_execution_types::running_actions::RunBehaviorPursuit,
+        >
+            .pipe(advance_current_pursuit_actions),
+    );
+
+    use openzt2_zoo_state::behavior_task_execution_types::running_actions::BehaviorStepFixedSet;
     application.add_systems(
-        BehaviorStep,
+        FixedUpdate,
         (
             record_pursuit_navigation_results,
             fail_pursuits_of_unavailable_targets,
-            advance_current_pursuit_actions
+            update_waiting_behavior_actors
+                .pipe(advance_current_pursuit_actions)
                 .after(record_pursuit_navigation_results)
                 .after(fail_pursuits_of_unavailable_targets),
             discard_pursuits_without_tasks,
         )
-            .in_set(BehaviorStepSet::Actions)
+            .in_set(BehaviorStepFixedSet::Think)
             .run_if(in_state(GamePhase::InGame)),
     );
     application.add_systems(
@@ -118,7 +128,7 @@ fn record_pursuit_navigation_results(
 #[allow(clippy::type_complexity)]
 fn fail_pursuits_of_unavailable_targets(
     mut commands: Commands,
-    clock: Res<ZooClock>,
+    clock: Single<&ZooClock>,
     pursuers: Query<
         (
             Entity,
@@ -166,10 +176,11 @@ fn fail_pursuits_of_unavailable_targets(
     clippy::too_many_lines
 )]
 fn advance_current_pursuit_actions(
+    activation: In<Option<Entity>>,
     mut commands: Commands,
-    clock: Res<ZooClock>,
+    clock: Single<&ZooClock>,
     time: Res<Time<Fixed>>,
-    mut sequence: ResMut<NavigationRequestSequence>,
+    mut navigation_generations: Query<&mut NavigationRequestGeneration>,
     mut route_requests: MessageWriter<NavigateTo>,
     mut pursuit_requests: MessageWriter<PursueEntity>,
     mut actors: Query<
@@ -191,7 +202,9 @@ fn advance_current_pursuit_actions(
     >,
     transforms: Query<&GlobalTransform>,
 ) {
-    for (actor, (task, running), transform, has_agent, pending, destination) in &mut actors {
+    for (actor, (task, running), transform, has_agent, pending, destination) in
+        behavior_action_actors(&mut actors, activation.0)
+    {
         let running = task
             .zip(running)
             .filter(|(task, (instruction, _))| instruction.is_current(task));
@@ -205,6 +218,9 @@ fn advance_current_pursuit_actions(
         let Some((task, (instruction, running))) = running else {
             continue;
         };
+        if activation.0.is_none() && !instruction.can_update_after_activation(clock.tick) {
+            continue;
+        }
         let action = &running.0;
         if task.next_action_tick > clock.tick {
             continue;
@@ -229,12 +245,15 @@ fn advance_current_pursuit_actions(
         let hit_radius_m = metres(action.hit_radius_cm);
         let pursuit_radius_m = metres(action.pursuit_radius_cm);
         let failure_radius_m = metres(action.failure_radius_cm);
+        let Ok(mut generation) = navigation_generations.get_mut(actor) else {
+            continue;
+        };
         let mut request = PursuitRequests {
             actor,
             target,
             target_position,
             hit_radius_m,
-            sequence: &mut *sequence,
+            generation: &mut generation,
             route_requests: &mut route_requests,
             pursuit_requests: &mut pursuit_requests,
         };
@@ -242,7 +261,7 @@ fn advance_current_pursuit_actions(
         // update may still make it unnecessary.
         let (mut state, mut unsent_first_route) = pending.as_deref().cloned().map_or_else(
             || {
-                let request_id = request.sequence.next();
+                let request_id = request.generation.advance();
                 (
                     PendingBehaviorPursuit {
                         instruction: instruction.id(),
@@ -280,7 +299,7 @@ fn advance_current_pursuit_actions(
                     request_id,
                     refused_route_request_id: None,
                 } => {
-                    let refused_route_request_id = request.sequence.next();
+                    let refused_route_request_id = request.generation.advance();
                     request.direct(Some(request_id), refused_route_request_id, 0.0);
                     state.leg = BehaviorPursuitLeg::Direct {
                         request_id,
@@ -302,7 +321,7 @@ fn advance_current_pursuit_actions(
             }
             // Arrival ended the steering short of the hit radius; it resumes.
             BehaviorPursuitLeg::DirectArrived { .. } => {
-                let route_request_id = request.sequence.next();
+                let route_request_id = request.generation.advance();
                 state.leg = BehaviorPursuitLeg::DirectRequested {
                     request_id: request.direct(None, route_request_id, 0.0),
                     route_request_id,
@@ -311,14 +330,14 @@ fn advance_current_pursuit_actions(
             BehaviorPursuitLeg::RouteArrived
                 if distance_squared < pursuit_radius_m * pursuit_radius_m =>
             {
-                let route_request_id = request.sequence.next();
+                let route_request_id = request.generation.advance();
                 state.leg = BehaviorPursuitLeg::DirectRequested {
                     request_id: request.direct(None, route_request_id, pursuit_radius_m * 0.5),
                     route_request_id,
                 };
             }
             BehaviorPursuitLeg::RouteArrived => {
-                let request_id = request.sequence.next();
+                let request_id = request.generation.advance();
                 request.route(request_id, pursuit_radius_m * 0.5);
                 state.leg = BehaviorPursuitLeg::Route { request_id };
             }
@@ -340,7 +359,7 @@ fn advance_current_pursuit_actions(
 #[allow(clippy::type_complexity)]
 fn settle_pursuits_after_navigation_acceptance(
     mut commands: Commands,
-    clock: Res<ZooClock>,
+    clock: Single<&ZooClock>,
     mut pursuers: Query<
         (
             Entity,
@@ -430,7 +449,7 @@ struct PursuitRequests<'a, 'route, 'pursuit> {
     target: Entity,
     target_position: Vec3,
     hit_radius_m: f32,
-    sequence: &'a mut NavigationRequestSequence,
+    generation: &'a mut NavigationRequestGeneration,
     route_requests: &'a mut MessageWriter<'route, NavigateTo>,
     pursuit_requests: &'a mut MessageWriter<'pursuit, PursueEntity>,
 }
@@ -453,7 +472,7 @@ impl PursuitRequests<'_, '_, '_> {
         refused_route_request_id: u64,
         refused_route_arrival_radius_m: f32,
     ) -> u64 {
-        let request_id = active_request_id.unwrap_or_else(|| self.sequence.next());
+        let request_id = active_request_id.unwrap_or_else(|| self.generation.advance());
         self.pursuit_requests.write(PursueEntity {
             entity: self.actor,
             request_id,

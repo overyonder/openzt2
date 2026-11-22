@@ -3,6 +3,7 @@
 use bevy::{ecs::entity::EntityHashSet, platform::collections::HashMap, prelude::*};
 use openzt2_game_data::world_definitions::object_placement::FootprintCellFlags;
 use openzt2_world_state::world_spawn::prefab_source_asset_handle::PrefabSourceAssetHandle;
+use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_zoo_state::placement::object_placement_geometry::ScenePlacementFootprints;
 
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
@@ -26,7 +27,7 @@ use openzt2_zoo_state::placement::object_placement_validation::ObjectPlacementAu
 use openzt2_zoo_state::placement::placed_object_types::PhysicsMovedPlacedObjectFootprint;
 use openzt2_zoo_state::placement::placed_object_types::PlacedObjectDefinitionReference;
 use openzt2_zoo_state::placement::placed_object_types::PlacedObjectFootprintOccupancy;
-use openzt2_zoo_state::placement::placement_occupancy_index::PlacedObjectFootprintOccupancyIndex;
+use openzt2_zoo_state::placement::placement_occupancy_index::PlacedObjectFootprintQueries;
 use openzt2_zoo_state::placement::placement_transaction_types::PlacedObjectTerrainSupportEvaluated;
 use openzt2_zoo_state::placement::placement_transaction_types::PlacedObjectTerrainSupportOutcome;
 
@@ -36,8 +37,9 @@ use openzt2_zoo_state::placement::placement_transaction_types::PlacedObjectTerra
 /// object or alter occupancy.
 pub(super) fn reconcile_static_placed_object_support_after_terrain_changes(
     mut changes: MessageReader<TerrainNavigationChanged>,
-    terrain_index: Res<TerrainIndex>,
-    placement_index: Res<PlacedObjectFootprintOccupancyIndex>,
+    indexes: Query<&TerrainIndex>,
+    members: Query<&WorldMember>,
+    placement_index: PlacedObjectFootprintQueries,
     terrain_assets: Res<Assets<TerrainAsset>>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
@@ -60,7 +62,11 @@ pub(super) fn reconcile_static_placed_object_support_after_terrain_changes(
     };
     let mut affected_objects = EntityHashSet::default();
     for change in changes.read() {
-        let Ok((chunk, _)) = chunks.get(change.chunk) else {
+        let (Ok((chunk, _)), Ok(member)) = (chunks.get(change.chunk), members.get(change.chunk))
+        else {
+            continue;
+        };
+        let Ok(terrain_index) = indexes.get(member.root) else {
             continue;
         };
         let minimum = (chunk.origin
@@ -81,7 +87,8 @@ pub(super) fn reconcile_static_placed_object_support_after_terrain_changes(
                             && sample.saturating_add(UVec2::ONE).cmpge(change.min).all()
                     })
                 {
-                    affected_objects.extend(placement_index.entities_occupying_cell(cell));
+                    affected_objects
+                        .extend(placement_index.entities_occupying_cell(member.root, cell));
                 }
             }
         }
@@ -90,6 +97,13 @@ pub(super) fn reconcile_static_placed_object_support_after_terrain_changes(
     affected_objects.sort_unstable();
     let mut terrain_samples = HashMap::new();
     for entity in affected_objects {
+        let Some(terrain_index) = members
+            .get(entity)
+            .ok()
+            .and_then(|member| indexes.get(member.root).ok())
+        else {
+            continue;
+        };
         let Ok((placeable, occupancy, mut transform, habitat, prefab)) = placed.get_mut(entity)
         else {
             continue;

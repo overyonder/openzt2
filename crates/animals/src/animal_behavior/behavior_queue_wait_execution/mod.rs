@@ -49,21 +49,35 @@ impl ActiveQueueWait {
 }
 
 pub(super) fn register_queue_wait_execution(application: &mut App) {
-    use openzt2_game_assets::application_lifecycle::GamePhase;
     use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
-        BehaviorStep, BehaviorStepSet,
+        activated_behavior_actor, update_waiting_behavior_actors,
     };
+    application.add_observer(activated_behavior_actor::<openzt2_zoo_state::behavior_task_execution_types::running_actions::RunBehaviorWaitInteractionQueue>.pipe(start::start_or_repeat_authored_queue_wait));
+
+    use openzt2_game_assets::application_lifecycle::GamePhase;
+    use openzt2_world_state::application_schedule::FixedGameSet;
+    use openzt2_zoo_state::behavior_task_execution_types::running_actions::BehaviorStepFixedSet;
 
     application
         .add_observer(start::apply_queue_wait_admission)
         .add_systems(
-            BehaviorStep,
-            (
-                update::update_queue_wait_deadlines_and_service_readiness,
-                start::start_or_repeat_authored_queue_wait,
-            )
-                .chain()
-                .in_set(BehaviorStepSet::Actions)
+            FixedUpdate,
+            update::update_queue_wait_deadlines_and_service_readiness::<true>
+                .in_set(FixedGameSet::Think)
+                .before(BehaviorStepFixedSet::Think)
+                .run_if(in_state(GamePhase::InGame)),
+        )
+        .add_systems(
+            FixedUpdate,
+            update_waiting_behavior_actors
+                .pipe(start::start_or_repeat_authored_queue_wait)
+                .in_set(BehaviorStepFixedSet::Think),
+        )
+        .add_systems(
+            FixedUpdate,
+            update::update_queue_wait_deadlines_and_service_readiness::<false>
+                .in_set(FixedGameSet::Act)
+                .after(BehaviorStepFixedSet::Act)
                 .run_if(in_state(GamePhase::InGame)),
         );
 }

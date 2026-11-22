@@ -1,10 +1,12 @@
 use bevy::prelude::*;
 use openzt2_game_data::AssetId;
 
+use openzt2_world_state::world_spawn::persistent_id_index::PersistentIdIndex;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 use openzt2_zoo_state::construction::construction_transaction_types::EditApplication;
+use openzt2_zoo_state::topology::topology_graph_types::Portal;
 
 use openzt2_zoo_state::topology::gate_operation_types::Gate;
 use crate::topology::topology_edit_application::apply_committed_topology_edit;
@@ -29,9 +31,6 @@ fn undo_and_redo_restore_stable_identity_and_connectivity() {
             openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset,
         >::default())
         .init_resource::<WorldDefinitions>()
-        .init_resource::<openzt2_zoo_state::terrain::terrain_chunk_types::TerrainIndex>()
-        .init_resource::<TopologyIndex>()
-        .init_resource::<TopologyGrid>()
         .add_message::<CommitTopologyEdit>()
         .add_message::<TopologyChanged>()
         .add_message::<TopologyEditAcknowledged>()
@@ -39,10 +38,17 @@ fn undo_and_redo_restore_stable_identity_and_connectivity() {
     install_fence_definition_for_topology_transaction_tests(&mut app, AssetId::default());
     let root = app
         .world_mut()
-        .spawn(WorldRoot {
-            scenario: AssetId::default(),
-        })
+        .spawn((
+            WorldRoot {
+                scenario: AssetId::default(),
+            },
+            openzt2_zoo_state::terrain::terrain_chunk_types::TerrainIndex::default(),
+            TopologyIndex::default(),
+            TopologyGrid::default(),
+        ))
         .id();
+    let entrance_pose = Transform::from_xyz(2.0, 3.0, -4.0);
+    let exit_pose = Transform::from_xyz(7.0, 8.0, -9.0);
     let edit = TopologyEdit {
         created: vec![
             TopologySnapshot::Node {
@@ -64,6 +70,18 @@ fn undo_and_redo_restore_stable_identity_and_connectivity() {
                 }),
                 wall_top: None,
             },
+            TopologySnapshot::Portal {
+                id: PersistentId(103),
+                destination: PersistentId(104),
+                bidirectional: false,
+                endpoint_pose: Some(entrance_pose),
+            },
+            TopologySnapshot::Portal {
+                id: PersistentId(104),
+                destination: PersistentId(101),
+                bidirectional: false,
+                endpoint_pose: Some(exit_pose),
+            },
         ]
         .into_boxed_slice(),
         removed: Box::new([]),
@@ -80,13 +98,28 @@ fn undo_and_redo_restore_stable_identity_and_connectivity() {
             application,
         });
         app.update();
-        let index = app.world().resource::<TopologyIndex>();
+        let world = app.world();
+        let index = world.get::<TopologyIndex>(root).unwrap();
+        let ids = world.resource::<PersistentIdIndex>();
+        let entrance = ids.get(root, PersistentId(103));
+        let exit = ids.get(root, PersistentId(104));
         if application == EditApplication::Undo {
             assert!(index.nodes.is_empty());
             assert!(index.edges.is_empty());
+            assert!(entrance.is_none() && exit.is_none());
         } else {
             assert_eq!(index.nodes.len(), 2);
             assert_eq!(index.edges.len(), 1);
+            let (entrance, exit) = (entrance.unwrap(), exit.unwrap());
+            assert_eq!(world.get::<Portal>(entrance).unwrap().destination, exit);
+            assert_eq!(
+                world.get::<GlobalTransform>(entrance),
+                Some(&GlobalTransform::from(entrance_pose))
+            );
+            assert_eq!(
+                world.get::<GlobalTransform>(exit),
+                Some(&GlobalTransform::from(exit_pose))
+            );
         }
     }
 

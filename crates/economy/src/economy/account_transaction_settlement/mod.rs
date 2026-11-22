@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use openzt2_world_state::simulation_time::simulation_clock_types::ZooCalendar;
+use openzt2_world_state::world_spawn::world_membership_types::{WorldMember, WorldRoot};
 use openzt2_zoo_state::animal_lifecycle::animal_adoption_contracts::AnimalAdoptionRefund;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
 use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorTaskFailure;
@@ -139,10 +139,17 @@ pub(super) fn stage_requested_account_transactions<const PLAYER: bool>(
 
 pub(super) fn settle_requested_account_transactions<const PLAYER: bool>(
     mut commands: Commands,
-    mut zoo_cash: ResMut<ZooCash>,
-    unlimited_zoo_cash: Option<Res<UnlimitedZooCash>>,
-    mut general_ledger: Option<ResMut<GeneralEconomyLedger>>,
-    calendar: Option<Res<ZooCalendar>>,
+    mut roots: Query<
+        (
+            Entity,
+            &mut ZooCash,
+            Option<&UnlimitedZooCash>,
+            Option<&mut GeneralEconomyLedger>,
+            Option<&ZooClock>,
+        ),
+        With<WorldRoot>,
+    >,
+    members: Query<&WorldMember>,
     mut wallets: Query<&mut Wallet>,
     mut completed_transactions: MessageWriter<TransactionCompleted>,
     mut rejected_transactions: MessageWriter<TransactionRejected>,
@@ -165,13 +172,7 @@ pub(super) fn settle_requested_account_transactions<const PLAYER: bool>(
         Without<PendingBehaviorTaskFailure>,
     >,
     mut keeper_refills: KeeperRefillSettlement,
-    clock: Option<Res<ZooClock>>,
 ) {
-    if let (Some(ledger), Some(calendar)) = (general_ledger.as_deref_mut(), calendar.as_deref()) {
-        ledger.enter_calendar_month(
-            u32::from(calendar.year) * 12 + u32::from(calendar.month.saturating_sub(1)),
-        );
-    }
     let mut pending = transaction_operations
         .iter()
         .filter_map(|(operation, state, ..)| match *state {
@@ -217,11 +218,37 @@ pub(super) fn settle_requested_account_transactions<const PLAYER: bool>(
                     return Err(TransactionRejection::Cancelled);
                 }
             }
+            let debit_owner = match request.debit {
+                Account::Entity(entity) => Some(entity),
+                _ => None,
+            };
+            let credit_owner = match request.credit {
+                Account::Entity(entity) => Some(entity),
+                _ => None,
+            };
+            let mut owners = [Some(operation), debit_owner, credit_owner, request.subject]
+                .into_iter()
+                .flatten()
+                .filter_map(|entity| members.get(entity).ok().map(|member| member.root));
+            let root = match owners.next() {
+                Some(root) if owners.all(|owner| owner == root) => root,
+                Some(_) => return Err(TransactionRejection::MissingAccount),
+                None => {
+                    roots
+                        .single()
+                        .map_err(|_| TransactionRejection::MissingAccount)?
+                        .0
+                }
+            };
+            let (_, mut zoo_cash, unlimited_zoo_cash, mut general_ledger, clock) = roots
+                .get_mut(root)
+                .map_err(|_| TransactionRejection::MissingAccount)?;
             let debit_account_balance = read_account_balance_for_transaction(
                 request.debit,
                 zoo_cash.0,
                 &wallets,
-                unlimited_zoo_cash.is_some() && matches!(request.debit, Account::Zoo),
+                unlimited_zoo_cash.is_some_and(|policy| policy.0)
+                    && matches!(request.debit, Account::Zoo),
             )?;
             let credit_account_balance =
                 read_account_balance_for_transaction(request.credit, zoo_cash.0, &wallets, false)?;
@@ -257,7 +284,7 @@ pub(super) fn settle_requested_account_transactions<const PLAYER: bool>(
                 let (task, instruction, _) = behavior_tasks
                     .get(owner.actor)
                     .map_err(|_| TransactionRejection::Cancelled)?;
-                let tick = clock.as_ref().ok_or(TransactionRejection::Cancelled)?.tick;
+                let tick = clock.ok_or(TransactionRejection::Cancelled)?.tick;
                 keeper_refills
                     .commit(owner.actor, task, refill)
                     .ok_or(TransactionRejection::Cancelled)?;
@@ -304,15 +331,18 @@ pub(super) fn settle_requested_account_transactions<const PLAYER: bool>(
                     }
                 }
             }
-            Ok::<(), TransactionRejection>(())
+            Ok::<Entity, TransactionRejection>(root)
         })();
 
-        *state = TransactionSettlement::Settled { player_operation };
+        *state = TransactionSettlement::Settled {
+            player_operation,
+            world: settlement.as_ref().ok().copied(),
+        };
         commands
             .entity(operation)
             .try_remove::<AwaitingAccountSettlement>();
         match settlement {
-            Ok(()) => {
+            Ok(_) => {
                 completed_transactions.write(TransactionCompleted {
                     operation: request.operation,
                     debit: request.debit,

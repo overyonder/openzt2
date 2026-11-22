@@ -162,7 +162,7 @@ fn initialize_animal_need_latches(
 
 fn advance_animal_need_decay_cadence(
     time: Res<Time<Fixed>>,
-    seed: Res<ZooSeed>,
+    seed: Single<&ZooSeed>,
     definitions: Res<WorldDefinitions>,
     definition_assets: Res<Assets<WorldDefinitionAsset>>,
     profiles: Res<SpeciesNeedProfiles>,
@@ -207,7 +207,7 @@ fn advance_animal_need_decay_cadence(
             let mut timer = AnimalNeedAdjustmentTimer {
                 remaining_ns: 0,
                 random: DeterministicRng::from_entity(
-                    *seed,
+                    **seed,
                     *persistent_id,
                     RngDomain::AnimalNeeds,
                 ),

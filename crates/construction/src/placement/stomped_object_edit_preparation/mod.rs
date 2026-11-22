@@ -12,7 +12,7 @@ use openzt2_world_state::world_spawn::{
 use openzt2_zoo_state::placement::{
     object_placement_validation::object_placement_stomp_action,
     placed_object_types::{IndexedObjectPlacementCells, PlacedObjectDefinitionReference},
-    placement_occupancy_index::PlacedObjectFootprintOccupancyIndex,
+    placement_occupancy_index::PlacedObjectFootprintQueries,
     placement_transaction_types::{PreparedObjectPlacementEditMutationKind, PreparedObjectPlacementMutation},
 };
 
@@ -28,11 +28,12 @@ pub(super) fn object_stomp_prevents_placement_at_cell(
     cell: IVec2,
     definition: &PlaceableDefinition,
     catalogue: WorldDefinitionsView<'_>,
-    placement: &PlacedObjectFootprintOccupancyIndex,
+    root: Entity,
+    placement: &PlacedObjectFootprintQueries,
     targets: &Query<StompablePlacedObject>,
     ignored: impl Fn(Entity) -> bool,
 ) -> bool {
-    placement.entities_occupying_cell(cell).any(|entity| {
+    placement.entities_occupying_cell(root, cell).any(|entity| {
         if ignored(entity) {
             return false;
         }
@@ -51,12 +52,14 @@ pub(super) fn prepare_stomped_object_removals(
     cells: &[IVec2],
     definition: &PlaceableDefinition,
     catalogue: WorldDefinitionsView<'_>,
-    placement: &PlacedObjectFootprintOccupancyIndex,
+    root: Entity,
+    placement: &PlacedObjectFootprintQueries,
     targets: &Query<StompablePlacedObject>,
     ignored: impl Fn(Entity) -> bool,
 ) -> Option<Vec<PreparedObjectPlacementMutation>> {
     prepare_placement_stomp_removals(
         cells.iter().copied(),
+        root,
         placement,
         targets,
         ignored,
@@ -66,13 +69,14 @@ pub(super) fn prepare_stomped_object_removals(
 
 pub(crate) fn prepare_placement_stomp_removals(
     cells: impl Iterator<Item = IVec2>,
-    placement: &PlacedObjectFootprintOccupancyIndex,
+    root: Entity,
+    placement: &PlacedObjectFootprintQueries,
     targets: &Query<StompablePlacedObject>,
     ignored: impl Fn(Entity) -> bool,
     action: impl Fn(AssetId) -> PlacementStompAction,
 ) -> Option<Vec<PreparedObjectPlacementMutation>> {
     let overlapping = cells
-        .flat_map(|cell| placement.entities_occupying_cell(cell))
+        .flat_map(|cell| placement.entities_occupying_cell(root, cell))
         .filter(|entity| !ignored(*entity))
         .collect::<BTreeSet<_>>();
     let mut removals = Vec::new();

@@ -8,6 +8,7 @@ use openzt2_zoo_state::animal_behavior::behavior_target_placement_types::{
 use openzt2_zoo_state::animal_behavior::interaction_container_membership::requests::{
     InteractionContainerAdmissionOutcome, InteractionContainerAdmissionRequest,
 };
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::behavior_action_actors;
 
 #[cfg(test)]
 mod navigation_event_tests;
@@ -25,7 +26,7 @@ use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorDockingComp
 use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorTaskFailure;
 use openzt2_zoo_state::locomotion::locomotion_types::Arrived;
 use openzt2_zoo_state::locomotion::locomotion_types::DockAt;
-use openzt2_zoo_state::locomotion::locomotion_types::{NavAgent, NavigationRequestSequence};
+use openzt2_zoo_state::locomotion::locomotion_types::{NavAgent, NavigationRequestGeneration};
 use openzt2_zoo_state::locomotion::locomotion_types::LocomotionMode;
 use openzt2_zoo_state::locomotion::locomotion_types::NavigationFailed;
 use openzt2_zoo_state::placement::placed_object_types::PlacedObjectAuthoredEntrance;
@@ -40,7 +41,7 @@ pub(super) type DockBehaviorActors<'w, 's> = Query<
         Entity,
         Option<&'static NavAgent>,
         Option<&'static LocomotionMode>,
-        &'static BehaviorTaskExecutionState,
+        &'static mut BehaviorTaskExecutionState,
         &'static RunningBehaviorInstruction,
         Option<&'static RunBehaviorDock>,
         Option<&'static RunBehaviorDockQueue>,
@@ -58,7 +59,13 @@ pub(super) struct DockBehaviorGeometry<'w, 's> {
     fences: Query<'w, 's, openzt2_zoo_state::topology::topology_graph_types::FenceSegment>,
     topology_nodes:
         Query<'w, 's, &'static openzt2_zoo_state::topology::topology_graph_types::TopologyNode>,
-    topology_grid: Res<'w, openzt2_zoo_state::topology::topology_graph_types::TopologyGrid>,
+    topology_grids:
+        Query<'w, 's, &'static openzt2_zoo_state::topology::topology_graph_types::TopologyGrid>,
+    world_members: Query<
+        'w,
+        's,
+        &'static openzt2_world_state::world_spawn::world_membership_types::WorldMember,
+    >,
     ground: openzt2_zoo_state::terrain::dry_surface_eligibility::DrySurfaceEligibility<'w, 's>,
     children: Query<'w, 's, &'static Children>,
     authored_attachment_transforms: NamedNodeTransforms<'w, 's>,
@@ -67,16 +74,17 @@ pub(super) struct DockBehaviorGeometry<'w, 's> {
 }
 
 pub(super) fn start_current_supported_behavior_docking_actions(
+    activation: In<Option<Entity>>,
     mut commands: Commands,
-    simulation_clock: Res<ZooClock>,
-    behavior_tasks: DockBehaviorActors,
+    simulation_clock: Single<&ZooClock>,
+    mut behavior_tasks: DockBehaviorActors,
     target_definition_references: Query<&DefinitionId>,
     travel_sites: Query<&BehaviorPlacementTravelSite>,
     path_tiles: Query<(), With<openzt2_zoo_state::topology::topology_graph_types::PathTile>>,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,
     geometry: DockBehaviorGeometry,
-    mut navigation_request_sequence: ResMut<NavigationRequestSequence>,
+    mut navigation_generations: Query<&mut NavigationRequestGeneration>,
     mut docking_requests: MessageWriter<DockAt>,
 ) {
     let world_definitions = active_world_definitions.get(&world_definition_assets);
@@ -92,16 +100,20 @@ pub(super) fn start_current_supported_behavior_docking_actions(
         actor,
         navigation_agent,
         locomotion_mode,
-        behavior_task,
+        mut behavior_task,
         instruction,
         dock,
         queue_approach,
-    ) in &behavior_tasks
+    ) in behavior_action_actors(&mut behavior_tasks, activation.0)
     {
+        if activation.0.is_none() && !instruction.can_update_after_activation(simulation_clock.tick)
+        {
+            continue;
+        }
         if behavior_task.next_action_tick > simulation_clock.tick {
             continue;
         }
-        if !instruction.is_current(behavior_task) {
+        if !instruction.is_current(&behavior_task) {
             continue;
         }
         let docking_action = dock.map(|dock| &dock.0);
@@ -112,7 +124,7 @@ pub(super) fn start_current_supported_behavior_docking_actions(
                 "dock waits: the actor has no navigation agent");
             continue;
         };
-        let Some(target) = travel_target(behavior_task, travel_sites.get(actor).ok()) else {
+        let Some(target) = travel_target(&behavior_task, travel_sites.get(actor).ok()) else {
             super::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation(
                 actor, &mut commands,
             );
@@ -173,7 +185,10 @@ pub(super) fn start_current_supported_behavior_docking_actions(
             let direction = offset.normalize_or_zero();
             let direction = Vec3::new(direction.x, 0.0, direction.y);
             let target_from_world = target_transform.affine().inverse();
-            let request_id = navigation_request_sequence.next();
+            let Ok(mut generation) = navigation_generations.get_mut(actor) else {
+                continue;
+            };
+            let request_id = generation.advance();
             docking_requests.write(DockAt {
                 entity: actor,
                 request_id,
@@ -191,11 +206,7 @@ pub(super) fn start_current_supported_behavior_docking_actions(
                     instruction: instruction.id(),
                     request_id,
                 });
-            instruction.resume_at(
-                actor,
-                simulation_clock.tick.saturating_add(1),
-                &mut commands,
-            );
+            behavior_task.next_action_tick = simulation_clock.tick.saturating_add(1);
             continue;
         }
         let docking_action = docking_action.expect("a dock or a queue approach");
@@ -203,8 +214,9 @@ pub(super) fn start_current_supported_behavior_docking_actions(
         // animals; their reservation tags name no slot. Nor does a tag such as
         // `General` on a target without a slot of that tag, like the guest a
         // rampaging ankylosaur attacks.
-        if let Some(reservation_tag) = instruction
-            .reservation_tag()
+        if let Some(reservation_tag) = docking_action
+            .reservation
+            .or(instruction.reservation_tag())
             .filter(|_| !path_tiles.contains(target) && !fences.contains(target))
             .filter(|tag| {
                 target_definition.is_none_or(|definition| {
@@ -252,7 +264,7 @@ pub(super) fn start_current_supported_behavior_docking_actions(
                 queue_service_slots: Vec::new(),
             };
             let action = docking_action.clone();
-            let instruction = BehaviorAdmissionInstruction::new(actor, behavior_task, instruction);
+            let instruction = BehaviorAdmissionInstruction::new(actor, &behavior_task, instruction);
             commands.queue(move |world: &mut World| {
                 if instruction.is_current(world) {
                     let outcome = request.commit(world);
@@ -274,10 +286,10 @@ pub(super) fn start_current_supported_behavior_docking_actions(
             navigation_agent,
             locomotion_mode,
             simulation_clock.tick,
-            behavior_task,
+            &mut behavior_task,
             instruction,
             &geometry,
-            &mut navigation_request_sequence,
+            &mut navigation_generations,
             &mut docking_requests,
             &mut commands,
         );
@@ -296,18 +308,18 @@ pub(super) struct BehaviorDockAdmitted {
 pub(super) fn request_dock_after_container_admission(
     admitted: On<BehaviorDockAdmitted>,
     mut commands: Commands,
-    clock: Res<ZooClock>,
-    actors: DockBehaviorActors,
+    clock: Single<&ZooClock>,
+    mut actors: DockBehaviorActors,
     target_definitions: Query<&DefinitionId>,
     definition_assets: Res<Assets<WorldDefinitionAsset>>,
     definitions: Res<WorldDefinitions>,
     geometry: DockBehaviorGeometry,
-    mut sequence: ResMut<NavigationRequestSequence>,
+    mut navigation_generations: Query<&mut NavigationRequestGeneration>,
     mut requests: MessageWriter<DockAt>,
 ) {
     let actor = admitted.actor;
     let target = admitted.target;
-    let Ok((_, Some(agent), mode, task, instruction, _, _)) = actors.get(actor) else {
+    let Ok((_, Some(agent), mode, mut task, instruction, _, _)) = actors.get_mut(actor) else {
         return;
     };
     let InteractionContainerAdmissionOutcome::Granted { slot, .. } = admitted.outcome else {
@@ -320,7 +332,10 @@ pub(super) fn request_dock_after_container_admission(
     let definition = definitions
         .get(&definition_assets)
         .and_then(|definitions| definitions.find_object(target_definitions.get(target).ok()?.0));
-    instruction.bind_interaction_slot(actor, slot, &mut commands);
+    if !instruction.is_current(&task) {
+        return;
+    }
+    task.interaction_slot = Some(slot);
     request_behavior_dock(
         actor,
         target,
@@ -329,10 +344,10 @@ pub(super) fn request_dock_after_container_admission(
         agent,
         mode,
         clock.tick,
-        task,
+        &mut task,
         instruction,
         &geometry,
-        &mut sequence,
+        &mut navigation_generations,
         &mut requests,
         &mut commands,
     );
@@ -347,10 +362,10 @@ fn request_behavior_dock(
     navigation_agent: &NavAgent,
     locomotion_mode: Option<&LocomotionMode>,
     tick: u64,
-    behavior_task: &BehaviorTaskExecutionState,
+    behavior_task: &mut BehaviorTaskExecutionState,
     instruction: &RunningBehaviorInstruction,
     geometry: &DockBehaviorGeometry,
-    navigation_request_sequence: &mut NavigationRequestSequence,
+    navigation_generations: &mut Query<&mut NavigationRequestGeneration>,
     docking_requests: &mut MessageWriter<DockAt>,
     commands: &mut Commands,
 ) {
@@ -358,7 +373,8 @@ fn request_behavior_dock(
         target_entrances,
         fences,
         topology_nodes,
-        topology_grid,
+        topology_grids,
+        world_members,
         ground,
         children,
         authored_attachment_transforms,
@@ -381,10 +397,12 @@ fn request_behavior_dock(
         // A fence segment's origin is its first end; dock on its middle,
         // on the ground there rather than at the topology layer's height.
         let centre = fences.get(target).ok().and_then(|edge| {
+            let root = world_members.get(actor).ok()?.root;
+            let topology_grid = topology_grids.get(root).ok()?;
             let first = topology_grid.cell_translation(topology_nodes.get(edge.a()).ok()?.cell);
             let second = topology_grid.cell_translation(topology_nodes.get(edge.b()).ok()?.cell);
             let middle = (first + second) * 0.5;
-            let middle = middle.with_y(ground.ground_height(middle.xz()).unwrap_or(middle.y));
+            let middle = middle.with_y(ground.ground_height(root, middle.xz()).unwrap_or(middle.y));
             Some(target_transform.affine().inverse().transform_point3(middle))
         });
         radial_dock_point_and_forward_in_target_space(
@@ -483,7 +501,10 @@ fn request_behavior_dock(
     commands
         .entity(actor)
         .try_remove::<DockedAtInteractionContainer>();
-    let request_id = navigation_request_sequence.next();
+    let Ok(mut generation) = navigation_generations.get_mut(actor) else {
+        return;
+    };
+    let request_id = generation.advance();
     debug!(?actor, ?target, request_id, ?local_point, slot = ?behavior_task.interaction_slot,
         "dock requested");
     docking_requests.write(DockAt {
@@ -503,7 +524,7 @@ fn request_behavior_dock(
             instruction: instruction.id(),
             request_id,
         });
-    instruction.resume_at(actor, tick.saturating_add(1), commands);
+    behavior_task.next_action_tick = tick.saturating_add(1);
 }
 
 fn radial_dock_point_and_forward_in_target_space(
@@ -702,7 +723,7 @@ pub(super) fn find_named_descendant_global_transform<'a>(
 pub(super) fn finish_behavior_docking_actions_after_matching_arrival(
     mut commands: Commands,
     mut arrivals: MessageReader<Arrived>,
-    simulation_clock: Res<ZooClock>,
+    simulation_clock: Single<&ZooClock>,
     memberships: InteractionContainerMemberships,
     travel_sites: Query<&BehaviorPlacementTravelSite>,
     behavior_tasks: Query<
@@ -746,10 +767,10 @@ pub(super) fn finish_behavior_docking_actions_after_matching_arrival(
                 .entity(arrival.entity)
                 .try_insert(DockedAtInteractionContainer);
         }
-        instruction.complete(arrival.entity, simulation_clock.tick, &mut commands);
         commands
             .entity(arrival.entity)
             .remove::<PendingBehaviorDockingCompletion>();
+        instruction.complete(arrival.entity, simulation_clock.tick, &mut commands);
     }
 }
 

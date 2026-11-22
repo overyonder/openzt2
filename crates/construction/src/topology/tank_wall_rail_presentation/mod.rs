@@ -63,7 +63,7 @@ pub(super) fn present_changed_tank_wall_rails(
     mut commands: Commands,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
-    grid: Res<TopologyGrid>,
+    grid: Single<&TopologyGrid>,
     walls: Query<(
         Entity,
         FenceSegment,
@@ -76,6 +76,7 @@ pub(super) fn present_changed_tank_wall_rails(
     )>,
     nodes: Query<&TopologyNode>,
 ) {
+    let grid = grid.into_inner();
     let definitions_changed = definitions.is_changed() || active_definitions.is_changed();
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;

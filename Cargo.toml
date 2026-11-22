@@ -152,13 +152,16 @@ type_complexity = "deny"
 # Fast first-party edit/build cycles. Dependencies retain optimization below so
 # Bevy, Avian, and codecs remain representative enough for interactive use.
 opt-level = 1
-debug = 1
+# Line tables keep file and line numbers in our own backtraces. Full debug info
+# in every test binary made each relink read the dependencies' debug sections.
+debug = "line-tables-only"
 incremental = true
 codegen-units = 256
 lto = "off"
 
 [profile.dev.package."*"]
 opt-level = 3
+debug = false
 
 [profile.release]
 opt-level = 3

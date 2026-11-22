@@ -34,7 +34,7 @@ use openzt2_zoo_state::{
         egg_incubation::EggIncubation,
     },
     behavior_task_execution_types::{
-        BehaviorTaskExecutionPhase, BehaviorTaskExecutionSequence, BehaviorTaskExecutionState,
+        BehaviorTaskExecutionPhase, BehaviorTaskExecutionState, BehaviorTaskGeneration,
     },
     need_adjustment::advance_need_adjustment_timer,
     terrain::dry_surface_eligibility::DrySurfaceEligibility,
@@ -51,25 +51,26 @@ pub(super) fn initialize_live_eggs(
     definitions: Res<WorldDefinitions>,
     assets: Res<Assets<WorldDefinitionAsset>>,
     mut events: MessageReader<AssetEvent<WorldDefinitionAsset>>,
-    seed: Res<ZooSeed>,
-    mut entities: Query<
-        (
-            Entity,
-            Ref<DefinitionId>,
-            &PersistentId,
-            Has<EggIncubation>,
-            Has<BehaviorRandomStream>,
-            Option<&mut AuthoredEgg>,
-        ),
-        With<WorldMember>,
-    >,
+    seeds: Query<&ZooSeed>,
+    mut entities: Query<(
+        Entity,
+        Ref<DefinitionId>,
+        &WorldMember,
+        &PersistentId,
+        Has<EggIncubation>,
+        Has<BehaviorRandomStream>,
+        Option<&mut AuthoredEgg>,
+    )>,
 ) {
     let changed = definitions.is_changed() || events.read().next().is_some();
     events.clear();
     let Some(view) = definitions.get(&assets) else {
         return;
     };
-    for (entity, definition, id, incubating, has_random, policy) in &mut entities {
+    for (entity, definition, member, id, incubating, has_random, policy) in &mut entities {
+        let Ok(seed) = seeds.get(member.root) else {
+            continue;
+        };
         if !changed && !definition.is_changed() {
             continue;
         }
@@ -183,8 +184,8 @@ pub(super) fn update_egg_incubation(
 
 pub(super) fn start_idle_egg_tasks(
     mut commands: Commands,
-    clock: Res<ZooClock>,
-    mut executions: ResMut<BehaviorTaskExecutionSequence>,
+    clocks: Query<&ZooClock>,
+    mut behavior_generations: Query<&mut BehaviorTaskGeneration>,
     assets: Res<Assets<BehaviorDocumentAsset>>,
     definitions: Res<WorldDefinitions>,
     definition_assets: Res<Assets<WorldDefinitionAsset>>,
@@ -193,6 +194,7 @@ pub(super) fn start_idle_egg_tasks(
         (
             Entity,
             &DefinitionId,
+            &WorldMember,
             &GlobalTransform,
             &EggIncubation,
             &EggTasks,
@@ -204,7 +206,10 @@ pub(super) fn start_idle_egg_tasks(
     let Some(definitions) = definitions.get(&definition_assets) else {
         return;
     };
-    for (egg, definition, pose, incubation, tasks, mut random) in &mut eggs {
+    for (egg, definition, member, pose, incubation, tasks, mut random) in &mut eggs {
+        let Ok(clock) = clocks.get(member.root) else {
+            continue;
+        };
         let Some(object) = definitions.find_object(definition.0) else {
             continue;
         };
@@ -241,12 +246,12 @@ pub(super) fn start_idle_egg_tasks(
                         BehaviorEligibilityFactInput::Spatial(
                             BehaviorSpatialEligibilityFact::OnLand,
                         ) => terrain
-                            .on_land_at_position(pose.translation())
+                            .on_land_at_position(member.root, pose.translation())
                             .map(|on_land| i32::from(on_land) * 65536),
                         BehaviorEligibilityFactInput::Spatial(
                             BehaviorSpatialEligibilityFact::InWater,
                         ) => terrain
-                            .on_land_at_position(pose.translation())
+                            .on_land_at_position(member.root, pose.translation())
                             .map(|on_land| i32::from(!on_land) * 65536),
                         _ => None,
                     };
@@ -271,8 +276,14 @@ pub(super) fn start_idle_egg_tasks(
         if let Some(((document, declaration, task), _)) =
             ranking.finish(|limit| random.0.range_u32(limit))
         {
+            let execution_id =
+                openzt2_zoo_state::behavior_task_execution_types::allocate_behavior_execution_id(
+                    egg,
+                    behavior_generations.get_mut(egg).ok(),
+                    &mut commands,
+                );
             commands.entity(egg).insert(BehaviorTaskExecutionState {
-                execution_id: executions.next(),
+                execution_id,
                 program: task.id,
                 target: Some(egg),
                 object: None,

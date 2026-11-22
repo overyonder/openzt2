@@ -1,4 +1,5 @@
-use bevy::{ecs::change_detection::Tick, prelude::*};
+use bevy::prelude::*;
+use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_zoo_state::placement::object_placement_geometry::{
     ScenePlacementFootprintChanged, ScenePlacementFootprints,
 };
@@ -32,7 +33,7 @@ use openzt2_zoo_state::placement::object_placement_validation::calculate_authore
 use openzt2_zoo_state::placement::object_placement_validation::validate_object_placement_footprint_cells;
 use openzt2_zoo_state::placement::object_placement_validation::ObjectPlacementAuthoritativeFacts;
 use openzt2_zoo_state::placement::placed_object_types::IndexedObjectPlacementCells;
-use openzt2_zoo_state::placement::placement_occupancy_index::PlacedObjectFootprintOccupancyIndex;
+use openzt2_zoo_state::placement::placement_occupancy_index::PlacedObjectFootprintQueries;
 use openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementPreviewPermissionFacts;
 use openzt2_zoo_state::placement::placement_transaction_types::PlacedObjectRelocationSource;
 
@@ -46,8 +47,6 @@ pub(super) struct ObjectPlacementFit {
     pub cells: Vec<IVec2>,
     pub permission: ObjectPlacementPreviewPermissionFacts,
     pub habitat: Option<Entity>,
-    pub revisions: [Option<Tick>; 7],
-    pub terrain_cursor: usize,
 }
 
 // Asset reloads and terrain edits must invalidate previews even if the pointer
@@ -60,11 +59,13 @@ pub(super) fn mark_changed_object_placement_previews_dirty(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     mut scene_changes: MessageReader<ScenePlacementFootprintChanged>,
-    placement: Res<PlacedObjectFootprintOccupancyIndex>,
-    topology: Res<TopologyIndex>,
+    placement: PlacedObjectFootprintQueries,
+    topology: Query<Ref<TopologyIndex>>,
+    terrain_indexes: Query<Ref<TerrainIndex>>,
     previews: Query<(
         Entity,
         Ref<ConstructionPreview>,
+        &WorldMember,
         Ref<ObjectPlacementPreviewPermissionFacts>,
         Option<Ref<HabitatMember>>,
         Option<Ref<ObjectPlacementPrefabSource>>,
@@ -84,7 +85,7 @@ pub(super) fn mark_changed_object_placement_previews_dirty(
         .read()
         .map(|change| change.affected_entity)
         .collect::<bevy::platform::collections::HashSet<_>>();
-    for (entity, preview, permission, habitat, prefab) in &previews {
+    for (entity, preview, member, permission, habitat, prefab) in &previews {
         if !preview.is_changed()
             && !permission.is_changed()
             && habitat.is_none_or(|habitat| !habitat.is_changed())
@@ -92,8 +93,13 @@ pub(super) fn mark_changed_object_placement_previews_dirty(
             && prefab.is_none_or(|prefab| {
                 !prefab.is_changed() && !scene_changes.contains(&prefab.0.id())
             })
-            && !placement.is_changed()
-            && !topology.is_changed()
+            && !placement.index_changed(member.root)
+            && !topology
+                .get(member.root)
+                .is_ok_and(|topology| topology.is_changed())
+            && !terrain_indexes
+                .get(member.root)
+                .is_ok_and(|index| index.is_changed())
             && !authored_inputs_changed
         {
             continue;
@@ -104,21 +110,21 @@ pub(super) fn mark_changed_object_placement_previews_dirty(
 
 pub(super) fn evaluate_dirty_object_placement_previews(
     mut commands: Commands,
-    placement: Res<PlacedObjectFootprintOccupancyIndex>,
+    placement: PlacedObjectFootprintQueries,
     ground_paths: GroundPathPlacementStomp,
-    terrain_index: Res<TerrainIndex>,
+    terrain_indexes: Query<&TerrainIndex>,
     terrain_assets: Res<Assets<TerrainAsset>>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     footprints: Res<ScenePlacementFootprints>,
     chunks: Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
-    terrain_changes: Res<Messages<TerrainChanged>>,
     habitats: Query<&HabitatMember>,
     placed: Query<StompablePlacedObject>,
     mut previews: Query<
         (
             Entity,
             &mut ConstructionPreview,
+            &WorldMember,
             Option<&ObjectPlacementPreviewPermissionFacts>,
             Option<&PlacedObjectRelocationSource>,
             Option<&ObjectPlacementPrefabSource>,
@@ -133,17 +139,11 @@ pub(super) fn evaluate_dirty_object_placement_previews(
     let Some(catalogue) = active_definitions.get(&definitions) else {
         return;
     };
-    let revisions = [
-        Some(placement.last_changed()),
-        ground_paths.topology_change_tick(),
-        Some(terrain_index.last_changed()),
-        Some(terrain_assets.last_changed()),
-        Some(definitions.last_changed()),
-        Some(active_definitions.last_changed()),
-        Some(footprints.last_changed()),
-    ];
-    let terrain_cursor = terrain_changes.oldest_message_count() + terrain_changes.len();
-    for (entity, mut preview, permission, relocation, prefab, existing_fit) in &mut previews {
+    for (entity, mut preview, member, permission, relocation, prefab, existing_fit) in &mut previews
+    {
+        let Ok(terrain_index) = terrain_indexes.get(member.root) else {
+            continue;
+        };
         commands
             .entity(entity)
             .remove::<ObjectPlacementPreviewDirty>();
@@ -183,7 +183,7 @@ pub(super) fn evaluate_dirty_object_placement_previews(
             let asset = terrain_assets.get(&chunk.asset)?;
             sample_terrain(chunk, asset, edited, position)
         };
-        let path_overlaps = ground_paths.overlaps(definition, catalogue);
+        let path_overlaps = ground_paths.overlaps(member.root, definition, catalogue);
         let habitat = habitats
             .get(entity)
             .ok()
@@ -199,6 +199,7 @@ pub(super) fn evaluate_dirty_object_placement_previews(
                         cell,
                         definition,
                         catalogue,
+                        member.root,
                         &placement,
                         &placed,
                         |entity| Some(entity) == relocation.map(|source| source.0),
@@ -231,8 +232,6 @@ pub(super) fn evaluate_dirty_object_placement_previews(
                     cells,
                     permission: *permission,
                     habitat,
-                    revisions,
-                    terrain_cursor,
                 };
                 if let Some(mut existing_fit) = existing_fit {
                     existing_fit.set_if_neq(fit);

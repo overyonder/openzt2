@@ -11,8 +11,9 @@ use openzt2_game_data::AssetId;
 use openzt2_world_state::{
     application_schedule::FixedGameSet, simulation_time::simulation_clock_types::ZooClock,
 };
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::WhenBehaviorAction;
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
-    RunBehaviorSendSelfTokens, RunningBehaviorInstruction,
+    BehaviorTaskReplaced, RunBehaviorSendSelfTokens, RunningBehaviorInstruction,
 };
 use openzt2_zoo_state::{
     animal_behavior::behavior_random_stream_state::BehaviorRandomStream,
@@ -54,9 +55,24 @@ fn release_claimed_token_when_task_is_discarded(
     }
 }
 
+fn release_claimed_token_when_task_is_replaced(
+    replaced: On<BehaviorTaskReplaced>,
+    claims: Query<(&ClaimedBehaviorSelfToken, &ChildOf)>,
+    mut commands: Commands,
+) {
+    let Some(token) = replaced.previous_object else {
+        return;
+    };
+    if claims.get(token).is_ok_and(|(claim, owner)| {
+        owner.parent() == replaced.actor && claim.execution_id == replaced.previous_execution
+    }) {
+        commands.entity(token).try_insert(EndedBehaviorTokenClaim);
+    }
+}
+
 fn discard_expired_and_consumed_tokens(
     mut commands: Commands,
-    clock: Res<ZooClock>,
+    clock: Single<&ZooClock>,
     tokens: Query<&BehaviorSelfToken>,
     expiring: Query<
         (Entity, &BehaviorSelfToken),
@@ -115,13 +131,13 @@ fn discard_expired_and_consumed_tokens(
     }
 }
 
-struct DeliverBehaviorSelfToken {
-    actor: Entity,
-    recipient: Entity,
-    only_one: bool,
-    reconsider: bool,
-    tick: u64,
-    token: BehaviorSelfToken,
+pub(super) struct DeliverBehaviorSelfToken {
+    pub(super) actor: Entity,
+    pub(super) recipient: Entity,
+    pub(super) only_one: bool,
+    pub(super) reconsider: bool,
+    pub(super) tick: u64,
+    pub(super) token: BehaviorSelfToken,
 }
 
 impl Command for DeliverBehaviorSelfToken {
@@ -160,11 +176,9 @@ impl Command for DeliverBehaviorSelfToken {
 }
 
 pub(super) fn register_token_execution(application: &mut App) {
-    use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
-        BehaviorStep, BehaviorStepSet,
-    };
     application
         .add_observer(release_claimed_token_when_task_is_discarded)
+        .add_observer(release_claimed_token_when_task_is_replaced)
         .add_systems(
             FixedUpdate,
             discard_expired_and_consumed_tokens
@@ -172,15 +186,13 @@ pub(super) fn register_token_execution(application: &mut App) {
                 .in_set(FixedGameSet::Think)
                 .run_if(in_state(GamePhase::InGame)),
         )
-        .add_systems(
-            BehaviorStep,
-            execute_current_self_token_deliveries.in_set(BehaviorStepSet::Actions),
-        );
+        .add_observer(execute_current_self_token_deliveries);
 }
 
 fn execute_current_self_token_deliveries(
+    activation: On<WhenBehaviorAction<RunBehaviorSendSelfTokens>>,
     mut commands: Commands,
-    clock: Res<ZooClock>,
+    clock: Single<&ZooClock>,
     definitions: Res<WorldDefinitions>,
     definition_assets: Res<Assets<WorldDefinitionAsset>>,
     mut actors: Query<
@@ -209,7 +221,9 @@ fn execute_current_self_token_deliveries(
     let Some(definitions) = definitions.get(&definition_assets) else {
         return;
     };
-    for (actor, (task, instruction, running_action), mut random, mut guest_random) in &mut actors {
+    for (actor, (task, instruction, running_action), mut random, mut guest_random) in
+        std::iter::once(actors.get_mut(activation.entity)).flatten()
+    {
         if task.next_action_tick > clock.tick {
             continue;
         }

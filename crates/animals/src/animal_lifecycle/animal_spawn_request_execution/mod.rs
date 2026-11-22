@@ -25,16 +25,18 @@ use super::{
 pub(super) fn spawn_animals_requested_by_gameplay_operations(
     mut commands: Commands,
     mut requests: MessageReader<SpawnAnimalRequest>,
-    zoo_seed: Res<ZooSeed>,
-    zoo_clock: Res<ZooClock>,
     species_assets: Res<Assets<SpeciesAsset>>,
     species_index: Res<SpeciesAssets>,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,
-    mut persistent_identifiers: Query<&mut PersistentIdAllocator>,
+    mut roots: Query<(
+        &mut PersistentIdAllocator,
+        &ZooSeed,
+        &ZooClock,
+        &HabitatIndex,
+        &TopologyGrid,
+    )>,
     placement_sites: PlacementSiteQueries,
-    habitats: Res<HabitatIndex>,
-    topology: Res<TopologyGrid>,
     mut spawned_animals: MessageWriter<AnimalSpawned>,
     mut rejected_spawns: MessageWriter<AnimalSpawnRejected>,
 ) {
@@ -45,21 +47,23 @@ pub(super) fn spawn_animals_requested_by_gameplay_operations(
         return;
     };
     for request in requests.read() {
-        let Ok(mut allocator) = persistent_identifiers.get_mut(request.world) else {
+        let Ok((mut allocator, zoo_seed, zoo_clock, habitats, topology)) =
+            roots.get_mut(request.world)
+        else {
             rejected_spawns.write(AnimalSpawnRejected {
                 operation: request.operation,
             });
             continue;
         };
         let habitat = locate_habitat_at_world_position(
-            &habitats,
+            habitats,
             request.transform.translation.xz(),
             *topology,
         );
         let (persistent_identifier, world_membership, resolved_components) =
             match resolve_animal_spawn_request_to_identifiers_and_components(
                 request,
-                &zoo_seed,
+                zoo_seed,
                 species_index,
                 world_definitions,
                 &mut allocator,

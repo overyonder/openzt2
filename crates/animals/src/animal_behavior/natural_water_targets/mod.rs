@@ -1,3 +1,4 @@
+use bevy::ecs::entity::EntityHashMap;
 use bevy::{
     ecs::system::SystemParam,
     math::I64Vec2,
@@ -9,7 +10,7 @@ use openzt2_game_assets::{
     terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset,
 };
 use openzt2_world_state::application_schedule::FixedGameSet;
-use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
+use openzt2_world_state::world_spawn::world_membership_types::{WorldMember, WorldRoot};
 use openzt2_zoo_state::{
     animal_behavior::behavior_natural_water_target_types::{
         NaturalWaterTargetKind, SelectedNaturalWaterTarget,
@@ -49,12 +50,12 @@ struct ProjectedWaterTarget {
     target: SelectedNaturalWaterTarget,
 }
 
-#[derive(Resource, Default, PartialEq)]
+#[derive(Component, Default, PartialEq)]
 struct WaterTargetSearchMargin(f32);
 
 #[derive(SystemParam)]
 struct WaterTerrain<'w, 's> {
-    index: Res<'w, TerrainIndex>,
+    indexes: Query<'w, 's, Ref<'static, TerrainIndex>>,
     assets: Res<'w, Assets<TerrainAsset>>,
     chunks: Query<
         'w,
@@ -67,10 +68,13 @@ struct WaterTerrain<'w, 's> {
 }
 
 impl WaterTerrain<'_, '_> {
-    fn sample(&self, point: Vec2) -> Option<TerrainPoint> {
+    fn sample(&self, world: Entity, point: Vec2) -> Option<TerrainPoint> {
         let (chunk, edited) = self
             .chunks
-            .get(terrain_chunk_at(&self.index, point)?)
+            .get(terrain_chunk_at(
+                self.indexes.get(world).ok()?.into_inner(),
+                point,
+            )?)
             .ok()?;
         sample_terrain(
             &chunk,
@@ -80,10 +84,13 @@ impl WaterTerrain<'_, '_> {
         )
     }
 
-    fn changed_at(&self, point: Vec2) -> bool {
-        self.index.is_changed()
+    fn changed_at(&self, world: Entity, point: Vec2) -> bool {
+        let Ok(index) = self.indexes.get(world) else {
+            return true;
+        };
+        index.is_changed()
             || self.assets.is_changed()
-            || terrain_chunk_at(&self.index, point)
+            || terrain_chunk_at(&index, point)
                 .and_then(|chunk| self.chunks.get(chunk).ok())
                 .is_none_or(|(chunk, edited)| {
                     chunk.is_changed() || edited.is_some_and(|edits| edits.is_changed())
@@ -92,12 +99,13 @@ impl WaterTerrain<'_, '_> {
 }
 
 pub(super) fn register_water_target_projection(app: &mut App) {
-    app.init_resource::<WaterTargetSearchMargin>().add_systems(
-        FixedUpdate,
-        project_chunk_water_targets
-            .in_set(FixedGameSet::Clock)
-            .run_if(in_state(GamePhase::InGame)),
-    );
+    app.register_required_components::<WorldRoot, WaterTargetSearchMargin>()
+        .add_systems(
+            FixedUpdate,
+            project_chunk_water_targets
+                .in_set(FixedGameSet::Clock)
+                .run_if(in_state(GamePhase::InGame)),
+        );
 }
 
 fn project_chunk_water_targets(
@@ -126,18 +134,18 @@ fn project_chunk_water_targets(
     mut removed_region_cells: RemovedComponents<NaturalWaterRegionCells>,
     mut removed_edits: RemovedComponents<EditedTerrainSamples>,
     mut projected: Query<(Entity, &mut ChunkWaterTargets)>,
-    mut margin: ResMut<WaterTargetSearchMargin>,
+    mut margins: Query<(Entity, &mut WaterTargetSearchMargin)>,
     mut commands: Commands,
 ) {
     let regions_removed = removed_regions.read().count() + removed_region_cells.read().count() != 0;
-    if terrain.index.is_changed()
+    if terrain.indexes.iter().any(|index| index.is_changed())
         || terrain.assets.is_changed()
         || regions_removed
         || !changed_regions.is_empty()
     {
         removed_edits.clear();
         let mut targets_by_chunk = HashMap::<Entity, ChunkWaterTargets>::default();
-        let mut maximum_cell_size = 0.0_f32;
+        let mut maximum_cell_sizes = EntityHashMap::<f32>::default();
         let mut order = 0;
         for (region, cells, parent) in &regions {
             let Ok(world) = worlds.get(parent.parent()) else {
@@ -148,9 +156,13 @@ fn project_chunk_water_targets(
             } else {
                 0.0
             };
-            maximum_cell_size = maximum_cell_size.max(cell_size);
+            let maximum = maximum_cell_sizes.entry(world.root).or_default();
+            *maximum = maximum.max(cell_size);
+            let Ok(index) = terrain.indexes.get(world.root) else {
+                continue;
+            };
             for &centre in &cells.centres {
-                let Some(chunk) = terrain_chunk_at(&terrain.index, centre.xz()) else {
+                let Some(chunk) = terrain_chunk_at(&index, centre.xz()) else {
                     continue;
                 };
                 targets_by_chunk
@@ -168,7 +180,11 @@ fn project_chunk_water_targets(
                 order += 5;
             }
         }
-        margin.set_if_neq(WaterTargetSearchMargin(maximum_cell_size));
+        for (root, mut margin) in &mut margins {
+            margin.set_if_neq(WaterTargetSearchMargin(
+                maximum_cell_sizes.remove(&root).unwrap_or(0.0),
+            ));
+        }
         for targets in targets_by_chunk.values_mut() {
             project_water_sites(&terrain, targets);
         }
@@ -187,16 +203,25 @@ fn project_chunk_water_targets(
 
     let terrain_edits: HashSet<Entity> =
         changed_terrain.iter().chain(removed_edits.read()).collect();
-    if terrain_edits.is_empty() || terrain.index.chunk_span_m <= 0.0 {
+    if terrain_edits.is_empty() {
         return;
     }
-    let chunks = &terrain.index.chunks;
-    let reach = (margin.0 / terrain.index.chunk_span_m).ceil() as i64;
     let mut affected = HashSet::<Entity>::new();
-    for (&coordinate, _) in chunks
-        .iter()
-        .filter(|(_, chunk)| terrain_edits.contains(*chunk))
-    {
+    for chunk in terrain_edits {
+        let (Ok(member), Ok((chunk, _))) = (worlds.get(chunk), terrain.chunks.get(chunk)) else {
+            continue;
+        };
+        let (Ok(index), Ok((_, margin))) =
+            (terrain.indexes.get(member.root), margins.get(member.root))
+        else {
+            continue;
+        };
+        if index.chunk_span_m <= 0.0 {
+            continue;
+        }
+        let chunks = &index.chunks;
+        let reach = (margin.0 / index.chunk_span_m).ceil() as i64;
+        let coordinate = chunk.coord;
         if reach.saturating_mul(reach).saturating_mul(4) > chunks.len() as i64 {
             affected.extend(chunks.iter().filter_map(|(&other, &chunk)| {
                 let distance = (other.as_i64vec2() - coordinate.as_i64vec2()).abs();
@@ -225,7 +250,7 @@ fn project_water_sites(terrain: &WaterTerrain<'_, '_>, targets: &mut ChunkWaterT
     targets.shores.clear();
     for site in &targets.sites {
         let wet = site.centre;
-        let Some(sample) = terrain.sample(wet.xz()) else {
+        let Some(sample) = terrain.sample(site.world, wet.xz()) else {
             continue;
         };
         let Some(height) = sample.water_height_m else {
@@ -252,7 +277,7 @@ fn project_water_sites(terrain: &WaterTerrain<'_, '_>, targets: &mut ChunkWaterT
             .enumerate()
         {
             let mut dry = wet + direction * site.cell_size;
-            let Some(dry_sample) = terrain.sample(dry.xz()) else {
+            let Some(dry_sample) = terrain.sample(site.world, dry.xz()) else {
                 continue;
             };
             if dry_sample.water_height_m.is_some() {
@@ -268,7 +293,7 @@ fn project_water_sites(terrain: &WaterTerrain<'_, '_>, targets: &mut ChunkWaterT
                     break;
                 }
                 if let Some(height) = terrain
-                    .sample(midpoint.xz())
+                    .sample(site.world, midpoint.xz())
                     .and_then(|sample| sample.water_height_m)
                 {
                     wet_edge = midpoint.with_y(height);
@@ -295,12 +320,11 @@ pub(super) struct NaturalWaterTargets<'w, 's> {
     terrain: WaterTerrain<'w, 's>,
     regions: Query<'w, 's, Ref<'static, NaturalWaterRegionCells>, With<NaturalWaterRegion>>,
     chunk_targets: Query<'w, 's, Ref<'static, ChunkWaterTargets>>,
-    search_margin: Res<'w, WaterTargetSearchMargin>,
-    graph: Option<Res<'w, ActiveTerrainDerivedNavigationGraph>>,
+    search_margins: Query<'w, 's, &'static WaterTargetSearchMargin>,
+    graphs: Query<'w, 's, Ref<'static, ActiveTerrainDerivedNavigationGraph>>,
     pub(super) agents: Query<'w, 's, Ref<'static, NavAgent>>,
-    habitats: Res<'w, HabitatIndex>,
+    habitats: Query<'w, 's, (Ref<'static, HabitatIndex>, Ref<'static, TopologyGrid>)>,
     habitat_summaries: Query<'w, 's, Ref<'static, HabitatSummary>>,
-    grid: Res<'w, TopologyGrid>,
 }
 
 impl NaturalWaterTargets<'_, '_> {
@@ -337,12 +361,19 @@ impl NaturalWaterTargets<'_, '_> {
         output: &mut Vec<SelectedNaturalWaterTarget>,
     ) {
         output.clear();
-        let habitat = self.habitat_at(position);
-        let index = &self.terrain.index;
+        let habitat = self.habitat_at(world, position);
+        let Ok(index) = self.terrain.indexes.get(world) else {
+            return;
+        };
         if (!escaped && habitat.is_none()) || index.chunk_span_m <= 0.0 || !radius.is_finite() {
             return;
         }
-        let extent = radius + shore_actor.map_or(0.0, |_| self.search_margin.0);
+        let extent = radius
+            + shore_actor.map_or(0.0, |_| {
+                self.search_margins
+                    .get(world)
+                    .map_or(0.0, |margin| margin.0)
+            });
         let center = position.xz();
         let bounds = [-extent, extent].map(|offset| {
             ((center + Vec2::splat(offset) - index.origin) / index.chunk_span_m)
@@ -363,10 +394,10 @@ impl NaturalWaterTargets<'_, '_> {
                 let candidate = entry.target;
                 if entry.world != world
                     || candidate.water.xz().distance_squared(center) >= radius * radius
-                    || !self.reaches_from(candidate.water, habitat, escaped)
+                    || !self.reaches_from(world, candidate.water, habitat, escaped)
                     || shore_actor.is_some_and(|actor| {
-                        !self.navigation_supports_dry_endpoint(actor, candidate.approach)
-                            || !self.reaches_from(candidate.approach, habitat, escaped)
+                        !self.navigation_supports_dry_endpoint(world, actor, candidate.approach)
+                            || !self.reaches_from(world, candidate.approach, habitat, escaped)
                     })
                 {
                     continue;
@@ -396,12 +427,19 @@ impl NaturalWaterTargets<'_, '_> {
         output.extend(candidates.into_iter().map(|(_, candidate)| candidate));
     }
 
-    fn habitat_at(&self, position: Vec3) -> Option<Entity> {
-        locate_habitat_at_world_position(&self.habitats, position.xz(), *self.grid)
+    fn habitat_at(&self, world: Entity, position: Vec3) -> Option<Entity> {
+        let (index, grid) = self.habitats.get(world).ok()?;
+        locate_habitat_at_world_position(&index, position.xz(), *grid)
     }
 
-    fn reaches_from(&self, point: Vec3, origin: Option<Entity>, escaped: bool) -> bool {
-        let destination = self.habitat_at(point);
+    fn reaches_from(
+        &self,
+        world: Entity,
+        point: Vec3,
+        origin: Option<Entity>,
+        escaped: bool,
+    ) -> bool {
+        let destination = self.habitat_at(world, point);
         if escaped {
             destination.is_none_or(|habitat| {
                 self.habitat_summaries
@@ -413,11 +451,11 @@ impl NaturalWaterTargets<'_, '_> {
         }
     }
 
-    pub(super) fn valid(&self, target: &SelectedNaturalWaterTarget) -> bool {
+    pub(super) fn valid(&self, world: Entity, target: &SelectedNaturalWaterTarget) -> bool {
         if !self.regions.contains(target.region) {
             return false;
         }
-        let Some(sample) = self.terrain.sample(target.water.xz()) else {
+        let Some(sample) = self.terrain.sample(world, target.water.xz()) else {
             return false;
         };
         sample.water_height_m.is_some_and(|height| {
@@ -431,59 +469,81 @@ impl NaturalWaterTargets<'_, '_> {
         })
     }
 
-    pub(super) fn water_inputs_changed(&self, target: &SelectedNaturalWaterTarget) -> bool {
+    pub(super) fn water_inputs_changed(
+        &self,
+        world: Entity,
+        target: &SelectedNaturalWaterTarget,
+    ) -> bool {
         self.regions
             .get(target.region)
             .map_or(true, |region| region.is_changed())
-            || self.terrain.changed_at(target.water.xz())
-            || terrain_chunk_at(&self.terrain.index, target.water.xz())
+            || self.terrain.changed_at(world, target.water.xz())
+            || self
+                .terrain
+                .indexes
+                .get(world)
+                .ok()
+                .and_then(|index| terrain_chunk_at(&index, target.water.xz()))
                 .and_then(|chunk| self.chunk_targets.get(chunk).ok())
                 .is_none_or(|targets| targets.is_changed())
     }
 
     pub(super) fn docking_inputs_changed(
         &self,
+        world: Entity,
         actor: Entity,
         position: Vec3,
         target: &SelectedNaturalWaterTarget,
         escaped: bool,
     ) -> bool {
-        self.terrain.changed_at(position.xz())
-            || self.graph.as_ref().is_none_or(|graph| graph.is_changed())
+        self.terrain.changed_at(world, position.xz())
+            || self
+                .graphs
+                .get(world)
+                .map_or(true, |graph| graph.is_changed())
             || self
                 .agents
                 .get(actor)
                 .map_or(true, |agent| agent.is_changed())
-            || self.habitats.is_changed()
-            || self.grid.is_changed()
+            || self.habitats.get(world).map_or(true, |(index, grid)| {
+                index.is_changed() || grid.is_changed()
+            })
             || escaped
-                && self.habitat_at(position).is_some_and(|habitat| {
+                && self.habitat_at(world, position).is_some_and(|habitat| {
                     self.habitat_summaries
                         .get(habitat)
                         .map_or(true, |summary| summary.is_changed())
                 })
-            || self.water_inputs_changed(target)
+            || self.water_inputs_changed(world, target)
     }
 
     pub(super) fn docking_endpoint(
         &self,
+        world: Entity,
         actor: Entity,
         point: Vec3,
         shore: &SelectedNaturalWaterTarget,
         escaped: bool,
     ) -> bool {
-        self.terrain.sample(point.xz()).is_some_and(|sample| {
-            sample.water_height_m.is_none()
-                && self.agents.get(actor).is_ok_and(|agent| {
-                    (sample.height_m - point.y).abs() <= agent.radius_m.max(0.05)
-                })
-                && self.navigation_supports_dry_endpoint(actor, point)
-                && self.reaches_from(point, self.habitat_at(shore.approach), escaped)
-        })
+        self.terrain
+            .sample(world, point.xz())
+            .is_some_and(|sample| {
+                sample.water_height_m.is_none()
+                    && self.agents.get(actor).is_ok_and(|agent| {
+                        (sample.height_m - point.y).abs() <= agent.radius_m.max(0.05)
+                    })
+                    && self.navigation_supports_dry_endpoint(world, actor, point)
+                    && self.reaches_from(
+                        world,
+                        point,
+                        self.habitat_at(world, shore.approach),
+                        escaped,
+                    )
+            })
     }
 
-    fn navigation_supports_dry_endpoint(&self, actor: Entity, point: Vec3) -> bool {
-        let (Ok(agent), Some(graph)) = (self.agents.get(actor), self.graph.as_ref()) else {
+    fn navigation_supports_dry_endpoint(&self, world: Entity, actor: Entity, point: Vec3) -> bool {
+        let (Ok(agent), Ok(graph)) = (self.agents.get(actor), self.graphs.get(world)) else {
             return false;
         };
         let graph = graph.terrain_derived_navigation_graph();

@@ -6,6 +6,9 @@ use openzt2_game_data::{
 use openzt2_zoo_state::animal_behavior::behavior_target_retry_delays::{
     restore_behavior_target_retry, BehaviorTargetRejections,
 };
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
+    activate_behavior_failure, activate_due_behavior_instructions,
+};
 
 #[derive(Component)]
 struct SelectionAttempts {
@@ -14,7 +17,7 @@ struct SelectionAttempts {
 }
 
 fn record_guest_selection_attempts(
-    clock: Res<ZooClock>,
+    clock: Single<&ZooClock>,
     rejections: BehaviorTargetRejections,
     mut actors: Query<
         (Entity, &mut SelectionAttempts),
@@ -32,7 +35,7 @@ fn record_guest_selection_attempts(
 }
 
 fn record_staff_selection_attempts(
-    clock: Res<ZooClock>,
+    clock: Single<&ZooClock>,
     rejections: BehaviorTargetRejections,
     mut actors: Query<
         (Entity, &mut SelectionAttempts),
@@ -81,14 +84,9 @@ fn check_guest_and_staff_selection_window(interval: u32, cap: u32) {
     app.insert_resource(assets)
         .insert_resource(definitions)
         .init_resource::<Assets<BehaviorDocumentAsset>>()
-        .insert_resource(ZooClock {
-            fractional_tick: Default::default(),
-            tick: 0,
-            absolute_day: 0,
-            tick_in_day: 0,
-        })
         .add_message::<BehaviorTaskFailed>()
         .add_message::<BehaviorTaskFinished>()
+        .add_observer(advance_behavior_tasks_through_return_failure_completion_and_final_outcome)
         .configure_sets(
             FixedUpdate,
             (FixedGameSet::Clock, FixedGameSet::Think).chain(),
@@ -102,13 +100,22 @@ fn check_guest_and_staff_selection_window(interval: u32, cap: u32) {
             (
                 record_staff_selection_attempts,
                 advance_behavior_target_retry_clocks,
-                advance_behavior_tasks_through_return_failure_completion_and_final_outcome,
+                activate_due_behavior_instructions,
                 record_guest_selection_attempts,
             )
                 .chain()
                 .in_set(FixedGameSet::Think),
         );
-    let root = app.world_mut().spawn_empty().id();
+    let root = app
+        .world_mut()
+        .spawn(ZooClock {
+            fractional_tick: Default::default(),
+            tick: 0,
+            absolute_day: 0,
+            tick_in_day: 0,
+        })
+        .id();
+
     let target = app
         .world_mut()
         .spawn(DefinitionId(AssetId::from_key("service")))
@@ -161,7 +168,14 @@ fn check_guest_and_staff_selection_window(interval: u32, cap: u32) {
         .id();
     let first_available_update = u64::from(interval) + 1;
     for update in 1..=first_available_update {
-        app.world_mut().resource_mut::<ZooClock>().tick = update;
+        {
+            let world = app.world_mut();
+            world
+                .query::<&mut ZooClock>()
+                .single_mut(world)
+                .unwrap()
+                .tick = update;
+        }
         app.world_mut().run_schedule(FixedUpdate);
         if update < first_available_update {
             for actor in [guest, staff] {
@@ -189,7 +203,14 @@ fn check_guest_and_staff_selection_window(interval: u32, cap: u32) {
             [first_available_update]
         );
     }
-    app.world_mut().resource_mut::<ZooClock>().tick = first_available_update + 1;
+    {
+        let world = app.world_mut();
+        world
+            .query::<&mut ZooClock>()
+            .single_mut(world)
+            .unwrap()
+            .tick = first_available_update + 1;
+    }
     app.world_mut().run_schedule(FixedUpdate);
     assert_eq!(
         app.world()
@@ -232,7 +253,14 @@ fn check_guest_and_staff_selection_window(interval: u32, cap: u32) {
         let available_update = failure_update + expected_delay + 1;
         while update < available_update {
             update += 1;
-            app.world_mut().resource_mut::<ZooClock>().tick = update;
+            {
+                let world = app.world_mut();
+                world
+                    .query::<&mut ZooClock>()
+                    .single_mut(world)
+                    .unwrap()
+                    .tick = update;
+            }
             app.world_mut().run_schedule(FixedUpdate);
             for actor in [guest, staff] {
                 let attempts = &app
@@ -256,18 +284,21 @@ fn unsupported_nested_set_fails_instead_of_returning_success_to_its_parent() {
     app.init_resource::<Assets<BehaviorDocumentAsset>>()
         .init_resource::<Assets<WorldDefinitionAsset>>()
         .init_resource::<WorldDefinitions>()
-        .insert_resource(ZooClock {
+        .add_message::<BehaviorTaskFailed>()
+        .add_message::<BehaviorTaskFinished>()
+        .add_observer(advance_behavior_tasks_through_return_failure_completion_and_final_outcome)
+        .add_observer(activate_behavior_failure)
+        .add_observer(super::super::fail_invalid_authored_instruction)
+        .add_systems(Update, activate_due_behavior_instructions);
+    let root = app
+        .world_mut()
+        .spawn(ZooClock {
             fractional_tick: Default::default(),
             tick: 1,
             absolute_day: 0,
             tick_in_day: 1,
         })
-        .add_message::<BehaviorTaskFailed>()
-        .add_message::<BehaviorTaskFinished>()
-        .add_systems(
-            Update,
-            advance_behavior_tasks_through_return_failure_completion_and_final_outcome,
-        );
+        .id();
     let program = AssetId::from_key("unsupported-child");
     let document = app
         .world_mut()
@@ -278,9 +309,7 @@ fn unsupported_nested_set_fails_instead_of_returning_success_to_its_parent() {
                     id: program,
                     name: "unsupported-child".into(),
                     subjects: vec![],
-                    actions: BehaviorTaskActionPhase::Unsupported {
-                        first_unsupported_action: "UnmappedAction".into(),
-                    },
+                    actions: BehaviorTaskActionPhase::Supported(vec![openzt2_game_data::behavior::action_record::BehaviorAction::InvalidAuthoredAction("unsupported".into())]),
                 },
                 BehaviorSet {
                     id: AssetId::from_key("parent"),
@@ -308,7 +337,7 @@ fn unsupported_nested_set_fails_instead_of_returning_success_to_its_parent() {
     task.depth = 1;
     task.program = program;
     task.declaration = 0;
-    let actor = app.world_mut().spawn(task).id();
+    let actor = app.world_mut().spawn((WorldMember { root }, task)).id();
     app.world_mut().spawn((
         openzt2_zoo_state::behavior_task_execution_types::continuations::BehaviorContinuationOf(
             actor,
@@ -317,10 +346,7 @@ fn unsupported_nested_set_fails_instead_of_returning_success_to_its_parent() {
             return_frame,
         ),
     ));
-    for tick in 1..=3 {
-        app.world_mut().resource_mut::<ZooClock>().tick = tick;
-        app.update();
-    }
+    app.update();
     assert!(app
         .world()
         .get::<BehaviorTaskExecutionState>(actor)
@@ -341,16 +367,16 @@ fn consecutive_instructions_finish_in_authored_order_and_a_wait_runs_once() {
         action::head_look::BehaviorHeadLookAction, action_record::BehaviorAction,
     };
     use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
-        apply_behavior_instruction_completion, defer_incomplete_behavior_steps,
-        drive_behavior_steps, BehaviorStep, BehaviorStepProgress, BehaviorStepSet,
-        RunBehaviorHeadLook, RunBehaviorSendSubjectTrigger,
+        apply_behavior_instruction_completion, RunBehaviorHeadLook, RunBehaviorSendSubjectTrigger,
+        WhenBehaviorAction,
     };
 
     #[derive(Component, Default)]
     struct Trace(Vec<usize>);
 
     fn head_look(
-        clock: Res<ZooClock>,
+        activation: On<WhenBehaviorAction<RunBehaviorHeadLook>>,
+        clock: Single<&ZooClock>,
         mut actors: Query<
             (
                 Entity,
@@ -362,7 +388,9 @@ fn consecutive_instructions_finish_in_authored_order_and_a_wait_runs_once() {
         >,
         mut commands: Commands,
     ) {
-        for (actor, task, instruction, mut trace) in &mut actors {
+        for (actor, task, instruction, mut trace) in
+            std::iter::once(actors.get_mut(activation.entity)).flatten()
+        {
             if task.next_action_tick <= clock.tick {
                 trace.0.push(task.action);
                 instruction.complete(actor, clock.tick, &mut commands);
@@ -371,7 +399,8 @@ fn consecutive_instructions_finish_in_authored_order_and_a_wait_runs_once() {
     }
 
     fn subject_trigger(
-        clock: Res<ZooClock>,
+        activation: On<WhenBehaviorAction<RunBehaviorSendSubjectTrigger>>,
+        clock: Single<&ZooClock>,
         mut actors: Query<
             (
                 Entity,
@@ -381,41 +410,45 @@ fn consecutive_instructions_finish_in_authored_order_and_a_wait_runs_once() {
             ),
             With<RunBehaviorSendSubjectTrigger>,
         >,
-        mut commands: Commands,
     ) {
-        for (actor, task, instruction, mut trace) in &mut actors {
+        for (_, task, _, mut trace) in std::iter::once(actors.get_mut(activation.entity)).flatten()
+        {
             if task.next_action_tick <= clock.tick {
                 trace.0.push(task.action);
-                if task.action == 1 {
-                    instruction.complete(actor, clock.tick, &mut commands);
-                }
+            }
+        }
+    }
+
+    fn finish_wait(
+        clock: Single<&ZooClock>,
+        actors: Query<(Entity, &RunningBehaviorInstruction), With<RunBehaviorSendSubjectTrigger>>,
+        mut commands: Commands,
+    ) {
+        for (actor, instruction) in &actors {
+            if instruction.can_update_after_activation(clock.tick) {
+                instruction.complete(actor, clock.tick, &mut commands);
             }
         }
     }
 
     let mut app = App::new();
     app.init_resource::<Assets<BehaviorDocumentAsset>>()
-        .init_resource::<BehaviorStepProgress>()
-        .insert_resource(ZooClock {
+        .add_observer(apply_behavior_instruction_completion)
+        .add_observer(head_look)
+        .add_observer(subject_trigger)
+        .add_systems(
+            FixedUpdate,
+            (activate_due_behavior_instructions, finish_wait).chain(),
+        );
+    let root = app
+        .world_mut()
+        .spawn(ZooClock {
             tick: 7,
             fractional_tick: Default::default(),
             absolute_day: 0,
             tick_in_day: 7,
         })
-        .init_schedule(BehaviorStep)
-        .configure_sets(
-            BehaviorStep,
-            (BehaviorStepSet::Actions, BehaviorStepSet::Finish).chain(),
-        )
-        .add_observer(apply_behavior_instruction_completion)
-        .add_systems(
-            BehaviorStep,
-            (subject_trigger, head_look).in_set(BehaviorStepSet::Actions),
-        )
-        .add_systems(
-            BehaviorStep,
-            defer_incomplete_behavior_steps.in_set(BehaviorStepSet::Finish),
-        );
+        .id();
     let look = BehaviorAction::HeadLook(BehaviorHeadLookAction {
         disengage: false,
         target_node: None,
@@ -432,9 +465,10 @@ fn consecutive_instructions_finish_in_authored_order_and_a_wait_runs_once() {
                 subjects: Vec::new(),
                 actions: BehaviorTaskActionPhase::Supported(vec![
                     look.clone(),
-                    trigger.clone(),
-                    look,
+                    look.clone(),
                     trigger,
+                    look.clone(),
+                    look,
                 ]),
             }]),
         ));
@@ -442,6 +476,7 @@ fn consecutive_instructions_finish_in_authored_order_and_a_wait_runs_once() {
         .world_mut()
         .spawn((
             Trace::default(),
+            WorldMember { root },
             BehaviorTaskExecutionState {
                 execution_id: 1,
                 program,
@@ -460,9 +495,17 @@ fn consecutive_instructions_finish_in_authored_order_and_a_wait_runs_once() {
         .id();
     app.world_mut().flush();
 
-    drive_behavior_steps(app.world_mut());
-    drive_behavior_steps(app.world_mut());
-    assert_eq!(app.world().get::<Trace>(actor).unwrap().0, [0, 1, 2, 3]);
+    app.world_mut().run_schedule(FixedUpdate);
+    app.world_mut().run_schedule(FixedUpdate);
+    assert_eq!(app.world().get::<Trace>(actor).unwrap().0, [0, 1, 2]);
+    let world = app.world_mut();
+    world
+        .query::<&mut ZooClock>()
+        .single_mut(world)
+        .unwrap()
+        .tick = 8;
+    world.run_schedule(FixedUpdate);
+    assert_eq!(app.world().get::<Trace>(actor).unwrap().0, [0, 1, 2, 3, 4]);
     assert_eq!(
         app.world()
             .get::<BehaviorTaskExecutionState>(actor)

@@ -1,3 +1,4 @@
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::{BehaviorTaskReplaced};
 use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
 use openzt2_game_assets::behavior::behavior_asset_types::LoadedBehaviorDocumentCollection;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
@@ -5,7 +6,7 @@ use openzt2_game_assets::world_definitions::world_definition_document_asset_and_
 use openzt2_zoo_state::animal_lifecycle::types::SpeciesHandle;
 use openzt2_zoo_state::guests::guest_simulation_types::GuestArchetype;
 use openzt2_zoo_state::staff::staff_employment_types::StaffRole;
-use bevy::prelude::*;
+use bevy::{ecs::entity::EntityHashMap, prelude::*};
 
 use super::behavior_set_start_request_types::{PendingBehaviorSet, StartBehaviorSet};
 use openzt2_zoo_state::animal_behavior::behavior_pursuit_types::PendingBehaviorPursuit;
@@ -16,27 +17,42 @@ use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorAnimationCl
 use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorDockingCompletion;
 use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorMoveCompletion;
 use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorTaskFailure;
+use openzt2_zoo_state::behavior_task_execution_types::{
+    allocate_behavior_execution_id, BehaviorTaskGeneration,
+};
 use openzt2_zoo_state::locomotion::locomotion_types::Destination;
 use openzt2_zoo_state::locomotion::locomotion_types::Docking;
 
 pub(super) fn accept_animal_behavior_set_start_requests(
     mut behavior_set_start_requests: MessageReader<StartBehaviorSet>,
     mut commands: Commands,
+    mut pending: Query<&mut PendingBehaviorSet>,
     synchronized_partners: Query<
         (),
         With<openzt2_zoo_state::behavior_task_execution_types::SynchronizedBehaviorParticipant>,
     >,
 ) {
-    for behavior_set_start_request in behavior_set_start_requests.read() {
-        if synchronized_partners.contains(behavior_set_start_request.actor) {
+    let mut new_request_indices: EntityHashMap<usize> = EntityHashMap::default();
+    let mut new_requests: Vec<(Entity, PendingBehaviorSet)> = Vec::new();
+    for request in behavior_set_start_requests.read() {
+        if synchronized_partners.contains(request.actor) {
             continue;
         }
-        commands
-            .entity(behavior_set_start_request.actor)
-            .insert(PendingBehaviorSet {
-                program: behavior_set_start_request.program,
-                target: behavior_set_start_request.target,
-            });
+        let replacement = PendingBehaviorSet {
+            program: request.program,
+            target: request.target,
+        };
+        if let Ok(mut current) = pending.get_mut(request.actor) {
+            *current = replacement;
+        } else if let Some(&index) = new_request_indices.get(&request.actor) {
+            new_requests[index] = (request.actor, replacement);
+        } else {
+            new_request_indices.insert(request.actor, new_requests.len());
+            new_requests.push((request.actor, replacement));
+        }
+    }
+    for (actor, request) in new_requests {
+        commands.entity(actor).try_insert(request);
     }
 }
 
@@ -52,17 +68,15 @@ pub(super) fn resolve_pending_animal_behavior_sets_to_loaded_declarations(
         Option<&SpeciesHandle>,
         Option<&StaffRole>,
         Option<&GuestArchetype>,
-        Has<BehaviorTaskExecutionState>,
         Option<&PendingBehaviorDockingCompletion>,
         Option<&PendingBehaviorMoveCompletion>,
         Option<&PendingBehaviorPursuit>,
     )>,
+    mut tasks: Query<&mut BehaviorTaskExecutionState>,
     navigation: Query<(Option<&Destination>, Option<&Docking>)>,
     mut commands: Commands,
     mut failed_tasks: MessageWriter<BehaviorTaskFailed>,
-    mut execution_sequence: ResMut<
-        openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionSequence,
-    >,
+    mut execution_generations: Query<&mut BehaviorTaskGeneration>,
 ) {
     let Some(behavior_declaration_index) =
         loaded_behavior_documents.create_declaration_index_view(&behavior_document_assets)
@@ -78,7 +92,6 @@ pub(super) fn resolve_pending_animal_behavior_sets_to_loaded_declarations(
         species_handle,
         staff,
         guest,
-        has_task,
         pending_dock,
         pending_move,
         pending_pursuit,
@@ -98,12 +111,16 @@ pub(super) fn resolve_pending_animal_behavior_sets_to_loaded_declarations(
             error!(actor = ?actor_entity, program = ?pending_behavior_set.program,
                 "requested behavior set has no matching declaration in the settled archive index");
             commands.entity(actor_entity).remove::<PendingBehaviorSet>();
-            if has_task {
+            if tasks.contains(actor_entity) {
                 super::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation(actor_entity, &mut commands);
             } else {
                 failed_tasks.write(BehaviorTaskFailed {
                     actor: actor_entity,
-                    execution_id: execution_sequence.next(),
+                    execution_id: allocate_behavior_execution_id(
+                        actor_entity,
+                        execution_generations.get_mut(actor_entity).ok(),
+                        &mut commands,
+                    ),
                 });
             }
             continue;
@@ -125,22 +142,25 @@ pub(super) fn resolve_pending_animal_behavior_sets_to_loaded_declarations(
                 commands.entity(actor_entity).remove::<Docking>();
             }
         }
-        commands
-            .entity(actor_entity)
-            .insert(BehaviorTaskExecutionState {
-                execution_id: execution_sequence.next(),
-                program: pending_behavior_set.program,
-                target: pending_behavior_set.target,
-                document: behavior_document_handle,
-                declaration: declaration_index,
-                phase: BehaviorTaskExecutionPhase::Set,
-                action: 0,
-                repetitions: 0,
-                next_action_tick: 0,
-                object: None,
-                interaction_slot: None,
-                depth: 0,
-            })
+        let replacement = BehaviorTaskExecutionState {
+            execution_id: allocate_behavior_execution_id(
+                actor_entity,
+                execution_generations.get_mut(actor_entity).ok(),
+                &mut commands,
+            ),
+            program: pending_behavior_set.program,
+            target: pending_behavior_set.target,
+            document: behavior_document_handle,
+            declaration: declaration_index,
+            phase: BehaviorTaskExecutionPhase::Set,
+            action: 0,
+            repetitions: 0,
+            next_action_tick: 0,
+            object: None,
+            interaction_slot: None,
+            depth: 0,
+        };
+        commands.entity(actor_entity)
             .remove::<(
                 openzt2_zoo_state::animal_behavior::behavior_task_effective_score_types::BehaviorTaskEffectiveScore,
                 PendingBehaviorAnimationClipCompletion,
@@ -150,5 +170,17 @@ pub(super) fn resolve_pending_animal_behavior_sets_to_loaded_declarations(
                 PendingBehaviorTaskFailure,
             )>()
             .remove::<PendingBehaviorSet>();
+        if let Ok(mut current) = tasks.get_mut(actor_entity) {
+            let replaced = BehaviorTaskReplaced {
+                actor: actor_entity,
+                previous_execution: current.execution_id,
+                previous_object: current.object,
+                execution: replacement.execution_id,
+            };
+            *current = replacement;
+            commands.trigger(replaced);
+        } else {
+            commands.entity(actor_entity).insert(replacement);
+        }
     }
 }

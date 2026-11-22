@@ -1,5 +1,6 @@
 use bevy::ecs::entity::EntityHashSet;
 use bevy::prelude::*;
+use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_zoo_state::topology::habitat_boundary_queries::HabitatBoundaryQueries;
 
 use openzt2_zoo_state::aquatic::tank_wall_ground_sampling::TankWallGroundSampling;
@@ -20,12 +21,13 @@ use openzt2_game_assets::world_definitions::{
 pub(super) fn project_changed_habitat_and_terrain_geometry_into_tanks(
     mut habitat_changes: MessageReader<HabitatChanged>,
     mut terrain_changes: MessageReader<TerrainChanged>,
-    chunks: Query<&TerrainChunk>,
+    chunks: Query<(&TerrainChunk, &WorldMember)>,
     added_tanks: Query<Entity, Added<Tank>>,
     mut tanks: Query<
         (
             Entity,
             &HabitatRegion,
+            &WorldMember,
             &HabitatSummary,
             &mut TankGeometry,
             &mut TankEnvironment,
@@ -52,23 +54,27 @@ pub(super) fn project_changed_habitat_and_terrain_geometry_into_tanks(
     let changed_terrain: Vec<_> = terrain_changes
         .read()
         .filter_map(|event| {
-            let chunk = chunks.get(event.chunk).ok()?;
+            let (chunk, member) = chunks.get(event.chunk).ok()?;
             let origin = chunk.coord * i32::from(chunk.side.saturating_sub(1));
             Some((
                 origin + event.min.as_ivec2() - IVec2::ONE,
                 origin + event.max.as_ivec2(),
                 event.ground_height_changed,
+                member.root,
             ))
         })
         .collect();
     if changed_walls.is_empty() && changed_habitats.is_empty() && changed_terrain.is_empty() {
         return;
     }
-    for (tank, region, summary, mut geometry, mut environment) in &mut tanks {
+    for (tank, region, member, summary, mut geometry, mut environment) in &mut tanks {
         let changed_habitat = changed_habitats.contains(&tank);
         let mut terrain_changed = false;
         let mut ground_changed = false;
-        for (minimum, maximum, height_changed) in &changed_terrain {
+        for (minimum, maximum, height_changed, root) in &changed_terrain {
+            if *root != member.root {
+                continue;
+            }
             if region
                 .topology_cells
                 .iter()
@@ -102,7 +108,13 @@ pub(super) fn project_changed_habitat_and_terrain_geometry_into_tanks(
         }
         if changed_habitat || terrain_changed {
             let lowest_ground = if changed_habitat || ground_changed {
-                lowest_ground_under_boundary(boundaries.fences(tank), &fences, &nodes, &ground)
+                lowest_ground_under_boundary(
+                    member.root,
+                    boundaries.fences(tank),
+                    &fences,
+                    &nodes,
+                    &ground,
+                )
             } else {
                 None
             };
@@ -120,6 +132,7 @@ pub(super) fn project_changed_habitat_and_terrain_geometry_into_tanks(
 }
 
 fn lowest_ground_under_boundary(
+    root: Entity,
     boundary: impl Iterator<Item = Entity>,
     fences: &Query<(FenceSegment, Option<&TankWallTopHeight>)>,
     nodes: &Query<&TopologyNode>,
@@ -129,7 +142,7 @@ fn lowest_ground_under_boundary(
     for fence in boundary {
         let (edge, _) = fences.get(fence).ok()?;
         for node in [edge.a(), edge.b()] {
-            let height = ground.ground_height_at_topology_cell(nodes.get(node).ok()?.cell)?;
+            let height = ground.ground_height_at_topology_cell(root, nodes.get(node).ok()?.cell)?;
             lowest = Some(lowest.map_or(height, |lowest| lowest.min(height)));
         }
     }

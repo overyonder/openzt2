@@ -51,18 +51,24 @@ use openzt2_zoo_state::maintenance::maintenance_types::{AnimalHabitatWaste, Loos
 
 pub(super) fn register_object_spawn_execution(app: &mut App) {
     use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
-        BehaviorStep, BehaviorStepSet,
+        activated_behavior_actor, update_waiting_behavior_actors,
     };
+
+    use openzt2_zoo_state::behavior_task_execution_types::running_actions::BehaviorStepFixedSet;
+    app.add_observer(activated_behavior_actor::<openzt2_zoo_state::behavior_task_execution_types::running_actions::RunBehaviorSpawnObjectAtActor>.pipe(spawn_behavior_objects_at_actor));
+    app.add_observer(activated_behavior_actor::<openzt2_zoo_state::behavior_task_execution_types::running_actions::RunBehaviorSpawnObject>.pipe(prepare_behavior_object_spawns));
     app.add_systems(
-        BehaviorStep,
-        prepare_behavior_object_spawns
-            .in_set(BehaviorStepSet::Actions)
+        FixedUpdate,
+        update_waiting_behavior_actors
+            .pipe(prepare_behavior_object_spawns)
+            .in_set(BehaviorStepFixedSet::Think)
             .run_if(in_state(GamePhase::InGame)),
     )
     .add_systems(
-        BehaviorStep,
-        spawn_behavior_objects_at_actor
-            .in_set(BehaviorStepSet::Actions)
+        FixedUpdate,
+        update_waiting_behavior_actors
+            .pipe(spawn_behavior_objects_at_actor)
+            .in_set(BehaviorStepFixedSet::Think)
             .run_if(in_state(GamePhase::InGame)),
     )
     .add_systems(

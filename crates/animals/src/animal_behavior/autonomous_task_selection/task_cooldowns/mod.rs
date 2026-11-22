@@ -13,7 +13,6 @@ use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskFinished;
 /// Delayed tasks this animal has ended, and the tick each becomes selectable.
 #[derive(Component, Debug, Default)]
 pub(crate) struct AnimalTaskCooldowns {
-    pub(super) pending: Option<super::PendingAnimalTaskStart>,
     ready_ticks_by_task: Vec<(AssetId, u64)>,
     /// Delayed tasks possible for the animal since it waited out their delay.
     armed: Vec<AssetId>,
@@ -74,7 +73,7 @@ pub(super) fn sample_task_delay_ticks(delay_seconds: [f32; 2], unit: f32, fixed_
 
 /// Starts each delayed task's cooldown when its execution ends, either way.
 pub(crate) fn start_animal_task_cooldowns_after_delayed_tasks_end(
-    clock: Res<ZooClock>,
+    clock: Single<&ZooClock>,
     mut finished: MessageReader<BehaviorTaskFinished>,
     mut failed: MessageReader<BehaviorTaskFailed>,
     mut animals: Query<(&RunningDelayedAnimalTask, Option<&mut AnimalTaskCooldowns>)>,

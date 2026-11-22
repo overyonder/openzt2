@@ -6,7 +6,7 @@ use bevy::{
 };
 use openzt2_game_data::audio::VARIANT_LOOPED;
 use openzt2_game_data::AssetId;
-use openzt2_zoo_state::terrain::terrain_water_view_state::TerrainWaterViewState;
+use openzt2_zoo_state::terrain::terrain_water_view_state::TerrainWaterCameraContact;
 
 use openzt2_game_assets::audio::audio_asset_types::{AudioAsset, AudioAssets};
 use openzt2_interface_state::settings::audio_settings_types::AudioSettings;
@@ -173,7 +173,7 @@ pub(super) fn retire_empty_positioned_audio_groups(
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn forward_positioned_audio_cue_playback_requests(
-    view_state: Option<Res<TerrainWaterViewState>>,
+    camera_contacts: Query<&TerrainWaterCameraContact>,
     mut commands: Commands,
     mut requests: MessageReader<PlayPositionedAudioCue>,
     mut cues: MessageWriter<AdmitAudioCue>,
@@ -196,12 +196,9 @@ pub(super) fn forward_positioned_audio_cue_playback_requests(
         requests.clear();
         return;
     }
-    let underwater = view_state
-        .as_deref()
-        .and_then(TerrainWaterViewState::underwater_status);
-    let camera = view_state
-        .as_deref()
-        .and_then(TerrainWaterViewState::camera_position);
+    let contact = camera_contacts.single().ok();
+    let underwater = contact.and_then(|contact| contact.underwater_status);
+    let camera = contact.and_then(|contact| contact.position);
     let mut active_groups = HashMap::new();
     for (entity, group, member, emitters) in &groups {
         if member.root == root {

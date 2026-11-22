@@ -25,7 +25,7 @@ use openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementCellCo
 use openzt2_zoo_state::placement::placement_transaction_types::ObjectPlacementCommitted;
 use openzt2_zoo_state::placement::placed_object_types::PlacedObjectDefinitionReference;
 use openzt2_zoo_state::placement::placed_object_types::PlacedObjectFootprintOccupancy;
-use openzt2_zoo_state::placement::placement_occupancy_index::PlacedObjectFootprintOccupancyIndex;
+use openzt2_zoo_state::placement::placement_occupancy_index::PlacedObjectFootprintQueries;
 use openzt2_zoo_state::placement::placement_transaction_types::PreparedObjectPlacementEditMutationKind;
 use openzt2_zoo_state::placement::placement_transaction_types::PreparedObjectPlacementMutation;
 use openzt2_zoo_state::animal_behavior::behavior_target_placement_types::{
@@ -103,7 +103,7 @@ pub(super) struct BehaviorTargetPlacementWorld<'w, 's> {
     server: Res<'w, AssetServer>,
     prefabs: Res<'w, Assets<ScenePrefabAsset>>,
     models: Res<'w, Assets<Gltf>>,
-    terrain_index: Res<'w, TerrainIndex>,
+    terrain_indexes: Query<'w, 's, &'static TerrainIndex>,
     terrain_assets: Res<'w, Assets<TerrainAsset>>,
     terrain_chunks: Query<'w, 's, (&'static TerrainChunk, Option<&'static EditedTerrainSamples>)>,
     ground_paths: GroundPathPlacementStomp<'w, 's>,
@@ -125,17 +125,23 @@ pub(super) struct BehaviorTargetPlacementWorld<'w, 's> {
         's,
         &'static openzt2_zoo_state::aquatic::tank_navigation_water::TankNavigationWater,
     >,
-    navigation: Option<Res<'w, ActiveTerrainDerivedNavigationGraph>>,
-    habitats: Res<'w, HabitatIndex>,
+    navigation: Query<'w, 's, &'static ActiveTerrainDerivedNavigationGraph>,
+    roots: Query<
+        'w,
+        's,
+        (
+            &'static HabitatIndex,
+            &'static TopologyGrid,
+            &'static TopologyIndex,
+        ),
+    >,
     regions: Query<'w, 's, &'static HabitatRegion>,
-    grid: Res<'w, TopologyGrid>,
-    topology: Res<'w, TopologyIndex>,
     spatial: SpatialQuery<'w, 's>,
 }
 
 #[derive(SystemParam)]
 pub(super) struct BehaviorTargetPlacementCreation<'w, 's> {
-    placement: Res<'w, PlacedObjectFootprintOccupancyIndex>,
+    placement: PlacedObjectFootprintQueries<'w, 's>,
     placed: Query<
         'w,
         's,
@@ -554,8 +560,9 @@ fn choose_behavior_target_placement_site(
         let Ok(agent) = world.agents.get(actor) else {
             return SiteChoice::Rejected;
         };
-        let (Some(navigation), Ok(region)) = (
-            world.navigation.as_ref(),
+        let (Ok(navigation), Ok((_, grid, _)), Ok(region)) = (
+            world.navigation.get(pending.root),
+            world.roots.get(pending.root),
             world.regions.get(member.habitat_entity),
         ) else {
             return SiteChoice::Pending;
@@ -563,7 +570,7 @@ fn choose_behavior_target_placement_site(
         navigation.collect_dry_ground_candidates(
             world.tank_water.get(pending.root).ok(),
             region,
-            *world.grid,
+            *grid,
             agent,
             recipient_transform.translation(),
             &mut candidates,
@@ -573,7 +580,7 @@ fn choose_behavior_target_placement_site(
     // authored placement set still navigates to and docks at the chosen site.
     for candidate in std::iter::once(recipient_transform.translation()).chain(candidates) {
         let position = candidate.xz();
-        let Some(point) = sample_behavior_placement_terrain(world, position) else {
+        let Some(point) = sample_behavior_placement_terrain(world, pending.root, position) else {
             continue;
         };
         if point.1 {
@@ -618,13 +625,16 @@ fn site_is_still_valid(
     if recipient_world.root != pending.root {
         return false;
     }
+    let (Ok((habitats, grid, topology)), Ok(terrain_index)) = (
+        world.roots.get(pending.root),
+        world.terrain_indexes.get(pending.root),
+    ) else {
+        return false;
+    };
     let expected_habitat = habitat.map(|member| member.habitat_entity);
-    if locate_habitat_at_world_position(
-        &world.habitats,
-        site.transform.translation.xz(),
-        *world.grid,
-    ) != expected_habitat
-        || !sample_behavior_placement_terrain(world, site.transform.translation.xz())
+    if locate_habitat_at_world_position(habitats, site.transform.translation.xz(), *grid)
+        != expected_habitat
+        || !sample_behavior_placement_terrain(world, pending.root, site.transform.translation.xz())
             .is_some_and(|(_, water)| !water)
     {
         return false;
@@ -633,7 +643,9 @@ fn site_is_still_valid(
     else {
         return false;
     };
-    let paths = world.ground_paths.overlaps(definition, catalogue);
+    let paths = world
+        .ground_paths
+        .overlaps(pending.root, definition, catalogue);
     let geometry = world.footprints.resolve(definition, Some(&site.prefab));
     let Some(origin) =
         calculate_object_placement_footprint_origin(geometry, &site.transform, turns)
@@ -671,7 +683,7 @@ fn site_is_still_valid(
                     .normalize_or_zero();
                 [position, position + forward]
                     .into_iter()
-                    .any(|point| world.topology.paths.contains_key(&point.round().as_ivec3()))
+                    .any(|point| topology.paths.contains_key(&point.round().as_ivec3()))
             });
     let wall_valid = !constraints.contains_all(PlacementConstraints::REQUIRE_WALL)
         || occupied().any(|cell| {
@@ -683,7 +695,7 @@ fn site_is_still_valid(
             [IVec3::X, IVec3::NEG_X, IVec3::Z, IVec3::NEG_Z]
                 .into_iter()
                 .filter_map(|offset| EdgeKey::new(cell, cell + offset))
-                .any(|edge| world.topology.edges.contains_key(&edge))
+                .any(|edge| topology.edges.contains_key(&edge))
         });
     let clearance = definition.minimum_headroom_metres;
     let headroom_valid = clearance <= f32::EPSILON
@@ -706,12 +718,10 @@ fn site_is_still_valid(
         geometry.cells(turns),
         &site.transform,
         |position| {
-            if locate_habitat_at_world_position(&world.habitats, position, *world.grid)
-                != expected_habitat
-            {
+            if locate_habitat_at_world_position(habitats, position, *grid) != expected_habitat {
                 return None;
             }
-            let entity = terrain_chunk_at(&world.terrain_index, position)?;
+            let entity = terrain_chunk_at(terrain_index, position)?;
             let (chunk, edited) = world.terrain_chunks.get(entity).ok()?;
             sample_terrain(
                 chunk,
@@ -719,7 +729,7 @@ fn site_is_still_valid(
                 edited,
                 position,
             )
-            .filter(|_| world.surfaces.on_land(position) == Some(true))
+            .filter(|_| world.surfaces.on_land(pending.root, position) == Some(true))
         },
         |cell| {
             paths.prevents_placement(cell)
@@ -727,6 +737,7 @@ fn site_is_still_valid(
                     cell,
                     definition,
                     catalogue,
+                    pending.root,
                     &creation.placement,
                     &creation.stomp_targets,
                     |_| false,
@@ -806,6 +817,7 @@ fn create_behavior_target_placement_object(
         &cells,
         definition,
         catalogue,
+        root,
         &creation.placement,
         &creation.stomp_targets,
         |_| false,
@@ -814,7 +826,9 @@ fn create_behavior_target_placement_object(
         .iter()
         .filter_map(|removal| removal.applied_entity)
         .collect::<Vec<_>>();
-    let paths = world.ground_paths.overlaps(definition, catalogue);
+    let paths = world
+        .ground_paths
+        .overlaps(pending.root, definition, catalogue);
     let path_removals = cells
         .iter()
         .flat_map(|cell| paths.actions_at(*cell))
@@ -843,7 +857,7 @@ fn create_behavior_target_placement_object(
         actor,
         &mut edit,
         catalogue,
-        Some(root),
+        root,
         &creation.placement,
         &mut creation.scratch,
         &world.footprints,
@@ -961,9 +975,10 @@ fn authored_rotation_step_degrees(definition: &PlaceableDefinition) -> f32 {
 /// Ground height and whether water covers it.
 fn sample_behavior_placement_terrain(
     world: &BehaviorTargetPlacementWorld,
+    root: Entity,
     position: Vec2,
 ) -> Option<(f32, bool)> {
-    let entity = terrain_chunk_at(&world.terrain_index, position)?;
+    let entity = terrain_chunk_at(world.terrain_indexes.get(root).ok()?, position)?;
     let (chunk, edited) = world.terrain_chunks.get(entity).ok()?;
     let point = sample_terrain(
         chunk,
@@ -971,5 +986,5 @@ fn sample_behavior_placement_terrain(
         edited,
         position,
     )?;
-    Some((point.height_m, !world.surfaces.on_land(position)?))
+    Some((point.height_m, !world.surfaces.on_land(root, position)?))
 }

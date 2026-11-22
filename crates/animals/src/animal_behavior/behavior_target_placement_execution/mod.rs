@@ -21,8 +21,8 @@ use openzt2_zoo_state::{
     animal_lifecycle::types::SpeciesHandle,
     behavior_task_execution_types::{
         running_actions::{
-            ResumeSuspendedBehaviorInstruction, RunBehaviorPlaceTarget, RunningBehaviorInstruction,
-            SelectedBehaviorSet,
+            BehaviorResumeOutcome, ResumeSuspendedBehaviorInstruction, RunBehaviorPlaceTarget,
+            RunningBehaviorInstruction, SelectedBehaviorSet,
         },
         BehaviorTaskExecutionState, PendingBehaviorTaskFailure,
     },
@@ -73,6 +73,7 @@ pub(super) fn invalidate_obsolete_behavior_target_placement_sites(
                     !site.uses_current_prefab(catalogue, placement.definition)
                 }))
         {
+            commands.entity(operation).try_despawn();
             let actor = owner.0;
             if let Ok((task, world)) = actors.get(actor) {
                 if placement.owns(actor, task, world, &frames) {
@@ -84,28 +85,29 @@ pub(super) fn invalidate_obsolete_behavior_target_placement_sites(
                             depth: placement.depth,
                             instruction: placement.origin.clone(),
                             tick: task.next_action_tick,
-                            advance: false,
+                            outcome: BehaviorResumeOutcome::Fail,
                         });
+                    } else {
+                        mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
                     }
-                    mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
                 }
             }
-            commands.entity(operation).try_despawn();
         }
     }
 }
 
 pub(super) fn prepare_and_finish_behavior_target_placements(
+    activation: In<Option<Entity>>,
     mut commands: Commands,
-    clock: Res<ZooClock>,
+    clock: Single<&ZooClock>,
     documents: Res<Assets<BehaviorDocumentAsset>>,
     loaded: Res<LoadedBehaviorDocumentCollection>,
     (definitions, definition_assets): (Res<WorldDefinitions>, Res<Assets<WorldDefinitionAsset>>),
     species_index: Res<SpeciesAssets>,
     species_assets: Res<Assets<SpeciesAsset>>,
     animal_types: super::behavior_subject_type_resolution::AnimalBehaviorSubjectTypes,
-    actors: Query<(
-        &BehaviorTaskExecutionState,
+    mut actors: Query<(
+        &mut BehaviorTaskExecutionState,
         &WorldMember,
         Option<(&RunningBehaviorInstruction, &RunBehaviorPlaceTarget)>,
         Option<&SpeciesHandle>,
@@ -113,36 +115,50 @@ pub(super) fn prepare_and_finish_behavior_target_placements(
         Option<&GuestArchetype>,
         Has<PendingBehaviorTaskFailure>,
     )>,
-    new_actions: Query<Entity, (With<RunBehaviorPlaceTarget>, Without<BehaviorPlacements>)>,
+    mut new_actions: Query<Entity, (With<RunBehaviorPlaceTarget>, Without<BehaviorPlacements>)>,
+    owned_placements: Query<&BehaviorPlacements>,
     placements: Query<(
         Entity,
         &BehaviorPlacementOf,
         Option<&BehaviorPlacementRecipient>,
         &BehaviorTargetPlacement,
     )>,
-    ready_sites: Query<
-        &BehaviorTargetPlacementSite,
-        (
-            Without<BehaviorPlacementSiting>,
-            Without<BehaviorPlacementDelivering>,
-            Without<BehaviorPlacementPutDown>,
-        ),
-    >,
-    delivering: Query<(), With<BehaviorPlacementDelivering>>,
-    results: Query<&BehaviorPlacementResult>,
+    (ready_sites, delivering, results): (
+        Query<
+            &BehaviorTargetPlacementSite,
+            (
+                Without<BehaviorPlacementSiting>,
+                Without<BehaviorPlacementDelivering>,
+                Without<BehaviorPlacementPutDown>,
+            ),
+        >,
+        Query<(), With<BehaviorPlacementDelivering>>,
+        Query<&BehaviorPlacementResult>,
+    ),
     frames: openzt2_zoo_state::behavior_task_execution_types::continuations::BehaviorContinuationFrames,
     recipients: Query<
         (&WorldMember, &SpeciesHandle),
         (Without<Dead>, Without<WorldEntityIsCrated>),
     >,
 ) {
-    for (operation, owner, recipient, placement) in &placements {
+    let mut all_placements = activation.0.is_none().then(|| placements.iter());
+    let mut selected_placements = activation
+        .0
+        .and_then(|actor| owned_placements.get(actor).ok())
+        .into_iter()
+        .flat_map(bevy::ecs::relationship::RelationshipTarget::iter);
+    let actor_placements = std::iter::from_fn(|| match all_placements.as_mut() {
+        Some(all) => all.next(),
+        None => selected_placements.find_map(|operation| placements.get(operation).ok()),
+    });
+    for (operation, owner, recipient, placement) in actor_placements {
         let actor = owner.0;
-        let Ok((task, world, step, species, staff, guest, failing)) = actors.get(actor) else {
+        let Ok((mut task, world, step, species, staff, guest, failing)) = actors.get_mut(actor)
+        else {
             commands.entity(operation).try_despawn();
             continue;
         };
-        if failing || !placement.owns(actor, task, world, &frames) {
+        if failing || !placement.owns(actor, &task, world, &frames) {
             commands.entity(operation).try_despawn();
             continue;
         }
@@ -157,8 +173,8 @@ pub(super) fn prepare_and_finish_behavior_target_placements(
         let Some((instruction, action)) = step else {
             continue;
         };
-        if !placement.is_current(task)
-            || !instruction.is_current(task)
+        if !placement.is_current(&task)
+            || !instruction.is_current(&task)
             || task.next_action_tick > clock.tick
         {
             continue;
@@ -174,7 +190,7 @@ pub(super) fn prepare_and_finish_behavior_target_placements(
             commands
                 .entity(actor)
                 .remove::<BehaviorPlacementTravelSite>();
-            instruction.clear_interaction_slot(actor, &mut commands);
+            task.interaction_slot = None;
             commands
                 .entity(operation)
                 .remove::<BehaviorPlacementDelivering>()
@@ -211,7 +227,7 @@ pub(super) fn prepare_and_finish_behavior_target_placements(
             commands
                 .entity(actor)
                 .insert(BehaviorPlacementTravelSite { operation, point });
-            instruction.clear_interaction_slot(actor, &mut commands);
+            task.interaction_slot = None;
             instruction.enter_set(
                 actor,
                 SelectedBehaviorSet {
@@ -230,7 +246,12 @@ pub(super) fn prepare_and_finish_behavior_target_placements(
         }
     }
 
-    for actor in &new_actions {
+    for actor in
+        openzt2_zoo_state::behavior_task_execution_types::running_actions::behavior_action_actors(
+            &mut new_actions,
+            activation.0,
+        )
+    {
         let Ok((task, world, Some((instruction, action)), _, _, _, false)) = actors.get(actor)
         else {
             continue;

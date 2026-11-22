@@ -45,7 +45,7 @@ pub(super) fn project_current_crowd_into_audio_playback(
     mut commands: Commands,
     assets: Res<Assets<AudioAsset>>,
     catalogue: Res<AudioAssets>,
-    finance: Option<Res<MonthlyFinanceHistory>>,
+    finance: Query<&MonthlyFinanceHistory>,
     presets: Query<&WorldAudioPreset>,
     mut soundscapes: Query<(
         Entity,
@@ -55,15 +55,18 @@ pub(super) fn project_current_crowd_into_audio_playback(
     )>,
     mut requests: MessageWriter<ProducedAudioRequest<CROWD>>,
 ) {
-    let Some(count) =
-        finance.and_then(|history| history.current_month_finance().map(|row| row.active_users))
-    else {
-        return;
-    };
     let catalogue_policy = catalogue
         .get(&assets)
         .and_then(|catalogue| catalogue.crowd());
     for (entity, soundscape, member, playback) in &mut soundscapes {
+        let Some(count) = finance
+            .get(member.root)
+            .ok()
+            .and_then(|history| history.current_month_finance())
+            .map(|row| row.active_users)
+        else {
+            continue;
+        };
         let policy = match presets.get(member.root) {
             Ok(preset) => {
                 let Some(preset) = assets.get(&preset.0) else {
@@ -138,7 +141,6 @@ mod tests {
         ));
         app.init_resource::<Assets<AudioAsset>>()
             .init_resource::<AudioAssets>()
-            .insert_resource(history)
             .add_message::<ProducedAudioRequest<CROWD>>()
             .add_systems(Update, project_current_crowd_into_audio_playback);
         let cues = ["quiet", "small", "medium", "large", "huge"].map(CueId::from_key);
@@ -156,7 +158,10 @@ mod tests {
                 }),
             ),
         );
-        let root = app.world_mut().spawn(WorldAudioPreset(preset)).id();
+        let root = app
+            .world_mut()
+            .spawn((WorldAudioPreset(preset), history))
+            .id();
         app.world_mut().spawn((
             AudioSoundscape {
                 biome: CueId::default(),
@@ -178,18 +183,21 @@ mod tests {
         };
         assert_eq!(drain(&mut app), vec![cues[2]]);
         app.world_mut()
-            .resource_mut::<MonthlyFinanceHistory>()
+            .get_mut::<MonthlyFinanceHistory>(root)
+            .unwrap()
             .record_guest_arrival();
         app.update();
         assert_eq!(drain(&mut app), vec![cues[3]]);
         app.world_mut()
-            .resource_mut::<MonthlyFinanceHistory>()
+            .get_mut::<MonthlyFinanceHistory>(root)
+            .unwrap()
             .record_guest_departure();
         app.update();
         assert!(drain(&mut app).is_empty());
         for _ in 0..11 {
             app.world_mut()
-                .resource_mut::<MonthlyFinanceHistory>()
+                .get_mut::<MonthlyFinanceHistory>(root)
+                .unwrap()
                 .record_guest_departure();
         }
         app.update();

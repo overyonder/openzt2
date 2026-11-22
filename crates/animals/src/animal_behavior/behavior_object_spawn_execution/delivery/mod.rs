@@ -9,7 +9,7 @@ pub(super) fn deliver_behavior_object_spawns(
     definitions: Res<WorldDefinitions>,
     definition_assets: Res<Assets<WorldDefinitionAsset>>,
     prefabs: Res<Assets<ScenePrefabAsset>>,
-    clock: Res<ZooClock>,
+    clock: Single<&ZooClock>,
     mut ids: Query<&mut PersistentIdAllocator>,
     mut events: MessageReader<AnimationObjectCommand>,
     mut completed: MessageReader<AnimationCompleted>,
@@ -42,6 +42,9 @@ pub(super) fn deliver_behavior_object_spawns(
             })
         {
             failed.insert(actor);
+            commands
+                .entity(actor)
+                .remove::<PendingBehaviorObjectSpawn>();
             mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
         }
     }
@@ -157,6 +160,9 @@ pub(super) fn deliver_behavior_object_spawns(
             pending.spawned = true;
         } else {
             failed.insert(actor);
+            commands
+                .entity(actor)
+                .remove::<PendingBehaviorObjectSpawn>();
             mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
         }
     }
@@ -176,13 +182,13 @@ pub(super) fn deliver_behavior_object_spawns(
         {
             continue;
         }
+        commands
+            .entity(actor)
+            .remove::<PendingBehaviorObjectSpawn>();
         if pending.spawned {
             instruction.complete(actor, clock.tick, &mut commands);
         } else {
             mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
         }
-        commands
-            .entity(actor)
-            .remove::<PendingBehaviorObjectSpawn>();
     }
 }

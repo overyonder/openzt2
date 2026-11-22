@@ -1,6 +1,7 @@
 //! Authored carried objects use ordinary world entities and the shared container owner.
 
 use super::behavior_animation_key_execution::CrossedBehaviorAnimationEffect;
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::behavior_action_actors;
 use openzt2_zoo_state::behavior_task_execution_types::{
     running_actions::{BehaviorAnimationEffect, TimedBehaviorAnimationEffect},
     PendingBehaviorAnimationClipCompletion,
@@ -139,7 +140,23 @@ struct AttachmentAssets<'w> {
     server: Res<'w, AssetServer>,
 }
 
+#[derive(SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct BehaviorObjectAttachmentSet;
+
 pub(super) fn register_object_attachment_execution(app: &mut App) {
+    use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
+        activated_behavior_actor, update_waiting_behavior_actors,
+    };
+    app.add_observer(
+        activated_behavior_actor::<RunBehaviorDetachObject>
+            .pipe(detach_held_objects_for_current_actions),
+    );
+    app.add_systems(FixedUpdate, update_waiting_behavior_actors.pipe(detach_held_objects_for_current_actions)
+        .in_set(openzt2_world_state::application_schedule::FixedGameSet::Act)
+        .after(super::behavior_animation_key_execution::BehaviorAnimationDetachReady)
+        .before(super::behavior_animation_clip_execution::finish_behavior_animation_clip_actions_after_playback_completion));
+    app.add_observer(activated_behavior_actor::<openzt2_zoo_state::behavior_task_execution_types::running_actions::RunBehaviorAttachObject>.pipe(start_or_finish_object_attachment));
+
     use openzt2_game_assets::application_lifecycle::GamePhase;
     use openzt2_world_state::application_schedule::FixedGameSet;
     held_food_prop::register(app);
@@ -148,16 +165,13 @@ pub(super) fn register_object_attachment_execution(app: &mut App) {
         .add_observer(detach::release_detached_object_presentation)
         .add_observer(admission::apply_object_attachment_admissions)
         .add_observer(presentation::unbind_carried_prefab_presentation);
-    use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
-        BehaviorStep, BehaviorStepSet,
-    };
-    app.add_systems(BehaviorStep, (
-        start_or_finish_object_attachment,
-        detach_held_objects_for_current_actions,
+    use openzt2_zoo_state::behavior_task_execution_types::running_actions::BehaviorStepFixedSet;
+    app.add_systems(FixedUpdate, (
+        update_waiting_behavior_actors.pipe(start_or_finish_object_attachment).in_set(BehaviorObjectAttachmentSet),
         detach::apply_delivered_detach_after_object_admission,
         created::hydrate_detach_created_objects,
         release_detached_object_locomotion_modifiers,
-    ).chain().in_set(BehaviorStepSet::Actions)
+    ).chain().in_set(BehaviorStepFixedSet::Think)
         .run_if(in_state(GamePhase::InGame)))
         .add_systems(FixedUpdate, held_clip::release_behavior_held_animation_clips
             .in_set(FixedGameSet::Act)
@@ -176,12 +190,13 @@ pub(super) fn register_object_attachment_execution(app: &mut App) {
 }
 
 fn start_or_finish_object_attachment(
+    activation: In<Option<Entity>>,
     mut commands: Commands,
     assets: AttachmentAssets,
-    clock: Res<ZooClock>,
+    clock: Single<&ZooClock>,
     memberships: InteractionContainerMemberships,
     mut requests: MessageWriter<AnimationClipPlaybackRequest>,
-    actors: Query<
+    mut actors: Query<
         (
             Entity,
             (
@@ -215,13 +230,23 @@ fn start_or_finish_object_attachment(
         With<openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackController>,
     >,
 ) {
-    for actor in &obsolete {
+    let mut all_obsolete = activation.0.is_none().then(|| obsolete.iter());
+    let mut obsolete_actor = activation.0.and_then(|actor| obsolete.get(actor).ok());
+    while let Some(actor) = match &mut all_obsolete {
+        Some(actors) => actors.next(),
+        None => obsolete_actor.take(),
+    } {
         commands.entity(actor).remove::<PendingObjectAttachment>();
     }
     let Some(definitions) = assets.definitions.get(&assets.definition_assets) else {
         return;
     };
-    for (actor, (task, instruction, running_action), actor_definition, world, pending) in &actors {
+    for (actor, (task, instruction, running_action), actor_definition, world, pending) in
+        behavior_action_actors(&mut actors, activation.0)
+    {
+        if activation.0.is_none() && !instruction.can_update_after_activation(clock.tick) {
+            continue;
+        }
         if pending.is_some_and(|pending| !pending.owns(task, instruction)) {
             commands.entity(actor).remove::<PendingObjectAttachment>();
             continue;
@@ -460,11 +485,12 @@ fn start_or_finish_object_attachment(
 /// Applies an authored detach rule to a held item, such as the trash left
 /// once a guest has eaten.
 fn detach_held_objects_for_current_actions(
+    activation: In<Option<Entity>>,
     mut commands: Commands,
     assets: AttachmentAssets,
-    clock: Res<ZooClock>,
+    clock: Single<&ZooClock>,
     memberships: InteractionContainerMemberships,
-    actors: Query<
+    mut actors: Query<
         (
             Entity,
             &BehaviorTaskExecutionState,
@@ -487,12 +513,19 @@ fn detach_held_objects_for_current_actions(
     let Some(definitions) = assets.definitions.get(&assets.definition_assets) else {
         return;
     };
-    for (actor, task, instruction, immediate, timed, key) in &actors {
+    for (actor, task, instruction, immediate, timed, key) in
+        openzt2_zoo_state::behavior_task_execution_types::running_actions::behavior_action_actors(
+            &mut actors,
+            activation.0,
+        )
+    {
         if !instruction.is_current(task) {
             continue;
         }
         let (entity, rule) = match (immediate, timed) {
-            (Some(immediate), _) if task.next_action_tick <= clock.tick => {
+            (Some(immediate), _)
+                if activation.0.is_some() && task.next_action_tick <= clock.tick =>
+            {
                 (immediate.0.entity, immediate.0.detach_rule)
             }
             (

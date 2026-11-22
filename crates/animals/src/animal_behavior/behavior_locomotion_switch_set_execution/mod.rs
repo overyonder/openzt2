@@ -1,10 +1,14 @@
 //! Selection of the behavior set authored for the actor's locomotion medium
 //! or current animation graph node.
 
-use bevy::{ecs::system::SystemParam, prelude::*};
+use bevy::{
+    ecs::{entity::EntityHashSet, system::SystemParam},
+    prelude::*,
+};
 use openzt2_game_data::AssetId;
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::WhenBehaviorAction;
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
-    ResumeSuspendedBehaviorInstruction, RunBehaviorAnimationSwitchSet,
+    BehaviorResumeOutcome, ResumeSuspendedBehaviorInstruction, RunBehaviorAnimationSwitchSet,
     RunBehaviorLocomotionSwitchSet, RunningBehaviorInstruction, SelectedBehaviorSet,
 };
 
@@ -131,10 +135,11 @@ fn select_behavior_set(
 /// Plays the set authored for the subject's locomotion medium, falling back
 /// to its ground set.
 pub(super) fn play_locomotion_medium_behavior_sets(
+    activation: On<WhenBehaviorAction<RunBehaviorLocomotionSwitchSet>>,
     mut commands: Commands,
     lookup: BehaviorSetLookup,
     animal_types: super::behavior_subject_type_resolution::AnimalBehaviorSubjectTypes,
-    clock: Res<ZooClock>,
+    clock: Single<&ZooClock>,
     actors: Query<
         (
             Entity,
@@ -152,7 +157,8 @@ pub(super) fn play_locomotion_medium_behavior_sets(
         Without<PendingBehaviorTaskFailure>,
     >,
 ) {
-    for (actor, (task, instruction, running_action), mode, layer, species, staff, guest) in &actors
+    for (actor, (task, instruction, running_action), mode, layer, species, staff, guest) in
+        std::iter::once(actors.get(activation.entity)).flatten()
     {
         if task.next_action_tick > clock.tick {
             continue;
@@ -202,8 +208,23 @@ pub(super) fn play_locomotion_medium_behavior_sets(
 /// again, which selects the set for the new medium.
 pub(super) fn switch_medium_following_sets_after_medium_changes(
     mut commands: Commands,
-    clock: Res<ZooClock>,
+    clock: Single<&ZooClock>,
     frames: openzt2_zoo_state::behavior_task_execution_types::continuations::BehaviorContinuationFrames,
+    changed: Query<
+        Entity,
+        (
+            With<MediumFollowingBehaviorSet>,
+            Or<(
+                Changed<LocomotionMode>,
+                Changed<SwimLayer>,
+                Changed<BehaviorTaskExecutionState>,
+                Added<PendingBehaviorTaskFailure>,
+            )>,
+        ),
+    >,
+    mut removed_modes: RemovedComponents<LocomotionMode>,
+    mut removed_layers: RemovedComponents<SwimLayer>,
+    mut ended_tasks: RemovedComponents<BehaviorTaskExecutionState>,
     actors: Query<(
         Entity,
         &MediumFollowingBehaviorSet,
@@ -213,7 +234,14 @@ pub(super) fn switch_medium_following_sets_after_medium_changes(
         Has<PendingBehaviorTaskFailure>,
     )>,
 ) {
-    for (actor, following, task, mode, layer, failing) in &actors {
+    let mut seen = EntityHashSet::default();
+    let affected = changed
+        .iter()
+        .chain(removed_modes.read())
+        .chain(removed_layers.read())
+        .chain(ended_tasks.read())
+        .filter(|actor| seen.insert(*actor));
+    for (actor, following, task, mode, layer, failing) in actors.iter_many(affected).flatten() {
         let Some(task) = task.filter(|task| {
             !failing
                 && task.execution_id == following.execution_id
@@ -228,15 +256,6 @@ pub(super) fn switch_medium_following_sets_after_medium_changes(
         if LocomotionMedium::of(mode, layer) == following.medium {
             continue;
         }
-        commands.trigger(ResumeSuspendedBehaviorInstruction {
-            actor,
-            execution_id: task.execution_id,
-            origin: following.origin.clone(),
-            instruction: following.switch.clone(),
-            depth: following.depth,
-            tick: clock.tick,
-            advance: false,
-        });
         commands.entity(actor).remove::<(
             MediumFollowingBehaviorSet,
             Destination,
@@ -245,16 +264,26 @@ pub(super) fn switch_medium_following_sets_after_medium_changes(
             PendingBehaviorDockingCompletion,
             PendingBehaviorMoveCompletion,
         )>();
+        commands.trigger(ResumeSuspendedBehaviorInstruction {
+            actor,
+            execution_id: task.execution_id,
+            origin: following.origin.clone(),
+            instruction: following.switch.clone(),
+            depth: following.depth,
+            tick: clock.tick,
+            outcome: BehaviorResumeOutcome::Retry,
+        });
     }
 }
 
 /// Plays the set authored for the graph node the actor's animation is in,
 /// or the `default` row for any other node.
 pub(super) fn play_animation_node_behavior_sets(
+    activation: On<WhenBehaviorAction<RunBehaviorAnimationSwitchSet>>,
     mut commands: Commands,
     lookup: BehaviorSetLookup,
     animal_types: super::behavior_subject_type_resolution::AnimalBehaviorSubjectTypes,
-    clock: Res<ZooClock>,
+    clock: Single<&ZooClock>,
     animation_sets: Res<Assets<AnimationSetAsset>>,
     presentations: Query<&AnimationPresentations>,
     controllers: Query<(&AnimationPlaybackController, &AnimationGraphPlaybackState)>,
@@ -273,7 +302,9 @@ pub(super) fn play_animation_node_behavior_sets(
         Without<PendingBehaviorTaskFailure>,
     >,
 ) {
-    for (actor, (task, instruction, running_action), species, staff, guest) in &actors {
+    for (actor, (task, instruction, running_action), species, staff, guest) in
+        std::iter::once(actors.get(activation.entity)).flatten()
+    {
         if task.next_action_tick > clock.tick {
             continue;
         }

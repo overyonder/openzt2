@@ -1,17 +1,19 @@
 use super::*;
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::behavior_action_actors;
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
     RunBehaviorSpawnObject, RunningBehaviorInstruction,
 };
 
 pub(super) fn prepare_behavior_object_spawns(
+    activation: In<Option<Entity>>,
     mut commands: Commands,
     definitions: Res<WorldDefinitions>,
     definition_assets: Res<Assets<WorldDefinitionAsset>>,
     prefabs: Res<Assets<ScenePrefabAsset>>,
     server: Res<AssetServer>,
-    clock: Res<ZooClock>,
+    clock: Single<&ZooClock>,
     mut requests: MessageWriter<AnimationClipPlaybackRequest>,
-    actors: Query<
+    mut actors: Query<
         (
             Entity,
             (
@@ -34,7 +36,12 @@ pub(super) fn prepare_behavior_object_spawns(
         ),
     >,
 ) {
-    for actor in &obsolete {
+    let mut all_obsolete = activation.0.is_none().then(|| obsolete.iter());
+    let mut obsolete_actor = activation.0.and_then(|actor| obsolete.get(actor).ok());
+    while let Some(actor) = match &mut all_obsolete {
+        Some(actors) => actors.next(),
+        None => obsolete_actor.take(),
+    } {
         commands
             .entity(actor)
             .remove::<PendingBehaviorObjectSpawn>();
@@ -42,7 +49,12 @@ pub(super) fn prepare_behavior_object_spawns(
     let Some(view) = definitions.get(&definition_assets) else {
         return;
     };
-    for (actor, (task, instruction, running_action), pending) in &actors {
+    for (actor, (task, instruction, running_action), pending) in
+        behavior_action_actors(&mut actors, activation.0)
+    {
+        if activation.0.is_none() && !instruction.can_update_after_activation(clock.tick) {
+            continue;
+        }
         if pending.is_some_and(|pending| !pending.owns(task, instruction)) {
             commands
                 .entity(actor)

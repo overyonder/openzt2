@@ -12,14 +12,16 @@ use openzt2_zoo_state::{
     economy::account_transaction_types::TransactionSettlement,
     placement::{
         placed_object_types::{PlacedObjectDefinitionReference, PlacedObjectFootprintOccupancy},
-        placement_occupancy_index::PlacedObjectFootprintOccupancyIndex,
+        placement_occupancy_index::{
+            PlacedObjectFootprintOccupancyIndex, PlacedObjectFootprintQueries,
+        },
         placement_preview_types::ObjectPlacementCellCollectionScratch,
         placement_transaction_types::{ObjectPlacementCommitted, PreparedObjectPlacementMutation},
     },
 };
 
 pub fn add_placement_persistence_test_systems(app: &mut App) {
-    app.init_resource::<PlacedObjectFootprintOccupancyIndex>()
+    app.register_required_components::<openzt2_world_state::world_spawn::world_membership_types::WorldRoot, PlacedObjectFootprintOccupancyIndex>()
         .init_resource::<ObjectPlacementCellCollectionScratch>()
         .init_resource::<ConstructionTool>()
         .add_message::<ObjectPlacementCommitted>()
@@ -44,7 +46,7 @@ pub fn apply_settled_placement_purchase_for_test(
         Commands,
         Res<WorldDefinitions>,
         Res<Assets<WorldDefinitionAsset>>,
-        Res<PlacedObjectFootprintOccupancyIndex>,
+        PlacedObjectFootprintQueries,
         ResMut<ObjectPlacementCellCollectionScratch>,
         Res<Assets<ScenePrefabAsset>>,
         Res<Assets<bevy::gltf::Gltf>>,
@@ -75,7 +77,7 @@ pub fn apply_settled_placement_purchase_for_test(
             transaction,
             &mut edit,
             active.get(&assets).unwrap(),
-            Some(root),
+            root,
             &occupancy,
             &mut scratch,
             &openzt2_zoo_state::placement::object_placement_geometry::ScenePlacementFootprints::default(),

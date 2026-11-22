@@ -106,7 +106,6 @@ pub(super) fn install_definitions(
         AnimalSex(Sex::Female),
         AnimalLifeStage(LifeStage::Adult),
         GlobalTransform::default(),
-        WorldMember { root: target },
     ));
     app.world_mut().entity_mut(actor).insert((
         Hunger::default(),

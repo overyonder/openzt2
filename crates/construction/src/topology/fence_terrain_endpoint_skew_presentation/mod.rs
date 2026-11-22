@@ -28,11 +28,11 @@ use openzt2_zoo_state::topology::topology_graph_types::TopologyGrid;
 #[allow(clippy::too_many_arguments)]
 pub fn fit_fence_presentations_to_terrain_endpoint_heights(
     mut terrain_changed: MessageReader<TerrainChanged>,
-    terrain_index: Res<TerrainIndex>,
+    terrain_index: Single<&TerrainIndex>,
     terrain_assets: Res<Assets<TerrainAsset>>,
     terrain_chunks: Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
-    grid: Res<TopologyGrid>,
-    topology: Option<Res<TopologyIndex>>,
+    grid: Single<Ref<TopologyGrid>>,
+    topology: Option<Single<&TopologyIndex>>,
     frame: Option<Res<FrameCount>>,
     mut endpoint_fitting_reports: Option<ResMut<FenceEndpointFittingReports>>,
     mut fitting_history: FenceTerrainFittingObservation,
@@ -54,6 +54,9 @@ pub fn fit_fence_presentations_to_terrain_endpoint_heights(
         Without<FenceTerrainEndpointPresentationCells>,
     >,
 ) {
+    let terrain_index = terrain_index.into_inner();
+    let grid = grid.into_inner();
+    let topology = topology.map(Single::into_inner);
     let mut terrain_affected = bevy::ecs::entity::EntityHashSet::new();
     let mut terrain_was_changed = false;
     for change in terrain_changed.read() {

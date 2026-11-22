@@ -17,7 +17,7 @@ use openzt2_zoo_state::construction::construction_tool_and_placement_policy_type
 use openzt2_zoo_state::construction::construction_transaction_types::{EditApplication, RollbackContext};
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 use openzt2_world_state::world_spawn::prefab_model_readiness::first_missing_prefab_collider_model_asset_id;
-use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
+use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
 use crate::placement::object_placement_edit_direction::object_placement_edit_application_creates_entity;
 use crate::placement::placed_object_creation_edit_application::apply_prepared_placed_object_creation_edit;
@@ -29,7 +29,7 @@ use openzt2_zoo_state::placement::object_placement_validation::calculate_authore
 use openzt2_zoo_state::placement::object_placement_validation::calculate_object_placement_footprint_origin;
 use openzt2_zoo_state::placement::placed_object_types::PlacedObjectDefinitionReference;
 use openzt2_zoo_state::placement::placed_object_types::PlacedObjectFootprintOccupancy;
-use openzt2_zoo_state::placement::placement_occupancy_index::PlacedObjectFootprintOccupancyIndex;
+use openzt2_zoo_state::placement::placement_occupancy_index::PlacedObjectFootprintQueries;
 use openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementCellCollectionScratch;
 use openzt2_zoo_state::placement::placement_transaction_types::ApplyPreparedObjectPlacementEditRequest;
 use openzt2_zoo_state::placement::placement_transaction_types::ObjectPlacementCommitted;
@@ -105,9 +105,12 @@ fn apply_placement_batch(
 
 fn preflight_placement_batch(
     In(request): In<ApplyPreparedObjectPlacementEditRequest>,
-    edits: Query<(&PreparedObjectPlacementEdit, Option<&RollbackContext>)>,
-    roots: Query<Entity, With<WorldRoot>>,
-    placement: Res<PlacedObjectFootprintOccupancyIndex>,
+    edits: Query<(
+        &PreparedObjectPlacementEdit,
+        &WorldMember,
+        Option<&RollbackContext>,
+    )>,
+    placement: PlacedObjectFootprintQueries,
     mut scratch: ResMut<ObjectPlacementCellCollectionScratch>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
@@ -120,7 +123,7 @@ fn preflight_placement_batch(
         &PlacedObjectFootprintOccupancy,
     )>,
 ) -> Option<Vec<usize>> {
-    let (edit, rollback) = edits.get(request.transaction).ok()?;
+    let (edit, member, rollback) = edits.get(request.transaction).ok()?;
     let forward = matches!(
         request.application,
         EditApplication::InitialCommit | EditApplication::Redo
@@ -132,7 +135,7 @@ fn preflight_placement_batch(
         edit,
         forward,
         active_definitions.get(&definitions)?,
-        roots.single().ok(),
+        member.root,
         &placement,
         &mut scratch,
         &footprints,
@@ -146,9 +149,8 @@ fn preflight_placement_batch(
 fn commit_placement_mutation(
     In((request, index)): In<(ApplyPreparedObjectPlacementEditRequest, usize)>,
     mut commands: Commands,
-    mut edits: Query<&mut PreparedObjectPlacementEdit>,
-    roots: Query<Entity, With<WorldRoot>>,
-    placement: Res<PlacedObjectFootprintOccupancyIndex>,
+    mut edits: Query<(&mut PreparedObjectPlacementEdit, &WorldMember)>,
+    placement: PlacedObjectFootprintQueries,
     mut scratch: ResMut<ObjectPlacementCellCollectionScratch>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
@@ -164,7 +166,7 @@ fn commit_placement_mutation(
     mut tool: ResMut<ConstructionTool>,
     mut object_placed: MessageWriter<ObjectPlacementCommitted>,
 ) -> bool {
-    let (Some(catalogue), Ok(mut edit)) = (
+    let (Some(catalogue), Ok((mut edit, member))) = (
         active_definitions.get(&definitions),
         edits.get_mut(request.transaction),
     ) else {
@@ -175,7 +177,7 @@ fn commit_placement_mutation(
         &request,
         &mut edit.mutations[index],
         catalogue,
-        roots.single().ok(),
+        member.root,
         &placement,
         &mut scratch,
         &footprints,
@@ -194,8 +196,8 @@ fn preflight_prepared_object_placement_mutations(
     edit: &PreparedObjectPlacementEdit,
     forward: bool,
     catalogue: openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView<'_>,
-    root: Option<Entity>,
-    placement: &PlacedObjectFootprintOccupancyIndex,
+    root: Entity,
+    placement: &PlacedObjectFootprintQueries,
     scratch: &mut ObjectPlacementCellCollectionScratch,
     footprints: &ScenePlacementFootprints,
     prefabs: &Assets<ScenePrefabAsset>,
@@ -212,7 +214,8 @@ fn preflight_prepared_object_placement_mutations(
     let mut projected_created_cells: HashMap<IVec2, Vec<AssetId>> = HashMap::new();
     for index in indices {
         let mutation = &edit.mutations[index];
-        let target = find_prepared_object_placement_mutation_entity(mutation, placement, placed);
+        let target =
+            find_prepared_object_placement_mutation_entity(mutation, root, placement, placed);
         if mutation.mutation == PreparedObjectPlacementEditMutationKind::Relocate {
             let Some(entity) = target else {
                 return false;
@@ -232,13 +235,12 @@ fn preflight_prepared_object_placement_mutations(
                 return false;
             };
             let geometry = footprints.resolve(definition, Some(&mutation.prefab));
-            if root.is_none()
-                || collect_occupied_placement_cells_for_transform(
-                    geometry,
-                    &mutation.transform,
-                    &mut scratch.cells,
-                )
-                .is_none_or(|cells| cells != mutation.cells.as_ref())
+            if collect_occupied_placement_cells_for_transform(
+                geometry,
+                &mutation.transform,
+                &mut scratch.cells,
+            )
+            .is_none_or(|cells| cells != mutation.cells.as_ref())
                 || calculate_authored_object_placement_eighth_turns(definition, &mutation.transform)
                     .and_then(|turns| {
                         calculate_object_placement_footprint_origin(
@@ -256,7 +258,7 @@ fn preflight_prepared_object_placement_mutations(
             }
             for cell in mutation.cells.iter().copied() {
                 let existing_blocked = placement
-                    .entities_occupying_cell(cell)
+                    .entities_occupying_cell(root, cell)
                     .filter(|entity| !removed_entities.contains(entity))
                     .any(|entity| {
                         let target = placed
@@ -303,7 +305,7 @@ fn preflight_prepared_object_placement_mutations(
                             && mutation
                                 .cells
                                 .iter()
-                                .all(|cell| placement.cell_contains_entity(*cell, target)),
+                                .all(|cell| placement.cell_contains_entity(root, *cell, target)),
                     )
                 })
                 .unwrap_or(false);
@@ -318,7 +320,8 @@ fn preflight_prepared_object_placement_mutations(
 
 fn find_prepared_object_placement_mutation_entity(
     edit: &PreparedObjectPlacementMutation,
-    placement: &PlacedObjectFootprintOccupancyIndex,
+    root: Entity,
+    placement: &PlacedObjectFootprintQueries,
     placed: &Query<(
         &PersistentId,
         &PlacedObjectDefinitionReference,
@@ -330,11 +333,13 @@ fn find_prepared_object_placement_mutation_entity(
         .filter(|entity| placed.get(*entity).is_ok())
         .or_else(|| {
             edit.cells.first().and_then(|cell| {
-                placement.entities_occupying_cell(*cell).find(|entity| {
-                    placed
-                        .get(*entity)
-                        .is_ok_and(|(id, _, _, _)| *id == edit.entity)
-                })
+                placement
+                    .entities_occupying_cell(root, *cell)
+                    .find(|entity| {
+                        placed
+                            .get(*entity)
+                            .is_ok_and(|(id, _, _, _)| *id == edit.entity)
+                    })
             })
         })
 }
@@ -345,8 +350,8 @@ fn apply_prepared_object_placement_mutation(
     request: &ApplyPreparedObjectPlacementEditRequest,
     edit: &mut PreparedObjectPlacementMutation,
     catalogue: openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView<'_>,
-    root: Option<Entity>,
-    placement: &PlacedObjectFootprintOccupancyIndex,
+    root: Entity,
+    placement: &PlacedObjectFootprintQueries,
     scratch: &mut ObjectPlacementCellCollectionScratch,
     footprints: &ScenePlacementFootprints,
     prefabs: &Assets<ScenePrefabAsset>,
@@ -367,6 +372,7 @@ fn apply_prepared_object_placement_mutation(
             request.application,
             edit,
             catalogue,
+            root,
             placement,
             scratch,
             footprints,
@@ -382,11 +388,13 @@ fn apply_prepared_object_placement_mutation(
         .applied_entity
         .is_some_and(|entity| placed.get(entity).is_ok())
         || edit.cells.first().is_some_and(|cell| {
-            placement.entities_occupying_cell(*cell).any(|entity| {
-                placed
-                    .get(entity)
-                    .is_ok_and(|(id, _, _, _)| *id == edit.entity)
-            })
+            placement
+                .entities_occupying_cell(root, *cell)
+                .any(|entity| {
+                    placed
+                        .get(entity)
+                        .is_ok_and(|(id, _, _, _)| *id == edit.entity)
+                })
         });
     if object_placement_edit_application_creates_entity(
         edit.mutation,
@@ -412,7 +420,7 @@ fn apply_prepared_object_placement_mutation(
         )
     } else {
         apply_prepared_placed_object_removal_edit(
-            commands, edit, catalogue, placement, scratch, footprints, placed,
+            commands, edit, catalogue, root, placement, scratch, footprints, placed,
         )
     }
 }

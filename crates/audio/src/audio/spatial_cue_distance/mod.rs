@@ -1,7 +1,7 @@
 use bevy::audio::{SpatialListener, SpatialScale};
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
-use openzt2_zoo_state::terrain::terrain_water_view_state::TerrainWaterViewState;
+use openzt2_zoo_state::terrain::terrain_water_view_state::TerrainWaterCameraContact;
 
 use super::audio_cue_playback::PositionedListenerWater;
 
@@ -50,7 +50,7 @@ pub(super) struct SpatialCueListener<'w, 's> {
             Option<&'static PositionedListenerWater>,
         ),
     >,
-    water: Option<Res<'w, TerrainWaterViewState>>,
+    camera_contacts: Query<'w, 's, &'static TerrainWaterCameraContact>,
 }
 
 impl SpatialCueListener<'_, '_> {
@@ -59,9 +59,10 @@ impl SpatialCueListener<'_, '_> {
             return 0.0;
         };
         let underwater = self
-            .water
-            .as_deref()
-            .and_then(TerrainWaterViewState::underwater_status);
+            .camera_contacts
+            .single()
+            .ok()
+            .and_then(|contact| contact.underwater_status);
         if water.is_some_and(|water| !water.allows(underwater)) {
             return 0.0;
         }

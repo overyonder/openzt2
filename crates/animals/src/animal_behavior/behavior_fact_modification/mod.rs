@@ -1,4 +1,5 @@
 use bevy::{ecs::system::SystemParam, prelude::*};
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::WhenBehaviorAction;
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
     RunBehaviorFactModifications, RunningBehaviorInstruction,
 };
@@ -124,8 +125,9 @@ impl MaintenanceFacts<'_, '_> {
 }
 
 pub(super) fn apply_supported_current_behavior_fact_modifications(
+    activation: On<WhenBehaviorAction<RunBehaviorFactModifications>>,
     assets: Res<Assets<BehaviorDocumentAsset>>,
-    clock: Res<ZooClock>,
+    clock: Single<&ZooClock>,
     mut tasks: Query<
         (
             Entity,
@@ -152,7 +154,9 @@ pub(super) fn apply_supported_current_behavior_fact_modifications(
     mut guests: Query<&mut GuestDeparturePoints>,
     mut commands: Commands,
 ) {
-    for (entity, (task, instruction, running_action), mut random) in &mut tasks {
+    for (entity, (task, instruction, running_action), mut random) in
+        std::iter::once(tasks.get_mut(activation.entity)).flatten()
+    {
         if task.next_action_tick > clock.tick {
             continue;
         }

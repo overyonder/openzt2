@@ -66,6 +66,7 @@ enum TankWallBoundaryReading {
 /// with the lowest persistent identifier. A wall without a recorded top gets
 /// the rubber-band rule over its own two endpoints.
 fn read_tank_wall_boundary(
+    root: Entity,
     sides: impl Iterator<Item = Entity>,
     definitions: WorldDefinitionsView<'_>,
     limits: TankGeometryLimits,
@@ -100,7 +101,7 @@ fn read_tank_wall_boundary(
         };
         let mut endpoint_ground = [0.0; 2];
         for (index, cell) in [a.cell, b.cell].into_iter().enumerate() {
-            let Some(height) = ground.ground_height_at_topology_cell(cell) else {
+            let Some(height) = ground.ground_height_at_topology_cell(root, cell) else {
                 return TankWallBoundaryReading::NotReady;
             };
             endpoint_ground[index] = height;
@@ -140,8 +141,8 @@ fn read_tank_wall_boundary(
 pub(super) fn promote_or_restore_habitats_enclosed_by_tank_walls(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
-    habitat_index: Res<HabitatIndex>,
-    terrain_index: Res<TerrainIndex>,
+    habitat_index: Single<Ref<HabitatIndex>>,
+    terrain_index: Single<Ref<TerrainIndex>>,
     mut terrain_assets: MessageReader<AssetEvent<TerrainAsset>>,
     changed_habitats: Query<Entity, Changed<HabitatRegion>>,
     mut pending_habitats: Query<(Entity, &mut PendingTankPromotion)>,
@@ -163,6 +164,8 @@ pub(super) fn promote_or_restore_habitats_enclosed_by_tank_walls(
     (ground, boundaries): (TankWallGroundSampling, HabitatBoundaryQueries),
     mut commands: Commands,
 ) {
+    let habitat_index = habitat_index.into_inner();
+    let terrain_index = terrain_index.into_inner();
     let terrain_loaded = terrain_assets.read().any(|event| {
         matches!(
             event,
@@ -217,12 +220,13 @@ pub(super) fn promote_or_restore_habitats_enclosed_by_tank_walls(
         return;
     };
     for habitat in candidates {
-        let Ok((region, _, tank, existing_geometry, water, environment, quality)) =
+        let Ok((region, member, tank, existing_geometry, water, environment, quality)) =
             habitats.get_mut(habitat)
         else {
             continue;
         };
         let walls = match read_tank_wall_boundary(
+            member.root,
             boundaries.fences(habitat),
             definitions,
             limits,

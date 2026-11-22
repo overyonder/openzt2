@@ -36,7 +36,8 @@ fn queue_deadline_keeps_its_parent_instruction_across_nested_waiting_sets() {
             BehaviorContinuationFrames, BehaviorContinuationOf, SuspendedBehaviorFrame,
         },
         running_actions::{
-            resume_suspended_behavior_instruction, ResumeSuspendedBehaviorInstruction,
+            resume_suspended_behavior_instruction, BehaviorResumeOutcome,
+            ResumeSuspendedBehaviorInstruction,
         },
     };
     world.add_observer(resume_suspended_behavior_instruction);
@@ -62,7 +63,7 @@ fn queue_deadline_keeps_its_parent_instruction_across_nested_waiting_sets() {
         depth: 0,
         instruction: origin,
         tick: 20,
-        advance: false,
+        outcome: BehaviorResumeOutcome::Retry,
     });
     world.flush();
     let task = world.get::<BehaviorTaskExecutionState>(actor).unwrap();

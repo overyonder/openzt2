@@ -1,11 +1,10 @@
 use bevy::prelude::*;
+use openzt2_world_state::world_spawn::world_membership_types::{WorldMember, WorldRoot};
 
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use openzt2_zoo_state::habitat::habitat_types::HabitatRegion;
 use openzt2_zoo_state::terrain::terrain_chunk_identity_type::TerrainChunkId;
-use openzt2_zoo_state::terrain::terrain_chunk_types::{
-    EditedTerrainSamples, TerrainChunk, TerrainIndex,
-};
+use openzt2_zoo_state::terrain::terrain_chunk_types::{EditedTerrainSamples, TerrainChunk};
 use openzt2_zoo_state::terrain::terrain_edit_rectangle_operations::{
     apply_terrain_sample_rectangle, materialize_complete_edited_terrain_sample_overlay,
 };
@@ -45,14 +44,18 @@ fn tank_floor_excavation_keeps_samples_on_and_beside_the_walls() {
 fn apply_excavation(app: &mut App, step: &str) -> Vec<i16> {
     let mut excavations = app
         .world_mut()
-        .query_filtered::<(Entity, &TerrainEdit), With<TankFloorExcavation>>();
-    let (entity, deltas) = excavations
+        .query_filtered::<(Entity, &WorldMember, &TerrainEdit), With<TankFloorExcavation>>();
+    let (entity, root, deltas) = excavations
         .iter(app.world())
-        .map(|(entity, edit)| (entity, edit.deltas.clone()))
+        .map(|(entity, member, edit)| (entity, member.root, edit.deltas.clone()))
         .next()
         .unwrap_or_else(|| panic!("no excavation after {step}"));
     app.world_mut().despawn(entity);
-    let chunk = app.world().resource::<TerrainIndex>().chunks[&IVec2::ZERO];
+    let chunk = app
+        .world()
+        .get::<openzt2_zoo_state::terrain::terrain_chunk_types::TerrainIndex>(root)
+        .unwrap()
+        .chunks[&IVec2::ZERO];
     let terrain = app.world().get::<TerrainChunk>(chunk).unwrap().clone();
     let mut overlay = app
         .world()
@@ -93,13 +96,20 @@ fn a_tank_floor_is_dug_into_the_terrain_and_filled_back_when_the_tank_goes() {
     app.init_resource::<Assets<
         openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset,
     >>()
-    .init_resource::<TopologyGrid>()
     .add_message::<TerrainChanged>()
     .add_message::<RestoreTankFloorTerrain>()
     .add_observer(queue_terrain_restoration_after_tank_removal)
     .add_systems(Update, excavate_changed_tank_floors);
-    install_flat_terrain(&mut app, 7);
-    let chunk = app.world().resource::<TerrainIndex>().chunks[&IVec2::ZERO];
+    let root = app
+        .world_mut()
+        .spawn((
+            WorldRoot {
+                scenario: Default::default(),
+            },
+            TopologyGrid::default(),
+        ))
+        .id();
+    let chunk = install_flat_terrain(&mut app, root, 7);
     app.world_mut().entity_mut(chunk).insert(TerrainChunkId(0));
     let corners = [
         IVec3::ZERO,
@@ -123,6 +133,7 @@ fn a_tank_floor_is_dug_into_the_terrain_and_filled_back_when_the_tank_goes() {
     let tank = app
         .world_mut()
         .spawn((
+            WorldMember { root },
             Tank {
                 definition: Default::default(),
             },

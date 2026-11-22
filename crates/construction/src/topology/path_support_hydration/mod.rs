@@ -60,10 +60,13 @@ pub(super) fn hydrate_authored_path_supports_at_sampled_terrain_height(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     terrain_assets: Res<Assets<TerrainAsset>>,
     terrain_chunks: Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
-    terrain_index: Res<TerrainIndex>,
-    topology_index: Res<TopologyIndex>,
-    topology_grid: Res<TopologyGrid>,
+    terrain_index: Single<&TerrainIndex>,
+    topology_index: Single<&TopologyIndex>,
+    topology_grid: Single<&TopologyGrid>,
 ) {
+    let terrain_index = terrain_index.into_inner();
+    let topology_index = topology_index.into_inner();
+    let topology_grid = topology_grid.into_inner();
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };
@@ -209,11 +212,13 @@ pub(super) fn invalidate_path_supports_after_topology_or_terrain_changes(
     paths: Query<(&PathTile, Option<&Children>), With<PathSupportHydrated>>,
     changed_paths: Query<Entity, (Changed<PathTile>, With<PathSupportHydrated>)>,
     supports: Query<(), With<PathSupport>>,
-    grid: Res<TopologyGrid>,
-    index: Res<TopologyIndex>,
+    grid: Single<&TopologyGrid>,
+    index: Single<&TopologyIndex>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
 ) {
+    let grid = grid.into_inner();
+    let index = index.into_inner();
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };

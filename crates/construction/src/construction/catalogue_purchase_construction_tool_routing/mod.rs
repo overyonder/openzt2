@@ -28,13 +28,14 @@ pub(super) fn route_construction_purchase_choices(
     mut purchases: MessageReader<PurchaseChoice>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
-    unlocks: Res<UnlockedCatalogueDefinitionSet>,
+    unlocks: Single<&UnlockedCatalogueDefinitionSet>,
     worlds: Query<(&SelectedWorldIdentity, Option<&ScenarioContentAvailability>), With<WorldRoot>>,
     mut policy: ResMut<ConstructionPlacementPolicy>,
     mut tool: ResMut<ConstructionTool>,
     mut selections: MessageWriter<SelectConstructionTool>,
     mut cancel: MessageWriter<CancelConstruction>,
 ) {
+    let unlocks = unlocks.into_inner();
     let Some(catalogue) = active_definitions.get(&definitions) else {
         return;
     };

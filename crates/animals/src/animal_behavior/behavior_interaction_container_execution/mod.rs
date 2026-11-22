@@ -5,6 +5,7 @@ use bevy::prelude::*;
 use openzt2_zoo_state::animal_behavior::interaction_container_membership::requests::{
     InteractionContainerAdmissionOutcome, InteractionContainerAdmissionRequest,
 };
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::WhenBehaviorAction;
 
 use openzt2_game_data::AssetId;
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
@@ -29,13 +30,20 @@ use super::behavior_random_stream_state::BehaviorRandomStream;
 use super::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation;
 
 pub(super) fn enter_authored_interaction_containers_and_play_selected_behavior_sets(
+    activation: On<
+        WhenBehaviorAction<(
+            RunBehaviorEnterInteractionContainer,
+            RunBehaviorPlaySet,
+            RunBehaviorRandomSet,
+        )>,
+    >,
     mut commands: Commands,
     behavior_documents: Res<LoadedBehaviorDocumentCollection>,
     behavior_document_assets: Res<Assets<BehaviorDocumentAsset>>,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,
     animal_types: super::behavior_subject_type_resolution::AnimalBehaviorSubjectTypes,
-    simulation_clock: Res<ZooClock>,
+    simulation_clock: Single<&ZooClock>,
     target_definitions: Query<&DefinitionId>,
     memberships: InteractionContainerMemberships,
     transforms: Query<&GlobalTransform>,
@@ -80,7 +88,7 @@ pub(super) fn enter_authored_interaction_containers_and_play_selected_behavior_s
         guest,
         mut guest_random,
         mut behavior_random,
-    ) in &mut actors
+    ) in std::iter::once(actors.get_mut(activation.entity)).flatten()
     {
         if task.next_action_tick > simulation_clock.tick {
             continue;
@@ -267,11 +275,11 @@ pub(super) fn apply_interaction_container_entry(
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,
     animal_types: super::behavior_subject_type_resolution::AnimalBehaviorSubjectTypes,
-    clock: Res<ZooClock>,
+    clock: Single<&ZooClock>,
     target_definitions: Query<&DefinitionId>,
     memberships: InteractionContainerMemberships,
-    actors: Query<(
-        &BehaviorTaskExecutionState,
+    mut actors: Query<(
+        &mut BehaviorTaskExecutionState,
         &RunningBehaviorInstruction,
         Option<&SpeciesHandle>,
         Option<&StaffRole>,
@@ -279,17 +287,17 @@ pub(super) fn apply_interaction_container_entry(
     )>,
 ) {
     let actor = entered.actor;
-    let Ok((task, instruction, species, staff, guest)) = actors.get(actor) else {
+    let Ok((mut task, instruction, species, staff, guest)) = actors.get_mut(actor) else {
         return;
     };
-    if !instruction.is_current(task) {
+    if !instruction.is_current(&task) {
         return;
     }
     let InteractionContainerAdmissionOutcome::Granted { slot, .. } = entered.outcome else {
         mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
         return;
     };
-    instruction.bind_interaction_slot(actor, slot, &mut commands);
+    task.interaction_slot = Some(slot);
     if memberships.is_docked(entered.target, actor) {
         instruction.complete(actor, clock.tick, &mut commands);
         return;

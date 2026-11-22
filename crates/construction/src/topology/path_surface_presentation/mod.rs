@@ -35,9 +35,10 @@ pub(super) fn fit_ground_path_tiles_to_authored_terrain(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     terrain_assets: Res<Assets<TerrainAsset>>,
     terrain_chunks: Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
-    terrain_index: Res<TerrainIndex>,
+    terrain_index: Single<&TerrainIndex>,
     mut paths: Query<(Entity, &PathTile, &mut Transform), Without<PathTerrainFitted>>,
 ) {
+    let terrain_index = terrain_index.into_inner();
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };
@@ -72,9 +73,11 @@ pub(super) fn invalidate_ground_path_terrain_fitting_after_terrain_changes(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     paths: Query<&PathTile, With<PathTerrainFitted>>,
-    grid: Res<TopologyGrid>,
-    index: Res<openzt2_zoo_state::topology::topology_graph_types::TopologyIndex>,
+    grid: Single<&TopologyGrid>,
+    index: Single<&openzt2_zoo_state::topology::topology_graph_types::TopologyIndex>,
 ) {
+    let grid = grid.into_inner();
+    let index = index.into_inner();
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };

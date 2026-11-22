@@ -6,6 +6,7 @@ use openzt2_zoo_state::topology::{
 
 use bevy::ecs::entity::EntityHashSet;
 use bevy::prelude::*;
+use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use openzt2_zoo_state::aquatic::tank_wall_ground_sampling::TankWallGroundSampling;
@@ -75,9 +76,8 @@ pub(super) fn inside_walls_beyond(point: Vec2, walls: &[[Vec2; 2]], margin: f32)
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub(super) fn excavate_changed_tank_floors(
     mut commands: Commands,
-    grid: Res<TopologyGrid>,
-    terrain_index: Res<TerrainIndex>,
-    tanks: Query<(Entity, &TankGeometry, Ref<HabitatRegion>), With<Tank>>,
+    terrain: Single<(Entity, Ref<TopologyGrid>, &TerrainIndex)>,
+    tanks: Query<(Entity, &WorldMember, &TankGeometry, Ref<HabitatRegion>), With<Tank>>,
     mut restorations: MessageReader<RestoreTankFloorTerrain>,
     mut changes: MessageReader<TerrainChanged>,
     (ground, boundaries): (TankWallGroundSampling, HabitatBoundaryQueries),
@@ -91,6 +91,7 @@ pub(super) fn excavate_changed_tank_floors(
     assets: Res<Assets<TerrainAsset>>,
     mut footprints: Query<&mut TankFloorTerrainFootprint>,
 ) {
+    let (root, grid, terrain_index) = terrain.into_inner();
     let restorations = restorations.read().collect::<Vec<_>>();
     let height_edits: Vec<_> = changes
         .read()
@@ -104,7 +105,10 @@ pub(super) fn excavate_changed_tank_floors(
         .collect();
     let excavations = tanks
         .iter()
-        .filter_map(|(tank, geometry, region)| {
+        .filter_map(|(tank, member, geometry, region)| {
+            if member.root != root {
+                return None;
+            }
             let floor_height_cm = (geometry.floor_height * 100.0).round() as i16;
             if !region.is_changed()
                 && !grid.is_changed()
@@ -124,7 +128,7 @@ pub(super) fn excavate_changed_tank_floors(
                     let edge = fences.get(fence).ok()?;
                     let a = nodes.get(edge.a()).ok()?.cell;
                     let b = nodes.get(edge.b()).ok()?.cell;
-                    wall_ground_sum += ground.ground_height_at_topology_cell(a)?;
+                    wall_ground_sum += ground.ground_height_at_topology_cell(root, a)?;
                     Some([a, b].map(|cell| grid.cell_translation(cell).xz()))
                 })
                 .collect::<Option<Vec<_>>>()?;
@@ -265,6 +269,7 @@ pub(super) fn excavate_changed_tank_floors(
     }
     if !deltas.is_empty() {
         commands.spawn((
+            WorldMember { root },
             TankFloorExcavation,
             TerrainEdit {
                 deltas,

@@ -2,6 +2,7 @@ use bevy::camera::primitives::Aabb;
 use bevy::ecs::system::SystemParam;
 use bevy::picking::mesh_picking::ray_cast::{RayCastBackfaces, SimplifiedMesh};
 use bevy::prelude::*;
+use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_zoo_state::topology::topology_graph_types::FenceSegment;
 use openzt2_zoo_state::transport_tours::transport_pick_bounds::TransportPickBounds;
 
@@ -38,7 +39,7 @@ pub(super) struct DeleteHoverProbe(Option<Ray3d>);
 
 #[derive(SystemParam)]
 pub(super) struct DeleteTargetChanges<'w, 's> {
-    topology: Res<'w, TopologyIndex>,
+    topology: Query<'w, 's, Ref<'static, TopologyIndex>>,
     mesh_assets: Res<'w, Assets<Mesh>>,
     meshes: Query<
         'w,
@@ -127,12 +128,13 @@ pub(super) fn update_delete_hover_target(
     mut cursors: Query<(
         Entity,
         Ref<ConstructionCursor>,
+        &WorldMember,
         &mut DeleteHoverProbe,
         Option<&mut DeleteHoverTarget>,
     )>,
     fences: Query<(Entity, FenceSegment)>,
     nodes: Query<&TopologyNode>,
-    grid: Res<TopologyGrid>,
+    grids: Query<Ref<TopologyGrid>>,
     track_pieces: Query<(Entity, &TransportTrackConstructionPiece)>,
     routes: Query<&TrackSegment>,
     (sales, sky_towers): (
@@ -147,7 +149,11 @@ pub(super) fn update_delete_hover_target(
     mut changes: DeleteTargetChanges,
 ) {
     let removed = changes.clear_removals();
-    let Ok((cursor_entity, cursor, mut previous_probe, previous)) = cursors.single_mut() else {
+    let Ok((cursor_entity, cursor, member, mut previous_probe, previous)) = cursors.single_mut()
+    else {
+        return;
+    };
+    let Ok(grid) = grids.get(member.root) else {
         return;
     };
     let delete_ray = if *tool == ConstructionTool::Delete {
@@ -161,7 +167,10 @@ pub(super) fn update_delete_hover_target(
             || (!cursor.is_changed()
                 && !grid.is_changed()
                 && !removed
-                && !changes.topology.is_changed()
+                && !changes
+                    .topology
+                    .get(member.root)
+                    .is_ok_and(|index| index.is_changed())
                 && !changes.mesh_assets.is_changed()
                 && changes.routes.is_empty()
                 && changes.towers.is_empty()

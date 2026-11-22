@@ -1,6 +1,7 @@
 //! Authored head-look steps.
 
 use bevy::prelude::*;
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::WhenBehaviorAction;
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
     RunBehaviorHeadLook, RunningBehaviorInstruction,
 };
@@ -12,8 +13,9 @@ use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorTaskFailure
 
 /// Submit or release the look target and continue the behavior immediately.
 pub(super) fn continue_after_authored_head_look_steps(
+    activation: On<WhenBehaviorAction<RunBehaviorHeadLook>>,
     mut commands: Commands,
-    clock: Res<ZooClock>,
+    clock: Single<&ZooClock>,
     mut actors: Query<
         (
             Entity,
@@ -25,7 +27,9 @@ pub(super) fn continue_after_authored_head_look_steps(
         Without<PendingBehaviorTaskFailure>,
     >,
 ) {
-    for (actor, task, instruction, action, current) in &mut actors {
+    for (actor, task, instruction, action, current) in
+        std::iter::once(actors.get_mut(activation.entity)).flatten()
+    {
         if task.next_action_tick > clock.tick {
             continue;
         }

@@ -13,6 +13,7 @@ use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_world_state::world_spawn::world_entity_crating::WorldEntityIsCrated;
 use openzt2_world_state::world_spawn::world_membership_types::{DefinitionId, WorldMember};
 use openzt2_zoo_state::animal_health::types::{Dead, Tranquilized};
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::behavior_action_actors;
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
     RunBehaviorEvasion, RunBehaviorWander, RunningBehaviorInstruction,
 };
@@ -26,7 +27,7 @@ use openzt2_zoo_state::{
     },
     locomotion::locomotion_types::{
         ActiveTerrainDerivedNavigationGraph, Arrived, Destination, LocomotionMode, NavAgent,
-        NavFlags, NavigateTo, NavigationFailed, NavigationRequestSequence, Route,
+        NavFlags, NavigateTo, NavigationFailed, NavigationRequestGeneration, Route,
     },
     staff::staff_employment_types::{Staff, StaffSubmergedDepth},
     topology::topology_graph_types::TopologyGrid,
@@ -40,16 +41,32 @@ use super::behavior_spatial_candidates::BehaviorSpatialCandidates;
 
 pub(super) fn register_wander_execution(application: &mut App) {
     use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
-        BehaviorStep, BehaviorStepSet,
+        activated_behavior_actor, update_waiting_behavior_actors,
     };
+    application.add_observer(
+        activated_behavior_actor::<
+            openzt2_zoo_state::behavior_task_execution_types::running_actions::RunBehaviorWander,
+        >
+            .pipe(execute_current_wander_actions),
+    );
+    application.add_observer(
+        activated_behavior_actor::<
+            openzt2_zoo_state::behavior_task_execution_types::running_actions::RunBehaviorEvasion,
+        >
+            .pipe(execute_current_evasion_actions),
+    );
+
+    use openzt2_zoo_state::behavior_task_execution_types::running_actions::BehaviorStepFixedSet;
     application.add_systems(
-        BehaviorStep,
+        FixedUpdate,
         (
             finish_wander_navigation_requests,
-            execute_current_wander_actions.after(finish_wander_navigation_requests),
-            execute_current_evasion_actions,
+            update_waiting_behavior_actors
+                .pipe(execute_current_wander_actions)
+                .after(finish_wander_navigation_requests),
+            update_waiting_behavior_actors.pipe(execute_current_evasion_actions),
         )
-            .in_set(BehaviorStepSet::Actions)
+            .in_set(BehaviorStepFixedSet::Think)
             .run_if(in_state(GamePhase::InGame)),
     );
 }
@@ -79,17 +96,18 @@ fn finish_wander_navigation_requests(
 }
 
 fn execute_current_wander_actions(
+    activation: In<Option<Entity>>,
     mut commands: Commands,
-    clock: Res<ZooClock>,
+    clocks: Query<&ZooClock>,
     definitions: Res<WorldDefinitions>,
     definition_assets: Res<Assets<WorldDefinitionAsset>>,
-    graph: Option<Res<ActiveTerrainDerivedNavigationGraph>>,
-    (habitats, habitat_summaries): (
-        Res<HabitatIndex>,
-        Query<&openzt2_zoo_state::habitat::habitat_types::HabitatSummary>,
-    ),
-    topology: Res<TopologyGrid>,
-    mut sequence: ResMut<NavigationRequestSequence>,
+    worlds: Query<(
+        &HabitatIndex,
+        &TopologyGrid,
+        Option<&ActiveTerrainDerivedNavigationGraph>,
+    )>,
+    habitat_summaries: Query<&openzt2_zoo_state::habitat::habitat_types::HabitatSummary>,
+    mut navigation_generations: Query<&mut NavigationRequestGeneration>,
     mut requests: MessageWriter<NavigateTo>,
     subject_types: super::behavior_subject_type_resolution::AnimalBehaviorSubjectTypes,
     entities: Query<
@@ -102,7 +120,7 @@ fn execute_current_wander_actions(
     mut animals: Query<
         (
             Entity,
-            &GlobalTransform,
+            (&GlobalTransform, &WorldMember),
             (
                 Option<&BehaviorTaskExecutionState>,
                 Option<(&RunningBehaviorInstruction, &RunBehaviorWander)>,
@@ -128,7 +146,7 @@ fn execute_current_wander_actions(
 ) {
     for (
         actor,
-        transform,
+        (transform, member),
         (task, running),
         mut random,
         agent,
@@ -142,7 +160,7 @@ fn execute_current_wander_actions(
         staff,
         escaped,
         mut submerged_depth,
-    ) in &mut animals
+    ) in behavior_action_actors(&mut animals, activation.0)
     {
         let mut wandering = wandering;
         let immobilized = crated || tranquilized || dead;
@@ -165,6 +183,9 @@ fn execute_current_wander_actions(
             wandering = None;
             submerged_depth = None;
         }
+        let Ok(clock) = clocks.get(member.root) else {
+            continue;
+        };
         let Some(task) =
             task.filter(|task| !failing && !immobilized && task.next_action_tick <= clock.tick)
         else {
@@ -175,6 +196,9 @@ fn execute_current_wander_actions(
         else {
             continue;
         };
+        if activation.0.is_none() && !instruction.can_update_after_activation(clock.tick) {
+            continue;
+        }
         let action = &running.0;
         if action.maximum_duration.is_zero() {
             instruction.complete(actor, clock.tick, &mut commands);
@@ -201,9 +225,12 @@ fn execute_current_wander_actions(
         };
         // A wander that cannot move, at the `stop` speed or without a navigation
         // agent, still ends when its time runs out.
+        let Ok((habitats, topology, graph)) = worlds.get(member.root) else {
+            continue;
+        };
         let (Some(agent), Some(graph)) = (
             agent.filter(|_| action.locomotion_speed != BehaviorGroundLocomotionSpeed::Stop),
-            graph.as_deref(),
+            graph,
         ) else {
             if wandering.is_none() {
                 let until_tick = draw_wander_until_tick(
@@ -230,9 +257,8 @@ fn execute_current_wander_actions(
             continue;
         }
         let position = transform.translation();
-        let world = entities.get(actor).ok().map(|(_, _, _, world)| world.root);
         let mut avoids_entities = |start: Vec2, end: Vec2| {
-            let (Some(avoidance), Some(world)) = (action.avoided_entities.as_ref(), world) else {
+            let Some(avoidance) = action.avoided_entities.as_ref() else {
                 return true;
             };
             let margin = Vec2::splat(avoidance.radius_m.abs());
@@ -248,7 +274,7 @@ fn execute_current_wander_actions(
                 .iter_many(candidates.iter().copied())
                 .flatten()
                 .all(|(entity, transform, definition, membership)| {
-                    if entity == actor || membership.root != world {
+                    if entity == actor || membership.root != member.root {
                         return true;
                     }
                     let other = transform.translation().xz();
@@ -297,7 +323,7 @@ fn execute_current_wander_actions(
             }
             active.request_id = None;
         }
-        let habitat = locate_habitat_at_world_position(&habitats, position.xz(), *topology);
+        let habitat = locate_habitat_at_world_position(habitats, position.xz(), *topology);
         let navigation = graph.terrain_derived_navigation_graph();
         let tile_size_m = navigation.terrain_tile_size_centimetres() as f32 * 0.01;
         let mut selected = None;
@@ -342,13 +368,13 @@ fn execute_current_wander_actions(
                         // An escaped animal roams wherever its breach leads.
                         || if escaped {
                             !super::escaped_animal_reaches(
-                                &habitats,
+                                habitats,
                                 *topology,
                                 &habitat_summaries,
                                 point.xz(),
                             )
                         } else {
-                            locate_habitat_at_world_position(&habitats, point.xz(), *topology)
+                            locate_habitat_at_world_position(habitats, point.xz(), *topology)
                                 != habitat
                         }
                     {
@@ -365,7 +391,10 @@ fn execute_current_wander_actions(
             super::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
             continue;
         };
-        let request_id = sequence.next();
+        let Ok(mut generation) = navigation_generations.get_mut(actor) else {
+            continue;
+        };
+        let request_id = generation.advance();
         requests.write(NavigateTo {
             entity: actor,
             request_id,
@@ -418,11 +447,12 @@ fn draw_wander_until_tick(
 
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn execute_current_evasion_actions(
+    activation: In<Option<Entity>>,
     mut commands: Commands,
-    clock: Res<ZooClock>,
+    clocks: Query<&ZooClock>,
     definitions: Res<WorldDefinitions>,
     definition_assets: Res<Assets<WorldDefinitionAsset>>,
-    mut sequence: ResMut<NavigationRequestSequence>,
+    mut navigation_generations: Query<&mut NavigationRequestGeneration>,
     subject_types: super::behavior_subject_type_resolution::AnimalBehaviorSubjectTypes,
     entities: Query<
         (Entity, &GlobalTransform, &DefinitionId, &WorldMember),
@@ -434,6 +464,7 @@ fn execute_current_evasion_actions(
         (
             Entity,
             &GlobalTransform,
+            &WorldMember,
             Option<&BehaviorTaskExecutionState>,
             Option<(&RunningBehaviorInstruction, &RunBehaviorEvasion)>,
             Option<&mut Destination>,
@@ -459,6 +490,7 @@ fn execute_current_evasion_actions(
     for (
         actor,
         transform,
+        member,
         task,
         running,
         mut destination,
@@ -469,7 +501,7 @@ fn execute_current_evasion_actions(
         crated,
         tranquilized,
         dead,
-    ) in &mut actors
+    ) in behavior_action_actors(&mut actors, activation.0)
     {
         let immobilized = failing || crated || tranquilized || dead;
         let current = evading.filter(|evading| {
@@ -492,6 +524,9 @@ fn execute_current_evasion_actions(
                 .remove::<(BehaviorEvasionNavigation, BehaviorEvasionSteering)>();
             steering = None;
         }
+        let Ok(clock) = clocks.get(member.root) else {
+            continue;
+        };
         let Some(task) = task.filter(|task| !immobilized && task.next_action_tick <= clock.tick)
         else {
             continue;
@@ -504,6 +539,9 @@ fn execute_current_evasion_actions(
         else {
             continue;
         };
+        if activation.0.is_none() && !instruction.can_update_after_activation(clock.tick) {
+            continue;
+        }
         let action = &running.0;
         let position = transform.translation();
         let mut target_direction = Vec2::ZERO;
@@ -512,6 +550,7 @@ fn execute_current_evasion_actions(
             .target()
             .filter(|target| *target != actor)
             .and_then(|target| entities.get(target).ok())
+            .filter(|(_, _, _, target)| target.root == member.root)
         {
             let away = position.xz() - target.translation().xz();
             target_near = away.length_squared() <= action.radius_m.powi(2);
@@ -529,35 +568,33 @@ fn execute_current_evasion_actions(
         }
         let mut entity_direction = Vec2::ZERO;
         let mut entity_near = false;
-        if let Ok((_, _, _, world)) = entities.get(actor) {
-            let margin = Vec2::splat(action.radius_m.abs());
-            nearby.in_bounds(
-                position.xz() - margin,
-                position.xz() + margin,
-                &mut candidates,
-            );
-            nearby.preserve_query_order(&mut candidates);
-            for (entity, other, definition, other_world) in
-                entities.iter_many(candidates.iter().copied()).flatten()
-            {
-                if entity == actor || other_world.root != world.root {
-                    continue;
-                }
-                let away = position.xz() - other.translation().xz();
-                if away.length_squared() > action.radius_m.powi(2) {
-                    continue;
-                }
-                let types = subject_types.borrow_for(entity);
-                if action.avoided_types.iter().any(|required| {
-                    *required == definition.0
-                        || types.contains(required)
-                        || definitions.find_object(definition.0).is_some_and(|object| {
-                            object.behavior_type_identifiers.contains(required)
-                        })
-                }) {
-                    entity_direction += away;
-                    entity_near = true;
-                }
+        let margin = Vec2::splat(action.radius_m.abs());
+        nearby.in_bounds(
+            position.xz() - margin,
+            position.xz() + margin,
+            &mut candidates,
+        );
+        nearby.preserve_query_order(&mut candidates);
+        for (entity, other, definition, other_world) in
+            entities.iter_many(candidates.iter().copied()).flatten()
+        {
+            if entity == actor || other_world.root != member.root {
+                continue;
+            }
+            let away = position.xz() - other.translation().xz();
+            if away.length_squared() > action.radius_m.powi(2) {
+                continue;
+            }
+            let types = subject_types.borrow_for(entity);
+            if action.avoided_types.iter().any(|required| {
+                *required == definition.0
+                    || types.contains(required)
+                    || definitions
+                        .find_object(definition.0)
+                        .is_some_and(|object| object.behavior_type_identifiers.contains(required))
+            }) {
+                entity_direction += away;
+                entity_near = true;
             }
         }
         let timed_out = current.map_or(action.maximum_duration.is_zero(), |evading| {
@@ -582,7 +619,10 @@ fn execute_current_evasion_actions(
             }
             continue;
         }
-        let request_id = current.map_or_else(|| sequence.next(), |current| current.request_id);
+        let Ok(mut generation) = navigation_generations.get_mut(actor) else {
+            continue;
+        };
+        let request_id = current.map_or_else(|| generation.advance(), |current| current.request_id);
         let mut direction = target_direction + entity_direction.normalize_or_zero();
         if direction.length_squared() <= f32::EPSILON {
             direction = Vec2::new(random.0.unit_f32() * 2.0 - 1.0, -1.0);

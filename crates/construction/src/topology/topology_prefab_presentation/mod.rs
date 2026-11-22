@@ -29,7 +29,7 @@ pub(super) fn hydrate_topology_prefab_presentations(
     mut commands: Commands,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
-    grid: Res<TopologyGrid>,
+    grid: Single<&TopologyGrid>,
     topology: Query<
         (
             Entity,
@@ -50,6 +50,7 @@ pub(super) fn hydrate_topology_prefab_presentations(
         ),
     >,
 ) {
+    let grid = grid.into_inner();
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };

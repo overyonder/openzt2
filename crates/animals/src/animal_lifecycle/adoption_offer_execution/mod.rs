@@ -166,7 +166,7 @@ fn initialize_adoption_offer_options(
         (Entity, &SelectedWorldIdentity, &Fame),
         (With<WorldRoot>, Without<AdoptionOfferRandom>),
     >,
-    seed: Option<Res<ZooSeed>>,
+    seed: Option<Single<&ZooSeed>>,
     assets: Res<Assets<WorldDefinitionAsset>>,
     definitions: Res<WorldDefinitions>,
     mut commands: Commands,
@@ -188,7 +188,7 @@ fn initialize_adoption_offer_options(
         commands.entity(world).insert((
             AdoptionOfferClock(0.0),
             AdoptionOfferRandom(DeterministicRng::from_entity(
-                *seed,
+                **seed,
                 PersistentId(0),
                 RngDomain::AnimalAdoptionOffers,
             )),

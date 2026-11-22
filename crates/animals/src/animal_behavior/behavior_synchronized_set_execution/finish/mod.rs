@@ -1,6 +1,8 @@
-use super::super::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation;
-use super::SynchronizedBehaviorParticipant;
-use bevy::{ecs::relationship::RelationshipTarget, prelude::*};
+use super::{SynchronizedBehaviorOwner, SynchronizedBehaviorParticipant};
+use bevy::{
+    ecs::{entity::EntityHashSet, relationship::RelationshipTarget},
+    prelude::*,
+};
 use openzt2_world_state::animation_graph::animation_presentation_relationship_types::AnimationPresentations;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_zoo_state::animal_behavior::behavior_synchronized_set_types::{
@@ -10,7 +12,8 @@ use openzt2_zoo_state::behavior_task_execution_types::{
     abandon_behavior_task_for_reconsideration,
     continuations::BehaviorContinuationFrames,
     running_actions::{
-        ResumeSuspendedBehaviorInstruction, RunBehaviorAnimationClip, RunningBehaviorInstruction,
+        BehaviorResumeOutcome, ResumeSuspendedBehaviorInstruction, RunBehaviorAnimationClip,
+        RunningBehaviorInstruction,
     },
     BehaviorTaskExecutionState, BehaviorTaskFailed, BehaviorTaskFinished,
     PendingBehaviorTaskFailure,
@@ -18,22 +21,56 @@ use openzt2_zoo_state::behavior_task_execution_types::{
 
 pub(super) fn finish_or_cancel_synchronized_behavior_sets(
     mut commands: Commands,
-    clock: Res<ZooClock>,
+    clock: Single<&ZooClock>,
     mut finished: MessageReader<BehaviorTaskFinished>,
     mut failed: MessageReader<BehaviorTaskFailed>,
-    mut operations: Query<(
-        Entity,
-        &mut SynchronizedBehaviorOperation,
-        Option<&SynchronizedBehaviorSubject>,
-        Option<&SynchronizedBehaviorPartner>,
+    mut operations: ParamSet<(
+        Query<(
+            Entity,
+            &mut SynchronizedBehaviorOperation,
+            Option<&SynchronizedBehaviorSubject>,
+            Option<&SynchronizedBehaviorPartner>,
+        )>,
+        Query<
+            Entity,
+            (
+                With<SynchronizedBehaviorOperation>,
+                Or<(
+                    Added<SynchronizedBehaviorOperation>,
+                    Changed<SynchronizedBehaviorSubject>,
+                    Changed<SynchronizedBehaviorPartner>,
+                )>,
+            ),
+        >,
     )>,
-    participants: Query<&SynchronizedBehaviorParticipant>,
+    participants: Query<(
+        Option<&SynchronizedBehaviorOwner>,
+        Option<&SynchronizedBehaviorParticipant>,
+    )>,
+    changed_tasks: Query<
+        Entity,
+        (
+            Or<(
+                With<SynchronizedBehaviorOwner>,
+                With<SynchronizedBehaviorParticipant>,
+            )>,
+            Or<(
+                Changed<BehaviorTaskExecutionState>,
+                Added<PendingBehaviorTaskFailure>,
+                Changed<RunBehaviorAnimationClip>,
+            )>,
+        ),
+    >,
+    mut ended_tasks: RemovedComponents<BehaviorTaskExecutionState>,
+    mut detached_subjects: RemovedComponents<SynchronizedBehaviorSubject>,
+    mut detached_partners: RemovedComponents<SynchronizedBehaviorPartner>,
     frames: BehaviorContinuationFrames,
     tasks: Query<(&BehaviorTaskExecutionState, Has<PendingBehaviorTaskFailure>)>,
     looping_clips: Query<(&RunBehaviorAnimationClip, &RunningBehaviorInstruction)>,
     presentations: Query<&AnimationPresentations>,
     mut players: Query<&mut AnimationPlayer>,
 ) {
+    let mut affected = Vec::new();
     for (actor, execution_id, success) in finished
         .read()
         .map(|event| (event.actor, event.execution_id, true))
@@ -46,17 +83,36 @@ pub(super) fn finish_or_cancel_synchronized_behavior_sets(
         let Some(operation) = participants
             .get(actor)
             .ok()
-            .and_then(|target| target.iter().next())
+            .and_then(|(_, partner)| partner?.iter().next())
         else {
             continue;
         };
-        if let Ok((_, mut operation, _, _)) = operations.get_mut(operation) {
-            if operation.target_execution_id == execution_id {
-                operation.target_outcome = Some(success);
+        if let Ok((_, mut state, _, _)) = operations.p0().get_mut(operation) {
+            if state.target_execution_id == execution_id {
+                state.target_outcome = Some(success);
+                affected.push(operation);
             }
         }
     }
-    for (operation, state, subject, partner) in &operations {
+    affected.extend(operations.p1().iter());
+    affected.extend(detached_subjects.read());
+    affected.extend(detached_partners.read());
+    for actor in changed_tasks.iter().chain(ended_tasks.read()) {
+        if let Ok((owner, partner)) = participants.get(actor) {
+            affected.extend(owner.into_iter().flat_map(RelationshipTarget::iter));
+            affected.extend(partner.into_iter().flat_map(RelationshipTarget::iter));
+        }
+    }
+    let mut seen = EntityHashSet::default();
+    let operations = operations.p0();
+    for (operation, state, subject, partner) in operations
+        .iter_many(
+            affected
+                .into_iter()
+                .filter(|operation| seen.insert(*operation)),
+        )
+        .flatten()
+    {
         let actor = subject.map(|relation| relation.0);
         let target = partner.map(|relation| relation.0);
         let actor_task = actor.and_then(|actor| tasks.get(actor).ok());
@@ -94,20 +150,6 @@ pub(super) fn finish_or_cancel_synchronized_behavior_sets(
             continue;
         }
         let partner_has_task = partner_task.is_some();
-        if let Some(actor) = actor.filter(|_| owns_subject) {
-            commands.trigger(ResumeSuspendedBehaviorInstruction {
-                actor,
-                execution_id: state.execution_id,
-                origin: state.origin.clone(),
-                depth: state.depth,
-                instruction: state.origin.clone(),
-                tick: clock.tick,
-                advance: !failed,
-            });
-            if failed {
-                mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
-            }
-        }
         if let Some(target) = target.filter(|_| owns_partner) {
             if partner_has_task {
                 abandon_behavior_task_for_reconsideration(target, &mut commands);
@@ -131,5 +173,20 @@ pub(super) fn finish_or_cancel_synchronized_behavior_sets(
             }
         }
         commands.entity(operation).despawn();
+        if let Some(actor) = actor.filter(|_| owns_subject) {
+            commands.trigger(ResumeSuspendedBehaviorInstruction {
+                actor,
+                execution_id: state.execution_id,
+                origin: state.origin.clone(),
+                depth: state.depth,
+                instruction: state.origin.clone(),
+                tick: clock.tick,
+                outcome: if failed {
+                    BehaviorResumeOutcome::Fail
+                } else {
+                    BehaviorResumeOutcome::Advance
+                },
+            });
+        }
     }
 }

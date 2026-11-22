@@ -27,8 +27,9 @@ use openzt2_world_state::{
     application_schedule::FixedGameSet,
     simulation_time::simulation_clock_types::ZooClock,
 };
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::behavior_action_actors;
 use openzt2_zoo_state::{
-    animal_behavior::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation,
+    behavior_task_execution_types::running_actions::mark_behavior_task_for_failure_and_stop_navigation,
     behavior_task_execution_types::{
         running_actions::{
             BehaviorInstructionId, RunBehaviorTraversalAnimation, RunBehaviorTraversalDock,
@@ -37,7 +38,7 @@ use openzt2_zoo_state::{
         BehaviorTaskExecutionState, PendingBehaviorTaskFailure,
     },
     locomotion::locomotion_types::{
-        Arrived, DockAt, NavAgent, NavigationFailed, NavigationRequestSequence,
+        Arrived, DockAt, NavAgent, NavigationFailed, NavigationRequestGeneration,
     },
 };
 
@@ -64,12 +65,19 @@ struct TraversalAnimation {
 
 pub(super) fn register_behavior_traversal_execution(app: &mut App) {
     use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
-        BehaviorStep, BehaviorStepSet,
+        activated_behavior_actor, update_waiting_behavior_actors,
     };
+    app.add_observer(activated_behavior_actor::<openzt2_zoo_state::behavior_task_execution_types::running_actions::RunBehaviorTraversalDock>.pipe(start_traversal_docks));
+    app.add_observer(activated_behavior_actor::<openzt2_zoo_state::behavior_task_execution_types::running_actions::RunBehaviorTraversalAnimation>.pipe(start_traversal_animation));
+
+    use openzt2_zoo_state::behavior_task_execution_types::running_actions::BehaviorStepFixedSet;
     app.add_systems(
-        BehaviorStep,
-        (start_traversal_docks, start_traversal_animation)
-            .in_set(BehaviorStepSet::Actions)
+        FixedUpdate,
+        (
+            update_waiting_behavior_actors.pipe(start_traversal_docks),
+            update_waiting_behavior_actors.pipe(start_traversal_animation),
+        )
+            .in_set(BehaviorStepFixedSet::Think)
             .run_if(in_state(GamePhase::InGame)),
     )
     .add_systems(
@@ -112,11 +120,12 @@ fn traversal_attachment(
 }
 
 fn start_traversal_docks(
-    clock: Res<ZooClock>,
-    actors: Query<
+    activation: In<Option<Entity>>,
+    clock: Single<&ZooClock>,
+    mut actors: Query<
         (
             Entity,
-            &BehaviorTaskExecutionState,
+            &mut BehaviorTaskExecutionState,
             &RunningBehaviorInstruction,
             &RunBehaviorTraversalDock,
             &GlobalTransform,
@@ -129,13 +138,18 @@ fn start_traversal_docks(
     paths: Query<(&Name, &TraversalAnimationPath, &GlobalTransform)>,
     sources: Res<Assets<AnimationClipSourceAsset>>,
     clips: Res<Assets<AnimationClip>>,
-    mut sequence: ResMut<NavigationRequestSequence>,
+    mut navigation_generations: Query<&mut NavigationRequestGeneration>,
     mut requests: MessageWriter<DockAt>,
     mut playback: MessageWriter<AnimationClipPlaybackRequest>,
     mut commands: Commands,
 ) {
-    for (actor, task, step, action, transform, agent) in &actors {
-        if task.next_action_tick > clock.tick || !step.is_current(task) {
+    for (actor, mut task, step, action, transform, agent) in
+        behavior_action_actors(&mut actors, activation.0)
+    {
+        if activation.0.is_none() && !step.can_update_after_activation(clock.tick) {
+            continue;
+        }
+        if task.next_action_tick > clock.tick || !step.is_current(&task) {
             continue;
         }
         let path = task
@@ -162,7 +176,10 @@ fn start_traversal_docks(
                     AnimationPlaybackRepetitionPolicy::UseAuthoredClipPolicy,
             });
         }
-        let request_id = sequence.next();
+        let Ok(mut generation) = navigation_generations.get_mut(actor) else {
+            continue;
+        };
+        let request_id = generation.advance();
         requests.write(DockAt {
             entity: actor,
             request_id,
@@ -176,12 +193,12 @@ fn start_traversal_docks(
             path,
             request_id,
         });
-        step.resume_at(actor, clock.tick.saturating_add(1), &mut commands);
+        task.next_action_tick = clock.tick.saturating_add(1);
     }
 }
 
 fn finish_traversal_docks(
-    clock: Res<ZooClock>,
+    clock: Single<&ZooClock>,
     mut failures: MessageReader<NavigationFailed>,
     mut arrivals: MessageReader<Arrived>,
     actors: Query<(
@@ -216,8 +233,8 @@ fn finish_traversal_docks(
             && result.target == Some(pending.path)
             && !failed.contains(&actor)
         {
-            step.complete(actor, clock.tick, &mut commands);
             commands.entity(actor).remove::<TraversalDock>();
+            step.complete(actor, clock.tick, &mut commands);
         }
     }
     for (actor, pending, step, failing) in &actors {
@@ -232,11 +249,12 @@ fn finish_traversal_docks(
 }
 
 fn start_traversal_animation(
-    clock: Res<ZooClock>,
-    actors: Query<
+    activation: In<Option<Entity>>,
+    clock: Single<&ZooClock>,
+    mut actors: Query<
         (
             Entity,
-            &BehaviorTaskExecutionState,
+            &mut BehaviorTaskExecutionState,
             &RunningBehaviorInstruction,
             &RunBehaviorTraversalAnimation,
             &GlobalTransform,
@@ -253,8 +271,13 @@ fn start_traversal_animation(
     mut playback: MessageWriter<AnimationClipPlaybackRequest>,
     mut commands: Commands,
 ) {
-    for (actor, task, step, action, transform, collider_disabled) in &actors {
-        if task.next_action_tick > clock.tick || !step.is_current(task) {
+    for (actor, mut task, step, action, transform, collider_disabled) in
+        behavior_action_actors(&mut actors, activation.0)
+    {
+        if activation.0.is_none() && !step.can_update_after_activation(clock.tick) {
+            continue;
+        }
+        if task.next_action_tick > clock.tick || !step.is_current(&task) {
             continue;
         }
         let path = task
@@ -287,12 +310,12 @@ fn start_traversal_animation(
         if !collider_disabled {
             commands.entity(actor).insert(ColliderDisabled);
         }
-        step.resume_at(actor, clock.tick.saturating_add(1), &mut commands);
+        task.next_action_tick = clock.tick.saturating_add(1);
     }
 }
 
 fn animate_traversal(
-    clock: Res<ZooClock>,
+    clock: Single<&ZooClock>,
     mut actors: Query<(
         Entity,
         &TraversalAnimation,
@@ -381,13 +404,19 @@ fn animate_traversal(
             if !clip_completed {
                 continue;
             }
+            retire_traversal_motion(actor, motion, &mut commands);
             step.complete(actor, clock.tick, &mut commands);
-        } else if current.is_some() {
-            mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
+        } else {
+            retire_traversal_motion(actor, motion, &mut commands);
+            if current.is_some() {
+                mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
+            }
         }
-        commands.entity(actor).remove::<TraversalAnimation>();
-        if motion.disabled_collider {
-            commands.entity(actor).remove::<ColliderDisabled>();
-        }
+    }
+}
+fn retire_traversal_motion(actor: Entity, motion: &TraversalAnimation, commands: &mut Commands) {
+    commands.entity(actor).remove::<TraversalAnimation>();
+    if motion.disabled_collider {
+        commands.entity(actor).remove::<ColliderDisabled>();
     }
 }

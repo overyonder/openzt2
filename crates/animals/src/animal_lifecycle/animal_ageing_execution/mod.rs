@@ -72,7 +72,7 @@ pub(super) fn register_animal_ageing(app: &mut App) {
 }
 
 fn animal_life_stage_needs_update(
-    clock: Res<ZooClock>,
+    clock: Single<&ZooClock>,
     deadlines: Res<AnimalLifeStageDeadlines>,
     rechecks: Query<(), With<RecheckAnimalLifeStage>>,
     mut removed: RemovedComponents<NextAnimalLifeStageTick>,
@@ -85,7 +85,7 @@ fn animal_life_stage_needs_update(
 }
 
 fn resolve_due_animal_life_stages(
-    clock: Res<ZooClock>,
+    clock: Single<&ZooClock>,
     mut deadlines: ResMut<AnimalLifeStageDeadlines>,
     scheduled: Query<Entity, Or<(With<NextAnimalLifeStageTick>, With<RecheckAnimalLifeStage>)>>,
     all_animals: Query<Entity, With<Animal>>,

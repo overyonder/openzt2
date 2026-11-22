@@ -46,6 +46,12 @@ pub struct AnimalLifecyclePlugin;
 
 impl Plugin for AnimalLifecyclePlugin {
     fn build(&self, app: &mut App) {
+        use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
+            activated_behavior_actor, update_waiting_behavior_actors,
+        };
+        app.add_observer(activated_behavior_actor::<openzt2_zoo_state::behavior_task_execution_types::running_actions::RunBehaviorSpawnChild>.pipe(animal_birth_execution::spawn_children_for_authored_births));
+        app.add_observer(activated_behavior_actor::<openzt2_zoo_state::behavior_task_execution_types::running_actions::RunBehaviorMorphEntity>.pipe(authored_entity_morph::morph_authored_entities));
+
         app.add_observer(authored_entity_morph::cancel_interrupted_morph_fade);
         app.add_observer(
             openzt2_zoo_state::animal_behavior::animal_lineage::end_live_animal_relationships,
@@ -55,7 +61,7 @@ impl Plugin for AnimalLifecyclePlugin {
         app.add_systems(Update, (
             starting_animal_hydration::hydrate_starting_animals,
             crate::animal_welfare::systems::initialize_animal_needs
-                .run_if(resource_exists::<openzt2_world_state::simulation_time::deterministic_random_stream::ZooSeed>),
+                .run_if(any_with_component::<openzt2_world_state::simulation_time::deterministic_random_stream::ZooSeed>),
             starting_animal_hydration::finish_starting_animal_hydration,
         ).chain().in_set(GameSet::Intent)
             .before(openzt2_world_state::world_spawn::world_load_completion_marker::WorldLoadCompletionSet)
@@ -155,12 +161,12 @@ impl Plugin for AnimalLifecyclePlugin {
                     .run_if(simulation_is_running),
             )
             .add_systems(
-                openzt2_zoo_state::behavior_task_execution_types::running_actions::BehaviorStep,
+                FixedUpdate,
                 (
-                    animal_birth_execution::spawn_children_for_authored_births,
-                    authored_entity_morph::morph_authored_entities,
+                    update_waiting_behavior_actors.pipe(animal_birth_execution::spawn_children_for_authored_births),
+                    update_waiting_behavior_actors.pipe(authored_entity_morph::morph_authored_entities),
                     authored_entity_morph::remove_authored_morph_shells,
-                ).in_set(openzt2_zoo_state::behavior_task_execution_types::running_actions::BehaviorStepSet::Actions),
+                ).in_set(openzt2_zoo_state::behavior_task_execution_types::running_actions::BehaviorStepFixedSet::Think),
             )
             .add_systems(
                 FixedUpdate,

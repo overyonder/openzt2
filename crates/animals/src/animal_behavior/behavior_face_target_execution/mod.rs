@@ -1,9 +1,9 @@
 use bevy::prelude::*;
-use openzt2_game_assets::application_lifecycle::GamePhase;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_zoo_state::animal_behavior::behavior_target_placement_types::{
     travel_target, BehaviorPlacementTravelSite,
 };
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::WhenBehaviorAction;
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
     RunBehaviorFaceTarget, RunningBehaviorInstruction,
 };
@@ -12,23 +12,16 @@ use openzt2_zoo_state::behavior_task_execution_types::{
 };
 
 pub(super) fn register_face_target_execution(application: &mut App) {
-    use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
-        BehaviorStep, BehaviorStepSet,
-    };
-    application.add_systems(
-        BehaviorStep,
-        face_current_behavior_targets
-            .in_set(BehaviorStepSet::Actions)
-            .run_if(in_state(GamePhase::InGame)),
-    );
+    application.add_observer(face_current_behavior_targets);
 }
 
 /// Turns the subject to its target's position when it starts, plus the
 /// authored offset, unless its heading is already within the authored error.
 /// Headings change at once, as docking aligns them.
 fn face_current_behavior_targets(
+    activation: On<WhenBehaviorAction<RunBehaviorFaceTarget>>,
     mut commands: Commands,
-    clock: Res<ZooClock>,
+    clock: Single<&ZooClock>,
     mut actors: Query<
         (
             Entity,
@@ -44,7 +37,9 @@ fn face_current_behavior_targets(
     targets: Query<&GlobalTransform>,
     travel_sites: Query<&BehaviorPlacementTravelSite>,
 ) {
-    for (actor, (task, instruction, running_action), mut transform) in &mut actors {
+    for (actor, (task, instruction, running_action), mut transform) in
+        std::iter::once(actors.get_mut(activation.entity)).flatten()
+    {
         if task.next_action_tick > clock.tick {
             continue;
         }

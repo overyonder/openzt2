@@ -2,6 +2,7 @@
 
 use bevy::prelude::*;
 use openzt2_game_data::behavior::action::target_test::BehaviorTargetTestKind;
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::WhenBehaviorAction;
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
     RunBehaviorTargetTest, RunningBehaviorInstruction, SelectedBehaviorSet,
 };
@@ -21,16 +22,17 @@ use super::behavior_task_failure_transition::mark_behavior_task_for_failure_and_
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
 
 pub(super) fn find_target_and_enter_success_or_failure_behavior_set(
+    activation: On<WhenBehaviorAction<RunBehaviorTargetTest>>,
     documents: Res<LoadedBehaviorDocumentCollection>,
     assets: Res<Assets<BehaviorDocumentAsset>>,
-    clock: Res<ZooClock>,
+    clock: Single<&ZooClock>,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,
     animal_types: super::behavior_subject_type_resolution::AnimalBehaviorSubjectTypes,
-    tasks: Query<(
+    mut tasks: Query<(
         Entity,
         (
-            &BehaviorTaskExecutionState,
+            &mut BehaviorTaskExecutionState,
             &RunningBehaviorInstruction,
             &RunBehaviorTargetTest,
         ),
@@ -49,11 +51,13 @@ pub(super) fn find_target_and_enter_success_or_failure_behavior_set(
     let Some(definitions) = active_world_definitions.get(&world_definition_assets) else {
         return;
     };
-    for (entity, (task, instruction, running_action), origin, species, staff, guest) in &tasks {
+    for (entity, (mut task, instruction, running_action), origin, species, staff, guest) in
+        std::iter::once(tasks.get_mut(activation.entity)).flatten()
+    {
         if task.next_action_tick > clock.tick {
             continue;
         }
-        if !instruction.is_current(task) {
+        if !instruction.is_current(&task) {
             continue;
         }
         let action = &running_action.0;
@@ -108,9 +112,10 @@ pub(super) fn find_target_and_enter_success_or_failure_behavior_set(
         };
         let Some(program) = branch else {
             if selected.is_some() {
-                instruction.complete_with_target(entity, selected, clock.tick, &mut commands);
+                task.target = selected;
+                instruction.complete(entity, clock.tick, &mut commands);
             } else {
-                instruction.retarget(entity, None, &mut commands);
+                task.target = None;
                 mark_behavior_task_for_failure_and_stop_navigation(entity, &mut commands);
             }
             continue;
@@ -125,7 +130,7 @@ pub(super) fn find_target_and_enter_success_or_failure_behavior_set(
                 animal_types.borrow_for(entity),
             ),
         ) else {
-            instruction.retarget(entity, selected, &mut commands);
+            task.target = selected;
             mark_behavior_task_for_failure_and_stop_navigation(entity, &mut commands);
             continue;
         };

@@ -49,8 +49,8 @@ pub(super) fn update_tank_geometry_gesture(
         Res<UiPointerCapture>,
         Res<AuthoredModalInputCapture>,
     ),
-    grid: Res<TopologyGrid>,
-    habitat_index: Res<HabitatIndex>,
+    grid: Single<&TopologyGrid>,
+    habitat_index: Single<&HabitatIndex>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     cursors: Query<&ConstructionCursor>,
@@ -77,6 +77,8 @@ pub(super) fn update_tank_geometry_gesture(
         MessageWriter<CommitConstruction>,
     ),
 ) {
+    let grid = grid.into_inner();
+    let habitat_index = habitat_index.into_inner();
     let mut primary_just_pressed = false;
     let mut primary_just_released = false;
     for input in pointer_inputs

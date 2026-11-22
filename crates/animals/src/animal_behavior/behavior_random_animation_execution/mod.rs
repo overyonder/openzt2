@@ -1,4 +1,5 @@
-//! Random authored clips use the normal playback request and completion owner.
+//! Uses the normal playback request and completion owner.
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::behavior_action_actors;
 
 use super::{
     behavior_random_choice_execution::select_next_authored_random_choice,
@@ -18,13 +19,14 @@ use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorTaskFailure
 use openzt2_zoo_state::guests::guest_simulation_types::GuestRng;
 
 pub(super) fn start_next_random_behavior_animation(
+    activation: In<Option<Entity>>,
     mut commands: Commands,
-    clock: Res<ZooClock>,
+    clock: Single<&ZooClock>,
     mut actors: Query<
         (
             Entity,
             (
-                &BehaviorTaskExecutionState,
+                &mut BehaviorTaskExecutionState,
                 &RunningBehaviorInstruction,
                 &RunBehaviorRandomAnimation,
             ),
@@ -38,13 +40,16 @@ pub(super) fn start_next_random_behavior_animation(
     >,
     mut requests: MessageWriter<AnimationClipPlaybackRequest>,
 ) {
-    for (actor, (task, instruction, running_action), mut guest_random, mut behavior_random) in
-        &mut actors
+    for (actor, (mut task, instruction, running_action), mut guest_random, mut behavior_random) in
+        behavior_action_actors(&mut actors, activation.0)
     {
+        if activation.0.is_none() && !instruction.can_update_after_activation(clock.tick) {
+            continue;
+        }
         if task.next_action_tick > clock.tick {
             continue;
         }
-        if !instruction.is_current(task) {
+        if !instruction.is_current(&task) {
             continue;
         }
         let RunBehaviorRandomAnimation {
@@ -87,12 +92,8 @@ pub(super) fn start_next_random_behavior_animation(
                         target: task.target,
                         repeats: true,
                     });
-                instruction.repeat_at(
-                    actor,
-                    clock.tick.saturating_add(1),
-                    repetitions,
-                    &mut commands,
-                );
+                task.next_action_tick = clock.tick.saturating_add(1);
+                task.repetitions = repetitions;
             }
             Ok(None) => instruction.complete(actor, clock.tick, &mut commands),
             Err(()) => mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands),

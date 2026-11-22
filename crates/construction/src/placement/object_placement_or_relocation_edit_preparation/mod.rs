@@ -37,7 +37,7 @@ use openzt2_zoo_state::placement::object_placement_validation::validate_object_p
 use openzt2_zoo_state::placement::object_placement_validation::ObjectPlacementAuthoritativeFacts;
 use openzt2_zoo_state::placement::placed_object_types::PlacedObjectDefinitionReference;
 use openzt2_zoo_state::placement::placed_object_types::PlacedObjectFootprintOccupancy;
-use openzt2_zoo_state::placement::placement_occupancy_index::PlacedObjectFootprintOccupancyIndex;
+use openzt2_zoo_state::placement::placement_occupancy_index::PlacedObjectFootprintQueries;
 use openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementCellCollectionScratch;
 use openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementPrefabSource;
 use openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementPreviewPermissionFacts;
@@ -77,14 +77,14 @@ pub(super) fn prepare_object_placement_or_relocation_edit(
     placed: Query<StompablePlacedObject>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
-    terrain_index: Res<TerrainIndex>,
+    terrain_indexes: Query<Ref<TerrainIndex>>,
     terrain_assets: Res<Assets<TerrainAsset>>,
-    (chunks, terrain_changes): (
+    (chunks, mut terrain_changes): (
         Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
-        Res<Messages<openzt2_zoo_state::terrain::terrain_edit_types::TerrainChanged>>,
+        MessageReader<openzt2_zoo_state::terrain::terrain_edit_types::TerrainChanged>,
     ),
     (placement, ground_paths, footprints): (
-        Res<PlacedObjectFootprintOccupancyIndex>,
+        PlacedObjectFootprintQueries,
         GroundPathPlacementStomp,
         Res<ScenePlacementFootprints>,
     ),
@@ -100,16 +100,11 @@ pub(super) fn prepare_object_placement_or_relocation_edit(
         return;
     };
     let catalogue = active_definitions.get(&definitions);
-    let revisions = [
-        Some(placement.last_changed()),
-        ground_paths.topology_change_tick(),
-        Some(terrain_index.last_changed()),
-        Some(terrain_assets.last_changed()),
-        Some(definitions.last_changed()),
-        Some(active_definitions.last_changed()),
-        Some(footprints.last_changed()),
-    ];
-    let terrain_cursor = terrain_changes.oldest_message_count() + terrain_changes.len();
+    let terrain_changed = terrain_changes.read().count() != 0;
+    let authored_inputs_changed = terrain_assets.is_changed()
+        || definitions.is_changed()
+        || active_definitions.is_changed()
+        || footprints.is_changed();
     for request in requests.read() {
         let Ok((preview, member, permission, habitat, relocation, prefab, submitted, fit)) =
             previews.get(request.preview)
@@ -118,6 +113,14 @@ pub(super) fn prepare_object_placement_or_relocation_edit(
                 &mut rejected,
                 request.transaction,
                 PlacementFailure::InvalidTopology,
+            );
+            continue;
+        };
+        let Ok(terrain_index) = terrain_indexes.get(member.root) else {
+            reject_object_placement_edit_preparation(
+                &mut rejected,
+                request.transaction,
+                PlacementFailure::OutsideMap,
             );
             continue;
         };
@@ -195,10 +198,13 @@ pub(super) fn prepare_object_placement_or_relocation_edit(
             let asset = terrain_assets.get(&chunk.asset)?;
             sample_terrain(chunk, asset, edited, position)
         };
-        let path_overlaps = ground_paths.overlaps(definition, catalogue);
+        let path_overlaps = ground_paths.overlaps(member.root, definition, catalogue);
         let (cells, cost) = if let Some(fit) = fit.filter(|fit| {
-            fit.revisions == revisions
-                && fit.terrain_cursor == terrain_cursor
+            !terrain_changed
+                && !authored_inputs_changed
+                && !terrain_index.is_changed()
+                && !placement.index_changed(member.root)
+                && !ground_paths.topology_changed(member.root)
                 && fit.permission == *permission
                 && fit.habitat == habitat
         }) {
@@ -215,6 +221,7 @@ pub(super) fn prepare_object_placement_or_relocation_edit(
                             cell,
                             definition,
                             catalogue,
+                            member.root,
                             &placement,
                             &placed,
                             |entity| Some(entity) == relocation.map(|source| source.0),
@@ -334,6 +341,7 @@ pub(super) fn prepare_object_placement_or_relocation_edit(
             &cells,
             definition,
             catalogue,
+            member.root,
             &placement,
             &placed,
             |entity| Some(entity) == relocation.map(|source| source.0),

@@ -62,8 +62,8 @@ mod tests {
         let mut app = App::new();
         app.add_message::<ConstructionCommitted>()
             .insert_resource(ConstructionTool::Fence(definition))
-            .init_resource::<TopologyGrid>()
             .add_systems(Update, restart_fence_preview_from_committed_endpoint);
+        app.world_mut().spawn(TopologyGrid::default());
         let endpoint = app
             .world_mut()
             .spawn(TopologyNode {
@@ -125,15 +125,22 @@ mod tests {
     fn gate_pointer_picks_the_nearest_fence_segment_or_prompted_enclosure_wall() {
         let grid = TopologyGrid::default();
         let mut world = World::new();
-        world.init_resource::<TopologyIndex>();
+        let root = world.spawn(TopologyIndex::default()).id();
         let near = EdgeKey::new(IVec3::ZERO, IVec3::new(4, 0, 0)).unwrap();
         let far = EdgeKey::new(IVec3::new(0, 3, 0), IVec3::new(4, 3, 0)).unwrap();
         for edge in [near, far] {
-            let a = world.spawn(TopologyNode { cell: edge.lo }).id();
-            let b = world.spawn(TopologyNode { cell: edge.hi }).id();
-            world.spawn(FenceEdge::between(AssetId::default(), a, b));
+            let a = world
+                .spawn((TopologyNode { cell: edge.lo }, WorldMember { root }))
+                .id();
+            let b = world
+                .spawn((TopologyNode { cell: edge.hi }, WorldMember { root }))
+                .id();
+            world.spawn((
+                FenceEdge::between(AssetId::default(), a, b),
+                WorldMember { root },
+            ));
         }
-        let index = world.resource::<TopologyIndex>();
+        let index = world.get::<TopologyIndex>(root).unwrap();
         let above = |cell: IVec3, offset: Vec3| grid.cell_translation(cell) + offset;
         let beside_near = above(
             IVec3::new(2, 0, 0),
@@ -211,10 +218,10 @@ pub(super) fn drive_selected_topology_placement_pointer_sequence(
     (pointer, mut pointer_inputs): (MousePointer, MessageReader<PointerInput>),
     ui_capture: Res<openzt2_interface_state::ui::pointer_capture_types::UiPointerCapture>,
     (tool, policy): (Res<ConstructionTool>, Res<ConstructionPlacementPolicy>),
-    grid: Res<TopologyGrid>,
+    grid: Single<&TopologyGrid>,
     active_definitions: Res<WorldDefinitions>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
-    index: Res<TopologyIndex>,
+    index: Single<&TopologyIndex>,
     cursors: Query<&ConstructionCursor>,
     roots: Query<Entity, With<WorldRoot>>,
     previews: Query<
@@ -230,6 +237,8 @@ pub(super) fn drive_selected_topology_placement_pointer_sequence(
         GatePromptQueries,
     ),
 ) {
+    let grid = grid.into_inner();
+    let index = index.into_inner();
     let mut primary_just_released = false;
     let mut primary_press = None;
     for input in pointer_inputs
@@ -594,7 +603,7 @@ pub(super) fn restart_fence_preview_from_committed_endpoint(
     mut commands: Commands,
     mut committed: MessageReader<ConstructionCommitted>,
     tool: Res<ConstructionTool>,
-    grid: Res<TopologyGrid>,
+    grid: Single<&TopologyGrid>,
     applied: Query<&AppliedFenceTopology>,
     walls: Query<FenceSegment>,
     nodes: Query<&TopologyNode>,
@@ -605,6 +614,7 @@ pub(super) fn restart_fence_preview_from_committed_endpoint(
         &mut Transform,
     )>,
 ) {
+    let grid = grid.into_inner();
     let ConstructionTool::Fence(definition) = *tool else {
         committed.clear();
         return;
@@ -646,11 +656,11 @@ pub(super) fn restart_fence_preview_from_committed_endpoint(
 #[allow(clippy::too_many_arguments)]
 pub(super) fn evaluate_topology_construction_preview_validity(
     mut commands: Commands,
-    grid: Res<TopologyGrid>,
-    index: Res<TopologyIndex>,
+    grid: Single<Ref<TopologyGrid>>,
+    index: Single<Ref<TopologyIndex>>,
     active_definitions: Res<WorldDefinitions>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
-    terrain: Res<TerrainIndex>,
+    terrain: Single<Ref<TerrainIndex>>,
     terrain_assets: Res<Assets<TerrainAsset>>,
     mut changes: MessageReader<openzt2_zoo_state::terrain::terrain_edit_types::TerrainChanged>,
     terrain_messages: Res<Messages<openzt2_zoo_state::terrain::terrain_edit_types::TerrainChanged>>,
@@ -668,6 +678,9 @@ pub(super) fn evaluate_topology_construction_preview_validity(
         Or<(With<FencePreview>, With<PathPreview>)>,
     >,
 ) {
+    let grid = grid.into_inner();
+    let index = index.into_inner();
+    let terrain = terrain.into_inner();
     let version = TopologyPlanVersion {
         revisions: [
             grid.last_changed(),

@@ -1,14 +1,18 @@
 //! Admit once, then repeat the authored waiting set without renewing its deadline.
 
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::behavior_action_actors;
 use super::super::behavior_container_admission::BehaviorAdmissionInstruction;
 use super::super::{
     behavior_random_stream_state::BehaviorRandomStream,
-    behavior_subject_type_resolution::behavior_subject_type_identifiers,
+    behavior_subject_type_resolution::{behavior_subject_type_identifiers, AnimalBehaviorSubjectTypes},
     behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation,
 };
 use super::{ActiveQueueWait, QueueWaitSources};
 use bevy::{ecs::system::SystemParam, prelude::*};
+use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDeclarationIndexView;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
 use openzt2_game_data::behavior::action::queue::BehaviorQueueWaitAction;
+use openzt2_game_data::AssetId;
 use openzt2_zoo_state::animal_behavior::interaction_container_membership::requests::{
     InteractionContainerAdmissionOutcome, InteractionContainerAdmissionRequest,
 };
@@ -33,7 +37,7 @@ pub(super) struct QueueWaitActors<'w, 's> {
         (
             Entity,
             (
-                &'static BehaviorTaskExecutionState,
+                &'static mut BehaviorTaskExecutionState,
                 &'static RunningBehaviorInstruction,
                 &'static RunBehaviorWaitInteractionQueue,
             ),
@@ -61,27 +65,33 @@ pub(super) struct QueueWaitActors<'w, 's> {
 }
 
 pub(super) fn start_or_repeat_authored_queue_wait(
+    activation: In<Option<Entity>>,
     mut commands: Commands,
-    clock: Res<ZooClock>,
+    clock: Single<&ZooClock>,
     sources: QueueWaitSources,
-    actors: QueueWaitActors,
+    animal_types: AnimalBehaviorSubjectTypes,
+    mut actors: QueueWaitActors,
     memberships: InteractionContainerMemberships,
 ) {
     let Some(definitions) = sources.definitions.get(&sources.definition_assets) else {
         return;
     };
-    if sources
+    let Some(declarations) = sources
         .declarations
         .create_declaration_index_view(&sources.behaviors)
-        .is_none()
-    {
+    else {
         return;
-    }
-    for (actor, (task, instruction, running), _) in &actors.tasks {
+    };
+    for (actor, (task, instruction, running), active_wait) in
+        behavior_action_actors(&mut actors.tasks, activation.0)
+    {
+        if activation.0.is_none() && !instruction.can_update_after_activation(clock.tick) {
+            continue;
+        }
         if task.next_action_tick > clock.tick {
             continue;
         }
-        if !instruction.is_current(task) {
+        if !instruction.is_current(&task) {
             continue;
         }
         let action = &running.0;
@@ -116,6 +126,29 @@ pub(super) fn start_or_repeat_authored_queue_wait(
             mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
             continue;
         };
+        if active_wait.is_some_and(|wait| {
+            wait.execution_id == task.execution_id
+                && wait.target == target
+                && wait.queue_slot == queue_index
+                && task.is_at_exact_frame(&wait.origin, wait.stack_depth)
+                && memberships.actor_slot(target, actor) == Some(queue_index)
+        }) {
+            let selection = resolve_queue_waiting_set(
+                actor,
+                &task,
+                action.waiting_behavior_set,
+                clock.tick,
+                (definitions, declarations),
+                &actors.identities,
+                &animal_types,
+            );
+            if let Some(selection) = selection {
+                instruction.enter_set(actor, selection, &mut commands);
+            } else {
+                mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
+            }
+            continue;
+        }
         let service_slots = object
             .interaction_slots
             .iter()
@@ -130,7 +163,7 @@ pub(super) fn start_or_repeat_authored_queue_wait(
             despawn_on_refusal: false,
             queue_service_slots: service_slots,
         };
-        let instruction = BehaviorAdmissionInstruction::new(actor, task, instruction);
+        let instruction = BehaviorAdmissionInstruction::new(actor, &task, instruction);
         let action = action.clone();
         commands.queue(move |world: &mut World| {
             if instruction.is_current(world) {
@@ -158,15 +191,15 @@ pub(super) struct QueueWaitAdmitted {
 pub(super) fn apply_queue_wait_admission(
     admitted: On<QueueWaitAdmitted>,
     mut commands: Commands,
-    clock: Res<ZooClock>,
+    clock: Single<&ZooClock>,
     sources: QueueWaitSources,
-    animal_types: super::super::behavior_subject_type_resolution::AnimalBehaviorSubjectTypes,
+    animal_types: AnimalBehaviorSubjectTypes,
     mut actors: QueueWaitActors,
 ) {
     let actor = admitted.actor;
     let target = admitted.target;
     let action = &admitted.action;
-    let Ok((_, (task, instruction, _), active_wait)) = actors.tasks.get(actor) else {
+    let Ok((_, (mut task, instruction, _), active_wait)) = actors.tasks.get_mut(actor) else {
         return;
     };
     let InteractionContainerAdmissionOutcome::Granted {
@@ -178,10 +211,13 @@ pub(super) fn apply_queue_wait_admission(
         mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
         return;
     };
-    instruction.bind_interaction_slot(actor, queue_index, &mut commands);
+    if !instruction.is_current(&task) {
+        return;
+    }
+    task.interaction_slot = Some(queue_index);
     if queue_service_available {
-        instruction.complete(actor, clock.tick, &mut commands);
         commands.entity(actor).remove::<ActiveQueueWait>();
+        instruction.complete(actor, clock.tick, &mut commands);
         return;
     }
     let (Some(definitions), Some(declarations)) = (
@@ -192,24 +228,18 @@ pub(super) fn apply_queue_wait_admission(
     ) else {
         return;
     };
-    let Ok((species, staff, guest)) = actors.identities.get(actor) else {
-        mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
-        return;
-    };
-    let Some((document, declaration)) = declarations.find_behavior_set_location(
+    let Some(selection) = resolve_queue_waiting_set(
+        actor,
+        &task,
         action.waiting_behavior_set,
-        behavior_subject_type_identifiers(
-            species,
-            staff,
-            guest,
-            definitions,
-            animal_types.borrow_for(actor),
-        ),
+        clock.tick,
+        (definitions, declarations),
+        &actors.identities,
+        &animal_types,
     ) else {
         mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
         return;
     };
-    let waiting_set = action.waiting_behavior_set;
     let origin = task.create_return_frame_after_action(task.action);
     if active_wait.is_none() {
         let duration = if action.minimum_wait == action.maximum_wait {
@@ -251,16 +281,39 @@ pub(super) fn apply_queue_wait_admission(
                 .saturating_add(u64::try_from(ticks).unwrap_or(u64::MAX)),
         });
     }
-    instruction.enter_set(
-        actor,
-        SelectedBehaviorSet {
-            program: waiting_set,
-            document,
-            declaration,
-            tick: clock.tick,
-            repeat: Some(task.repetitions),
-            target: None,
-        },
-        &mut commands,
-    );
+    instruction.enter_set(actor, selection, &mut commands);
+}
+
+fn resolve_queue_waiting_set(
+    actor: Entity,
+    task: &BehaviorTaskExecutionState,
+    program: AssetId,
+    tick: u64,
+    (definitions, declarations): (WorldDefinitionsView<'_>, BehaviorDeclarationIndexView<'_>),
+    identities: &Query<(
+        Option<&SpeciesHandle>,
+        Option<&StaffRole>,
+        Option<&GuestArchetype>,
+    )>,
+    animal_types: &AnimalBehaviorSubjectTypes,
+) -> Option<SelectedBehaviorSet> {
+    let (species, staff, guest) = identities.get(actor).ok()?;
+    let (document, declaration) = declarations.find_behavior_set_location(
+        program,
+        behavior_subject_type_identifiers(
+            species,
+            staff,
+            guest,
+            definitions,
+            animal_types.borrow_for(actor),
+        ),
+    )?;
+    Some(SelectedBehaviorSet {
+        program,
+        document,
+        declaration,
+        tick,
+        repeat: Some(task.repetitions),
+        target: None,
+    })
 }

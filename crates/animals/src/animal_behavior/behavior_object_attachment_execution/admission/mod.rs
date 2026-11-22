@@ -145,7 +145,7 @@ pub(super) fn apply_object_attachment_admissions(
     result: On<InteractionContainerAttachmentAdmission>,
     mut commands: Commands,
     mut pending: Query<&mut PendingAttachmentAdmission>,
-    tasks: Query<(&BehaviorTaskExecutionState, &RunningBehaviorInstruction)>,
+    mut tasks: Query<(&mut BehaviorTaskExecutionState, &RunningBehaviorInstruction)>,
     prefabs: Res<Assets<ScenePrefabAsset>>,
     definitions: Res<WorldDefinitions>,
     definition_assets: Res<Assets<WorldDefinitionAsset>>,
@@ -235,7 +235,7 @@ pub(super) fn apply_object_attachment_admissions(
                         actor,
                         member,
                         food,
-                        &tasks,
+                        &mut tasks,
                         &mut playback,
                         &mut commands,
                     );

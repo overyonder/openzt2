@@ -71,18 +71,16 @@ pub(super) fn present_ground_path_placement_highlights(
     mut commands: Commands,
     tool: Res<ConstructionTool>,
     capture: Res<UiPointerCapture>,
-    (grid, index): (Res<TopologyGrid>, Res<TopologyIndex>),
     (active_definitions, definitions): (Res<WorldDefinitions>, Res<Assets<WorldDefinitionAsset>>),
     (rules, mut presentation): (
         Res<Assets<PathPlacementHighlightAsset>>,
         ResMut<PathPlacementHighlightAssets>,
     ),
-    terrain: Res<TerrainIndex>,
     terrain_assets: Res<Assets<TerrainAsset>>,
     terrain_chunks: Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
     mut terrain_changes: MessageReader<TerrainChanged>,
     cursors: Query<&ConstructionCursor>,
-    roots: Query<Entity, With<WorldRoot>>,
+    roots: Query<(Entity, &TopologyGrid, &TopologyIndex, &TerrainIndex), With<WorldRoot>>,
     previews: Query<(&PathPreview, &PathDrawPlan)>,
     mut highlights: Query<(
         Entity,
@@ -107,7 +105,7 @@ pub(super) fn present_ground_path_placement_highlights(
         }
         return;
     };
-    let (Ok(cursor), Ok(root), Some(rules)) = (
+    let (Ok(cursor), Ok((root, grid, index, terrain)), Some(rules)) = (
         cursors.single(),
         roots.single(),
         rules.get(&presentation.rules),

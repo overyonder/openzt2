@@ -12,7 +12,7 @@ use super::types::{Dead, Escaped, Rampaging, Tranquilized};
 
 pub(super) fn detect_animal_containment_breaches_and_mark_newly_escaped_animals(
     mut commands: Commands,
-    clock: Res<ZooClock>,
+    clock: Single<&ZooClock>,
     mut containment_changes: MessageReader<ContainmentChanged>,
     animals: Query<Option<&Escaped>, (With<Animal>, Without<Dead>)>,
 ) {

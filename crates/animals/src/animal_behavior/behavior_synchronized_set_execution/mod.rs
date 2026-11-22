@@ -36,20 +36,26 @@ struct SynchronizedBehaviorSources<'w, 's> {
 }
 
 pub(super) fn register_synchronized_behavior_execution(app: &mut App) {
-    use openzt2_game_assets::application_lifecycle::GamePhase;
     use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
-        BehaviorStep, BehaviorStepSet,
+        activated_behavior_actor, update_waiting_behavior_actors,
     };
+    app.add_observer(activated_behavior_actor::<openzt2_zoo_state::behavior_task_execution_types::running_actions::RunBehaviorSynchronizedSets>.pipe(start::start_synchronized_behavior_sets));
+
+    use openzt2_game_assets::application_lifecycle::GamePhase;
+    use openzt2_zoo_state::behavior_task_execution_types::running_actions::BehaviorStepFixedSet;
 
     app.add_observer(start::claim_synchronized_behavior)
         .add_systems(
-            BehaviorStep,
-            (
-                finish::finish_or_cancel_synchronized_behavior_sets,
-                start::start_synchronized_behavior_sets,
-            )
-                .chain()
-                .in_set(BehaviorStepSet::Actions)
+            FixedUpdate,
+            update_waiting_behavior_actors
+                .pipe(start::start_synchronized_behavior_sets)
+                .in_set(BehaviorStepFixedSet::Think),
+        )
+        .add_systems(
+            FixedUpdate,
+            finish::finish_or_cancel_synchronized_behavior_sets
+                .in_set(openzt2_world_state::application_schedule::FixedGameSet::Act)
+                .after(BehaviorStepFixedSet::Act)
                 .run_if(in_state(GamePhase::InGame)),
         );
 }

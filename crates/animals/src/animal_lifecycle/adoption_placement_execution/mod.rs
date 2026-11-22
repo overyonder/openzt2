@@ -65,7 +65,7 @@ pub(super) fn begin_selected_species_adoption_placement_on_construction_cursor(
     species_index: Res<SpeciesAssets>,
     definition_assets: Res<Assets<WorldDefinitionAsset>>,
     definitions: Res<WorldDefinitions>,
-    seed: Res<ZooSeed>,
+    seed: Single<&ZooSeed>,
     mut placement_sequence: Local<u64>,
     mut construction_cursors: AnimalPlacementCursor,
     mut construction_tool_requests: MessageWriter<SelectConstructionTool>,
@@ -98,7 +98,7 @@ pub(super) fn begin_selected_species_adoption_placement_on_construction_cursor(
             };
         *placement_sequence = placement_sequence.wrapping_add(1);
         let mut random = DeterministicRng::from_entity(
-            *seed,
+            **seed,
             PersistentId(*placement_sequence),
             RngDomain::Reproduction,
         );
@@ -215,8 +215,8 @@ fn set_animal_cursor_placement(
 #[allow(clippy::too_many_arguments)]
 pub(super) fn validate_selected_species_adoption_placement_preview(
     mut commands: Commands,
-    zoo_cash: Res<ZooCash>,
-    unlimited_zoo_cash: Option<Res<UnlimitedZooCash>>,
+    zoo_cash: Single<&ZooCash>,
+    unlimited_zoo_cash: Option<Single<&UnlimitedZooCash>>,
     species_assets: Res<Assets<SpeciesAsset>>,
     species_index: Res<SpeciesAssets>,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
@@ -226,8 +226,8 @@ pub(super) fn validate_selected_species_adoption_placement_preview(
         &AnimalSpeciesAwaitingHabitatPlacement,
         &ObjectPlacementPreviewRequest,
     )>,
-    habitat_index: Res<HabitatIndex>,
-    topology_grid: Res<TopologyGrid>,
+    habitat_index: Single<Ref<HabitatIndex>>,
+    topology_grid: Single<Ref<TopologyGrid>>,
     adoption_policy: Query<(Entity, Option<&AnimalAdoptionAvailabilityPolicy>), With<WorldRoot>>,
     placement_sites: PlacementSiteQueries,
     hydrated_previews: Query<(), With<ObjectPlacementPreviewPrefabHydrated>>,
@@ -237,6 +237,8 @@ pub(super) fn validate_selected_species_adoption_placement_preview(
         Option<&mut AnimalPlacementSite>,
     )>,
 ) {
+    let habitat_index = habitat_index.into_inner();
+    let topology_grid = topology_grid.into_inner();
     let (
         Ok((cursor, animal_placement, requested_prefab)),
         Some(species_index),
@@ -323,7 +325,9 @@ pub(super) fn validate_selected_species_adoption_placement_preview(
                 .0
                 .saturating_mul(i64::from(availability.multiplier_permille))
                 / 1000;
-            if unlimited_zoo_cash.is_none() && zoo_cash.0 .0 < adoption_cost.0 {
+            if unlimited_zoo_cash.as_ref().is_none_or(|policy| !policy.0)
+                && zoo_cash.0 .0 < adoption_cost.0
+            {
                 PlacementValidity::Invalid(PlacementFailure::Unaffordable)
             } else {
                 PlacementValidity::Valid {
@@ -417,7 +421,7 @@ pub(super) fn confirm_selected_species_adoption_into_habitat(
                 rotation.0 = transform.rotation;
             }
             if has_task {
-                openzt2_zoo_state::animal_behavior::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation(animal, &mut commands);
+                openzt2_zoo_state::behavior_task_execution_types::running_actions::mark_behavior_task_for_failure_and_stop_navigation(animal, &mut commands);
             }
             commands.entity(animal).remove::<(
                 openzt2_zoo_state::locomotion::locomotion_types::Destination,

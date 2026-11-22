@@ -10,24 +10,28 @@ use openzt2_game_data::{
     },
     AssetId,
 };
+use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_zoo_state::animal_health::types::Frozen;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionPhase;
 use openzt2_zoo_state::locomotion::locomotion_types::{NavAgent, NavFlags, Route, Steering};
 
-fn fixture(kill_subject: bool, kill_target: bool) -> (App, BehaviorTaskExecutionState) {
+fn fixture(kill_subject: bool, kill_target: bool) -> (App, Entity, BehaviorTaskExecutionState) {
     let mut app = App::new();
     app.add_observer(openzt2_zoo_state::behavior_task_execution_types::running_actions::apply_behavior_instruction_completion);
     app.init_resource::<Assets<BehaviorDocumentAsset>>()
         .init_resource::<Assets<WorldDefinitionAsset>>()
         .init_resource::<WorldDefinitions>()
-        .insert_resource(ZooClock {
+        .add_message::<AnimalDied>()
+        .add_observer(execute_animal_termination_actions).add_systems(Update, openzt2_zoo_state::behavior_task_execution_types::running_actions::activate_due_behavior_instructions);
+    let root = app
+        .world_mut()
+        .spawn(ZooClock {
             fractional_tick: Default::default(),
             tick: 1,
             absolute_day: 0,
             tick_in_day: 1,
         })
-        .add_message::<AnimalDied>()
-        .add_systems(Update, execute_animal_termination_actions);
+        .id();
     let definitions = WorldDefinitionDocument {
         simulation_timing: Some(SimulationTimingDefinition {
             fixed_hz: 10,
@@ -72,6 +76,7 @@ fn fixture(kill_subject: bool, kill_target: bool) -> (App, BehaviorTaskExecution
         ));
     (
         app,
+        root,
         BehaviorTaskExecutionState {
             execution_id: 1,
             program,
@@ -91,12 +96,13 @@ fn fixture(kill_subject: bool, kill_target: bool) -> (App, BehaviorTaskExecution
 
 #[test]
 fn authored_death_without_disease_cleans_activity_and_emits_once() {
-    let (mut app, task) = fixture(true, false);
+    let (mut app, root, task) = fixture(true, false);
     let cause = DeathCause::Authored(task.program);
     let actor = app
         .world_mut()
         .spawn((
             Animal,
+            WorldMember { root },
             Frozen,
             task,
             NavAgent {
@@ -140,10 +146,13 @@ fn authored_death_without_disease_cleans_activity_and_emits_once() {
 
 #[test]
 fn kill_target_kills_the_resolved_animal_and_advances_only_on_success() {
-    let (mut app, mut task) = fixture(false, true);
-    let target = app.world_mut().spawn(Animal).id();
+    let (mut app, root, mut task) = fixture(false, true);
+    let target = app.world_mut().spawn((Animal, WorldMember { root })).id();
     task.target = Some(target);
-    let actor = app.world_mut().spawn((Animal, task)).id();
+    let actor = app
+        .world_mut()
+        .spawn((Animal, WorldMember { root }, task))
+        .id();
     app.update();
     assert!(app.world().get::<Dead>(target).is_some());
     assert!(app.world().get::<Dead>(actor).is_none());
@@ -162,10 +171,13 @@ fn kill_target_kills_the_resolved_animal_and_advances_only_on_success() {
     assert_eq!(deaths.len(), 1);
     assert_eq!(deaths[0].animal, target);
 
-    let (mut app, mut task) = fixture(false, true);
+    let (mut app, root, mut task) = fixture(false, true);
     let target = app.world_mut().spawn_empty().id();
     task.target = Some(target);
-    let actor = app.world_mut().spawn((Animal, task)).id();
+    let actor = app
+        .world_mut()
+        .spawn((Animal, WorldMember { root }, task))
+        .id();
     app.update();
     assert!(app.world().get::<Dead>(target).is_none());
     assert!(app

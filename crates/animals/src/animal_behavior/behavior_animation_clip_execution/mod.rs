@@ -4,6 +4,7 @@ use openzt2_world_state::animation_graph::animation_graph_playback_message_types
     AnimationClipPlaybackRequestStarted, AnimationReturnRouteOutcome, AnimationReturnRouteRequest,
     CancelAnimationClipPlaybackRequest,
 };
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::behavior_action_actors;
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
     RunBehaviorAnimationClip, RunningBehaviorInstruction,
 };
@@ -34,13 +35,14 @@ pub(super) struct TimedBehaviorAnimationClip {
 }
 
 pub(super) fn start_current_behavior_animation_clip_actions(
+    activation: In<Option<Entity>>,
     mut commands: Commands,
-    simulation_clock: Res<ZooClock>,
+    simulation_clock: Single<&ZooClock>,
     mut behavior_tasks: Query<
         (
             Entity,
             (
-                &BehaviorTaskExecutionState,
+                &mut BehaviorTaskExecutionState,
                 &RunningBehaviorInstruction,
                 &RunBehaviorAnimationClip,
             ),
@@ -60,15 +62,19 @@ pub(super) fn start_current_behavior_animation_clip_actions(
 ) {
     for (
         actor,
-        (behavior_task, instruction, running_action),
+        (mut behavior_task, instruction, running_action),
         mut behavior_random,
         mut guest_random,
-    ) in &mut behavior_tasks
+    ) in behavior_action_actors(&mut behavior_tasks, activation.0)
     {
+        if activation.0.is_none() && !instruction.can_update_after_activation(simulation_clock.tick)
+        {
+            continue;
+        }
         if behavior_task.next_action_tick > simulation_clock.tick {
             continue;
         }
-        if !instruction.is_current(behavior_task) {
+        if !instruction.is_current(&behavior_task) {
             continue;
         }
         let animation = &running_action.0;
@@ -168,11 +174,7 @@ pub(super) fn start_current_behavior_animation_clip_actions(
             });
         debug!(?actor, program = ?behavior_task.program, request_id = request_id.id,
             clip = %animation.animation_clip_asset_key, "behavior clip requested");
-        instruction.resume_at(
-            actor,
-            simulation_clock.tick.saturating_add(1),
-            &mut commands,
-        );
+        behavior_task.next_action_tick = simulation_clock.tick.saturating_add(1);
     }
 }
 
@@ -215,10 +217,10 @@ pub(super) fn finish_behavior_animation_clip_actions_after_playback_completion(
     mut commands: Commands,
     mut completed_animations: MessageReader<AnimationCompleted>,
     animation_controllers: Query<&AnimationPresentationOwner>,
-    simulation_clock: Res<ZooClock>,
-    behavior_tasks: Query<
+    simulation_clock: Single<&ZooClock>,
+    mut behavior_tasks: Query<
         (
-            &BehaviorTaskExecutionState,
+            &mut BehaviorTaskExecutionState,
             &PendingBehaviorAnimationClipCompletion,
             &RunningBehaviorInstruction,
             Option<&openzt2_zoo_state::behavior_task_execution_types::running_actions::TimedBehaviorAnimationEffect>,
@@ -234,13 +236,13 @@ pub(super) fn finish_behavior_animation_clip_actions_after_playback_completion(
             continue;
         };
         let actor = animation_owner.gameplay_entity;
-        let Ok((behavior_task, pending, instruction, timed_effect, key)) =
-            behavior_tasks.get(actor)
+        let Ok((mut behavior_task, pending, instruction, timed_effect, key)) =
+            behavior_tasks.get_mut(actor)
         else {
             continue;
         };
         if completed_animation.explicit_clip_request_id != Some(pending.request_id)
-            || !pending.owns(behavior_task, instruction)
+            || !pending.owns(&behavior_task, instruction)
         {
             continue;
         }
@@ -262,25 +264,21 @@ pub(super) fn finish_behavior_animation_clip_actions_after_playback_completion(
             request_id = pending.request_id,
             "behavior clip completed"
         );
-        if pending.repeats {
-            instruction.resume_at(
-                actor,
-                simulation_clock.tick.saturating_add(1),
-                &mut commands,
-            );
-        } else {
-            instruction.complete(actor, simulation_clock.tick, &mut commands);
-        }
         commands
             .entity(actor)
             .remove::<PendingBehaviorAnimationClipCompletion>();
+        if pending.repeats {
+            behavior_task.next_action_tick = simulation_clock.tick.saturating_add(1);
+        } else {
+            instruction.complete(actor, simulation_clock.tick, &mut commands);
+        }
     }
 }
 
 /// The behavior owns its hold time and waits for the animation owner's return result.
 pub(super) fn finish_behavior_animation_clip_actions_after_play_time(
     mut commands: Commands,
-    simulation_clock: Res<ZooClock>,
+    simulation_clock: Single<&ZooClock>,
     mut cancellations: MessageWriter<CancelAnimationClipPlaybackRequest>,
     mut started: MessageReader<AnimationClipPlaybackRequestStarted>,
     mut returns: MessageWriter<AnimationReturnRouteRequest>,
@@ -364,7 +362,7 @@ pub(super) fn finish_behavior_animation_clip_actions_after_play_time(
 fn consume_animation_return_route(
     outcome: On<AnimationReturnRouteOutcome>,
     mut commands: Commands,
-    clock: Res<ZooClock>,
+    clock: Single<&ZooClock>,
     mut cancellations: MessageWriter<CancelAnimationClipPlaybackRequest>,
     actors: Query<(
         &TimedBehaviorAnimationClip,
@@ -382,6 +380,10 @@ fn consume_animation_return_route(
         return;
     }
     commands.entity(outcome.observer()).try_despawn();
+    commands.entity(actor).try_remove::<(
+        TimedBehaviorAnimationClip,
+        PendingBehaviorAnimationClipCompletion,
+    )>();
     if !failing && pending.request_id == timed.request_id && pending.owns(task, instruction) {
         if outcome.succeeded {
             instruction.complete(actor, clock.tick, &mut commands);
@@ -393,10 +395,6 @@ fn consume_animation_return_route(
             super::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
         }
     }
-    commands.entity(actor).try_remove::<(
-        TimedBehaviorAnimationClip,
-        PendingBehaviorAnimationClipCompletion,
-    )>();
 }
 
 #[cfg(test)]

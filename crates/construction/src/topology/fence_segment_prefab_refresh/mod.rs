@@ -24,7 +24,7 @@ use openzt2_zoo_state::topology::topology_grid_geometry::calculate_topology_edge
 
 pub(super) fn refresh_fence_segment_prefabs_after_topology_index_changes(
     mut commands: Commands,
-    topology_index: Res<TopologyIndex>,
+    topology_index: Single<&TopologyIndex>,
     active_definitions: Res<WorldDefinitions>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     nodes: Query<&TopologyNode>,
@@ -32,7 +32,7 @@ pub(super) fn refresh_fence_segment_prefabs_after_topology_index_changes(
     incident: Query<(Option<&FencesStartingHere>, Option<&FencesEndingHere>)>,
     changed_edges: Query<Entity, Or<(Changed<FenceEdge>, Changed<FenceStart>, Changed<FenceEnd>)>>,
     edges: Query<FenceSegment>,
-    grid: Res<TopologyGrid>,
+    grid: Single<Ref<TopologyGrid>>,
     mut transforms: Query<&mut Transform, With<FenceEdge>>,
     mut fences: Query<(
         Entity,
@@ -43,6 +43,8 @@ pub(super) fn refresh_fence_segment_prefabs_after_topology_index_changes(
         Has<Gate>,
     )>,
 ) {
+    let topology_index = topology_index.into_inner();
+    let grid = grid.into_inner();
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };

@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
+use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainIndex;
 use openzt2_zoo_state::terrain::terrain_edit_types::{TerrainChanged, TerrainPresentationRestored};
 
@@ -34,7 +35,6 @@ fn unchanged_placement_preview_keeps_its_footprint_and_grid_decals() {
     app.init_resource::<Assets<WorldDefinitionAsset>>()
         .init_resource::<WorldDefinitions>()
         .init_resource::<Assets<Mesh>>()
-        .init_resource::<TerrainIndex>()
         .init_resource::<Assets<TerrainAsset>>()
         .add_message::<TerrainChanged>()
         .add_message::<TerrainPresentationRestored>()
@@ -102,9 +102,11 @@ fn unchanged_placement_preview_keeps_its_footprint_and_grid_decals() {
     app.world_mut()
         .resource_mut::<WorldDefinitions>()
         .index_test_document(handle, &document);
+    let root = app.world_mut().spawn(TerrainIndex::default()).id();
     let preview = app
         .world_mut()
         .spawn((
+            WorldMember { root },
             Visibility::Inherited,
             ConstructionPreview {
                 definition,

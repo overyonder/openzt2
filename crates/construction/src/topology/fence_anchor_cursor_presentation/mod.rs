@@ -48,9 +48,9 @@ pub(super) fn present_fence_anchor_cursor(
     tool: Res<ConstructionTool>,
     active_definitions: Res<WorldDefinitions>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
-    grid: Res<TopologyGrid>,
+    grid: Single<&TopologyGrid>,
     ui_capture: Res<openzt2_interface_state::ui::pointer_capture_types::UiPointerCapture>,
-    terrain_index: Res<TerrainIndex>,
+    terrain_index: Single<&TerrainIndex>,
     terrain_assets: Res<Assets<TerrainAsset>>,
     terrain_chunks: Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
     pointer: Query<&ConstructionCursor>,
@@ -63,6 +63,8 @@ pub(super) fn present_fence_anchor_cursor(
         Option<&Mesh3d>,
     )>,
 ) {
+    let grid = grid.into_inner();
+    let terrain_index = terrain_index.into_inner();
     // A gate goes onto an existing fence, so it has no anchor post to show.
     let gate = matches!(*tool, ConstructionTool::Fence(definition)
         if active_definitions.get(&definitions)

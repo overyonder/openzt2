@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::WhenBehaviorAction;
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
     RunBehaviorFeedback, RunningBehaviorInstruction,
 };
@@ -8,8 +9,9 @@ use openzt2_zoo_state::behavior_task_execution_types::BehaviorFeedbackDispatched
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
 
 pub(super) fn dispatch_current_authored_behavior_feedback_and_advance(
+    activation: On<WhenBehaviorAction<RunBehaviorFeedback>>,
     mut commands: Commands,
-    simulation_clock: Res<ZooClock>,
+    simulation_clock: Single<&ZooClock>,
     mut behavior_tasks: Query<(
         Entity,
         (
@@ -20,7 +22,9 @@ pub(super) fn dispatch_current_authored_behavior_feedback_and_advance(
     )>,
     mut dispatched_feedback: MessageWriter<BehaviorFeedbackDispatched>,
 ) {
-    for (actor, (behavior_task, instruction, running_action)) in &mut behavior_tasks {
+    for (actor, (behavior_task, instruction, running_action)) in
+        std::iter::once(behavior_tasks.get_mut(activation.entity)).flatten()
+    {
         if behavior_task.next_action_tick > simulation_clock.tick {
             continue;
         }

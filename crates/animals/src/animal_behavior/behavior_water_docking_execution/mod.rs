@@ -4,6 +4,7 @@ use super::{
 };
 use bevy::prelude::*;
 use openzt2_game_assets::application_lifecycle::GamePhase;
+use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_world_state::{
     animation_graph::animation_graph_playback_message_types::{
         AnimationClipPlaybackRequest, AnimationClipPlaybackRequestRejected,
@@ -20,6 +21,7 @@ use openzt2_world_state::{
     world_spawn::world_entity_crating::WorldEntityIsCrated,
 };
 use openzt2_zoo_state::animal_behavior::behavior_natural_water_target_types::SelectedNaturalWaterTarget;
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::behavior_action_actors;
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
     BehaviorInstructionId, RunBehaviorDockWater, RunningBehaviorInstruction,
 };
@@ -29,7 +31,7 @@ use openzt2_zoo_state::{
         BehaviorTaskExecutionState, PendingBehaviorTaskFailure, SamplingBehaviorDockPose,
     },
     locomotion::locomotion_types::{
-        Arrived, Destination, DockAt, Docking, NavigationFailed, NavigationRequestSequence,
+        Arrived, Destination, DockAt, Docking, NavigationFailed, NavigationRequestGeneration,
     },
 };
 
@@ -74,14 +76,25 @@ impl WaterDock {
 
 pub(super) fn register(application: &mut App) {
     use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
-        BehaviorStep, BehaviorStepSet,
+        activated_behavior_actor, update_waiting_behavior_actors,
     };
+    application.add_observer(
+        activated_behavior_actor::<
+            openzt2_zoo_state::behavior_task_execution_types::running_actions::RunBehaviorDockWater,
+        >
+            .pipe(execute_water_docking),
+    );
+
+    use openzt2_zoo_state::behavior_task_execution_types::running_actions::BehaviorStepFixedSet;
     application
         .add_systems(
-            BehaviorStep,
-            (receive_water_docking_events, execute_water_docking)
+            FixedUpdate,
+            (
+                receive_water_docking_events,
+                update_waiting_behavior_actors.pipe(execute_water_docking),
+            )
                 .chain()
-                .in_set(BehaviorStepSet::Actions)
+                .in_set(BehaviorStepFixedSet::Think)
                 .run_if(in_state(GamePhase::InGame)),
         )
         .add_systems(
@@ -166,20 +179,22 @@ fn receive_water_docking_events(
 }
 
 fn execute_water_docking(
+    activation: In<Option<Entity>>,
     mut commands: Commands,
-    clock: Res<ZooClock>,
+    clocks: Query<&ZooClock>,
     shores: NaturalWaterTargets,
     transforms: Query<&GlobalTransform>,
     controllers: Query<&AnimationPlaybackController>,
     movement: Query<&Destination>,
     escaped: Query<(), With<openzt2_zoo_state::animal_health::types::Escaped>>,
-    mut sequence: ResMut<NavigationRequestSequence>,
+    mut navigation_generations: Query<&mut NavigationRequestGeneration>,
     mut navigation: MessageWriter<DockAt>,
     mut clips: MessageWriter<AnimationClipPlaybackRequest>,
     mut cancellations: MessageWriter<CancelAnimationClipPlaybackRequest>,
     mut actors: Query<
         (
             Entity,
+            &WorldMember,
             Option<&BehaviorTaskExecutionState>,
             Option<(&RunningBehaviorInstruction, &RunBehaviorDockWater)>,
             Option<&SelectedNaturalWaterTarget>,
@@ -193,9 +208,23 @@ fn execute_water_docking(
         Or<(With<RunBehaviorDockWater>, With<WaterDock>)>,
     >,
 ) {
-    for (actor, task, running, selected, pending, failing, crated, dead, frozen, tranquilized) in
-        &mut actors
+    for (
+        actor,
+        member,
+        task,
+        running,
+        selected,
+        pending,
+        failing,
+        crated,
+        dead,
+        frozen,
+        tranquilized,
+    ) in behavior_action_actors(&mut actors, activation.0)
     {
+        let Ok(clock) = clocks.get(member.root) else {
+            continue;
+        };
         let mut pending = pending;
         let invalid = failing || crated || dead || frozen || tranquilized;
         if let Some(dock) = pending.as_deref() {
@@ -203,7 +232,8 @@ fn execute_water_docking(
                 || task
                     .zip(running)
                     .is_none_or(|(task, (step, _))| !dock.owns(task, step))
-                || (shores.water_inputs_changed(&dock.shore) && !shores.valid(&dock.shore))
+                || (shores.water_inputs_changed(member.root, &dock.shore)
+                    && !shores.valid(member.root, &dock.shore))
             {
                 if let Some(request) = dock.clip_request {
                     cancellations.write(CancelAnimationClipPlaybackRequest {
@@ -238,11 +268,14 @@ fn execute_water_docking(
         else {
             continue;
         };
+        if activation.0.is_none() && !instruction.can_update_after_activation(clock.tick) {
+            continue;
+        }
         let action = &running.0;
         let Some(shore) = pending.as_deref().map(|dock| dock.shore).or_else(|| {
-            selected
-                .copied()
-                .filter(|shore| task.target() == Some(shore.region) && shores.valid(shore))
+            selected.copied().filter(|shore| {
+                task.target() == Some(shore.region) && shores.valid(member.root, shore)
+            })
         }) else {
             mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
             continue;
@@ -262,12 +295,16 @@ fn execute_water_docking(
                     let (scale, _, _) = actor_transform.to_scale_rotation_translation();
                     let point = shore.water - rotation * (scale * mouth);
                     let escaped = escaped.contains(actor);
-                    if !point.is_finite() || !shores.docking_endpoint(actor, point, &shore, escaped)
+                    if !point.is_finite()
+                        || !shores.docking_endpoint(member.root, actor, point, &shore, escaped)
                     {
                         dock.stage = WaterDockStage::Failed;
                         continue;
                     }
-                    let request = sequence.next();
+                    let Ok(mut generation) = navigation_generations.get_mut(actor) else {
+                        continue;
+                    };
+                    let request = generation.advance();
                     navigation.write(DockAt {
                         entity: actor,
                         request_id: request,
@@ -308,10 +345,10 @@ fn execute_water_docking(
                             request_id: request,
                         });
                     }
-                    instruction.complete(actor, clock.tick, &mut commands);
                     commands
                         .entity(actor)
                         .remove::<(WaterDock, SamplingBehaviorDockPose)>();
+                    instruction.complete(actor, clock.tick, &mut commands);
                 }
                 WaterDockStage::Failed => {
                     if let Some(request) = dock.clip_request.take() {
@@ -320,10 +357,10 @@ fn execute_water_docking(
                             request_id: request,
                         });
                     }
-                    mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
                     commands
                         .entity(actor)
                         .remove::<(WaterDock, SamplingBehaviorDockPose)>();
+                    mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
                 }
                 WaterDockStage::Finishing {
                     request,
@@ -344,9 +381,16 @@ fn execute_water_docking(
                     let point = destination.world;
                     let escaped = escaped.contains(actor);
                     let revalidate = dock.validated_endpoint != Some((point, escaped))
-                        || shores.docking_inputs_changed(actor, point, &shore, escaped);
+                        || shores.docking_inputs_changed(
+                            member.root,
+                            actor,
+                            point,
+                            &shore,
+                            escaped,
+                        );
                     if destination.request_id != request
-                        || (revalidate && !shores.docking_endpoint(actor, point, &shore, escaped))
+                        || (revalidate
+                            && !shores.docking_endpoint(member.root, actor, point, &shore, escaped))
                     {
                         dock.stage = WaterDockStage::Failed;
                     } else if revalidate {

@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::WhenBehaviorAction;
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
     RunBehaviorLearnTrick, RunningBehaviorInstruction,
 };
@@ -10,8 +11,9 @@ use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorTaskFailure
 use openzt2_zoo_state::shows::performer_training::PerformerTraining;
 
 pub(super) fn apply_current_authored_trick_learning(
+    activation: On<WhenBehaviorAction<RunBehaviorLearnTrick>>,
     mut commands: Commands,
-    clock: Res<ZooClock>,
+    clock: Single<&ZooClock>,
     mut performers: Query<
         (
             Entity,
@@ -25,7 +27,9 @@ pub(super) fn apply_current_authored_trick_learning(
         (With<Animal>, Without<PendingBehaviorTaskFailure>),
     >,
 ) {
-    for (performer, (task, instruction, running_action), training) in &mut performers {
+    for (performer, (task, instruction, running_action), training) in
+        std::iter::once(performers.get_mut(activation.entity)).flatten()
+    {
         if task.next_action_tick > clock.tick {
             continue;
         }

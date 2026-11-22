@@ -97,7 +97,7 @@ pub(in crate::animal_behavior) struct BehaviorScriptWorldAccess<'w, 's> {
     killed: Query<'w, 's, &'static BehaviorKilledTarget>,
     mates: Query<'w, 's, &'static AnimalMate>,
     diseases: Query<'w, 's, &'static mut Disease>,
-    clock: Res<'w, ZooClock>,
+    clock: Single<'w, 's, &'static ZooClock>,
     tokens: Query<'w, 's, &'static BehaviorSelfToken>,
     token_owners: Query<'w, 's, &'static Children>,
     lineage: AnimalLineage<'w, 's>,

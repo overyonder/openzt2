@@ -1,3 +1,5 @@
+use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
+use openzt2_zoo_state::topology::topology_graph_types::TopologyIndex;
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
@@ -18,18 +20,24 @@ use openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementPrevie
 #[test]
 fn occupancy_index_change_revalidates_an_unchanged_continuing_preview() {
     let mut app = App::new();
-    app.init_resource::<PlacedObjectFootprintOccupancyIndex>()
-        .init_resource::<openzt2_zoo_state::topology::topology_graph_types::TopologyIndex>()
-        .init_resource::<Assets<TerrainAsset>>()
+    app.init_resource::<Assets<TerrainAsset>>()
         .init_resource::<Assets<WorldDefinitionAsset>>()
         .init_resource::<WorldDefinitions>()
         .add_message::<openzt2_zoo_state::terrain::terrain_edit_types::TerrainChanged>()
         .add_message::<openzt2_zoo_state::habitat::habitat_types::ContainmentChanged>()
         .add_message::<ScenePlacementFootprintChanged>()
         .add_systems(Update, mark_changed_object_placement_previews_dirty);
+    let root = app
+        .world_mut()
+        .spawn((
+            PlacedObjectFootprintOccupancyIndex::default(),
+            TopologyIndex::default(),
+        ))
+        .id();
     let preview = app
         .world_mut()
         .spawn((
+            WorldMember { root },
             ConstructionPreview {
                 definition: AssetId([3; 16]),
                 transform: Transform::IDENTITY,
@@ -58,11 +66,12 @@ fn occupancy_index_change_revalidates_an_unchanged_continuing_preview() {
         .world()
         .get::<ObjectPlacementPreviewDirty>(preview)
         .is_none());
-    app.world_mut().spawn(
+    app.world_mut().spawn((
+        WorldMember { root },
         openzt2_zoo_state::placement::placed_object_types::IndexedObjectPlacementCells(Box::new([
             IVec2::ZERO,
         ])),
-    );
+    ));
 
     app.update();
 

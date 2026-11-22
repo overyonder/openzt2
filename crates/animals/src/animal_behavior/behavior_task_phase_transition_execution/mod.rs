@@ -6,13 +6,13 @@ use bevy::prelude::*;
 mod tests;
 
 use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
-use openzt2_game_data::behavior::document::BehaviorTaskActionPhase;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_game_data::world_definitions::behavior_selection_policy::BehaviorSelectionPolicy;
 use openzt2_zoo_state::animal_behavior::behavior_target_retry_delays::{
     BehaviorTargetRetryClock, BehaviorTargetRetryOutcomes,
 };
+#[cfg(test)]
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
@@ -22,7 +22,9 @@ use openzt2_zoo_state::animal_behavior::behavior_set_start_request_types::Pendin
 use openzt2_zoo_state::behavior_task_execution_types::SynchronizedBehaviorParticipant;
 
 use openzt2_zoo_state::behavior_task_execution_types::continuations::BehaviorContinuationFrames;
-use openzt2_zoo_state::behavior_task_execution_types::running_actions::RunningBehaviorInstruction;
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
+    continue_behavior_program, BehaviorProgramBoundary, RunningBehaviorInstruction,
+};
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionPhase;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskFailed;
@@ -77,6 +79,7 @@ pub(super) fn advance_behavior_target_retry_clocks(
 }
 
 pub(super) fn advance_behavior_tasks_through_return_failure_completion_and_final_outcome(
+    boundary: On<BehaviorProgramBoundary>,
     behavior_document_assets: Res<Assets<BehaviorDocumentAsset>>,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     world_definitions: Res<WorldDefinitions>,
@@ -91,202 +94,112 @@ pub(super) fn advance_behavior_tasks_through_return_failure_completion_and_final
     continuations: BehaviorContinuationFrames,
     mut commands: Commands,
     mut retry_outcomes: BehaviorTargetRetryOutcomes,
-    mut step_progress: Option<
-        ResMut<
-            openzt2_zoo_state::behavior_task_execution_types::running_actions::BehaviorStepProgress,
-        >,
-    >,
-    simulation_clock: Res<ZooClock>,
     mut failed_behavior_tasks: MessageWriter<BehaviorTaskFailed>,
     mut finished_behavior_tasks: MessageWriter<BehaviorTaskFinished>,
 ) {
     let retry_policy = world_definitions
         .get(&world_definition_assets)
         .and_then(|definitions| definitions.behavior_selection_policy().copied());
-    let mut record_advance = || {
-        if let Some(progress) = step_progress.as_deref_mut() {
-            progress.record_advance();
-        }
+    let actor_entity = boundary.entity;
+    let tick = boundary.tick;
+    let Ok((_, mut behavior_task, pending_failure, instruction, retry_delays)) =
+        behavior_tasks.get_mut(actor_entity)
+    else {
+        return;
     };
-    for (actor_entity, mut behavior_task, pending_failure, instruction, retry_delays) in
-        &mut behavior_tasks
-    {
-        let retry_target = behavior_task
-            .target()
-            .filter(|target| target_definitions.contains(*target));
-        if pending_failure.is_none() && behavior_task.next_action_tick > simulation_clock.tick {
-            continue;
-        }
-        if pending_failure.is_some() {
-            record_advance();
-            if behavior_task.phase == BehaviorTaskExecutionPhase::Set {
-                if let Some(return_frame) = continuations.pop(actor_entity, &mut commands) {
-                    behavior_task.depth = behavior_task.depth.saturating_sub(1);
-                    behavior_task.program = return_frame.program;
-                    behavior_task.document = return_frame.document;
-                    behavior_task.declaration = return_frame.declaration;
-                    behavior_task.phase = return_frame.phase;
-                    behavior_task.action = return_frame.action;
-                    behavior_task.repetitions = return_frame.repetitions;
-                    behavior_task.next_action_tick = simulation_clock.tick;
-                    continue;
-                }
-            }
-            let failure_actions = behavior_document_assets
-                .get(&behavior_task.document)
-                .and_then(|asset| asset.behavior_task_at_index(behavior_task.declaration))
-                .map(|declaration| &declaration.failure);
-            if behavior_task.phase != BehaviorTaskExecutionPhase::Failure
-                && failure_actions.is_some_and(|actions| !actions.is_empty())
-            {
-                behavior_task.phase = BehaviorTaskExecutionPhase::Failure;
-                behavior_task.action = 0;
-                behavior_task.repetitions = 0;
-                continuations.truncate(actor_entity, 0, &mut commands);
-                behavior_task.depth = 0;
-                behavior_task.next_action_tick = simulation_clock.tick;
-                commands
-                    .entity(actor_entity)
-                    .remove::<PendingBehaviorTaskFailure>();
-            } else {
-                finish_target_retry_outcome(
-                    actor_entity,
-                    retry_target,
-                    true,
-                    retry_policy,
-                    retry_delays,
-                    &mut retry_outcomes,
-                    &mut commands,
-                );
-                failed_behavior_tasks.write(BehaviorTaskFailed {
-                    actor: actor_entity,
-                    execution_id: behavior_task.execution_id,
+    let retry_target = behavior_task
+        .target()
+        .filter(|target| target_definitions.contains(*target));
+    if pending_failure.is_none() && behavior_task.next_action_tick > tick {
+        return;
+    }
+    let failed = if pending_failure.is_some() {
+        if behavior_task.phase == BehaviorTaskExecutionPhase::Set {
+            if let Some(frame) = continuations.pop(actor_entity, &mut commands) {
+                let depth = behavior_task.depth.saturating_sub(1);
+                behavior_task.restore_suspended_instruction(&frame, depth, tick);
+                commands.trigger(BehaviorProgramBoundary {
+                    entity: actor_entity,
+                    tick,
                 });
-                commands.entity(actor_entity).remove::<(
-                    BehaviorTaskExecutionState,
-                    openzt2_zoo_state::animal_behavior::behavior_task_effective_score_types::BehaviorTaskEffectiveScore,
-                    PendingBehaviorTaskFailure,
-                    PendingBehaviorAnimationClipCompletion,
-                    PendingBehaviorDockingCompletion,
-                    openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorMoveCompletion,
-                )>();
+                return;
             }
-            continue;
         }
-        let Some(behavior_document_asset) = behavior_document_assets.get(&behavior_task.document)
-        else {
-            continue;
+        let failure_actions = behavior_document_assets
+            .get(&behavior_task.document)
+            .and_then(|asset| asset.behavior_task_at_index(behavior_task.declaration))
+            .map(|declaration| &declaration.failure);
+        if behavior_task.phase != BehaviorTaskExecutionPhase::Failure
+            && failure_actions.is_some_and(|actions| !actions.is_empty())
+        {
+            behavior_task.phase = BehaviorTaskExecutionPhase::Failure;
+            behavior_task.action = 0;
+            behavior_task.repetitions = 0;
+            continuations.truncate(actor_entity, 0, &mut commands);
+            behavior_task.depth = 0;
+            behavior_task.next_action_tick = tick;
+            commands
+                .entity(actor_entity)
+                .remove::<PendingBehaviorTaskFailure>();
+            continue_behavior_program(actor_entity, tick, &mut commands);
+            return;
+        }
+        true
+    } else {
+        let Some(document) = behavior_document_assets.get(&behavior_task.document) else {
+            return;
         };
         if instruction.is_some_and(|instruction| instruction.is_current(&behavior_task)) {
-            continue;
+            return;
         }
-        let current_phase = if behavior_task.phase == BehaviorTaskExecutionPhase::Set {
-            behavior_document_asset
-                .behavior_set_at_index(behavior_task.declaration)
-                .map(|set| (set.name.as_str(), &set.actions))
-        } else {
-            behavior_document_asset
-                .behavior_task_at_index(behavior_task.declaration)
-                .and_then(|task| {
-                    Some((
-                        task.name.as_str(),
-                        match behavior_task.phase {
-                            BehaviorTaskExecutionPhase::Execution => &task.execution,
-                            BehaviorTaskExecutionPhase::Completion => &task.completion,
-                            BehaviorTaskExecutionPhase::Failure => &task.failure,
-                            BehaviorTaskExecutionPhase::Set => return None,
-                        },
-                    ))
-                })
-        };
-        if let Some((
-            name,
-            BehaviorTaskActionPhase::SupportedPrefix {
-                first_unsupported_action,
-                ..
-            }
-            | BehaviorTaskActionPhase::Unsupported {
-                first_unsupported_action,
-            },
-        )) = current_phase
-        {
-            // Name the enclosing task too when the unsupported action is in a set.
-            let enclosing_task = continuations
-                .frames(actor_entity)
-                .next()
-                .map(|frame| frame.program)
-                .unwrap_or(behavior_task.program);
-            record_advance();
-            warn!(actor = ?actor_entity, program = ?behavior_task.program, name,
-                phase = ?behavior_task.phase, action = first_unsupported_action,
-                ?enclosing_task,
-                "behavior reached an unsupported authored action; failing its task");
-            super::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation(
-                actor_entity, &mut commands,
-            );
-            continue;
-        }
-        if let Some(return_frame) = continuations.pop(actor_entity, &mut commands) {
-            record_advance();
-            behavior_task.depth = behavior_task.depth.saturating_sub(1);
-            behavior_task.program = return_frame.program;
-            behavior_task.document = return_frame.document;
-            behavior_task.declaration = return_frame.declaration;
-            behavior_task.phase = return_frame.phase;
-            behavior_task.action = return_frame.action;
-            behavior_task.repetitions = return_frame.repetitions;
-            behavior_task.next_action_tick = simulation_clock.tick;
-            continue;
+        if let Some(frame) = continuations.pop(actor_entity, &mut commands) {
+            let depth = behavior_task.depth.saturating_sub(1);
+            behavior_task.restore_suspended_instruction(&frame, depth, tick);
+            continue_behavior_program(actor_entity, tick, &mut commands);
+            return;
         }
         if behavior_task.phase == BehaviorTaskExecutionPhase::Execution
-            && behavior_document_asset
+            && document
                 .behavior_task_at_index(behavior_task.declaration)
                 .is_some_and(|task| !task.completion.is_empty())
         {
-            record_advance();
             behavior_task.phase = BehaviorTaskExecutionPhase::Completion;
             behavior_task.action = 0;
             behavior_task.repetitions = 0;
-            behavior_task.next_action_tick = simulation_clock.tick;
-            continue;
+            behavior_task.next_action_tick = tick;
+            continue_behavior_program(actor_entity, tick, &mut commands);
+            return;
         }
-        if behavior_task.phase == BehaviorTaskExecutionPhase::Failure {
-            finish_target_retry_outcome(
-                actor_entity,
-                retry_target,
-                true,
-                retry_policy,
-                retry_delays,
-                &mut retry_outcomes,
-                &mut commands,
-            );
-            failed_behavior_tasks.write(BehaviorTaskFailed {
-                actor: actor_entity,
-                execution_id: behavior_task.execution_id,
-            });
-        } else {
-            finish_target_retry_outcome(
-                actor_entity,
-                retry_target,
-                false,
-                retry_policy,
-                retry_delays,
-                &mut retry_outcomes,
-                &mut commands,
-            );
-            finished_behavior_tasks.write(BehaviorTaskFinished {
-                actor: actor_entity,
-                execution_id: behavior_task.execution_id,
-            });
-        }
-        commands.entity(actor_entity).remove::<(
-            BehaviorTaskExecutionState,
-            openzt2_zoo_state::animal_behavior::behavior_task_effective_score_types::BehaviorTaskEffectiveScore,
-            PendingBehaviorAnimationClipCompletion,
-            PendingBehaviorDockingCompletion,
-            openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorMoveCompletion,
-        )>();
+        behavior_task.phase == BehaviorTaskExecutionPhase::Failure
+    };
+    finish_target_retry_outcome(
+        actor_entity,
+        retry_target,
+        failed,
+        retry_policy,
+        retry_delays,
+        &mut retry_outcomes,
+        &mut commands,
+    );
+    if failed {
+        failed_behavior_tasks.write(BehaviorTaskFailed {
+            actor: actor_entity,
+            execution_id: behavior_task.execution_id,
+        });
+    } else {
+        finished_behavior_tasks.write(BehaviorTaskFinished {
+            actor: actor_entity,
+            execution_id: behavior_task.execution_id,
+        });
     }
+    commands.entity(actor_entity).remove::<(
+        BehaviorTaskExecutionState,
+        openzt2_zoo_state::animal_behavior::behavior_task_effective_score_types::BehaviorTaskEffectiveScore,
+        PendingBehaviorTaskFailure,
+        PendingBehaviorAnimationClipCompletion,
+        PendingBehaviorDockingCompletion,
+        openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorMoveCompletion,
+    )>();
 }
 
 fn finish_target_retry_outcome(

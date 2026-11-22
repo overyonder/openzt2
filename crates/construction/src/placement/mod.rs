@@ -111,7 +111,7 @@ impl Plugin for ObjectPlacementPlugin {
                 .in_set(FixedGameSet::Cleanup)
                 .run_if(in_state(GamePhase::InGame)),
         );
-        app.init_resource::<PlacedObjectFootprintOccupancyIndex>()
+        app.register_required_components::<openzt2_world_state::world_spawn::world_membership_types::WorldRoot, PlacedObjectFootprintOccupancyIndex>()
             .init_resource::<ObjectPlacementCellCollectionScratch>()
             .add_message::<openzt2_zoo_state::placement::object_placement_geometry::ScenePlacementFootprintChanged>()
             .add_message::<CommitObjectPlacementPreviewRequest>()
@@ -226,11 +226,7 @@ impl Plugin for ObjectPlacementPlugin {
     }
 }
 
-fn reset_object_placement_resources(
-    mut index: ResMut<PlacedObjectFootprintOccupancyIndex>,
-    mut scratch: ResMut<ObjectPlacementCellCollectionScratch>,
-) {
-    *index = default();
+fn reset_object_placement_resources(mut scratch: ResMut<ObjectPlacementCellCollectionScratch>) {
     *scratch = default();
 }
 

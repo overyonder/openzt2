@@ -2,6 +2,7 @@
 //! detach before the authored continuation returns to the enclosing task.
 
 use bevy::ecs::relationship::RelationshipTarget;
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::behavior_action_actors;
 
 use super::super::behavior_subject_type_resolution::{
     behavior_subject_type_identifiers, AnimalBehaviorSubjectTypes,
@@ -36,18 +37,21 @@ pub(super) struct HeldFoodPropAttachment {
 }
 
 pub(super) fn register(app: &mut App) {
+    use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
+        activated_behavior_actor, update_waiting_behavior_actors,
+    };
+    app.add_observer(activated_behavior_actor::<openzt2_zoo_state::behavior_task_execution_types::running_actions::RunBehaviorAttachObject>.pipe(execute_food_prop_attachments));
+
     use openzt2_game_assets::application_lifecycle::GamePhase;
     use openzt2_world_state::application_schedule::FixedGameSet;
-    use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
-        BehaviorStep, BehaviorStepSet,
-    };
-    app.add_systems(BehaviorStep, (
+    use openzt2_zoo_state::behavior_task_execution_types::running_actions::BehaviorStepFixedSet;
+    app.add_systems(FixedUpdate, (
         discard_cancelled_food_prop_attachments,
-        execute_food_prop_attachments,
+        update_waiting_behavior_actors.pipe(execute_food_prop_attachments),
     )
         .chain()
-        .before(super::start_or_finish_object_attachment)
-        .in_set(BehaviorStepSet::Actions)
+        .before(super::BehaviorObjectAttachmentSet)
+        .in_set(BehaviorStepFixedSet::Think)
         .run_if(in_state(GamePhase::InGame)))
         .add_systems(FixedUpdate, receive_food_prop_animation_events
             .after(openzt2_zoo_state::behavior_task_execution_types::running_actions::BehaviorAnimationKeyDelivery)
@@ -114,16 +118,20 @@ pub(super) fn finish_food_prop_admission(
     actor: Entity,
     item: Entity,
     admission: FoodPropAdmission,
-    tasks: &Query<(&BehaviorTaskExecutionState, &RunningBehaviorInstruction)>,
+    tasks: &mut Query<(&mut BehaviorTaskExecutionState, &RunningBehaviorInstruction)>,
     playback: &mut MessageWriter<AnimationClipPlaybackRequest>,
     commands: &mut Commands,
 ) {
-    let Ok((task, instruction)) = tasks.get(actor) else {
+    let Ok((mut task, instruction)) = tasks.get_mut(actor) else {
         commands.entity(item).try_despawn();
         return;
     };
+    if !instruction.is_current(&task) {
+        commands.entity(item).try_despawn();
+        return;
+    }
     let completed = admission.animation.is_none();
-    let mut origin = PendingObjectAttachment::waiting_for_attachment(task, instruction, None);
+    let mut origin = PendingObjectAttachment::waiting_for_attachment(&task, instruction, None);
     origin.joint = admission.subject_joint;
     if let Some(animation_clip_asset_key) = admission.animation {
         origin.request_id = Some(
@@ -147,21 +155,22 @@ pub(super) fn finish_food_prop_admission(
         detached: false,
         completed,
     });
-    instruction.resume_at(actor, admission.tick.saturating_add(1), commands);
+    task.next_action_tick = admission.tick.saturating_add(1);
 }
 
 fn execute_food_prop_attachments(
+    activation: In<Option<Entity>>,
     mut commands: Commands,
     assets: AttachmentAssets,
     loaded: Res<LoadedBehaviorDocumentCollection>,
     animal_types: AnimalBehaviorSubjectTypes,
-    clock: Res<ZooClock>,
+    clock: Single<&ZooClock>,
     mut requests: MessageWriter<AnimationClipPlaybackRequest>,
-    actors: Query<
+    mut actors: Query<
         (
             Entity,
             (
-                &BehaviorTaskExecutionState,
+                &mut BehaviorTaskExecutionState,
                 &RunningBehaviorInstruction,
                 &RunBehaviorAttachObject,
             ),
@@ -192,7 +201,7 @@ fn execute_food_prop_attachments(
     };
     for (
         actor,
-        (task, instruction, running_action),
+        (mut task, instruction, running_action),
         actor_definition,
         world,
         pending,
@@ -200,8 +209,11 @@ fn execute_food_prop_attachments(
         species,
         staff,
         guest,
-    ) in &actors
+    ) in behavior_action_actors(&mut actors, activation.0)
     {
+        if activation.0.is_none() && !instruction.can_update_after_activation(clock.tick) {
+            continue;
+        }
         if task.next_action_tick > clock.tick {
             continue;
         }
@@ -296,7 +308,7 @@ fn execute_food_prop_attachments(
             continue;
         };
         let mut state = HeldFoodPropAttachment {
-            origin: PendingObjectAttachment::waiting_for_attachment(task, instruction, None),
+            origin: PendingObjectAttachment::waiting_for_attachment(&task, instruction, None),
             attached: source.held_prop.is_none(),
             detached: false,
             completed: action.animation.is_none(),
@@ -426,7 +438,7 @@ fn execute_food_prop_attachments(
             );
         }
         commands.entity(actor).insert(state);
-        instruction.resume_at(actor, clock.tick.saturating_add(1), &mut commands);
+        task.next_action_tick = clock.tick.saturating_add(1);
     }
 }
 

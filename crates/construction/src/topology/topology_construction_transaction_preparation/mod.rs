@@ -13,7 +13,7 @@ use crate::placement::stomped_object_edit_preparation::{
 };
 use openzt2_game_data::world_definitions::object_placement::placement_stomp_rules::PlacementStompAction;
 use openzt2_zoo_state::placement::{
-    placement_occupancy_index::PlacedObjectFootprintOccupancyIndex,
+    placement_occupancy_index::PlacedObjectFootprintQueries,
     placement_transaction_types::{ObjectPlacementEditPrepared, PreparedObjectPlacementEdit, PreparedObjectPlacementMutation},
 };
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
@@ -53,6 +53,7 @@ use openzt2_zoo_state::topology::topology_graph_types::TopologyGrid;
 use openzt2_zoo_state::topology::topology_graph_types::TopologyIndex;
 
 fn prepare_fence_construction_snapshots(
+    root: Entity,
     submitted: Option<&FenceDrawPlan>,
     preview: &FencePreview,
     index: &TopologyIndex,
@@ -179,13 +180,13 @@ fn prepare_fence_construction_snapshots(
             for cell in &samples {
                 minimum = minimum.max(
                     ground
-                        .ground_height_at_topology_cell(*cell)
+                        .ground_height_at_topology_cell(root, *cell)
                         .ok_or(PlacementFailure::OutsideMap)?
                         + policy.minimum_tank_wall_height_cm as f32 / 100.0,
                 );
                 maximum = maximum.min(
                     ground
-                        .terrain_units_at_topology_cell(*cell)
+                        .terrain_units_at_topology_cell(root, *cell)
                         .ok_or(PlacementFailure::OutsideMap)?
                         .maximum_height_metres
                         + policy.default_tank_wall_height_cm as f32 / 100.0,
@@ -316,10 +317,11 @@ calculate_path_construction_plan(
 }
 
 fn prepare_objects_stomped_by_ground_path(
+    root: Entity,
     snapshots: &[TopologySnapshot],
     grid: TopologyGrid,
     definitions: WorldDefinitionsView<'_>,
-    placement: &PlacedObjectFootprintOccupancyIndex,
+    placement: &PlacedObjectFootprintQueries,
     targets: &Query<StompablePlacedObject>,
 ) -> Result<Vec<PreparedObjectPlacementMutation>, PlacementFailure> {
     let Some(TopologySnapshot::Path { definition, .. }) = snapshots.first() else {
@@ -353,6 +355,7 @@ fn prepare_objects_stomped_by_ground_path(
         });
     prepare_placement_stomp_removals(
         cells,
+        root,
         placement,
         targets,
         |_| false,
@@ -378,10 +381,8 @@ fn prepare_objects_stomped_by_ground_path(
 pub(super) fn prepare_topology_construction_transaction(
     mut commands: Commands,
     mut requests: MessageReader<PrepareConstruction>,
-    index: Res<TopologyIndex>,
-    grid: Res<TopologyGrid>,
-    (terrain, terrain_assets, terrain_chunks, ground, paths, terrain_messages): (
-        Res<TerrainIndex>,
+    roots: Query<(Ref<TopologyIndex>, Ref<TopologyGrid>, Ref<TerrainIndex>)>,
+    (terrain_assets, terrain_chunks, ground, paths, terrain_messages): (
         Res<Assets<TerrainAsset>>,
         Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
         TankWallGroundSampling,
@@ -414,22 +415,12 @@ pub(super) fn prepare_topology_construction_transaction(
         MessageWriter<TopologyEditPreparationRejected>,
     ),
     (placement, stomp_targets, mut placement_prepared): (
-        Res<PlacedObjectFootprintOccupancyIndex>,
+        PlacedObjectFootprintQueries,
         Query<StompablePlacedObject>,
         MessageWriter<ObjectPlacementEditPrepared>,
     ),
 ) {
-    let version = TopologyPlanVersion {
-        revisions: [
-            grid.last_changed(),
-            index.last_changed(),
-            active_definitions.last_changed(),
-            definitions.last_changed(),
-            terrain.last_changed(),
-            terrain_assets.last_changed(),
-        ],
-        terrain_changes: terrain_change_cursor(&terrain_messages),
-    };
+    let definition_change = definitions.last_changed();
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };
@@ -449,6 +440,25 @@ pub(super) fn prepare_topology_construction_transaction(
                 &mut rejected,
             );
             continue;
+        };
+        let Ok((index, grid, terrain)) = roots.get(member.root) else {
+            write_topology_edit_preparation_rejection(
+                request.transaction,
+                PlacementFailure::OutsideMap,
+                &mut rejected,
+            );
+            continue;
+        };
+        let version = TopologyPlanVersion {
+            revisions: [
+                grid.last_changed(),
+                index.last_changed(),
+                active_definitions.last_changed(),
+                definition_change,
+                terrain.last_changed(),
+                terrain_assets.last_changed(),
+            ],
+            terrain_changes: terrain_change_cursor(&terrain_messages),
         };
         if terrain.chunks.is_empty() {
             write_topology_edit_preparation_rejection(
@@ -482,6 +492,7 @@ pub(super) fn prepare_topology_construction_transaction(
                 .map(|(created, removed, cost)| (vec![created], vec![removed], cost))
             }
             (Some(preview), None) => prepare_fence_construction_snapshots(
+                member.root,
                 fence_plan.filter(|plan| plan.version == version && plan.input == *preview),
                 preview,
                 &index,
@@ -529,6 +540,7 @@ pub(super) fn prepare_topology_construction_transaction(
         match result {
             Ok((created, removed, cost)) => {
                 match prepare_objects_stomped_by_ground_path(
+                    member.root,
                     &created,
                     *grid,
                     definitions,

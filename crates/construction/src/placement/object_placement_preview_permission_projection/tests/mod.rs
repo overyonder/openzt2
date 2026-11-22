@@ -50,7 +50,6 @@ fn create_headroom_test_application() -> App {
         PhysicsPlugins::default(),
     ))
     .init_asset::<Mesh>()
-    .init_resource::<TerrainIndex>()
     .insert_resource(TimeUpdateStrategy::FixedTimesteps(1));
     app.finish();
     app.cleanup();
@@ -63,12 +62,12 @@ fn create_headroom_test_application() -> App {
 fn flattening_occupied_ground_preserves_overhead_and_unrelated_terrain_obstructions(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut app = create_headroom_test_application();
-    let world = app.world_mut().spawn_empty().id();
+    let world = app.world_mut().spawn(TerrainIndex::default()).id();
     let other_world = app.world_mut().spawn_empty().id();
     let preview = app.world_mut().spawn_empty().id();
     let (chunk, ground) = spawn_terrain_surface(app.world_mut(), world, vec![8.0, 8.5, 8.0, 8.5]);
     {
-        let mut index = app.world_mut().resource_mut::<TerrainIndex>();
+        let mut index = app.world_mut().get_mut::<TerrainIndex>(world).unwrap();
         index.chunk_span_m = 2.0;
         index.chunks.insert(IVec2::ZERO, chunk);
     }
@@ -120,7 +119,8 @@ fn flattening_occupied_ground_preserves_overhead_and_unrelated_terrain_obstructi
         .entity_mut(chunk)
         .insert(WorldMember { root: world });
     app.world_mut()
-        .resource_mut::<TerrainIndex>()
+        .get_mut::<TerrainIndex>(world)
+        .unwrap()
         .chunks
         .clear();
     assert_eq!(
@@ -128,7 +128,8 @@ fn flattening_occupied_ground_preserves_overhead_and_unrelated_terrain_obstructi
         Some(ground)
     );
     app.world_mut()
-        .resource_mut::<TerrainIndex>()
+        .get_mut::<TerrainIndex>(world)
+        .unwrap()
         .chunks
         .insert(IVec2::ZERO, chunk);
 

@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::WhenBehaviorAction;
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
     RunBehaviorAnimalShowEvent, RunningBehaviorInstruction,
 };
@@ -13,8 +14,9 @@ use openzt2_zoo_state::shows::show_event_types::AuthoredAnimalShowEvent;
 
 #[allow(clippy::type_complexity)]
 pub(super) fn register_current_authored_animal_show_events(
+    activation: On<WhenBehaviorAction<RunBehaviorAnimalShowEvent>>,
     mut commands: Commands,
-    clock: Res<ZooClock>,
+    clock: Single<&ZooClock>,
     mut performers: Query<
         (
             Entity,
@@ -32,7 +34,9 @@ pub(super) fn register_current_authored_animal_show_events(
         ),
     >,
 ) {
-    for (performer, world, (task, instruction, running_action)) in &mut performers {
+    for (performer, world, (task, instruction, running_action)) in
+        std::iter::once(performers.get_mut(activation.entity)).flatten()
+    {
         if task.next_action_tick > clock.tick {
             continue;
         }

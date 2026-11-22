@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 use openzt2_game_assets::{
     application_lifecycle::GamePhase,
+    scene_prefab::ScenePrefabAsset,
     species::species_asset_types::{SpeciesAsset, SpeciesAssets},
     terrain::{
         terrain_asset_types_and_borrowing_queries::TerrainAsset,
@@ -21,13 +22,17 @@ use openzt2_world_state::{
     application_schedule::FixedGameSet,
     simulation_time::{
         deterministic_random_stream::ZooSeed,
-        simulation_clock_types::{ZooCalendar, ZooClock},
+        simulation_clock_types::{ZooCalendar, ZooClock, ZooDay, ZooDayAdvanced, ZooMonth},
         simulation_control_queries::simulation_is_running,
         simulation_control_types::SimulationControl,
     },
-    world_spawn::{persistent_id_types::PersistentIdAllocator, world_membership_types::WorldRoot},
+    world_spawn::{
+        persistent_id_types::PersistentIdAllocator,
+        world_membership_types::{WorldMember, WorldRoot},
+    },
 };
 use openzt2_zoo_state::{
+    animal_health::types::AnimalDied,
     animal_lifecycle::{
         animal_adoption_contracts::{
             AdoptAnimal, AnimalAdopted, AnimalAdoptionRefund, PendingAdoption,
@@ -40,7 +45,8 @@ use openzt2_zoo_state::{
         money_types::Money,
         zoo_cash_types::ZooCash,
     },
-    guests::guest_simulation_types::{GuestArrived, GuestDeparted},
+    guests::guest_simulation_types::{GuestArrived, GuestDeparted, GuestReachedEntrance},
+    habitat::habitat_types::HabitatIndex,
     terrain::terrain_chunk_types::{TerrainChunk, TerrainIndex},
     topology::topology_graph_types::TopologyGrid,
 };
@@ -168,29 +174,19 @@ fn object(id: AssetId) -> WorldObjectDefinition {
 
 fn setup(cash: i64) -> (App, Entity) {
     let mut app = App::new();
-    app.insert_resource(State::new(GamePhase::InGame))
-        .insert_resource(SimulationControl::new(0, true))
-        .insert_resource(ZooSeed(123))
-        .insert_resource(ZooClock {
-            tick: 99,
-            absolute_day: 0,
-            tick_in_day: 99,
-            fractional_tick: Default::default(),
-        })
-        .insert_resource(ZooCalendar {
-            year: 2000,
-            month: 1,
-            day: 1,
-        })
+    app.add_plugins((MinimalPlugins, AssetPlugin::default()))
+        .insert_resource(State::new(GamePhase::InGame))
         .add_message::<GuestArrived>()
         .add_message::<GuestDeparted>()
+        .add_message::<GuestReachedEntrance>()
+        .add_message::<ZooDayAdvanced>()
+        .add_message::<AnimalDied>()
+        .init_resource::<Assets<ScenePrefabAsset>>()
         .init_resource::<Assets<SpeciesAsset>>()
         .init_resource::<SpeciesAssets>()
         .init_resource::<Assets<WorldDefinitionAsset>>()
         .init_resource::<WorldDefinitions>()
         .init_resource::<Assets<TerrainAsset>>()
-        .init_resource::<TopologyGrid>()
-        .init_resource::<openzt2_zoo_state::habitat::habitat_types::HabitatIndex>()
         .add_plugins((
             super::AnimalLifecyclePlugin,
             openzt2_economy::economy::EconomyPlugin,
@@ -221,7 +217,6 @@ fn setup(cash: i64) -> (App, Entity) {
             .chain()
             .after(FixedGameSet::Cleanup),
     );
-    app.insert_resource(ZooCash(Money(cash)));
     let document = species_document();
     let species = document.species[0].id;
     let handle = app
@@ -256,10 +251,31 @@ fn setup(cash: i64) -> (App, Entity) {
     app.world_mut()
         .resource_mut::<WorldDefinitions>()
         .index_test_document(handle, &definitions);
-    let root = app.world_mut().spawn(WorldRoot { scenario: species }).id();
-    app.world_mut()
-        .entity_mut(root)
-        .insert(PersistentIdAllocator::default());
+    let root = app
+        .world_mut()
+        .spawn((
+            WorldRoot { scenario: species },
+            PersistentIdAllocator::default(),
+            SimulationControl::new(0, true),
+            ZooSeed(123),
+            ZooClock {
+                tick: 99,
+                absolute_day: 0,
+                tick_in_day: 99,
+                fractional_tick: Default::default(),
+            },
+            ZooCalendar {
+                year: 2000,
+                month: 1,
+                day: 1,
+            },
+            ZooDay(0),
+            ZooMonth(0),
+            TopologyGrid::default(),
+            HabitatIndex::default(),
+            ZooCash(Money(cash)),
+        ))
+        .id();
     let grid = TerrainGrid {
         width: 2,
         height: 2,
@@ -309,21 +325,24 @@ fn setup(cash: i64) -> (App, Entity) {
         .add(terrain_test_asset(grid));
     let chunk = app
         .world_mut()
-        .spawn(TerrainChunk {
-            source_coord: IVec2::ZERO,
-            coord: IVec2::ZERO,
-            asset,
-            origin: Vec2::ZERO,
-            spacing_m: 1.0,
-            side: 2,
-        })
+        .spawn((
+            WorldMember { root },
+            TerrainChunk {
+                source_coord: IVec2::ZERO,
+                coord: IVec2::ZERO,
+                asset,
+                origin: Vec2::ZERO,
+                spacing_m: 1.0,
+                side: 2,
+            },
+        ))
         .id();
     let mut index = TerrainIndex {
         chunk_span_m: 1.0,
         ..Default::default()
     };
     index.chunks.insert(IVec2::ZERO, chunk);
-    app.insert_resource(index);
+    app.world_mut().entity_mut(root).insert(index);
     app.world_mut().write_message(AdoptAnimal {
         species,
         variant: None,
@@ -368,29 +387,29 @@ fn assert_no_pending_adoption(app: &mut App) {
 
 #[test]
 fn paused_adoption_charges_and_spawns_once_without_an_enclosure() {
-    let (mut app, _) = setup(10_000);
+    let (mut app, root) = setup(10_000);
     advance_fixed(&mut app);
     assert_eq!(animal_count(&mut app), 1);
-    assert_eq!(app.world().resource::<ZooCash>().0, Money(8_750));
+    assert_eq!(app.world().get::<ZooCash>(root).unwrap().0, Money(8_750));
     assert_eq!(app.world().resource::<Messages<AnimalAdopted>>().len(), 1);
     for _ in 0..4 {
         advance_fixed(&mut app);
     }
     assert_eq!(animal_count(&mut app), 1);
-    assert_eq!(app.world().resource::<ZooCash>().0, Money(8_750));
+    assert_eq!(app.world().get::<ZooCash>(root).unwrap().0, Money(8_750));
     assert_eq!(app.world().resource::<Messages<AnimalAdopted>>().len(), 1);
     assert_no_pending_adoption(&mut app);
-    assert_eq!(app.world().resource::<ZooClock>().tick, 99);
+    assert_eq!(app.world().get::<ZooClock>(root).unwrap().tick, 99);
 }
 
 #[test]
 fn paused_adoption_with_insufficient_funds_does_not_spawn_or_charge() {
-    let (mut app, _) = setup(1_249);
+    let (mut app, root) = setup(1_249);
     for _ in 0..4 {
         advance_fixed(&mut app);
     }
     assert_eq!(animal_count(&mut app), 0);
-    assert_eq!(app.world().resource::<ZooCash>().0, Money(1_249));
+    assert_eq!(app.world().get::<ZooCash>(root).unwrap().0, Money(1_249));
     assert_eq!(
         app.world()
             .resource::<Messages<TransactionRejected>>()
@@ -409,13 +428,13 @@ fn failed_paid_spawn_refunds_once_through_a_distinct_live_operation() {
         .insert(PersistentIdAllocator::from_snapshot(u64::MAX).unwrap());
     advance_fixed(&mut app);
     assert_eq!(animal_count(&mut app), 0);
-    assert_eq!(app.world().resource::<ZooCash>().0, Money(8_750));
+    assert_eq!(app.world().get::<ZooCash>(root).unwrap().0, Money(8_750));
     advance_fixed(&mut app);
-    assert_eq!(app.world().resource::<ZooCash>().0, Money(10_000));
+    assert_eq!(app.world().get::<ZooCash>(root).unwrap().0, Money(10_000));
     for _ in 0..4 {
         advance_fixed(&mut app);
     }
-    assert_eq!(app.world().resource::<ZooCash>().0, Money(10_000));
+    assert_eq!(app.world().get::<ZooCash>(root).unwrap().0, Money(10_000));
     assert_no_pending_adoption(&mut app);
     let transactions = app.world().resource::<Messages<TransactionCompleted>>();
     let mut cursor = transactions.get_cursor();

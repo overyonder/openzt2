@@ -19,7 +19,7 @@ use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorTaskFailure
 
 pub(super) fn finish_clothing_delivery(
     mut commands: Commands,
-    clock: Res<ZooClock>,
+    clock: Single<&ZooClock>,
     server: Res<AssetServer>,
     images: Res<Assets<Image>>,
     materials: Res<Assets<MaterialAsset>>,
@@ -162,14 +162,14 @@ pub(super) fn finish_clothing_delivery(
                 commands.entity(root).insert(clothing);
             }
         }
-        instruction.complete(actor, clock.tick, &mut commands);
         commands.entity(actor).remove::<PendingClothingDelivery>();
+        instruction.complete(actor, clock.tick, &mut commands);
     }
 }
 
 fn fail_delivery(actor: Entity, commands: &mut Commands) {
+    commands.entity(actor).remove::<PendingClothingDelivery>();
     super::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation(
         actor, commands,
     );
-    commands.entity(actor).remove::<PendingClothingDelivery>();
 }

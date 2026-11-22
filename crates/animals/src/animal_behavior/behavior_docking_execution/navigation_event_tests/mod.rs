@@ -16,12 +16,12 @@ use openzt2_zoo_state::locomotion::locomotion_types::NavigationFailure;
 fn docking_events_respect_request_frame_and_failure_precedence() {
     let mut app = App::new();
     app.add_observer(openzt2_zoo_state::behavior_task_execution_types::running_actions::apply_behavior_instruction_completion).init_resource::<Assets<BehaviorDocumentAsset>>()
-        .insert_resource(ZooClock {
+        .add_plugins(move |app: &mut App| { app.world_mut().spawn(ZooClock {
             fractional_tick: Default::default(),
             tick: 0,
             absolute_day: 0,
             tick_in_day: 0,
-        })
+        }); })
         .add_message::<Arrived>()
         .add_message::<NavigationFailed>()
         .add_systems(
@@ -48,6 +48,7 @@ fn docking_events_respect_request_frame_and_failure_precedence() {
                         target_animation_clip_asset_key: None,
                         locomotion_speed: None,
                         redock: false,
+                        reservation: None,
                         radial_distance_m: None,
                         arrival_radius_m: None,
                         rotation_tolerance_radians: 0.0,
