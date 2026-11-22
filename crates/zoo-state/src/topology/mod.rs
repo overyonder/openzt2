@@ -12,5 +12,4 @@ mod topology_spatial_index_lifecycle;
 pub mod gate_actor_type_queries;
 
 pub mod habitat_boundary_queries;
-pub mod persistent_edit_lookup;
 pub mod topology_confirmation;

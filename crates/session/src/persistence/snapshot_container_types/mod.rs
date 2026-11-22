@@ -139,12 +139,10 @@ impl ValidatedWorldSnapshotContainer {
 #[derive(Resource, Debug, Default)]
 pub(super) struct ReusableWorldSnapshotByteBuffer {
     pub(super) snapshot_container_bytes: Vec<u8>,
-    pub(super) contains_validated_snapshot_container: bool,
 }
 
 impl ReusableWorldSnapshotByteBuffer {
     pub(super) fn clear_logical_contents(&mut self) {
         self.snapshot_container_bytes.clear();
-        self.contains_validated_snapshot_container = false;
     }
 }

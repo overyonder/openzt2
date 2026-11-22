@@ -30,9 +30,8 @@ use super::{
 
 pub(super) fn initialize_default_photo_album_and_camera_roll_for_loaded_worlds(
     profile: Res<ProfileOptions>,
-    mut allocator: ResMut<PersistentIdAllocator>,
-    roots: Query<
-        Entity,
+    mut roots: Query<
+        (Entity, &mut PersistentIdAllocator),
         (
             With<WorldRoot>,
             With<WorldLoadCompleted>,
@@ -52,7 +51,7 @@ pub(super) fn initialize_default_photo_album_and_camera_roll_for_loaded_worlds(
     mut failed: MessageWriter<PhotoCaptureFailed>,
 ) {
     // Allocate at the post-import boundary; pending text must not move this ID.
-    for root in &roots {
+    for (root, mut allocator) in &mut roots {
         let member = WorldMember { root };
         if let Some((album, ..)) = albums
             .iter()
@@ -65,7 +64,7 @@ pub(super) fn initialize_default_photo_album_and_camera_roll_for_loaded_worlds(
                 PhotoAlbumCapacityPages(INITIAL_PHOTO_ALBUM_SPREADS),
             ));
         } else {
-            let id = match allocator.allocate(root) {
+            let id = match allocator.allocate() {
                 Ok(id) => id,
                 Err(reason) => {
                     failed.write(PhotoCaptureFailed {

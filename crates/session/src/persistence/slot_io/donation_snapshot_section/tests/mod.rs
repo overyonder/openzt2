@@ -44,17 +44,21 @@ fn completed_categories_survive_capture_binary_restore_and_next_payment() {
     let decoded = decode_donation_records(&bytes, section(&bytes, 2)).unwrap();
     assert_eq!(decoded, expected);
 
-    let mut destination = World::new();
-    destination.spawn_empty();
-    let acceptor = destination.spawn(PersistentId(42)).id();
-    destination.spawn(PersistentId(43));
-    let mut state =
-        SystemState::<(Commands, Query<(Entity, &PersistentId)>)>::new(&mut destination);
-    let (mut commands, entities) = state.get_mut(&mut destination).unwrap();
-    let identities = entities.iter().map(|(entity, id)| (id.0, entity)).collect();
-    let resolved = resolve_donation_records(decoded, &identities).unwrap();
-    apply_donation_records(&mut commands, resolved);
-    state.apply(&mut destination);
+    let mut app = App::new();
+    app.add_plugins(openzt2_world_state::world_spawn::persistent_id_index::PersistentIdIndexPlugin);
+    let destination = app.world_mut();
+    let root = destination.spawn_empty().id();
+    let member = openzt2_world_state::world_spawn::world_membership_types::WorldMember { root };
+    let acceptor = destination.spawn((PersistentId(42), member)).id();
+    destination.spawn((PersistentId(43), member));
+    let mut state = SystemState::<(
+        Commands,
+        Res<PersistentIdIndex>,
+        Query<RestoredDonationComponents>,
+    )>::new(destination);
+    let (mut commands, identities, mut totals) = state.get_mut(destination).unwrap();
+    restore_donation_totals(&mut commands, decoded, &identities, root, &mut totals).unwrap();
+    state.apply(destination);
     assert_eq!(
         destination.get::<DonationTotal>(acceptor).unwrap().amount,
         Money(622_400)

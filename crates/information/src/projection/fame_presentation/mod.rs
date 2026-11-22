@@ -7,7 +7,9 @@ use openzt2_game_data::{
 use openzt2_interface_state::ui::authored_ui_node_projection_components::{
     UiDocumentOwner, UiDocumentRoot, UiNodeId, UiValue,
 };
-use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
+use openzt2_world_state::world_spawn::{
+    world_load_completion_marker::WorldLoadCompleted, world_membership_types::WorldRoot,
+};
 use openzt2_zoo_state::progression::fame_types::FameAuthoredPresentation;
 
 #[derive(Component, PartialEq, Eq)]
@@ -88,7 +90,7 @@ pub(crate) fn bind_authored_fame_fields(
 }
 
 pub(crate) fn project_fame_values_into_authored_fields(
-    worlds: Query<Ref<FameAuthoredPresentation>, With<WorldRoot>>,
+    worlds: Query<Ref<FameAuthoredPresentation>, (With<WorldRoot>, With<WorldLoadCompleted>)>,
     documents: Res<Assets<UiDocumentAsset>>,
     roots: Query<&UiDocumentRoot>,
     mut fields: Query<(
@@ -99,7 +101,7 @@ pub(crate) fn project_fame_values_into_authored_fields(
         Option<&mut UiValue>,
     )>,
 ) {
-    let Some(presentation) = worlds.iter().next() else {
+    let Ok(presentation) = worlds.single() else {
         return;
     };
     for (field, node_id, owner, node, value) in &mut fields {

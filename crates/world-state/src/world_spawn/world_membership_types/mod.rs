@@ -9,9 +9,14 @@ pub struct WorldRoot {
 }
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+#[relationship(relationship_target = WorldMembers)]
 pub struct WorldMember {
     pub root: Entity,
 }
+
+#[derive(Component)]
+#[relationship_target(relationship = WorldMember, linked_spawn)]
+pub struct WorldMembers(Vec<Entity>);
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DefinitionId(pub AssetId);

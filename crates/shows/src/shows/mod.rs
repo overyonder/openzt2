@@ -1,6 +1,8 @@
 //! Animal show stages, authored schedules, editor state, and platform upgrades.
 
+mod authored_show_rewards;
 mod running_show_schedule;
+mod scheduled_trick_execution;
 mod show_audience_lifecycle;
 mod show_audience_types;
 mod show_donation_summary_presentation;
@@ -8,6 +10,10 @@ mod show_editor_interaction_types;
 mod show_editor_presentation_lifecycle;
 mod show_editor_ui_action_routing;
 pub(crate) mod show_event_lifecycle;
+mod show_guest_need;
+mod show_scoring;
+mod show_trick_props;
+mod show_viewing_locations;
 use openzt2_zoo_state::shows::show_event_types;
 mod show_platform_upgrade_lifecycle;
 mod show_platform_upgrade_presentation;
@@ -22,12 +28,16 @@ use openzt2_zoo_state::shows::show_stage_types;
 mod show_timing_operations;
 
 use bevy::prelude::*;
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
+    BehaviorStep, BehaviorStepSet,
+};
 
 use openzt2_game_assets::application_lifecycle::GamePhase;
 use openzt2_world_state::application_schedule::FixedGameSet;
 use openzt2_world_state::application_schedule::GameSet;
 use openzt2_zoo_state::shows::running_show_types::{
     BeginScheduledShowTrick, ScheduledShowTrickScored, ShowAudienceReaction, ShowRunFinished,
+    WorldTrickPopularity,
 };
 use show_platform_upgrade_types::{
     CommitShowPlatformUpgradeEdit, RestoreShowPlatformUpgrade, ShowPlatformUpgradeEditAcknowledged,
@@ -37,11 +47,28 @@ pub struct ShowsPlugin;
 
 impl Plugin for ShowsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_message::<BeginScheduledShowTrick>()
+        app.register_required_components::<openzt2_world_state::world_spawn::world_membership_types::WorldRoot, WorldTrickPopularity>()
+            .init_asset::<authored_show_rewards::AuthoredShowRewards>()
+            .init_asset_loader::<authored_show_rewards::AuthoredShowRewardsLoader>()
+            .init_asset::<show_guest_need::ShowNeedPolicy>()
+            .init_asset_loader::<show_guest_need::ShowNeedPolicyLoader>()
+            .add_systems(Startup, (
+                authored_show_rewards::load_authored_show_rewards,
+                show_guest_need::load_show_need_policy,
+            ))
+            .add_systems(FixedUpdate, show_guest_need::advance_show_needs
+                .in_set(FixedGameSet::Think)
+                .before(openzt2_zoo_state::guests::GuestDestinationSelection)
+                .run_if(in_state(GamePhase::InGame)))
+            .add_systems(FixedUpdate, show_scoring::grow_trick_popularity
+                .in_set(FixedGameSet::Clock)
+                .run_if(in_state(GamePhase::InGame)))
+            .add_message::<BeginScheduledShowTrick>()
             .add_message::<ScheduledShowTrickScored>()
             .add_message::<ShowRunFinished>()
             .add_message::<ShowAudienceReaction>()
             .add_observer(show_audience_lifecycle::clear_completed_show_watch_action)
+            .add_observer(show_trick_props::remove_completed_prop)
             .add_message::<CommitShowPlatformUpgradeEdit>()
             .add_message::<ShowPlatformUpgradeEditAcknowledged>()
             .add_message::<RestoreShowPlatformUpgrade>()
@@ -116,22 +143,40 @@ impl Plugin for ShowsPlugin {
                         running_show_schedule::start_next_stage_show_or_break
                             .after(running_show_schedule::initialize_show_schedule_cursors),
                     ).chain(),
-                    (
-                        show_audience_lifecycle::retire_interrupted_show_watch_actions,
-                        show_audience_lifecycle::bind_ready_show_watch_actions,
-                    ).chain().after(openzt2_zoo_state::guests::GuestLifecycleAdvance),
+                    show_audience_lifecycle::retire_interrupted_show_watch_actions
+                        .after(openzt2_zoo_state::guests::GuestLifecycleAdvance),
                     running_show_schedule::initialize_show_schedule_cursors,
                     show_event_lifecycle::schedule_authored_animal_show_events,
-                    running_show_schedule::apply_authored_trick_outcome_scores,
+                    show_scoring::apply_authored_trick_outcome_scores
+                        .after(show_event_lifecycle::schedule_authored_animal_show_events),
+                    show_trick_props::load_scheduled_prop_prefabs
+                        .after(running_show_schedule::start_next_stage_show_or_break),
+                    show_scoring::predict_performance_scores
+                        .after(running_show_schedule::start_next_stage_show_or_break),
+                    scheduled_trick_execution::start_scheduled_tricks_with_authored_outcome_tokens
+                        .after(show_trick_props::load_scheduled_prop_prefabs),
+                    scheduled_trick_execution::release_tokens_from_completed_trick_slots
+                        .after(running_show_schedule::advance_running_stage_shows),
+                    show_viewing_locations::refresh_stage_viewing_locations
+                        .after(running_show_schedule::start_next_stage_show_or_break),
+                    show_audience_lifecycle::invite_guests_to_starting_shows
+                        .after(running_show_schedule::start_next_stage_show_or_break),
+                    show_scoring::smooth_finished_show_scores
+                        .after(running_show_schedule::advance_running_stage_shows),
                     show_event_lifecycle::dispatch_released_animal_show_events
                         .after(show_event_lifecycle::schedule_authored_animal_show_events)
-                        .after(running_show_schedule::apply_authored_trick_outcome_scores)
-                        .after(show_audience_lifecycle::bind_ready_show_watch_actions),
+                        .after(show_scoring::apply_authored_trick_outcome_scores)
+                        .after(show_audience_lifecycle::retire_interrupted_show_watch_actions),
                     show_audience_lifecycle::complete_watch_actions_after_show
                         .after(running_show_schedule::advance_running_stage_shows),
                 )
                     .in_set(FixedGameSet::Cleanup)
                     .run_if(in_state(GamePhase::InGame)),
+            )
+            .add_systems(
+                BehaviorStep,
+                show_audience_lifecycle::bind_ready_show_watch_actions
+                    .in_set(BehaviorStepSet::Actions),
             );
     }
 }

@@ -9,6 +9,7 @@ pub(super) struct FareGuest(pub(super) Entity);
 #[derive(Component, Debug, Clone, Copy, PartialEq)]
 pub(super) struct PendingTransportFare {
     pub(super) circuit: Entity,
+    pub(super) station: Entity,
     pub(super) score: f32,
     pub(super) rating: f32,
 }

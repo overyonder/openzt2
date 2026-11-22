@@ -56,7 +56,7 @@ pub(super) fn apply_authored_staff_habitat_waste_termination(
         let Ok((job, claim, behavior, applied)) = jobs.get(current.job()) else {
             continue;
         };
-        if job.kind != StaffJobKind::CleanHabitat || execution.next_action_tick > clock.tick {
+        if job.kind != Some(StaffJobKind::CleanHabitat) || execution.next_action_tick > clock.tick {
             continue;
         }
         if !instruction.is_current(execution) {
@@ -136,7 +136,7 @@ pub(super) fn complete_applied_habitat_cleanup_after_behavior_exits(
         let Ok((job, claim, behavior, applied)) = jobs.get(current.job()) else {
             continue;
         };
-        if job.kind == StaffJobKind::CleanHabitat
+        if job.kind == Some(StaffJobKind::CleanHabitat)
             && claim.staff == actor
             && behavior.execution_id == Some(execution_id)
             && applied.execution_id == execution_id
@@ -147,6 +147,7 @@ pub(super) fn complete_applied_habitat_cleanup_after_behavior_exits(
                 current.job(),
                 job,
                 actor,
+                StaffJobKind::CleanHabitat,
             ));
         }
     }

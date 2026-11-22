@@ -6,11 +6,11 @@ use super::{
     economy_snapshot_types::{
         EconomySnapshotRecords, EntityEconomySnapshotRecord, ServiceFacilitySnapshot,
     },
-    world_snapshot_capture_system_parameters::WorldSnapshotCaptureQueries,
+    world_snapshot_capture_system_parameters::EconomyCaptureQueries,
 };
 
 pub(super) fn capture_economy_snapshot_records_from_live_world(
-    world_snapshot_capture_queries: &WorldSnapshotCaptureQueries,
+    world_snapshot_capture_queries: &EconomyCaptureQueries,
 ) -> EconomySnapshotRecords {
     use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
     use openzt2_zoo_state::economy::{

@@ -1,6 +1,6 @@
-use crate::topology::persistent_edit_lookup::PersistentEditLookup;
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
+use openzt2_world_state::world_spawn::persistent_id_index::PersistentIdIndex;
 
 use crate::economy::money_types::Money;
 use crate::economy::object_sale_refund::calculate_authored_object_sale_refund;
@@ -51,7 +51,7 @@ pub struct TransportTrackSaleQueries<'w, 's> {
     circuits: Query<'w, 's, &'static WorldMember, With<TransportCircuit>>,
     incidence: TrackIncidence<'w, 's>,
     route_pieces: Query<'w, 's, &'static TrackPieces>,
-    identities: Res<'w, PersistentEditLookup>,
+    identities: Res<'w, PersistentIdIndex>,
     transport: Query<
         'w,
         's,

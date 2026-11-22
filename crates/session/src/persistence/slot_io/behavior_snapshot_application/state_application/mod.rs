@@ -21,7 +21,9 @@ use openzt2_zoo_state::{
     locomotion::locomotion_types::{
         Destination, Docking, EntityPursuit, MotionProgress, Route, Steering, SwimLayer,
     },
-    staff::staff_job_types::{JobClaim, JobProgress, StaffJob, StaffJobBehaviorTask},
+    staff::staff_job_types::{
+        JobClaim, JobProgress, StaffJob, StaffJobBehaviorTask, StaffJobRouting,
+    },
 };
 use std::collections::BTreeMap;
 
@@ -304,6 +306,10 @@ pub(super) fn apply_prepared_behavior_actor(
                     target: resolve(&job.target),
                     urgency: job.urgency,
                     token: job.token,
+                },
+                StaffJobRouting {
+                    subject_type: job.subject_type,
+                    recipient: job.recipient,
                 },
                 JobClaim { staff: actor },
                 StaffJobBehaviorTask {

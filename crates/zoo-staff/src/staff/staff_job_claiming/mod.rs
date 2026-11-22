@@ -5,6 +5,7 @@ use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
 use openzt2_game_assets::behavior::behavior_asset_types::LoadedBehaviorDocumentCollection;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_data::AssetId;
 use openzt2_zoo_state::animal_health::types::Rampaging;
 use openzt2_zoo_state::feeding::container_quantity::{DrinkContainer, FoodContainer};
 use openzt2_zoo_state::habitat::habitat_types::HabitatMember;
@@ -12,26 +13,25 @@ use openzt2_zoo_state::locomotion::locomotion_types::NavAgent;
 use openzt2_zoo_state::locomotion::locomotion_types::{SpatialGrid, SpatialGridMembership};
 use openzt2_zoo_state::maintenance::maintenance_types::FacilityContainedWaste;
 use openzt2_zoo_state::terrain::dry_surface_eligibility::DrySurfaceEligibility;
-use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
+use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
+use openzt2_world_state::world_spawn::world_membership_types::{DefinitionId, WorldMember, WorldMembers};
 use openzt2_zoo_state::animal_behavior::behavior_target_retry_delays::BehaviorTargetRejections;
 
 use super::{
-    staff_assignment_types::{
-        CleansFilters, CleansRecycling, EmptiesTrash, StaffAssignmentArea, StaffAssignmentTarget,
-        SweepsTrash,
-    },
-    staff_employment_types::{Staff, StaffRole},
+    staff_assignment_types::{StaffAssignmentArea, StaffAssignmentTarget},
+    staff_employment_types::{Staff, StaffJobCapabilities, StaffRole},
     staff_job_claim_ranking::RankedStaffJobClaimCandidate,
     staff_job_eligibility::{
         find_highest_priority_compatible_staff_behavior_task, staff_assignment_accepts_job_target,
-        StaffCandidateEligibilityFacts, StaffTasksByRequestToken,
+        staff_subject_matches, StaffCandidateEligibilityFacts, StaffTasksByRequestToken,
     },
     staff_job_types::{
         CurrentJob, JobClaim, StaffJob, StaffJobBehaviorTask, StaffJobCancellationPending,
-        TankCleaningRequestSite, UnsuccessfulStaffJobCandidates,
+        StaffJobRouting, TankCleaningRequestSite, UnsuccessfulStaffJobCandidates,
     },
-    worker_duty_assignment::maintenance_worker_duties_accept_staff_job,
+    worker_duty_assignment::{worker_duties_allow_staff_job, WorkerDutyFlags},
 };
+use openzt2_zoo_state::shows::running_show_types::AnimalPerformingShowTrick;
 
 pub(crate) fn claim_highest_ranked_compatible_jobs_for_available_staff(
     mut commands: Commands,
@@ -48,18 +48,23 @@ pub(crate) fn claim_highest_ranked_compatible_jobs_for_available_staff(
         (
             Entity,
             &StaffRole,
+            &StaffJobCapabilities,
+            &WorldMember,
             &GlobalTransform,
             Option<&StaffAssignmentArea>,
             Option<&StaffAssignmentTarget>,
-            Has<CleansFilters>,
-            Has<CleansRecycling>,
-            Has<EmptiesTrash>,
-            Has<SweepsTrash>,
+            WorkerDutyFlags,
         ),
         (With<Staff>, With<NavAgent>, Without<CurrentJob>),
     >,
     jobs: Query<
-        (Entity, &StaffJob, Option<&UnsuccessfulStaffJobCandidates>),
+        (
+            Entity,
+            &StaffJob,
+            &WorldMember,
+            Option<&StaffJobRouting>,
+            Option<&UnsuccessfulStaffJobCandidates>,
+        ),
         (Without<JobClaim>, Without<StaffJobCancellationPending>),
     >,
     targets: Query<(
@@ -70,10 +75,15 @@ pub(crate) fn claim_highest_ranked_compatible_jobs_for_available_staff(
         Option<&DefinitionId>,
         Option<&FoodContainer>,
         Option<&DrinkContainer>,
+        Has<AnimalPerformingShowTrick>,
     )>,
     waste: Query<&FacilityContainedWaste>,
     filters: Query<&openzt2_zoo_state::aquatic::aquatic_simulation_types::WaterFilter>,
-    request_sites: Query<(), With<TankCleaningRequestSite>>,
+    request_routing: (
+        Query<(), With<TankCleaningRequestSite>>,
+        Query<&WorldMembers>,
+        Query<(Entity, &PersistentId, &GlobalTransform), With<Staff>>,
+    ),
 ) {
     let Some(catalogue) = active_definitions.get(&definitions) else {
         return;
@@ -88,10 +98,35 @@ pub(crate) fn claim_highest_ranked_compatible_jobs_for_available_staff(
     }
     let mut evaluated =
         Parallel::<Vec<(RankedStaffJobClaimCandidate, StaffJobBehaviorTask)>>::default();
-    jobs.par_iter().for_each(|(job_entity, job, unsuccessful)| {
+    let (request_sites, world_members, staff_recipients) = request_routing;
+    let staff_manager = catalogue.staff_manager();
+    let (job_safe_distance, steal_threshold) = staff_manager.map_or((6.0, 0.1), |policy| {
+        (
+            policy.job_safe_distance_m,
+            policy.steal_job_threshold / 100.0,
+        )
+    });
+    jobs.par_iter().for_each(|job_row| {
+        let (job_entity, job, job_world, routing, unsuccessful) = job_row;
         let Some(token) = job.token else {
             return;
         };
+        let routing = routing.copied().unwrap_or_default();
+        let manager = staff_manager.filter(|_| routing.subject_type.is_some());
+        let mut emitted_tokens = manager
+            .into_iter()
+            .flat_map(|policy| &policy.tokens)
+            .filter(|rule| rule.token == token)
+            .filter_map(|rule| rule.name);
+        let first_token = if manager.is_some() {
+            let Some(first_token) = emitted_tokens.next() else {
+                return;
+            };
+            first_token
+        } else {
+            token
+        };
+        let other_tokens: Vec<AssetId> = emitted_tokens.collect();
         let Ok((
             target_transform,
             parent,
@@ -100,11 +135,26 @@ pub(crate) fn claim_highest_ranked_compatible_jobs_for_available_staff(
             target_definition,
             food,
             drink,
+            target_in_show,
         )) = targets.get(job.target)
         else {
             return;
         };
         let target_position = target_transform.translation();
+        let recipient = routing.recipient.and_then(|identifier| {
+            let members = world_members.get(job_world.root).ok()?;
+            staff_recipients
+                .iter_many(members.iter())
+                .filter_map(Result::ok)
+                .find_map(|(employee, id, transform)| {
+                    (AssetId::from_key(&id.0.to_string()) == identifier).then(|| {
+                        (
+                            employee,
+                            transform.translation().xz().distance(target_position.xz()),
+                        )
+                    })
+                })
+        });
         let Some(target_cell) = spatial_grid.cell_of(target_position.xz()) else {
             return;
         };
@@ -123,9 +173,7 @@ pub(crate) fn claim_highest_ranked_compatible_jobs_for_available_staff(
             target_in_water: target_on_land.map(|on_land| !on_land),
             target_on_land,
             target_rampaging: Some(target_rampaging),
-            target_in_show: target_definition
-                .and_then(|definition| catalogue.find_object(definition.0))
-                .and_then(|definition| (!definition.supports_show_tricks).then_some(false)),
+            target_in_show: Some(target_in_show),
             target_trash_level_q16: waste
                 .get(job.target)
                 .ok()
@@ -158,18 +206,18 @@ pub(crate) fn claim_highest_ranked_compatible_jobs_for_available_staff(
                         let Ok((
                             staff_entity,
                             staff_role,
+                            capabilities,
+                            staff_world,
                             staff_transform,
                             assigned_area,
                             assigned_target,
-                            cleans_filters,
-                            cleans_recycling,
-                            empties_trash,
-                            sweeps_trash,
+                            duties,
                         )) = staff.get(candidate_entity)
                         else {
                             continue;
                         };
-                        if target_retry_delays.rejects(staff_entity, job.target)
+                        if staff_world.root != job_world.root
+                            || target_retry_delays.rejects(staff_entity, job.target)
                             || unsuccessful
                                 .is_some_and(|candidates| candidates.contains(staff_entity))
                             || !staff_assignment_accepts_job_target(
@@ -182,28 +230,65 @@ pub(crate) fn claim_highest_ranked_compatible_jobs_for_available_staff(
                         {
                             continue;
                         }
+                        if let Some((_, assigned_distance)) =
+                            recipient.filter(|(recipient, _)| *recipient != staff_entity)
+                        {
+                            let candidate_distance = staff_transform
+                                .translation()
+                                .xz()
+                                .distance(target_position.xz());
+                            if assigned_distance <= job_safe_distance
+                                || candidate_distance >= assigned_distance
+                                || (assigned_distance - candidate_distance) / assigned_distance
+                                    <= steal_threshold
+                            {
+                                continue;
+                            }
+                        }
                         let Some(role_definition) = catalogue.find_staff(staff_role.0) else {
                             continue;
                         };
-                        if !maintenance_worker_duties_accept_staff_job(
-                            role_definition.role,
-                            job.kind,
-                            Some(token),
-                            cleans_filters,
-                            cleans_recycling,
-                            empties_trash,
-                            sweeps_trash,
-                        ) {
+                        if routing.subject_type.is_some_and(|required| {
+                            !staff_subject_matches(catalogue, role_definition, required)
+                        }) || job.kind.is_some_and(|kind| {
+                            !worker_duties_allow_staff_job(
+                                role_definition.role,
+                                kind,
+                                token,
+                                *capabilities,
+                                duties,
+                            )
+                        }) {
                             continue;
                         }
-                        let Some(behavior) = find_highest_priority_compatible_staff_behavior_task(
-                            behavior_declarations,
-                            &token_tasks,
-                            catalogue,
-                            role_definition,
-                            token,
-                            candidate_facts,
-                        ) else {
+                        let resolve_task = |task_token| {
+                            find_highest_priority_compatible_staff_behavior_task(
+                                behavior_declarations,
+                                &token_tasks,
+                                catalogue,
+                                role_definition,
+                                task_token,
+                                candidate_facts,
+                            )
+                        };
+                        let Some(behavior) = resolve_task(first_token).and_then(|first| {
+                            other_tokens.iter().try_fold(first, |best, &task_token| {
+                                let task = resolve_task(task_token)?;
+                                Some(
+                                    if task
+                                        .definition
+                                        .priority
+                                        .unwrap_or_default()
+                                        .total_cmp(&best.definition.priority.unwrap_or_default())
+                                        .is_gt()
+                                    {
+                                        task
+                                    } else {
+                                        best
+                                    },
+                                )
+                            })
+                        }) else {
                             continue;
                         };
                         candidates.push((

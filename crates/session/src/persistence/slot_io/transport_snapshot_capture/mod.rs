@@ -6,11 +6,11 @@ use super::{
         TransportCircuitMemberSnapshotRecord, TransportCircuitSnapshotRecord,
         TransportRouteSnapshot, TransportSnapshotRecords, TransportVehicleSnapshotRecord,
     },
-    world_snapshot_capture_system_parameters::WorldSnapshotCaptureQueries,
+    world_snapshot_capture_system_parameters::TransportCaptureQueries,
 };
 
 pub(super) fn capture_sorted_transport_snapshot_records_from_live_world(
-    world_snapshot_capture_queries: &WorldSnapshotCaptureQueries,
+    world_snapshot_capture_queries: &TransportCaptureQueries,
 ) -> Result<TransportSnapshotRecords, WorldSnapshotPersistenceFailure> {
     let entity_persistent_identifier = |entity| {
         world_snapshot_capture_queries
@@ -114,8 +114,8 @@ pub(super) fn capture_sorted_transport_snapshot_records_from_live_world(
         let mut saved_pieces = world_snapshot_capture_queries
             .transport_track_pieces
             .iter_many(pieces.iter())
-            .filter_map(Result::ok)
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference)?;
         saved_pieces.sort_unstable_by_key(|(_, piece)| piece.piece_index);
         if saved_pieces.first().is_none_or(|(first, _)| *first != id)
             || saved_pieces.len() + 1 != route.path_points.len()

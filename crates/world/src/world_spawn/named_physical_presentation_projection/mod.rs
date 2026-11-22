@@ -17,6 +17,8 @@ use openzt2_zoo_state::feeding::container_quantity::{DrinkContainer, FoodContain
 use openzt2_zoo_state::aquatic::aquatic_simulation_types::WaterFilter;
 use openzt2_game_data::AssetId;
 
+pub(super) mod animation_key_commands;
+
 #[cfg(test)]
 mod node_attachment_tests;
 #[cfg(test)]

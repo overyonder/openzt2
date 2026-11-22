@@ -28,7 +28,7 @@ fn claimed_task_waits_for_its_asset_and_does_not_restart_after_terminal_executio
         .world_mut()
         .spawn((
             StaffJob {
-                kind: StaffJobKind::Feed,
+                kind: Some(StaffJobKind::Feed),
                 target,
                 urgency: 20,
                 token: None,
@@ -137,7 +137,7 @@ fn removed_source_task_releases_assignment_without_cancelling_live_request() {
         .world_mut()
         .spawn((
             StaffJob {
-                kind: StaffJobKind::Feed,
+                kind: Some(StaffJobKind::Feed),
                 target,
                 urgency: 20,
                 token: Some(AssetId::from_key("t_fillfoodcontainer")),
@@ -187,7 +187,7 @@ fn failed_assignment_preserves_request_until_its_owner_cancels_it() {
         .world_mut()
         .spawn((
             StaffJob {
-                kind: StaffJobKind::Feed,
+                kind: Some(StaffJobKind::Feed),
                 target,
                 urgency: 20,
                 token: Some(AssetId::from_key("t_fillfoodcontainer")),
@@ -243,7 +243,7 @@ fn replaced_assignment_ignores_previous_execution_success_and_failure() {
         .world_mut()
         .spawn((
             StaffJob {
-                kind: StaffJobKind::Treat,
+                kind: Some(StaffJobKind::Treat),
                 target: worker,
                 urgency: 1,
                 token: None,
@@ -300,7 +300,7 @@ fn successful_container_refill_releases_worker_and_preserves_controller_request(
         .world_mut()
         .spawn((
             StaffJob {
-                kind: StaffJobKind::Feed,
+                kind: Some(StaffJobKind::Feed),
                 target,
                 urgency: 1,
                 token: Some(AssetId::from_key("t_fillfoodcontainer")),
@@ -349,7 +349,7 @@ fn completed_water_placement_releases_keeper_without_a_second_service_effect() {
         .world_mut()
         .spawn((
             StaffJob {
-                kind: StaffJobKind::RefillWater,
+                kind: Some(StaffJobKind::RefillWater),
                 target,
                 urgency: 6,
                 token: Some(AssetId::from_key("t_wateranimal")),

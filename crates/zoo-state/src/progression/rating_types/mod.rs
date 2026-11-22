@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 
-#[derive(Resource, Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ZooRating {
     pub animal_welfare_permille: u16,
     pub guest_satisfaction_permille: u16,

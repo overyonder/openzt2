@@ -11,7 +11,7 @@ use super::authored_model_material_pass_projection::project_authored_model_mater
 mod tests;
 
 #[derive(Component, Clone, PartialEq)]
-struct ModelDrawShadowPolicy {
+pub(super) struct ModelDrawShadowPolicy {
     layers: RenderLayers,
     casts: bool,
     receives: bool,
@@ -41,7 +41,7 @@ pub(super) fn register_inherited_model_draw_shadow_policy(app: &mut App) {
     );
 }
 
-fn publish_model_draw_shadow_policy_sources(
+pub(super) fn publish_model_draw_shadow_policy_sources(
     mut commands: Commands,
     changed: Query<
         Entity,

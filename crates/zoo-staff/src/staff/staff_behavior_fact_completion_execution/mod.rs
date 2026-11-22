@@ -26,7 +26,7 @@ pub(super) fn acknowledge_staff_job_completion_fact_actions_owned_by_terminal_do
         let Ok((job, claim, behavior)) = jobs.get(current.job()) else {
             continue;
         };
-        if job.kind != StaffJobKind::EmptyBin
+        if job.kind != Some(StaffJobKind::EmptyBin)
             || claim.staff != outcome.actor
             || behavior.execution_id != Some(outcome.execution_id)
         {
@@ -35,7 +35,7 @@ pub(super) fn acknowledge_staff_job_completion_fact_actions_owned_by_terminal_do
         completed.write(StaffJobCompleted {
             staff: outcome.actor,
             job: current.job(),
-            kind: job.kind,
+            kind: StaffJobKind::EmptyBin,
             target: job.target,
         });
     }

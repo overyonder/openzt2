@@ -46,18 +46,15 @@ fn selection_uses_last_valid_request_and_emits_once() {
 
 #[test]
 fn selecting_native_crate_uses_its_inspectable_animal() {
-    use openzt2_world_state::world_spawn::world_entity_crating::ContainedCratedAnimal;
+    use openzt2_world_state::world_spawn::world_entity_crating::AnimalCrate;
     let (mut app, owner) = test_app();
-    let animal = app
-        .world_mut()
-        .spawn(Inspectable { definition: id(1) })
-        .id();
     let crate_entity = app
         .world_mut()
-        .spawn((
-            Inspectable { definition: id(2) },
-            ContainedCratedAnimal(animal),
-        ))
+        .spawn(Inspectable { definition: id(2) })
+        .id();
+    let animal = app
+        .world_mut()
+        .spawn((Inspectable { definition: id(1) }, AnimalCrate(crate_entity)))
         .id();
     app.world_mut().write_message(SelectionRequest {
         entity: Some(crate_entity),

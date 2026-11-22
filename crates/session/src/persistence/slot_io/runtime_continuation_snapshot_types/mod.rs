@@ -19,6 +19,30 @@ pub(super) struct RuntimeContinuationSnapshot {
     pub guest_arrivals: Option<GuestArrivalState>,
     pub guest_survey: Option<(GuestSurveyNeedCadence, GuestSurvey)>,
     pub guest_favourite_animal_trend: Option<GuestFavouriteAnimalTrend>,
+    pub domain_continuation: Option<RuntimeDomainContinuation>,
+}
+
+#[derive(Debug, Clone, Default, serde::Deserialize, serde::Serialize)]
+pub(super) struct RuntimeDomainContinuation {
+    pub disease: DiseaseContinuation,
+    pub eggs: Vec<EggContinuation>,
+    pub fossils: Option<super::fossil_continuation_snapshot::FossilContinuation>,
+    pub trick_popularity: Option<std::collections::BTreeMap<openzt2_game_data::AssetId, f32>>,
+}
+
+#[derive(Debug, Clone, Copy, Default, serde::Deserialize, serde::Serialize)]
+pub(super) struct DiseaseContinuation {
+    pub funding: Option<f32>,
+    pub exposure_deadline: Option<u64>,
+    pub active: Option<(openzt2_game_data::AssetId, u64)>,
+}
+
+#[derive(Debug, Clone, Copy, serde::Deserialize, serde::Serialize)]
+pub(super) struct EggContinuation {
+    pub id: u64,
+    pub amount: f32,
+    pub remaining_ns: u64,
+    pub random: [u64; 2],
 }
 
 /// Maxima include every restored actor, buffered request, result and stable reference.

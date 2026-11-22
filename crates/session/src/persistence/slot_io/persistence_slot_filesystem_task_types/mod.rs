@@ -21,8 +21,13 @@ pub(in crate::persistence) struct PersistenceSlotFilesystemOperationContext {
 
 pub(in crate::persistence) enum PersistenceSlotFilesystemTaskCompletion {
     SnapshotFileSaved {
+        record: SaveSlotRecord,
+        reusable_snapshot_byte_buffer: Vec<u8>,
+    },
+    SnapshotEncodingFailed {
         save_slot_identifier: SaveSlotId,
         reusable_snapshot_byte_buffer: Vec<u8>,
+        failure_reason: WorldSnapshotPersistenceFailure,
     },
     SnapshotFileLoaded {
         save_slot_identifier: SaveSlotId,

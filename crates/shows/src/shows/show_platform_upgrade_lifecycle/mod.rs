@@ -9,7 +9,7 @@ use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator
 use openzt2_world_state::world_spawn::prefab_authored_attachment_identifier::PrefabAuthoredAttachmentIdentifier;
 use openzt2_world_state::world_spawn::prefab_model_readiness::first_missing_prefab_collider_model_asset_id;
 use openzt2_world::world_spawn::prefab_world_instance_spawning::spawn_loaded_scene_prefab_as_world_instance;
-use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
+use openzt2_world_state::world_spawn::world_membership_types::{WorldMember, WorldRoot};
 
 use super::show_platform_upgrade_types::{
     CommitShowPlatformUpgradeEdit, InstalledShowPlatformUpgrade, InstalledShowPlatformUpgradeStage,
@@ -32,7 +32,7 @@ pub(super) fn apply_show_platform_upgrade_edits(
     models: Res<Assets<Gltf>>,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,
-    mut ids: ResMut<PersistentIdAllocator>,
+    mut ids: Query<&mut PersistentIdAllocator, With<WorldRoot>>,
 ) {
     let world_definitions = active_world_definitions.get(&world_definition_assets);
     for request in requests.read() {
@@ -69,7 +69,11 @@ pub(super) fn apply_show_platform_upgrade_edits(
             publish_show_platform_upgrade_edit_acknowledgement(&mut commands, request, true);
             continue;
         }
-        let Ok(persistent_id) = ids.allocate(member.root) else {
+        let Some(persistent_id) = ids
+            .get_mut(member.root)
+            .ok()
+            .and_then(|mut ids| ids.allocate().ok())
+        else {
             publish_show_platform_upgrade_edit_acknowledgement(&mut commands, request, false);
             continue;
         };

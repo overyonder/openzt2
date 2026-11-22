@@ -161,20 +161,24 @@ pub(crate) fn settle_staff_jobs_after_authored_behavior_finishes(
         {
             continue;
         }
+        let Some(kind) = job.kind else {
+            // The controller owns the request. The authored task owns its effects.
+            commands.entity(current_job.job()).remove::<JobClaim>();
+            continue;
+        };
         if matches!(
-            job.kind,
+            kind,
             StaffJobKind::MaintainTank | StaffJobKind::EmptyBin | StaffJobKind::SweepLitter
         ) {
             continue;
         }
-        if (job.kind == StaffJobKind::Treat
+        if (kind == StaffJobKind::Treat
             && (job.token == Some(AssetId::from_key("t_cureanimal"))
                 || job.token == Some(AssetId::from_key("t_healanimal"))))
-            || (job.kind == StaffJobKind::Feed
-                && job.token == Some(AssetId::from_key("t_feedanimal")))
-            || (job.kind == StaffJobKind::RefillWater
+            || (kind == StaffJobKind::Feed && job.token == Some(AssetId::from_key("t_feedanimal")))
+            || (kind == StaffJobKind::RefillWater
                 && job.token == Some(AssetId::from_key("t_wateranimal")))
-            || (job.kind == StaffJobKind::Capture
+            || (kind == StaffJobKind::Capture
                 && job.token == Some(AssetId::from_key("t_crateanimal")))
         {
             if cancelling.contains(current_job.job()) || !live_animals.contains(job.target) {
@@ -187,11 +191,11 @@ pub(crate) fn settle_staff_jobs_after_authored_behavior_finishes(
             completed_jobs.write(StaffJobCompleted {
                 staff: claim.staff,
                 job: current_job.job(),
-                kind: job.kind,
+                kind,
                 target: job.target,
             });
-        } else if job.kind == StaffJobKind::CleanHabitat
-            || (job.kind == StaffJobKind::Feed
+        } else if kind == StaffJobKind::CleanHabitat
+            || (kind == StaffJobKind::Feed
                 && job.token == Some(AssetId::from_key("t_fillfoodcontainer")))
         {
             // Native care completion clears the assignment; ordinary container

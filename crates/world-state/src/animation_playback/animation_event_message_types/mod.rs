@@ -29,6 +29,9 @@ pub struct AnimationTraversalTransitionRequested {
 #[derive(Message, Clone, Debug)]
 pub struct AnimationAiCommandRequested {
     pub controller: Entity,
+    pub playback_generation: u64,
+    pub request_id: Option<usize>,
+    pub milliseconds: u32,
     pub target: Entity,
     pub command: String,
 }
@@ -36,19 +39,9 @@ pub struct AnimationAiCommandRequested {
 #[derive(Message, Clone, Copy, Debug)]
 pub struct AnimationWhapRequested {
     pub controller: Entity,
+    pub playback_generation: u64,
+    pub request_id: Option<usize>,
     pub target: Entity,
     pub angle_degrees: i32,
-    pub duration_frames: i32,
-}
-
-#[derive(Message, Clone, Copy, Debug)]
-pub struct AnimationDockCommandRequested {
-    pub controller: Entity,
-    pub command: AnimationDockCommand,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub enum AnimationDockCommand {
-    Enable(bool),
-    GoToNode(i32),
+    pub random_offset_degrees: i32,
 }

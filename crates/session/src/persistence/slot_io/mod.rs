@@ -18,6 +18,7 @@ mod economy_snapshot_section_encoding;
 mod economy_snapshot_types;
 mod fence_topology_snapshot_section;
 pub(super) mod filesystem_task_completion_application;
+mod fossil_continuation_snapshot;
 pub(super) mod load_snapshot_file_request_execution;
 pub(super) mod loaded_snapshot_application_execution;
 mod loaded_snapshot_live_world_application;
@@ -31,7 +32,7 @@ mod maintenance_snapshot_types;
 mod native_crate_snapshot_links;
 pub(crate) mod pending_snapshot_application_types;
 mod persistence_failure_message_publication;
-mod persistence_slot_filesystem_task_types;
+pub(super) mod persistence_slot_filesystem_task_types;
 #[cfg(test)]
 pub(crate) mod photo_baseline_snapshot_tests;
 mod photo_snapshot_application;
@@ -102,3 +103,5 @@ pub(super) mod original_saved_game_load_preparation;
 mod original_saved_game_scenario_conversion;
 mod original_saved_game_snapshot_conversion;
 mod original_saved_game_world_conversion;
+
+pub(super) mod restored_component_values;

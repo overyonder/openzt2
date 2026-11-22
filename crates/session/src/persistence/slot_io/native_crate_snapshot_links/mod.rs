@@ -1,7 +1,8 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use bevy::{ecs::resource::IsResource, prelude::*};
 use openzt2_world_state::world_spawn::{
+    persistent_id_index::PersistentIdIndex,
     persistent_id_types::PersistentId,
     world_entity_crating::{AnimalCrate, ContainedCratedAnimal, WorldEntityIsCrated},
     world_membership_types::WorldMember,
@@ -36,11 +37,7 @@ pub(super) fn capture_native_crate_links(
             .get::<PersistentId>()
             .ok_or(Failure::BrokenPersistentEntityReference)?
             .0;
-        if crate_entity
-            .get::<ContainedCratedAnimal>()
-            .map(|link| link.0)
-            != Some(animal.id())
-            || !animal.contains::<WorldEntityIsCrated>()
+        if !animal.contains::<WorldEntityIsCrated>()
             || animal.get::<WorldMember>().is_none()
             || animal.get::<WorldMember>() != crate_entity.get::<WorldMember>()
         {
@@ -62,12 +59,7 @@ pub(super) fn capture_native_crate_links(
         let link = crate_entity
             .get::<ContainedCratedAnimal>()
             .ok_or(Failure::BrokenPersistentEntityReference)?;
-        if animals
-            .get(link.0)
-            .ok()
-            .and_then(|animal| animal.get::<AnimalCrate>().map(|link| link.0))
-            != Some(crate_entity.id())
-        {
+        if animals.get(link.occupant()).is_err() {
             return Err(Failure::BrokenPersistentEntityReference);
         }
     }
@@ -105,11 +97,11 @@ pub(super) fn validate_native_crate_links(
     Ok(())
 }
 
-pub(super) fn apply_native_crate_links(
+pub(super) fn restore_crate_relationships(
     commands: &mut Commands,
     records: &[AnimalSnapshotRecord],
-    animals: &BTreeMap<u64, Entity>,
-    placements: &BTreeMap<u64, Entity>,
+    identities: &PersistentIdIndex,
+    root: Entity,
 ) -> Result<(), Failure> {
     let links = records
         .iter()
@@ -119,13 +111,11 @@ pub(super) fn apply_native_crate_links(
                 .map(|crate_id| (record.persistent_identifier, crate_id))
         })
         .map(|(animal_id, crate_id)| {
-            let animal = animals
-                .get(&animal_id)
-                .copied()
+            let animal = identities
+                .get(root, PersistentId(animal_id))
                 .ok_or(Failure::BrokenPersistentEntityReference)?;
-            let crate_entity = placements
-                .get(&crate_id)
-                .copied()
+            let crate_entity = identities
+                .get(root, PersistentId(crate_id))
                 .ok_or(Failure::BrokenPersistentEntityReference)?;
             if animal == crate_entity {
                 return Err(Failure::BrokenPersistentEntityReference);
@@ -134,14 +124,7 @@ pub(super) fn apply_native_crate_links(
         })
         .collect::<Result<Vec<_>, Failure>>()?;
     for (animal, crate_entity) in links {
-        commands.entity(animal).insert((
-            AnimalCrate(crate_entity),
-            WorldEntityIsCrated,
-            Visibility::Hidden,
-        ));
-        commands
-            .entity(crate_entity)
-            .insert(ContainedCratedAnimal(animal));
+        commands.entity(animal).insert(AnimalCrate(crate_entity));
     }
     Ok(())
 }

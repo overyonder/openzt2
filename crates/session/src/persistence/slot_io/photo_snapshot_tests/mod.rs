@@ -3,6 +3,9 @@ use openzt2_game_data::{
     world_scenario::{PhotoChallengeRule, WorldScenarioDocument},
     AssetId,
 };
+use openzt2_world_state::world_spawn::persistent_id_index::{
+    PersistentIdIndex, PersistentIdIndexPlugin,
+};
 
 use openzt2_game_assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset;
 use openzt2_interface_state::photos::photo_album_types::AlbumMember;
@@ -19,7 +22,9 @@ use super::{
         persistence_failure_types::WorldSnapshotPersistenceFailure,
         snapshot_container_types::WorldSnapshotSectionDirectoryEntry,
     },
-    photo_snapshot_application::apply_photo_and_challenge_progress_snapshot_records_to_live_world,
+    photo_snapshot_application::{
+        restore_snapshot_photo_challenge_completion, spawn_snapshot_photos,
+    },
     photo_snapshot_section_encoding::{
         append_encoded_photo_snapshot_section, decode_and_validate_photo_snapshot_section,
     },
@@ -133,10 +138,14 @@ fn foreign_wire_records_reject_duplicate_challenge_identity() {
 
 #[test]
 fn restored_challenges_with_the_same_local_row_keep_distinct_photo_completions() {
-    let mut world = World::new();
+    let mut app = App::new();
+    app.add_plugins(PersistentIdIndexPlugin);
+    let world = app.world_mut();
     world.insert_resource(Assets::<Image>::default());
     let root = world.spawn_empty().id();
-    world.insert_resource(PersistentIdAllocator::new(root));
+    world
+        .entity_mut(root)
+        .insert(PersistentIdAllocator::default());
     let album = world
         .spawn((
             PersistentId(7),
@@ -195,27 +204,43 @@ fn restored_challenges_with_the_same_local_row_keep_distinct_photo_completions()
     .unwrap();
     let mut state = SystemState::<(
         Commands,
-        Query<(Entity, &PersistentId)>,
-        ResMut<PersistentIdAllocator>,
+        Res<PersistentIdIndex>,
+        Query<&mut PersistentIdAllocator>,
         ResMut<Assets<Image>>,
-        Query<(&PhotoChallenge, &mut PhotoChallengeProgress)>,
-    )>::new(&mut world);
+    )>::new(world);
     {
-        let (mut commands, identifiers, mut allocator, mut images, mut live_progress) =
-            state.get_mut(&mut world).unwrap();
-        apply_photo_and_challenge_progress_snapshot_records_to_live_world(
+        let (mut commands, identities, mut allocator, mut images) = state.get_mut(world).unwrap();
+        let mut allocator = allocator.get_mut(root).unwrap();
+        spawn_snapshot_photos(
             &mut commands,
             photos,
-            saved_progress,
             root,
-            &identifiers,
+            &identities,
             &mut allocator,
             &mut images,
-            &mut live_progress,
         )
         .unwrap();
     }
-    state.apply(&mut world);
+    state.apply(world);
+    let catalogue =
+        openzt2_interface_state::photos::photo_challenge_types::PhotoChallengeCatalogueIndex {
+            rules: std::collections::BTreeMap::from([
+                (FIRST_CHALLENGE, challenges[1]),
+                (SECOND_CHALLENGE, challenges[0]),
+            ]),
+            ..Default::default()
+        };
+    let mut state =
+        SystemState::<(Res<PersistentIdIndex>, Query<&mut PhotoChallengeProgress>)>::new(world);
+    let (identities, mut live) = state.get_mut(world).unwrap();
+    restore_snapshot_photo_challenge_completion(
+        &saved_progress,
+        root,
+        &identities,
+        Some(&catalogue),
+        &mut live,
+    )
+    .unwrap();
 
     for (entity, expected_id, photo_id, stars) in [
         (challenges[0], SECOND_CHALLENGE, 42, 5),

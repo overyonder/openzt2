@@ -121,6 +121,8 @@ impl Plugin for PersistencePlugin {
             .add_message::<screenshot_export::FullFrameScreenshotBmpExported>()
             .add_message::<screenshot_export::FullFrameScreenshotBmpExportFailed>()
             .add_message::<WorldSnapshotPersistenceFailed>()
+            .add_message::<persistence_ui_types::SaveSnapshotFromDialog>()
+            .add_message::<persistence_ui_types::SaveDialogSnapshotSaved>()
             .add_message::<LoadProfileIndex>()
             .add_message::<CreateProfile>()
             .add_message::<SelectProfile>()
@@ -130,10 +132,7 @@ impl Plugin for PersistencePlugin {
             .add_message::<ProfileSelected>()
             .add_message::<ProfileDeleted>()
             .add_message::<ProfileOperationFailed>()
-            .add_systems(
-                Startup,
-                initial_profile_activation::request_initial_profile_index_from_persistence_startup,
-            )
+            .add_systems(Startup, initial_profile_activation::begin_startup_profile_activation)
             .add_systems(
                 Update,
                 (
@@ -145,8 +144,11 @@ impl Plugin for PersistencePlugin {
                     profile_request_execution::begin_deleting_requested_profiles,
                     profile_filesystem_task_completion_application::
                         apply_completed_profile_filesystem_tasks_to_canonical_profile_state,
-                    initial_profile_activation::
-                        select_persisted_profile_or_create_localized_first_profile,
+                    (
+                        initial_profile_activation::activate_initial_profile_from_loaded_index,
+                        initial_profile_activation::create_initial_profile_after_default_name_loads,
+                        initial_profile_activation::select_created_profiles,
+                    ),
                     profile_request_execution::begin_persisting_changed_active_profile_options,
                     persistence_ui_action_routing::route_authored_persistence_ui_actions_to_domain_requests
                         .after(openzt2_interface_state::ui::UiSet::Interaction),
@@ -164,10 +166,10 @@ impl Plugin for PersistencePlugin {
                         photo_album_html_and_bmp_export::begin_photo_album_html_and_bmp_exports,
                         photo_album_html_and_bmp_export::complete_photo_album_html_and_bmp_exports,
                     ).chain(),
-                    (
-                        overview_map_html_and_jpeg_export::begin_overview_map_html_and_jpeg_exports,
-                        overview_map_html_and_jpeg_export::complete_overview_map_html_and_jpeg_exports,
-                    ).chain(),
+                    overview_map_html_and_jpeg_export::begin_overview_map_html_and_jpeg_exports
+                        .after(openzt2_interface_state::ui::UiSet::DomainProjection),
+                    overview_map_html_and_jpeg_export::capture_overview_export_projection,
+                    overview_map_html_and_jpeg_export::complete_overview_map_html_and_jpeg_exports,
                     (
                         screenshot_export::begin_full_frame_screenshot_bmp_exports,
                         screenshot_export::complete_full_frame_screenshot_bmp_exports,
@@ -187,7 +189,7 @@ impl Plugin for PersistencePlugin {
                 Update,
                 (
                     slot_io::save_snapshot_request_execution::
-                        begin_saving_requested_live_world_snapshot_to_save_slot
+                        capture_requested_world_snapshots()
                         .after(openzt2_interface_state::ui::UiSet::DomainProjection)
                         .run_if(in_state(GamePhase::InGame)),
                     slot_io::load_snapshot_file_request_execution::
@@ -212,7 +214,7 @@ impl Plugin for PersistencePlugin {
                     persistence_ui_operation_presentation::present_original_saved_game_failures
                         .before(openzt2_interface_state::ui::UiSet::Notifications),
                     (
-                        persistence_ui_operation_presentation::continue_to_load_slot_catalogue_after_world_snapshot_save
+                        persistence_ui_operation_presentation::continue_navigation_after_matching_dialog_save
                             .after(openzt2_interface_state::ui::UiSet::Projection),
                         persistence_ui_operation_presentation::close_save_dialogs_after_world_snapshot_save
                             .before(openzt2_interface_state::ui::UiSet::Commands),
@@ -223,7 +225,7 @@ impl Plugin for PersistencePlugin {
             .add_systems(
                 Update,
                 slot_io::loaded_snapshot_application_execution::
-                    coordinate_pending_snapshot_validation_baseline_world_loading_and_application
+                    restore_pending_snapshots()
                     .after(GameSet::Intent)
                     .after(
                         slot_io::filesystem_task_completion_application::

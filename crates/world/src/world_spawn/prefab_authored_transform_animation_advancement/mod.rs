@@ -1,9 +1,8 @@
 use bevy::{animation::AnimatedBy, prelude::*};
 use openzt2_game_assets::scene_prefab::transform_animation_lowering::{
-    PrefabMotion, PrefabMotionRotation,
+    PrefabMotion, PrefabMotionRotation, PrefabTransformClocks,
 };
 use openzt2_world_state::world_spawn::prefab_authored_rotation_cycle_advancement::PrefabRealTimeRotationClock;
-use openzt2_world_state::world_spawn::prefab_authored_transform_animation_advancement::PrefabTransformPlaybackClock;
 
 pub(super) fn insert_prefab_motion(
     entity: &mut EntityCommands<'_>,
@@ -12,14 +11,10 @@ pub(super) fn insert_prefab_motion(
 ) {
     let target = entity.id();
     let mut player = AnimationPlayer::default();
-    if let Some((node, instance_origin)) = motion.transform {
+    for &(node, _) in motion.transform_clocks.iter() {
         player.start(node).pause();
-        entity.insert(if instance_origin {
-            PrefabTransformPlaybackClock::Instance(node)
-        } else {
-            PrefabTransformPlaybackClock::Shared(node)
-        });
     }
+    entity.insert(PrefabTransformClocks(motion.transform_clocks.clone()));
     if let Some(node) = motion.spin {
         player.start(node).pause();
         entity.insert(PrefabRealTimeRotationClock { node, origin: None });
@@ -44,21 +39,20 @@ pub(super) fn insert_prefab_motion(
 
 pub(super) fn advance_authored_prefab_transform_animations_from_elapsed_time(
     time: Res<Time>,
-    mut players: Query<(Ref<PrefabTransformPlaybackClock>, &mut AnimationPlayer)>,
+    mut players: Query<(Ref<PrefabTransformClocks>, &mut AnimationPlayer)>,
 ) {
-    for (clock, mut player) in &mut players {
-        match *clock {
-            PrefabTransformPlaybackClock::Instance(node) if clock.is_added() => {
-                if let Some(animation) = player.animation_mut(node) {
-                    animation.set_seek_time(-time.delta_secs()).resume();
-                }
+    for (clocks, mut player) in &mut players {
+        for &(node, instance_origin) in clocks.0.iter() {
+            if instance_origin && !clocks.is_added() {
+                continue;
             }
-            PrefabTransformPlaybackClock::Shared(node) => {
-                if let Some(animation) = player.animation_mut(node) {
+            if let Some(animation) = player.animation_mut(node) {
+                if instance_origin {
+                    animation.set_seek_time(-time.delta_secs()).resume();
+                } else {
                     animation.set_seek_time(time.elapsed_secs());
                 }
             }
-            PrefabTransformPlaybackClock::Instance(_) => {}
         }
     }
 }

@@ -41,7 +41,7 @@ pub(super) enum ScenarioEntityCommand {
     Need(SetAnimalNeed),
     Crate(Entity),
     Name(Entity),
-    TrashLevel { entity: Entity, delta: i32 },
+    Remove(Entity),
 }
 
 #[derive(Default)]
@@ -65,8 +65,7 @@ impl EntityOperations {
 #[derive(SystemParam)]
 pub(super) struct ScenarioAnimalSpawnSources<'w, 's> {
     commands: Commands<'w, 's>,
-    allocator: Option<ResMut<'w, PersistentIdAllocator>>,
-    roots: Query<'w, 's, Entity, With<WorldRoot>>,
+    roots: Query<'w, 's, (Entity, &'static mut PersistentIdAllocator), With<WorldRoot>>,
     species: Res<'w, SpeciesAssets>,
     species_assets: Res<'w, Assets<SpeciesAsset>>,
     definitions: Res<'w, WorldDefinitions>,
@@ -100,12 +99,8 @@ impl ScenarioAnimalSpawnSources<'_, '_> {
                 "animal placement coordinates must be finite",
             ));
         }
-        let root = self.roots.single().map_err(|_| unavailable())?;
+        let (root, mut allocator) = self.roots.single_mut().map_err(|_| unavailable())?;
         let world = WorldMember { root };
-        let allocator = self.allocator.as_mut().ok_or_else(unavailable)?;
-        if !allocator.owns_world(root) {
-            return Err(unavailable());
-        }
         let species_view = self
             .species
             .get(&self.species_assets)
@@ -241,7 +236,7 @@ impl ScenarioAnimalSpawnSources<'_, '_> {
             .ok_or_else(|| {
                 mlua::Error::runtime("animal placement definition has no localized name")
             })?;
-        let persistent_id = allocator.allocate(root).map_err(|error| {
+        let persistent_id = allocator.allocate().map_err(|error| {
             mlua::Error::runtime(format!("animal identity allocation failed: {error:?}"))
         })?;
         let name = Some(format!("{name} {}", persistent_id.0));
@@ -274,8 +269,8 @@ fn apply_entity_commands(
     mut operations: MessageReader<ScenarioEntityCommand>,
     mut spawns: MessageWriter<ScriptedAnimalSpawnRequest>,
     mut needs: MessageWriter<SetAnimalNeed>,
-    mut trash: MessageWriter<
-        openzt2_zoo_state::maintenance::maintenance_types::AdjustFacilityContainedWaste,
+    mut removals: MessageWriter<
+        openzt2_zoo_state::construction::construction_interaction_types::DeleteEntity,
     >,
     animals: Query<(), (With<Animal>, With<WorldMember>)>,
     entities: Query<(&DefinitionId, &PersistentId, Option<&Name>), With<WorldMember>>,
@@ -296,12 +291,12 @@ fn apply_entity_commands(
             ScenarioEntityCommand::Need(request) if animals.contains(request.animal) => {
                 needs.write(*request);
             }
-            ScenarioEntityCommand::TrashLevel { entity, delta } => {
-                trash.write(openzt2_zoo_state::maintenance::maintenance_types::AdjustFacilityContainedWaste {
-                    facility: *entity,
-                    operation: openzt2_game_data::behavior::action::modification::BehaviorFactModificationOperation::Add,
-                    delta_q16: delta * 65_536,
-                });
+            ScenarioEntityCommand::Remove(entity) => {
+                removals.write(
+                    openzt2_zoo_state::construction::construction_interaction_types::DeleteEntity(
+                        *entity,
+                    ),
+                );
             }
             ScenarioEntityCommand::Crate(entity) if animals.contains(*entity) => {
                 commands.entity(*entity).insert(WorldEntityIsCrated);
@@ -322,6 +317,51 @@ fn apply_entity_commands(
             }
             _ => {}
         }
+    }
+}
+
+#[derive(SystemParam)]
+pub(super) struct ScenarioLuaDirectAccess<'w, 's> {
+    containers: Query<
+        'w,
+        's,
+        &'static mut openzt2_zoo_state::maintenance::maintenance_types::FacilityContainedWaste,
+    >,
+    profile: ResMut<
+        'w,
+        openzt2_zoo_state::progression::profile_scenario_variables::ProfileScenarioVariables,
+    >,
+}
+
+impl ScenarioLuaDirectAccess<'_, '_> {
+    pub(super) fn waste(&mut self, entity: Entity, next: Option<u16>) -> Option<u16> {
+        let mut container = self.containers.get_mut(entity).ok()?;
+        if let Some(next) = next {
+            let units = next.min(container.contained_waste_capacity_units);
+            container
+                .reborrow()
+                .map_unchanged(|container| &mut container.contained_waste_units)
+                .set_if_neq(units);
+        }
+        Some(container.contained_waste_units)
+    }
+
+    pub(super) fn profile(
+        &mut self,
+        key: AssetId,
+        next: Option<Option<&str>>,
+    ) -> mlua::Result<Option<String>> {
+        if let Some(next) = next {
+            let changed = self
+                .profile
+                .bypass_change_detection()
+                .set(key, next)
+                .map_err(mlua::Error::runtime)?;
+            if changed {
+                self.profile.set_changed();
+            }
+        }
+        Ok(self.profile.get(key).map(str::to_owned))
     }
 }
 

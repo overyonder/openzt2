@@ -54,6 +54,7 @@ pub(super) fn advance_active_staff_waste_container_emptying_jobs(
             staff_job_entity,
             staff_job,
             job_claim.staff,
+            StaffJobKind::EmptyBin,
         ));
     }
 }

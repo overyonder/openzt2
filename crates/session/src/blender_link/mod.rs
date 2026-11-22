@@ -10,13 +10,16 @@ use bevy::{
     ui::Pressed,
 };
 use std::{
-    path::Path,
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+    sync::Arc,
     time::{Duration, Instant},
 };
 
 use bevy::{
-    asset::{embedded_asset, load_embedded_asset, AssetPath},
+    asset::{embedded_asset, load_embedded_asset, AssetLoadFailedEvent, AssetPath},
     prelude::*,
+    tasks::{block_on, poll_once, AsyncComputeTaskPool, IoTaskPool, Task},
     ui::Val2,
 };
 use openzt2_game_assets::{
@@ -67,35 +70,42 @@ pub struct BlenderLinkPlugin;
 impl Plugin for BlenderLinkPlugin {
     fn build(&self, app: &mut App) {
         embedded_asset!(app, "button.png");
-        app.init_resource::<BlenderLink>()
-            .add_systems(
-                Update,
-                toggle_modder_tools
-                    .in_set(UiSet::Interaction)
-                    .run_if(in_state(GamePhase::MainMenu)),
+        app.add_systems(
+            Update,
+            toggle_modder_tools
+                .in_set(UiSet::Interaction)
+                .run_if(in_state(GamePhase::MainMenu)),
+        )
+        .add_systems(
+            Update,
+            (attach_blender_button, present_blender_button)
+                .chain()
+                .in_set(UiSet::DomainProjection),
+        )
+        .add_systems(
+            Update,
+            (toggle_blender_link, stop_blender_link_without_modder_tools)
+                .chain()
+                .in_set(GameSet::Input)
+                .run_if(in_state(GamePhase::InGame)),
+        )
+        .add_systems(
+            Update,
+            (
+                receive_blender_link_requests,
+                export_blender_objects_with_ready_materials,
+                answer_completed_blender_exports,
             )
-            .add_systems(
-                Update,
-                (attach_blender_button, present_blender_button)
-                    .chain()
-                    .in_set(UiSet::DomainProjection),
-            )
-            .add_systems(
-                Update,
-                (toggle_blender_link, stop_blender_link_without_modder_tools)
-                    .chain()
-                    .in_set(GameSet::Input)
-                    .run_if(in_state(GamePhase::InGame)),
-            )
-            .add_systems(Update, answer_blender_link_requests.in_set(GameSet::Ui))
-            .add_systems(OnExit(GamePhase::InGame), stop_blender_link);
+                .chain()
+                .in_set(GameSet::Ui),
+        )
+        .add_systems(OnExit(GamePhase::InGame), stop_blender_link);
     }
 }
 
-#[derive(Resource, Default)]
+#[derive(Component)]
 struct BlenderLink {
     server: Option<LinkServer>,
-    pending_loads: Vec<PendingLoad>,
 }
 
 #[derive(Component)]
@@ -187,7 +197,7 @@ fn attach_blender_button(
 fn present_blender_button(
     mut commands: Commands,
     settings: Res<ModderToolsSettings>,
-    link: Res<BlenderLink>,
+    link: Query<&BlenderLink>,
     pause_controls: Query<(&Node, &Visibility), Without<BlenderButton>>,
     mut buttons: Query<(
         Entity,
@@ -216,7 +226,7 @@ fn present_blender_button(
             Visibility::Hidden
         });
         interactive.set_if_neq(UiInteractionEnabled(settings.enabled));
-        let x = match (link.server.is_some(), hovered.get(), pressed) {
+        let x = match (!link.is_empty(), hovered.get(), pressed) {
             (_, _, true) => 192.0,
             (_, true, false) => 128.0,
             (true, false, false) => 64.0,
@@ -230,11 +240,13 @@ fn present_blender_button(
 }
 
 fn toggle_blender_link(
-    mut link: ResMut<BlenderLink>,
+    mut commands: Commands,
+    mut links: Query<(Entity, &mut BlenderLink)>,
     archives: Res<AssetArchives>,
     mut replaced: MessageWriter<PrefabModelReplaced>,
     mut presses: MessageReader<PointerPress>,
     buttons: Query<&UiInteractionEnabled, With<BlenderButton>>,
+    mut requests: Query<(&ChildOf, &mut BlenderExportRequest)>,
 ) {
     let pressed = presses.read().any(|press| {
         press.pointer.id.is_mouse()
@@ -245,48 +257,93 @@ fn toggle_blender_link(
     if !pressed {
         return;
     }
-    if link.server.is_some() {
-        stop(&mut link, &archives, &mut replaced);
+    if let Ok((owner, mut link)) = links.single_mut() {
+        stop(
+            &mut commands,
+            owner,
+            &mut link,
+            &archives,
+            &mut replaced,
+            &mut requests,
+        );
         return;
     }
     match LinkServer::start() {
         Ok(server) => {
             info!("Blender link listening on 127.0.0.1:{BLENDER_LINK_PORT}");
-            link.server = Some(server);
+            commands.spawn((
+                Name::new("Blender link"),
+                BlenderLink {
+                    server: Some(server),
+                },
+            ));
         }
         Err(error) => error!("Blender link could not start on port {BLENDER_LINK_PORT}: {error}"),
     }
 }
 
 fn stop_blender_link_without_modder_tools(
+    mut commands: Commands,
     settings: Res<ModderToolsSettings>,
-    mut link: ResMut<BlenderLink>,
+    mut links: Query<(Entity, &mut BlenderLink)>,
     archives: Res<AssetArchives>,
     mut replaced: MessageWriter<PrefabModelReplaced>,
+    mut requests: Query<(&ChildOf, &mut BlenderExportRequest)>,
 ) {
-    if !settings.enabled && link.server.is_some() {
-        stop(&mut link, &archives, &mut replaced);
+    if !settings.enabled {
+        if let Ok((owner, mut link)) = links.single_mut() {
+            stop(
+                &mut commands,
+                owner,
+                &mut link,
+                &archives,
+                &mut replaced,
+                &mut requests,
+            );
+        }
     }
 }
 
 fn stop_blender_link(
-    mut link: ResMut<BlenderLink>,
+    mut commands: Commands,
+    mut links: Query<(Entity, &mut BlenderLink)>,
     archives: Res<AssetArchives>,
     mut replaced: MessageWriter<PrefabModelReplaced>,
+    mut requests: Query<(&ChildOf, &mut BlenderExportRequest)>,
 ) {
-    stop(&mut link, &archives, &mut replaced);
+    if let Ok((owner, mut link)) = links.single_mut() {
+        stop(
+            &mut commands,
+            owner,
+            &mut link,
+            &archives,
+            &mut replaced,
+            &mut requests,
+        );
+    }
 }
 
 /// Stops the link and returns every model it replaced to the original.
 fn stop(
+    commands: &mut Commands,
+    owner: Entity,
     link: &mut BlenderLink,
     archives: &AssetArchives,
     replaced: &mut MessageWriter<PrefabModelReplaced>,
+    requests: &mut Query<(&ChildOf, &mut BlenderExportRequest)>,
 ) {
-    if link.server.take().is_some() {
+    if let Some(server) = link.server.take() {
+        for (parent, mut request) in requests {
+            if parent.parent() == owner {
+                if let Some(request) = request.0.take() {
+                    request.answer(Err("Blender link stopped".to_owned()));
+                }
+            }
+        }
+        commands.entity(owner).despawn();
+        drop(server);
         info!("Blender link stopped");
     }
-    link.pending_loads.clear();
     match archives.restore_live_model_replacements() {
         Ok(restored) => announce(replaced, restored),
         Err(error) => error!("models replaced from Blender could not be restored: {error}"),
@@ -314,13 +371,19 @@ struct ObjectPart {
 
 /// A Load waiting for its materials to load through the game's own loaders,
 /// so their textures can be exported with the models.
-struct PendingLoad {
-    request: LinkRequest,
+#[derive(Component)]
+struct BlenderObjectMaterialLoad {
     object: String,
     parts: Vec<ObjectPart>,
     materials: Vec<(String, Handle<MaterialAsset>)>,
-    started: Instant,
+    deadline: Instant,
 }
+
+#[derive(Component)]
+struct BlenderExportRequest(Option<LinkRequest>);
+
+#[derive(Component)]
+struct BlenderExportTask(Task<Result<Value, String>>);
 
 #[derive(bevy::ecs::system::SystemParam)]
 struct LinkWorld<'w, 's> {
@@ -342,57 +405,11 @@ struct LinkWorld<'w, 's> {
     >,
     asset_server: Res<'w, AssetServer>,
     prefabs: Res<'w, Assets<ScenePrefabAsset>>,
-    materials: Res<'w, Assets<MaterialAsset>>,
     archives: Res<'w, AssetArchives>,
-    paths: Option<Res<'w, PersistenceFilesystemPaths>>,
-}
-
-fn answer_blender_link_requests(
-    mut link: ResMut<BlenderLink>,
-    world: LinkWorld,
-    mut replaced: MessageWriter<PrefabModelReplaced>,
-) {
-    let mut new_loads = Vec::new();
-    let mut replaced_models = Vec::new();
-    if let Some(server) = &link.server {
-        while let Some(request) = server.try_next_request() {
-            if request.method == "load_object" {
-                match begin_load(&world, &mut replaced_models) {
-                    Ok((object, parts, materials)) => new_loads.push(PendingLoad {
-                        request,
-                        object,
-                        parts,
-                        materials,
-                        started: Instant::now(),
-                    }),
-                    Err(message) => request.answer(Err(message)),
-                }
-            } else {
-                let result = answer(&request, &world, &mut replaced_models);
-                request.answer(result);
-            }
-        }
-    }
-    announce(&mut replaced, replaced_models);
-    link.pending_loads.extend(new_loads);
-    let (ready, waiting) = std::mem::take(&mut link.pending_loads)
-        .into_iter()
-        .partition::<Vec<_>, _>(|load| {
-            load.started.elapsed() > MATERIAL_LOAD_TIMEOUT
-                || load.materials.iter().all(|(_, material)| {
-                    world.materials.contains(material)
-                        || world.asset_server.load_state(material).is_failed()
-                })
-        });
-    link.pending_loads = waiting;
-    for load in ready {
-        let result = finish_load(&load, &world);
-        load.request.answer(result);
-    }
 }
 
 fn answer(
-    request: &LinkRequest,
+    request: &mut LinkRequest,
     world: &LinkWorld,
     replaced_models: &mut Vec<String>,
 ) -> Result<Value, String> {
@@ -412,28 +429,10 @@ fn answer(
                 .map_err(|error| format!("{error:#}"))?;
             world
                 .archives
-                .replace_model_live(Path::new(model), request.model.clone())
+                .replace_model_live(Path::new(model), std::mem::take(&mut request.model))
                 .map_err(|error| error.to_string())?;
             replaced_models.push(model.to_owned());
             Ok(json!({ "model": model }))
-        }
-        "save_as_mod" => {
-            let name = request
-                .params
-                .get("name")
-                .and_then(Value::as_str)
-                .ok_or("save_as_mod needs a mod name")?;
-            let replacements = world.archives.live_model_replacements();
-            let path = mod_archive::write_mod_archive(
-                world.archives.installation_root(),
-                name,
-                &replacements,
-            )?;
-            let models = replacements
-                .iter()
-                .map(|(model, _)| model.to_string_lossy().into_owned())
-                .collect::<Vec<_>>();
-            Ok(json!({ "path": path, "models": models }))
         }
         "restore_models" => {
             let restored = world
@@ -448,6 +447,191 @@ fn answer(
             Ok(json!({}))
         }
         method => Err(format!("unknown method {method}")),
+    }
+}
+
+fn receive_blender_link_requests(
+    mut commands: Commands,
+    links: Query<(Entity, &BlenderLink)>,
+    world: LinkWorld,
+    exports: Query<(), With<BlenderExportRequest>>,
+    mut replaced: MessageWriter<PrefabModelReplaced>,
+) {
+    if !exports.is_empty() {
+        return;
+    }
+    let Ok((owner, link)) = links.single() else {
+        return;
+    };
+    let Some(server) = &link.server else {
+        return;
+    };
+    let mut replaced_models = Vec::new();
+    while let Some(mut request) = server.try_next_request() {
+        match request.method.as_str() {
+            "load_object" => match begin_load(&world, &mut replaced_models) {
+                Ok((object, parts, materials)) => {
+                    commands.spawn((
+                        ChildOf(owner),
+                        BlenderExportRequest(Some(request)),
+                        BlenderObjectMaterialLoad {
+                            object,
+                            parts,
+                            materials,
+                            deadline: Instant::now() + MATERIAL_LOAD_TIMEOUT,
+                        },
+                    ));
+                    break;
+                }
+                Err(error) => request.answer(Err(error)),
+            },
+            "save_as_mod" => {
+                let Some(name) = request
+                    .params
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+                else {
+                    request.answer(Err("save_as_mod needs a mod name".to_owned()));
+                    continue;
+                };
+                let directory = world.archives.installation_root().to_owned();
+                let replacements = world.archives.live_model_replacements();
+                let write = IoTaskPool::get().spawn(async move {
+                    let path = mod_archive::write_mod_archive(&directory, &name, &replacements)?;
+                    let models = replacements
+                        .iter()
+                        .map(|(model, _)| model.to_string_lossy())
+                        .collect::<Vec<_>>();
+                    Ok(json!({ "path": path, "models": models }))
+                });
+                commands.spawn((
+                    ChildOf(owner),
+                    BlenderExportRequest(Some(request)),
+                    BlenderExportTask(write),
+                ));
+                break;
+            }
+            _ => {
+                let result = answer(&mut request, &world, &mut replaced_models);
+                request.answer(result);
+            }
+        }
+    }
+    announce(&mut replaced, replaced_models);
+}
+
+fn export_blender_objects_with_ready_materials(
+    mut commands: Commands,
+    mut waiting: Query<(Entity, &mut BlenderObjectMaterialLoad)>,
+    mut material_events: MessageReader<AssetEvent<MaterialAsset>>,
+    mut material_failures: MessageReader<AssetLoadFailedEvent<MaterialAsset>>,
+    materials: Res<Assets<MaterialAsset>>,
+    server: Res<AssetServer>,
+    archives: Res<AssetArchives>,
+    paths: Option<Res<PersistenceFilesystemPaths>>,
+) {
+    let materials_changed = !material_events.is_empty() || !material_failures.is_empty();
+    material_events.clear();
+    material_failures.clear();
+    let now = Instant::now();
+    for (entity, mut load) in &mut waiting {
+        if now < load.deadline
+            && ((!load.is_added() && !materials_changed)
+                || !load.materials.iter().all(|(_, material)| {
+                    materials.contains(material) || server.load_state(material).is_failed()
+                }))
+        {
+            continue;
+        }
+        let Some(paths) = &paths else {
+            commands
+                .entity(entity)
+                .remove::<BlenderObjectMaterialLoad>()
+                .insert(BlenderExportTask(IoTaskPool::get().spawn(async {
+                    Err("the game has no folder to write models to".to_owned())
+                })));
+            continue;
+        };
+        let textures = Arc::new(
+            load.materials
+                .iter()
+                .filter_map(|(path, handle)| {
+                    let texture = materials.get(handle)?.first_bound_texture_asset()?;
+                    Some((
+                        path.clone(),
+                        texture.path()?.path().to_string_lossy().into_owned(),
+                    ))
+                })
+                .collect::<BTreeMap<_, _>>(),
+        );
+        let directory = paths.blender_model_export_directory_path();
+        let archives = (*archives).clone();
+        let parts = std::mem::take(&mut load.parts);
+        let object = std::mem::take(&mut load.object);
+        let write = IoTaskPool::get().spawn(async move {
+            std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+            let mut exported = Vec::with_capacity(parts.len());
+            for part in parts {
+                let ObjectPart {
+                    model,
+                    transform,
+                    visible,
+                    ..
+                } = part;
+                let path = blender_model_export_path(&directory, &model);
+                let archives = archives.clone();
+                let textures = Arc::clone(&textures);
+                let (model, glb) = AsyncComputeTaskPool::get()
+                    .spawn(async move {
+                        let glb = encode_editable_gltf_model(&archives, &model, |_, path| {
+                            textures.get(path).cloned()
+                        })
+                        .and_then(|glb| {
+                            place_gltf_scene(
+                                &glb,
+                                transform.translation.to_array(),
+                                transform.rotation.to_array(),
+                                transform.scale.to_array(),
+                            )
+                        })
+                        .map_err(|error| format!("{model} could not be exported: {error:#}"))?;
+                        Ok::<_, String>((model, glb))
+                    })
+                    .await?;
+                std::fs::write(&path, glb).map_err(|error| error.to_string())?;
+                exported.push(json!({ "model": model, "path": path, "visible": visible }));
+            }
+            Ok(json!({ "object": object, "parts": exported }))
+        });
+        commands
+            .entity(entity)
+            .remove::<BlenderObjectMaterialLoad>()
+            .insert(BlenderExportTask(write));
+    }
+}
+
+fn blender_model_export_path(directory: &Path, model: &str) -> PathBuf {
+    directory.join(format!(
+        "{}.glb",
+        Path::new(model)
+            .with_extension("")
+            .to_string_lossy()
+            .replace(['/', '\\'], "_")
+    ))
+}
+
+fn answer_completed_blender_exports(
+    mut commands: Commands,
+    mut exports: Query<(Entity, &mut BlenderExportRequest, &mut BlenderExportTask)>,
+) {
+    for (entity, mut request, mut task) in &mut exports {
+        if let Some(result) = block_on(poll_once(&mut task.0)) {
+            if let Some(request) = request.0.take() {
+                request.answer(result);
+            }
+            commands.entity(entity).despawn();
+        }
     }
 }
 
@@ -541,47 +725,6 @@ fn begin_load(world: &LinkWorld, replaced_models: &mut Vec<String>) -> Result<Be
         }
     }
     Ok((object, parts, materials))
-}
-
-/// Writes each part as its own GLB, placed where it sits in the object, for
-/// Blender's importer to read.
-fn finish_load(load: &PendingLoad, world: &LinkWorld) -> Result<Value, String> {
-    let directory = world
-        .paths
-        .as_ref()
-        .ok_or("the game has no folder to write models to")?
-        .blender_model_export_directory_path();
-    std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
-    let mut parts = Vec::new();
-    for part in &load.parts {
-        let glb = encode_editable_gltf_model(&world.archives, &part.model, |_, material_path| {
-            let (_, handle) = load
-                .materials
-                .iter()
-                .find(|(path, _)| path == material_path)?;
-            let texture = world.materials.get(handle)?.first_bound_texture_asset()?;
-            Some(texture.path()?.path().to_string_lossy().into_owned())
-        })
-        .and_then(|glb| {
-            place_gltf_scene(
-                &glb,
-                part.transform.translation.to_array(),
-                part.transform.rotation.to_array(),
-                part.transform.scale.to_array(),
-            )
-        })
-        .map_err(|error| format!("{} could not be exported: {error:#}", part.model))?;
-        let path = directory.join(format!(
-            "{}.glb",
-            Path::new(&part.model)
-                .with_extension("")
-                .to_string_lossy()
-                .replace(['/', '\\'], "_")
-        ));
-        std::fs::write(&path, glb).map_err(|error| error.to_string())?;
-        parts.push(json!({ "model": part.model, "path": path, "visible": part.visible }));
-    }
-    Ok(json!({ "object": load.object, "parts": parts }))
 }
 
 /// Generated native material paths use '#' as Bevy's label delimiter; a

@@ -12,10 +12,10 @@ pub(super) fn classify_spawned_staff_jobs_by_maintenance_work_kind(
 ) {
     for (staff_job_entity, staff_job) in &spawned_staff_jobs {
         match staff_job.kind {
-            StaffJobKind::EmptyBin => commands
+            Some(StaffJobKind::EmptyBin) => commands
                 .entity(staff_job_entity)
                 .insert(WasteContainerEmptyingStaffJobKindMarker),
-            StaffJobKind::SweepLitter => commands
+            Some(StaffJobKind::SweepLitter) => commands
                 .entity(staff_job_entity)
                 .insert(LooseLitterSweepingStaffJobKindMarker),
             _ => continue,

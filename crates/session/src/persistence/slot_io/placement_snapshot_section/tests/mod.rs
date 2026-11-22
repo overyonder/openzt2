@@ -1,10 +1,13 @@
 use super::*;
 use crate::persistence::slot_io::donation_snapshot_section::{
-    apply_donation_records, capture_donation_records, decode_donation_records,
-    encode_donation_records, resolve_donation_records, DonationSnapshotEntities,
+    capture_donation_records, decode_donation_records, encode_donation_records,
+    restore_donation_totals, DonationSnapshotEntities, RestoredDonationComponents,
 };
 use crate::persistence::slot_io::{
-    economy_snapshot_application::apply_economy_snapshot_records_to_live_economy_resources_and_facilities,
+    economy_snapshot_application::{
+        apply_economy_snapshot_records_to_live_economy_resources_and_facilities,
+        RestoredFacilityEconomy,
+    },
     economy_snapshot_section_encoding::{
         append_encoded_economy_snapshot_section, decode_and_validate_economy_snapshot_section,
     },
@@ -28,6 +31,9 @@ use openzt2_game_data::{
 };
 use openzt2_visitors::donations::{
     add_donation_payment_test_systems, queue_arrived_box_donation_for_test,
+};
+use openzt2_world_state::world_spawn::persistent_id_index::{
+    PersistentIdIndex, PersistentIdIndexPlugin,
 };
 use openzt2_world_state::{
     application_schedule::FixedGameSet, simulation_time::simulation_clock_types::ZooClock,
@@ -60,6 +66,7 @@ fn document() -> WorldDefinitionDocument {
     let id = AssetId::from_key("donationbox-test");
     WorldDefinitionDocument {
         objects: vec![WorldObjectDefinition {
+            authored_runtime: Default::default(),
             audio_cue_prefixes: Vec::new(),
             surface_effect_strength: None,
             presentation_caustic_policies: Vec::new(),
@@ -133,6 +140,7 @@ fn document() -> WorldDefinitionDocument {
 
 fn fixture() -> (App, Entity, Handle<ScenePrefabAsset>) {
     let mut app = App::new();
+    app.add_plugins(PersistentIdIndexPlugin);
     app.add_plugins((MinimalPlugins, AssetPlugin::default(), TransformPlugin))
         .init_resource::<Assets<ScenePrefabAsset>>()
         .init_resource::<Assets<Gltf>>()
@@ -169,7 +177,9 @@ fn fixture() -> (App, Entity, Handle<ScenePrefabAsset>) {
         .resource_mut::<WorldDefinitions>()
         .index_test_document(handle, &document);
     let root = app.world_mut().spawn_empty().id();
-    app.insert_resource(PersistentIdAllocator::new(root));
+    app.world_mut()
+        .entity_mut(root)
+        .insert(PersistentIdAllocator::default());
     let entity = |attachment, translation, children| PrefabEntity {
         stable_id: AssetId::from_key(attachment),
         attachment_id: AssetId::from_key(attachment),
@@ -342,30 +352,18 @@ fn purchased_box_survives_cold_restore_and_accepts_another_completed_payment() {
             },
         ))
         .id();
-    let mut state = SystemState::<(
+    let mut placement = SystemState::<(
         Commands,
         Res<Assets<ScenePrefabAsset>>,
         Res<WorldDefinitions>,
         Res<Assets<WorldDefinitionAsset>>,
-        ResMut<PersistentIdAllocator>,
-        ResMut<ZooCash>,
-        ResMut<AdmissionPrice>,
-        ResMut<ZooAdmissionsOpen>,
-        ResMut<MonthlyFinanceHistory>,
+        Query<&mut PersistentIdAllocator>,
     )>::new(destination.world_mut());
-    let restored_acceptor = {
-        let (
-            mut commands,
-            prefabs,
-            active,
-            assets,
-            mut allocator,
-            mut cash,
-            mut price,
-            mut admissions,
-            mut history,
-        ) = state.get_mut(destination.world_mut()).unwrap();
-        let restored = apply_placement_records(
+    {
+        let (mut commands, prefabs, active, assets, mut allocator) =
+            placement.get_mut(destination.world_mut()).unwrap();
+        let mut allocator = allocator.get_mut(restored_root).unwrap();
+        apply_placement_records(
             &mut commands,
             &records,
             &prefabs,
@@ -376,24 +374,50 @@ fn purchased_box_survives_cold_restore_and_accepts_another_completed_payment() {
             &mut allocator,
         )
         .unwrap();
-        let restored_acceptor = restored[&42];
-        apply_donation_records(
-            &mut commands,
-            resolve_donation_records(donations, &restored).unwrap(),
-        );
-        apply_economy_snapshot_records_to_live_economy_resources_and_facilities(
-            &mut commands,
-            economy,
-            &restored,
-            &mut cash,
-            &mut price,
-            &mut admissions,
-            &mut history,
-        )
-        .unwrap();
-        restored_acceptor
-    };
-    state.apply(destination.world_mut());
+    }
+    placement.apply(destination.world_mut());
+    let mut finances = SystemState::<(
+        Commands,
+        Res<PersistentIdIndex>,
+        Query<RestoredDonationComponents>,
+        Query<RestoredFacilityEconomy>,
+        ResMut<ZooCash>,
+        ResMut<AdmissionPrice>,
+        ResMut<ZooAdmissionsOpen>,
+        ResMut<MonthlyFinanceHistory>,
+    )>::new(destination.world_mut());
+    let (
+        mut commands,
+        identities,
+        mut totals,
+        mut facilities,
+        mut cash,
+        mut price,
+        mut admissions,
+        mut history,
+    ) = finances.get_mut(destination.world_mut()).unwrap();
+    let restored_acceptor = identities.get(restored_root, PersistentId(42)).unwrap();
+    restore_donation_totals(
+        &mut commands,
+        donations,
+        &identities,
+        restored_root,
+        &mut totals,
+    )
+    .unwrap();
+    apply_economy_snapshot_records_to_live_economy_resources_and_facilities(
+        &mut commands,
+        economy,
+        &identities,
+        restored_root,
+        &mut facilities,
+        &mut cash,
+        &mut price,
+        &mut admissions,
+        &mut history,
+    )
+    .unwrap();
+    finances.apply(destination.world_mut());
     destination.update();
     destination.update();
     assert!(destination.world().get_entity(deleted).is_err());
@@ -478,11 +502,12 @@ fn restored_tilted_world_pose_preserves_transform_and_completes_non_grid_hydrati
         Res<Assets<ScenePrefabAsset>>,
         Res<WorldDefinitions>,
         Res<Assets<WorldDefinitionAsset>>,
-        ResMut<PersistentIdAllocator>,
+        Query<&mut PersistentIdAllocator>,
     )>::new(app.world_mut());
-    let restored = {
+    {
         let (mut commands, prefabs, active, assets, mut allocator) =
             state.get_mut(app.world_mut()).unwrap();
+        let mut allocator = allocator.get_mut(root).unwrap();
         apply_placement_records(
             &mut commands,
             &records,
@@ -493,9 +518,14 @@ fn restored_tilted_world_pose_preserves_transform_and_completes_non_grid_hydrati
             root,
             &mut allocator,
         )
-        .unwrap()[&42]
-    };
+        .unwrap();
+    }
     state.apply(app.world_mut());
+    let restored = app
+        .world()
+        .resource::<PersistentIdIndex>()
+        .get(root, PersistentId(42))
+        .unwrap();
     app.update();
     app.update();
     assert_eq!(capture(&mut app), expected);
@@ -555,11 +585,12 @@ fn missing_placement_prefab_leaves_baseline_population_intact() {
         Res<Assets<ScenePrefabAsset>>,
         Res<WorldDefinitions>,
         Res<Assets<WorldDefinitionAsset>>,
-        ResMut<PersistentIdAllocator>,
+        Query<&mut PersistentIdAllocator>,
     )>::new(app.world_mut());
     {
         let (mut commands, prefabs, active, assets, mut allocator) =
             state.get_mut(app.world_mut()).unwrap();
+        let mut allocator = allocator.get_mut(root).unwrap();
         assert!(apply_placement_records(
             &mut commands,
             &records,

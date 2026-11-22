@@ -106,6 +106,7 @@ pub(in crate::persistence::slot_io) fn read_original_saved_scenario_snapshot(
     })?;
     let snapshot = ScenarioSnapshot {
         timing: Some(Default::default()),
+        challenge: None,
         version: 1,
         definition: definition.id,
         started_tick: activation_tick,
@@ -125,26 +126,23 @@ fn invalid(message: impl Into<String>) -> io::Error {
 
 pub(in crate::persistence::slot_io) fn assign_original_scenario_objective_identifiers(
     snapshot: &mut Option<ScenarioSnapshot>,
-    root: Entity,
+    _root: Entity,
     allocator: &openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator,
 ) -> Result<u64, super::Failure> {
     use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator;
 
-    if !allocator.owns_world(root) {
-        return Err(super::Failure::BrokenPersistentEntityReference);
-    }
     let Some(snapshot) = snapshot else {
         return Ok(allocator.next());
     };
     super::validate(snapshot)?;
-    let mut planned = PersistentIdAllocator::from_snapshot(root, allocator.next())
+    let mut planned = PersistentIdAllocator::from_snapshot(allocator.next())
         .map_err(|_| super::Failure::BrokenPersistentEntityReference)?;
     let identifiers = snapshot
         .objectives
         .iter()
         .map(|_| {
             planned
-                .allocate(root)
+                .allocate()
                 .map_err(|_| super::Failure::CapacityExceeded)
         })
         .collect::<Result<Vec<_>, _>>()?;

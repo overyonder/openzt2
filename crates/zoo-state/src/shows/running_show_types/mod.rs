@@ -1,4 +1,4 @@
-use bevy::prelude::*;
+use bevy::{platform::collections::HashMap, prelude::*};
 use openzt2_game_data::AssetId;
 
 #[derive(Component)]
@@ -15,7 +15,7 @@ pub struct StageRunningShow(Entity);
 pub struct ShowViewingLocationOf(pub Entity);
 
 #[derive(Component)]
-#[relationship_target(relationship = ShowViewingLocationOf)]
+#[relationship_target(relationship = ShowViewingLocationOf, linked_spawn)]
 pub struct ShowViewingLocations(Vec<Entity>);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,8 +31,10 @@ pub struct RunningShow {
     pub phase: ShowPhase,
     pub remaining_ticks: u32,
     pub current_slot: usize,
-    pub trick_quality_q16: i32,
+    pub trick_score: f32,
+    pub stars: f32,
     pub completed_tricks: u32,
+    pub failed_tricks: u32,
 }
 
 #[derive(Component)]
@@ -86,10 +88,43 @@ pub struct ScheduledShowTrickScored {
     pub performer: Entity,
     pub slot: Entity,
     pub trick: AssetId,
-    pub score_q16: i32,
+    pub score: f32,
+    pub failed: bool,
 }
 
 #[derive(Message, Clone, Copy)]
 pub struct ShowRunFinished {
+    pub show: Entity,
     pub stage: Entity,
+}
+
+/// Live repetition history for tricks performed in this world.
+#[derive(Component, Default)]
+pub struct WorldTrickPopularity(pub HashMap<AssetId, f32>);
+
+/// The guest's authored desire to attend a show, in source need units.
+#[derive(Component)]
+pub struct GuestShowNeed {
+    pub value: f32,
+    pub triggered: bool,
+    pub minimum: f32,
+    pub cessation: f32,
+    pub trigger: f32,
+    pub remaining_ns: u64,
+    pub rng: openzt2_world_state::simulation_time::deterministic_random_stream::DeterministicRng,
+}
+
+impl GuestShowNeed {
+    pub fn adjust(&mut self, delta: f32) {
+        self.value = (self.value + delta).max(self.minimum);
+        if self.value >= self.trigger {
+            self.triggered = true;
+        } else if self.value <= self.cessation {
+            self.triggered = false;
+        }
+    }
+
+    pub fn source_need(&self) -> (i32, bool) {
+        ((self.value * 65_536.0).round() as i32, self.triggered)
+    }
 }

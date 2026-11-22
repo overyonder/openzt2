@@ -28,26 +28,24 @@ pub(super) struct ScenarioLuaQueryFactSources<'w, 's> {
     species: Res<'w, openzt2_game_assets::species::species_asset_types::SpeciesAssets>,
     species_assets:
         Res<'w, Assets<openzt2_game_assets::species::species_asset_types::SpeciesAsset>>,
-    profile_variables: Res<
-        'w,
-        openzt2_zoo_state::progression::profile_scenario_variables::ProfileScenarioVariables,
-    >,
     zoo_cash: Res<'w, ZooCash>,
     tanks: super::scenario_lua_types::ScenarioLuaTankQuery<'w, 's>,
     selected_worlds: Query<
         'w,
         's,
-        &'static openzt2_world_state::world_spawn::selected_world_identity::SelectedWorldIdentity,
+        (Entity, &'static openzt2_world_state::world_spawn::selected_world_identity::SelectedWorldIdentity, Option<&'static Fame>),
         With<openzt2_world_state::world_spawn::world_membership_types::WorldRoot>,
     >,
     guest_admission_price: Res<'w, AdmissionPrice>,
     finance_history: Res<'w, MonthlyFinanceHistory>,
-    zoo_fame: Res<'w, Fame>,
     zoo_clock: Option<Res<'w, ZooClock>>,
     zoo_calendar: Option<Res<'w, ZooCalendar>>,
     world_definitions: Res<'w, WorldDefinitions>,
     world_definition_assets: Res<'w, Assets<WorldDefinitionAsset>>,
     selected_entity: WorldUiSelection<'w, 's>,
+    persistent_ids: Res<'w, openzt2_world_state::world_spawn::persistent_id_index::PersistentIdIndex>,
+    contained_crated_animals: super::scenario_lua_types::ScenarioLuaCrateQuery<'w, 's>,
+    containers: openzt2_zoo_state::animal_behavior::interaction_container_membership::InteractionContainerMemberships<'w, 's>,
     live_world_entities: ScenarioLuaLiveEntityQuery<'w, 's>,
     scenario_document_assets: Res<'w, Assets<WorldScenarioDocumentAsset>>,
     current_photo_challenge_sets: ScenarioLuaCurrentPhotoChallengeSetQuery<'w, 's>,
@@ -71,11 +69,18 @@ pub(super) struct ScenarioLuaQueryFactSources<'w, 's> {
 }
 
 impl ScenarioLuaQueryFactSources<'_, '_> {
+    pub(super) fn contained_entities(&self, container: Entity) -> Vec<Entity> {
+        self.containers.members_of_container(container).collect()
+    }
+
     pub(super) fn zoo_clock(&self) -> Option<&ZooClock> {
         self.zoo_clock.as_deref()
     }
 
-    pub(super) fn borrow_scenario_lua_query_facts<'a>(&'a self) -> ScenarioLuaQueryFacts<'a> {
+    pub(super) fn borrow_scenario_lua_query_facts<'a>(
+        &'a self,
+        contained_entities: &'a dyn Fn(Entity) -> Vec<Entity>,
+    ) -> ScenarioLuaQueryFacts<'a> {
         let live_world_entities: &'a ScenarioLuaLiveEntityQuery<'a, 'a> = &self.live_world_entities;
         let current_photo_challenge_sets: &'a ScenarioLuaCurrentPhotoChallengeSetQuery<'a, 'a> =
             &self.current_photo_challenge_sets;
@@ -91,6 +96,7 @@ impl ScenarioLuaQueryFactSources<'_, '_> {
             &self.ui_nodes;
         let ui_roots: &'a super::scenario_lua_types::ScenarioLuaUiRootQuery<'a, 'a> =
             &self.ui_roots;
+        let world = self.selected_worlds.single().ok();
         ScenarioLuaQueryFacts {
             donation_totals: &self.donation_totals,
             localization: self
@@ -98,18 +104,23 @@ impl ScenarioLuaQueryFactSources<'_, '_> {
                 .borrow_loaded_localization_view(&self.localization_assets),
             spawn_animal: None,
             species: self.species.get(&self.species_assets),
-            profile_variables: &self.profile_variables,
+            profile: None,
             zoo_cash: &self.zoo_cash,
             tank_in_world: !self.tanks.is_empty(),
             tanks,
-            world_session_mode: self.selected_worlds.single().ok().map(|world| world.mode),
+            world_session_mode: world.map(|(_, identity, _)| identity.mode),
             guest_admission_price: &self.guest_admission_price,
             finance_history: &self.finance_history,
-            zoo_fame: &self.zoo_fame,
+            zoo_fame: world.and_then(|(_, _, fame)| fame),
             zoo_clock: self.zoo_clock.as_deref(),
             zoo_calendar: self.zoo_calendar.as_deref(),
             zoo_months_since_calendar_epoch: self.count_zoo_months_since_calendar_epoch(),
             zoo_month_progress: self.measure_zoo_month_progress(),
+            world: world.map(|(entity, _, _)| entity),
+            persistent_ids: &self.persistent_ids,
+            contained_crated_animals: &self.contained_crated_animals,
+            contained_entities,
+            waste: None,
             live_world_entities,
             world_definitions: self.world_definitions.get(&self.world_definition_assets),
             scenario_document_assets: &self.scenario_document_assets,

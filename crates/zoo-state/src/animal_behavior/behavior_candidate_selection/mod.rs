@@ -1,5 +1,9 @@
 //! Shared candidate ranking over borrowed canonical task records and live facts.
 
+use crate::terrain::terrain_chunk_types::{EditedTerrainSamples, TerrainChunk, TerrainIndex};
+use crate::terrain::terrain_world_sampling::{sample_authored_terrain, terrain_chunk_at};
+use bevy::{ecs::system::SystemParam, prelude::*};
+use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use openzt2_game_data::{
     behavior::eligibility::{
         BehaviorCandidateEligibilityFact, BehaviorCandidateEligibilityRequirements,
@@ -7,6 +11,27 @@ use openzt2_game_data::{
     },
     AssetId,
 };
+
+#[derive(SystemParam)]
+pub struct BehaviorTargetBiome<'w, 's> {
+    terrain: Res<'w, TerrainIndex>,
+    assets: Res<'w, Assets<TerrainAsset>>,
+    chunks: Query<'w, 's, (&'static TerrainChunk, Option<&'static EditedTerrainSamples>)>,
+}
+
+impl BehaviorTargetBiome<'_, '_> {
+    pub fn at(&self, position: Vec3) -> Option<AssetId> {
+        let point = position.xz();
+        let (chunk, edits) = self
+            .chunks
+            .get(terrain_chunk_at(&self.terrain, point)?)
+            .ok()?;
+        let asset = self.assets.get(&chunk.asset)?;
+        sample_authored_terrain(chunk, asset, edits, point)?
+            .biome
+            .map(|biome| biome.id)
+    }
+}
 
 /// Ranks candidates by priority and score, retaining tied winners.
 pub struct BehaviorCandidateRanking<T> {
@@ -192,6 +217,7 @@ pub fn score_supported_behavior_task(
     task: &openzt2_game_data::behavior::document::BehaviorTask,
     outside_range_need_value: f32,
     target_distance: f32,
+    target_biome: impl FnOnce() -> Option<AssetId>,
     source_need: impl Fn(AssetId) -> Option<(i32, bool)>,
     scalar_value: impl FnMut(openzt2_game_data::behavior::scalar::BehaviorScalarQ16) -> Option<i32>,
 ) -> Option<f32> {
@@ -200,6 +226,7 @@ pub fn score_supported_behavior_task(
         outside_range_need_value,
         target_distance,
         None,
+        target_biome,
         source_need,
         scalar_value,
     )
@@ -214,6 +241,7 @@ pub fn score_behavior_task_with_need_points(
     outside_range_need_value: f32,
     target_distance: f32,
     need_points: (f32, f32),
+    target_biome: impl FnOnce() -> Option<AssetId>,
     source_need: impl Fn(AssetId) -> Option<(i32, bool)>,
     scalar_value: impl FnMut(openzt2_game_data::behavior::scalar::BehaviorScalarQ16) -> Option<i32>,
 ) -> Option<f32> {
@@ -222,6 +250,7 @@ pub fn score_behavior_task_with_need_points(
         outside_range_need_value,
         target_distance,
         Some(need_points),
+        target_biome,
         source_need,
         scalar_value,
     )
@@ -232,6 +261,7 @@ fn score_behavior_task(
     outside_range_need_value: f32,
     target_distance: f32,
     need_points: Option<(f32, f32)>,
+    target_biome: impl FnOnce() -> Option<AssetId>,
     source_need: impl Fn(AssetId) -> Option<(i32, bool)>,
     mut scalar_value: impl FnMut(openzt2_game_data::behavior::scalar::BehaviorScalarQ16) -> Option<i32>,
 ) -> Option<f32> {
@@ -266,6 +296,7 @@ fn score_behavior_task(
         .any(|entry| matches!(entry, BehaviorScore::DistanceInfluence(false)));
     let mut score = 0.0;
     let mut has_need_adjustment = false;
+    let mut has_biome_map = false;
     for entry in &task.scores {
         match entry {
             BehaviorScore::AttributeValue { attribute, value } => {
@@ -282,11 +313,10 @@ fn score_behavior_task(
             }
             // Applied once to the accumulated need score below.
             BehaviorScore::DistanceInfluence(_) => {}
+            BehaviorScore::BiomeWeight { .. } => has_biome_map = true,
             // Need-point thresholds were checked above, when they are known.
             BehaviorScore::AggregateGoodNeeds { .. } | BehaviorScore::AggregateBadNeeds { .. }
                 if need_points.is_some() => {}
-            // Current need-point branches and biome multiplier have separate owners.
-            // Until those inputs are available, do not silently treat them as neutral.
             _ => return None,
         }
     }
@@ -294,7 +324,21 @@ fn score_behavior_task(
         // Distance penalty: (max(distance, 1) - 1) / 1000 + 1.
         score /= (target_distance.max(1.0) - 1.0) / 1000.0 + 1.0;
     }
-    (has_need_adjustment && score.is_finite()).then_some(score)
+    if has_biome_map {
+        // A concrete target on an unlisted biome and a self target use a unit factor.
+        let factor = target_biome()
+            .and_then(|target| {
+                task.scores.iter().rev().find_map(|entry| match entry {
+                    BehaviorScore::BiomeWeight { biome, weight } if *biome == target => {
+                        Some(*weight)
+                    }
+                    _ => None,
+                })
+            })
+            .unwrap_or(1.0);
+        score *= factor;
+    }
+    ((has_need_adjustment || has_biome_map) && score.is_finite()).then_some(score)
 }
 
 #[cfg(test)]
@@ -332,6 +376,7 @@ mod need_point_threshold_tests {
             0.0,
             1.0,
             need_points,
+            || None,
             |_| Some((50 << 16, true)),
             |value| match value {
                 BehaviorScalarQ16::FixedQ16(value) => Some(value),
@@ -369,11 +414,40 @@ mod need_point_threshold_tests {
                 &invite,
                 0.0,
                 1.0,
+                || None,
                 |_| Some((50 << 16, true)),
                 |_| { Some(-40 << 16) }
             ),
             None
         );
+    }
+
+    #[test]
+    fn a_concrete_target_applies_its_biome_after_the_distance_penalty() {
+        let desert = AssetId::from_key("desert");
+        let task = task(vec![
+            BehaviorScore::AttributeValue {
+                attribute: AssetId::from_key("exercise"),
+                value: BehaviorScalarQ16::FixedQ16(-40 << 16),
+            },
+            BehaviorScore::BiomeWeight {
+                biome: desert,
+                weight: 1.5,
+            },
+        ]);
+        let score = |biome| {
+            score_supported_behavior_task(
+                &task,
+                0.0,
+                1001.0,
+                || biome,
+                |_| Some((50 << 16, true)),
+                |_| Some(-40 << 16),
+            )
+        };
+        assert_eq!(score(Some(desert)), Some(15.0));
+        assert_eq!(score(Some(AssetId::from_key("tundra"))), Some(10.0));
+        assert_eq!(score(None), Some(10.0));
     }
 }
 

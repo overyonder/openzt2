@@ -9,17 +9,21 @@ use openzt2_world_state::simulation_time::{
     simulation_clock_types::{ZooCalendar, ZooDayAdvanced},
     zoo_calendar_calculation::calculate_zoo_calendar_for_absolute_day,
 };
+use openzt2_world_state::world_spawn::{
+    world_load_completion_marker::WorldLoadCompleted, world_membership_types::WorldRoot,
+};
 
 pub(super) fn record_completed_month_fame_history(
     mut days: MessageReader<ZooDayAdvanced>,
     definitions: Res<WorldDefinitions>,
     assets: Res<Assets<WorldDefinitionAsset>>,
-    fame: Res<Fame>,
+    fame: Query<&Fame, (With<WorldRoot>, With<WorldLoadCompleted>)>,
     mut fame_history: ResMut<FameHistory>,
 ) {
     let Some(definitions) = definitions.get(&assets) else {
         return;
     };
+    let Ok(fame) = fame.single() else { return };
     record_completed_fame_months(
         &mut fame_history,
         &definitions.timing().calendar,

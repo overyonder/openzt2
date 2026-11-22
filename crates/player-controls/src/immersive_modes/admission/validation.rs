@@ -11,7 +11,9 @@ use openzt2_interface_state::photos::photo_capture_types::AlbumPhotoReadbacks;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_world_state::world_spawn::world_terrain_hydration::WorldTerrainHorizontalBounds;
 use openzt2_zoo_state::animal_health::types::Dead;
-use openzt2_zoo_state::extinct_animals::fossil_collection_and_assembly_types::FossilSetAssembly;
+use openzt2_zoo_state::extinct_animals::fossil_collection_and_assembly_types::{
+    FossilAssemblyTable, FossilCollections, FossilPlacementSurface,
+};
 use openzt2_zoo_state::extinct_animals::fossil_recovery_types::FossilRecoverySite;
 use openzt2_zoo_state::guests::guest_simulation_types::Guest;
 use openzt2_zoo_state::locomotion::locomotion_types::NavFlags;
@@ -90,7 +92,11 @@ pub(in crate::immersive_modes) fn validate_first_person(
 
 pub(in crate::immersive_modes) fn validate_search(
     mut request: Query<&mut PendingMode<FossilSearchControl>>,
-    sites: Query<&FossilRecoverySite>,
+    sites: Query<(
+        &FossilRecoverySite,
+        &openzt2_world_state::world_spawn::world_membership_types::WorldMember,
+    )>,
+    fossils: FossilCollections,
     definitions: ModeDefinitions,
     cameras: Query<Entity, With<ZooCamera>>,
 ) {
@@ -98,23 +104,34 @@ pub(in crate::immersive_modes) fn validate_search(
         return;
     };
     request.result = (|| {
-        let site = sites
-            .get(subject(request.subject)?)
-            .map_err(|_| ModeEntryFailure::WrongSubject)?;
-        if site.all_pieces_collected {
+        let definitions = definitions.get()?;
+        let viable_site = |site: &FossilRecoverySite, world: &WorldMember| {
+            definitions
+                .find_fossil_set(site.fossil_set_definition_identifier)
+                .is_some_and(|set| {
+                    set.pieces
+                        .iter()
+                        .any(|piece| !fossils.contains(world.root, *piece))
+                })
+        };
+        let searchable = request.subject.map_or_else(
+            || sites.iter().any(|(site, world)| viable_site(site, world)),
+            |subject| {
+                sites
+                    .get(subject)
+                    .is_ok_and(|(site, world)| viable_site(site, world))
+            },
+        );
+        if !searchable {
             return Err(ModeEntryFailure::WrongSubject);
         }
-        Admission::from_authored(
-            definitions.get()?,
-            ImmersiveMode::FossilSearch,
-            camera(&cameras)?,
-        )
+        Admission::from_authored(definitions, ImmersiveMode::FossilSearch, camera(&cameras)?)
     })();
 }
 
 pub(in crate::immersive_modes) fn validate_assembly(
     mut request: Query<&mut PendingMode<FossilAssemblyControl>>,
-    assemblies: Query<(), With<FossilSetAssembly>>,
+    assemblies: Query<&FossilPlacementSurface, With<FossilAssemblyTable>>,
     definitions: ModeDefinitions,
     cameras: Query<Entity, With<ZooCamera>>,
 ) {
@@ -122,9 +139,12 @@ pub(in crate::immersive_modes) fn validate_assembly(
         return;
     };
     request.result = (|| {
-        assemblies
+        if !assemblies
             .get(subject(request.subject)?)
-            .map_err(|_| ModeEntryFailure::WrongSubject)?;
+            .is_ok_and(|surface| surface.accepts_fossil_pieces)
+        {
+            return Err(ModeEntryFailure::WrongSubject);
+        }
         Admission::from_authored(
             definitions.get()?,
             ImmersiveMode::FossilAssembly,

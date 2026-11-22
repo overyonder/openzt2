@@ -1,78 +1,78 @@
 use bevy::prelude::*;
+use openzt2_game_assets::behavior::behavior_asset_types::{
+    BehaviorDeclarationIndexView, BehaviorDocumentAsset, LoadedBehaviorDocumentCollection,
+};
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::{
+    WorldDefinitions, WorldDefinitionsView,
+};
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_data::{
     ui_document::action::staff_management::UiWorkerDuty,
-    world_definitions::staff_management::{StaffJobCapabilityFlags, StaffJobKind, StaffRoleKind},
+    world_definitions::staff_management::{StaffJobKind, StaffRoleDefinition, StaffRoleKind},
+    AssetId,
 };
-
-use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
-use openzt2_game_assets::behavior::behavior_asset_types::LoadedBehaviorDocumentCollection;
-use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
-use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
 
 use super::{
     staff_assignment_types::{
         CleansFilters, CleansRecycling, EmptiesTrash, SetStaffWorkerDutyAssignment, SweepsTrash,
     },
-    staff_employment_types::{Staff, StaffRole},
-    staff_job_eligibility::{
-        staff_behavior_task_satisfies_authored_request_token, staff_subject_matches,
-    },
+    staff_employment_types::{Staff, StaffJobCapabilities, StaffRole},
+    staff_job_eligibility::{staff_subject_matches, StaffTasksByRequestToken},
 };
 
-/// Applies the original maintenance-worker default: an absent authored task
-/// assignment list means that every maintenance duty is enabled.
-///
-/// The four duty components remain the authoritative live assignment facts.
-/// This projection runs once for a newly identified or hired staff entity and
-/// does not overwrite later player changes.
-pub(super) fn enable_every_maintenance_worker_duty_for_new_staff_by_default(
+pub(super) type WorkerDutyFlags = (
+    Has<CleansFilters>,
+    Has<CleansRecycling>,
+    Has<EmptiesTrash>,
+    Has<SweepsTrash>,
+);
+
+const WORKER_DUTIES: [UiWorkerDuty; 4] = [
+    UiWorkerDuty::CleanAquaticTankFilter,
+    UiWorkerDuty::EmptyRecyclingContainer,
+    UiWorkerDuty::EmptyTrashContainer,
+    UiWorkerDuty::SweepLitter,
+];
+
+pub(super) fn initialize_supported_worker_duties(
     mut commands: Commands,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
-    new_staff: Query<(Entity, &StaffRole), Added<Staff>>,
+    behavior_assets: Res<Assets<BehaviorDocumentAsset>>,
+    behavior_documents: Res<LoadedBehaviorDocumentCollection>,
+    token_tasks: Res<StaffTasksByRequestToken>,
+    staff: Query<
+        (Entity, &StaffRole, &StaffJobCapabilities),
+        (With<Staff>, Added<StaffJobCapabilities>),
+    >,
 ) {
-    let Some(definitions) = active_definitions.get(&definitions) else {
+    let Some(catalogue) = active_definitions.get(&definitions) else {
         return;
     };
-    for (staff_entity, staff_role) in &new_staff {
-        if definitions
-            .find_staff(staff_role.0)
-            .is_some_and(|definition| definition.role == StaffRoleKind::Maintenance)
-        {
-            commands.entity(staff_entity).insert((
-                CleansFilters,
-                CleansRecycling,
-                EmptiesTrash,
-                SweepsTrash,
-            ));
-        }
-    }
-}
-
-pub(super) fn maintenance_worker_duties_accept_staff_job(
-    staff_role_kind: StaffRoleKind,
-    job_kind: StaffJobKind,
-    token: Option<openzt2_game_data::AssetId>,
-    cleans_filters: bool,
-    cleans_recycling: bool,
-    empties_trash: bool,
-    sweeps_trash: bool,
-) -> bool {
-    if !matches!(staff_role_kind, StaffRoleKind::Maintenance) {
-        return true;
-    }
-    match job_kind {
-        StaffJobKind::MaintainTank => cleans_filters,
-        StaffJobKind::EmptyBin => {
-            if token == Some(worker_duty_token(UiWorkerDuty::EmptyRecyclingContainer)) {
-                cleans_recycling
-            } else {
-                empties_trash
+    let Some(declarations) = behavior_documents.create_declaration_index_view(&behavior_assets)
+    else {
+        return;
+    };
+    for (employee, role, capabilities) in &staff {
+        let Some(role) = catalogue
+            .find_staff(role.0)
+            .filter(|role| role.role == StaffRoleKind::Maintenance)
+        else {
+            continue;
+        };
+        let mut employee = commands.entity(employee);
+        for duty in WORKER_DUTIES {
+            if staff_supports_worker_duty(
+                catalogue,
+                declarations,
+                &token_tasks,
+                role,
+                *capabilities,
+                duty,
+            ) {
+                set_worker_duty(&mut employee, duty, true);
             }
         }
-        StaffJobKind::SweepLitter => sweeps_trash,
-        _ => true,
     }
 }
 
@@ -81,106 +81,138 @@ pub(super) fn apply_staff_worker_duty_assignments(
     mut assignment_requests: MessageReader<SetStaffWorkerDutyAssignment>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
-    behavior_document_assets: Res<Assets<BehaviorDocumentAsset>>,
-    loaded_behavior_documents: Res<LoadedBehaviorDocumentCollection>,
-    staff_roles: Query<&StaffRole, With<Staff>>,
-    capabilities: Res<openzt2_game_assets::world_definitions::loaded_staff_behavior_capabilities::LoadedStaffBehaviorCapabilities>,
+    behavior_assets: Res<Assets<BehaviorDocumentAsset>>,
+    behavior_documents: Res<LoadedBehaviorDocumentCollection>,
+    token_tasks: Res<StaffTasksByRequestToken>,
+    staff: Query<(&StaffRole, Option<&StaffJobCapabilities>), With<Staff>>,
 ) {
-    let Some(definitions) = active_definitions.get(&definitions) else {
-        return;
-    };
-    let Some(behavior_declarations) =
-        loaded_behavior_documents.create_declaration_index_view(&behavior_document_assets)
-    else {
-        return;
-    };
+    let catalogue = active_definitions.get(&definitions);
+    let declarations = behavior_documents.create_declaration_index_view(&behavior_assets);
     for request in assignment_requests.read() {
-        let Ok(staff_role) = staff_roles.get(request.worker) else {
+        let Ok((role, capabilities)) = staff.get(request.worker) else {
             continue;
         };
-        if request.assigned
-            && !staff_role_accepts_worker_duty(
-                definitions,
-                behavior_declarations,
-                staff_role,
-                request.duty,
-                &capabilities,
-            )
-        {
-            continue;
+        if request.assigned {
+            let (Some(catalogue), Some(declarations), Some(capabilities)) =
+                (catalogue, declarations, capabilities)
+            else {
+                continue;
+            };
+            if !catalogue.find_staff(role.0).is_some_and(|role| {
+                staff_supports_worker_duty(
+                    catalogue,
+                    declarations,
+                    &token_tasks,
+                    role,
+                    *capabilities,
+                    request.duty,
+                )
+            }) {
+                continue;
+            }
         }
-        match request.duty {
-            UiWorkerDuty::CleanAquaticTankFilter => {
-                if request.assigned {
-                    commands.entity(request.worker).insert(CleansFilters);
-                } else {
-                    commands.entity(request.worker).remove::<CleansFilters>();
-                }
-            }
-            UiWorkerDuty::EmptyRecyclingContainer => {
-                if request.assigned {
-                    commands.entity(request.worker).insert(CleansRecycling);
-                } else {
-                    commands.entity(request.worker).remove::<CleansRecycling>();
-                }
-            }
-            UiWorkerDuty::EmptyTrashContainer => {
-                if request.assigned {
-                    commands.entity(request.worker).insert(EmptiesTrash);
-                } else {
-                    commands.entity(request.worker).remove::<EmptiesTrash>();
-                }
-            }
-            UiWorkerDuty::SweepLitter => {
-                if request.assigned {
-                    commands.entity(request.worker).insert(SweepsTrash);
-                } else {
-                    commands.entity(request.worker).remove::<SweepsTrash>();
-                }
-            }
+        set_worker_duty(
+            &mut commands.entity(request.worker),
+            request.duty,
+            request.assigned,
+        );
+    }
+}
+
+fn set_worker_duty(employee: &mut EntityCommands, duty: UiWorkerDuty, assigned: bool) {
+    match (duty, assigned) {
+        (UiWorkerDuty::CleanAquaticTankFilter, true) => {
+            employee.insert_if_new(CleansFilters);
+        }
+        (UiWorkerDuty::CleanAquaticTankFilter, false) => {
+            employee.remove::<CleansFilters>();
+        }
+        (UiWorkerDuty::EmptyRecyclingContainer, true) => {
+            employee.insert_if_new(CleansRecycling);
+        }
+        (UiWorkerDuty::EmptyRecyclingContainer, false) => {
+            employee.remove::<CleansRecycling>();
+        }
+        (UiWorkerDuty::EmptyTrashContainer, true) => {
+            employee.insert_if_new(EmptiesTrash);
+        }
+        (UiWorkerDuty::EmptyTrashContainer, false) => {
+            employee.remove::<EmptiesTrash>();
+        }
+        (UiWorkerDuty::SweepLitter, true) => {
+            employee.insert_if_new(SweepsTrash);
+        }
+        (UiWorkerDuty::SweepLitter, false) => {
+            employee.remove::<SweepsTrash>();
         }
     }
 }
 
-fn staff_role_accepts_worker_duty(
-    definitions: WorldDefinitionsView<'_>,
-    behavior_declarations: openzt2_game_assets::behavior::behavior_asset_types::BehaviorDeclarationIndexView<'_>,
-    staff_role: &StaffRole,
-    worker_duty: UiWorkerDuty,
-    capabilities: &openzt2_game_assets::world_definitions::loaded_staff_behavior_capabilities::LoadedStaffBehaviorCapabilities,
+fn staff_supports_worker_duty(
+    catalogue: WorldDefinitionsView<'_>,
+    declarations: BehaviorDeclarationIndexView<'_>,
+    token_tasks: &StaffTasksByRequestToken,
+    role: &StaffRoleDefinition,
+    capabilities: StaffJobCapabilities,
+    duty: UiWorkerDuty,
 ) -> bool {
-    let required_job_kind = match worker_duty {
+    let kind = match duty {
         UiWorkerDuty::CleanAquaticTankFilter => StaffJobKind::MaintainTank,
         UiWorkerDuty::EmptyRecyclingContainer | UiWorkerDuty::EmptyTrashContainer => {
             StaffJobKind::EmptyBin
         }
         UiWorkerDuty::SweepLitter => StaffJobKind::SweepLitter,
     };
-    definitions
-        .find_staff(staff_role.0)
-        .is_some_and(|staff_role_definition| {
-            let token = worker_duty_token(worker_duty);
-            capabilities
-                .for_employee(definitions, staff_role_definition)
-                .contains_all(StaffJobCapabilityFlags::for_job_kind(required_job_kind))
-                && behavior_declarations.behavior_tasks().any(|(_, _, task)| {
-                    staff_behavior_task_satisfies_authored_request_token(task, Some(token))
-                        && (task.subjects.is_empty()
-                            || task.subjects.iter().any(|subject| {
-                                staff_subject_matches(
-                                    definitions,
-                                    staff_role_definition,
-                                    openzt2_game_data::AssetId::from_key(
-                                        &subject.to_ascii_lowercase(),
-                                    ),
-                                )
-                            }))
+    capabilities.supports(kind)
+        && token_tasks.candidates(worker_duty_token(duty)).any(|task| {
+            declarations
+                .find_behavior_task_location(task)
+                .is_some_and(|(_, _, task)| {
+                    task.subjects.is_empty()
+                        || task.subjects.iter().any(|subject| {
+                            staff_subject_matches(
+                                catalogue,
+                                role,
+                                AssetId::from_key(&subject.trim().to_ascii_lowercase()),
+                            )
+                        })
                 })
         })
 }
 
-fn worker_duty_token(duty: UiWorkerDuty) -> openzt2_game_data::AssetId {
-    openzt2_game_data::AssetId::from_key(match duty {
+pub(super) fn worker_duties_allow_staff_job(
+    role: StaffRoleKind,
+    kind: StaffJobKind,
+    token: AssetId,
+    capabilities: StaffJobCapabilities,
+    (filters, recycling, trash, sweeping): (bool, bool, bool, bool),
+) -> bool {
+    if role != StaffRoleKind::Maintenance {
+        return true;
+    }
+    match kind {
+        StaffJobKind::MaintainTank
+            if token == worker_duty_token(UiWorkerDuty::CleanAquaticTankFilter) =>
+        {
+            capabilities.supports(kind) && filters
+        }
+        StaffJobKind::EmptyBin
+            if token == worker_duty_token(UiWorkerDuty::EmptyRecyclingContainer) =>
+        {
+            capabilities.supports(kind) && recycling
+        }
+        StaffJobKind::EmptyBin if token == worker_duty_token(UiWorkerDuty::EmptyTrashContainer) => {
+            capabilities.supports(kind) && trash
+        }
+        StaffJobKind::SweepLitter if token == worker_duty_token(UiWorkerDuty::SweepLitter) => {
+            capabilities.supports(kind) && sweeping
+        }
+        _ => true,
+    }
+}
+
+fn worker_duty_token(duty: UiWorkerDuty) -> AssetId {
+    AssetId::from_key(match duty {
         UiWorkerDuty::CleanAquaticTankFilter => "t_cleanwaterfilter",
         UiWorkerDuty::EmptyRecyclingContainer => "t_emptyrecyclingbin",
         UiWorkerDuty::EmptyTrashContainer => "t_emptytrash",

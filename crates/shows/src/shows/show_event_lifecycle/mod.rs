@@ -1,3 +1,4 @@
+use super::show_scoring::scaled_popularity;
 use bevy::{ecs::relationship::RelationshipTarget, prelude::*};
 use openzt2_game_assets::{
     behavior::behavior_asset_types::{BehaviorDocumentAsset, LoadedBehaviorDocumentCollection},
@@ -12,7 +13,10 @@ use openzt2_world_state::{
     world_spawn::world_membership_types::WorldMember,
 };
 use openzt2_zoo_state::{
-    animal_behavior::behavior_set_start_request_types::PendingBehaviorSet,
+    animal_behavior::{
+        behavior_set_start_request_types::PendingBehaviorSet,
+        behavior_token_types::ClaimedBehaviorSelfToken,
+    },
     animal_lifecycle::types::{Animal, SpeciesHandle},
     behavior_task_execution_types::{
         running_actions::{RunBehaviorWatchShow, RunningBehaviorInstruction, SelectedBehaviorSet},
@@ -24,11 +28,13 @@ use openzt2_zoo_state::{
     },
     shows::running_show_types::{
         AnimalPerformingShowTrick, RunningShow, RunningShowOnStage, RunningShowTrick,
-        ShowAudienceReaction, ShowPhase,
+        ScheduledShowTrickScored, ShowAudienceReaction, ShowPhase, WorldTrickPopularity,
     },
 };
 
 use super::{
+    authored_show_rewards::{AuthoredShowRewards, AuthoredShowRewardsSource},
+    scheduled_trick_execution::{ScheduledTrickToken, ShowTrickTokens},
     show_audience_types::{GuestShowExperience, GuestWatchingStage, StageShowAudience},
     show_event_types::AuthoredAnimalShowEvent,
 };
@@ -48,14 +54,24 @@ pub(crate) struct ShowEventWindow {
     trick: AssetId,
 }
 
-pub(crate) fn schedule_authored_animal_show_events(
+pub(super) fn schedule_authored_animal_show_events(
     mut commands: Commands,
     clock: Res<ZooClock>,
     definitions: Res<WorldDefinitions>,
     assets: Res<Assets<WorldDefinitionAsset>>,
     events: Query<(Entity, &AuthoredAnimalShowEvent), Without<ShowEventWindow>>,
     performers: Query<&AnimalPerformingShowTrick, With<Animal>>,
-    tricks: Query<&RunningShowTrick>,
+    tricks: Query<(
+        &WorldMember,
+        &RunningShow,
+        &RunningShowTrick,
+        &ShowTrickTokens,
+    )>,
+    popularity: Query<&WorldTrickPopularity>,
+    tokens: Query<(&ScheduledTrickToken, &ClaimedBehaviorSelfToken, &ChildOf)>,
+    reward_source: Res<AuthoredShowRewardsSource>,
+    rewards: Res<Assets<AuthoredShowRewards>>,
+    mut scores: MessageWriter<ScheduledShowTrickScored>,
 ) {
     if events.is_empty() {
         return;
@@ -71,10 +87,62 @@ pub(crate) fn schedule_authored_animal_show_events(
             commands.entity(entity).try_despawn();
             continue;
         };
-        let Ok(trick) = tricks.get(*run.collection()) else {
+        let Ok((member, show, trick, show_tokens)) = tricks.get(*run.collection()) else {
             commands.entity(entity).try_despawn();
             continue;
         };
+        let token_matches =
+            tokens
+                .iter_many(show_tokens.iter())
+                .flatten()
+                .any(|(token, claim, owner)| {
+                    token.slot == trick.slot
+                        && claim.execution_id == event.execution_id
+                        && owner.parent() == event.performer
+                });
+        if !token_matches {
+            commands.entity(entity).try_despawn();
+            continue;
+        }
+        let failure = AssetId::from_key("trickfailure");
+        let success = AssetId::from_key("tricksuccess");
+        let critical = AssetId::from_key("trickcritical");
+        if let (false, Some(rewards), Some(definition)) = (
+            trick.scored,
+            rewards.get(&reward_source.0),
+            definitions.find_trick(trick.definition),
+        ) {
+            let popularity = scaled_popularity(
+                popularity.get(member.root).ok(),
+                definition,
+                &rewards.popularity,
+            );
+            let score = if event.policy.name == failure {
+                let failures = show.failed_tricks.saturating_add(1) as f32;
+                let counted = (f32::from(rewards.failures_to_ignore) - failures).max(0.0);
+                Some(
+                    (rewards.popularity.maximum - popularity)
+                        * counted
+                        * rewards.failure_multiplier,
+                )
+            } else if event.policy.name == success {
+                Some(popularity * rewards.success_multiplier)
+            } else if event.policy.name == critical {
+                Some(popularity * rewards.critical_multiplier)
+            } else {
+                None
+            };
+            if let Some(score) = score {
+                scores.write(ScheduledShowTrickScored {
+                    show: *run.collection(),
+                    performer: event.performer,
+                    slot: trick.slot,
+                    trick: trick.definition,
+                    score,
+                    failed: event.policy.name == failure,
+                });
+            }
+        }
         let release = clock
             .tick
             .saturating_add(event.policy.time_in_seconds.map_or(0, ticks));
@@ -167,7 +235,7 @@ pub(super) fn dispatch_released_animal_show_events(
             continue;
         }
         let stage = stage.0;
-        let quality = show.trick_quality_q16;
+        let quality = (show.stars * 65_536.0).round() as i32;
         if let Ok(audience) = audiences.get(stage) {
             for guest in audience.iter() {
                 let Ok((
@@ -190,6 +258,7 @@ pub(super) fn dispatch_released_animal_show_events(
                     history.show = Some(show_entity);
                     history.reactions.clear();
                     history.delivered_events.clear();
+                    history.saw_favourite = false;
                 }
                 let policies = &action.0.events;
                 let default = policies
@@ -220,7 +289,6 @@ pub(super) fn dispatch_released_animal_show_events(
                 if window.expires.is_some() {
                     history.delivered_events.insert(entity);
                 }
-                let previous = history.reactions.entry(event.policy.name).or_default();
                 let popularity = definitions
                     .find_trick(window.trick)
                     .map_or(0, |trick| trick.popularity_q16);
@@ -228,14 +296,11 @@ pub(super) fn dispatch_released_animal_show_events(
                     .get(event.performer)
                     .ok()
                     .and_then(|(_, _, species)| species.map(|species| species.species));
-                let score = score_show_event(
-                    policy,
-                    popularity,
-                    quality,
-                    species.is_some_and(|species| favorite.0 == Some(species)),
-                    *previous,
-                    random,
-                );
+                let favourite = species.is_some_and(|species| favorite.0 == Some(species));
+                history.saw_favourite |= favourite;
+                let previous = history.reactions.entry(event.policy.name).or_default();
+                let score =
+                    score_show_event(policy, popularity, quality, favourite, *previous, random);
                 *previous = previous.saturating_add(1);
                 let reaction = policy
                     .reactions

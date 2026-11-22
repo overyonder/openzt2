@@ -4,7 +4,7 @@ use super::{
 };
 use bevy::{ecs::system::SystemParam, prelude::*};
 use openzt2_game_assets::{
-    saved_world_asset_source::SavedWorldAssetSource,
+    saved_world_asset_source::{SavedWorldAssetSource, SavedWorldTerrainAsset},
     world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset,
 };
 
@@ -20,9 +20,9 @@ impl SavedWorldSnapshotPreparation<'_> {
         world: &WorldSnapshotRecord,
         terrain: Option<&TerrainSnapshotRecord>,
         retained: &mut Option<Handle<WorldScenarioDocumentAsset>>,
-    ) -> Result<bool, Failure> {
+    ) -> Result<Option<SavedWorldTerrainAsset>, Failure> {
         let Some(document) = &world.source_document else {
-            return Ok(true);
+            return Ok(None);
         };
         let terrain = terrain.ok_or(Failure::CorruptSnapshotSection)?;
         let expected = if let Some(map) = document
@@ -52,37 +52,25 @@ impl SavedWorldSnapshotPreparation<'_> {
         {
             return Err(Failure::BrokenPersistentEntityReference);
         }
+        if retained.is_some() {
+            return Ok(None);
+        }
         let server = self
             .server
             .as_deref()
             .ok_or(Failure::UnknownAssetIdentifier)?;
-        if retained.is_none() {
-            let map = document
-                .document
-                .maps
-                .iter()
-                .find(|map| map.id == world.map_definition_identifier)
-                .ok_or(Failure::UnknownAssetIdentifier)?;
-            let source = self
-                .source
-                .as_deref_mut()
-                .ok_or(Failure::UnknownAssetIdentifier)?;
-            *retained = Some(
-                source
-                    .register(document.clone(), map.terrain, &terrain.grid, server)
-                    .map_err(|_| Failure::CorruptSnapshotSection)?,
-            );
-        }
-        let handle = retained.as_ref().ok_or(Failure::UnknownAssetIdentifier)?;
-        if matches!(
-            server.get_load_state(handle.id()),
-            Some(bevy::asset::LoadState::Failed(_))
-        ) || matches!(
-            server.get_recursive_dependency_load_state(handle.id()),
-            Some(bevy::asset::RecursiveDependencyLoadState::Failed(_))
-        ) {
-            return Err(Failure::UnknownAssetIdentifier);
-        }
-        Ok(server.is_loaded_with_dependencies(handle.id()))
+        let map = document
+            .document
+            .find_world_map(world.map_definition_identifier)
+            .ok_or(Failure::UnknownAssetIdentifier)?;
+        let source = self
+            .source
+            .as_deref_mut()
+            .ok_or(Failure::UnknownAssetIdentifier)?;
+        let (handle, terrain) = source
+            .register(document.clone(), map.terrain, &terrain.grid, server)
+            .map_err(|_| Failure::CorruptSnapshotSection)?;
+        *retained = Some(handle);
+        Ok(Some(terrain))
     }
 }

@@ -10,6 +10,10 @@ pub struct PerformerTraining {
 }
 
 impl PerformerTraining {
+    pub fn proficiency(&self, trick: AssetId) -> u16 {
+        self.scores.get(&trick).copied().unwrap_or_default()
+    }
+
     pub fn apply_capped_learning(&mut self, trick: AssetId, amount: u16, cap: u16) {
         let score = self.scores.entry(trick).or_default();
         // A lower-cap learning source must not erase proficiency already earned.

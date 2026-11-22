@@ -1,20 +1,13 @@
-use bevy::{ecs::relationship::RelationshipTarget, prelude::*};
+use bevy::prelude::*;
 use openzt2_game_data::AssetId;
 use openzt2_world_state::world_spawn::prefab_authored_attachment_identifier::PrefabAuthoredAttachmentIdentifier;
 
-use openzt2_game_assets::{
-    terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset,
-    world_definitions::{
-        world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions,
-        world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
-    },
+use openzt2_game_assets::world_definitions::{
+    world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions,
+    world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
 };
-use openzt2_zoo_state::{
-    terrain::{
-        terrain_chunk_types::{EditedTerrainSamples, TerrainChunk, TerrainIndex},
-        terrain_world_sampling::{sample_terrain, terrain_chunk_at},
-    },
-    transport_tours::{transport_rider_types::*, transport_vehicle_types::TransportVehicle},
+use openzt2_zoo_state::transport_tours::{
+    transport_rider_types::*, transport_vehicle_types::TransportVehicle,
 };
 
 #[derive(Component)]
@@ -32,8 +25,21 @@ pub(super) fn hydrate_vehicle_seats(
     let Some(definitions) = catalogue.get(&definitions) else {
         return;
     };
+    let cabin_tag = AssetId::from_key("passenger_cabin");
     for (entity, vehicle) in &vehicles {
-        for index in 0..vehicle.seats {
+        let cabin_mounts = definitions
+            .find_vehicle(vehicle.definition)
+            .and_then(|vehicle| definitions.find_object(vehicle.object))
+            .into_iter()
+            .flat_map(|object| &object.interaction_slots)
+            .filter(|slot| slot.reservation_tag == cabin_tag && !slot.is_queue)
+            .map(|slot| {
+                (!slot.target_node_name.is_empty())
+                    .then(|| AssetId::from_key(&slot.target_node_name.to_ascii_lowercase()))
+            });
+        for (index, cabin_mount) in
+            (0..vehicle.seats).zip(cabin_mounts.chain(std::iter::repeat(None)))
+        {
             let authored = definitions.find_vehicle_seat_by_index(vehicle.definition, index);
             let mut seat = commands.spawn((
                 ChildOf(entity),
@@ -43,7 +49,7 @@ pub(super) fn hydrate_vehicle_seats(
                 },
                 Transform::IDENTITY,
             ));
-            if let Some(node) = authored.and_then(|seat| seat.mount_node) {
+            if let Some(node) = authored.and_then(|seat| seat.mount_node).or(cabin_mount) {
                 seat.insert(PendingSeatMount(node));
             }
         }
@@ -119,31 +125,5 @@ pub(super) fn project_seated_passenger_poses(
             local.rotation *= Quat::from_rotation_y(std::f32::consts::PI);
         }
         rider.set_if_neq(vehicle.mul_transform(local));
-    }
-}
-
-pub(super) fn eject_passengers_after_vehicle_charge(
-    event: On<TransportVehicleCharged>,
-    vehicles: Query<(&VehicleRiders, &Transform), With<TransportVehicle>>,
-    mut guests: Query<&mut Transform, Without<TransportVehicle>>,
-    terrain: Res<TerrainIndex>,
-    assets: Res<Assets<TerrainAsset>>,
-    chunks: Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
-    mut commands: Commands,
-) {
-    let Ok((riders, vehicle)) = vehicles.get(event.entity) else {
-        return;
-    };
-    let position = vehicle.translation.xz();
-    let ground = terrain_chunk_at(&terrain, position).and_then(|entity| {
-        let (chunk, edited) = chunks.get(entity).ok()?;
-        sample_terrain(chunk, assets.get(&chunk.asset)?, edited, position)
-            .map(|sample| sample.height_m)
-    });
-    for rider in riders.iter() {
-        if let (Some(height), Ok(mut pose)) = (ground, guests.get_mut(rider)) {
-            pose.translation = Vec3::new(position.x, height, position.y);
-        }
-        commands.entity(rider).try_remove::<TransportRider>();
     }
 }

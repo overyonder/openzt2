@@ -56,7 +56,7 @@ pub(super) fn apply_completed_service_maintenance_effects_to_facilities(
     mut completed_services: MessageReader<ServiceCompleted>,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,
-    mut persistent_identifier_allocator: ResMut<PersistentIdAllocator>,
+    mut persistent_identifiers: Query<&mut PersistentIdAllocator>,
     mut facilities: Query<(
         &DefinitionId,
         &Transform,
@@ -93,8 +93,10 @@ pub(super) fn apply_completed_service_maintenance_effects_to_facilities(
             let Some(litter_definition) = &maintenance_definition.litter_definition else {
                 continue;
             };
-            let Ok(persistent_identifier) =
-                persistent_identifier_allocator.allocate(world_member.root)
+            let Some(persistent_identifier) = persistent_identifiers
+                .get_mut(world_member.root)
+                .ok()
+                .and_then(|mut allocator| allocator.allocate().ok())
             else {
                 continue;
             };

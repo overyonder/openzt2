@@ -9,8 +9,8 @@ use openzt2_zoo_state::{
     shows::{
         running_show_types::{
             AnimalPerformingShowTrick, BeginScheduledShowTrick, RunningShow, RunningShowFromRow,
-            RunningShowOnStage, RunningShowTrick, ScheduledShowTrickScored, ShowPhase,
-            ShowRunFinished, ShowTrickBeingPerformedBy, StageRunningShow,
+            RunningShowOnStage, RunningShowTrick, ShowPhase, ShowRunFinished,
+            ShowTrickBeingPerformedBy, StageRunningShow,
         },
         show_schedule_types::{
             ScheduledShowBreakRow, ScheduledShowRowActivationState, ScheduledShowTrickPerformance,
@@ -23,7 +23,7 @@ use openzt2_zoo_state::{
 use super::show_timing_operations::convert_authored_nanoseconds_to_fixed_simulation_ticks;
 
 #[derive(Component)]
-pub(super) struct ShowRunSlotOrder(Box<[Entity]>);
+pub(super) struct ShowRunSlotOrder(pub(super) Box<[Entity]>);
 
 #[derive(Component, Default)]
 pub(super) struct ShowScheduleCursor(Option<u16>);
@@ -109,8 +109,10 @@ pub(super) fn start_next_stage_show_or_break(
                 phase,
                 remaining_ticks,
                 current_slot: 0,
-                trick_quality_q16: 0,
+                trick_score: 0.0,
+                stars: 0.0,
                 completed_tricks: 0,
+                failed_tricks: 0,
             },
         ));
     }
@@ -157,7 +159,10 @@ pub(super) fn advance_running_stage_shows(
             continue;
         }
         if show.phase == ShowPhase::Postshow {
-            finished.write(ShowRunFinished { stage: stage.0 });
+            finished.write(ShowRunFinished {
+                show: entity,
+                stage: stage.0,
+            });
             show.phase = ShowPhase::BetweenShows;
             show.remaining_ticks = convert_authored_nanoseconds_to_fixed_simulation_ticks(
                 timing.between_show_ns,
@@ -216,35 +221,6 @@ pub(super) fn advance_running_stage_shows(
         } else {
             begin_postshow(&mut show, timing.post_show_ns, definitions);
         }
-    }
-}
-
-pub(super) fn apply_authored_trick_outcome_scores(
-    mut results: MessageReader<ScheduledShowTrickScored>,
-    mut shows: Query<(
-        &mut RunningShow,
-        &mut RunningShowTrick,
-        &ShowTrickBeingPerformedBy,
-    )>,
-) {
-    for result in results.read() {
-        let Ok((mut show, mut trick, performer)) = shows.get_mut(result.show) else {
-            continue;
-        };
-        if show.phase != ShowPhase::Conducting
-            || trick.definition != result.trick
-            || trick.slot != result.slot
-            || trick.scored
-            || performer.0 != result.performer
-        {
-            continue;
-        }
-        trick.scored = true;
-        let count = show.completed_tricks.saturating_add(1);
-        let sum = i64::from(show.trick_quality_q16) * i64::from(show.completed_tricks)
-            + i64::from(result.score_q16);
-        show.trick_quality_q16 = (sum / i64::from(count)) as i32;
-        show.completed_tricks = count;
     }
 }
 

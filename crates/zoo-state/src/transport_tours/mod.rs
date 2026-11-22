@@ -1,3 +1,4 @@
+pub mod authored_station_fare;
 pub mod transport_circuit_types;
 pub mod transport_rider_types;
 pub mod transport_topology_types;

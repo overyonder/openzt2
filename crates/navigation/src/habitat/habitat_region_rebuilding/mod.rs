@@ -93,7 +93,7 @@ pub(super) fn rebuild_changed_habitat_regions_from_fence_topology_and_terrain(
             &mut HabitatRegion,
             &mut HabitatSummary,
             Option<&mut HabitatClimate>,
-            Option<&mut WorldMember>,
+            Option<&WorldMember>,
         ),
         With<Habitat>,
     >,
@@ -289,9 +289,7 @@ pub(super) fn rebuild_changed_habitat_regions_from_fence_topology_and_terrain(
                 }
                 (None, None) => {}
             }
-            if let Some(mut world) = world {
-                world.set_if_neq(member);
-            } else {
+            if world != Some(&member) {
                 commands.entity(habitat_entity).insert(member);
             }
         } else {

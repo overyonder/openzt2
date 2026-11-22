@@ -49,7 +49,7 @@ pub(super) fn initialize_animal_waste_production_schedule(
 pub(super) fn produce_due_animal_habitat_waste(
     mut commands: Commands,
     zoo_clock: Res<ZooClock>,
-    mut persistent_identifier_allocator: ResMut<PersistentIdAllocator>,
+    mut persistent_identifiers: Query<&mut PersistentIdAllocator>,
     mut animals_with_waste_production_schedule: Query<
         (
             &AnimalWasteCycle,
@@ -76,7 +76,10 @@ pub(super) fn produce_due_animal_habitat_waste(
         else {
             continue;
         };
-        let Ok(persistent_identifier) = persistent_identifier_allocator.allocate(world_member.root)
+        let Some(persistent_identifier) = persistent_identifiers
+            .get_mut(world_member.root)
+            .ok()
+            .and_then(|mut allocator| allocator.allocate().ok())
         else {
             continue;
         };

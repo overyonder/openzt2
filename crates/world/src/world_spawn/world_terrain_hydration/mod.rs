@@ -6,7 +6,7 @@ use bevy::prelude::IVec2;
 use bevy::prelude::Query;
 use bevy::prelude::Res;
 use bevy::prelude::Vec2;
-use bevy::prelude::With;
+use bevy::prelude::{With, Without};
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
@@ -15,10 +15,10 @@ use openzt2_zoo_state::terrain::terrain_chunk_identity_type::TerrainChunkId;
 use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainChunk;
 use openzt2_zoo_state::topology::topology_graph_types::TopologyGrid;
 use openzt2_world_state::world_spawn::selected_world_terrain_asset_handle::SelectedWorldTerrainAssetHandle;
-use openzt2_world_state::world_spawn::world_hydration_types::WorldHydration;
+use openzt2_world_state::world_spawn::world_hydration_types::{TerrainProjectionPendingFor, WorldHydration};
+use openzt2_world_state::world_spawn::world_load_completion_marker::{StartingTerrainHydrated, WorldClockInitialized};
 use openzt2_world_state::world_spawn::world_load_failure::WorldLoadFailure;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
-use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 use openzt2_world_state::world_spawn::world_terrain_hydration::WorldTerrainHorizontalBounds;
 
 /// Hydrate the selected terrain asset into chunk entities and derive the
@@ -30,17 +30,17 @@ pub(super) fn hydrate_selected_terrain_chunks_world_bounds_and_topology_grid(
     asset_server: Res<AssetServer>,
     active_definitions: Res<WorldDefinitions>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
-    roots: Query<&SelectedWorldTerrainAssetHandle, With<WorldRoot>>,
-    mut pending: Query<(Entity, &mut WorldHydration)>,
+    pending: Query<
+        (Entity, &SelectedWorldTerrainAssetHandle),
+        (
+            With<WorldHydration>,
+            With<WorldClockInitialized>,
+            Without<StartingTerrainHydrated>,
+            Without<WorldLoadFailure>,
+        ),
+    >,
 ) {
-    let Ok((root, mut pending)) = pending.single_mut() else {
-        return;
-    };
-    if !pending.terrain_hydration_is_pending() {
-        return;
-    }
-    let Ok(source) = roots.get(root) else {
-        pending.record_failure(WorldLoadFailure::InvalidRecord(0));
+    let Ok((root, source)) = pending.single() else {
         return;
     };
     let Some(terrain) = terrains.get(&source.0) else {
@@ -58,7 +58,7 @@ pub(super) fn hydrate_selected_terrain_chunks_world_bounds_and_topology_grid(
                     )
                 },
             );
-            pending.record_failure(reason);
+            commands.entity(root).insert_if_new(reason);
         }
         return;
     };
@@ -66,12 +66,16 @@ pub(super) fn hydrate_selected_terrain_chunks_world_bounds_and_topology_grid(
         .terrain_chunk_cells_per_side()
         .and_then(|cells| cells.checked_add(1))
     else {
-        pending.record_failure(WorldLoadFailure::InvalidRecord(0));
+        commands
+            .entity(root)
+            .insert_if_new(WorldLoadFailure::InvalidRecord(0));
         return;
     };
     let spacing_m = terrain.canonical_terrain_grid().units.cell_size_metres;
     if side < 2 || !spacing_m.is_finite() || spacing_m <= 0.0 {
-        pending.record_failure(WorldLoadFailure::InvalidRecord(0));
+        commands
+            .entity(root)
+            .insert_if_new(WorldLoadFailure::InvalidRecord(0));
         return;
     }
     let Some(topology_spacing_m) = active_definitions
@@ -105,15 +109,16 @@ pub(super) fn hydrate_selected_terrain_chunks_world_bounds_and_topology_grid(
                     side,
                 },
                 WorldMember { root },
+                TerrainProjectionPendingFor(root),
             ));
         }
     }
-    commands
-        .entity(root)
-        .insert(WorldTerrainHorizontalBounds { min, max });
+    commands.entity(root).insert((
+        WorldTerrainHorizontalBounds { min, max },
+        StartingTerrainHydrated,
+    ));
     commands.insert_resource(TopologyGrid {
         origin: min,
         spacing_m: topology_spacing_m,
     });
-    pending.record_terrain_hydration_completion();
 }

@@ -1,7 +1,6 @@
 use avian3d::prelude::RigidBody;
 use bevy::asset::LoadState;
 use bevy::gltf::Gltf;
-use bevy::prelude::AssetServer;
 use bevy::prelude::Assets;
 use bevy::prelude::ChildOf;
 use bevy::prelude::Commands;
@@ -12,10 +11,11 @@ use bevy::prelude::Res;
 use bevy::prelude::Transform;
 use bevy::prelude::Vec3;
 use bevy::prelude::Visibility;
+use bevy::prelude::{AssetServer, Component, Handle, Or, With, Without};
 use openzt2_game_data::world_definitions::world_objects::WorldObjectInformationViewClass;
 use openzt2_game_data::world_definitions::world_objects::WorldObjectKind;
-use openzt2_game_data::world_scenario::StartingZooEntityTransform;
 use openzt2_game_data::world_scenario::StartingZooSpawnEntityFlags;
+use openzt2_game_data::world_scenario::{StartingZooEntityTransform, StartingZooSpawnEntityRecord};
 use openzt2_game_data::AssetId;
 
 use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
@@ -29,7 +29,6 @@ use openzt2_interface_state::information::entity_selection_types::Inspectable;
 
 use crate::world_spawn::prefab_world_instance_spawning::spawn_loaded_scene_prefab_as_world_instance;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
-use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator;
 use openzt2_world_state::world_spawn::prefab_model_readiness::first_missing_prefab_collider_model_asset_id;
 use openzt2_world_state::world_spawn::prefab_transform_conversion::transform_from_authored;
 use openzt2_world_state::world_spawn::world_hydration_types::WorldHydration;
@@ -38,196 +37,445 @@ use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_world_state::world_spawn::zoo_entrance_anchor_synchronization::zoo_entrance_from_authored_gate_anchor;
 
-const WORLD_PREFAB_RECORD_HYDRATION_BATCH_SIZE: usize = 128;
+use std::collections::VecDeque;
 
-pub(super) fn hydrate_bounded_world_prefab_record_batch(
+use openzt2_world_state::world_spawn::selected_world_document_handles::SelectedWorldDocumentHandles;
+use openzt2_world_state::world_spawn::selected_world_identity::SelectedWorldIdentity;
+use openzt2_world_state::world_spawn::starting_animal_hydration::PendingStartingAnimal;
+use openzt2_world_state::world_spawn::world_hydration_types::StartingAnimalPendingFor;
+use openzt2_world_state::world_spawn::world_load_completion_marker::{
+    ImportedPersistentIdsReserved, StartingPrefabsHydrated,
+};
+
+const MAXIMUM_PREFAB_WORK_IN_FLIGHT: usize = 128;
+
+#[derive(Component, Default)]
+pub(super) struct StartingPrefabWindow(VecDeque<Entity>);
+
+#[derive(Component)]
+pub(super) struct StartingPrefabRow {
+    root: Entity,
+    index: usize,
+}
+
+#[derive(Component)]
+pub(super) enum StartingPrefabDependencies {
+    Animal,
+    Nonvisual {
+        object: AssetId,
+        named_prefabs: Vec<(AssetId, Handle<ScenePrefabAsset>)>,
+    },
+    Scene {
+        id: AssetId,
+        handle: Handle<ScenePrefabAsset>,
+        object: Option<AssetId>,
+    },
+}
+
+#[derive(Component)]
+pub(super) struct StartingPrefabDependenciesReady;
+
+pub(super) fn admit_starting_prefab_rows(
     mut commands: Commands,
+    mut loads: Query<
+        (Entity, &WorldHydration, &mut StartingPrefabWindow),
+        (
+            With<ImportedPersistentIdsReserved>,
+            Without<WorldLoadFailure>,
+        ),
+    >,
+) {
+    for (root, progress, mut window) in &mut loads {
+        let (committed, total) = progress.prefab_loading_progress();
+        let end = total.min(committed + MAXIMUM_PREFAB_WORK_IN_FLIGHT);
+        for index in committed + window.0.len()..end {
+            window.0.push_back(
+                commands
+                    .spawn((StartingPrefabRow { root, index }, ChildOf(root)))
+                    .id(),
+            );
+        }
+    }
+}
+
+pub(super) fn demand_starting_prefab_dependencies(
+    mut commands: Commands,
+    rows: Query<
+        (Entity, &StartingPrefabRow),
+        (
+            Without<StartingPrefabDependencies>,
+            Without<WorldLoadFailure>,
+        ),
+    >,
+    worlds: Query<
+        (&SelectedWorldIdentity, &SelectedWorldDocumentHandles),
+        Without<WorldLoadFailure>,
+    >,
     scenarios: Res<Assets<WorldScenarioDocumentAsset>>,
-    prefabs: Res<Assets<ScenePrefabAsset>>,
-    species_assets: Res<Assets<SpeciesAsset>>,
-    species_index: Res<SpeciesAssets>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
+    species_assets: Res<Assets<SpeciesAsset>>,
+    species_index: Res<SpeciesAssets>,
+    asset_server: Res<AssetServer>,
+) {
+    let Some(catalogue) = active_definitions.get(&definitions) else {
+        return;
+    };
+    if species_index.catalogue_load_is_pending(&asset_server) {
+        return;
+    }
+    let species = species_index.get(&species_assets);
+    for (job, row) in &rows {
+        let Ok((selection, documents)) = worlds.get(row.root) else {
+            continue;
+        };
+        let Some(document) = scenarios.get(&documents.start) else {
+            commands
+                .entity(job)
+                .insert_if_new(WorldLoadFailure::MissingScenario);
+            continue;
+        };
+        let Some(record) = document
+            .document
+            .find_starting_zoo(selection.start)
+            .and_then(|start| start.entities.get(row.index))
+        else {
+            commands
+                .entity(job)
+                .insert_if_new(WorldLoadFailure::InvalidRecord(row.index as u32));
+            continue;
+        };
+        let definition = AssetId(record.definition.0);
+        let dependencies =
+            if species.is_some_and(|species| species.find_variant(definition).is_some()) {
+                Ok(StartingPrefabDependencies::Animal)
+            } else {
+                resolve_starting_object_dependencies(catalogue, document, record, definition)
+            };
+        match dependencies {
+            Ok(dependencies) => {
+                commands.entity(job).insert(dependencies);
+            }
+            Err(reason) if active_definitions.is_complete() => {
+                commands.entity(job).insert_if_new(reason);
+            }
+            Err(_) => {}
+        }
+    }
+}
+
+fn resolve_starting_object_dependencies(
+    catalogue: WorldDefinitionsView<'_>,
+    document: &WorldScenarioDocumentAsset,
+    record: &StartingZooSpawnEntityRecord,
+    definition: AssetId,
+) -> Result<StartingPrefabDependencies, WorldLoadFailure> {
+    let object = catalogue
+        .find_object(definition)
+        .map(|object| object.id)
+        .or_else(|| catalogue.find_facility(definition).map(|role| role.object))
+        .or_else(|| catalogue.find_staff(definition).map(|role| role.object))
+        .or_else(|| catalogue.find_guest(definition).map(|role| role.object))
+        .or_else(|| catalogue.find_path(definition).map(|role| role.object))
+        .or_else(|| catalogue.find_fence(definition).map(|role| role.object));
+    let staff_prefab = catalogue.find_staff(definition)
+        .or_else(|| catalogue.find_staff_by_object(definition))
+        .and_then(|role| {
+            openzt2_zoo_state::staff::staff_presentation_variant_selection::staff_presentation_variant(
+                role,
+                record.persistent_id,
+                catalogue,
+            )
+        })
+        .map(|(variant, _)| variant.prefab);
+    let object_definition = object.and_then(|id| catalogue.find_object(id));
+    let id = if record.prefab != AssetId::default() {
+        record.prefab
+    } else {
+        staff_prefab
+            .or_else(|| object_definition.map(|object| object.prefab))
+            .ok_or(WorldLoadFailure::MissingDependency(definition))?
+    };
+    if id != AssetId::default() {
+        let handle = document
+            .scene(id)
+            .cloned()
+            .or_else(|| catalogue.scene(id))
+            .ok_or(WorldLoadFailure::MissingDependency(id))?;
+        return Ok(StartingPrefabDependencies::Scene { id, handle, object });
+    }
+    let object = object_definition.ok_or(WorldLoadFailure::MissingDependency(definition))?;
+    let named_prefabs = object
+        .named_physical_presentations
+        .iter()
+        .filter(|presentation| presentation.required && presentation.prefab != AssetId::default())
+        .map(|presentation| {
+            let id = presentation.prefab;
+            catalogue
+                .scene(id)
+                .map(|handle| (id, handle))
+                .ok_or(WorldLoadFailure::MissingDependency(id))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(StartingPrefabDependencies::Nonvisual {
+        object: object.id,
+        named_prefabs,
+    })
+}
+
+pub(super) fn mark_ready_starting_prefab_dependencies(
+    mut commands: Commands,
+    rows: Query<
+        (Entity, &StartingPrefabDependencies),
+        (
+            Without<StartingPrefabDependenciesReady>,
+            Without<WorldLoadFailure>,
+        ),
+    >,
+    prefabs: Res<Assets<ScenePrefabAsset>>,
     models: Res<Assets<Gltf>>,
     asset_server: Res<AssetServer>,
-    allocator: Option<Res<PersistentIdAllocator>>,
-    mut pending: Query<(Entity, &mut WorldHydration)>,
 ) {
-    let Some(allocator) = allocator else {
-        return;
-    };
-    let Ok((root, mut pending)) = pending.single_mut() else {
-        return;
-    };
-    if !pending.world_prefab_record_hydration_is_pending() {
-        return;
-    }
-    if !allocator.owns_world(root) {
-        let next_record = pending.next_world_prefab_record_index() as u32;
-        pending.record_failure(WorldLoadFailure::InvalidRecord(next_record));
-        return;
-    }
-    let Some(start_asset) = scenarios.get(pending.starting_zoo_document_asset_handle()) else {
-        pending.record_failure(WorldLoadFailure::MissingScenario);
-        return;
-    };
-    let Some(active_catalogue) = active_definitions.get(&definitions) else {
-        return;
-    };
-    let Some(species) = species_index.get(&species_assets) else {
-        return;
-    };
-    let catalog = &start_asset.document;
-    let end =
-        pending.bounded_world_prefab_record_batch_end(WORLD_PREFAB_RECORD_HYDRATION_BATCH_SIZE);
-
-    'records: while pending.next_world_prefab_record_index() < end {
-        let local_index = pending.next_world_prefab_record_index();
-        let Some(record) = catalog
-            .find_starting_zoo(pending.starting_zoo_id())
-            .and_then(|start| start.entities.get(local_index))
-        else {
-            pending.record_failure(WorldLoadFailure::InvalidRecord(local_index as u32));
-            break;
+    for (job, dependencies) in &rows {
+        let scenes = match dependencies {
+            StartingPrefabDependencies::Animal => &[][..],
+            StartingPrefabDependencies::Scene { id, handle, .. } => {
+                mark_starting_prefab_row_ready(
+                    &mut commands,
+                    job,
+                    scene_and_colliders_ready(*id, handle, &prefabs, &models, &asset_server),
+                );
+                continue;
+            }
+            StartingPrefabDependencies::Nonvisual { named_prefabs, .. } => named_prefabs.as_slice(),
         };
-        let definition_id = AssetId(record.definition.0);
-        if species.find_variant(definition_id).is_some() {
-            let entity = commands.spawn((
-                WorldMember { root },
-                DefinitionId(definition_id),
-                PersistentId(record.persistent_id),
-                transform_from_world(&record.transform),
-                openzt2_world_state::world_spawn::starting_animal_hydration::PendingStartingAnimal {
-                    variant: definition_id,
-                    initial_needs: record.initial_needs.clone(),
-                },
-            )).id();
-            pending.record_world_prefab_spawn_completion(entity);
-            continue;
+        let mut readiness = Ok(true);
+        for (id, handle) in scenes {
+            match scene_and_colliders_ready(*id, handle, &prefabs, &models, &asset_server) {
+                Ok(false) => readiness = Ok(false),
+                Ok(true) => {}
+                Err(reason) => {
+                    readiness = Err(reason);
+                    break;
+                }
+            }
         }
-        let object_definition_id = active_catalogue
-            .find_object(definition_id)
-            .map(|record| record.id)
-            .or_else(|| {
-                active_catalogue
-                    .find_facility(definition_id)
-                    .map(|record| record.object)
-            })
-            .or_else(|| {
-                active_catalogue
-                    .find_staff(definition_id)
-                    .map(|record| record.object)
-            })
-            .or_else(|| {
-                active_catalogue
-                    .find_guest(definition_id)
-                    .map(|record| record.object)
-            })
-            .or_else(|| {
-                active_catalogue
-                    .find_path(definition_id)
-                    .map(|record| record.object)
-            })
-            .or_else(|| {
-                active_catalogue
-                    .find_fence(definition_id)
-                    .map(|record| record.object)
-            });
-        let staff_variant_prefab = active_catalogue
-            .find_staff(definition_id)
-            .or_else(|| active_catalogue.find_staff_by_object(definition_id))
-            .and_then(|role| {
-                openzt2_zoo_state::staff::staff_presentation_variant_selection::staff_presentation_variant(
-                    role,
-                    record.persistent_id,
-                    active_catalogue,
-                )
-            })
-            .map(|(variant, _)| variant.prefab);
-        let prefab_id = if record.prefab != AssetId::default() {
-            AssetId(record.prefab.0)
-        } else if let Some(prefab) = staff_variant_prefab {
-            prefab
+        mark_starting_prefab_row_ready(&mut commands, job, readiness);
+    }
+}
+
+fn mark_starting_prefab_row_ready(
+    commands: &mut Commands,
+    job: Entity,
+    readiness: Result<bool, WorldLoadFailure>,
+) {
+    match readiness {
+        Ok(true) => {
+            commands.entity(job).insert(StartingPrefabDependenciesReady);
+        }
+        Ok(false) => {}
+        Err(reason) => {
+            commands.entity(job).insert_if_new(reason);
+        }
+    }
+}
+
+fn scene_and_colliders_ready(
+    id: AssetId,
+    handle: &Handle<ScenePrefabAsset>,
+    prefabs: &Assets<ScenePrefabAsset>,
+    models: &Assets<Gltf>,
+    asset_server: &AssetServer,
+) -> Result<bool, WorldLoadFailure> {
+    let Some(prefab) = prefabs.get(handle) else {
+        return if matches!(asset_server.load_state(handle.id()), LoadState::Failed(_)) {
+            Err(WorldLoadFailure::MissingDependency(id))
         } else {
-            let Some(prefab) = object_definition_id.and_then(|object| {
-                active_catalogue
-                    .find_object(object)
-                    .map(|record| record.prefab)
-            }) else {
+            Ok(false)
+        };
+    };
+    if let Some(model) = first_missing_prefab_collider_model_asset_id(prefab, models) {
+        return if prefab
+            .loaded_model_asset_handle(model)
+            .is_none_or(|handle| {
+                matches!(asset_server.load_state(handle.id()), LoadState::Failed(_))
+            }) {
+            Err(WorldLoadFailure::MissingDependency(model))
+        } else {
+            Ok(false)
+        };
+    }
+    Ok(true)
+}
+
+pub(super) fn commit_ready_starting_prefab_rows_in_source_order(
+    mut commands: Commands,
+    mut loads: Query<
+        (
+            Entity,
+            &SelectedWorldIdentity,
+            &SelectedWorldDocumentHandles,
+            &mut WorldHydration,
+            &mut StartingPrefabWindow,
+        ),
+        (
+            With<ImportedPersistentIdsReserved>,
+            Without<WorldLoadFailure>,
+        ),
+    >,
+    ready: Query<
+        (
+            Option<&StartingPrefabDependencies>,
+            Option<&WorldLoadFailure>,
+        ),
+        Or<(
+            With<StartingPrefabDependenciesReady>,
+            With<WorldLoadFailure>,
+        )>,
+    >,
+    scenarios: Res<Assets<WorldScenarioDocumentAsset>>,
+    prefabs: Res<Assets<ScenePrefabAsset>>,
+    active_definitions: Res<WorldDefinitions>,
+    definitions: Res<Assets<WorldDefinitionAsset>>,
+) {
+    let Some(catalogue) = active_definitions.get(&definitions) else {
+        return;
+    };
+    for (root, selection, documents, mut progress, mut window) in &mut loads {
+        let Some(start) = scenarios
+            .get(&documents.start)
+            .and_then(|asset| asset.document.find_starting_zoo(selection.start))
+        else {
+            commands
+                .entity(root)
+                .insert_if_new(WorldLoadFailure::MissingScenario);
+            continue;
+        };
+        while let Some(&job) = window.0.front() {
+            let Ok((dependencies, failure)) = ready.get(job) else {
                 break;
             };
-            prefab
-        };
-        let parent = match record.parent {
-            u32::MAX => None,
-            index => pending.spawned_world_prefab_root_at_record_index(index),
-        };
-        if record.parent != u32::MAX && parent.is_none() {
-            pending.record_failure(WorldLoadFailure::InvalidRecord(local_index as u32));
-            break;
+            if let Some(&reason) = failure {
+                commands.entity(root).insert_if_new(reason);
+                break;
+            }
+            let Some(dependencies) = dependencies else {
+                break;
+            };
+            let (index, _) = progress.prefab_loading_progress();
+            let Some(record) = start.entities.get(index) else {
+                commands
+                    .entity(root)
+                    .insert_if_new(WorldLoadFailure::InvalidRecord(index as u32));
+                break;
+            };
+            let parent = if matches!(dependencies, StartingPrefabDependencies::Animal)
+                || record.parent == u32::MAX
+            {
+                None
+            } else {
+                let Some(parent) =
+                    progress.spawned_world_prefab_root_at_record_index(record.parent)
+                else {
+                    commands
+                        .entity(root)
+                        .insert_if_new(WorldLoadFailure::InvalidRecord(index as u32));
+                    break;
+                };
+                Some(parent)
+            };
+            match spawn_starting_prefab_row(
+                &mut commands,
+                root,
+                record,
+                parent,
+                dependencies,
+                catalogue,
+                &prefabs,
+            ) {
+                Ok(entity) => {
+                    progress.record_world_prefab_spawn_completion(entity);
+                    let _ = window.0.pop_front();
+                    commands.entity(job).despawn();
+                }
+                Err(reason) => {
+                    commands.entity(root).insert_if_new(reason);
+                    break;
+                }
+            }
         }
-        // A declared object without a scene still owns identity and gameplay state.
-        if prefab_id == AssetId::default() {
-            let object = object_definition_id
-                .and_then(|id| active_catalogue.find_object(id))
-                .expect("a missing scene requires a declared nonvisual object");
+        let (committed, total) = progress.prefab_loading_progress();
+        if committed == total {
+            commands
+                .entity(root)
+                .remove::<StartingPrefabWindow>()
+                .insert(StartingPrefabsHydrated);
+        }
+    }
+}
+
+fn spawn_starting_prefab_row(
+    commands: &mut Commands,
+    root: Entity,
+    record: &StartingZooSpawnEntityRecord,
+    parent: Option<Entity>,
+    dependencies: &StartingPrefabDependencies,
+    catalogue: WorldDefinitionsView<'_>,
+    prefabs: &Assets<ScenePrefabAsset>,
+) -> Result<Entity, WorldLoadFailure> {
+    let definition = record.definition;
+    let transform = transform_from_world(&record.transform);
+    let visible = record
+        .flags
+        .contains_all(StartingZooSpawnEntityFlags::VISIBLE);
+    let id = PersistentId(record.persistent_id);
+    match dependencies {
+        StartingPrefabDependencies::Animal => Ok(commands
+            .spawn((
+                WorldMember { root },
+                DefinitionId(definition),
+                id,
+                transform,
+                PendingStartingAnimal {
+                    variant: definition,
+                    initial_needs: record.initial_needs.clone(),
+                },
+                StartingAnimalPendingFor(root),
+            ))
+            .id()),
+        StartingPrefabDependencies::Nonvisual {
+            object,
+            named_prefabs,
+        } => {
+            let object = catalogue
+                .find_object(*object)
+                .ok_or(WorldLoadFailure::MissingDependency(*object))?;
             let mut named_presentations = Vec::new();
             for presentation in object
                 .named_physical_presentations
                 .iter()
-                .filter(|presentation| presentation.required)
+                .filter(|item| item.required)
             {
-                if presentation.prefab == AssetId::default() {
-                    named_presentations.push((presentation, None));
-                    continue;
-                }
-                if pending
-                    .retained_pending_named_prefab(presentation.prefab)
-                    .is_none()
-                {
-                    let Some(handle) = active_catalogue.scene(presentation.prefab) else {
-                        pending.record_failure(WorldLoadFailure::MissingDependency(
-                            presentation.prefab,
-                        ));
-                        break 'records;
-                    };
-                    pending.retain_pending_named_prefab(presentation.prefab, handle);
-                }
-                let handle = pending
-                    .retained_pending_named_prefab(presentation.prefab)
-                    .expect("required named scene was retained")
-                    .clone();
-                let Some(prefab) = prefabs.get(&handle) else {
-                    if matches!(asset_server.load_state(handle.id()), LoadState::Failed(_)) {
-                        pending.record_failure(WorldLoadFailure::MissingDependency(
-                            presentation.prefab,
-                        ));
-                    }
-                    break 'records;
+                let handle = if presentation.prefab == AssetId::default() {
+                    None
+                } else {
+                    Some(
+                        named_prefabs
+                            .iter()
+                            .find(|(id, _)| *id == presentation.prefab)
+                            .map(|(_, handle)| handle.clone())
+                            .ok_or(WorldLoadFailure::MissingDependency(presentation.prefab))?,
+                    )
                 };
-                if let Some(model) = first_missing_prefab_collider_model_asset_id(prefab, &models) {
-                    if prefab.loaded_model_asset_handle(model).is_none_or(|model| {
-                        matches!(asset_server.load_state(model.id()), LoadState::Failed(_))
-                    }) {
-                        pending.record_failure(WorldLoadFailure::MissingDependency(model));
-                    }
-                    break 'records;
-                }
-                named_presentations.push((presentation, Some(handle)));
+                named_presentations.push((presentation, handle));
             }
-
             let mut entity = commands.spawn((
                 WorldMember { root },
-                DefinitionId(definition_id),
-                PersistentId(record.persistent_id),
-                Inspectable {
-                    definition: definition_id,
-                },
-                transform_from_world(&record.transform),
-                if record
-                    .flags
-                    .contains_all(StartingZooSpawnEntityFlags::VISIBLE)
-                {
+                DefinitionId(definition),
+                id,
+                Inspectable { definition },
+                transform,
+                if visible {
                     Visibility::Inherited
                 } else {
                     Visibility::Hidden
@@ -238,65 +486,20 @@ pub(super) fn hydrate_bounded_world_prefab_record_batch(
             }
             let entity = entity.id();
             crate::world_spawn::named_physical_presentation_projection::spawn_required_named_physical_presentations(
-                &mut commands, entity, named_presentations,
+                commands, entity, named_presentations,
             );
-            pending.record_world_prefab_spawn_completion(entity);
-            continue;
+            Ok(entity)
         }
-        if pending
-            .retained_pending_prefab()
-            .is_none_or(|(pending_id, _)| *pending_id != prefab_id)
-        {
-            let Some(handle) = start_asset
-                .scene(prefab_id)
-                .cloned()
-                .or_else(|| active_catalogue.scene(prefab_id))
-            else {
-                break;
-            };
-            pending.retain_pending_prefab(prefab_id, handle);
-        }
-        let prefab_handle = pending
-            .retained_pending_prefab()
-            .expect("selected prefab handle was retained")
-            .1
-            .clone();
-        let Some(prefab) = prefabs.get(&prefab_handle) else {
-            if matches!(
-                asset_server.load_state(prefab_handle.id()),
-                LoadState::Failed(_)
-            ) {
-                pending.record_failure(WorldLoadFailure::MissingDependency(prefab_id));
-            }
-            // Otherwise Bevy is still preparing this selected prefab and its
-            // focused dependency handles. Continue next frame.
-            break;
-        };
-        if let Some(model) = first_missing_prefab_collider_model_asset_id(prefab, &models) {
-            if prefab
-                .loaded_model_asset_handle(model)
-                .is_none_or(|handle| {
-                    matches!(asset_server.load_state(handle.id()), LoadState::Failed(_))
-                })
-            {
-                pending.record_failure(WorldLoadFailure::MissingDependency(model));
-            }
-            break;
-        }
-        let entity = spawn_loaded_scene_prefab_as_world_instance(
-            &mut commands,
-            prefab,
-            prefab_handle,
-            root,
-            definition_id,
-            PersistentId(record.persistent_id),
-            transform_from_world(&record.transform),
-            record
-                .flags
-                .contains_all(StartingZooSpawnEntityFlags::VISIBLE),
-            parent,
-            object_definition_id
-                .and_then(|object| active_catalogue.find_object(object))
+        StartingPrefabDependencies::Scene {
+            id: prefab_id,
+            handle,
+            object,
+        } => {
+            let prefab = prefabs
+                .get(handle)
+                .ok_or(WorldLoadFailure::MissingDependency(*prefab_id))?;
+            let body = object
+                .and_then(|object| catalogue.find_object(object))
                 .map_or(RigidBody::Static, |object| {
                     if matches!(
                         object.kind,
@@ -304,7 +507,7 @@ pub(super) fn hydrate_bounded_world_prefab_record_batch(
                             | WorldObjectKind::Guest
                             | WorldObjectKind::Animal
                             | WorldObjectKind::Vehicle
-                    ) || active_catalogue
+                    ) || catalogue
                         .find_placeable(object.id)
                         .is_some_and(|placeable| placeable.moving_footprint)
                     {
@@ -312,30 +515,39 @@ pub(super) fn hydrate_bounded_world_prefab_record_batch(
                     } else {
                         RigidBody::Static
                     }
-                }),
-        );
-        if let Some(definition) = active_catalogue
-            .find_object(definition_id)
-            .filter(|definition| definition.terrain_fitted)
-        {
-            commands.entity(entity).insert(TerrainFittingSurface {
-                normal_tolerance: 0.0,
-                height_offset_m: definition.terrain_fit_height_offset_m,
-                water_offset_m: definition.terrain_fit_water_offset_m,
-            });
-        }
-        if is_zoo_entrance(active_catalogue, definition_id) {
-            let root_transform =
-                transform_from_world(&record.transform).mul_transform(transform_from_authored(
+                });
+            let entity = spawn_loaded_scene_prefab_as_world_instance(
+                commands,
+                prefab,
+                handle.clone(),
+                root,
+                definition,
+                id,
+                transform,
+                visible,
+                parent,
+                body,
+            );
+            if let Some(object) = catalogue
+                .find_object(definition)
+                .filter(|object| object.terrain_fitted)
+            {
+                commands.entity(entity).insert(TerrainFittingSurface {
+                    normal_tolerance: 0.0,
+                    height_offset_m: object.terrain_fit_height_offset_m,
+                    water_offset_m: object.terrain_fit_water_offset_m,
+                });
+            }
+            if is_zoo_entrance(catalogue, definition) {
+                let anchor = transform.mul_transform(transform_from_authored(
                     &prefab.canonical_scene_prefab_document().entities[0].transform,
                 ));
-            commands
-                .entity(entity)
-                .insert(zoo_entrance_from_authored_gate_anchor(
-                    root_transform.translation,
-                ));
+                commands
+                    .entity(entity)
+                    .insert(zoo_entrance_from_authored_gate_anchor(anchor.translation));
+            }
+            Ok(entity)
         }
-        pending.record_world_prefab_spawn_completion(entity);
     }
 }
 

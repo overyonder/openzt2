@@ -1,19 +1,24 @@
 use bevy::prelude::*;
 use openzt2_game_data::{world_definitions::staff_management::StaffJobKind, AssetId};
 
+use super::staff_job_types::StaffJobRouting;
+
 #[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StaffJobRequest {
-    pub kind: StaffJobKind,
+    pub kind: Option<StaffJobKind>,
     pub target: Entity,
     pub urgency: u32,
-    /// Lowercase authored request token. Distinct tokens on one target are
-    /// distinct jobs; a missing token cannot select a behavior task.
     pub token: Option<AssetId>,
+    pub routing: StaffJobRouting,
 }
+
+#[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BeginStaffHirePlacement(pub AssetId);
 
 #[derive(Message, Debug, Clone, Copy, PartialEq)]
 pub struct HireStaffRequest {
     pub role: AssetId,
+    pub object: AssetId,
     pub position: Vec3,
 }
 

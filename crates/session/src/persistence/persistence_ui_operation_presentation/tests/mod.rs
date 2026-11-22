@@ -6,19 +6,18 @@ use openzt2_interface_state::ui::ui_document_asset_load_failure::UiDocumentAsset
 use openzt2_interface_state::ui::ui_document_lifecycle_contracts::ShowUiRole;
 use openzt2_interface_state::ui::UiSet;
 
-use openzt2_interface_state::persistence::save_slot_types::SaveSlotId;
-use openzt2_interface_state::persistence::save_slot_types::WorldSnapshotSavedToSlot;
+use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentRoot;
 
-use crate::persistence::{
-    persistence_failure_types::WorldSnapshotPersistenceFailed,
-    persistence_ui_types::OpenLoadSlotCatalogueAfterWorldSnapshotSave,
+use crate::persistence::persistence_ui_types::{
+    OpenLoadSlotCatalogueAfterWorldSnapshotSave, SaveDialogSnapshotSaved, SaveDialogSubmission,
 };
+use crate::shell::shell_navigation_request_types::{ExitApplication, ReturnToMainMenu};
 use openzt2_game_assets::ui_document::{
     ui_document_asset_types_and_borrowing_queries::UiDocumentAsset,
     ui_document_role_asset_path_selection::select_bevy_asset_path_for_canonical_ui_document_role,
 };
 
-use super::continue_to_load_slot_catalogue_after_world_snapshot_save;
+use super::continue_navigation_after_matching_dialog_save;
 
 #[test]
 fn failed_save_receiver_cannot_continue_after_a_later_save_for_other_owners() {
@@ -27,12 +26,13 @@ fn failed_save_receiver_cannot_continue_after_a_later_save_for_other_owners() {
         .init_asset::<UiDocumentAsset>()
         .add_message::<UiNodeActivated>()
         .add_message::<UiDocumentAssetLoadFailed>()
-        .add_message::<WorldSnapshotPersistenceFailed>()
-        .add_message::<WorldSnapshotSavedToSlot>()
+        .add_message::<SaveDialogSnapshotSaved>()
+        .add_message::<ReturnToMainMenu>()
+        .add_message::<ExitApplication>()
         .add_message::<ShowUiRole>()
         .add_systems(
             Update,
-            continue_to_load_slot_catalogue_after_world_snapshot_save.after(UiSet::Projection),
+            continue_navigation_after_matching_dialog_save.after(UiSet::Projection),
         );
     let failed_save_owner = app
         .world_mut()
@@ -74,7 +74,7 @@ fn failed_save_receiver_cannot_continue_after_a_later_save_for_other_owners() {
         },
         UiDocumentAssetLoadFailed {
             owner: foreign_owner,
-            document: save_document,
+            document: save_document.clone(),
         },
     ] {
         app.world_mut().write_message(failure);
@@ -98,9 +98,22 @@ fn failed_save_receiver_cannot_continue_after_a_later_save_for_other_owners() {
         0
     );
 
-    app.world_mut().write_message(WorldSnapshotSavedToSlot {
-        save_slot_identifier: SaveSlotId(4),
-        saved_snapshot_byte_count: 100,
+    let matching_dialog = app
+        .world_mut()
+        .spawn((
+            UiDocumentRoot {
+                document: save_document,
+            },
+            ChildOf(unaffected_owner),
+        ))
+        .id();
+    let operation = app.world_mut().spawn_empty().id();
+    app.world_mut().write_message(SaveDialogSnapshotSaved {
+        operation,
+        dialog: SaveDialogSubmission {
+            document: matching_dialog,
+            owner: unaffected_owner,
+        },
     });
     app.update();
     let opened = app
@@ -108,13 +121,17 @@ fn failed_save_receiver_cannot_continue_after_a_later_save_for_other_owners() {
         .resource_mut::<Messages<ShowUiRole>>()
         .drain()
         .collect::<Vec<_>>();
-    assert_eq!(opened.len(), 2);
-    for owner in [unrelated_document_owner, unaffected_owner] {
-        assert!(opened.contains(&ShowUiRole {
+    assert_eq!(
+        opened,
+        [ShowUiRole {
             role: UiDocumentRole::SavedGames,
-            owner
-        }));
-    }
+            owner: unaffected_owner,
+        }]
+    );
+    assert!(app
+        .world()
+        .get::<OpenLoadSlotCatalogueAfterWorldSnapshotSave>(unrelated_document_owner)
+        .is_some());
     assert!(!opened
         .iter()
         .any(|request| request.owner == failed_save_owner));

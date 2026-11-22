@@ -61,7 +61,9 @@ fn fixture() -> (App, Entity) {
         .add_message::<BehaviorTaskFailed>();
     add_animal_waste_cleanup_test_systems(&mut app);
     let root = app.world_mut().spawn_empty().id();
-    app.insert_resource(PersistentIdAllocator::new(root));
+    app.world_mut()
+        .entity_mut(root)
+        .insert(PersistentIdAllocator::default());
     (app, root)
 }
 
@@ -78,12 +80,13 @@ fn restore(
 ) {
     let mut state = SystemState::<(
         Commands,
-        ResMut<PersistentIdAllocator>,
+        Query<&mut PersistentIdAllocator>,
         Res<Assets<ScenePrefabAsset>>,
         Query<Entity, super::maintenance_snapshot_capture::LooseWasteSnapshotFilter>,
     )>::new(app.world_mut());
     {
         let (mut commands, mut ids, assets, baseline) = state.get_mut(app.world_mut()).unwrap();
+        let mut ids = ids.get_mut(root).unwrap();
         apply_loose_waste_records(
             &mut commands,
             records,
@@ -228,10 +231,16 @@ fn litter_and_animal_waste_round_trip_with_their_distinct_cleanup_kinds() {
 
 #[test]
 fn maintained_object_state_compost_and_animal_waste_deadlines_survive_entity_remapping() {
-    use super::maintenance_snapshot_application::apply_maintained_object_records;
+    use super::maintenance_snapshot_application::{
+        apply_maintained_object_records, RestoredMaintenanceComponents,
+    };
     use super::maintenance_snapshot_capture::{
         capture_maintained_object_records, MaintainedObjectSnapshotEntities,
     };
+    use openzt2_world_state::world_spawn::persistent_id_index::{
+        PersistentIdIndex, PersistentIdIndexPlugin,
+    };
+    use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
     use openzt2_zoo_state::maintenance::maintenance_types::{
         AnimalWasteProductionSchedule, CompostPooLevel, FacilityContainedWaste,
     };
@@ -265,7 +274,12 @@ fn maintained_object_state_compost_and_animal_waste_deadlines_survive_entity_rem
     );
 
     let mut destination = App::new();
-    destination.add_plugins(openzt2_zoo_staff::maintenance::MaintenancePlugin);
+    destination.add_plugins((
+        PersistentIdIndexPlugin,
+        openzt2_zoo_staff::maintenance::MaintenancePlugin,
+    ));
+    let root = destination.world_mut().spawn_empty().id();
+    let member = WorldMember { root };
     for _ in 0..8 {
         destination.world_mut().spawn_empty();
     }
@@ -273,22 +287,30 @@ fn maintained_object_state_compost_and_animal_waste_deadlines_survive_entity_rem
         .world_mut()
         .spawn((
             PersistentId(7),
+            member,
             FacilityContainedWaste {
                 contained_waste_units: 0,
                 contained_waste_capacity_units: 10,
             },
         ))
         .id();
-    let animal = destination.world_mut().spawn(PersistentId(9)).id();
-    let compost = destination.world_mut().spawn(PersistentId(11)).id();
-    let identities = std::collections::BTreeMap::from([(7, facility), (9, animal), (11, compost)]);
-    let mut commands = SystemState::<Commands>::new(destination.world_mut());
+    destination.world_mut().spawn((PersistentId(9), member));
+    destination.world_mut().spawn((PersistentId(11), member));
+    let mut state = SystemState::<(
+        Commands,
+        Res<PersistentIdIndex>,
+        Query<RestoredMaintenanceComponents>,
+    )>::new(destination.world_mut());
+    let (mut commands, identities, mut objects) = state.get_mut(destination.world_mut()).unwrap();
     apply_maintained_object_records(
-        &mut commands.get_mut(destination.world_mut()).unwrap(),
+        &mut commands,
         &decoded.objects,
         &identities,
-    );
-    commands.apply(destination.world_mut());
+        root,
+        &mut objects,
+    )
+    .unwrap();
+    state.apply(destination.world_mut());
     let mut capture = SystemState::<MaintainedObjectSnapshotEntities>::new(destination.world_mut());
     assert_eq!(
         capture_maintained_object_records(&capture.get(destination.world()).unwrap()),
@@ -367,7 +389,8 @@ fn restored_waste_rebuilds_one_job_and_authored_cleanup_survives_a_second_save()
     assert_eq!(
         destination
             .world()
-            .resource::<PersistentIdAllocator>()
+            .get::<PersistentIdAllocator>(root)
+            .unwrap()
             .next(),
         52
     );
@@ -377,7 +400,8 @@ fn restored_waste_rebuilds_one_job_and_authored_cleanup_survives_a_second_save()
         .single(destination.world())
         .unwrap();
     destination.world_mut().write_message(StaffJobRequest {
-        kind: StaffJobKind::CleanHabitat,
+        kind: Some(StaffJobKind::CleanHabitat),
+        routing: Default::default(),
         target: restored_waste,
         urgency: 1,
         token: Some(AssetId::from_key("t_rakepoo")),
@@ -392,7 +416,7 @@ fn restored_waste_rebuilds_one_job_and_authored_cleanup_survives_a_second_save()
         .collect();
     assert_eq!(jobs.len(), 1);
     let (job, work) = jobs[0];
-    assert_eq!(work.kind, StaffJobKind::CleanHabitat);
+    assert_eq!(work.kind, Some(StaffJobKind::CleanHabitat));
     assert_eq!(work.token, Some(AssetId::from_key("t_rakepoo")));
     assert_eq!(
         destination.world().get::<PersistentId>(work.target),

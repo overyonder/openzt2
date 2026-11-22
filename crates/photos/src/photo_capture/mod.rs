@@ -28,7 +28,10 @@ use openzt2_interface_state::photos::photo_challenge_types::{
 };
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator;
-use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
+use openzt2_world_state::world_spawn::{
+    world_load_completion_marker::WorldLoadCompleted,
+    world_membership_types::{WorldMember, WorldRoot},
+};
 
 use super::{
     photo_album_types::{ActivePhotoAlbum, PhotoCameraRoll, PHOTO_CAMERA_ROLL_CAPACITY},
@@ -57,7 +60,7 @@ pub(super) fn begin_requested_album_photo_captures(
     primary_window: Query<Entity, With<PrimaryWindow>>,
     controllers: Query<&ImmersiveCamera, With<PhotoControl>>,
     viewfinders: Query<(Entity, &AuthoredPhotoModeDocumentPresentationOwner)>,
-    allocator: Res<PersistentIdAllocator>,
+    loaded_worlds: Query<Entity, (With<WorldRoot>, With<WorldLoadCompleted>)>,
     selected_sets: Query<(&PhotoChallengeSet, &WorldMember), With<CurrentPhotoChallengeSet>>,
     mut commands: Commands,
     mut failed: MessageWriter<PhotoCaptureFailed>,
@@ -98,9 +101,11 @@ pub(super) fn begin_requested_album_photo_captures(
                 continue;
             }
         };
-        let challenge_set = selected_sets
-            .iter()
-            .find_map(|(set, member)| allocator.owns_world(member.root).then_some(set.id));
+        let challenge_set = loaded_worlds.single().ok().and_then(|world| {
+            selected_sets
+                .iter()
+                .find_map(|(set, member)| (member.root == world).then_some(set.id))
+        });
         let mut screenshot = commands.spawn((
             Screenshot(target.clone()),
             AlbumPhotoReadbackOf(request.camera),
@@ -176,7 +181,10 @@ fn create_album_photo_from_completed_screenshot_capture(
         With<PhotoAlbum>,
     >,
     members: Query<&AlbumPhotos>,
-    mut allocator: ResMut<PersistentIdAllocator>,
+    mut worlds: Query<
+        (Entity, &mut PersistentIdAllocator),
+        (With<WorldRoot>, With<WorldLoadCompleted>),
+    >,
     mut images: ResMut<Assets<Image>>,
     mut commands: Commands,
     mut failed: MessageWriter<PhotoCaptureFailed>,
@@ -195,7 +203,8 @@ fn create_album_photo_from_completed_screenshot_capture(
         if !collected {
             return Err(PhotoFailure::Gpu);
         }
-        let world_albums = || albums.iter().filter(|row| allocator.owns_world(row.1.root));
+        let (world, mut allocator) = worlds.single_mut().map_err(|_| PhotoFailure::Storage)?;
+        let world_albums = || albums.iter().filter(|row| row.1.root == world);
         let (album, member, _, camera_roll) = world_albums()
             .find(|row| row.3)
             .or_else(|| world_albums().find(|row| row.2))
@@ -207,9 +216,7 @@ fn create_album_photo_from_completed_screenshot_capture(
         {
             return Err(PhotoFailure::CapacityExceeded);
         }
-        let id = allocator
-            .allocate(member.root)
-            .map_err(PhotoFailure::PersistentId)?;
+        let id = allocator.allocate().map_err(PhotoFailure::PersistentId)?;
         let pixels = captured
             .image
             .clone()

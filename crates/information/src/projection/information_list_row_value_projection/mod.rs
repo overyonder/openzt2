@@ -6,7 +6,7 @@ use openzt2_game_data::ui_document::node_property_binding::UiIntegerPropertyBind
 
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiValue;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiValueBinding;
-use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
+use openzt2_world_state::simulation_time::simulation_clock_types::ZooDay;
 use openzt2_zoo_state::animal_health::types::Disease;
 use openzt2_zoo_state::animal_lifecycle::types::Pregnancy;
 use openzt2_zoo_state::animal_welfare::types::CumulativeNeedPoints;
@@ -59,7 +59,6 @@ pub(crate) struct InformationValueInvalidation<'w, 's> {
         RemovedComponents<'w, 's, TransportVehicle>,
         RemovedComponents<'w, 's, VehicleRiders>,
     ),
-    last_day: Local<'s, u32>,
 }
 
 /// Updates information-list values from the referenced entities.
@@ -76,10 +75,11 @@ pub(crate) fn project_live_world_subject_values_to_information_list_rows(
     facility_profits: Query<&FacilityProfit>,
     donation_totals: Query<&DonationTotal>,
     transport_vehicles: Query<(&TransportVehicle, Option<&VehicleRiders>)>,
-    zoo_clock: Res<ZooClock>,
+    zoo_day: Res<ZooDay>,
     mut bound_values: Query<(Ref<UiValueBinding>, &mut UiValue, Option<&mut Text>)>,
     mut invalidation: InformationValueInvalidation,
 ) {
+    let day_changed = zoo_day.is_changed();
     let removed = &mut invalidation.removed;
     let dirty_subjects = invalidation
         .subjects
@@ -97,8 +97,6 @@ pub(crate) fn project_live_world_subject_values_to_information_list_rows(
         .chain(removed.10.read())
         .chain(removed.11.read())
         .collect::<std::collections::HashSet<_>>();
-    let day_changed = *invalidation.last_day != zoo_clock.absolute_day;
-    *invalidation.last_day = zoo_clock.absolute_day;
     for (source, fields) in &information_entity_sources {
         let refresh_row = source.is_changed()
             || dirty_subjects.contains(&source.0)
@@ -128,7 +126,7 @@ pub(crate) fn project_live_world_subject_values_to_information_list_rows(
                 &facility_profits,
                 &donation_totals,
                 &transport_vehicles,
-                zoo_clock.absolute_day,
+                zoo_day.0,
             ) else {
                 continue;
             };

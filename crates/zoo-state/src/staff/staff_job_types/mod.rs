@@ -6,12 +6,20 @@ use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StaffJob {
-    pub kind: StaffJobKind,
+    /// Domain-specific settlement for jobs that need it.
+    pub kind: Option<StaffJobKind>,
     pub target: Entity,
     pub urgency: u32,
     /// Lowercase authored request token. Distinct tokens on one target are
     /// distinct jobs; a missing token cannot select a behavior task.
     pub token: Option<AssetId>,
+}
+
+#[derive(Component, Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct StaffJobRouting {
+    pub subject_type: Option<AssetId>,
+    /// An authored object instance identifier, scoped to the job's world.
+    pub recipient: Option<AssetId>,
 }
 
 /// Urgency of an authored staff request. A lower authored priority is served

@@ -23,6 +23,9 @@ use openzt2_interface_state::information::catalogue_types::SelectedCatalogueEntr
 
 use openzt2_game_assets::application_lifecycle::GamePhase;
 use openzt2_world_state::application_schedule::GameSet;
+use openzt2_world_state::simulation_time::{
+    simulation_clock_types::ZooDay, zoo_day_publication::publish_zoo_day,
+};
 
 pub struct InformationPlugin;
 
@@ -40,6 +43,14 @@ impl Plugin for InformationPlugin {
             .init_resource::<SelectedCatalogueEntry>()
             .init_resource::<SelectedCareAnimal>()
             .init_resource::<InformationViewFilters>()
+            .init_resource::<ZooDay>()
+            .add_systems(
+                Update,
+                publish_zoo_day
+                    .in_set(GameSet::Ui)
+                    .before(projection::information_list_projection::project_live_world_entities_to_visible_information_list_rows)
+                    .before(projection::information_list_row_value_projection::project_live_world_subject_values_to_information_list_rows),
+            )
             .add_message::<PurchaseChoice>()
             .add_systems(
                 Update,
@@ -54,17 +65,29 @@ impl Plugin for InformationPlugin {
                 (
                     catalogue::catalogue_type_list_row_count_operations::initialize_authored_catalogue_type_list_state,
                     catalogue::catalogue_filter_menu::populate_catalogue_filter_menu,
-                    catalogue::catalogue_filter_menu::select_catalogue_filter_row,
+                    catalogue::catalogue_filter_menu::select_catalogue_filter_row
+                        .after(catalogue::catalogue_type_list_row_count_operations::initialize_authored_catalogue_type_list_state)
+                        .after(catalogue::catalogue_filter_menu::populate_catalogue_filter_menu),
                     catalogue::catalogue_type_list_activation::choose_catalogue_entry_from_activated_type_list_row,
-                    catalogue::catalogue_type_list_activation::choose_catalogue_entry_from_activated_type_list,
-                    catalogue::adoption_list_operations::choose_species_from_activated_adoption_list_row,
+                    catalogue::catalogue_type_list_activation::choose_catalogue_entry_from_activated_type_list
+                        .after(catalogue::catalogue_filter_menu::select_catalogue_filter_row),
+                    catalogue::adoption_list_operations::choose_species_from_activated_adoption_list_row
+                        .after(catalogue::catalogue_type_list_activation::choose_catalogue_entry_from_activated_type_list_row)
+                        .after(catalogue::catalogue_type_list_activation::choose_catalogue_entry_from_activated_type_list),
                     information_ui_action_routing::route_authored_information_actions_from_activated_ui_nodes
+                        .after(catalogue::catalogue_type_list_row_count_operations::initialize_authored_catalogue_type_list_state)
+                        .after(catalogue::catalogue_filter_menu::select_catalogue_filter_row)
+                        .after(catalogue::catalogue_type_list_activation::choose_catalogue_entry_from_activated_type_list)
                         .before(openzt2_interface_state::shell::ShellNavigationAfterSettings),
-                    zoopedia::zoopedia_navigation_activation::navigate_to_subject_from_pressed_zoopedia_table_of_contents_row,
-                    zoopedia::zoopedia_navigation_activation::navigate_to_subject_from_pressed_zoopedia_rich_content_link,
-                    catalogue::catalogue_selection_and_details_projection::select_catalogue_entry_and_open_purchase_information_document,
+                    (
+                        zoopedia::zoopedia_navigation_activation::navigate_to_subject_from_pressed_zoopedia_table_of_contents_row
+                            .after(information_ui_action_routing::route_authored_information_actions_from_activated_ui_nodes),
+                        zoopedia::zoopedia_navigation_activation::navigate_to_subject_from_pressed_zoopedia_rich_content_link,
+                    ).chain(),
+                    catalogue::catalogue_selection_and_details_projection::select_catalogue_entry_and_open_purchase_information_document
+                        .after(catalogue::adoption_list_operations::choose_species_from_activated_adoption_list_row)
+                        .after(information_ui_action_routing::route_authored_information_actions_from_activated_ui_nodes),
                 )
-                    .chain()
                     .in_set(GameSet::Intent),
             )
             .add_systems(
@@ -103,23 +126,23 @@ impl Plugin for InformationPlugin {
                         .chain(),
                     catalogue::catalogue_filter_menu::label_catalogue_filter_rows,
                     (
-                        catalogue::adoption_list_operations::apply_authored_adoption_catalogue_tab_initialization,
-                        (
-                            catalogue::adoption_list_operations::select_first_available_species_after_adoption_catalogue_and_offer_inventory_are_both_available,
-                            catalogue::adoption_list_operations::request_authored_adoption_list_row_count,
-                            catalogue::adoption_list_operations::project_adoption_catalogue_entries_to_authored_rows,
-                        )
-                            .chain()
-                            .run_if(catalogue::adoption_list_operations::an_authored_adoption_catalogue_is_visible),
-                    )
-                        .chain(),
+                    catalogue::adoption_list_operations::apply_authored_adoption_catalogue_tab_initialization,
                     (
-                        catalogue::catalogue_selection_and_details_projection::dismiss_purchase_information_on_inspection_request,
-                        catalogue::catalogue_selection_and_details_projection::project_purchase_information_document_visibility_from_selected_subject,
-                        catalogue::catalogue_selection_and_details_projection::project_selected_catalogue_entry_to_purchase_information_document,
-                        catalogue::catalogue_selection_and_details_projection::position_visible_purchase_information_rows_from_authored_dynamic_start,
+                        catalogue::adoption_list_operations::select_first_available_species_after_adoption_catalogue_and_offer_inventory_are_both_available,
+                        catalogue::adoption_list_operations::request_authored_adoption_list_row_count,
+                        catalogue::adoption_list_operations::project_adoption_catalogue_entries_to_authored_rows
+                            .after(catalogue::adoption_list_operations::select_first_available_species_after_adoption_catalogue_and_offer_inventory_are_both_available),
                     )
-                        .chain(),
+                        .run_if(catalogue::adoption_list_operations::an_authored_adoption_catalogue_is_visible),
+                    catalogue::catalogue_selection_and_details_projection::dismiss_purchase_information_on_inspection_request,
+                    catalogue::catalogue_selection_and_details_projection::project_purchase_information_document_visibility_from_selected_subject
+                        .after(catalogue::catalogue_selection_and_details_projection::dismiss_purchase_information_on_inspection_request),
+                    (
+                        catalogue::catalogue_selection_and_details_projection::project_selected_catalogue_entry_to_purchase_information_document
+                            .after(catalogue::catalogue_selection_and_details_projection::dismiss_purchase_information_on_inspection_request),
+                        catalogue::catalogue_selection_and_details_projection::position_visible_purchase_information_rows_from_authored_dynamic_start,
+                    ).chain(),
+                    ),
                     (
                         catalogue::catalogue_preview_scene_projection::project_selected_catalogue_entry_into_preview_scene,
                         catalogue::catalogue_preview_scene_projection::synchronize_catalogue_preview_camera_activity_with_authored_image_visibility
@@ -201,14 +224,19 @@ impl Plugin for InformationPlugin {
                 Update,
                 (
                     zoopedia::zoopedia_page_hydration::hydrate_zoopedia_pages_from_authored_root_entry,
-                    zoopedia::zoopedia_table_of_contents_projection::project_zoopedia_table_of_contents_for_hydrated_pages,
-                    zoopedia::zoopedia_table_of_contents_projection::apply_authored_zoopedia_table_of_contents_expansion_changes,
-                    zoopedia::zoopedia_table_of_contents_projection::reconcile_visible_zoopedia_entries,
-                    zoopedia::zoopedia_table_of_contents_projection::project_zoopedia_table_of_contents_rows,
-                    zoopedia::zoopedia_navigation_control_interaction_projection::project_zoopedia_history_availability_to_authored_navigation_controls,
-                    zoopedia::zoopedia_page_projection::project_localized_zoopedia_page_to_authored_information_document,
+                    (
+                        zoopedia::zoopedia_table_of_contents_projection::apply_authored_zoopedia_table_of_contents_expansion_changes
+                            .after(zoopedia::zoopedia_table_of_contents_projection::project_zoopedia_table_of_contents_for_hydrated_pages),
+                        zoopedia::zoopedia_table_of_contents_projection::reconcile_visible_zoopedia_entries,
+                        zoopedia::zoopedia_table_of_contents_projection::project_zoopedia_table_of_contents_rows,
+                    ).chain(),
+                    zoopedia::zoopedia_table_of_contents_projection::project_zoopedia_table_of_contents_for_hydrated_pages
+                        .after(zoopedia::zoopedia_page_hydration::hydrate_zoopedia_pages_from_authored_root_entry),
+                    zoopedia::zoopedia_navigation_control_interaction_projection::project_zoopedia_history_availability_to_authored_navigation_controls
+                        .after(zoopedia::zoopedia_page_hydration::hydrate_zoopedia_pages_from_authored_root_entry),
+                    zoopedia::zoopedia_page_projection::project_localized_zoopedia_page_to_authored_information_document
+                        .after(zoopedia::zoopedia_page_hydration::hydrate_zoopedia_pages_from_authored_root_entry),
                 )
-                    .chain()
                     .after(openzt2_interface_state::ui::UiSet::Projection)
                     .in_set(GameSet::Ui)
                     .run_if(in_state(GamePhase::InGame)),

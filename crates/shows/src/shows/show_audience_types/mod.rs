@@ -8,6 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 pub(super) struct GuestWatchingStage {
     #[relationship]
     pub(super) stage: Entity,
+    pub(super) location: Option<Entity>,
     pub(super) instruction: Option<BehaviorInstructionId>,
 }
 
@@ -18,6 +19,7 @@ pub(super) struct StageShowAudience(Vec<Entity>);
 #[derive(Component, Default)]
 pub(super) struct GuestShowExperience {
     pub(super) show: Option<Entity>,
+    pub(super) saw_favourite: bool,
     pub(super) reactions: BTreeMap<AssetId, u32>,
     pub(super) delivered_events: BTreeSet<Entity>,
 }

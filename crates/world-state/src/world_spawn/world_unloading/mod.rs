@@ -1,27 +1,7 @@
-use bevy::ecs::entity::EntityHashSet;
-use bevy::ecs::entity_disabling::Disabled;
-use bevy::ecs::query::Allow;
 use bevy::prelude::*;
 
 #[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UnloadWorld(pub Entity);
-
-pub fn queue_owned_hierarchy_roots_for_retirement(
-    commands: &mut Commands,
-    owned_entities: &EntityHashSet,
-    parents: &Query<&ChildOf, Allow<Disabled>>,
-) {
-    // Unmarked renderer nodes can bridge two owned members. Only an ancestor
-    // in this retirement operation owns their recursive despawn.
-    for entity in owned_entities {
-        if !parents
-            .iter_ancestors::<ChildOf>(*entity)
-            .any(|ancestor| owned_entities.contains(&ancestor))
-        {
-            commands.entity(*entity).despawn();
-        }
-    }
-}
 
 #[cfg(any(test, feature = "testing"))]
 pub fn assert_no_invalid_entity_commands_during(operation: impl FnOnce()) {

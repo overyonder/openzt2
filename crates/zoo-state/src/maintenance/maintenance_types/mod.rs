@@ -101,7 +101,7 @@ pub struct AnimalWasteProductionSchedule {
 }
 
 /// Whole-zoo cleanliness, or `None` while its aggregation policy is unavailable.
-#[derive(Resource, Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[repr(transparent)]
 pub struct ZooCleanlinessPermille(pub Option<u16>);
 

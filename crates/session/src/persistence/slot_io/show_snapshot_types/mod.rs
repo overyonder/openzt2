@@ -18,6 +18,7 @@ pub(super) struct ScheduledShowSnapshotRecord {
     pub schedule_row_order: u16,
     pub is_active: bool,
     pub performance_capacity: u16,
+    pub rating: Option<f32>,
     pub performance_records: Vec<ScheduledShowPerformanceSnapshotRecord>,
 }
 

@@ -17,13 +17,15 @@ use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 use openzt2_zoo_state::scenario::scenario_objective_types::ScenarioObjective;
 use openzt2_zoo_state::scenario::scenario_objective_types::ScenarioObjectiveAuthoredVisibility;
 use openzt2_zoo_state::scenario::scenario_objective_types::ScenarioObjectiveDeadline;
-use openzt2_zoo_state::scenario::scenario_objective_types::ScenarioObjectivePrerequisiteEntities;
 use openzt2_zoo_state::scenario::scenario_objective_types::ScenarioObjectiveProgress;
 use openzt2_zoo_state::scenario::scenario_objective_types::ScenarioObjectiveStatus;
+use openzt2_zoo_state::scenario::scenario_objective_types::{
+    ScenarioObjectiveOf, ScenarioObjectivePrerequisiteFor, ScenarioObjectiveRequires,
+};
 use openzt2_zoo_state::scenario::scenario_script_timing_types::ScenarioScriptTiming;
 use openzt2_zoo_state::scenario::scenario_session_types::ActiveScenarioSession;
+use openzt2_zoo_state::scenario::scenario_session_types::ScenarioDocument;
 use openzt2_zoo_state::scenario::scenario_session_types::ScenarioSessionState;
-use openzt2_zoo_state::scenario::scenario_session_types::SelectedScenarioDocument;
 
 use super::challenge_offer_types::ScenarioChallengeSelectionRandomNumberGenerator;
 
@@ -32,18 +34,17 @@ pub(super) fn instantiate_selected_scenario_and_authored_objectives(
     assets: Res<Assets<WorldScenarioDocumentAsset>>,
     scenarios: Res<WorldScenarios>,
     clock: Res<ZooClock>,
-    active: Query<(), With<ActiveScenarioSession>>,
-    mut allocator: ResMut<PersistentIdAllocator>,
-    roots: Query<
-        (Entity, &WorldRoot, Option<&SelectedWorldDocumentHandles>),
+    mut roots: Query<
+        (
+            Entity,
+            &WorldRoot,
+            Option<&SelectedWorldDocumentHandles>,
+            &mut PersistentIdAllocator,
+        ),
         (With<WorldLoadCompleted>, Without<ActiveScenarioSession>),
     >,
-    existing: Query<(), With<ScenarioObjective>>,
 ) {
-    if !active.is_empty() || !existing.is_empty() {
-        return;
-    }
-    for (root, world, saved_handles) in &roots {
+    for (root, world, saved_handles, mut allocator) in &mut roots {
         let Some(view) = scenarios.get(&assets).and_then(|view| {
             saved_handles.map_or(Some(view), |handles| view.with_document(&handles.start))
         }) else {
@@ -56,8 +57,8 @@ pub(super) fn instantiate_selected_scenario_and_authored_objectives(
             continue;
         };
 
-        commands.insert_resource(SelectedScenarioDocument(handle));
         commands.entity(root).insert((
+            ScenarioDocument(handle),
             ActiveScenarioSession {
                 definition: scenario.id,
                 started_tick: clock.tick,
@@ -68,6 +69,7 @@ pub(super) fn instantiate_selected_scenario_and_authored_objectives(
         spawn_authored_scenario_objectives(
             &mut commands,
             &mut allocator,
+            root,
             root,
             scenario.id,
             scenario,
@@ -98,6 +100,7 @@ fn spawn_authored_scenario_objectives(
     commands: &mut Commands,
     allocator: &mut PersistentIdAllocator,
     root: Entity,
+    owner: Entity,
     scenario_id: AssetId,
     scenario: &ScenarioDefinitionRecord,
     started_tick: u64,
@@ -109,13 +112,14 @@ fn spawn_authored_scenario_objectives(
         } else {
             ScenarioObjectiveStatus::Inactive
         };
-        let Ok(id) = allocator.allocate(root) else {
+        let Ok(id) = allocator.allocate() else {
             return;
         };
         let objective = commands
             .spawn((
                 WorldMember { root },
                 id,
+                ScenarioObjectiveOf(owner),
                 ScenarioObjective {
                     scenario: scenario_id,
                     record_index: index as u32,
@@ -145,19 +149,27 @@ fn spawn_authored_scenario_objectives(
                 spawned.iter().find_map(|(candidate, entity)| {
                     (scenario.objectives[*candidate].id == *id).then_some(*entity)
                 })
-            })
-            .collect::<Vec<_>>()
-            .into_boxed_slice();
-        commands
-            .entity(*entity)
-            .insert(ScenarioObjectivePrerequisiteEntities(prerequisites));
+            });
+        for prerequisite in prerequisites {
+            commands.spawn((
+                ScenarioObjectivePrerequisiteFor(*entity),
+                ScenarioObjectiveRequires(prerequisite),
+            ));
+        }
     }
+    super::scenario_group_completion::spawn_scenario_objective_groups(
+        commands,
+        owner,
+        &scenario.objective_groups,
+        Default::default(),
+    );
 }
 
 pub(crate) fn spawn_authored_challenge_objectives(
     commands: &mut Commands,
     allocator: &mut PersistentIdAllocator,
     root: Entity,
+    owner: Entity,
     scenario_id: AssetId,
     catalog: &WorldScenarioDocument,
     started_tick: u64,
@@ -169,6 +181,7 @@ pub(crate) fn spawn_authored_challenge_objectives(
         commands,
         allocator,
         root,
+        owner,
         scenario_id,
         scenario,
         started_tick,

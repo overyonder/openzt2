@@ -230,7 +230,7 @@ fn request_payment_for_ready_vehicles(
     >,
     circuits: Query<&CircuitMembers, With<TransportCircuit>>,
     stations: Query<&GlobalTransform, With<TransportStation>>,
-    mut ids: ResMut<PersistentIdAllocator>,
+    mut ids: Query<&mut PersistentIdAllocator>,
     mut requests: MessageWriter<TransactionRequest>,
     mut commands: Commands,
 ) {
@@ -239,7 +239,9 @@ fn request_payment_for_ready_vehicles(
             .get(owner.0)
             .ok()
             .and_then(|members| members.iter().find(|&member| stations.contains(member)));
-        let (Some(station), Ok(id)) = (station, ids.allocate(world.root)) else {
+        let Some((station, id)) = station
+            .and_then(|station| Some((station, ids.get_mut(world.root).ok()?.allocate().ok()?)))
+        else {
             commands.entity(operation).try_despawn();
             continue;
         };

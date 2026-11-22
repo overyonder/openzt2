@@ -60,8 +60,3 @@ pub struct RidersAtSeat(Vec<Entity>);
 
 #[derive(Component)]
 pub struct TransportStationExit;
-
-#[derive(EntityEvent)]
-pub struct TransportVehicleCharged {
-    pub entity: Entity,
-}

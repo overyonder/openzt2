@@ -73,7 +73,7 @@ impl Plugin for ImmersiveModesPlugin {
                     admission::admit_validated_mode,
                     immersive_mode_entry_ui_action_routing::route_authored_immersive_mode_entry_actions_from_activated_ui_nodes,
                     animal_health_ui_action_routing::route_animal_health_tool_actions_from_activated_ui_nodes,
-                    tranquilizer_control_execution::initialize_tranquilizer_tool_from_active_world_definitions,
+                    tranquilizer_control_execution::initialize_tranquilizer_tool,
                     session_lifecycle::exit_requested_session,
                     immersive_mode_entry_ui_action_routing::retire_inactive_first_person_training,
                 )
@@ -99,7 +99,9 @@ impl Plugin for ImmersiveModesPlugin {
                         .run_if(active_mode_is(ImmersiveMode::Photo)),
                     show_edit_mode_control_execution::cancel_active_show_edit_mode
                         .run_if(active_mode_is(ImmersiveMode::ShowEdit)),
-                    tranquilizer_control_execution::aim_charge_fire_or_cancel_active_tranquilizer_controls,
+                    tranquilizer_control_execution::sample_tranquilizer_aim,
+                    tranquilizer_control_execution::apply_tranquilizer_input
+                        .after(tranquilizer_control_execution::sample_tranquilizer_aim),
                 )
                     .in_set(GameSet::Input)
                     .run_if(in_state(GamePhase::InGame)),

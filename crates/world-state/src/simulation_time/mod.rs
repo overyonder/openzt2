@@ -5,6 +5,7 @@ pub mod simulation_control_queries;
 pub mod simulation_control_types;
 pub mod simulation_time_resource_removal;
 pub mod zoo_calendar_calculation;
+pub mod zoo_day_publication;
 
 #[cfg(test)]
 mod deterministic_random_stream_tests;

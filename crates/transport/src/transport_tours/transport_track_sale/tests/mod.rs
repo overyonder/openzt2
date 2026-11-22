@@ -6,7 +6,7 @@ use crate::transport_tours::transport_track_sale_steps::{
     begin_requested_transport_track_sales, settle_acknowledged_transport_track_sale_steps,
     ApplyTransportTrackSaleStep, TransportTrackSaleStepAcknowledged,
 };
-use openzt2_construction::construction::construction_history::ConstructionHistoryPolicy;
+use openzt2_construction::construction::construction_history::WorldConstructionHistory;
 use openzt2_construction::construction::deletion_transaction_preparation::begin_deletion_transaction_preparation;
 use openzt2_game_data::world_definitions::document::WorldDefinitionDocument;
 use openzt2_game_data::world_definitions::economy_transactions::*;
@@ -19,7 +19,7 @@ use openzt2_game_data::AssetId;
 use openzt2_interface_state::information::entity_selection_types::SelectedSubject;
 use openzt2_interface_state::ui::ui_document_lifecycle_contracts::InGameUiOwner;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
-use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
+use openzt2_world_state::world_spawn::world_membership_types::{WorldMember, WorldRoot};
 use openzt2_zoo_state::construction::construction_interaction_types::DeleteEntity;
 use openzt2_zoo_state::construction::construction_transaction_types::EditApplication;
 use openzt2_zoo_state::economy::facility_economy_types::CurrentSellQuote;
@@ -33,12 +33,9 @@ use openzt2_zoo_state::transport_tours::transport_track_construction_types::*;
 
 fn sale_application(refund_percent: f32) -> (App, Entity, [Entity; 2], Entity, Entity) {
     let mut app = App::new();
-    app.add_plugins(
-        openzt2_zoo_state::topology::persistent_edit_lookup::PersistentEditLookupPlugin,
-    );
+    app.add_plugins(openzt2_world_state::world_spawn::persistent_id_index::PersistentIdIndexPlugin);
     app.init_resource::<Assets<WorldDefinitionAsset>>()
         .init_resource::<WorldDefinitions>()
-        .init_resource::<ConstructionHistoryPolicy>()
         .add_message::<DeleteEntity>()
         .add_message::<PrepareDeletion>()
         .add_message::<TransportTrackConstructionEditPrepared>()
@@ -72,6 +69,7 @@ fn sale_application(refund_percent: f32) -> (App, Entity, [Entity; 2], Entity, E
     let definition = AssetId::from_key("track");
     let document = WorldDefinitionDocument {
         objects: vec![WorldObjectDefinition {
+            authored_runtime: Default::default(),
             audio_cue_prefixes: Vec::new(),
             surface_effect_strength: None,
             presentation_caustic_policies: Vec::new(),
@@ -153,11 +151,19 @@ fn sale_application(refund_percent: f32) -> (App, Entity, [Entity; 2], Entity, E
     app.world_mut()
         .resource_mut::<WorldDefinitions>()
         .index_test_document(handle, &document);
-    let root = app.world_mut().spawn_empty().id();
+    let root = app
+        .world_mut()
+        .spawn((
+            WorldRoot {
+                scenario: definition,
+            },
+            WorldConstructionHistory::default(),
+        ))
+        .id();
     let world = WorldMember { root };
-    app.insert_resource(
+    app.world_mut().entity_mut(root).insert(
         openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator::from_snapshot(
-            root, 100,
+            100,
         )
         .unwrap(),
     );

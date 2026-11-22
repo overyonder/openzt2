@@ -22,16 +22,12 @@ use bevy::camera::visibility::VisibilitySystems;
 use bevy::core_pipeline::core_3d::Transparent3d;
 use bevy::ecs::schedule::ScheduleCleanupPolicy;
 use bevy::extract::extract_instances::ExtractInstancesPlugin;
-use bevy::pbr::MeshPipeline;
 use bevy::prelude::*;
-use bevy::render::render_phase::{
-    sort_phase_system, AddRenderCommand, DrawFunctions, SortedRenderPhasePlugin,
-};
+use bevy::render::render_phase::sort_phase_system;
 use bevy::render::Render;
 use bevy::render::RenderApp;
 use bevy::render::RenderSystems;
 use bevy::transform::TransformSystems;
-use openzt2_game_assets::material::runtime::effect_pass_stencil_reference::DrawEffectPass;
 
 use openzt2_world_state::model_render::authored_effect_technique_pass_submission_order::AuthoredEffectTechniquePassSubmissionOrder;
 use openzt2_world_state::model_render::ModelRenderPresentationSet;
@@ -66,12 +62,6 @@ impl Plugin for ModelRenderPlugin {
             RenderApp,
         >::extract_visible());
         app.add_observer(bind_prefab_model_scene_ownership_on_ready);
-        app.add_plugins(ExtractInstancesPlugin::<
-            environment_layer_rendering::EnvironmentPrimitiveLayer,
-            RenderApp,
-        >::new());
-        type EnvironmentPhase = environment_layer_rendering::EnvironmentPhaseItem;
-        app.add_plugins(SortedRenderPhasePlugin::<EnvironmentPhase, MeshPipeline>::new(default()));
         let render_app = app.sub_app_mut(RenderApp);
         render_app
             .remove_systems_in_set(
@@ -80,29 +70,11 @@ impl Plugin for ModelRenderPlugin {
                 ScheduleCleanupPolicy::RemoveSystemsOnly,
             )
             .expect("the Core3d transparent sort system is registered");
-        render_app
-            .init_resource::<DrawFunctions<EnvironmentPhase>>()
-            .add_render_command::<EnvironmentPhase, DrawEffectPass>()
-            .add_systems(
-                Render,
-                environment_layer_rendering::queue_environment_layers
-                    .in_set(RenderSystems::QueueMeshes)
-                    .after(bevy::pbr::queue_material_meshes),
-            )
-            .add_systems(
-                Render,
-                (
-                    sort_phase_system::<EnvironmentPhase>,
-                    authored_effect_technique_pass_submission_order::sort_transparent_effect_phase,
-                )
-                    .in_set(RenderSystems::PhaseSort),
-            )
-            .add_systems(
-                bevy::core_pipeline::schedule::Core3d,
-                environment_layer_rendering::render_environment_layers_before_world
-                    .in_set(bevy::core_pipeline::schedule::Core3dSystems::MainPass)
-                    .before(bevy::core_pipeline::core_3d::main_opaque_pass_3d),
-            );
+        render_app.add_systems(
+            Render,
+            authored_effect_technique_pass_submission_order::sort_transparent_effect_phase
+                .in_set(RenderSystems::PhaseSort),
+        );
         app.configure_sets(
             PostUpdate,
             ModelRenderPresentationSet::LevelOfDetail

@@ -54,7 +54,21 @@ pub(super) struct RouteDrawings(Vec<Entity>);
 #[derive(Component)]
 pub(super) struct SkyTowerDrawing;
 
-pub(super) const AUTHORED_TERRAIN_DECAL_MATERIAL_PATH: &str = "Materials/terraindecal.bfmat";
+const AUTHORED_TERRAIN_DECAL_MATERIAL_PATH: &str = "Materials/terraindecal.bfmat";
+
+#[derive(Resource)]
+pub(super) struct TransportTrackMaterials {
+    pub(super) terrain_decal: Handle<MaterialAsset>,
+}
+
+pub(super) fn load_transport_track_materials(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+) {
+    commands.insert_resource(TransportTrackMaterials {
+        terrain_decal: asset_server.load(AUTHORED_TERRAIN_DECAL_MATERIAL_PATH),
+    });
+}
 
 /// The compass point a direction heads to: 0 = north (-Z, source +Y),
 /// 2 = east (+X), counting clockwise in eighths.
@@ -716,7 +730,7 @@ fn authored_ground_track_paint(
 #[allow(clippy::too_many_arguments)]
 pub(super) fn project_committed_transport_track_piece_authored_prefabs(
     mut commands: Commands,
-    asset_server: Res<AssetServer>,
+    materials: Res<TransportTrackMaterials>,
     definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     authored_materials: Res<Assets<MaterialAsset>>,
@@ -748,10 +762,8 @@ pub(super) fn project_committed_transport_track_piece_authored_prefabs(
     let Some(definitions) = active_definitions.get(&definition_assets) else {
         return;
     };
-    let terrain_decal_material =
-        asset_server.load::<MaterialAsset>(AUTHORED_TERRAIN_DECAL_MATERIAL_PATH);
     let terrain_decal_pass = authored_materials
-        .get(&terrain_decal_material)
+        .get(&materials.terrain_decal)
         .and_then(|material| {
             material
                 .evaluated_pass_material_assets_for_effect_quality(graphics_settings.effects)

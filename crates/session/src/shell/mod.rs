@@ -11,7 +11,6 @@ mod map_selection_screen_lifecycle;
 mod menu_screen_lifecycle;
 mod online_message_operations;
 mod online_message_types;
-mod post_save_navigation;
 mod profile_dialog_lifecycle;
 mod profile_selection_list_presentation;
 mod shell_navigation_and_world_launch;
@@ -82,7 +81,7 @@ impl Plugin for ShellPlugin {
             .add_systems(
                 OnEnter(ShellMenuPage::MainMenu),
                 main_menu_screen_lifecycle_and_presentation::
-                    create_main_menu_screen_and_request_profile_index,
+                    create_main_menu_screen,
             )
             .add_systems(
                 OnEnter(GamePhase::MapSelection),
@@ -137,8 +136,6 @@ impl Plugin for ShellPlugin {
                     in_game_options_overlay_lifecycle::close_finished_in_game_options_overlays,
                     exit_confirmation_presentation::
                         reveal_authored_exit_confirmation_after_modal_projection,
-                    post_save_navigation::
-                        complete_or_cancel_pending_navigation_after_save_result,
                     shell_navigation_and_world_launch::exit_application_after_request,
                     menu_screen_lifecycle::route_requested_shell_menu_page,
                 )

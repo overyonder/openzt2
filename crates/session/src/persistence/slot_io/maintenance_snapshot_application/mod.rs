@@ -7,6 +7,7 @@ use super::{
 use avian3d::prelude::RigidBody;
 use bevy::{
     asset::{LoadState, RecursiveDependencyLoadState},
+    ecs::query::QueryData,
     prelude::*,
 };
 use openzt2_game_assets::{
@@ -16,6 +17,7 @@ use openzt2_game_assets::{
 use openzt2_game_data::{world_definitions::world_objects::WorldObjectPropertyFlags, AssetId};
 use openzt2_interface_state::information::entity_selection_types::Inspectable;
 use openzt2_world::world_spawn::prefab_world_instance_spawning::spawn_loaded_scene_prefab_as_world_instance;
+use openzt2_world_state::world_spawn::persistent_id_index::PersistentIdIndex;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator;
 use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
@@ -78,7 +80,7 @@ pub(super) fn apply_loose_waste_records(
     world_root: Entity,
     allocator: &mut PersistentIdAllocator,
     baseline_waste: &Query<Entity, super::maintenance_snapshot_capture::LooseWasteSnapshotFilter>,
-) -> Result<std::collections::BTreeMap<u64, Entity>, WorldSnapshotPersistenceFailure> {
+) -> Result<(), WorldSnapshotPersistenceFailure> {
     if records.len() != resolved_prefabs.len()
         || resolved_prefabs
             .iter()
@@ -89,13 +91,12 @@ pub(super) fn apply_loose_waste_records(
     }
     for record in records {
         allocator
-            .reserve_imported(world_root, PersistentId(record.persistent_identifier))
+            .reserve_imported(PersistentId(record.persistent_identifier))
             .map_err(|_| WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference)?;
     }
     for entity in baseline_waste {
         commands.entity(entity).despawn();
     }
-    let mut restored_identities = std::collections::BTreeMap::new();
     for (record, prefab) in records.iter().zip(resolved_prefabs) {
         let id = PersistentId(record.persistent_identifier);
         let entity = if let Some(handle) = prefab {
@@ -126,7 +127,6 @@ pub(super) fn apply_loose_waste_records(
                 ))
                 .id()
         };
-        restored_identities.insert(record.persistent_identifier, entity);
         // The saved root pose already includes the authored root transform and scale.
         // Insertion fires the cleanliness hook and rebuilds the matching cleanup work.
         let mut restored = commands.entity(entity);
@@ -148,39 +148,58 @@ pub(super) fn apply_loose_waste_records(
             }
         }
     }
-    Ok(restored_identities)
+    Ok(())
 }
 
 /// Restores saved bin contents, compost levels and animal production deadlines. Authored
 /// initial facts only fill values that are still absent.
+#[derive(QueryData)]
+#[query_data(mutable)]
+pub(super) struct RestoredMaintenanceComponents {
+    waste: Option<&'static mut FacilityContainedWaste>,
+    compost: Option<&'static mut CompostPooLevel>,
+    schedule: Option<&'static mut AnimalWasteProductionSchedule>,
+    has_schedule_resolution: Has<AnimalWasteProductionScheduleResolutionMarker>,
+}
+
 pub(super) fn apply_maintained_object_records(
     commands: &mut Commands,
     records: &[MaintainedObjectSnapshotRecord],
-    restored_identities: &std::collections::BTreeMap<u64, Entity>,
-) {
+    identities: &PersistentIdIndex,
+    root: Entity,
+    objects: &mut Query<RestoredMaintenanceComponents>,
+) -> Result<(), WorldSnapshotPersistenceFailure> {
+    use super::restored_component_values::restore_optional_component;
     for record in records {
-        let Some(&entity) = restored_identities.get(&record.persistent_identifier) else {
-            continue;
-        };
+        let entity = identities
+            .get(root, PersistentId(record.persistent_identifier))
+            .ok_or(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference)?;
+        let live = objects
+            .get_mut(entity)
+            .map_err(|_| WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference)?;
         let mut object = commands.entity(entity);
-        if let Some([units, capacity]) = record.contained_waste {
-            object
-                .remove::<FacilityContainedWaste>()
-                .insert(FacilityContainedWaste {
-                    contained_waste_units: units,
-                    contained_waste_capacity_units: capacity,
-                });
+        let waste = record
+            .contained_waste
+            .map(|[units, capacity]| FacilityContainedWaste {
+                contained_waste_units: units,
+                contained_waste_capacity_units: capacity,
+            });
+        restore_optional_component(&mut object, live.waste, waste, false);
+        restore_optional_component(
+            &mut object,
+            live.compost,
+            record.compost_poo_level.map(CompostPooLevel),
+            false,
+        );
+        let schedule = record
+            .next_waste_production_tick
+            .map(|next_production_tick| AnimalWasteProductionSchedule {
+                next_production_tick,
+            });
+        if schedule.is_some() && !live.has_schedule_resolution {
+            object.insert(AnimalWasteProductionScheduleResolutionMarker);
         }
-        if let Some(level) = record.compost_poo_level {
-            object.insert(CompostPooLevel(level));
-        }
-        if let Some(next_production_tick) = record.next_waste_production_tick {
-            object.insert((
-                AnimalWasteProductionSchedule {
-                    next_production_tick,
-                },
-                AnimalWasteProductionScheduleResolutionMarker,
-            ));
-        }
+        restore_optional_component(&mut object, live.schedule, schedule, false);
     }
+    Ok(())
 }

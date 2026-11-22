@@ -14,6 +14,7 @@ use openzt2_zoo_state::terrain::{
 };
 
 use super::super::persistence_failure_types::WorldSnapshotPersistenceFailure as Failure;
+use super::restored_component_values::restore_optional_component;
 use super::terrain_snapshot_section_encoding::validate_terrain_snapshot_record;
 use super::terrain_snapshot_types::TerrainSnapshotRecord;
 
@@ -25,8 +26,21 @@ pub(super) fn apply_terrain_snapshot_record<'a>(
     record: &TerrainSnapshotRecord,
     terrain: &Handle<TerrainAsset>,
     world_root: Entity,
-    chunks: impl Iterator<Item = (Entity, &'a TerrainChunk)>,
-    existing_sources: impl Iterator<Item = (Entity, &'a TerrainWaterRegionSource)>,
+    chunks: impl Iterator<
+        Item = (
+            Entity,
+            &'a TerrainChunk,
+            Option<Mut<'a, EditedTerrainSamples>>,
+        ),
+    >,
+    existing_sources: impl Iterator<
+        Item = (
+            Entity,
+            &'a TerrainWaterRegionSource,
+            Option<Mut<'a, TerrainWaterRegionEdit>>,
+            bool,
+        ),
+    >,
     commands: &mut Commands,
 ) -> Result<TerrainSnapshotApplication, Failure> {
     validate_terrain_snapshot_record(record)?;
@@ -39,7 +53,7 @@ pub(super) fn apply_terrain_snapshot_record<'a>(
     let mut chunk_by_coordinate = BTreeMap::new();
     let mut chunk_entities = HashSet::new();
     let mut terrain_origin = None;
-    for (entity, chunk) in chunks {
+    for (entity, chunk, samples) in chunks {
         let coordinate = chunk.source_coord.to_array();
         if entity == world_root
             || chunk.asset.id() != terrain.id()
@@ -53,7 +67,7 @@ pub(super) fn apply_terrain_snapshot_record<'a>(
             || !chunk.origin.is_finite()
             || !chunk_entities.insert(entity)
             || chunk_by_coordinate
-                .insert(coordinate, (entity, chunk))
+                .insert(coordinate, (entity, chunk, samples))
                 .is_some()
         {
             return Err(Failure::CorruptSnapshotSection);
@@ -77,16 +91,20 @@ pub(super) fn apply_terrain_snapshot_record<'a>(
     {
         return Err(Failure::SnapshotTransactionInFlight);
     }
-    let mut water_region_owners = vec![None; grid.water_regions.len()];
+    let mut water_region_owners = std::iter::repeat_with(|| None)
+        .take(grid.water_regions.len())
+        .collect::<Vec<_>>();
     let mut owner_entities = HashSet::new();
-    for (owner, source) in existing_sources {
+    for (owner, source, edit, retired) in existing_sources {
         let row = source.source_region_index();
         if source.terrain().id() != terrain.id()
             || row >= water_region_owners.len()
             || owner == world_root
             || chunk_entities.contains(&owner)
             || !owner_entities.insert(owner)
-            || water_region_owners[row].replace(owner).is_some()
+            || water_region_owners[row]
+                .replace((owner, edit, retired))
+                .is_some()
         {
             return Err(Failure::BrokenPersistentEntityReference);
         }
@@ -132,34 +150,36 @@ pub(super) fn apply_terrain_snapshot_record<'a>(
             && (row >= record.original_water_region_count as usize
                 || required_rows.contains(&(row as u32)))
         {
-            water_region_owners[row] = Some(
-                commands
-                    .spawn((
-                        TerrainWaterRegionSource::new(terrain.clone(), row),
-                        ChildOf(world_root),
-                    ))
-                    .id(),
-            );
+            let owner = commands
+                .spawn((
+                    TerrainWaterRegionSource::new(terrain.clone(), row),
+                    ChildOf(world_root),
+                ))
+                .id();
+            water_region_owners[row] = Some((owner, None, false));
         }
-        let Some(owner) = water_region_owners[row] else {
+        let Some((owner, edit, was_retired)) = water_region_owners[row].as_mut() else {
             continue;
         };
-        let mut entity = commands.entity(owner);
-        if let Some(height) = exact_planes.get(&(row as u32)) {
-            entity.insert(TerrainWaterRegionEdit {
+        let mut entity = commands.entity(*owner);
+        let saved = exact_planes
+            .get(&(row as u32))
+            .map(|height| TerrainWaterRegionEdit {
                 terrain: terrain.clone(),
                 biome_index: region.water_style_index as usize,
                 surface_height_metres: *height,
                 depth_ratio: region.depth_ratio,
                 uses_tank_minimum_depth: region.uses_tank_minimum_depth,
             });
-        } else {
-            entity.remove::<TerrainWaterRegionEdit>();
-        }
-        if retired_rows.contains(&(row as u32)) {
-            entity.insert(TerrainWaterRegionRetired);
-        } else {
-            entity.remove::<TerrainWaterRegionRetired>();
+        restore_optional_component(&mut entity, edit.take(), saved, true);
+        match (*was_retired, retired_rows.contains(&(row as u32))) {
+            (false, true) => {
+                entity.insert(TerrainWaterRegionRetired);
+            }
+            (true, false) => {
+                entity.remove::<TerrainWaterRegionRetired>();
+            }
+            _ => {}
         }
     }
     let overlays = record
@@ -168,9 +188,9 @@ pub(super) fn apply_terrain_snapshot_record<'a>(
         .map(|chunk| (chunk.source_coord, chunk))
         .collect::<BTreeMap<_, _>>();
     let mut changed_chunks = Vec::with_capacity(chunk_by_coordinate.len());
-    for (coordinate, (entity, chunk)) in chunk_by_coordinate {
+    for (coordinate, (entity, chunk, existing_samples)) in chunk_by_coordinate {
         let mut target = commands.entity(entity);
-        if let Some(overlay) = overlays.get(&coordinate) {
+        let saved_samples = overlays.get(&coordinate).map(|overlay| {
             let mut samples = overlay.samples.clone();
             for sample in &overlay.edited_water_owner_samples {
                 let Some(TerrainWaterAffiliation::SourceRow(row)) =
@@ -178,17 +198,18 @@ pub(super) fn apply_terrain_snapshot_record<'a>(
                 else {
                     unreachable!("validated source row");
                 };
-                let owner =
-                    water_region_owners[row as usize].expect("required owner was allocated above");
+                let owner = water_region_owners[row as usize]
+                    .as_ref()
+                    .expect("required owner was allocated above")
+                    .0;
                 samples.water_affiliations[*sample as usize] =
                     Some(TerrainWaterAffiliation::Edited(owner));
             }
-            target.insert(samples);
-        } else {
-            target.remove::<EditedTerrainSamples>();
-        }
+            samples
+        });
+        restore_optional_component(&mut target, existing_samples, saved_samples, true);
         target.remove::<TerrainWaterMembershipIndex>();
-        target.insert(TerrainCollisionPending);
+        target.insert_if_new(TerrainCollisionPending);
         changed_chunks.push(TerrainWaterChanged {
             chunk: entity,
             min: UVec2::ZERO,
@@ -205,9 +226,38 @@ mod tests {
         terrain_snapshot_section_encoding::tests::painted_nonflat_water_snapshot,
     };
     use super::*;
-    use bevy::ecs::{system::SystemState, world::CommandQueue};
+    use bevy::ecs::system::SystemState;
     use openzt2_game_assets::terrain::terrain_test_asset::terrain_test_asset;
     use openzt2_zoo_state::terrain::terrain_water_presentation_types::TerrainWaterRegionQuery;
+
+    fn restore_test_terrain(
+        world: &mut World,
+        record: &TerrainSnapshotRecord,
+        terrain: &Handle<TerrainAsset>,
+        root: Entity,
+    ) -> Result<TerrainSnapshotApplication, Failure> {
+        let mut state = SystemState::<(
+            Commands,
+            Query<(Entity, &TerrainChunk, Option<&mut EditedTerrainSamples>)>,
+            Query<(
+                Entity,
+                &TerrainWaterRegionSource,
+                Option<&mut TerrainWaterRegionEdit>,
+                Has<TerrainWaterRegionRetired>,
+            )>,
+        )>::new(world);
+        let (mut commands, mut chunks, mut regions) = state.get_mut(world).unwrap();
+        let result = apply_terrain_snapshot_record(
+            record,
+            terrain,
+            root,
+            chunks.iter_mut(),
+            regions.iter_mut(),
+            &mut commands,
+        );
+        state.apply(world);
+        result
+    }
 
     #[test]
     fn commands_restore_water_owners_exact_overlays_and_authoritative_removal() {
@@ -225,24 +275,13 @@ mod tests {
             side: 5,
         };
         let chunk_entity = world.spawn((chunk.clone(), ChildOf(root))).id();
-        let source = TerrainWaterRegionSource::new(terrain.clone(), 0);
         let source_owner = world
             .spawn((
                 TerrainWaterRegionSource::new(terrain.clone(), 0),
                 ChildOf(root),
             ))
             .id();
-        let mut queue = CommandQueue::default();
-        let application = apply_terrain_snapshot_record(
-            &record,
-            &terrain,
-            root,
-            std::iter::once((chunk_entity, &chunk)),
-            std::iter::once((source_owner, &source)),
-            &mut Commands::new(&mut queue, &world),
-        )
-        .unwrap();
-        queue.apply(&mut world);
+        let application = restore_test_terrain(&mut world, &record, &terrain, root).unwrap();
         let edited_owner = world
             .query::<(Entity, &TerrainWaterRegionSource)>()
             .iter(&world)
@@ -323,20 +362,7 @@ mod tests {
             );
         }
         record.edited_chunks.clear();
-        let existing = [
-            TerrainWaterRegionSource::new(terrain.clone(), 0),
-            TerrainWaterRegionSource::new(terrain.clone(), 1),
-        ];
-        apply_terrain_snapshot_record(
-            &record,
-            &terrain,
-            root,
-            std::iter::once((chunk_entity, &chunk)),
-            [(source_owner, &existing[0]), (edited_owner, &existing[1])].into_iter(),
-            &mut Commands::new(&mut queue, &world),
-        )
-        .unwrap();
-        queue.apply(&mut world);
+        restore_test_terrain(&mut world, &record, &terrain, root).unwrap();
         assert!(world.get::<EditedTerrainSamples>(chunk_entity).is_none());
     }
 
@@ -354,19 +380,9 @@ mod tests {
             spacing_m: 2.0,
             side: 4,
         };
-        let chunk_entity = world.spawn(chunk.clone()).id();
+        let chunk_entity = world.spawn(chunk).id();
         let count = world.entities().len();
-        let mut queue = CommandQueue::default();
-        assert!(apply_terrain_snapshot_record(
-            &record,
-            &terrain,
-            root,
-            std::iter::once((chunk_entity, &chunk)),
-            std::iter::empty(),
-            &mut Commands::new(&mut queue, &world)
-        )
-        .is_err());
-        queue.apply(&mut world);
+        assert!(restore_test_terrain(&mut world, &record, &terrain, root).is_err());
         assert_eq!(world.entities().len(), count);
         assert!(world.get::<EditedTerrainSamples>(chunk_entity).is_none());
         assert!(world.get::<TerrainCollisionPending>(chunk_entity).is_none());

@@ -27,9 +27,12 @@ pub(super) fn route_scenario_selection_and_start_ui_actions(
     nodes: AuthoredScenarioUiActionDocumentQueries,
     parents: Query<&ChildOf>,
     values: Query<&UiValue>,
-    choices: Query<(Entity, &WorldChoice)>,
+    mut choices: Query<(Entity, &WorldChoice, Option<&mut Visibility>)>,
     mut shell: ScenarioShellMessageWriters,
-    continuation: Res<super::scenario_lua_ui::ScenarioContinuation>,
+    continuation: Query<
+        &super::scenario_lua_ui::presentation::ScenarioUiState,
+        With<openzt2_world_state::world_spawn::world_membership_types::WorldRoot>,
+    >,
 ) {
     let Some(scenarios) = active_scenarios.get(&scenarios) else {
         return;
@@ -50,36 +53,46 @@ pub(super) fn route_scenario_selection_and_start_ui_actions(
             }
             match &record.action {
                 UiScenarioAction::PopulateScenarioSelection => {
-                    for (entity, choice) in &choices {
-                        commands
-                            .entity(entity)
-                            .insert(if selection.mode == Some(choice.mode) {
-                                Visibility::Inherited
-                            } else {
-                                Visibility::Hidden
-                            });
+                    for (entity, choice, visibility) in &mut choices {
+                        let next = if selection.mode == Some(choice.mode) {
+                            Visibility::Inherited
+                        } else {
+                            Visibility::Hidden
+                        };
+                        if let Some(mut visibility) = visibility {
+                            visibility.set_if_neq(next);
+                        } else {
+                            commands.entity(entity).insert(next);
+                        }
                     }
                 }
                 UiScenarioAction::PopulateCampaignSelection => {
-                    for (entity, choice) in &choices {
-                        commands.entity(entity).insert(
-                            if choice.mode == WorldSessionMode::Campaign {
-                                Visibility::Inherited
-                            } else {
-                                Visibility::Hidden
-                            },
-                        );
+                    for (entity, choice, visibility) in &mut choices {
+                        let next = if choice.mode == WorldSessionMode::Campaign {
+                            Visibility::Inherited
+                        } else {
+                            Visibility::Hidden
+                        };
+                        if let Some(mut visibility) = visibility {
+                            visibility.set_if_neq(next);
+                        } else {
+                            commands.entity(entity).insert(next);
+                        }
                     }
                 }
                 UiScenarioAction::PlayNextScenario => {
-                    if let Some(target) = continuation.scenario {
+                    if let Some(target) = continuation
+                        .single()
+                        .ok()
+                        .and_then(|state| state.continuation)
+                    {
                         shell.continue_campaign.write(
                             crate::shell::shell_navigation_request_types::ContinueCampaign(target),
                         );
                     }
                 }
                 UiScenarioAction::SelectionChanged => {
-                    if let Ok((_, choice)) = choices.get(activation.node) {
+                    if let Ok((_, choice, _)) = choices.get(activation.node) {
                         shell.choose_world.write(ChooseWorld(choice.scenario));
                     }
                 }
@@ -102,7 +115,7 @@ pub(super) fn route_scenario_selection_and_start_ui_actions(
                     });
                 }
                 UiScenarioAction::PlayTutorial => {
-                    if let Ok((_, choice)) = choices.get(activation.node) {
+                    if let Ok((_, choice, _)) = choices.get(activation.node) {
                         selection.mode = Some(choice.mode);
                         selection.scenario = Some(choice.scenario);
                     }

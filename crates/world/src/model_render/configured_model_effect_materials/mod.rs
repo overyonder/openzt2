@@ -1,6 +1,9 @@
+use crate::animation_playback::authored_decal_texture_cycles::AnimationDecalFrames;
+use crate::world_spawn::prefab_world_instance_spawning::morph_fade_projection::PrefabMorphOpacity;
 use bevy::app::{HierarchyPropagatePlugin, Propagate, PropagateSet};
 use bevy::asset::{AssetEvent, AssetId};
 use bevy::ecs::entity::EntityHashSet;
+use bevy::ecs::system::SystemParam;
 use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 use bevy::render::storage::ShaderBuffer;
@@ -16,7 +19,7 @@ use openzt2_world_state::world_spawn::{
 use std::marker::PhantomData;
 
 use super::authored_model_material_pass_projection::project_authored_model_material_passes;
-use super::environment_layer_rendering::EnvironmentPrimitiveLayer;
+use super::environment_layer_rendering::FIRST_ENVIRONMENT_RENDER_LAYER;
 use super::mirrored_model_primitive_winding::{
     project_mirrored_and_tinted_model_primitive_meshes, InheritedPrimitiveTint,
 };
@@ -44,7 +47,7 @@ impl<T: Component> PartialEq for ModelMaterialInputOwner<T> {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 struct ModelEffectMaterialVariant {
     authored: AssetId<EffectPassMaterial>,
     replacement: Option<AssetId<Image>>,
@@ -54,25 +57,31 @@ struct ModelEffectMaterialVariant {
     tint: Option<[u32; 4]>,
     animation_geometry: Option<Entity>,
     ordered_environment: bool,
+    fading_draw: Option<Entity>,
+    animated_decals: Box<[(Option<usize>, Option<u32>, AssetId<Image>)]>,
 }
 
 pub(super) fn register_configured_model_effect_materials(app: &mut App) {
     register_model_material_input::<ModelExpanded>(app);
     register_model_material_input::<PrefabTextureReplacements>(app);
     register_model_material_input::<PrefabFixedFunctionWorldLightingPolicy>(app);
+    register_model_material_input::<AnimationDecalFrames>(app);
 
     app.configure_sets(
         PostUpdate,
-        PropagateSet::<ModelMaterialInputOwner<ModelExpanded>>::default()
-            .before(project_authored_model_material_passes),
+        (
+            PropagateSet::<ModelMaterialInputOwner<ModelExpanded>>::default()
+                .before(project_authored_model_material_passes),
+            PropagateSet::<PrefabMorphOpacity>::default()
+                .after(project_authored_model_material_passes),
+        ),
     );
     app.add_systems(
         PostUpdate,
         project_configured_model_effect_materials
-            .after(project_authored_model_material_passes)
+            .after(PropagateSet::<PrefabMorphOpacity>::default())
             .after(project_mirrored_and_tinted_model_primitive_meshes)
             .after(PropagateSet::<PrefabCameraRenderLayers>::default())
-            .after(PropagateSet::<EnvironmentPrimitiveLayer>::default())
             .in_set(ModelRenderPresentationSet::SourceMaterials)
             .before(bevy::pbr::check_entities_needing_specialization::<EffectPassMaterial>),
     );
@@ -114,16 +123,25 @@ fn publish_model_material_input_owners<T: Component>(
     }
 }
 
+#[derive(SystemParam)]
+struct AnimatedMaterialInputs<'w, 's> {
+    decals: Query<'w, 's, Ref<'static, AnimationDecalFrames>>,
+    removed_decals: RemovedComponents<'w, 's, ModelMaterialInputOwner<AnimationDecalFrames>>,
+    removed_morph: RemovedComponents<'w, 's, PrefabMorphOpacity>,
+}
+
 fn project_configured_model_effect_materials(
     mut draws: Query<(
         Entity,
         Ref<AuthoredModelEffectMaterial>,
         Ref<Mesh3d>,
         Option<Ref<PrefabCameraRenderLayers>>,
-        Option<Ref<EnvironmentPrimitiveLayer>>,
         Option<Ref<ModelMaterialInputOwner<ModelExpanded>>>,
         Option<Ref<ModelMaterialInputOwner<PrefabTextureReplacements>>>,
         Option<Ref<InheritedPrimitiveTint>>,
+        Option<Ref<PrefabMorphOpacity>>,
+        Option<Ref<ModelMaterialInputOwner<AnimationDecalFrames>>>,
+        Option<&bevy::gltf::GltfMaterialName>,
         &mut MeshMaterial3d<EffectPassMaterial>,
     )>,
     models: Query<(
@@ -146,7 +164,7 @@ fn project_configured_model_effect_materials(
         ModelMaterialInputOwner<PrefabFixedFunctionWorldLightingPolicy>,
     >,
     mut removed_layers: RemovedComponents<PrefabCameraRenderLayers>,
-    mut removed_environment: RemovedComponents<EnvironmentPrimitiveLayer>,
+    mut animation: AnimatedMaterialInputs,
     mut variants: Local<HashMap<ModelEffectMaterialVariant, AssetId<EffectPassMaterial>>>,
 ) {
     let changed_assets = material_events
@@ -169,7 +187,8 @@ fn project_configured_model_effect_materials(
         .chain(removed_tint_owners.read())
         .chain(removed_light_owners.read())
         .chain(removed_layers.read())
-        .chain(removed_environment.read())
+        .chain(animation.removed_morph.read())
+        .chain(animation.removed_decals.read())
         .collect::<EntityHashSet>();
     let texture_replacement_enabled = graphics
         .as_ref()
@@ -183,10 +202,12 @@ fn project_configured_model_effect_materials(
         authored,
         mesh,
         layers,
-        environment,
         model_owner,
         replacement_owner,
         tint,
+        morph_opacity,
+        decal_owner,
+        material_name,
         mut binding,
     ) in &mut draws
     {
@@ -200,12 +221,14 @@ fn project_configured_model_effect_materials(
             .as_ref()
             .and_then(|(_, owner)| owner.as_ref())
             .and_then(|owner| lighting_policies.get(owner.0).ok());
+        let decals = decal_owner
+            .as_ref()
+            .and_then(|owner| animation.decals.get(owner.0).ok());
         let changed = authored.is_changed()
             || mesh.is_changed()
             || removed_inputs.contains(&entity)
             || changed_assets.contains(&authored.template.id())
             || layers.as_ref().is_some_and(|layers| layers.is_changed())
-            || environment.as_ref().is_some_and(|layer| layer.is_changed())
             || model_owner
                 .as_ref()
                 .is_some_and(|owner| owner.is_changed() || removed_inputs.contains(&owner.0))
@@ -225,6 +248,11 @@ fn project_configured_model_effect_materials(
                 .as_ref()
                 .is_some_and(|policy| policy.is_changed())
             || tint.as_ref().is_some_and(|tint| tint.is_changed())
+            || morph_opacity
+                .as_ref()
+                .is_some_and(|opacity| opacity.is_changed())
+            || decal_owner.as_ref().is_some_and(|owner| owner.is_changed())
+            || decals.as_ref().is_some_and(|decals| decals.is_changed())
             || (replacement.is_some() && changed_settings);
         if !changed {
             continue;
@@ -268,10 +296,34 @@ fn project_configured_model_effect_materials(
         let Some(source) = materials.get(&authored.template) else {
             continue;
         };
+        let animated_decals = decals
+            .as_ref()
+            .map_or(&[][..], |decals| decals.0.as_slice())
+            .iter()
+            .filter(|decal| {
+                model
+                    .as_ref()
+                    .and_then(|(model, _)| model.material_name.as_deref())
+                    .is_some_and(|name| name.eq_ignore_ascii_case(&decal.material))
+                    || material_name.is_some_and(|name| {
+                        name.0.eq_ignore_ascii_case(&decal.material)
+                            || name.0.eq_ignore_ascii_case(
+                                &openzt2_game_data::AssetId::from_key(&decal.material)
+                                    .to_lowercase_hexadecimal_string(),
+                            )
+                    })
+            })
+            .collect::<Vec<_>>();
         let animation_geometry = source
             .has_texture_coordinate_animation()
             .then_some(authored.geometry);
-        let ordered_environment = environment.is_some() && source.uses_binned_opaque_phase();
+        let ordered_environment = source.uses_binned_opaque_phase()
+            && layers.as_ref().is_some_and(|layers| {
+                layers
+                    .0
+                    .iter()
+                    .any(|layer| layer >= FIRST_ENVIRONMENT_RENDER_LAYER)
+            });
         if texture.is_none()
             && light_policy.is_none()
             && light_context == 0
@@ -279,6 +331,8 @@ fn project_configured_model_effect_materials(
             && authored.clothing_decal.is_none()
             && animation_geometry.is_none()
             && !ordered_environment
+            && morph_opacity.is_none()
+            && animated_decals.is_empty()
         {
             binding.set_if_neq(MeshMaterial3d(authored.template.clone()));
             continue;
@@ -297,6 +351,11 @@ fn project_configured_model_effect_materials(
             tint: tint.map(|color| color.to_array().map(f32::to_bits)),
             animation_geometry,
             ordered_environment,
+            fading_draw: morph_opacity.as_ref().map(|_| entity),
+            animated_decals: animated_decals
+                .iter()
+                .map(|decal| (decal.layer, decal.texture_coordinates, decal.image.id()))
+                .collect(),
         };
         let projected = variants
             .get(&key)
@@ -328,6 +387,21 @@ fn project_configured_model_effect_materials(
             if let Some(texture) = texture {
                 derived.replace_texture_asset_at_d3d9_stage(0, texture.clone());
             }
+            for decal in animated_decals {
+                if let Some(stage) = decal.layer {
+                    let texture_coordinates = decal
+                        .texture_coordinates
+                        .unwrap_or_else(|| derived.netimmerse_texture_coordinate_set(stage));
+                    derived = derived.clone_with_netimmerse_decal(
+                        stage,
+                        texture_coordinates,
+                        decal.image.clone(),
+                        &mut buffers,
+                    );
+                } else {
+                    derived.replace_texture_asset_at_d3d9_stage(0, decal.image.clone());
+                }
+            }
             if let Some(tinted) = tint.and_then(|tint| derived.clone_tinted(tint, &mut buffers)) {
                 derived = tinted;
             }
@@ -337,10 +411,23 @@ fn project_configured_model_effect_materials(
             if let Some(geometry) = animation_geometry {
                 derived.bind_texture_coordinate_animation_geometry(geometry, &mut buffers);
             }
+            if morph_opacity.is_some() {
+                derived.configure_for_morph_fade();
+            }
             let handle = materials.add(derived);
             variants.insert(key, handle.id());
             handle
         };
+        if let Some(opacity) = morph_opacity {
+            if materials
+                .get(&handle)
+                .is_some_and(|material| material.morph_opacity() != opacity.0)
+            {
+                if let Some(mut material) = materials.get_mut(&handle) {
+                    material.set_morph_opacity(opacity.0);
+                }
+            }
+        }
         binding.set_if_neq(MeshMaterial3d(handle));
     }
 }

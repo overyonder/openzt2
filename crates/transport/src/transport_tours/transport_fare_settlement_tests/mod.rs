@@ -33,6 +33,7 @@ fn matching_completed_payment_emits_one_trip_and_consumes_fare_operation() {
         .spawn((
             FareGuest(guest_entity),
             PendingTransportFare {
+                station: circuit_entity,
                 circuit: circuit_entity,
                 score: 420.0,
                 rating: 0.42,
@@ -70,6 +71,7 @@ fn unrelated_completed_payment_does_not_complete_transport_trip() {
         .spawn((
             FareGuest(guest_entity),
             PendingTransportFare {
+                station: circuit_entity,
                 circuit: circuit_entity,
                 score: 100.0,
                 rating: 0.1,

@@ -1,5 +1,5 @@
-use bevy::prelude::Entity;
 use bevy::prelude::Message;
+use bevy::prelude::{Component, Entity};
 use openzt2_game_data::AssetId;
 
 #[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
@@ -10,7 +10,7 @@ pub struct WorldLoadFailed {
     pub reason: WorldLoadFailure,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorldLoadFailure {
     MissingScenario,
     InvalidRecord(u32),

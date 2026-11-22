@@ -1,6 +1,9 @@
 use bevy::prelude::*;
 use openzt2_game_data::ui_document::node_property_binding::UiIntegerPropertyBindingSource;
 use openzt2_game_data::ui_document::node_property_binding::UiTextPropertyBindingSource;
+use openzt2_world_state::world_spawn::{
+    world_load_completion_marker::WorldLoadCompleted, world_membership_types::WorldRoot,
+};
 
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiValue;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiValueBinding;
@@ -11,8 +14,10 @@ use openzt2_zoo_state::progression::rating_types::ZooRating;
 
 pub(crate) fn project_live_zoo_status_to_authored_information_bindings(
     cash: Option<Res<ZooCash>>,
-    fame: Option<Res<Fame>>,
-    rating: Option<Res<ZooRating>>,
+    worlds: Query<
+        (Option<Ref<Fame>>, Option<Ref<ZooRating>>),
+        (With<WorldRoot>, With<WorldLoadCompleted>),
+    >,
     endangered_births: Option<Res<TotalEndangeredAnimalBirthCount>>,
     mut values: Query<(Ref<UiValueBinding>, &mut UiValue, &mut Visibility)>,
     history: Option<Res<openzt2_zoo_state::economy::monthly_finance_types::MonthlyFinanceHistory>>,
@@ -20,13 +25,13 @@ pub(crate) fn project_live_zoo_status_to_authored_information_bindings(
         Ref<openzt2_ui::authored_ui_text_content_binding::UiTextBinding>,
         &mut Text,
     )>,
-    mut previous_guest_count: Local<Option<i32>>,
 ) {
+    let (fame, rating) = worlds.single().unwrap_or_default();
     let guest_count = history
         .as_ref()
         .and_then(|history| history.current_month_finance())
         .map_or(0, |month| month.active_users);
-    let guest_count_changed = *previous_guest_count != Some(guest_count);
+    let guest_count_changed = history.as_ref().is_some_and(DetectChanges::is_changed);
     for (binding, text) in &mut guest_texts {
         if matches!(binding.0, UiTextPropertyBindingSource::ZooGuestCount { .. })
             && (guest_count_changed || binding.is_added())
@@ -37,7 +42,6 @@ pub(crate) fn project_live_zoo_status_to_authored_information_bindings(
             );
         }
     }
-    *previous_guest_count = Some(guest_count);
     let facts_changed = guest_count_changed
         || cash.as_ref().is_some_and(DetectChanges::is_changed)
         || fame.as_ref().is_some_and(DetectChanges::is_changed)

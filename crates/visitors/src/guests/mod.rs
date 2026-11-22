@@ -1,5 +1,8 @@
 //! Visitor lifecycle represented directly by small ECS facts.
 
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
+    BehaviorStep, BehaviorStepFixedSet, BehaviorStepSet,
+};
 use openzt2_zoo_state::guests::GuestDestinationSelection;
 use openzt2_zoo_state::guests::GuestLifecycleAdvance;
 use openzt2_zoo_state::guests::GuestReactionApplication;
@@ -92,6 +95,15 @@ impl Plugin for GuestsPlugin {
                     .run_if(in_state(GamePhase::InGame)),
             )
             .add_systems(
+                BehaviorStep,
+                (
+                    guest_behavior_fact_execution::apply_authored_guest_behavior_fact_modifications
+                        .after(openzt2_zoo_state::maintenance::maintenance_types::FacilityWasteBehaviorModification),
+                    view_event_execution::emit_authored_view_events,
+                    guest_view_animals_execution::watch_animals_for_current_view_actions,
+                ).in_set(BehaviorStepSet::Actions),
+            )
+            .add_systems(
                 FixedUpdate,
                 (
                     initialize_spawned_guests,
@@ -101,15 +113,9 @@ impl Plugin for GuestsPlugin {
                     guest_destination_and_viewing_execution::project_authored_viewing_ground_slots
                         .after(hydrate_viewing_opportunities),
                     decay_guest_needs.after(initialize_spawned_guests),
-                    guest_behavior_fact_execution::apply_authored_guest_behavior_fact_modifications
-                        .after(guest_task_target_loss::fail_guest_tasks_whose_target_is_gone)
-                        .after_ignore_deferred(decay_guest_needs)
-                        .after(openzt2_zoo_state::maintenance::maintenance_types::FacilityWasteBehaviorModification),
-                    guest_task_need_facts::observe_guest_need_triggers
-                        .after(guest_behavior_fact_execution::apply_authored_guest_behavior_fact_modifications),
+                    guest_task_need_facts::observe_guest_need_triggers.after_ignore_deferred(decay_guest_needs),
                     advance_guest_survey_day,
-                    guest_survey_need_sampling::sample_current_guest_need_observations
-                        .after(guest_behavior_fact_execution::apply_authored_guest_behavior_fact_modifications),
+                    guest_survey_need_sampling::sample_current_guest_need_observations.after_ignore_deferred(decay_guest_needs),
                     route_guest_survey_triggers,
                     adjust_guest_survey_data
                         .after_ignore_deferred(advance_guest_survey_day)
@@ -121,29 +127,25 @@ impl Plugin for GuestsPlugin {
                         .after_ignore_deferred(guest_task_need_facts::observe_guest_need_triggers)
                         .in_set(GuestDestinationSelection),
                     guest_self_task_selection::select_idle_guest_tasks
-                        .after(choose_guest_destination),
+                        .after(choose_guest_destination)
+                        .before(BehaviorStepFixedSet::Think),
                     guest_task_progress_diagnostics::report_guest_task_progress_changes
                         .after(guest_self_task_selection::select_idle_guest_tasks),
                 )
                     .in_set(FixedGameSet::Think)
-                    .after(openzt2_zoo_state::animal_behavior::behavior_trigger_types::BehaviorTriggerDelivery)
                     .run_if(in_state(GamePhase::InGame)),
             )
             .add_systems(
                 FixedUpdate,
                 (
-                    view_event_execution::emit_authored_view_events,
-                    guest_view_animals_execution::watch_animals_for_current_view_actions,
                     spawn_arriving_guests.run_if(guest_arrival_execution::guest_arrivals_are_due),
-                    guest_viewing_lifecycle::revoke_unowned_guest_observations
-                        .after(guest_view_animals_execution::watch_animals_for_current_view_actions),
+                    guest_viewing_lifecycle::revoke_unowned_guest_observations,
                     begin_viewing
                         .after(guest_viewing_lifecycle::revoke_unowned_guest_observations)
                         .in_set(GuestViewingBegin),
                     advance_viewing.after(begin_viewing),
                     view_event_execution::apply_guest_reactions
                         .after(advance_viewing)
-                        .after_ignore_deferred(view_event_execution::emit_authored_view_events)
                         .in_set(GuestReactionApplication),
                     guest_view_event_meter_application::apply_accepted_view_events_to_view_meters
                         .after_ignore_deferred(view_event_execution::apply_guest_reactions),

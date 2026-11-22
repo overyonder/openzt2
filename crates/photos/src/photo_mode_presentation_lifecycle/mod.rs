@@ -12,8 +12,10 @@ use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocum
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentRoot;
 use openzt2_interface_state::ui::ui_document_lifecycle_contracts::ShowUiRole;
 use openzt2_ui::animation::UiShowHideAnimation;
-use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator;
-use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
+use openzt2_world_state::world_spawn::{
+    world_load_completion_marker::WorldLoadCompleted,
+    world_membership_types::{WorldMember, WorldRoot},
+};
 
 use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
@@ -111,18 +113,16 @@ pub(super) fn project_photo_viewfinder_capture_visibility(
 }
 
 pub(super) fn project_selected_photo_challenge_goals(
-    world: Option<Res<PersistentIdAllocator>>,
+    loaded_worlds: Query<Entity, (With<WorldRoot>, With<WorldLoadCompleted>)>,
     selected_sets: Query<&WorldMember, With<CurrentPhotoChallengeSet>>,
     mut goals: Query<(&mut Visibility, &mut UiShowHideAnimation), With<PhotoChallengeGoals>>,
 ) {
     if goals.is_empty() {
         return;
     }
-    let visible = world.is_some_and(|world| {
-        selected_sets
-            .iter()
-            .any(|member| world.owns_world(member.root))
-    });
+    let visible = loaded_worlds
+        .single()
+        .is_ok_and(|world| selected_sets.iter().any(|member| member.root == world));
     for (mut visibility, mut animation) in &mut goals {
         if visibility.set_if_neq(if visible {
             Visibility::Inherited

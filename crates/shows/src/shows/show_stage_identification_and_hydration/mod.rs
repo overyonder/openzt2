@@ -3,7 +3,11 @@ use bevy::prelude::*;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
-use openzt2_zoo_state::donations::donation_opportunity_types::DirectDonationSettlement;
+use openzt2_game_data::AssetId;
+use openzt2_zoo_state::{
+    donations::donation_opportunity_types::DonationOpportunity,
+    economy::money_types::Money,
+};
 
 use super::show_stage_types::{ShowStage, ShowStageHydrated, ShowStageOpenState};
 
@@ -24,6 +28,7 @@ pub(super) fn hydrate_show_stages_from_active_world_definitions(
             &DefinitionId,
             Option<&mut ShowStage>,
             Has<ShowStageOpenState>,
+            Has<DonationOpportunity>,
         ),
         Without<ShowStageHydrated>,
     >,
@@ -31,7 +36,7 @@ pub(super) fn hydrate_show_stages_from_active_world_definitions(
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };
-    for (entity, definition_id, existing_stage, has_open_state) in &mut stages {
+    for (entity, definition_id, existing_stage, has_open_state, has_donation) in &mut stages {
         let definition = existing_stage
             .as_deref()
             .and_then(|stage| definitions.find_show_stage(stage.show_stage_definition))
@@ -47,9 +52,14 @@ pub(super) fn hydrate_show_stages_from_active_world_definitions(
         } else {
             commands.entity(entity).insert(stage);
         }
-        commands
-            .entity(entity)
-            .insert((ShowStageHydrated, DirectDonationSettlement));
+        commands.entity(entity).insert(ShowStageHydrated);
+        if !has_donation {
+            commands.entity(entity).insert(DonationOpportunity {
+                category: AssetId::from_key("show-donation"),
+                amount: Money::ZERO,
+                interaction_ticks: 0,
+            });
+        }
         if !has_open_state {
             commands.entity(entity).insert(ShowStageOpenState::Open);
         }

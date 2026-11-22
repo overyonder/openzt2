@@ -4,8 +4,7 @@ pub(crate) fn update_current_and_maximum_fame(
     fame: &mut Fame,
     next_half_stars: u8,
     next_percent: f32,
-) -> bool {
-    let previous_fame = *fame;
+) {
     fame.half_stars = next_half_stars;
     fame.current_percent = Some(next_percent);
     fame.maximum_reached = fame.maximum_reached.max(next_half_stars);
@@ -13,7 +12,6 @@ pub(crate) fn update_current_and_maximum_fame(
         fame.maximum_percent_reached
             .map_or(next_percent, |previous| previous.max(next_percent)),
     );
-    *fame != previous_fame
 }
 
 pub(crate) fn select_fame_level_for_rating_and_guest_count(

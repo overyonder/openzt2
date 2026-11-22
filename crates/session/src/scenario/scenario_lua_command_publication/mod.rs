@@ -8,77 +8,92 @@ use super::{
     scenario_lua_types::ScenarioLuaScriptResult,
 };
 
-pub(super) fn publish_commands_produced_by_scenario_lua_script(
-    terminal: Entity,
-    result: ScenarioLuaScriptResult,
-    economy: &mut MessageWriter<ScenarioEconomyCommand>,
-    award_points: &mut MessageWriter<AdjustScenarioAwardPointTotalRequest>,
-    challenge_offers: &mut MessageWriter<CreateScenarioChallengeOfferFromLuaSourcePathRequest>,
-    panels: &mut MessageWriter<super::challenge_offer_types::ScenarioChallengePanelRequest>,
-    shown_rules: &mut MessageWriter<
+#[derive(bevy::ecs::system::SystemParam)]
+pub(super) struct ScenarioLuaOutputs<'w> {
+    economy: MessageWriter<'w, ScenarioEconomyCommand>,
+    award_points: MessageWriter<'w, AdjustScenarioAwardPointTotalRequest>,
+    challenge_offers: MessageWriter<'w, CreateScenarioChallengeOfferFromLuaSourcePathRequest>,
+    panels: MessageWriter<'w, super::challenge_offer_types::ScenarioChallengePanelRequest>,
+    shown_rules: MessageWriter<'w,
         openzt2_zoo_state::scenario::scenario_objective_types::ShowScenarioRuleRequest,
     >,
-    available_content: &mut MessageWriter<
+    available_content: MessageWriter<'w,
         openzt2_zoo_state::progression::adoption_and_content_availability_types::MakeScenarioContentAvailableRequest,
     >,
-    photo_challenge_sets: &mut MessageWriter<
+    photo_challenge_sets: MessageWriter<'w,
         super::scenario_photo_challenge_selection::SelectCurrentPhotoChallengeSetRequest,
     >,
-    profile_variables: &mut MessageWriter<
-        openzt2_zoo_state::progression::profile_scenario_variables::SetProfileScenarioVariable,
-    >,
-    persist_profile_variables: &mut MessageWriter<
+    persist_profile_variables: MessageWriter<'w,
         openzt2_zoo_state::progression::profile_scenario_variables::PersistProfileScenarioVariables,
     >,
-    ui: &mut MessageWriter<super::scenario_lua_ui::ScenarioUiCommand>,
-    entities: &mut MessageWriter<super::scenario_lua_entity_commands::ScenarioEntityCommand>,
-    fame: &mut MessageWriter<openzt2_zoo_state::progression::fame_types::SetScenarioMaximumFame>,
-) {
-    if let Some(percent) = result.maximum_fame_percent {
-        fame.write(openzt2_zoo_state::progression::fame_types::SetScenarioMaximumFame { percent });
+    ui: MessageWriter<'w, super::scenario_lua_ui::ScenarioUiCommand>,
+    entities: MessageWriter<'w, super::scenario_lua_entity_commands::ScenarioEntityCommand>,
+    fame: MessageWriter<'w, openzt2_zoo_state::progression::fame_types::SetScenarioMaximumFame>,
+}
+
+impl ScenarioLuaOutputs<'_> {
+    pub(super) fn write_timed_boundary(
+        &mut self,
+        command: super::scenario_lua_ui::ScenarioUiCommand,
+    ) {
+        self.ui.write(command);
     }
-    let _ = entities.write_batch(result.entities);
-    let _ = ui.write_batch(result.ui);
-    let _ = profile_variables.write_batch(result.profile_variables);
-    if result.persist_profile_variables {
-        persist_profile_variables.write(openzt2_zoo_state::progression::profile_scenario_variables::PersistProfileScenarioVariables);
-    }
-    if let Some(set) = result.current_photo_challenge_set {
-        photo_challenge_sets.write(
-            super::scenario_photo_challenge_selection::SelectCurrentPhotoChallengeSetRequest {
-                set,
-            },
-        );
-    }
-    for definition in result.available_content {
-        available_content.write(
+
+    pub(super) fn publish(&mut self, terminal: Entity, result: ScenarioLuaScriptResult) {
+        if let Some(percent) = result.maximum_fame_percent {
+            self.fame.write(
+                openzt2_zoo_state::progression::fame_types::SetScenarioMaximumFame { percent },
+            );
+        }
+        let _ = self.entities.write_batch(result.entities);
+        let _ = self.ui.write_batch(result.ui);
+        if result.persist_profile_variables {
+            self.persist_profile_variables.write(openzt2_zoo_state::progression::profile_scenario_variables::PersistProfileScenarioVariables);
+        }
+        if let Some(set) = result.current_photo_challenge_set {
+            self.photo_challenge_sets.write(
+                super::scenario_photo_challenge_selection::SelectCurrentPhotoChallengeSetRequest {
+                    set,
+                },
+            );
+        }
+        for definition in result.available_content {
+            self.available_content.write(
             openzt2_zoo_state::progression::adoption_and_content_availability_types::MakeScenarioContentAvailableRequest {
                 source: terminal,
                 definition,
             },
         );
+        }
+        let _ = self
+            .shown_rules
+            .write_batch(result.shown_rules.into_iter().map(|mut request| {
+                request.source = Some(terminal);
+                request
+            }));
+        if let Some(mut panel) = result.challenge_panel {
+            panel.source = Some(terminal);
+            self.panels.write(panel);
+        }
+        result.economy_operations.into_iter().for_each(|operation| {
+            self.economy.write(ScenarioEconomyCommand {
+                terminal,
+                operation,
+            });
+        });
+        result
+            .award_point_adjustments
+            .into_iter()
+            .for_each(|delta| {
+                self.award_points
+                    .write(AdjustScenarioAwardPointTotalRequest { delta });
+            });
+        result
+            .challenge_offer_source_paths
+            .into_iter()
+            .for_each(|source_path| {
+                self.challenge_offers
+                    .write(CreateScenarioChallengeOfferFromLuaSourcePathRequest { source_path });
+            });
     }
-    let _ = shown_rules.write_batch(result.shown_rules);
-    if let Some(panel) = result.challenge_panel {
-        panels.write(panel);
-    }
-    result.economy_operations.into_iter().for_each(|operation| {
-        economy.write(ScenarioEconomyCommand {
-            terminal,
-            operation,
-        });
-    });
-    result
-        .award_point_adjustments
-        .into_iter()
-        .for_each(|delta| {
-            award_points.write(AdjustScenarioAwardPointTotalRequest { delta });
-        });
-    result
-        .challenge_offer_source_paths
-        .into_iter()
-        .for_each(|source_path| {
-            challenge_offers
-                .write(CreateScenarioChallengeOfferFromLuaSourcePathRequest { source_path });
-        });
 }

@@ -23,7 +23,8 @@ pub(super) fn append_runtime_continuation_snapshot(
             | (u16::from(record.registered_entity_name_identifiers.is_some()) << 5)
             | (u16::from(record.world_audio_preset.is_some()) << 6)
             | (u16::from(record.entity_names.is_some()) << 7)
-            | (u16::from(record.general_economy.is_some()) << 8))
+            | (u16::from(record.general_economy.is_some()) << 8)
+            | (u16::from(record.domain_continuation.is_some()) << 9))
             .to_le_bytes(),
     );
     for value in [
@@ -117,6 +118,16 @@ pub(super) fn append_runtime_continuation_snapshot(
         );
         bytes.extend_from_slice(&payload);
     }
+    if let Some(continuation) = &record.domain_continuation {
+        let payload =
+            postcard::to_allocvec(continuation).map_err(|_| Failure::CorruptSnapshotSection)?;
+        bytes.extend_from_slice(
+            &u32::try_from(payload.len())
+                .map_err(|_| Failure::CapacityExceeded)?
+                .to_le_bytes(),
+        );
+        bytes.extend_from_slice(&payload);
+    }
     Ok(())
 }
 
@@ -128,7 +139,7 @@ pub(super) fn decode_runtime_continuation_snapshot(
         return Err(Failure::CorruptSnapshotSection);
     }
     let flags = u16::from_le_bytes(take(&mut bytes)?);
-    if flags & !511 != 0 {
+    if flags & !1023 != 0 {
         return Err(Failure::CorruptSnapshotSection);
     }
     let next_persistent_identifier = u64::from_le_bytes(take(&mut bytes)?);
@@ -271,10 +282,26 @@ pub(super) fn decode_runtime_continuation_snapshot(
     } else {
         None
     };
+    let domain_continuation = if flags & 512 != 0 {
+        let length = u32::from_le_bytes(take(&mut bytes)?) as usize;
+        let (payload, rest) = bytes
+            .split_at_checked(length)
+            .ok_or(Failure::CorruptSnapshotSection)?;
+        bytes = rest;
+        let (continuation, trailing) =
+            postcard::take_from_bytes(payload).map_err(|_| Failure::CorruptSnapshotSection)?;
+        if !trailing.is_empty() {
+            return Err(Failure::CorruptSnapshotSection);
+        }
+        Some(continuation)
+    } else {
+        None
+    };
     if !bytes.is_empty() {
         return Err(Failure::CorruptSnapshotSection);
     }
     let record = RuntimeContinuationSnapshot {
+        domain_continuation,
         general_economy,
         entity_names,
         world_audio_preset,
@@ -308,6 +335,40 @@ pub(super) fn validate_runtime_continuation_snapshot(
             .is_some_and(|ids| {
                 ids.iter().any(|id| matches!(*id, 0 | u64::MAX))
                     || ids.windows(2).any(|pair| pair[0] >= pair[1])
+            })
+        || record
+            .domain_continuation
+            .as_ref()
+            .is_some_and(|continuation| {
+                continuation
+                    .fossils
+                    .as_ref()
+                    .is_some_and(|fossils| !fossils.valid(record.next_persistent_identifier))
+                    || continuation
+                        .disease
+                        .funding
+                        .is_some_and(|funding| !funding.is_finite())
+                    || continuation
+                        .disease
+                        .active
+                        .is_some_and(|(definition, _)| definition == AssetId::default())
+                    || continuation.eggs.iter().any(|egg| {
+                        egg.id == 0
+                            || egg.id >= record.next_persistent_identifier
+                            || !egg.amount.is_finite()
+                    })
+                    || continuation
+                        .eggs
+                        .windows(2)
+                        .any(|pair| pair[0].id >= pair[1].id)
+                    || continuation
+                        .trick_popularity
+                        .as_ref()
+                        .is_some_and(|tricks| {
+                            tricks.iter().any(|(trick, score)| {
+                                *trick == AssetId::default() || !score.is_finite()
+                            })
+                        })
             })
         || record.next_persistent_identifier == 0
         || record.guest_survey.is_some_and(|(cadence, survey)| {
@@ -351,11 +412,14 @@ fn take<const N: usize>(bytes: &mut &[u8]) -> Result<[u8; N], Failure> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::runtime_continuation_snapshot_types::{
+        DiseaseContinuation, EggContinuation, RuntimeDomainContinuation,
+    };
     use super::*;
 
     #[test]
     fn continuation_preserves_exhausted_counters_presence_and_next_random_draw() {
-        for flags in 0..16 {
+        for flags in 0..32 {
             let mut record = RuntimeContinuationSnapshot {
                 general_economy: None,
                 entity_names: None,
@@ -389,6 +453,21 @@ mod tests {
                     )
                     .unwrap(),
                 ),
+                domain_continuation: (flags & 16 != 0).then(|| RuntimeDomainContinuation {
+                    disease: DiseaseContinuation {
+                        funding: Some(50.0),
+                        exposure_deadline: Some(98),
+                        active: Some((AssetId::from_key("test disease"), 211)),
+                    },
+                    eggs: vec![EggContinuation {
+                        id: 10,
+                        amount: 0.25,
+                        remaining_ns: 3_000_000,
+                        random: [120, 19],
+                    }],
+                    fossils: None,
+                    trick_popularity: Some([(AssetId::from_key("test trick"), 0.375)].into()),
+                }),
             };
             if let Some((_, survey)) = &mut record.guest_survey {
                 for (index, history) in survey.ratings.iter_mut().enumerate() {
@@ -446,6 +525,7 @@ mod tests {
             guest_arrivals: None,
             guest_survey: None,
             guest_favourite_animal_trend: None,
+            domain_continuation: None,
         };
         let mut bytes = Vec::new();
         append_runtime_continuation_snapshot(&mut bytes, &record).unwrap();
@@ -483,6 +563,7 @@ mod tests {
             guest_arrivals: None,
             guest_survey: None,
             guest_favourite_animal_trend: None,
+            domain_continuation: None,
         };
         let mut bytes = Vec::new();
         append_runtime_continuation_snapshot(&mut bytes, &record).unwrap();
@@ -493,7 +574,7 @@ mod tests {
         bad_version[0] = 4;
         assert!(decode_runtime_continuation_snapshot(&bad_version).is_err());
         let mut unknown_flags = bytes.clone();
-        unknown_flags[2] = 2;
+        unknown_flags[2] = 4;
         assert!(decode_runtime_continuation_snapshot(&unknown_flags).is_err());
         bytes[3..11].fill(0);
         assert!(decode_runtime_continuation_snapshot(&bytes).is_err());

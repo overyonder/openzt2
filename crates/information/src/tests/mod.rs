@@ -20,17 +20,11 @@ fn nested_information_row_uses_its_own_subject_until_unbound() {
     use openzt2_interface_state::ui::authored_ui_node_projection_components::{
         UiValue, UiValueBinding,
     };
-    use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
+    use openzt2_world_state::simulation_time::simulation_clock_types::ZooDay;
     use openzt2_zoo_state::guests::guest_simulation_types::GuestSatisfaction;
 
     let mut app = App::new();
-    app.insert_resource(ZooClock {
-        tick: 0,
-        fractional_tick: default(),
-        absolute_day: 0,
-        tick_in_day: 0,
-    })
-    .add_systems(
+    app.init_resource::<ZooDay>().add_systems(
         Update,
         (
             crate::projection::information_row_field_binding::bind_authored_information_row_fields,

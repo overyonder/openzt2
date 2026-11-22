@@ -37,7 +37,8 @@ use award_and_progression_fact_types::{
     ProgressionFactChanged, ScenarioAwardPointTotal,
 };
 use fame_history_types::FameHistory;
-use fame_types::Fame;
+use fame_types::{Fame, ZooMaximumFame};
+use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 use profile_challenge_types::{
     ProfileChallengeCompletionCounts, RecordCompletedChallengeRequest, TotalAnimalsReleasedCount,
     TotalEndangeredAnimalBirthCount,
@@ -49,6 +50,10 @@ use research_types::{
 use unlock_types::{
     ApplyCatalogueDefinitionUnlockRequest, CatalogueDefinitionUnlockApplied,
     CatalogueDefinitionUnlockRejected, UnlockedCatalogueDefinitionSet,
+};
+use zoo_rating_input_types::{
+    AnimalWelfareRating, EarnedAwardFamePoints, GuestRatingFacts, LivingAnimalPopulation,
+    ZooFinanceRating, ZooOverallRatingTarget, ZooSceneryRating,
 };
 
 use bevy::prelude::*;
@@ -63,20 +68,20 @@ pub struct ProgressionPlugin;
 
 impl Plugin for ProgressionPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Fame>()
-            .init_resource::<FameHistory>()
+        app.init_resource::<FameHistory>()
             .init_resource::<ScenarioAwardPointTotal>()
             .init_resource::<TotalEndangeredAnimalBirthCount>()
             .init_resource::<TotalAnimalsReleasedCount>()
-            .init_resource::<ZooRating>()
-            .init_resource::<zoo_rating_input_types::AnimalWelfareRating>()
-            .init_resource::<zoo_rating_input_types::LivingAnimalPopulation>()
-            .init_resource::<zoo_rating_input_types::EarnedAwardFamePoints>()
-            .init_resource::<zoo_rating_input_types::GuestRatingFacts>()
-            .init_resource::<zoo_rating_input_types::ZooSceneryRating>()
-            .init_resource::<zoo_rating_input_types::ZooFinanceRating>()
-            .init_resource::<zoo_rating_input_types::ZooOverallRatingTarget>()
-            .add_systems(OnExit(GamePhase::InGame), zoo_rating_recomputation::reset_rating_inputs_after_leaving_game)
+            .register_required_components::<WorldRoot, Fame>()
+            .register_required_components::<WorldRoot, ZooMaximumFame>()
+            .register_required_components::<WorldRoot, AnimalWelfareRating>()
+            .register_required_components::<WorldRoot, LivingAnimalPopulation>()
+            .register_required_components::<WorldRoot, GuestRatingFacts>()
+            .register_required_components::<WorldRoot, EarnedAwardFamePoints>()
+            .register_required_components::<WorldRoot, ZooSceneryRating>()
+            .register_required_components::<WorldRoot, ZooFinanceRating>()
+            .register_required_components::<WorldRoot, ZooOverallRatingTarget>()
+            .register_required_components::<WorldRoot, ZooRating>()
             .init_resource::<UnlockedCatalogueDefinitionSet>()
             .init_resource::<ProfileChallengeCompletionCounts>()
             .add_message::<ProgressionFactChanged>()
@@ -197,10 +202,11 @@ impl Plugin for ProgressionPlugin {
                     (
                         award_evaluation_and_granting::evaluate_all_progression_award_conditions_and_queue_grants,
                         award_evaluation_and_granting::grant_earned_progression_awards,
-                        fame_progression::count_earned_award_fame_points,
+                        zoo_rating_recomputation::count_earned_award_fame_points,
                         fame_progression::update_fame_and_apply_authored_fame_unlocks
                             .after(scenario_award_point_adjustment::apply_requested_scenario_award_point_total_adjustments),
                         fame_progression::apply_scenario_maximum_fame_requests,
+                        fame_progression::publish_world_maximum_fame,
                         research_execution::refresh_authored_research_availability,
                         research_execution::complete_research_projects_and_apply_authored_unlocks,
                     ).chain(),

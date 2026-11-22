@@ -117,6 +117,19 @@ impl AuthoredAnimationAudioAndEffectTextActionExecutionContext<'_, '_> {
         water_vertical_offset: Option<f32>,
         disable_distance_culling: bool,
     ) {
+        if let Some(offset) = water_vertical_offset {
+            let effect = self.particle_effect_asset(effect_asset_path);
+            self.commands.spawn((
+                super::animation_water_effect_binding::PendingAnimationWaterEffect {
+                    effect,
+                    attach_to_target,
+                    disable_distance_culling,
+                    offset,
+                },
+                ChildOf(effect_target_entity),
+            ));
+            return;
+        }
         let Ok(target) = self.transforms.get(effect_target_entity) else {
             return;
         };
@@ -131,25 +144,6 @@ impl AuthoredAnimationAudioAndEffectTextActionExecutionContext<'_, '_> {
         {
             return;
         }
-        let water = if let Some(offset) = water_vertical_offset {
-            let Some(region) = super::animation_water_effect_binding::resolve_water_effect_region(
-                position,
-                &self.water_memberships,
-                &self.water_regions,
-                &self.terrain_assets,
-            ) else {
-                return;
-            };
-            Some(
-                super::animation_water_effect_binding::AnimationWaterEffect {
-                    region,
-                    offset,
-                    target: attach_to_target.then_some(effect_target_entity),
-                },
-            )
-        } else {
-            None
-        };
         let request = SpawnCompleteParticleEffectDocument {
             particle_effect_asset: self.particle_effect_asset(effect_asset_path),
             parent_entity: attach_to_target.then_some(effect_target_entity),
@@ -161,22 +155,9 @@ impl AuthoredAnimationAudioAndEffectTextActionExecutionContext<'_, '_> {
             },
             manual_particle_count: 0,
         };
-        let entity = openzt2_game_assets::effect::effect_instance_spawning_and_preparation::spawn_complete_particle_effect_document(
+        openzt2_game_assets::effect::effect_instance_spawning_and_preparation::spawn_complete_particle_effect_document(
             &mut self.commands, &request,
         );
-        if let Some(water) = water {
-            if let Some(source) = self.water_regions.get(water.region) {
-                if let Some(height) = self
-                    .terrain_assets
-                    .get(source.terrain())
-                    .and_then(|terrain| source.surface_height(terrain))
-                {
-                    self.commands
-                        .entity(entity)
-                        .insert((water, water.plane(height)));
-                }
-            }
-        }
     }
 
     pub(super) fn stop_authored_animation_effects_attached_to_target(

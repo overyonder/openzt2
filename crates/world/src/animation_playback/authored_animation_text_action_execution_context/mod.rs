@@ -9,7 +9,7 @@ use openzt2_zoo_state::audio::audio_playback_message_types::PlayAudioCue;
 
 use openzt2_world_state::animation_playback::animation_event_message_types::AnimationTraversalTransitionRequested;
 use openzt2_world_state::animation_playback::animation_event_message_types::{
-    AnimationAiCommandRequested, AnimationDockCommandRequested, AnimationWhapRequested,
+    AnimationAiCommandRequested, AnimationWhapRequested,
 };
 use openzt2_world_state::animation_playback::animation_joint_target_types::{
     AnimationJointTarget, AnimationRigJoints,
@@ -17,6 +17,7 @@ use openzt2_world_state::animation_playback::animation_joint_target_types::{
 
 #[derive(SystemParam)]
 pub(super) struct AuthoredAnimationTextActionExecutionContext<'w, 's, const REAL_TIME: bool> {
+    pub(super) binder_commands: MessageWriter<'w, super::AnimationNamedPhysicalPresentationCommand<REAL_TIME>>,
     pub(super) object_commands:
         MessageWriter<'w, openzt2_world_state::animation_playback::animation_event_message_types::AnimationObjectCommand>,
     pub(super) named_animation_joint_targets:
@@ -30,16 +31,23 @@ pub(super) struct AuthoredAnimationTextActionExecutionContext<'w, 's, const REAL
 #[derive(SystemParam)]
 pub(super) struct AuthoredAnimationAudioAndEffectTextActionExecutionContext<'w, 's> {
     pub(super) commands: Commands<'w, 's>,
-    pub(super) terrain_index: Res<'w, openzt2_zoo_state::terrain::terrain_chunk_types::TerrainIndex>,
-    pub(super) terrain_assets: Res<'w, Assets<openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset>>,
-    pub(super) terrain_chunks: Query<'w, 's, &'static ViewVisibility, With<openzt2_zoo_state::terrain::terrain_chunk_types::TerrainChunk>>,
-    pub(super) water_regions: openzt2_zoo_state::terrain::terrain_water_presentation_types::TerrainWaterRegionQuery<'w, 's>,
-    pub(super) water_memberships: Query<'w, 's, &'static openzt2_zoo_state::terrain::terrain_water_presentation_types::TerrainWaterMembershipIndex>,
+    pub(super) terrain_index:
+        Res<'w, openzt2_zoo_state::terrain::terrain_chunk_types::TerrainIndex>,
+    pub(super) terrain_chunks: Query<
+        'w,
+        's,
+        &'static ViewVisibility,
+        With<openzt2_zoo_state::terrain::terrain_chunk_types::TerrainChunk>,
+    >,
     pub(super) asset_server: Res<'w, AssetServer>,
     pub(super) transforms: Query<'w, 's, &'static GlobalTransform>,
-    pub(super) sound_resolution: super::authored_animation_sound_resolution::AuthoredAnimationSoundResolution<'w, 's>,
+    pub(super) sound_resolution:
+        super::authored_animation_sound_resolution::AuthoredAnimationSoundResolution<'w, 's>,
     pub(super) audio_messages: MessageWriter<'w, PlayAudioCue>,
-    pub(super) positioned_audio_messages: MessageWriter<'w, openzt2_zoo_state::audio::audio_playback_message_types::PlayPositionedAudioCue>,
+    pub(super) positioned_audio_messages: MessageWriter<
+        'w,
+        openzt2_zoo_state::audio::audio_playback_message_types::PlayPositionedAudioCue,
+    >,
     pub(super) effect_messages: MessageWriter<'w, SpawnCompleteParticleEffectDocument>,
     pub(super) stop_effect_messages: MessageWriter<'w, StopParticleEffectsAttachedToEntity>,
 }
@@ -48,9 +56,9 @@ pub(super) struct AuthoredAnimationAudioAndEffectTextActionExecutionContext<'w, 
 pub(super) struct AuthoredAnimationControlTextActionExecutionContext<'w, 's> {
     pub(super) commands: Commands<'w, 's>,
     pub(super) graphs_enabled: Query<'w, 's, &'static mut AnimationGraphEnabled>,
-    pub(super) ground_fit: Query<'w, 's, &'static mut openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationGroundFitMode>,
+    pub(super) ground_fit: Query<'w, 's, &'static mut openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationGroundFitControls>,
     pub(super) ai_commands: MessageWriter<'w, AnimationAiCommandRequested>,
-    pub(super) dock_commands: MessageWriter<'w, AnimationDockCommandRequested>,
+    pub(super) decal_cycles: Query<'w, 's, &'static mut super::authored_decal_texture_cycles::DecalCyclePlayback>,
     pub(super) whap_requests: MessageWriter<'w, AnimationWhapRequested>,
     pub(super) animation_node_messages: MessageWriter<'w, AnimationGraphNodePlaybackRequest>,
     pub(super) traversal_messages: MessageWriter<'w, AnimationTraversalTransitionRequested>,

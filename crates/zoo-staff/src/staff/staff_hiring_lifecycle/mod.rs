@@ -1,134 +1,129 @@
 use avian3d::prelude::RigidBody;
 use bevy::{gltf::Gltf, platform::collections::HashSet, prelude::*};
-use openzt2_game_data::AssetId;
-
 use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
-use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
-use openzt2_zoo_state::economy::account_transaction_types::Account;
-use openzt2_zoo_state::economy::account_transaction_types::TransactionCompleted;
-use openzt2_zoo_state::economy::account_transaction_types::TransactionKind;
-use openzt2_zoo_state::economy::account_transaction_types::TransactionRejected;
-use openzt2_zoo_state::economy::account_transaction_types::TransactionRequest;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_world::world_spawn::prefab_world_instance_spawning::spawn_loaded_scene_prefab_as_world_instance;
+use openzt2_world_state::simulation_time::simulation_clock_types::{ZooCalendar, ZooClock};
+use openzt2_world_state::world_spawn::persistent_id_types::{PersistentId, PersistentIdAllocator};
+use openzt2_world_state::world_spawn::prefab_model_readiness::first_missing_prefab_collider_model_asset_id;
+use openzt2_world_state::world_spawn::world_membership_types::{WorldMember, WorldRoot};
+use openzt2_zoo_state::economy::account_transaction_types::{
+    Account, TransactionCompleted, TransactionKind, TransactionRejected, TransactionRequest,
+};
 use openzt2_zoo_state::economy::money_types::Money;
 use openzt2_zoo_state::person_name_selection_and_resolution::choose_generated_person_name_rows_from_authored_pool;
-use openzt2_world_state::simulation_time::simulation_clock_types::ZooCalendar;
-use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
-use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
-use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator;
-use openzt2_world_state::world_spawn::prefab_model_readiness::first_missing_prefab_collider_model_asset_id;
-use openzt2_world::world_spawn::prefab_world_instance_spawning::spawn_loaded_scene_prefab_as_world_instance;
-use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
-use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 
 use super::{
-    staff_employment_types::{Employment, PendingStaffHire, Staff, StaffRole},
+    staff_employment_types::{Employment, Staff, StaffRole},
     staff_lifecycle_messages::{HireStaffRequest, StaffHired},
     staff_presentation_variant_selection::{
         attach_staff_presentation_variant, staff_presentation_variant,
     },
 };
 
-/// Keeps the selected prefab loaded while payment and spawning are pending.
 #[derive(Component)]
-pub(super) struct PendingStaffHirePrefab(Handle<ScenePrefabAsset>);
+pub(super) struct PendingEmployeePlacement {
+    hire: HireStaffRequest,
+    body: Handle<ScenePrefabAsset>,
+}
 
-/// The hire debit completed; prefab hydration may now create the employee.
 #[derive(Component)]
-pub(super) struct PaidStaffHire;
+pub(super) struct HirePaid;
 
-pub(crate) fn request_staff_hiring(
+#[derive(Component)]
+pub(super) struct EmployeePlacementIdentity(PersistentId);
+
+pub(super) fn request_staff_hire_payment(
     mut commands: Commands,
     mut requests: MessageReader<HireStaffRequest>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
-    pending: Query<&PendingStaffHire>,
-    roots: Query<(Entity, &WorldRoot)>,
+    pending: Query<&PendingEmployeePlacement>,
+    roots: Query<Entity, (With<WorldRoot>, With<PersistentIdAllocator>)>,
     mut transactions: MessageWriter<TransactionRequest>,
-    mut accepted: Local<HashSet<(AssetId, [u32; 3])>>,
 ) {
+    if requests.is_empty() {
+        return;
+    }
     let Some(catalogue) = active_definitions.get(&definitions) else {
         return;
     };
-    let Some((root, _)) = roots.iter().next() else {
+    let Ok(root) = roots.single() else {
         return;
     };
-    accepted.clear();
-    for request in requests.read() {
-        let key = (request.role, request.position.to_array().map(f32::to_bits));
-        if pending.iter().any(|operation| {
-            operation.role == request.role
-                && operation.position.to_array().map(f32::to_bits)
-                    == request.position.to_array().map(f32::to_bits)
-        }) || !accepted.insert(key)
-        {
+    let hire_key = |hire: &HireStaffRequest| {
+        (
+            hire.role,
+            hire.object,
+            hire.position.to_array().map(f32::to_bits),
+        )
+    };
+    let mut accepted: HashSet<_> = pending
+        .iter()
+        .map(|operation| hire_key(&operation.hire))
+        .collect();
+    for &hire in requests.read() {
+        if !accepted.insert(hire_key(&hire)) {
             continue;
         }
-        let Some(role) = catalogue.find_staff(request.role) else {
+        let Some(role) = catalogue
+            .find_staff(hire.role)
+            .filter(|role| role.object == hire.object)
+        else {
             continue;
         };
         let Some(object) = catalogue.find_object(role.object) else {
             continue;
         };
-        let Some(prefab) = catalogue.scene(object.prefab) else {
+        let Some(body) = catalogue.scene(object.prefab) else {
             continue;
         };
         let price = Money(object.price_cents);
-        if price.0 <= 0 {
+        if price < Money::ZERO {
             continue;
         }
-        let operation = commands
-            .spawn((
-                PendingStaffHire {
-                    role: request.role,
-                    position: request.position,
-                },
-                PendingStaffHirePrefab(prefab),
-                WorldMember { root },
-            ))
-            .id();
-        transactions.write(TransactionRequest {
-            operation,
-            debit: Account::Zoo,
-            credit: Account::External,
-            amount: price,
-            kind: TransactionKind::StaffHire,
-            subject: None,
-        });
-    }
-}
-
-pub(crate) fn mark_paid_staff_hires_for_prefab_spawning(
-    mut commands: Commands,
-    mut completed: MessageReader<TransactionCompleted>,
-    pending: Query<(), (With<PendingStaffHire>, Without<PaidStaffHire>)>,
-    mut handled: Local<HashSet<Entity>>,
-) {
-    handled.clear();
-    for result in completed.read() {
-        if handled.insert(result.operation) && pending.get(result.operation).is_ok() {
-            commands.entity(result.operation).insert(PaidStaffHire);
+        let mut operation = commands.spawn((
+            PendingEmployeePlacement { hire, body },
+            WorldMember { root },
+        ));
+        if price == Money::ZERO {
+            operation.insert(HirePaid);
+        } else {
+            transactions.write(TransactionRequest {
+                operation: operation.id(),
+                debit: Account::Zoo,
+                credit: Account::External,
+                amount: price,
+                kind: TransactionKind::StaffHire,
+                subject: None,
+            });
         }
     }
 }
 
-/// Persistent id allocated once payment completes, so the employee's drawn
-/// look can load its own body before spawning.
-#[derive(Component)]
-pub(super) struct PaidStaffHireIdentity(PersistentId);
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn spawn_paid_staff_hires_from_ready_prefabs(
+pub(super) fn accept_paid_employee_placements(
     mut commands: Commands,
-    pending: Query<
+    mut completed: MessageReader<TransactionCompleted>,
+    pending: Query<(), (With<PendingEmployeePlacement>, Without<HirePaid>)>,
+) {
+    for result in completed.read() {
+        if result.kind == TransactionKind::StaffHire && pending.contains(result.operation) {
+            commands.entity(result.operation).insert_if_new(HirePaid);
+        }
+    }
+}
+
+pub(super) fn spawn_paid_employees_from_ready_prefabs(
+    mut commands: Commands,
+    mut pending: Query<
         (
             Entity,
-            &PendingStaffHire,
-            &PendingStaffHirePrefab,
+            &mut PendingEmployeePlacement,
             &WorldMember,
-            Option<&PaidStaffHireIdentity>,
+            Option<&EmployeePlacementIdentity>,
         ),
-        With<PaidStaffHire>,
+        With<HirePaid>,
     >,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
@@ -136,99 +131,117 @@ pub(crate) fn spawn_paid_staff_hires_from_ready_prefabs(
     models: Res<Assets<Gltf>>,
     clock: Res<ZooClock>,
     calendar: Res<ZooCalendar>,
-    mut ids: ResMut<PersistentIdAllocator>,
+    mut identifiers: Query<&mut PersistentIdAllocator>,
     mut hired: MessageWriter<StaffHired>,
 ) {
     let Some(catalogue) = active_definitions.get(&definitions) else {
         return;
     };
-    for (operation, request, prefab_handle, member, identity) in &pending {
-        let Some(role) = catalogue.find_staff(request.role) else {
+    for (operation, pending, member, identity) in &mut pending {
+        let hire = pending.hire;
+        let Some(role) = catalogue.find_staff(hire.role) else {
             commands.entity(operation).despawn();
             continue;
         };
-        let Some(PaidStaffHireIdentity(id)) = identity else {
-            let Ok(id) = ids.allocate(member.root) else {
+        let Some(&EmployeePlacementIdentity(identifier)) = identity else {
+            let Some(identifier) = identifiers
+                .get_mut(member.root)
+                .ok()
+                .and_then(|mut allocator| allocator.allocate().ok())
+            else {
                 commands.entity(operation).despawn();
                 continue;
             };
-            let mut operation_commands = commands.entity(operation);
-            operation_commands.insert(PaidStaffHireIdentity(id));
-            if let Some((_, prefab)) = staff_presentation_variant(role, id.0, catalogue) {
-                operation_commands.insert(PendingStaffHirePrefab(prefab));
+            if let Some((_, body)) = staff_presentation_variant(role, identifier.0, catalogue) {
+                pending
+                    .map_unchanged(|pending| &mut pending.body)
+                    .set_if_neq(body);
             }
+            commands
+                .entity(operation)
+                .insert(EmployeePlacementIdentity(identifier));
             continue;
         };
-        let id = *id;
-        let Some(prefab) = prefabs.get(&prefab_handle.0) else {
+        let Some(prefab) = prefabs.get(&pending.body) else {
             continue;
         };
         if first_missing_prefab_collider_model_asset_id(prefab, &models).is_some() {
             continue;
         }
-        let variant = staff_presentation_variant(role, id.0, catalogue).map(|(variant, _)| variant);
+        let variant = staff_presentation_variant(role, identifier.0, catalogue)
+            .filter(|(_, drawn_body)| drawn_body.id() == pending.body.id())
+            .map(|(variant, _)| variant);
         let name = variant
             .and_then(|variant| {
                 choose_generated_person_name_rows_from_authored_pool(
                     catalogue,
-                    AssetId(variant.name_pool.0),
-                    id.0,
+                    variant.name_pool,
+                    identifier.0,
                 )
             })
             .or_else(|| {
                 choose_generated_person_name_rows_from_authored_pool(
                     catalogue,
-                    AssetId(role.name_pool.0),
-                    id.0,
+                    role.name_pool,
+                    identifier.0,
                 )
             });
-        let staff = spawn_loaded_scene_prefab_as_world_instance(
+        let employee = spawn_loaded_scene_prefab_as_world_instance(
             &mut commands,
             prefab,
-            prefab_handle.0.clone(),
+            pending.body.clone(),
             member.root,
-            AssetId(role.object.0),
-            id,
-            Transform::from_translation(request.position),
+            hire.object,
+            identifier,
+            Transform::from_translation(hire.position),
             true,
             None,
             RigidBody::Dynamic,
         );
         if let Some(variant) = variant {
-            attach_staff_presentation_variant(&mut commands, staff, variant, id.0, catalogue);
+            attach_staff_presentation_variant(
+                &mut commands,
+                employee,
+                variant,
+                identifier.0,
+                catalogue,
+            );
         }
-        super::spawned_staff_identification::attach_staff_virtual_nodes(&mut commands, staff, role);
-        let mut staff_commands = commands.entity(staff);
-        staff_commands.insert((
+        super::spawned_staff_identification::attach_staff_virtual_nodes(
+            &mut commands,
+            employee,
+            role,
+        );
+        let mut employee_commands = commands.entity(employee);
+        employee_commands.insert((
             Staff,
-            StaffRole(request.role),
+            StaffRole(hire.role),
             Employment {
                 wage: Money(i64::from(role.wage_cents_per_month)),
                 hired_tick: clock.tick,
-                hired_month_ordinal: u32::from(calendar.year)
-                    .saturating_mul(12)
-                    .saturating_add(u32::from(calendar.month.saturating_sub(1))),
+                hired_month_ordinal: u32::from(calendar.year) * 12
+                    + u32::from(calendar.month.saturating_sub(1)),
             },
         ));
         if let Some(name) = name {
-            staff_commands.insert(name);
+            employee_commands.insert(name);
         }
         hired.write(StaffHired {
-            staff,
-            role: request.role,
+            staff: employee,
+            role: hire.role,
         });
         commands.entity(operation).despawn();
     }
 }
 
-pub(crate) fn discard_rejected_staff_hires(
+pub(super) fn discard_rejected_employee_placements(
     mut commands: Commands,
     mut rejected: MessageReader<TransactionRejected>,
-    pending: Query<(), With<PendingStaffHire>>,
+    pending: Query<(), (With<PendingEmployeePlacement>, Without<HirePaid>)>,
 ) {
     for result in rejected.read() {
-        if pending.get(result.operation).is_ok() {
-            commands.entity(result.operation).despawn();
+        if result.kind == TransactionKind::StaffHire && pending.contains(result.operation) {
+            commands.entity(result.operation).try_despawn();
         }
     }
 }

@@ -46,6 +46,8 @@ pub(super) fn route_authored_shell_ui_actions_to_navigation_requests(
     worlds: Query<&WorldChoice>,
     profiles: Query<&ProfileChoice>,
     parents: Query<&ChildOf>,
+    mut filters: Query<&mut SelectedWorldCatalogueFilter>,
+    mut globes: Query<&mut SecondaryGlobe>,
     selection: Res<ShellSelection>,
     mut messages: ShellUiActionMessageWriters,
 ) {
@@ -140,22 +142,35 @@ pub(super) fn route_authored_shell_ui_actions_to_navigation_requests(
                         SelectedWorldCatalogueFilter::BiomeLocationGroup(*world_location)
                     };
                     if let Ok(shell_screen_owner) = parents.get(document_owner.0) {
-                        commands.entity(shell_screen_owner.parent()).insert(filter);
+                        let owner = shell_screen_owner.parent();
+                        if let Ok(mut current) = filters.get_mut(owner) {
+                            current.set_if_neq(filter);
+                        } else {
+                            commands.entity(owner).insert(filter);
+                        }
                     }
                 }
                 UiShellAction::FilterWorldChoicesToExpansionPack {
                     expansion_pack_identifier,
                 } => {
                     if let Ok(shell_screen_owner) = parents.get(document_owner.0) {
-                        commands.entity(shell_screen_owner.parent()).insert(
-                            SelectedWorldCatalogueFilter::ExpansionPack(*expansion_pack_identifier),
-                        );
+                        let owner = shell_screen_owner.parent();
+                        let filter =
+                            SelectedWorldCatalogueFilter::ExpansionPack(*expansion_pack_identifier);
+                        if let Ok(mut current) = filters.get_mut(owner) {
+                            current.set_if_neq(filter);
+                        } else {
+                            commands.entity(owner).insert(filter);
+                        }
                     }
                 }
                 UiShellAction::ShowSecondaryGlobeBiome { biome } => {
-                    commands
-                        .entity(document_owner.0)
-                        .insert(SecondaryGlobe(*biome));
+                    let next = SecondaryGlobe(*biome);
+                    if let Ok(mut current) = globes.get_mut(document_owner.0) {
+                        current.set_if_neq(next);
+                    } else {
+                        commands.entity(document_owner.0).insert(next);
+                    }
                 }
                 UiShellAction::ShowExitConfirmationDialog
                 | UiShellAction::DismissExitConfirmationDialog

@@ -162,7 +162,11 @@ pub(super) struct BehaviorNaturalWaterTargetSnapshot {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct BehaviorStaffJobSnapshot {
-    pub kind: StaffJobKind,
+    pub kind: Option<StaffJobKind>,
+    #[serde(default)]
+    pub subject_type: Option<AssetId>,
+    #[serde(default)]
+    pub recipient: Option<AssetId>,
     pub target: BehaviorSnapshotEntityReference,
     pub urgency: u32,
     pub token: Option<AssetId>,

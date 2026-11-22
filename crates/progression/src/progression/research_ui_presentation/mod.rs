@@ -14,6 +14,7 @@ use openzt2_interface_state::ui::authored_ui_node_projection_components::UiValue
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiValueBinding;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiVisibleBinding;
 use openzt2_interface_state::ui::authored_ui_selection_state::UiSelected;
+use openzt2_world_state::world_spawn::world_load_completion_marker::WorldLoadCompleted;
 use openzt2_world_state::world_spawn::selected_world_identity::SelectedWorldIdentity;
 use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 
@@ -36,8 +37,10 @@ pub(super) fn project_selected_catalogue_research_panels(
         Has<ResearchProject>,
     )>,
     unlocks: Res<UnlockedCatalogueDefinitionSet>,
+    active_world: Query<Entity, (With<WorldRoot>, With<WorldLoadCompleted>)>,
     roots: Query<
         (
+            Entity,
             &SelectedWorldIdentity,
             Option<&ScenarioContentAvailability>,
             Option<&WorldResearchItems>,
@@ -50,7 +53,10 @@ pub(super) fn project_selected_catalogue_research_panels(
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };
-    let world = roots.iter().next();
+    let world = active_world
+        .single()
+        .ok()
+        .and_then(|world| roots.get(world).ok());
     let entry = selected
         .0
         .and_then(|selected| definitions.catalogue_entry_for_definition(selected));
@@ -59,12 +65,12 @@ pub(super) fn project_selected_catalogue_research_panels(
             definitions,
             index,
             entry,
-            world.map(|(identity, _, _)| identity.mode),
-            world.and_then(|(_, scenario, _)| scenario),
+            world.map(|(_, identity, _, _)| identity.mode),
+            world.and_then(|(_, _, scenario, _)| scenario),
             &unlocks,
         )
     });
-    let items = world.and_then(|(_, _, items)| items);
+    let items = world.and_then(|(_, _, _, items)| items);
     let research_required = !available
         && entry.is_some_and(|(_, entry)| {
             catalogue_entry_can_be_researched(
@@ -106,7 +112,8 @@ pub(super) fn project_selected_catalogue_research_panels(
 
 pub(super) fn project_selected_catalogue_research_progress(
     selected: Res<SelectedCatalogueEntry>,
-    world_items: Query<&WorldResearchItems>,
+    world_items: Query<(Entity, &WorldResearchItems)>,
+    active_world: Query<Entity, (With<WorldRoot>, With<WorldLoadCompleted>)>,
     projects: Query<&ResearchProject>,
     mut sliders: Query<(
         &UiValueBinding,
@@ -117,7 +124,7 @@ pub(super) fn project_selected_catalogue_research_progress(
     )>,
 ) {
     let project = selected.0.and_then(|selected| {
-        let items = world_items.iter().next()?;
+        let (_, items) = world_items.get(active_world.single().ok()?).ok()?;
         items
             .definitions
             .get(&selected)

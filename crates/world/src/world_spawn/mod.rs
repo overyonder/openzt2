@@ -1,4 +1,6 @@
-use openzt2_world_state::world_spawn::world_load_completion_marker::WorldLoadPreparationSet;
+use openzt2_world_state::world_spawn::world_load_completion_marker::{
+    WorldLoadCompletionSet, WorldLoadPreparationSet,
+};
 pub mod prefab_renderable_components;
 pub mod prefab_world_instance_spawning;
 // One-time translation from authored scenario and prefab rows into the live ECS.
@@ -30,6 +32,10 @@ mod world_terrain_hydration;
 pub mod world_unloading;
 mod zoo_entrance_anchor_synchronization;
 
+use crate::world_spawn::named_physical_presentation_projection::{
+    attach_named_presentations_to_model_nodes, hydrate_required_named_physical_presentations,
+    project_physical_presentation_caustic_policies, select_named_presentation_fade_states,
+};
 use crate::world_spawn::persistent_id_assignment::assign_requested_persistent_ids;
 use crate::world_spawn::prefab_authored_rotation_cycle_advancement::advance_authored_prefab_rotation_cycles_from_elapsed_real_time;
 use crate::world_spawn::prefab_authored_transform_animation_advancement::advance_authored_prefab_transform_animations_from_elapsed_time;
@@ -38,12 +44,23 @@ use crate::world_spawn::prefab_object_presentation_attachment_projection::{
     project_pending_physical_presentation_children,
 };
 use crate::world_spawn::prefab_presentation_render_tree::hydrate_prefab_presentations;
+use crate::world_spawn::prefab_world_instance_spawning::{
+    begin_rebuilding_world_instance_renderables_after_prefab_reload,
+    finish_rebuilding_world_instance_renderables,
+};
 use crate::world_spawn::starting_path_hydration::hydrate_all_starting_paths_into_topology_once;
 use crate::world_spawn::starting_topology_hydration::hydrate_all_starting_fence_nodes_and_edges_into_topology_once;
 use crate::world_spawn::world_hydration_completion::complete_or_fail_finished_world_hydration;
-use crate::world_spawn::world_load_request_acceptance::accept_queued_world_load_after_required_assets_resolve;
+use crate::world_spawn::world_load_request_acceptance::{
+    accept_queued_world_load_after_required_assets_resolve, admit_first_world_load_request,
+    PendingWorldLoad,
+};
 use crate::world_spawn::world_persistent_id_reservation::reserve_all_imported_world_persistent_ids;
-use crate::world_spawn::world_prefab_record_hydration::hydrate_bounded_world_prefab_record_batch;
+use crate::world_spawn::world_prefab_record_hydration::{
+    admit_starting_prefab_rows, commit_ready_starting_prefab_rows_in_source_order,
+    demand_starting_prefab_dependencies, mark_ready_starting_prefab_dependencies,
+    StartingPrefabDependencies,
+};
 use crate::world_spawn::world_spawn_value_application::apply_all_authored_world_spawn_values_once;
 use crate::world_spawn::world_terrain_hydration::hydrate_selected_terrain_chunks_world_bounds_and_topology_grid;
 use crate::world_spawn::world_unloading::despawn_all_world_roots_and_members_when_leaving_ingame;
@@ -54,9 +71,13 @@ pub mod prefab_effect_trigger_hydration;
 mod world_entity_crating;
 mod world_object_selection;
 
+use bevy::asset::AssetLoadFailedEvent;
+use bevy::ecs::schedule::SystemCondition;
+use bevy::gltf::Gltf;
 use bevy::prelude::*;
 
 use openzt2_game_assets::application_lifecycle::GamePhase;
+use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
 use openzt2_world_state::application_schedule::FixedGameSet;
 use openzt2_world_state::application_schedule::GameSet;
 
@@ -64,6 +85,13 @@ pub struct WorldSpawnPlugin;
 
 impl Plugin for WorldSpawnPlugin {
     fn build(&self, app: &mut App) {
+        use openzt2_world_state::world_spawn::persistent_id_index::PersistentIdIndexPlugin;
+        if !app.is_plugin_added::<PersistentIdIndexPlugin>() {
+            app.add_plugins(PersistentIdIndexPlugin);
+        }
+        app.add_observer(world_hydration_completion::conclude_starting_animal_projection)
+            .add_observer(world_hydration_completion::conclude_terrain_mesh_projection)
+            .add_observer(world_hydration_completion::conclude_rejected_terrain_mesh_projection);
         app.init_resource::<openzt2_world_state::simulation_time::native_visual_random_stream::NativeVisualRandomStream>();
         app.add_systems(
             Update,
@@ -103,19 +131,38 @@ impl Plugin for WorldSpawnPlugin {
             .add_systems(
                 Update,
                 (
-                    accept_queued_world_load_after_required_assets_resolve.in_set(WorldLoadPreparationSet::Accept),
                     (
-                    hydrate_selected_terrain_chunks_world_bounds_and_topology_grid.in_set(WorldLoadPreparationSet::HydrateTerrain),
-                    reserve_all_imported_world_persistent_ids,
-                    hydrate_all_starting_fence_nodes_and_edges_into_topology_once,
-                    hydrate_all_starting_paths_into_topology_once,
-                    hydrate_bounded_world_prefab_record_batch,
-                    apply_all_authored_world_spawn_values_once,
-                    complete_or_fail_finished_world_hydration
-                        .in_set(openzt2_world_state::world_spawn::world_load_completion_marker::WorldLoadCompletionSet),
-                    ).chain().run_if(world_hydration_completion::loading_screen_is_ready),
+                        admit_first_world_load_request.run_if(on_message::<openzt2_world_state::world_spawn::world_load_request_acceptance::BeginWorldLoad>),
+                        accept_queued_world_load_after_required_assets_resolve.run_if(any_with_component::<PendingWorldLoad>),
+                    ).chain().in_set(WorldLoadPreparationSet::Accept),
+                    (
+                        hydrate_selected_terrain_chunks_world_bounds_and_topology_grid.in_set(WorldLoadPreparationSet::HydrateTerrain),
+                        reserve_all_imported_world_persistent_ids.after(WorldLoadPreparationSet::InitializeClock),
+                        (
+                            hydrate_all_starting_fence_nodes_and_edges_into_topology_once,
+                            hydrate_all_starting_paths_into_topology_once,
+                        )
+                            .after(WorldLoadPreparationSet::HydrateTerrain)
+                            .after(reserve_all_imported_world_persistent_ids)
+                            .run_if(resource_exists::<openzt2_zoo_state::topology::topology_graph_types::TopologyGrid>),
+                        (
+                            admit_starting_prefab_rows,
+                            demand_starting_prefab_dependencies,
+                            mark_ready_starting_prefab_dependencies.run_if(
+                                any_match_filter::<Added<StartingPrefabDependencies>>
+                                    .or_else(on_message::<AssetEvent<ScenePrefabAsset>>)
+                                    .or_else(on_message::<AssetEvent<Gltf>>)
+                                    .or_else(on_message::<AssetLoadFailedEvent<ScenePrefabAsset>>)
+                                    .or_else(on_message::<AssetLoadFailedEvent<Gltf>>),
+                            ),
+                            commit_ready_starting_prefab_rows_in_source_order,
+                            apply_all_authored_world_spawn_values_once,
+                        ).chain().after(reserve_all_imported_world_persistent_ids),
+                    )
+                        .before(WorldLoadCompletionSet)
+                        .run_if(world_hydration_completion::loading_screen_is_ready),
+                    complete_or_fail_finished_world_hydration.in_set(WorldLoadCompletionSet),
                 )
-                    .chain()
                     .in_set(GameSet::Intent)
                     .run_if(in_state(GamePhase::Loading)),
             )
@@ -123,11 +170,16 @@ impl Plugin for WorldSpawnPlugin {
                 Update,
                 (
                     unload_requested_worlds_and_their_members
-                        .before(accept_queued_world_load_after_required_assets_resolve),
+                        .before(WorldLoadPreparationSet::Accept),
                     crate::world_spawn::world_entity_crating::remove_requested_world_entities_from_crates,
-                    crate::world_spawn::world_object_selection::request_selection_of_clicked_world_object_or_inspectable_ancestor,
+                    world_object_selection::select_world_object_on_pointer_press,
                 )
                     .in_set(GameSet::Intent),
+            )
+            .add_systems(
+                PostUpdate,
+                world_object_selection::mark_inspectable_meshes_for_picking
+                    .after(bevy::camera::visibility::VisibilitySystems::CalculateBounds),
             )
             .add_systems(
                 Update,
@@ -147,22 +199,37 @@ impl Plugin for WorldSpawnPlugin {
                 Update,
                 (
                     prefab_presentation_render_tree::publish_replaced_prefab_reloads,
-                    prefab_presentation_render_tree::rebuild_prefab_presentations_after_prefab_reload,
-                    prefab_world_instance_spawning::begin_rebuilding_world_instance_renderables_after_prefab_reload,
-                    crate::world_spawn::prefab_world_instance_spawning::finish_rebuilding_world_instance_renderables,
-                    hydrate_prefab_presentations,
-                    crate::world_spawn::expanding_column_presentation::align_expanding_column_piece_attachments,
+                    prefab_presentation_render_tree::rebuild_prefab_presentations_after_prefab_reload
+                        .after_ignore_deferred(prefab_presentation_render_tree::publish_replaced_prefab_reloads),
+                    begin_rebuilding_world_instance_renderables_after_prefab_reload
+                        .after_ignore_deferred(prefab_presentation_render_tree::publish_replaced_prefab_reloads),
+                    finish_rebuilding_world_instance_renderables
+                        .after(begin_rebuilding_world_instance_renderables_after_prefab_reload),
+                    hydrate_prefab_presentations
+                        .after(prefab_presentation_render_tree::rebuild_prefab_presentations_after_prefab_reload),
+                    crate::world_spawn::expanding_column_presentation::align_expanding_column_piece_attachments
+                        .after(hydrate_prefab_presentations),
                     initialize_authored_physical_presentation_controllers,
-                    crate::world_spawn::physical_presentation_state::apply_physical_presentation_requests,
-                    project_pending_physical_presentation_children,
-                    crate::world_spawn::named_physical_presentation_projection::hydrate_required_named_physical_presentations,
-                    crate::world_spawn::named_physical_presentation_projection::attach_named_presentations_to_model_nodes,
-                    crate::world_spawn::named_physical_presentation_projection::select_named_presentation_fade_states,
-                    crate::world_spawn::named_physical_presentation_projection::project_physical_presentation_caustic_policies,
+                    crate::world_spawn::physical_presentation_state::apply_physical_presentation_requests
+                        .after(initialize_authored_physical_presentation_controllers),
+                    project_pending_physical_presentation_children
+                        .after(crate::world_spawn::physical_presentation_state::apply_physical_presentation_requests)
+                        .after(hydrate_prefab_presentations)
+                        .after(finish_rebuilding_world_instance_renderables),
+                    hydrate_required_named_physical_presentations
+                        .after(commit_ready_starting_prefab_rows_in_source_order),
+                    attach_named_presentations_to_model_nodes
+                        .after(hydrate_required_named_physical_presentations)
+                        .after(finish_rebuilding_world_instance_renderables)
+                        .after(hydrate_prefab_presentations),
+                    select_named_presentation_fade_states.after(attach_named_presentations_to_model_nodes),
+                    project_physical_presentation_caustic_policies
+                        .after(attach_named_presentations_to_model_nodes)
+                        .after(project_pending_physical_presentation_children),
                     crate::world_spawn::prefab_effect_trigger_hydration::hydrate_prefab_effect_triggers,
-                    synchronize_zoo_entrance_anchor_after_transform_changes,
+                    synchronize_zoo_entrance_anchor_after_transform_changes
+                        .after(commit_ready_starting_prefab_rows_in_source_order),
                 )
-                    .chain()
                     .in_set(GameSet::Intent),
             )
             .add_systems(

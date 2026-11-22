@@ -19,7 +19,10 @@ use openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementPrevie
 
 pub(super) fn project_transport_track_construction_preview_authored_prefabs(
     mut commands: Commands,
-    (style, asset_server): (Res<TransportHighlightStyle>, Res<AssetServer>),
+    (style, materials): (
+        Res<TransportHighlightStyle>,
+        Res<super::transport_track_piece_presentation::TransportTrackMaterials>,
+    ),
     definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     authored_materials: Res<Assets<MaterialAsset>>,
@@ -38,7 +41,6 @@ pub(super) fn project_transport_track_construction_preview_authored_prefabs(
     projected_prefabs: Query<(), With<TransportTrackConstructionPreviewAuthoredPrefab>>,
     mut material_events: MessageReader<AssetEvent<MaterialAsset>>,
     mut effect_events: MessageReader<AssetEvent<EffectPassMaterial>>,
-    mut decal_material_handle: Local<Option<Handle<MaterialAsset>>>,
     (rope_anchors, mut standard_materials): (
         crate::transport_tours::transport_track_piece_presentation::SkyRopeAnchors,
         ResMut<Assets<StandardMaterial>>,
@@ -50,9 +52,7 @@ pub(super) fn project_transport_track_construction_preview_authored_prefabs(
     let Some(definitions) = active_definitions.get(&definition_assets) else {
         return;
     };
-    let terrain_decal_material = decal_material_handle.get_or_insert_with(|| asset_server.load::<MaterialAsset>(
-        crate::transport_tours::transport_track_piece_presentation::AUTHORED_TERRAIN_DECAL_MATERIAL_PATH,
-    ));
+    let terrain_decal_material = &materials.terrain_decal;
     let material_changed = material_events
         .read()
         .filter(|event| {
@@ -63,7 +63,7 @@ pub(super) fn project_transport_track_construction_preview_authored_prefabs(
         .count()
         != 0;
     let pass_handle = authored_materials
-        .get(&*terrain_decal_material)
+        .get(terrain_decal_material)
         .and_then(|material| {
             material
                 .evaluated_pass_material_assets_for_effect_quality(graphics_settings.effects)

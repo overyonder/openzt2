@@ -38,7 +38,7 @@ struct EntityFacts {
     pregnant: bool,
     crated: bool,
     needs: [Option<i32>; 11],
-    trash: Option<u16>,
+    carried: bool,
     relocating: bool,
 }
 
@@ -55,19 +55,7 @@ fn collect_entity_facts(
 ) -> Vec<EntityFacts> {
     let mut facts = live_world_entities
         .iter()
-        .map(|animal| EntityFacts {
-            entity: animal.entity,
-            persistent_id: animal.persistent_id.map(|id| id.0),
-            definition: animal.definition.0,
-            species: animal.species.map(|v| v.species),
-            variant: animal.variant.map(|v| v.0),
-            adult: animal.stage.is_some_and(|v| v.0 == LifeStage::Adult),
-            pregnant: animal.pregnant,
-            crated: animal.crated,
-            needs: NEEDS.map(|(name, _)| animal.need_wellness_q16(name)),
-            trash: animal.trash.map(|trash| trash.contained_waste_units),
-            relocating: animal.relocating,
-        })
+        .map(live_fact)
         .collect::<Vec<_>>();
     let pending = pending.borrow();
     for request in &pending.spawns {
@@ -88,7 +76,7 @@ fn collect_entity_facts(
                     .find(|(need, _)| *need == kind)
                     .map(|(_, value)| *value)
             }),
-            trash: None,
+            carried: false,
             relocating: false,
         });
     }
@@ -109,8 +97,79 @@ fn collect_entity_facts(
             _ => {}
         }
     }
+    facts.retain(|fact| {
+        !pending.commands.iter().any(|command| {
+        matches!(command, ScenarioEntityCommand::Remove(entity) if *entity == fact.entity)
+    })
+    });
     facts.sort_unstable_by_key(|v| v.entity);
     facts
+}
+
+fn live_fact(
+    animal: super::scenario_lua_entity_facts::ScenarioLuaEntityFactsItem<'_, '_>,
+) -> EntityFacts {
+    EntityFacts {
+        entity: animal.entity,
+        persistent_id: animal.persistent_id.map(|id| id.0),
+        definition: animal.definition.0,
+        species: animal.species.map(|v| v.species),
+        variant: animal.variant.map(|v| v.0),
+        adult: animal.stage.is_some_and(|v| v.0 == LifeStage::Adult),
+        pregnant: animal.pregnant,
+        crated: animal.crated,
+        needs: NEEDS.map(|(name, _)| animal.need_wellness_q16(name)),
+        carried: animal.carried,
+        relocating: animal.relocating,
+    }
+}
+
+fn entity_fact(
+    queries: ScenarioLuaQueryFacts<'_>,
+    pending: &PendingEntityOperations,
+    entity: Entity,
+) -> Option<EntityFacts> {
+    if let Ok(animal) = queries.live_world_entities.get(entity) {
+        let mut fact = live_fact(animal);
+        for command in &pending.borrow().commands {
+            match command {
+                ScenarioEntityCommand::Remove(target) if *target == entity => return None,
+                ScenarioEntityCommand::Crate(target) if *target == entity => fact.crated = true,
+                ScenarioEntityCommand::Need(edit) if edit.animal == entity => {
+                    if let Some(index) = NEEDS.iter().position(|(_, kind)| *kind == edit.need) {
+                        fact.needs[index] = Some(edit.value_q16);
+                    }
+                }
+                _ => {}
+            }
+        }
+        return Some(fact);
+    }
+    let pending = pending.borrow();
+    let request = pending
+        .spawns
+        .iter()
+        .find(|request| request.entity == entity)?;
+    Some(EntityFacts {
+        entity,
+        persistent_id: Some(request.persistent_id.0),
+        definition: request.components.definition,
+        species: Some(request.species),
+        variant: Some(request.components.variant),
+        adult: request.components.life_stage == LifeStage::Adult,
+        pregnant: false,
+        crated: request.crated,
+        needs: NEEDS.map(|(_, kind)| {
+            request
+                .initial_needs
+                .iter()
+                .rev()
+                .find(|(need, _)| *need == kind)
+                .map(|(_, value)| *value)
+        }),
+        carried: false,
+        relocating: false,
+    })
 }
 
 fn matches_kind(fact: &EntityFacts, kind: &str, queries: ScenarioLuaQueryFacts<'_>) -> bool {
@@ -175,12 +234,40 @@ fn entity_component_metatable(lua: &Lua) -> mlua::Result<Table> {
     Ok(metatable)
 }
 
-fn matches_reference(fact: &EntityFacts, reference: &Table) -> mlua::Result<bool> {
-    if let Some(id) = reference.get::<Option<u64>>(PERSISTENT_ENTITY_FIELD)? {
-        Ok(fact.persistent_id == Some(id))
+fn reference_entity(
+    reference: &Table,
+    queries: ScenarioLuaQueryFacts<'_>,
+    pending: &PendingEntityOperations,
+) -> mlua::Result<Option<Entity>> {
+    let raw = reference
+        .get::<Option<u64>>(ENTITY_FIELD)?
+        .and_then(Entity::try_from_bits);
+    let persistent = reference.get::<Option<u64>>(PERSISTENT_ENTITY_FIELD)?;
+    let entity = if let Some(id) = persistent {
+        queries
+            .world
+            .and_then(|world| {
+                queries.persistent_ids.get(
+                    world,
+                    openzt2_world_state::world_spawn::persistent_id_types::PersistentId(id),
+                )
+            })
+            .or_else(|| {
+                pending
+                    .borrow()
+                    .spawns
+                    .iter()
+                    .find(|request| request.persistent_id.0 == id)
+                    .map(|request| request.entity)
+            })
     } else {
-        Ok(reference.get::<Option<u64>>(ENTITY_FIELD)? == Some(fact.entity.to_bits()))
-    }
+        raw
+    };
+    Ok(entity.filter(|entity| {
+        entity_fact(queries, pending, *entity).is_some()
+            || queries.fence_edges.contains(*entity)
+            || queries.path_tiles.contains(*entity)
+    }))
 }
 
 pub(super) fn resolve_reference_entity(
@@ -188,12 +275,8 @@ pub(super) fn resolve_reference_entity(
     queries: ScenarioLuaQueryFacts<'_>,
     pending: &PendingEntityOperations,
 ) -> mlua::Result<Entity> {
-    for fact in entity_facts(queries, pending) {
-        if matches_reference(&fact, reference)? {
-            return Ok(fact.entity);
-        }
-    }
-    Err(mlua::Error::runtime("scenario entity is no longer present"))
+    reference_entity(reference, queries, pending)?
+        .ok_or_else(|| mlua::Error::runtime("scenario entity is no longer present"))
 }
 
 fn matches_entity_type(
@@ -231,11 +314,11 @@ pub(super) fn create_scenario_lua_entity_manager<'scope, 'env: 'scope>(
         "resolveTable",
         scope.create_function(move |lua, value: Value| match value {
             Value::Table(reference) => {
-                for fact in entity_facts(queries, pending) {
-                    if matches_reference(&fact, &reference)? {
-                        return create_entity_component(lua, scope, queries, pending, fact)
-                            .map(Value::Table);
-                    }
+                if let Some(fact) = reference_entity(&reference, queries, pending)?
+                    .and_then(|entity| entity_fact(queries, pending, entity))
+                {
+                    return create_entity_component(lua, scope, queries, pending, fact)
+                        .map(Value::Table);
                 }
                 Ok(Value::Nil)
             }
@@ -266,12 +349,9 @@ pub(super) fn create_scenario_lua_entity_manager<'scope, 'env: 'scope>(
                 }
                 _ => return Err(mlua::Error::runtime("isKindOf requires an entity or binder")),
             };
-            for fact in entity_facts(queries, pending) {
-                if matches_reference(&fact, &binder)? {
-                    return Ok(matches_kind(&fact, &kind, queries));
-                }
-            }
-            Ok(false)
+            Ok(reference_entity(&binder, queries, pending)?
+                .and_then(|entity| entity_fact(queries, pending, entity))
+                .is_some_and(|fact| matches_kind(&fact, &kind, queries)))
         })?,
     )?;
     let manager = lua.create_table()?;
@@ -282,7 +362,7 @@ pub(super) fn create_scenario_lua_entity_manager<'scope, 'env: 'scope>(
                 .into_iter()
                 .filter(|v| {
                     // An object being carried has left the world, though it stays selected.
-                    !v.relocating
+                    !v.relocating && !v.carried
                         && !(direct == Some(true) && v.crated)
                         && matches_kind(v, &kind, queries)
                 })
@@ -340,18 +420,24 @@ pub(super) fn create_scenario_lua_entity_manager<'scope, 'env: 'scope>(
             get_entities.call::<Table>((manager, kind, true))
         })?,
     )?;
-    // The one script that removes entities presses Undo in the same call, which
-    // already takes back what it would remove.
     manager.set(
         "BFG_REMOVE_ENTITY",
-        scope.create_function(|_, _: mlua::MultiValue| Ok(()))?,
+        scope.create_function(move |_, (_, reference): (Table, Table)| {
+            if let Some(entity) = reference_entity(&reference, queries, pending)? {
+                pending
+                    .borrow_mut()
+                    .commands
+                    .push(ScenarioEntityCommand::Remove(entity));
+            }
+            Ok(())
+        })?,
     )?;
     manager.set(
         "BFG_GET_SELECTED_ENTITY",
         scope.create_function(move |lua, _: Table| {
-            match entity_facts(queries, pending)
-                .into_iter()
-                .find(|v| Some(v.entity) == queries.selected_entity)
+            match queries
+                .selected_entity
+                .and_then(|entity| entity_fact(queries, pending, entity))
             {
                 Some(fact) => Ok(Value::Table(create_entity_component(
                     lua, scope, queries, pending, fact,
@@ -380,7 +466,24 @@ fn create_entity_component<'scope, 'env: 'scope>(
     component.set("_this", component.clone())?;
     component.set(
         "BFG_FIND_CONTAINED_ENTITY",
-        lua.create_function(|_, _: mlua::MultiValue| Ok(Value::Nil))?,
+        scope.create_function(move |lua, (_, kind): (Table, String)| {
+            let crate_occupant = queries
+                .contained_crated_animals
+                .get(entity)
+                .ok()
+                .map(|crate_| crate_.occupant());
+            let found = crate_occupant
+                .into_iter()
+                .chain((queries.contained_entities)(entity))
+                .filter_map(|occupant| entity_fact(queries, pending, occupant))
+                .find(|fact| matches_kind(fact, &kind, queries));
+            match found {
+                Some(fact) => {
+                    create_entity_component(lua, scope, queries, pending, fact).map(Value::Table)
+                }
+                None => Ok(Value::Nil),
+            }
+        })?,
     )?;
     component.set(
         "BFG_GET_BINDER_TYPE",
@@ -424,10 +527,9 @@ fn create_entity_component<'scope, 'env: 'scope>(
         "BFG_GET_ATTR_FLOAT",
         scope.create_function(move |_, (_, attribute): (Table, String)| {
             if attribute == "f_TrashLevel" {
-                return entity_facts(queries, pending)
-                    .iter()
-                    .find(|v| v.entity == entity)
-                    .and_then(|v| v.trash)
+                return queries
+                    .waste
+                    .and_then(|waste| waste(entity, None))
                     .map(f64::from)
                     .ok_or_else(|| mlua::Error::runtime("entity holds no trash"));
             }
@@ -435,9 +537,7 @@ fn create_entity_component<'scope, 'env: 'scope>(
                 .iter()
                 .position(|(name, _)| *name == attribute)
                 .ok_or_else(|| mlua::Error::runtime("unsupported animal float attribute"))?;
-            let wellness = entity_facts(queries, pending)
-                .iter()
-                .find(|v| v.entity == entity)
+            let wellness = entity_fact(queries, pending, entity)
                 .and_then(|v| v.needs[index])
                 .ok_or_else(|| mlua::Error::runtime("animal need has not initialized"))?;
             Ok(f64::from(MAX_NEED_Q16 - wellness.clamp(0, MAX_NEED_Q16)) / f64::from(10 * Q16_ONE))
@@ -451,9 +551,7 @@ fn create_entity_component<'scope, 'env: 'scope>(
                 .find(|(name, _)| *name == attribute)
                 .map(|(_, kind)| *kind)
                 .ok_or_else(|| mlua::Error::runtime("unsupported animal need"))?;
-            let threshold = entity_facts(queries, pending)
-                .iter()
-                .find(|v| v.entity == entity)
+            let threshold = entity_fact(queries, pending, entity)
                 .and_then(|v| queries.species?.find(v.species?))
                 .and_then(|species| species.needs.iter().find(|need| need.kind == kind))
                 .and_then(|need| need.pressing_wellness_threshold)
@@ -472,18 +570,10 @@ fn create_entity_component<'scope, 'env: 'scope>(
                     if name.to_str()?.as_ref() != "f_TrashLevel" {
                         return Err(mlua::Error::runtime("unsupported float attribute"));
                     }
-                    let current = entity_facts(queries, pending)
-                        .iter()
-                        .find(|v| v.entity == entity)
-                        .and_then(|v| v.trash)
+                    queries
+                        .waste
+                        .and_then(|waste| waste(entity, Some(level as u16)))
                         .ok_or_else(|| mlua::Error::runtime("entity holds no trash"))?;
-                    pending
-                        .borrow_mut()
-                        .commands
-                        .push(ScenarioEntityCommand::TrashLevel {
-                            entity,
-                            delta: level as i32 - i32::from(current),
-                        });
                     return Ok(());
                 }
                 let mlua::Value::Table(attribute) = attribute else {
@@ -604,10 +694,7 @@ pub(super) fn create_world_manager<'scope, 'env: 'scope>(
             }
             let binder: Table = attribute.get("key")?;
             let entity = resolve_reference_entity(&binder, queries, pending)?;
-            let facts = entity_facts(queries, pending);
-            let fact = facts
-                .iter()
-                .find(|fact| fact.entity == entity)
+            let fact = entity_fact(queries, pending, entity)
                 .ok_or_else(|| mlua::Error::runtime("species requested for absent entity"))?;
             authored_entity_string_attribute(queries, "s_Species", fact.species, fact.variant)
         })?,
@@ -616,10 +703,7 @@ pub(super) fn create_world_manager<'scope, 'env: 'scope>(
         "ZT_NAME_ENTITY",
         scope.create_function(move |_, (_, component): (Table, Table)| {
             let entity = resolve_reference_entity(&component, queries, pending)?;
-            if !entity_facts(queries, pending)
-                .iter()
-                .any(|v| v.entity == entity)
-            {
+            if entity_fact(queries, pending, entity).is_none() {
                 return Err(mlua::Error::runtime("cannot name an absent entity"));
             }
             // Scripted creations already carry their canonical generated Name.

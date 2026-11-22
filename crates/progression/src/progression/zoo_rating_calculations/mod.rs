@@ -6,20 +6,6 @@ use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and
 
 use super::rating_types::ZooRating;
 
-pub(crate) fn calculate_mean_permille<I>(values: I) -> u16
-where
-    I: Iterator<Item = u16>,
-{
-    let (sum, count) = values.fold((0_u64, 0_u64), |(sum, count), value| {
-        (sum + u64::from(value.min(1000)), count + 1)
-    });
-    if count == 0 {
-        0
-    } else {
-        ((sum + count / 2) / count).min(1000) as u16
-    }
-}
-
 pub(crate) fn normalize_value_to_permille(value: i64, minimum: i32, maximum: i32) -> u16 {
     let minimum = i64::from(minimum);
     let maximum = i64::from(maximum);
@@ -124,7 +110,6 @@ mod tests {
 
     #[test]
     fn integer_zoo_rating_calculations_round_and_smooth_without_overshoot() {
-        assert_eq!(calculate_mean_permille([0, 1000, 1000].into_iter()), 667);
         assert_eq!(normalize_value_to_permille(50, 0, 100), 500);
         assert_eq!(normalize_value_to_permille(-20, 0, 100), 0);
         assert_eq!(

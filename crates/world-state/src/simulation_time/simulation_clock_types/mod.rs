@@ -10,6 +10,10 @@ pub struct ZooClock {
     pub tick_in_day: u32,
 }
 
+/// Absolute zoo day, with change detection independent of the fixed tick.
+#[derive(Resource, Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ZooDay(pub u32);
+
 /// The display calendar derived from [`ZooClock::absolute_day`].
 #[derive(Resource, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ZooCalendar {

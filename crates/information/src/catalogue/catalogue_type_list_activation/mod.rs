@@ -1,8 +1,7 @@
 use bevy::prelude::*;
 use openzt2_game_data::ui_document::action::UiTrigger;
-use openzt2_game_data::{
-    world_definitions::catalogue_and_progression::catalogue_definition_types::CatalogueCategory,
-    AssetId,
+use openzt2_game_data::world_definitions::catalogue_and_progression::catalogue_definition_types::{
+    CatalogueCategory, CatalogueEntry,
 };
 
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
@@ -14,6 +13,7 @@ use openzt2_zoo_state::progression::adoption_and_content_availability_types::Sce
 use openzt2_zoo_state::progression::catalogue_entry_availability::catalogue_entry_is_available;
 use openzt2_zoo_state::progression::catalogue_entry_availability::catalogue_entry_can_be_researched;
 use openzt2_zoo_state::progression::unlock_types::UnlockedCatalogueDefinitionSet;
+use openzt2_zoo_state::staff::staff_lifecycle_messages::BeginStaffHirePlacement;
 use openzt2_world_state::world_spawn::selected_world_identity::SelectedWorldIdentity;
 use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 
@@ -29,6 +29,12 @@ use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types:
 use openzt2_interface_state::ui::authored_ui_activation_contracts::UiNodeActivated;
 
 use super::catalogue_world_availability_context::CatalogueResearchAccess;
+
+type CataloguePlacementMessages<'w> = (
+    MessageWriter<'w, PurchaseChoice>,
+    MessageWriter<'w, BeginAnimalAdoptionPlacement>,
+    Option<MessageWriter<'w, BeginStaffHirePlacement>>,
+);
 
 pub(crate) fn choose_catalogue_entry_from_activated_type_list_row(
     mut commands: Commands,
@@ -54,8 +60,7 @@ pub(crate) fn choose_catalogue_entry_from_activated_type_list_row(
         With<WorldRoot>,
     >,
     scenario_disabled: Option<Res<ScenarioDisabledCatalogueDefinitions>>,
-    mut purchase_choices: MessageWriter<PurchaseChoice>,
-    mut adoption_placement_requests: MessageWriter<BeginAnimalAdoptionPlacement>,
+    mut placements: CataloguePlacementMessages,
 ) {
     let world_definitions = active_world_definitions.get(&world_definition_assets);
     let (world_session_mode, scenario_availability) =
@@ -72,25 +77,28 @@ pub(crate) fn choose_catalogue_entry_from_activated_type_list_row(
             continue;
         };
 
-        let selected_entry_is_unavailable = world_definitions.is_some_and(|world_definitions| {
-            world_definitions
-                .catalogue_entry_for_definition(catalogue_row.definition)
-                .is_none_or(|(catalogue_index, catalogue_entry)| {
-                    !catalogue_entry_can_be_researched(
-                        world_definitions,
-                        catalogue_entry,
-                        research_availability.available_for(catalogue_entry.definition),
-                    ) && !catalogue_entry_is_available(
-                        world_definitions,
-                        catalogue_index,
-                        catalogue_entry,
-                        world_session_mode,
-                        scenario_availability,
-                        &unlocked_catalogue_definitions,
-                    )
-                })
-        });
-        if selected_entry_is_unavailable
+        let Some(catalogue) = world_definitions else {
+            continue;
+        };
+        let Some((index, entry)) =
+            catalogue.catalogue_entry_for_definition(catalogue_row.definition)
+        else {
+            continue;
+        };
+        let available = catalogue_entry_is_available(
+            catalogue,
+            index,
+            entry,
+            world_session_mode,
+            scenario_availability,
+            &unlocked_catalogue_definitions,
+        );
+        if (!available
+            && !catalogue_entry_can_be_researched(
+                catalogue,
+                entry,
+                research_availability.available_for(entry.definition),
+            ))
             || scenario_disabled
                 .as_ref()
                 .is_some_and(|disabled| disabled.0.contains(&catalogue_row.definition))
@@ -108,12 +116,6 @@ pub(crate) fn choose_catalogue_entry_from_activated_type_list_row(
                 .insert(RememberedCatalogueEntry(catalogue_row.definition));
         }
 
-        let selected_entry_is_animal = world_definitions.is_some_and(|world_definitions| {
-            world_definitions
-                .catalogue_entry_for_definition(catalogue_row.definition)
-                .map(|(_, entry)| entry)
-                .is_some_and(|entry| matches!(&entry.category, CatalogueCategory::Animals))
-        });
         let sex = std::iter::successors(Some(activation.node), |entity| {
             parent_entities.get(*entity).ok().map(ChildOf::parent)
         })
@@ -130,11 +132,10 @@ pub(crate) fn choose_catalogue_entry_from_activated_type_list_row(
                 .map(|gender| gender.0)
         });
         request_catalogue_choice_through_its_placement_owner(
-            catalogue_row.definition,
-            selected_entry_is_animal,
+            entry,
+            available,
             sex,
-            &mut purchase_choices,
-            &mut adoption_placement_requests,
+            &mut placements,
         );
     }
 }
@@ -152,7 +153,7 @@ mod tests {
     };
     use openzt2_game_data::world_definitions::document::WorldDefinitionDocument;
 
-    fn loaded_catalogue_app(definitions: &[AssetId]) -> App {
+    fn loaded_catalogue_app(definitions: &[AssetId], category: CatalogueCategory) -> App {
         let mut app = App::new();
         app.init_resource::<Assets<WorldDefinitionAsset>>()
             .init_resource::<WorldDefinitions>()
@@ -160,6 +161,7 @@ mod tests {
             .add_message::<UiNodeActivated>()
             .add_message::<PurchaseChoice>()
             .add_message::<BeginAnimalAdoptionPlacement>()
+            .add_message::<BeginStaffHirePlacement>()
             .add_systems(Update, choose_catalogue_entry_from_activated_type_list);
 
         let document = WorldDefinitionDocument {
@@ -172,7 +174,7 @@ mod tests {
                     definition,
                     kind: AssetId::default(),
                     kinds: Vec::new(),
-                    category: CatalogueCategory::Facilities,
+                    category,
                     authored_purchase_sort_key: String::new(),
                     authored_purchase_sort_fallback_type_name: String::new(),
                     authored_type_registry_source_order: [0; 3],
@@ -196,7 +198,7 @@ mod tests {
     #[test]
     fn same_frame_row_press_drains_all_events_without_delayed_fallback_choice() {
         let definition = AssetId([7; 16]);
-        let mut app = loaded_catalogue_app(&[definition]);
+        let mut app = loaded_catalogue_app(&[definition], CatalogueCategory::Facilities);
         let type_list = app
             .world_mut()
             .spawn(UiTypeListPolicy {
@@ -260,7 +262,7 @@ mod tests {
     fn lists_retain_their_own_pressed_child_across_other_list_activation() {
         let first = AssetId([1; 16]);
         let second = AssetId([2; 16]);
-        let mut app = loaded_catalogue_app(&[first, second]);
+        let mut app = loaded_catalogue_app(&[first, second], CatalogueCategory::Staff);
         app.add_systems(
             Update,
             choose_catalogue_entry_from_activated_type_list_row
@@ -303,6 +305,12 @@ mod tests {
                     definition: expected
                 }]
             );
+            let hire_actions: Vec<BeginStaffHirePlacement> = app
+                .world_mut()
+                .resource_mut::<Messages<BeginStaffHirePlacement>>()
+                .drain()
+                .collect();
+            assert_eq!(hire_actions, [BeginStaffHirePlacement(expected)]);
         }
         assert_eq!(
             app.world()
@@ -349,10 +357,9 @@ pub(crate) fn choose_catalogue_entry_from_activated_type_list(
     >,
     visibilities: Query<&Visibility>,
     scenario_disabled: Option<Res<ScenarioDisabledCatalogueDefinitions>>,
-    mut purchase_choices: MessageWriter<PurchaseChoice>,
     document_owners: Query<&UiDocumentOwner>,
     selected_genders: Query<&AnimalCatalogueGender>,
-    mut adoption_placement_requests: MessageWriter<BeginAnimalAdoptionPlacement>,
+    mut placements: CataloguePlacementMessages,
 ) {
     // Consume the row stream completely before making the precedence decision.
     // Otherwise a short-circuiting reader could leave a later row event behind.
@@ -412,38 +419,42 @@ pub(crate) fn choose_catalogue_entry_from_activated_type_list(
         };
         commands
             .entity(activation.node)
-            .insert(RememberedCatalogueEntry(AssetId(
-                catalogue_entry.definition.0,
-            )));
+            .insert(RememberedCatalogueEntry(catalogue_entry.definition));
         let sex = document_owners
             .get(activation.node)
             .ok()
             .and_then(|owner| selected_genders.get(owner.0).ok())
             .map(|gender| gender.0);
         request_catalogue_choice_through_its_placement_owner(
-            AssetId(catalogue_entry.definition.0),
-            catalogue_entry.category == CatalogueCategory::Animals,
+            catalogue_entry,
+            true,
             sex,
-            &mut purchase_choices,
-            &mut adoption_placement_requests,
+            &mut placements,
         );
     }
 }
 
 fn request_catalogue_choice_through_its_placement_owner(
-    definition: AssetId,
-    is_animal: bool,
+    entry: &CatalogueEntry,
+    available: bool,
     sex: Option<openzt2_game_data::species::Sex>,
-    purchase_choices: &mut MessageWriter<PurchaseChoice>,
-    adoption_placement_requests: &mut MessageWriter<BeginAnimalAdoptionPlacement>,
+    placements: &mut CataloguePlacementMessages,
 ) {
-    if is_animal {
+    let (purchase_choices, adoption_placement_requests, staff_hire_placements) = placements;
+    if entry.category == CatalogueCategory::Animals {
         adoption_placement_requests.write(BeginAnimalAdoptionPlacement {
-            species: definition,
+            species: entry.definition,
             sex,
             offer_slot_index: None,
         });
     } else {
-        purchase_choices.write(PurchaseChoice { definition });
+        purchase_choices.write(PurchaseChoice {
+            definition: entry.definition,
+        });
+        if available && entry.category == CatalogueCategory::Staff {
+            if let Some(staff_hire_placements) = staff_hire_placements {
+                staff_hire_placements.write(BeginStaffHirePlacement(entry.definition));
+            }
+        }
     }
 }

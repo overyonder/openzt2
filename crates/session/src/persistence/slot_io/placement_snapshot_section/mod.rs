@@ -29,7 +29,6 @@ use openzt2_zoo_state::{
         placed_object_types::PlacedObjectDefinitionReference,
     },
 };
-use std::collections::BTreeMap;
 
 const MAXIMUM_PLACEMENT_RECORDS: usize = 65_536;
 const RECORD_BYTES: usize = 64;
@@ -291,7 +290,7 @@ pub(super) fn apply_placement_records(
     baseline: &[Entity],
     root: Entity,
     allocator: &mut PersistentIdAllocator,
-) -> Result<BTreeMap<u64, Entity>, Failure> {
+) -> Result<(), Failure> {
     if records.len() != resolved.len() {
         return Err(Failure::CorruptSnapshotSection);
     }
@@ -307,10 +306,9 @@ pub(super) fn apply_placement_records(
             Ok((definition.moving_footprint, prefab))
         })
         .collect::<Result<Vec<_>, Failure>>()?;
-    let mut restored = BTreeMap::new();
     for record in records {
         allocator
-            .reserve_imported(root, PersistentId(record.persistent_identifier))
+            .reserve_imported(PersistentId(record.persistent_identifier))
             .map_err(|_| Failure::BrokenPersistentEntityReference)?;
     }
     // Replace this cohort, including baseline objects deleted before the save.
@@ -340,13 +338,12 @@ pub(super) fn apply_placement_records(
         commands
             .entity(entity)
             .insert((record.transform, HabitatLocatable));
-        restored.insert(record.persistent_identifier, entity);
     }
-    Ok(restored)
+    Ok(())
 }
 
 pub(super) fn capture_world_placement_records(
-    queries: &super::world_snapshot_capture_system_parameters::WorldSnapshotCaptureQueries,
+    queries: &super::world_snapshot_capture_system_parameters::PlacementCaptureQueries,
 ) -> Result<Vec<PlacementSnapshotRecord>, Failure> {
     let definitions = queries
         .active_world_definitions

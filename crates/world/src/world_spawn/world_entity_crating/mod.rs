@@ -6,64 +6,66 @@ use openzt2_world_state::world_spawn::world_entity_crating::{
 pub(super) fn remove_requested_world_entities_from_crates(
     mut commands: Commands,
     mut requests: MessageReader<RemoveWorldEntityFromCrate>,
-    mut crated_world_entities: Query<
-        (Option<&AnimalCrate>, Option<&mut Transform>),
+    mut animals: Query<
+        (
+            Option<&AnimalCrate>,
+            Option<&mut Transform>,
+            Option<&mut Visibility>,
+        ),
         (With<WorldEntityIsCrated>, Without<ContainedCratedAnimal>),
     >,
-    crates: Query<(&ContainedCratedAnimal, &Transform), Without<AnimalCrate>>,
+    crates: Query<(&ContainedCratedAnimal, &Transform), Without<WorldEntityIsCrated>>,
 ) {
-    let mut released = std::collections::BTreeSet::new();
+    let mut released = bevy::ecs::entity::EntityHashSet::new();
     for request in requests.read() {
         let animal = crates
             .get(request.0)
-            .map_or(request.0, |(contained, _)| contained.0);
+            .map_or(request.0, |(contained, _)| contained.occupant());
         if !released.insert(animal) {
             continue;
         }
-        let Ok((link, transform)) = crated_world_entities.get_mut(animal) else {
+        let Ok((crate_link, transform, visibility)) = animals.get_mut(animal) else {
             continue;
         };
-        if let Some(link) = link {
-            if let Ok((contained, crate_transform)) = crates.get(link.0) {
-                if contained.0 != animal {
-                    warn!(?animal, crate_entity = ?link.0, "animal crate link is not reciprocal");
-                    continue;
-                }
+        if let Some(crate_link) = crate_link {
+            if let Ok((_, crate_pose)) = crates.get(crate_link.0) {
                 if let Some(mut transform) = transform {
-                    transform.translation = crate_transform.translation;
-                    transform.rotation = crate_transform.rotation;
+                    let scale = transform.scale;
+                    transform.set_if_neq(Transform {
+                        translation: crate_pose.translation,
+                        rotation: crate_pose.rotation,
+                        scale,
+                    });
                 }
-                commands.entity(link.0).despawn();
+                commands.entity(crate_link.0).try_despawn();
             }
-            commands
-                .entity(animal)
-                .remove::<AnimalCrate>()
-                .insert(Visibility::Inherited);
+            commands.entity(animal).remove::<AnimalCrate>();
+            if let Some(mut visibility) = visibility {
+                visibility.set_if_neq(Visibility::Inherited);
+            }
         }
         commands.entity(animal).remove::<WorldEntityIsCrated>();
     }
 }
 
-/// Native crate and animal roots remain separate entities; relocation history
-/// moves the crate while the contained animal retains its own authored scale.
 pub(super) fn synchronize_contained_animal_transforms(
-    crates: Query<(Entity, &ContainedCratedAnimal, &Transform), Without<AnimalCrate>>,
-    mut animals: Query<
-        (&AnimalCrate, &mut Transform),
-        (With<WorldEntityIsCrated>, Without<ContainedCratedAnimal>),
+    crates: Query<
+        (&ContainedCratedAnimal, &Transform),
+        (
+            Without<AnimalCrate>,
+            Or<(Changed<Transform>, Changed<ContainedCratedAnimal>)>,
+        ),
     >,
+    mut animals: Query<&mut Transform, With<AnimalCrate>>,
 ) {
-    for (crate_entity, contained, crate_transform) in &crates {
-        let Ok((link, mut transform)) = animals.get_mut(contained.0) else {
-            continue;
-        };
-        if link.0 == crate_entity {
-            if transform.translation != crate_transform.translation {
-                transform.translation = crate_transform.translation;
-            }
-            if transform.rotation != crate_transform.rotation {
-                transform.rotation = crate_transform.rotation;
-            }
+    for (contained, crate_pose) in &crates {
+        if let Ok(mut transform) = animals.get_mut(contained.occupant()) {
+            let scale = transform.scale;
+            transform.set_if_neq(Transform {
+                translation: crate_pose.translation,
+                rotation: crate_pose.rotation,
+                scale,
+            });
         }
     }
 }
@@ -93,10 +95,7 @@ mod tests {
             .id();
         let crate_entity = app
             .world_mut()
-            .spawn((
-                Transform::from_xyz(10.0, 2.0, 5.0),
-                ContainedCratedAnimal(animal),
-            ))
+            .spawn(Transform::from_xyz(10.0, 2.0, 5.0))
             .id();
         app.world_mut()
             .entity_mut(animal)

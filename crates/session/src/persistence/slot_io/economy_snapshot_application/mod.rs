@@ -1,4 +1,8 @@
-use bevy::prelude::{Commands, Entity};
+use bevy::{ecs::query::QueryData, prelude::*};
+use openzt2_world_state::world_spawn::persistent_id_index::PersistentIdIndex;
+use openzt2_zoo_state::economy::{
+    behavior_transaction_state::EconomyUsage, facility_economy_types::*,
+};
 
 use openzt2_zoo_state::economy::guest_admission_types::AdmissionPrice;
 use openzt2_zoo_state::economy::guest_admission_types::ZooAdmissionsOpen;
@@ -9,12 +13,29 @@ use openzt2_zoo_state::economy::zoo_cash_types::ZooCash;
 use super::{
     super::persistence_failure_types::WorldSnapshotPersistenceFailure,
     economy_snapshot_types::EconomySnapshotRecords,
+    restored_component_values::restore_optional_component,
 };
+
+#[derive(QueryData)]
+#[query_data(mutable)]
+pub(super) struct RestoredFacilityEconomy {
+    opening_day: Option<&'static mut OperatingSinceDay>,
+    profit: Option<&'static mut FacilityProfit>,
+    price_index: Option<&'static mut FacilityPriceIndex>,
+    schedule_index: Option<&'static mut MaintenanceScheduleIndex>,
+    wallet: Option<&'static mut Wallet>,
+    price: Option<&'static mut Price>,
+    service: Option<&'static mut ServiceFacility>,
+    inventory: Option<&'static mut Inventory>,
+    usage: Option<&'static mut EconomyUsage>,
+}
 
 pub(super) fn apply_economy_snapshot_records_to_live_economy_resources_and_facilities(
     commands: &mut Commands,
     economy_snapshot_records: EconomySnapshotRecords,
-    entities_with_persistent_identifiers: &std::collections::BTreeMap<u64, Entity>,
+    identities: &PersistentIdIndex,
+    root: Entity,
+    facilities: &mut Query<RestoredFacilityEconomy>,
     zoo_cash: &mut ZooCash,
     zoo_admission_price: &mut AdmissionPrice,
     zoo_admissions_open_state: &mut ZooAdmissionsOpen,
@@ -44,68 +65,77 @@ pub(super) fn apply_economy_snapshot_records_to_live_economy_resources_and_facil
                 .remove_resource::<openzt2_zoo_state::economy::zoo_cash_types::UnlimitedZooCash>();
         }
     }
-    use openzt2_zoo_state::economy::{
-        behavior_transaction_state::EconomyUsage, facility_economy_types::*,
-    };
     for record in economy_snapshot_records.entity_economy_records {
-        let entity = entities_with_persistent_identifiers
-            .get(&record.persistent_identifier.0)
-            .copied()
+        let entity = identities
+            .get(root, record.persistent_identifier)
             .ok_or(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference)?;
+        let live = facilities
+            .get_mut(entity)
+            .map_err(|_| WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference)?;
         let mut entity = commands.entity(entity);
-        if record.complete_component_state {
-            entity.remove::<(
-                OperatingSinceDay,
-                FacilityProfit,
-                FacilityPriceIndex,
-                MaintenanceScheduleIndex,
-                Wallet,
-                Price,
-                ServiceFacility,
-                Inventory,
-                EconomyUsage,
-                ObjectEconomyFactsResolved,
-                ServiceFacilityFactsResolved,
-            )>();
+        let remove = record.complete_component_state;
+        if remove {
+            entity.remove::<(ObjectEconomyFactsResolved, ServiceFacilityFactsResolved)>();
         }
-        if let Some(day) = record.opening_zoo_day {
-            entity.insert(OperatingSinceDay(day));
-        }
-        if let Some((profit, transactions)) = record.profit {
-            entity.insert(FacilityProfit {
-                total: Money(profit),
-                transactions,
-            });
-        }
-        if let Some(index) = record.price_index {
-            entity.insert(FacilityPriceIndex(index));
-        }
-        if let Some(index) = record.maintenance_schedule_index {
-            entity.insert(MaintenanceScheduleIndex(index));
-        }
-        if let Some(wallet) = record.wallet {
-            entity.insert(Wallet(Money(wallet)));
-        }
-        if let Some(price) = record.price {
-            entity.insert(Price(Money(price)));
-        }
-        if let Some(service) = record.service {
-            entity.insert(ServiceFacility {
-                definition: service.definition,
-                capacity: service.capacity,
-                payment_trigger: service.payment_trigger,
-            });
-        }
-        if let Some([available, reserved, capacity]) = record.inventory {
-            entity.insert(Inventory {
+        let profit = record.profit.map(|(profit, transactions)| FacilityProfit {
+            total: Money(profit),
+            transactions,
+        });
+        let service = record.service.map(|service| ServiceFacility {
+            definition: service.definition,
+            capacity: service.capacity,
+            payment_trigger: service.payment_trigger,
+        });
+        let inventory = record
+            .inventory
+            .map(|[available, reserved, capacity]| Inventory {
                 available: available.saturating_add(reserved).min(capacity),
                 reserved: 0,
                 capacity,
             });
-        }
-        if let Some([active, total]) = record.usage {
-            entity.insert(EconomyUsage::from_counts(active, total));
-        }
+        restore_optional_component(
+            &mut entity,
+            live.opening_day,
+            record.opening_zoo_day.map(OperatingSinceDay),
+            remove,
+        );
+        restore_optional_component(&mut entity, live.profit, profit, remove);
+        restore_optional_component(
+            &mut entity,
+            live.price_index,
+            record.price_index.map(FacilityPriceIndex),
+            remove,
+        );
+        restore_optional_component(
+            &mut entity,
+            live.schedule_index,
+            record
+                .maintenance_schedule_index
+                .map(MaintenanceScheduleIndex),
+            remove,
+        );
+        restore_optional_component(
+            &mut entity,
+            live.wallet,
+            record.wallet.map(|wallet| Wallet(Money(wallet))),
+            remove,
+        );
+        restore_optional_component(
+            &mut entity,
+            live.price,
+            record.price.map(|price| Price(Money(price))),
+            remove,
+        );
+        restore_optional_component(&mut entity, live.service, service, remove);
+        restore_optional_component(&mut entity, live.inventory, inventory, remove);
+        restore_optional_component(
+            &mut entity,
+            live.usage,
+            record
+                .usage
+                .map(|[active, total]| EconomyUsage::from_counts(active, total)),
+            remove,
+        );
     }
 
     Ok(())

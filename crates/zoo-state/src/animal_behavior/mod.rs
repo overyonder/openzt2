@@ -14,4 +14,8 @@ pub mod behavior_token_types;
 pub mod behavior_trigger_types;
 pub mod interaction_container_membership;
 
+pub mod animal_lineage;
 pub mod behavior_world_release_types;
+
+pub mod disease_exposure_state;
+pub mod egg_incubation;

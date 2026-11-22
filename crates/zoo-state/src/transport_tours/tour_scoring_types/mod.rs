@@ -19,6 +19,7 @@ pub struct TourViewable {
 #[derive(Message, Debug, Clone, Copy, PartialEq)]
 pub struct TransportTripCompleted {
     pub guest: Entity,
+    pub station: Entity,
     pub circuit: Entity,
     pub score: f32,
     pub rating: f32,

@@ -146,7 +146,6 @@ impl Plugin for GameUiPlugin {
             .add_message::<authored_ui_node_projection_components::UiSliderValueChanged>()
             .add_observer(slider::apply_native_slider_value)
             .add_message::<authored_ui_activation_contracts::UiNodeActivated>()
-            .add_message::<authored_ui_activation_contracts::RunAuthoredTimedScenarioScript>()
             .add_message::<authored_ui_activation_contracts::ActivateAuthoredUiTool>()
             .add_message::<authored_ui_presentation_action_application::RequestUiPresentationAction>()
             .add_message::<animation::UiAnimationCompleted>()

@@ -5,7 +5,8 @@ use openzt2_zoo_state::behavior_task_execution_types::continuations::BehaviorCon
 use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::{WorldDefinitions, WorldDefinitionsView};
-use openzt2_zoo_state::extinct_animals::fossil_collection_and_assembly_types::FossilSetAssembly;
+use openzt2_zoo_state::extinct_animals::fossil_collection_and_assembly_types::{FossilAssemblySlots, FossilAssemblySlotOccupant, FossilSetAssembly};
+use bevy::ecs::relationship::RelationshipTarget;
 
 use openzt2_game_assets::animation::animation_set_asset_types::AnimationSetAsset;
 use openzt2_interface_state::information::entity_selection_types::Inspectable;
@@ -16,13 +17,13 @@ use openzt2_world_state::animation_graph::animation_graph_playback_state_types::
 use openzt2_world_state::animation_graph::animation_presentation_relationship_types::AnimationPresentations;
 use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackController;
 use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
+use openzt2_zoo_state::animal_behavior::animal_lineage::AnimalLineage;
 use openzt2_zoo_state::animal_behavior::interaction_container_membership::InteractionContainerMemberships;
 use openzt2_zoo_state::animal_health::types::Disease;
 use openzt2_zoo_state::animal_health::types::Vitality;
 use openzt2_zoo_state::animal_lifecycle::types::AnimalLifeStage;
 use openzt2_zoo_state::animal_lifecycle::types::AnimalVariant;
 use openzt2_zoo_state::animal_lifecycle::types::EndangeredSpecies;
-use openzt2_zoo_state::animal_lifecycle::types::Parents;
 use openzt2_zoo_state::animal_lifecycle::types::SpeciesHandle;
 use openzt2_zoo_state::animal_welfare::types::EnvironmentNeed;
 use openzt2_zoo_state::animal_welfare::types::ExerciseNeed;
@@ -43,6 +44,9 @@ use openzt2_zoo_state::guests::guest_simulation_types::GuestArchetype;
 use openzt2_zoo_state::habitat::habitat_types::Containment;
 use openzt2_zoo_state::habitat::habitat_types::HabitatClimate;
 use openzt2_zoo_state::habitat::habitat_types::HabitatMember;
+use openzt2_zoo_state::topology::topology_graph_types::{
+    PathTile, TileSurface, TopologyGrid, TopologyIndex,
+};
 
 use super::photo_capture_types::{
     PendingPhotoCapture, PendingPhotoEvidence, PhotoEvidence, PhotoSemanticEvidence,
@@ -67,14 +71,15 @@ pub(super) struct PhotographableSemanticFactQueries<'w, 's> {
     habitats: Query<'w, 's, &'static HabitatClimate>,
     aquatic: Query<'w, 's, (), With<AquaticAnimal>>,
     show_tricks: Query<'w, 's, &'static PhotographableShowTrick>,
-    fossils: Query<'w, 's, &'static FossilSetAssembly>,
+    fossils: Query<'w, 's, (&'static FossilSetAssembly, &'static FossilAssemblySlots)>,
+    occupied_fossil_slots: Query<'w, 's, (), With<FossilAssemblySlotOccupant>>,
     world_definition_assets: Res<'w, Assets<WorldDefinitionAsset>>,
     world_definitions: Res<'w, WorldDefinitions>,
     fossil_levels: Query<'w, 's, &'static FossilEducationProgress>,
     health: Query<'w, 's, (&'static Vitality, Has<Disease>, Has<EndangeredSpecies>)>,
     life_stages: Query<'w, 's, &'static AnimalLifeStage>,
     animal_variants: Query<'w, 's, &'static AnimalVariant>,
-    parents: Query<'w, 's, &'static Parents>,
+    lineage: AnimalLineage<'w, 's>,
     needs: Query<
         'w,
         's,
@@ -136,17 +141,57 @@ pub(super) fn collect_visible_photo_subjects_and_semantic_evidence_for_pending_c
     behavior_document_assets: Res<Assets<BehaviorDocumentAsset>>,
     memberships: InteractionContainerMemberships,
     semantic_queries: PhotographableSemanticFactQueries,
+    topology: Option<Res<TopologyIndex>>,
+    grid: Option<Res<TopologyGrid>>,
+    path_tiles: Query<(&PathTile, &TileSurface, &GlobalTransform)>,
 ) {
     for (capture_entity, owner, mut capture, mut evidence) in &mut captures {
         let Ok((camera, camera_transform, view)) = cameras.get(owner.0) else {
             continue;
         };
-        capture.view = *view;
         capture.camera_position = camera_transform.translation();
         capture.camera_rotation = camera_transform.rotation();
         let definitions = semantic_queries
             .world_definitions
             .get(&semantic_queries.world_definition_assets);
+        capture.view = PhotoView {
+            elevated: definitions
+                .zip(topology.as_deref())
+                .zip(grid.as_deref())
+                .is_some_and(|((definitions, topology), grid)| {
+                    let position = capture.camera_position;
+                    let widest_tile_m = definitions
+                        .paths()
+                        .filter(|path| path.elevated)
+                        .map(|path| path.width_cm)
+                        .max()
+                        .map_or(0.0, |width| f32::from(width) * 0.01);
+                    if widest_tile_m <= 0.0 {
+                        return false;
+                    }
+                    let offset = Vec3::new(widest_tile_m, 0.0, widest_tile_m) * 0.5;
+                    let min = grid.position_cell(position - offset).truncate();
+                    let max = grid.position_cell(position + offset).truncate();
+                    path_tiles
+                        .iter_many(topology.paths_within(min, max))
+                        .filter_map(Result::ok)
+                        .any(|(path, surface, transform)| {
+                            definitions
+                                .find_path(path.definition)
+                                .is_some_and(|definition| {
+                                    definition.elevated
+                                        && is_strictly_above_path_tile(
+                                            position,
+                                            f32::from(definition.width_cm) * 0.01,
+                                            surface,
+                                            transform,
+                                        )
+                                })
+                        })
+                }),
+            underwater: view.underwater,
+            vehicle: view.vehicle,
+        };
         // Include stationary objects as well as moving animals.
         for (entity, species, definition, transform, visible, colliders, behavior_task) in &subjects
         {
@@ -250,14 +295,19 @@ pub(super) fn collect_visible_photo_subjects_and_semantic_evidence_for_pending_c
                     .fossils
                     .get(entity)
                     .ok()
-                    .and_then(|assembly| {
+                    .and_then(|(assembly, slots)| {
                         let definitions = semantic_queries
                             .world_definitions
                             .get(&semantic_queries.world_definition_assets)?;
                         let set = definitions.find_fossil_set(assembly.fossil_set_identifier())?;
                         Some(PhotographableFossil {
                             set: assembly.fossil_set_identifier(),
-                            complete: usize::from(assembly.placed_fossil_piece_count())
+                            complete: slots
+                                .iter()
+                                .filter(|slot| {
+                                    semantic_queries.occupied_fossil_slots.contains(*slot)
+                                })
+                                .count()
                                 == set.pieces.len(),
                         })
                     }),
@@ -278,16 +328,8 @@ pub(super) fn collect_visible_photo_subjects_and_semantic_evidence_for_pending_c
                     .get(entity)
                     .ok()
                     .map(|stage| stage.0),
-                mother: semantic_queries
-                    .parents
-                    .get(entity)
-                    .ok()
-                    .and_then(|parents| parents.mother),
-                father: semantic_queries
-                    .parents
-                    .get(entity)
-                    .ok()
-                    .and_then(|parents| parents.father),
+                mother: semantic_queries.lineage.parents(entity).mother,
+                father: semantic_queries.lineage.parents(entity).father,
                 needs_q16: semantic_queries
                     .needs
                     .get(entity)
@@ -642,4 +684,67 @@ fn photo_subject_collision_bounds_are_unoccluded_from_camera(
 #[inline]
 fn convert_fraction_to_rounded_permille(value: f32) -> u16 {
     (value.clamp(0.0, 1.0) * 1000.0).round() as u16
+}
+
+fn is_strictly_above_path_tile(
+    camera: Vec3,
+    tile_width: f32,
+    surface: &TileSurface,
+    transform: &GlobalTransform,
+) -> bool {
+    let half_width = tile_width * 0.5;
+    let local = transform.affine().inverse().transform_point3(camera);
+    if !local.is_finite()
+        || local.xz().min_element() < -half_width
+        || local.xz().max_element() >= half_width
+    {
+        return false;
+    }
+    // The whole tile must be below the camera, including its highest corner.
+    let corners = [
+        (-half_width, -half_width),
+        (half_width, -half_width),
+        (half_width, half_width),
+        (-half_width, half_width),
+    ];
+    corners
+        .into_iter()
+        .zip(surface.height_cm)
+        .all(|((x, z), height)| {
+            camera.y
+                > transform
+                    .transform_point(Vec3::new(x, f32::from(height) * 0.01, z))
+                    .y
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn elevated_shot_requires_the_entire_tile_below_the_camera() {
+        let transform = GlobalTransform::from_translation(Vec3::Y * 2.0);
+        let slopes = TileSurface {
+            height_cm: [0, 25, 100, 20, 50],
+        };
+        assert!(!is_strictly_above_path_tile(
+            Vec3::Y * 3.0,
+            2.0,
+            &slopes,
+            &transform
+        ));
+        assert!(is_strictly_above_path_tile(
+            Vec3::Y * 3.01,
+            2.0,
+            &slopes,
+            &transform
+        ));
+        assert!(!is_strictly_above_path_tile(
+            Vec3::new(2.0, 4.0, 0.0),
+            2.0,
+            &slopes,
+            &transform
+        ));
+    }
 }

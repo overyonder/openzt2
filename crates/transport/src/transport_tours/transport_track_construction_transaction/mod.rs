@@ -2,7 +2,7 @@ use super::transport_track_sale_steps::{
     ApplyTransportTrackSaleStep, TrackApplicationAcknowledgements,
 };
 use bevy::prelude::*;
-use openzt2_zoo_state::topology::persistent_edit_lookup::PersistentEditLookup;
+use openzt2_world_state::world_spawn::persistent_id_index::PersistentIdIndex;
 
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
@@ -53,7 +53,7 @@ pub(super) fn prepare_transport_track_construction_edit(
     )>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
-    mut allocator: ResMut<PersistentIdAllocator>,
+    mut allocators: Query<&mut PersistentIdAllocator>,
     mut prepared: MessageWriter<TransportTrackConstructionEditPrepared>,
     mut rejected: MessageWriter<TransportTrackConstructionEditPreparationRejected>,
 ) {
@@ -92,15 +92,19 @@ pub(super) fn prepare_transport_track_construction_edit(
             reject(&mut rejected, PlacementFailure::InvalidTopology);
             continue;
         };
+        let Ok(mut allocator) = allocators.get_mut(world_member.root) else {
+            reject(&mut rejected, PlacementFailure::InvalidTopology);
+            continue;
+        };
         let piece_entities = (0..piece_count)
-            .map(|_| allocator.allocate(world_member.root))
+            .map(|_| allocator.allocate())
             .collect::<Result<Vec<_>, _>>();
         let Ok(piece_entities) = piece_entities else {
             reject(&mut rejected, PlacementFailure::InvalidTopology);
             continue;
         };
         let destination_junction_entity = if track_preview.to_station.is_none() {
-            match allocator.allocate(world_member.root) {
+            match allocator.allocate() {
                 Ok(entity) => Some(entity),
                 Err(_) => {
                     reject(&mut rejected, PlacementFailure::InvalidTopology);
@@ -168,7 +172,7 @@ pub(super) fn apply_prepared_transport_track_construction_edits(
     mut requests: MessageReader<ApplyPreparedTransportTrackConstructionEditRequest>,
     mut step_requests: MessageReader<ApplyTransportTrackSaleStep>,
     mut edits: Query<(&mut PreparedTransportTrackConstructionEdit, &WorldMember)>,
-    persistent_entities: Res<PersistentEditLookup>,
+    persistent_entities: Res<PersistentIdIndex>,
     sales: openzt2_zoo_state::transport_tours::transport_track_sale::TransportTrackSaleQueries,
     mut connections: MessageWriter<ConnectTransportTrackRequest>,
     mut disconnections: MessageWriter<DisconnectTransportTrackRequest>,
@@ -398,7 +402,7 @@ pub(super) fn acknowledge_completed_transport_track_topology_applications(
     mut rejected_connections: MessageReader<TransportTrackConnectionRejected>,
     mut applied_disconnections: MessageReader<TransportTrackDisconnectionApplied>,
     mut edits: Query<(&mut PreparedTransportTrackConstructionEdit, &WorldMember)>,
-    persistent_entities: Res<PersistentEditLookup>,
+    persistent_entities: Res<PersistentIdIndex>,
     previews: Query<(), With<TransportTrackConstructionPreview>>,
     mut acknowledged: TrackApplicationAcknowledgements,
 ) {
@@ -492,7 +496,7 @@ pub(super) fn acknowledge_completed_transport_track_topology_applications(
 fn despawn_source_junction(
     commands: &mut Commands,
     edit: &PreparedTransportTrackConstructionEdit,
-    persistent_entities: &PersistentEditLookup,
+    persistent_entities: &PersistentIdIndex,
     root: Entity,
 ) {
     if let Some(endpoint) = edit

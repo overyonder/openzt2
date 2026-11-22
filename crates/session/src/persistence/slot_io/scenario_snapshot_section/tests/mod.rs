@@ -42,26 +42,30 @@ fn initialize_world() -> (World, Entity, AssetId, [AssetId; 2]) {
         document.clone(),
     ));
     let mut scenarios = WorldScenarios::default();
-    scenarios.index_test_document(handle, &document);
+    scenarios.index_test_document(handle.clone(), &document);
     world.insert_resource(assets);
     world.insert_resource(scenarios);
     world.insert_non_send(ScenarioLuaVirtualMachineContexts::default());
     let root = world
-        .spawn(WorldRoot {
-            scenario: definition,
-        })
+        .spawn((
+            WorldRoot {
+                scenario: definition,
+            },
+            ScenarioDocument(handle),
+        ))
         .id();
-    world.insert_resource(PersistentIdAllocator::new(root));
+    world
+        .entity_mut(root)
+        .insert(PersistentIdAllocator::default());
     (world, root, definition, rules)
 }
 
 #[test]
 fn campaign_state_round_trip_keeps_completed_rules_and_live_deadlines() {
     let (mut source, root, definition, _) = initialize_world();
-    source.entity_mut(root).insert(ScenarioScriptTiming {
-        evaluation_elapsed_seconds: 2.25,
-        always_run_elapsed_seconds: 0.75,
-    });
+    source
+        .entity_mut(root)
+        .insert(ScenarioScriptTiming::from_elapsed_seconds(2.25, 0.75).unwrap());
     source.entity_mut(root).insert(ActiveScenarioSession {
         definition,
         started_tick: 41,
@@ -77,6 +81,7 @@ fn campaign_state_round_trip_keeps_completed_rules_and_live_deadlines() {
         source.spawn((
             PersistentId(100 + index as u64),
             WorldMember { root },
+            ScenarioObjectiveOf(root),
             ScenarioObjective {
                 scenario: definition,
                 record_index: index as u32,
@@ -167,12 +172,13 @@ fn campaign_state_round_trip_keeps_completed_rules_and_live_deadlines() {
     destination.insert_resource(Messages::<ScenarioObjectiveStatusChanged>::default());
     let mut apply_state = SystemState::<(
         Commands,
-        ResMut<PersistentIdAllocator>,
+        Query<&mut PersistentIdAllocator>,
         ScenarioSnapshotApplication,
     )>::new(&mut destination);
     {
-        let (mut commands, mut allocator, mut parameters) =
+        let (mut commands, mut allocators, mut parameters) =
             apply_state.get_mut(&mut destination).unwrap();
+        let mut allocator = allocators.get_mut(restored_root).unwrap();
         let prepared = prepare(decoded, definition, restored_root, &parameters).unwrap();
         apply(
             &mut commands,
@@ -192,21 +198,31 @@ fn campaign_state_round_trip_keeps_completed_rules_and_live_deadlines() {
     assert!(destination
         .resource::<Messages<ScenarioObjectiveStatusChanged>>()
         .is_empty());
-    let mut objectives = destination.query::<(
-        Entity,
-        &ScenarioObjective,
-        &ScenarioObjectivePrerequisiteEntities,
-    )>();
+    use bevy::ecs::relationship::RelationshipTarget;
+    let mut objectives = destination.query::<(Entity, &ScenarioObjective)>();
     let first = objectives
         .iter(&destination)
-        .find(|(_, record, _)| record.record_index == 0)
+        .find(|(_, record)| record.record_index == 0)
         .unwrap()
         .0;
     let second = objectives
         .iter(&destination)
-        .find(|(_, record, _)| record.record_index == 1)
+        .find(|(_, record)| record.record_index == 1)
+        .unwrap()
+        .0;
+    let edges = destination
+        .get::<ScenarioObjectivePrerequisites>(second)
         .unwrap();
-    assert_eq!(&*second.2 .0, &[first]);
+    let prerequisites = edges
+        .iter()
+        .map(|edge| {
+            destination
+                .get::<ScenarioObjectiveRequires>(edge)
+                .unwrap()
+                .0
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(prerequisites, [first]);
 }
 
 #[test]
@@ -216,12 +232,12 @@ fn original_objective_planning_preserves_baseline_ids_and_applies_only_after_val
     let (mut world, root, definition, rules) = initialize_world();
     let baseline = world.spawn((PersistentId(9), WorldMember { root })).id();
     world.spawn((PersistentId(10), WorldMember { root }));
-    world.insert_resource(PersistentIdAllocator::from_snapshot(root, 503).unwrap());
+    world
+        .entity_mut(root)
+        .insert(PersistentIdAllocator::from_snapshot(503).unwrap());
     let source = ScenarioSnapshot {
-        timing: Some(ScenarioScriptTiming {
-            evaluation_elapsed_seconds: 2.0,
-            always_run_elapsed_seconds: 0.5,
-        }),
+        timing: ScenarioScriptTiming::from_elapsed_seconds(2.0, 0.5),
+        challenge: None,
         version: 1,
         definition,
         started_tick: 318,
@@ -245,17 +261,20 @@ fn original_objective_planning_preserves_baseline_ids_and_applies_only_after_val
     let next = assign_original_scenario_objective_identifiers(
         &mut planned,
         root,
-        world.resource::<PersistentIdAllocator>(),
+        world.get::<PersistentIdAllocator>(root).unwrap(),
     )
     .unwrap();
     assert_eq!(next, 505);
-    assert_eq!(world.resource::<PersistentIdAllocator>().next(), 503);
+    assert_eq!(
+        world.get::<PersistentIdAllocator>(root).unwrap().next(),
+        503
+    );
     let mut repeated = Some(source.clone());
     assert_eq!(
         assign_original_scenario_objective_identifiers(
             &mut repeated,
             root,
-            world.resource::<PersistentIdAllocator>()
+            world.get::<PersistentIdAllocator>(root).unwrap()
         )
         .unwrap(),
         next
@@ -263,7 +282,7 @@ fn original_objective_planning_preserves_baseline_ids_and_applies_only_after_val
     assert_eq!(repeated, planned);
 
     let mut exhausted = Some(source.clone());
-    let exhausted_allocator = PersistentIdAllocator::from_snapshot(root, u64::MAX - 1).unwrap();
+    let exhausted_allocator = PersistentIdAllocator::from_snapshot(u64::MAX - 1).unwrap();
     assert!(assign_original_scenario_objective_identifiers(
         &mut exhausted,
         root,
@@ -276,12 +295,13 @@ fn original_objective_planning_preserves_baseline_ids_and_applies_only_after_val
     let expected = planned.clone();
     let mut application = SystemState::<(
         Commands,
-        ResMut<PersistentIdAllocator>,
+        Query<&mut PersistentIdAllocator>,
         ScenarioSnapshotApplication,
     )>::new(&mut world);
     {
-        let (mut commands, mut allocator, mut parameters) =
+        let (mut commands, mut allocators, mut parameters) =
             application.get_mut(&mut world).unwrap();
+        let mut allocator = allocators.get_mut(root).unwrap();
         let prepared = prepare(planned, definition, root, &parameters).unwrap();
         apply(
             &mut commands,
@@ -294,10 +314,107 @@ fn original_objective_planning_preserves_baseline_ids_and_applies_only_after_val
     }
     application.apply(&mut world);
     assert_eq!(world.get::<PersistentId>(baseline), Some(&PersistentId(9)));
-    assert_eq!(world.resource::<PersistentIdAllocator>().next(), next);
+    assert_eq!(
+        world.get::<PersistentIdAllocator>(root).unwrap().next(),
+        next
+    );
     let mut capture_state = SystemState::<ScenarioSnapshotCapture>::new(&mut world);
     assert_eq!(
         capture(&capture_state.get(&world).unwrap()).unwrap(),
         expected
+    );
+}
+
+#[test]
+fn challenge_only_save_restores_offer_expiry_and_selection_stream() {
+    use openzt2_world_state::{
+        game_session_types::WorldSessionMode,
+        world_spawn::selected_world_identity::SelectedWorldIdentity,
+    };
+
+    let (mut world, root, definition, rules) = initialize_world();
+    let document = world.get::<ScenarioDocument>(root).unwrap().clone();
+    world.entity_mut(root).insert(SelectedWorldIdentity {
+        requested: definition,
+        map: definition,
+        start: definition,
+        mode: WorldSessionMode::Challenge,
+        profile: AssetId::default(),
+    });
+    let saved = ScenarioSnapshot {
+        timing: None,
+        version: 2,
+        definition: AssetId::default(),
+        started_tick: 0,
+        state: 0,
+        objectives: Vec::new(),
+        lua: None,
+        ui: Default::default(),
+        challenge: Some(ChallengeSnapshot {
+            rng: [3, 5],
+            next_evaluation: Some(830),
+            instant_decided: true,
+            candidates: BTreeMap::new(),
+            offer: Some(ChallengeOfferSnapshot {
+                id: 7,
+                definition,
+                expires_tick: 920,
+                state: 1,
+                objectives: rules
+                    .iter()
+                    .enumerate()
+                    .map(|(index, rule)| ScenarioObjectiveSnapshot {
+                        id: 8 + index as u64,
+                        definition: *rule,
+                        status: if index == 0 { 2 } else { 1 },
+                        progress: [index as i64, 3],
+                        deadline: Some(920),
+                        visible: true,
+                    })
+                    .collect(),
+                text: Some(AssetId::from_key("challenge text")),
+                description: None,
+                timing_seconds: Some([0.5, 1.25]),
+                surface: Some(ScenarioChallengePanelSurface::Offer),
+            }),
+        }),
+    };
+    let bytes = encode(Some(&saved)).unwrap();
+    let decoded = decode(
+        &bytes,
+        WorldSnapshotSectionDirectoryEntry {
+            encoded_record_count: 4,
+            payload_start_byte_offset: 0,
+            payload_byte_count: bytes.len() as u64,
+        },
+    )
+    .unwrap();
+    let mut application = SystemState::<(
+        Commands,
+        Query<&mut PersistentIdAllocator>,
+        ScenarioSnapshotApplication,
+    )>::new(&mut world);
+    {
+        let (mut commands, mut allocators, mut parameters) =
+            application.get_mut(&mut world).unwrap();
+        let prepared = prepare(decoded, definition, root, &parameters).unwrap();
+        apply(
+            &mut commands,
+            prepared,
+            root,
+            &mut allocators.get_mut(root).unwrap(),
+            &mut parameters,
+        )
+        .unwrap();
+    }
+    application.apply(&mut world);
+
+    assert!(world.get::<ActiveScenarioSession>(root).is_none());
+    assert_eq!(world.get::<PersistentIdAllocator>(root).unwrap().next(), 10);
+    assert_eq!(world.get::<ScenarioDocument>(root).unwrap().0, document.0);
+    let mut capture_state = SystemState::<ScenarioSnapshotCapture>::new(&mut world);
+    assert_eq!(
+        capture(&capture_state.get(&world).unwrap()).unwrap(),
+        Some(saved)
     );
 }

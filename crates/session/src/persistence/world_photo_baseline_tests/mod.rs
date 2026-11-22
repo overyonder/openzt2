@@ -40,11 +40,19 @@ use openzt2_game_assets::{
 
 use openzt2_world::world_spawn::world_hydration_completion::complete_or_fail_finished_world_hydration;
 use openzt2_world::world_spawn::world_persistent_id_reservation::reserve_all_imported_world_persistent_ids;
+use openzt2_world_state::game_session_types::WorldSessionMode;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator;
 use openzt2_world_state::world_spawn::world_hydration_types::WorldHydration;
-use openzt2_world_state::world_spawn::world_load_completion_marker::WorldLoadCompleted;
 use openzt2_world_state::world_spawn::world_load_completion_marker::WorldLoadCompletionSet;
+use openzt2_world_state::world_spawn::world_load_completion_marker::{
+    StartingFenceTopologyHydrated, StartingPathsHydrated, StartingSpawnValuesApplied,
+    StartingTerrainHydrated, WorldClockInitialized, WorldLoadCompleted,
+};
+use openzt2_world_state::world_spawn::{
+    selected_world_document_handles::SelectedWorldDocumentHandles,
+    selected_world_identity::SelectedWorldIdentity,
+};
 
 #[test]
 fn imported_ids_default_album_and_environment_keep_their_order_with_delayed_localization() {
@@ -66,7 +74,9 @@ fn imported_ids_default_album_and_environment_keep_their_order_with_delayed_loca
         app.world_mut()
             .entity_mut(root)
             .remove::<WorldLoadCompleted>();
-        app.insert_resource(PersistentIdAllocator::new(root));
+        app.world_mut()
+            .entity_mut(root)
+            .insert(PersistentIdAllocator::default());
 
         let mut catalogue = photo_fixture_catalogue();
         catalogue.starting_zoos.push(StartingZooRecord {
@@ -122,13 +132,25 @@ fn imported_ids_default_album_and_environment_keep_their_order_with_delayed_loca
             .queue_test_document(handle);
         // Upstream geometry/value hydration has completed; ID reservation and
         // the completion notification still run through their production systems.
-        let mut hydration =
-            WorldHydration::new_pending_world_hydration(SCENARIO, start, SCENARIO, 0);
-        hydration.record_terrain_hydration_completion();
-        hydration.record_starting_topology_hydration_completion();
-        hydration.record_starting_path_hydration_completion();
-        hydration.record_authored_world_spawn_value_application_completion();
-        app.world_mut().entity_mut(root).insert(hydration);
+        app.world_mut().entity_mut(root).insert((
+            WorldHydration::new_pending_world_hydration(0),
+            WorldClockInitialized,
+            StartingTerrainHydrated,
+            StartingFenceTopologyHydrated,
+            StartingPathsHydrated,
+            StartingSpawnValuesApplied,
+            SelectedWorldIdentity {
+                requested: SCENARIO,
+                map: SCENARIO,
+                start: SCENARIO,
+                mode: WorldSessionMode::Freeform,
+                profile: PROFILE,
+            },
+            SelectedWorldDocumentHandles {
+                map: start.clone(),
+                start,
+            },
+        ));
         let simulation_timing = app
             .world()
             .resource::<WorldDefinitions>()
@@ -186,7 +208,13 @@ fn imported_ids_default_album_and_environment_keep_their_order_with_delayed_loca
             .world_mut()
             .query_filtered::<&PersistentId, With<WorldEnvironment>>();
         assert_eq!(*environments.single(app.world()).unwrap(), PersistentId(8));
-        assert_eq!(app.world().resource::<PersistentIdAllocator>().next(), 9);
+        assert_eq!(
+            app.world()
+                .get::<PersistentIdAllocator>(root)
+                .unwrap()
+                .next(),
+            if delay_localization { 9 } else { 43 }
+        );
         if delay_localization {
             assert!(app.world().get::<Name>(album).is_none());
             app.update();
@@ -199,8 +227,15 @@ fn imported_ids_default_album_and_environment_keep_their_order_with_delayed_loca
                 NextState::Unchanged
             ));
             initialize_fixture_album_localization(app.world_mut());
+            app.update();
         }
-        app.update();
+        assert_eq!(
+            app.world()
+                .get::<PersistentIdAllocator>(root)
+                .unwrap()
+                .next(),
+            43,
+        );
         assert_eq!(
             app.world().get::<Name>(album).unwrap().as_str(),
             "Fixture Album"

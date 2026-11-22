@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_data::world_definitions::catalogue_and_progression::zoo_rating_fame_and_award_definition_types::RatingInputKind;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator;
 use openzt2_world_state::world_spawn::world_load_completion_marker::WorldLoadCompleted;
@@ -26,11 +27,12 @@ use super::{
     rating_types::ZooRating,
     unlock_types::UnlockedCatalogueDefinitionSet,
     zoo_rating_calculations::{select_zoo_rating_input, zoo_rating_satisfies_authored_comparison},
+    zoo_rating_input_types::ZooFinanceRating,
 };
 
 pub(super) fn initialize_award_condition_duration_storage(
-    roots: Query<
-        Entity,
+    mut roots: Query<
+        (Entity, &mut PersistentIdAllocator),
         (
             With<WorldRoot>,
             With<WorldLoadCompleted>,
@@ -45,106 +47,110 @@ pub(super) fn initialize_award_condition_duration_storage(
         &WorldMember,
         &ProgressionAwardConditionDurationProgress,
     )>,
-    mut ids: ResMut<PersistentIdAllocator>,
     mut commands: Commands,
 ) {
-    let Some(root) = roots.iter().find(|&entity| ids.owns_world(entity)) else {
-        return;
-    };
     let Some(definitions) = definitions.get(&assets) else {
         return;
     };
-    let earned = earned
-        .iter()
-        .filter(|(_, member, _)| member.root == root)
-        .map(|(entity, _, award)| (award.definition, entity))
-        .collect::<BTreeMap<_, _>>();
-    let saved_progress = saved_progress
-        .iter()
-        .filter(|(_, member, _)| member.root == root)
-        .map(|(entity, _, progress)| ((progress.award, progress.condition_index), entity))
-        .collect::<BTreeMap<_, _>>();
-    let timed_condition_count = definitions
-        .awards()
-        .flat_map(|award| {
-            award
-                .conditions
-                .iter()
-                .enumerate()
-                .map(move |(index, condition)| (award.id, index, condition))
-        })
-        .filter(|&(award, index, condition)| {
-            condition.duration_ticks != 0 && !saved_progress.contains_key(&(award, index as u32))
-        })
-        .count();
-    if u64::try_from(timed_condition_count)
-        .ok()
-        .and_then(|count| ids.next().checked_add(count))
-        .is_none()
-    {
-        return;
-    }
-    let world = WorldMember { root };
-    for definition in definitions.awards() {
-        let award = if let Some(&entity) = earned.get(&definition.id) {
-            commands.entity(entity).insert(ProgressionAward {
-                definition: definition.id,
-                state: ProgressionAwardState::Earned,
-            });
-            entity
-        } else {
-            commands
-                .spawn((
-                    ProgressionAward {
-                        definition: definition.id,
-                        state: ProgressionAwardState::Evaluating,
-                    },
-                    world,
-                ))
-                .id()
-        };
-        for (index, condition) in definition.conditions.iter().enumerate() {
-            let Ok(index) = u32::try_from(index) else {
-                return;
+    for (root, mut ids) in &mut roots {
+        let earned = earned
+            .iter()
+            .filter(|(_, member, _)| member.root == root)
+            .map(|(entity, _, award)| (award.definition, entity))
+            .collect::<BTreeMap<_, _>>();
+        let saved_progress = saved_progress
+            .iter()
+            .filter(|(_, member, _)| member.root == root)
+            .map(|(entity, _, progress)| ((progress.award, progress.condition_index), entity))
+            .collect::<BTreeMap<_, _>>();
+        let timed_condition_count = definitions
+            .awards()
+            .flat_map(|award| {
+                award
+                    .conditions
+                    .iter()
+                    .enumerate()
+                    .map(move |(index, condition)| (award.id, index, condition))
+            })
+            .filter(|&(award, index, condition)| {
+                condition.duration_ticks != 0
+                    && !saved_progress.contains_key(&(award, index as u32))
+            })
+            .count();
+        if u64::try_from(timed_condition_count)
+            .ok()
+            .and_then(|count| ids.next().checked_add(count))
+            .is_none()
+        {
+            continue;
+        }
+        let world = WorldMember { root };
+        for definition in definitions.awards() {
+            let award = if let Some(&entity) = earned.get(&definition.id) {
+                commands.entity(entity).insert(ProgressionAward {
+                    definition: definition.id,
+                    state: ProgressionAwardState::Earned,
+                });
+                entity
+            } else {
+                commands
+                    .spawn((
+                        ProgressionAward {
+                            definition: definition.id,
+                            state: ProgressionAwardState::Evaluating,
+                        },
+                        world,
+                    ))
+                    .id()
             };
-            if let Some(&entity) = saved_progress.get(&(definition.id, index)) {
-                commands.entity(entity).insert((
-                    ProgressionAwardConditionOf(award),
-                    AuthoredAwardConditionIndex(index),
-                ));
-                continue;
-            }
-            let mut row = commands.spawn((
-                ProgressionAwardConditionOf(award),
-                AuthoredAwardConditionIndex(index),
-                world,
-            ));
-            if condition.duration_ticks != 0 {
-                let Ok(id) = ids.allocate(root) else {
+            for (index, condition) in definition.conditions.iter().enumerate() {
+                let Ok(index) = u32::try_from(index) else {
                     return;
                 };
-                row.insert((
-                    id,
-                    ProgressionAwardConditionDurationProgress {
-                        award: definition.id,
-                        condition_index: index,
-                        satisfied_ticks: 0,
-                    },
+                if let Some(&entity) = saved_progress.get(&(definition.id, index)) {
+                    commands.entity(entity).insert((
+                        ProgressionAwardConditionOf(award),
+                        AuthoredAwardConditionIndex(index),
+                    ));
+                    continue;
+                }
+                let mut row = commands.spawn((
+                    ProgressionAwardConditionOf(award),
+                    AuthoredAwardConditionIndex(index),
+                    world,
                 ));
+                if condition.duration_ticks != 0 {
+                    let Ok(id) = ids.allocate() else {
+                        return;
+                    };
+                    row.insert((
+                        id,
+                        ProgressionAwardConditionDurationProgress {
+                            award: definition.id,
+                            condition_index: index,
+                            satisfied_ticks: 0,
+                        },
+                    ));
+                }
             }
         }
+        commands
+            .entity(root)
+            .insert(ProgressionAwardConditionStorageInitialized);
     }
-    commands
-        .entity(root)
-        .insert(ProgressionAwardConditionStorageInitialized);
 }
 
 pub(super) fn evaluate_all_progression_award_conditions_and_queue_grants(
     assets: Res<Assets<WorldDefinitionAsset>>,
     definitions: Res<WorldDefinitions>,
-    rating: Res<ZooRating>,
+    ratings: Query<(&ZooRating, &ZooFinanceRating), With<WorldRoot>>,
     mut awards: Query<
-        (Entity, &mut ProgressionAward, &ProgressionAwardConditions),
+        (
+            Entity,
+            &WorldMember,
+            &mut ProgressionAward,
+            &ProgressionAwardConditions,
+        ),
         Without<EarnedProgressionAward>,
     >,
     mut conditions: Query<(
@@ -157,7 +163,10 @@ pub(super) fn evaluate_all_progression_award_conditions_and_queue_grants(
     let Some(definitions) = definitions.get(&assets) else {
         return;
     };
-    for (award, mut state, members) in &mut awards {
+    for (award, world, mut state, members) in &mut awards {
+        let Ok((rating, finance)) = ratings.get(world.root) else {
+            continue;
+        };
         let Some(definition) = definitions.find_award(state.definition) else {
             continue;
         };
@@ -172,14 +181,17 @@ pub(super) fn evaluate_all_progression_award_conditions_and_queue_grants(
                 eligible = false;
                 continue;
             };
-            let satisfied =
-                select_zoo_rating_input(&rating, &condition.kind).is_some_and(|value| {
-                    zoo_rating_satisfies_authored_comparison(
-                        value,
-                        condition.value,
-                        &condition.comparison,
-                    )
-                });
+            let value = match condition.kind {
+                RatingInputKind::Finance => finance.0,
+                _ => select_zoo_rating_input(rating, &condition.kind),
+            };
+            let satisfied = value.is_some_and(|value| {
+                zoo_rating_satisfies_authored_comparison(
+                    value,
+                    condition.value,
+                    &condition.comparison,
+                )
+            });
             if condition.duration_ticks == 0 {
                 eligible &= satisfied;
             } else if let Some(mut progress) = progress {
@@ -217,7 +229,8 @@ pub(super) fn grant_earned_progression_awards(
     assets: Res<Assets<WorldDefinitionAsset>>,
     definitions: Res<WorldDefinitions>,
     mut awards: Query<(&WorldMember, &mut ProgressionAward)>,
-    mut ids: ResMut<PersistentIdAllocator>,
+    active_world: Query<Entity, (With<WorldRoot>, With<WorldLoadCompleted>)>,
+    mut ids: Query<&mut PersistentIdAllocator, With<WorldRoot>>,
     mut unlocks: ResMut<UnlockedCatalogueDefinitionSet>,
     mut commands: Commands,
     mut granted: MessageWriter<ProgressionAwardGranted>,
@@ -227,6 +240,7 @@ pub(super) fn grant_earned_progression_awards(
     let Some(definitions) = definitions.get(&assets) else {
         return;
     };
+    let active_world = active_world.single().ok();
     for candidate in candidates.read() {
         let Ok((world, mut state)) = awards.get_mut(candidate.award) else {
             continue;
@@ -244,7 +258,10 @@ pub(super) fn grant_earned_progression_awards(
         {
             continue;
         }
-        let Ok(id) = ids.allocate(world.root) else {
+        let Ok(mut ids) = ids.get_mut(world.root) else {
+            continue;
+        };
+        let Ok(id) = ids.allocate() else {
             continue;
         };
         state.state = ProgressionAwardState::Earned;
@@ -255,6 +272,9 @@ pub(super) fn grant_earned_progression_awards(
                 earned_tick: clock.tick,
             },
         ));
+        if active_world != Some(world.root) {
+            continue;
+        }
         granted.write(ProgressionAwardGranted {
             award: candidate.award,
             definition: definition.id,

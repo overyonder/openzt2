@@ -7,7 +7,7 @@ use openzt2_game_data::animation::animation_text_key::{
 };
 use openzt2_world_state::animation_playback::animation_event_message_types::AnimationObjectCommand;
 use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
-use openzt2_zoo_state::terrain::terrain_chunk_types::{EditedTerrainSamples, TerrainChunk, TerrainIndex};
+use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainIndex;
 use openzt2_zoo_state::terrain::terrain_water_geometric_wave_shader_state::{
     ActivateTerrainWaterImpactWave, WaterSurfaceSpraySample, WaterSurfaceWakeSample,
 };
@@ -24,7 +24,6 @@ pub(crate) fn project_animation_surface_effects_into_water_disturbances(
     active_definitions: Res<WorldDefinitions>,
     terrain_index: Option<Res<TerrainIndex>>,
     terrain_assets: Res<Assets<TerrainAsset>>,
-    chunks: Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
     memberships: Query<&TerrainWaterMembershipIndex>,
     regions: TerrainWaterRegionQuery,
     mut impacts: MessageWriter<ActivateTerrainWaterImpactWave>,
@@ -71,7 +70,6 @@ pub(crate) fn project_animation_surface_effects_into_water_disturbances(
         let Some((_, surface)) = sample_accepted_water_surface(
             &index,
             &terrain_assets,
-            &chunks,
             &memberships,
             &regions,
             position,

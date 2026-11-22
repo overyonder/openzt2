@@ -181,8 +181,8 @@ impl InteractionContainerAdmissionRequest {
                     return Refused;
                 }
                 let Some(persistent_id) = world
-                    .get_resource_mut::<PersistentIdAllocator>()
-                    .and_then(|mut ids| ids.allocate(world_root).ok())
+                    .get_mut::<PersistentIdAllocator>(world_root)
+                    .and_then(|mut ids| ids.allocate().ok())
                 else {
                     return IdentityUnavailable;
                 };

@@ -8,18 +8,15 @@ use openzt2_game_assets::world_scenario::world_scenario_document_asset_and_depen
 use openzt2_world_state::game_session_types::WorldSessionMode;
 use openzt2_world_state::world_spawn::selected_world_identity::SelectedWorldIdentity;
 use openzt2_world_state::world_spawn::world_load_completion_marker::WorldLoadCompleted;
-use openzt2_zoo_state::economy::scenario_economy_command_types::ScenarioEconomyCommand;
-use openzt2_zoo_state::progression::award_and_progression_fact_types::AdjustScenarioAwardPointTotalRequest;
 
-use openzt2_zoo_state::scenario::scenario_session_types::SelectedScenarioDocument;
+use openzt2_zoo_state::scenario::scenario_session_types::ScenarioDocument;
 
 use super::{
     challenge_offer_types::{
-        CreateScenarioChallengeOfferFromLuaSourcePathRequest,
         ScenarioChallengeManagerNextEvaluationTick, ScenarioChallengeOffer,
         ScenarioChallengeSelectionRandomNumberGenerator, ScenarioInstantChallengeDecided,
     },
-    scenario_lua_command_publication::publish_commands_produced_by_scenario_lua_script,
+    scenario_lua_command_publication::ScenarioLuaOutputs,
     scenario_lua_query_fact_collection::ScenarioLuaQueryFactSources,
     scenario_lua_types::ScenarioLuaVirtualMachineContexts,
     scenario_lua_virtual_machine::execute_loaded_scenario_lua_script_binding,
@@ -49,7 +46,10 @@ pub(super) fn evaluate_challenge_manager_and_validate_one_picked_challenge(
     scripts: Res<Assets<LuaScriptAsset>>,
     script_index: Res<LuaScriptArchivePathIndex>,
     mut runtime: NonSendMut<ScenarioLuaVirtualMachineContexts>,
-    fact_sources: ScenarioLuaQueryFactSources,
+    (fact_sources, direct): (
+        ScenarioLuaQueryFactSources,
+        super::scenario_lua_entity_commands::ScenarioLuaDirectAccess,
+    ),
     spawn_sources: super::scenario_lua_entity_commands::ScenarioAnimalSpawnSources,
     fixed_time: Res<Time<Fixed>>,
     mut roots: Query<
@@ -63,20 +63,12 @@ pub(super) fn evaluate_challenge_manager_and_validate_one_picked_challenge(
         With<WorldLoadCompleted>,
     >,
     offers: Query<(), With<ScenarioChallengeOffer>>,
-    mut outputs: (
-        MessageWriter<ScenarioEconomyCommand>,
-        MessageWriter<AdjustScenarioAwardPointTotalRequest>,
-        MessageWriter<CreateScenarioChallengeOfferFromLuaSourcePathRequest>,
-        MessageWriter<super::challenge_offer_types::ScenarioChallengePanelRequest>,
-        MessageWriter<openzt2_zoo_state::scenario::scenario_objective_types::ShowScenarioRuleRequest>,
-        MessageWriter<openzt2_zoo_state::progression::adoption_and_content_availability_types::MakeScenarioContentAvailableRequest>,
-        MessageWriter<super::scenario_photo_challenge_selection::SelectCurrentPhotoChallengeSetRequest>,
-        MessageWriter<openzt2_zoo_state::progression::profile_scenario_variables::SetProfileScenarioVariable>,
-        MessageWriter<openzt2_zoo_state::progression::profile_scenario_variables::PersistProfileScenarioVariables>,
-        MessageWriter<super::scenario_lua_ui::ScenarioUiCommand>,
-        MessageWriter<super::scenario_lua_entity_commands::ScenarioEntityCommand>,
-        MessageWriter<openzt2_zoo_state::progression::fame_types::SetScenarioMaximumFame>,
-    ),
+    contexts: Query<(
+        Entity,
+        &super::challenge_offer_types::ScenarioChallengeLuaCandidate,
+        &openzt2_world_state::world_spawn::world_membership_types::WorldMember,
+    )>,
+    mut outputs: ScenarioLuaOutputs,
 ) {
     let Some(clock) = fact_sources.zoo_clock() else {
         return;
@@ -178,11 +170,31 @@ pub(super) fn evaluate_challenge_manager_and_validate_one_picked_challenge(
             .borrow_mut()
             .resolve(kind, position, rotation, reserved)
     };
-    let mut queries = fact_sources.borrow_scenario_lua_query_facts();
+    let contained = |entity| fact_sources.contained_entities(entity);
+    let direct = std::cell::RefCell::new(direct);
+    let waste = |entity, value| direct.borrow_mut().waste(entity, value);
+    let profile = |key, value: Option<Option<&str>>| direct.borrow_mut().profile(key, value);
+    let mut queries = fact_sources.borrow_scenario_lua_query_facts(&contained);
+    queries.waste = Some(&waste);
+    queries.profile = Some(&profile);
     queries.spawn_animal = Some(&spawn_animal);
+    let owner = contexts
+        .iter()
+        .find(|(_, candidate, member)| candidate.0 == binding.scenario && member.root == root)
+        .map(|(entity, _, _)| entity)
+        .unwrap_or_else(|| {
+            commands
+                .spawn((
+                    openzt2_world_state::world_spawn::world_membership_types::WorldMember { root },
+                    super::challenge_offer_types::ScenarioChallengeLuaCandidate(binding.scenario),
+                    ScenarioDocument(handle.clone()),
+                ))
+                .id()
+        });
     match execute_loaded_scenario_lua_script_binding(
         &mut runtime,
-        &SelectedScenarioDocument(handle),
+        owner,
+        &ScenarioDocument(handle),
         &scenario_assets,
         &scripts,
         &script_index,
@@ -201,22 +213,7 @@ pub(super) fn evaluate_challenge_manager_and_validate_one_picked_challenge(
                 offered = ?result.challenge_offer_source_paths,
                 "challenge validation ran"
             );
-            publish_commands_produced_by_scenario_lua_script(
-                root,
-                result,
-                &mut outputs.0,
-                &mut outputs.1,
-                &mut outputs.2,
-                &mut outputs.3,
-                &mut outputs.4,
-                &mut outputs.5,
-                &mut outputs.6,
-                &mut outputs.7,
-                &mut outputs.8,
-                &mut outputs.9,
-                &mut outputs.10,
-                &mut outputs.11,
-            );
+            outputs.publish(root, result);
         }
         Err(error) => {
             error!(script = %binding.script, %error, "challenge validation Lua call failed");

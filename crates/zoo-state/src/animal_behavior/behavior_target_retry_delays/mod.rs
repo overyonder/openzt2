@@ -127,74 +127,66 @@ pub fn restore_behavior_target_retry(
     ));
 }
 
-pub fn update_behavior_target_retry(
-    world: &mut World,
-    actor: Entity,
-    target: Entity,
-    failure: Option<BehaviorSelectionPolicy>,
-) {
-    if world.get_entity(target).is_err() {
-        return;
-    }
-    let Ok(entity) = world.get_entity(actor) else {
-        return;
-    };
-    let existing = entity.get::<BehaviorRejections>().and_then(|records| {
-        records.iter().find(|record| {
-            world
-                .get::<RejectedTarget>(*record)
-                .is_some_and(|value| value.0 == target)
-        })
-    });
-    if existing.is_none() && failure.is_none() {
-        return;
-    }
-    if world.get::<BehaviorTargetRetryClock>(actor).is_none() {
-        world
-            .entity_mut(actor)
-            .insert(BehaviorTargetRetryClock::default());
-    }
-    let clock = world
-        .get::<BehaviorTargetRetryClock>(actor)
-        .expect("actor has a retry clock");
-    let epoch = clock.selection_epoch;
-    let completed = clock.completed_updates;
-    let selection_update = clock.selection_update;
-    let was_rejected = existing
-        .and_then(|record| world.get::<RetryDelay>(record))
-        .is_some_and(|delay| delay.rejects(clock));
+#[derive(SystemParam)]
+pub struct BehaviorTargetRetryOutcomes<'w, 's> {
+    actors: Query<'w, 's, &'static BehaviorRejections>,
+    targets: Query<'w, 's, &'static RejectedTarget>,
+    delays: Query<'w, 's, &'static mut RetryDelay>,
+}
 
-    if let Some(policy) = failure {
-        let failures = existing
-            .and_then(|record| world.get::<RetryDelay>(record))
-            .map_or(1, |delay| delay.failures.saturating_add(1));
-        let remaining = failures
-            .saturating_mul(policy.rejected_target_retry_interval)
-            .min(policy.rejected_target_retry_interval_cap);
-        let value = RetryDelay {
-            failures,
-            ready_at_update: completed.saturating_add(u64::from(remaining)),
-            rejected_on_epoch: Some(epoch),
-        };
-        if let Some(record) = existing {
-            *world
-                .get_mut::<RetryDelay>(record)
-                .expect("target has a retry delay") = value;
-        } else {
-            world.spawn((RejectedBy(actor), RejectedTarget(target), value));
-        }
-    } else if let Some(record) = existing {
-        if was_rejected {
-            // Selectors on either side of this outcome use the same update.
-            *world
-                .get_mut::<RetryDelay>(record)
-                .expect("target has a retry delay") = RetryDelay {
-                failures: 0,
-                ready_at_update: selection_update,
+impl BehaviorTargetRetryOutcomes<'_, '_> {
+    pub fn settle(
+        &mut self,
+        commands: &mut Commands,
+        actor: Entity,
+        target: Entity,
+        clock: Option<&BehaviorTargetRetryClock>,
+        failure: Option<BehaviorSelectionPolicy>,
+    ) {
+        let existing = self.actors.get(actor).ok().and_then(|records| {
+            records.iter().find(|record| {
+                self.targets
+                    .get(*record)
+                    .is_ok_and(|value| value.0 == target)
+            })
+        });
+        let default_clock = BehaviorTargetRetryClock::default();
+        let current_clock = clock.unwrap_or(&default_clock);
+        let epoch = current_clock.selection_epoch;
+        let delay = existing.and_then(|record| self.delays.get_mut(record).ok());
+        if let Some(policy) = failure {
+            let failures = delay
+                .as_ref()
+                .map_or(1, |delay| delay.failures.saturating_add(1));
+            let remaining = failures
+                .saturating_mul(policy.rejected_target_retry_interval)
+                .min(policy.rejected_target_retry_interval_cap);
+            let next = RetryDelay {
+                failures,
+                ready_at_update: current_clock
+                    .completed_updates
+                    .saturating_add(u64::from(remaining)),
                 rejected_on_epoch: Some(epoch),
             };
-        } else {
-            world.despawn(record);
+            if clock.is_none() {
+                commands.entity(actor).insert(default_clock);
+            }
+            if let Some(mut delay) = delay {
+                *delay = next;
+            } else {
+                commands.spawn((RejectedBy(actor), RejectedTarget(target), next));
+            }
+        } else if let (Some(record), Some(mut delay)) = (existing, delay) {
+            if delay.rejects(current_clock) {
+                // Both selectors see the same cognitive update.
+                *delay = RetryDelay {
+                    failures: 0,
+                    ready_at_update: current_clock.selection_update,
+                    rejected_on_epoch: Some(epoch),
+                };
+            } else {
+                commands.entity(record).despawn();
+            }
         }
     }
 }

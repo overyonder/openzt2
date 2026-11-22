@@ -311,7 +311,10 @@ fn capture_behavior_actor_snapshots(
                 if claim.staff != actor.entity || behavior.execution_id != Some(task.execution_id) {
                     return Err(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference);
                 }
+                let routing = job_entity.staff_job_routing.copied().unwrap_or_default();
                 Ok(BehaviorStaffJobSnapshot {
+                    subject_type: routing.subject_type,
+                    recipient: routing.recipient,
                     kind: job.kind,
                     target: reference(job.target)?,
                     urgency: job.urgency,

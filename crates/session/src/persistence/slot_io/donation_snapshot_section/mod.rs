@@ -1,5 +1,6 @@
-use bevy::prelude::*;
+use bevy::{ecs::query::QueryData, prelude::*};
 use openzt2_game_data::AssetId;
+use openzt2_world_state::world_spawn::persistent_id_index::PersistentIdIndex;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 use openzt2_zoo_state::donations::donation_payment_types::{DonationCategoryTotals, DonationTotal};
 use openzt2_zoo_state::economy::money_types::Money;
@@ -17,7 +18,7 @@ const MAXIMUM_DONATION_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct DonationSnapshotRecord {
-    identifier: PersistentId,
+    pub(super) identifier: PersistentId,
     total: DonationTotal,
     categories: DonationCategoryTotals,
 }
@@ -150,27 +151,32 @@ pub(super) fn decode_donation_records(
     Ok(records)
 }
 
-pub(super) fn resolve_donation_records(
-    records: Vec<DonationSnapshotRecord>,
-    entities: &std::collections::BTreeMap<u64, Entity>,
-) -> Result<Vec<(Entity, DonationTotal, DonationCategoryTotals)>, Failure> {
-    records
-        .into_iter()
-        .map(|record| {
-            let entity = entities
-                .get(&record.identifier.0)
-                .copied()
-                .ok_or(Failure::BrokenPersistentEntityReference)?;
-            Ok((entity, record.total, record.categories))
-        })
-        .collect()
+#[derive(QueryData)]
+#[query_data(mutable)]
+pub(super) struct RestoredDonationComponents {
+    total: Option<&'static mut DonationTotal>,
+    categories: Option<&'static mut DonationCategoryTotals>,
 }
 
-pub(super) fn apply_donation_records(
+pub(super) fn restore_donation_totals(
     commands: &mut Commands,
-    records: Vec<(Entity, DonationTotal, DonationCategoryTotals)>,
-) {
-    for (entity, total, categories) in records {
-        commands.entity(entity).insert((total, categories));
+    records: Vec<DonationSnapshotRecord>,
+    identities: &PersistentIdIndex,
+    root: Entity,
+    donations: &mut Query<RestoredDonationComponents>,
+) -> Result<(), Failure> {
+    use super::restored_component_values::restore_optional_component;
+
+    for record in records {
+        let owner = identities
+            .get(root, record.identifier)
+            .ok_or(Failure::BrokenPersistentEntityReference)?;
+        let live = donations
+            .get_mut(owner)
+            .map_err(|_| Failure::BrokenPersistentEntityReference)?;
+        let mut owner = commands.entity(owner);
+        restore_optional_component(&mut owner, live.total, Some(record.total), false);
+        restore_optional_component(&mut owner, live.categories, Some(record.categories), false);
     }
+    Ok(())
 }

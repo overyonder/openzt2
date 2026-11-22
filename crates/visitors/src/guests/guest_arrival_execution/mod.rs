@@ -38,7 +38,7 @@ use openzt2_world_state::simulation_time::deterministic_random_stream::RngDomain
 use openzt2_world_state::simulation_time::deterministic_random_stream::ZooSeed;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
-use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator;
+use openzt2_world_state::world_spawn::persistent_id_types::{PersistentIdAllocator, PersistentIdError};
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabPresentation;
 use openzt2_world_state::world_spawn::world_load_completion_marker::WorldLoadCompleted;
 use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
@@ -134,12 +134,11 @@ pub(super) fn guest_arrivals_are_due(
 #[derive(SystemParam)]
 pub(crate) struct GuestArrivalParams<'w, 's> {
     clock: Res<'w, ZooClock>,
-    fame: Res<'w, Fame>,
     admission: Res<'w, AdmissionPrice>,
     admissions_open: Res<'w, ZooAdmissionsOpen>,
     definitions: Res<'w, Assets<WorldDefinitionAsset>>,
     active_definitions: Res<'w, WorldDefinitions>,
-    ids: ResMut<'w, PersistentIdAllocator>,
+    ids: Query<'w, 's, &'static mut PersistentIdAllocator>,
     roots: Query<
         'w,
         's,
@@ -147,6 +146,7 @@ pub(crate) struct GuestArrivalParams<'w, 's> {
             Entity,
             &'static mut GuestArrivalState,
             &'static mut GuestFavouriteAnimalTrend,
+            &'static Fame,
         ),
         (With<WorldRoot>, With<WorldLoadCompleted>),
     >,
@@ -204,7 +204,6 @@ pub(crate) struct GuestArrivalParams<'w, 's> {
 pub(crate) fn spawn_arriving_guests(params: GuestArrivalParams) {
     let GuestArrivalParams {
         clock,
-        fame,
         admission,
         admissions_open,
         definitions,
@@ -225,7 +224,7 @@ pub(crate) fn spawn_arriving_guests(params: GuestArrivalParams) {
         mut failed,
         mut requested_arrivals,
     } = params;
-    let Ok((root, mut state, mut favourite_trend)) = roots.single_mut() else {
+    let Ok((root, mut state, mut favourite_trend, fame)) = roots.single_mut() else {
         return;
     };
     let Some(definitions) = active_definitions.get(&definitions) else {
@@ -371,7 +370,11 @@ pub(crate) fn spawn_arriving_guests(params: GuestArrivalParams) {
             });
             continue;
         };
-        let id = match ids.allocate(root) {
+        let id = match ids
+            .get_mut(root)
+            .map_err(|_| PersistentIdError::WrongWorld)
+            .and_then(|mut allocator| allocator.allocate())
+        {
             Ok(id) => id,
             Err(reason) => {
                 failed.write(GuestArrivalFailed {

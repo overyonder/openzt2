@@ -1,25 +1,17 @@
 use bevy::prelude::*;
 
-/// Installed by the world placement and motion owner for the supported releases.
-#[derive(Resource, Default)]
-pub struct BehaviorWorldReleaseSupport {
-    pub drop: bool,
-    pub fall: bool,
-}
-
 #[derive(Component, Clone, Copy)]
 pub enum BehaviorWorldReleaseMotion {
     Drop,
     Fall,
 }
 
-impl BehaviorWorldReleaseMotion {
-    pub fn available(self, support: Option<&BehaviorWorldReleaseSupport>) -> bool {
-        support.is_some_and(|support| match self {
-            Self::Drop => support.drop,
-            Self::Fall => support.fall,
-        })
-    }
+/// Optional animation keys authored on the released subject's definition.
+#[derive(Component, Clone, Debug, Default)]
+pub struct FallReleaseAnimationClips {
+    pub airborne: Option<String>,
+    pub land_impact: Option<String>,
+    pub water_impact: Option<String>,
 }
 
 /// The item is detached and its last joint pose is available to world physics.

@@ -2,6 +2,7 @@ use super::panel_binding_families::*;
 use bevy::ecs::relationship::RelationshipTarget;
 use bevy::prelude::*;
 use openzt2_game_data::ui_document::node_property_binding::UiIntegerPropertyBindingSource;
+use openzt2_world_state::world_spawn::world_membership_types::{WorldMember, WorldRoot};
 
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiValue;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiValueBinding;
@@ -15,7 +16,7 @@ use openzt2_interface_state::information::entity_selection_types::{InfoPanel, Se
 
 /// Updates maintenance information for the selected entity.
 pub(crate) fn project_live_maintenance_status_to_visible_information_panels(
-    cleanliness: Res<ZooCleanlinessPermille>,
+    cleanliness: Query<Ref<ZooCleanlinessPermille>, With<WorldRoot>>,
     panels: Query<
         (
             &ChildOf,
@@ -26,6 +27,7 @@ pub(crate) fn project_live_maintenance_status_to_visible_information_panels(
     >,
     selections: Query<Ref<SelectedSubject>>,
     subjects: Query<(
+        Option<&WorldMember>,
         Option<Ref<FacilityContainedWaste>>,
         Option<Ref<LooseLitterWaste>>,
         Option<Ref<AnimalHabitatWaste>>,
@@ -39,12 +41,13 @@ pub(crate) fn project_live_maintenance_status_to_visible_information_panels(
         if !visible.get() {
             continue;
         }
-        let Ok((container, litter, habitat_waste)) = subjects.get(selection.0) else {
+        let Ok((world, container, litter, habitat_waste)) = subjects.get(selection.0) else {
             continue;
         };
+        let cleanliness = world.and_then(|world| cleanliness.get(world.root).ok());
         if !selection.is_changed()
             && !visible.is_changed()
-            && !cleanliness.is_changed()
+            && cleanliness.as_ref().is_none_or(|value| !value.is_changed())
             && container.as_ref().is_none_or(|value| !value.is_changed())
             && litter.as_ref().is_none_or(|value| !value.is_changed())
             && habitat_waste
@@ -91,12 +94,13 @@ pub(crate) fn project_live_maintenance_status_to_visible_information_panels(
                     .as_ref()
                     .map(|waste| i64::from(waste.uncontained_waste_units)),
                 UiIntegerPropertyBindingSource::ZooCleanlinessPermille => {
-                    visibility.set_if_neq(if cleanliness.0.is_some() {
+                    let cleanliness = cleanliness.as_ref().and_then(|value| value.0);
+                    visibility.set_if_neq(if cleanliness.is_some() {
                         Visibility::Inherited
                     } else {
                         Visibility::Hidden
                     });
-                    cleanliness.0.map(i64::from)
+                    cleanliness.map(i64::from)
                 }
                 _ => None,
             };

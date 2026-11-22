@@ -4,10 +4,15 @@
 use std::{
     io::Write,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
 };
 
 use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
+
+static NEXT_PARTIAL_ARCHIVE: AtomicU64 = AtomicU64::new(0);
 
 /// Writes `name.z2f` into `directory`, holding each replacement as `foo.glb`
 /// beside the model `foo.bfb` or `foo.nif` it replaces. Rewriting a mod of
@@ -37,9 +42,13 @@ pub(super) fn write_mod_archive(
         return Err("no model has been sent from Blender yet".to_owned());
     }
     let path = directory.join(format!("{name}.z2f"));
-    let partial_path = directory.join(format!("{name}.z2f.partial"));
+    let serial = NEXT_PARTIAL_ARCHIVE.fetch_add(1, Ordering::Relaxed);
+    let partial_path = directory.join(format!(
+        "{name}.z2f.{}.{serial}.partial",
+        std::process::id()
+    ));
     let write = || -> std::io::Result<()> {
-        let mut archive = ZipWriter::new(std::fs::File::create(&partial_path)?);
+        let mut archive = ZipWriter::new(std::fs::File::create_new(&partial_path)?);
         let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
         for (model_path, gltf) in replacements {
             let entry = model_path.with_extension("glb");

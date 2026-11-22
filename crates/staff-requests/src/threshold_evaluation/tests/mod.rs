@@ -23,7 +23,7 @@ fn number_row(
         trigger_on_destruction: false,
         request: StaffRequestData {
             token: Some(AssetId::from_key("t_fillfoodcontainer")),
-            subject_type: None,
+            subject_type: Some(AssetId::from_key("keeper")),
             priority: 4.0,
             target: None,
             staff: None,
@@ -50,8 +50,12 @@ fn finite_thresholds_raise_only_on_entry() {
     let sample = |value| Some(StaffRequestControllerSample::NumberQ16(value * 65_536));
     for (comparison, current, previous, expected) in cases {
         let row = number_row(comparison, false);
-        let mut state =
-            bind_rows(row.id, std::slice::from_ref(&row), built_in_request_kind).remove(0);
+        let mut state = bind_rows(
+            row.id,
+            std::slice::from_ref(&row),
+            terminal_job_kind_for_token,
+        )
+        .remove(0);
         let _ = evaluate_staff_request_row(&row, &mut state, target, sample(previous));
         assert_eq!(
             matches!(
@@ -73,10 +77,14 @@ fn authored_hysteresis_uses_independent_cancel_threshold() {
             binder: row.binder,
             attribute_key: row.attribute_key,
             token: row.request.token,
+            routing: StaffJobRouting {
+                subject_type: row.request.subject_type,
+                recipient: row.request.staff,
+            },
             ordinal: 0,
         },
         row_index: 0,
-        job_kind: row.request.token.and_then(built_in_request_kind),
+        job_kind: row.request.token.and_then(terminal_job_kind_for_token),
         previous: None,
     };
     assert!(evaluate_staff_request_row(
@@ -135,8 +143,9 @@ fn authored_hysteresis_uses_independent_cancel_threshold() {
 }
 
 #[test]
-fn creation_and_edges_emit_one_request_and_one_cancellation() {
-    let row = number_row(Comparison::FallsBelow, true);
+fn creation_and_edges_emit_one_request_and_one_cancellation_without_a_terminal_kind() {
+    let mut row = number_row(Comparison::FallsBelow, true);
+    row.request.token = Some(AssetId::from_key("t_checkupbaby"));
     let target = Entity::from_bits(7);
     let mut state = StaffRequestRuntimeState {
         row: StaffRequestRowIdentity {
@@ -144,10 +153,14 @@ fn creation_and_edges_emit_one_request_and_one_cancellation() {
             binder: row.binder,
             attribute_key: row.attribute_key,
             token: row.request.token,
+            routing: StaffJobRouting {
+                subject_type: row.request.subject_type,
+                recipient: row.request.staff,
+            },
             ordinal: 0,
         },
         row_index: 0,
-        job_kind: row.request.token.and_then(built_in_request_kind),
+        job_kind: None,
         previous: None,
     };
     assert!(matches!(
@@ -243,13 +256,13 @@ fn a_filter_is_cleaned_at_the_thresholds_of_its_chosen_schedule() {
         filter_schedule_row(&row, &filter, Some(&MaintenanceScheduleIndex(0))).unwrap();
     let target = Entity::from_bits(7);
     let rows = std::slice::from_ref(&row);
-    let mut state = bind_rows(row.id, rows, built_in_request_kind).remove(0);
+    let mut state = bind_rows(row.id, rows, terminal_job_kind_for_token).remove(0);
     let dirt = |percent| Some(StaffRequestControllerSample::NumberQ16(percent * 65_536));
     assert!(evaluate_staff_request_row(&regular, &mut state, target, dirt(40)).is_none());
     assert!(matches!(
         evaluate_staff_request_row(&preemptive, &mut state, target, dirt(40)),
         Some(StaffRequestJobEvent::Raised { .. })
     ));
-    let mut state = reconcile_rows(row.id, rows, &[state], built_in_request_kind).remove(0);
+    let mut state = reconcile_rows(row.id, rows, &[state], terminal_job_kind_for_token).remove(0);
     assert!(evaluate_staff_request_row(&regular, &mut state, target, dirt(55)).is_none());
 }

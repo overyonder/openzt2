@@ -84,10 +84,6 @@ impl Plugin for SimulationTimePlugin {
                     .in_set(FixedGameSet::Clock)
                     .run_if(in_state(GamePhase::InGame))
                     .run_if(simulation_control_queries::simulation_is_running),
-            )
-            .add_systems(
-                OnExit(GamePhase::InGame),
-                simulation_time_world_lifecycle::remove_simulation_time_after_leaving_world,
             );
     }
 }

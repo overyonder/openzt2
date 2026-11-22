@@ -53,7 +53,7 @@ pub(super) fn prepare_transport_track_sale(
     active: Res<WorldDefinitions>,
     mut prepared: MessageWriter<TransportTrackConstructionEditPrepared>,
     mut rejected: MessageWriter<TransportTrackConstructionEditPreparationRejected>,
-    mut allocator: ResMut<PersistentIdAllocator>,
+    mut allocators: Query<&mut PersistentIdAllocator>,
 ) {
     for request in requests.read() {
         if !sales.requires_transport_sale(request.target) {
@@ -73,14 +73,20 @@ pub(super) fn prepare_transport_track_sale(
             continue;
         };
         if let Some((index, world)) = sales.single_piece(request.target) {
-            let Some(steps) = single_piece_removal_steps(
-                &mut commands,
-                &mut allocator,
-                request.transaction,
-                &edit,
-                index,
-                world,
-            ) else {
+            let steps = allocators
+                .get_mut(world.root)
+                .ok()
+                .and_then(|mut allocator| {
+                    single_piece_removal_steps(
+                        &mut commands,
+                        &mut allocator,
+                        request.transaction,
+                        &edit,
+                        index,
+                        world,
+                    )
+                });
+            let Some(steps) = steps else {
                 rejected.write(TransportTrackConstructionEditPreparationRejected {
                     transaction: request.transaction,
                     reason: PlacementFailure::InvalidTopology,
@@ -108,7 +114,7 @@ fn single_piece_removal_steps(
     index: usize,
     world: WorldMember,
 ) -> Option<TransportTrackConstructionEditSteps> {
-    let mut allocate = || allocator.allocate(world.root).ok();
+    let mut allocate = || allocator.allocate().ok();
     let laid = |points: &[bevy::math::Vec3]| PreparedTransportTrackConstructionEdit {
         removes_track: false,
         piece_entities: Box::default(),

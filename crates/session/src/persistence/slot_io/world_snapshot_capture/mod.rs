@@ -2,12 +2,12 @@ use bevy::prelude::Name;
 
 use super::super::persistence_failure_types::WorldSnapshotPersistenceFailure;
 use super::{
-    world_snapshot_capture_system_parameters::WorldSnapshotCaptureQueries,
+    world_snapshot_capture_system_parameters::WorldMetadataCaptureQueries,
     world_snapshot_types::{WorldSnapshotRecord, MAXIMUM_WORLD_DISPLAY_NAME_UTF8_BYTE_COUNT},
 };
 
 pub(super) fn capture_world_snapshot_record_from_live_world(
-    world_snapshot_capture_queries: &WorldSnapshotCaptureQueries,
+    world_snapshot_capture_queries: &WorldMetadataCaptureQueries,
 ) -> Result<WorldSnapshotRecord, WorldSnapshotPersistenceFailure> {
     let (_, world_root, world_selection, optional_world_name) = world_snapshot_capture_queries
         .world_roots

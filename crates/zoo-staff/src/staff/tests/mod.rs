@@ -26,7 +26,7 @@ use super::{
         CompatibleStaffBehaviorTask, StaffCandidateEligibilityFacts,
     },
     staff_job_request_creation::create_or_raise_priority_of_requested_staff_jobs,
-    staff_job_types::{CurrentJob, JobClaim, StaffJob},
+    staff_job_types::{CurrentJob, JobClaim, StaffJob, StaffJobRouting},
     staff_lifecycle_messages::{
         CancelStaffJobRequest, StaffJobCancelled, StaffJobCompleted, StaffJobRequest,
     },
@@ -65,28 +65,38 @@ fn claim_order_is_urgency_priority_distance_then_entity() {
 }
 
 #[test]
-fn duplicate_requests_create_one_job_entity() {
+fn duplicate_requests_create_one_job_per_routing() {
     let mut app = App::new();
     let root = app.world_mut().spawn_empty().id();
     let target = app.world_mut().spawn(WorldMember { root }).id();
-    app.insert_resource(PersistentIdAllocator::new(root))
-        .add_message::<StaffJobRequest>()
+    app.world_mut()
+        .entity_mut(root)
+        .insert(PersistentIdAllocator::default());
+    app.add_message::<StaffJobRequest>()
         .add_systems(Update, create_or_raise_priority_of_requested_staff_jobs);
     let request = StaffJobRequest {
-        kind: StaffJobKind::EmptyBin,
+        kind: Some(StaffJobKind::EmptyBin),
         target,
         urgency: 50,
         token: None,
+        routing: Default::default(),
     };
     app.world_mut().write_message(request);
     app.world_mut().write_message(request);
+    app.world_mut().write_message(StaffJobRequest {
+        routing: StaffJobRouting {
+            subject_type: Some(AssetId::from_key("worker")),
+            recipient: None,
+        },
+        ..request
+    });
     app.update();
     let count = {
         let world = app.world_mut();
         let mut jobs = world.query::<&StaffJob>();
         jobs.iter(world).count()
     };
-    assert_eq!(count, 1);
+    assert_eq!(count, 2);
 }
 
 #[test]
@@ -126,7 +136,7 @@ fn completion_clears_reciprocal_facts_and_releases_staff() {
         .world_mut()
         .spawn((
             StaffJob {
-                kind: StaffJobKind::Feed,
+                kind: Some(StaffJobKind::Feed),
                 target,
                 urgency: 1,
                 token: None,
@@ -161,7 +171,7 @@ fn missing_staff_releases_assignment_and_preserves_live_request() {
         .world_mut()
         .spawn((
             StaffJob {
-                kind: StaffJobKind::EmptyBin,
+                kind: Some(StaffJobKind::EmptyBin),
                 target,
                 urgency: 1,
                 token: None,
@@ -403,27 +413,31 @@ fn distinct_tokens_and_tokenless_requests_dedupe_separately() {
     let mut app = App::new();
     let root = app.world_mut().spawn_empty().id();
     let target = app.world_mut().spawn(WorldMember { root }).id();
-    app.insert_resource(PersistentIdAllocator::new(root))
-        .add_message::<StaffJobRequest>()
+    app.world_mut()
+        .entity_mut(root)
+        .insert(PersistentIdAllocator::default());
+    app.add_message::<StaffJobRequest>()
         .add_systems(Update, create_or_raise_priority_of_requested_staff_jobs);
     let fill_food_token = AssetId::from_key("t_fillfoodcontainer");
     let feed_animal_token = AssetId::from_key("t_feedanimal");
     for token in [Some(fill_food_token), Some(feed_animal_token), None] {
         app.world_mut().write_message(StaffJobRequest {
-            kind: StaffJobKind::Feed,
+            kind: Some(StaffJobKind::Feed),
             target,
             urgency: 10,
             token,
+            routing: Default::default(),
         });
     }
     // Same-batch duplicates coalesce to the maximum urgency before the
     // deferred spawn, so this request raises the dish job to 20 instead of
     // being discarded.
     app.world_mut().write_message(StaffJobRequest {
-        kind: StaffJobKind::Feed,
+        kind: Some(StaffJobKind::Feed),
         target,
         urgency: 20,
         token: Some(fill_food_token),
+        routing: Default::default(),
     });
     app.update();
     let mut jobs = {
@@ -433,13 +447,14 @@ fn distinct_tokens_and_tokenless_requests_dedupe_separately() {
             .map(|(job, claim)| (job.kind, job.token, job.urgency, claim.is_some()))
             .collect::<Vec<_>>()
     };
-    jobs.sort_by_key(|(kind, token, urgency, _)| (*kind as u8, *token, *urgency));
+    jobs.sort_by_key(|(kind, token, urgency, _)| (kind.map(|kind| kind as u8), *token, *urgency));
     let mut expected = vec![
-        (StaffJobKind::Feed, None, 10, false),
-        (StaffJobKind::Feed, Some(fill_food_token), 20, false),
-        (StaffJobKind::Feed, Some(feed_animal_token), 10, false),
+        (Some(StaffJobKind::Feed), None, 10, false),
+        (Some(StaffJobKind::Feed), Some(fill_food_token), 20, false),
+        (Some(StaffJobKind::Feed), Some(feed_animal_token), 10, false),
     ];
-    expected.sort_by_key(|(kind, token, urgency, _)| (*kind as u8, *token, *urgency));
+    expected
+        .sort_by_key(|(kind, token, urgency, _)| (kind.map(|kind| kind as u8), *token, *urgency));
     assert_eq!(jobs, expected);
 }
 
@@ -449,29 +464,34 @@ fn same_batch_jobs_spawn_in_first_seen_message_order() {
     let root = app.world_mut().spawn_empty().id();
     let animal_target = app.world_mut().spawn(WorldMember { root }).id();
     let dish_target = app.world_mut().spawn(WorldMember { root }).id();
-    app.insert_resource(PersistentIdAllocator::new(root))
-        .add_message::<StaffJobRequest>()
+    app.world_mut()
+        .entity_mut(root)
+        .insert(PersistentIdAllocator::default());
+    app.add_message::<StaffJobRequest>()
         .add_systems(Update, create_or_raise_priority_of_requested_staff_jobs);
     // Write the animal feed request first, interleave its duplicate, then the
     // dish request. The duplicate raises urgency without changing the first
     // occurrence's PersistentId order.
     app.world_mut().write_message(StaffJobRequest {
-        kind: StaffJobKind::Feed,
+        kind: Some(StaffJobKind::Feed),
         target: animal_target,
         urgency: 10,
         token: Some(AssetId::from_key("t_feedanimal")),
+        routing: Default::default(),
     });
     app.world_mut().write_message(StaffJobRequest {
-        kind: StaffJobKind::Feed,
+        kind: Some(StaffJobKind::Feed),
         target: dish_target,
         urgency: 10,
         token: Some(AssetId::from_key("t_fillfoodcontainer")),
+        routing: Default::default(),
     });
     app.world_mut().write_message(StaffJobRequest {
-        kind: StaffJobKind::Feed,
+        kind: Some(StaffJobKind::Feed),
         target: animal_target,
         urgency: 25,
         token: Some(AssetId::from_key("t_feedanimal")),
+        routing: Default::default(),
     });
     app.update();
     let mut spawned_jobs = {

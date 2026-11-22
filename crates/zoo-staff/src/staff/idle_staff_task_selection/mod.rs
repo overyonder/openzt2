@@ -28,8 +28,8 @@ use openzt2_game_assets::world_definitions::world_definition_document_asset_and_
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_world_state::world_spawn::world_membership_types::{DefinitionId, WorldMember};
 use openzt2_zoo_state::animal_behavior::behavior_candidate_selection::{
-    candidate_requirements_are_satisfied, score_supported_behavior_task,
-    BehaviorCandidateRanking,
+    BehaviorCandidateRanking, BehaviorTargetBiome, candidate_requirements_are_satisfied,
+    score_supported_behavior_task,
 };
 use openzt2_zoo_state::animal_behavior::behavior_random_stream_state::BehaviorRandomStream;
 use openzt2_zoo_state::animal_behavior::behavior_token_types::{
@@ -71,6 +71,7 @@ pub(crate) fn start_authored_idle_staff_tasks(
     mut sequence: ResMut<BehaviorTaskExecutionSequence>,
     target_retry_delays: BehaviorTargetRejections,
     surfaces: DrySurfaceEligibility,
+    biomes: BehaviorTargetBiome,
     world_objects: Query<(Entity, &GlobalTransform, &DefinitionId, &WorldMember)>,
     mut idle: Query<
         (
@@ -169,6 +170,7 @@ pub(crate) fn start_authored_idle_staff_tasks(
                     task,
                     0.0,
                     position.xz().distance(target_position.xz()),
+                    || biomes.at(target_position),
                     |attribute| staff_need(role, attribute),
                     |value| value.sample_q16(|_| 0),
                 ) else {

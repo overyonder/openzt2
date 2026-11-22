@@ -7,6 +7,10 @@ use openzt2_interface_state::information::catalogue_types::SelectedCatalogueEntr
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentRoot;
 
+use openzt2_world_state::world_spawn::{
+    world_load_completion_marker::WorldLoadCompleted, world_membership_types::WorldRoot,
+};
+
 use super::research_types::{
     ResearchProjectAvailability, StartResearchProjectRequest, WorldResearchItems,
 };
@@ -20,7 +24,8 @@ pub(super) fn route_authored_research_ui_actions_to_start_requests(
     roots: Query<&UiDocumentRoot>,
     selected: Res<SelectedCatalogueEntry>,
     research: Query<&ResearchProjectAvailability>,
-    world_items: Query<&WorldResearchItems>,
+    world_items: Query<(Entity, &WorldResearchItems)>,
+    active_world: Query<Entity, (With<WorldRoot>, With<WorldLoadCompleted>)>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     mut requests: MessageWriter<StartResearchProjectRequest>,
@@ -28,7 +33,11 @@ pub(super) fn route_authored_research_ui_actions_to_start_requests(
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };
-    let Some(items) = world_items.iter().next() else {
+    let Some((_, items)) = active_world
+        .single()
+        .ok()
+        .and_then(|world| world_items.get(world).ok())
+    else {
         return;
     };
     for activation in activations.read() {

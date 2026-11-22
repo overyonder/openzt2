@@ -40,7 +40,6 @@ pub(super) fn prepare_behavior_snapshot_before_world_replacement(
     if records.is_empty() {
         return Ok(true);
     }
-    super::behavior_snapshot_section_encoding::validate_behavior_actor_snapshots(records)?;
     let retry_records = records
         .iter()
         .filter_map(BehaviorActorSnapshot::retry_record)
@@ -105,7 +104,6 @@ pub(super) fn restore_behavior_actor_snapshots(
     if records.is_empty() {
         return Ok(true);
     }
-    super::behavior_snapshot_section_encoding::validate_behavior_actor_snapshots(records)?;
     let retry_records = records
         .iter()
         .filter_map(BehaviorActorSnapshot::retry_record)

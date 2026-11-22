@@ -1,5 +1,5 @@
 use bevy::{
-    prelude::{Commands, MessageReader, MessageWriter, Or, Query, Res, With},
+    prelude::{Commands, Component, MessageReader, MessageWriter, Or, Query, Res, With},
     tasks::IoTaskPool,
 };
 
@@ -31,6 +31,9 @@ use super::{
     },
     world_snapshot_section_encoding::decode_and_validate_world_snapshot_section,
 };
+
+#[derive(Component)]
+pub(in crate::persistence) struct SaveSlotCatalogueFilesystemRead;
 
 pub(in super::super) fn begin_loading_save_slot_catalogue_for_active_profile(
     mut commands: Commands,
@@ -66,6 +69,7 @@ pub(in super::super) fn begin_loading_save_slot_catalogue_for_active_profile(
 
     let active_profile_identifier = profile_options.profile_identifier;
     commands.spawn((
+        SaveSlotCatalogueFilesystemRead,
         PersistenceSlotFilesystemOperationContext {
             persistence_operation: WorldSnapshotPersistenceOperation::LoadFromSlot,
             save_slot_identifier: SaveSlotId(0),

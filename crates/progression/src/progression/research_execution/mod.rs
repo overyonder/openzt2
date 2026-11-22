@@ -1,6 +1,9 @@
 use super::research_duration_calculation::resolve_research_duration_to_simulation_ticks;
+use bevy::ecs::{entity::EntityHashSet, relationship::RelationshipTarget};
 use bevy::prelude::*;
+use openzt2_world_state::game_session_types::WorldSessionMode;
 use openzt2_world_state::simulation_time::deterministic_random_stream::ZooSeed;
+use openzt2_world_state::world_spawn::world_load_completion_marker::WorldLoadCompleted;
 
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
@@ -112,7 +115,7 @@ pub(super) fn start_paid_research_projects(
         &ResearchDurationOverride,
         &mut ResearchPurchaseState,
     )>,
-    mut ids: ResMut<PersistentIdAllocator>,
+    mut ids: Query<&mut PersistentIdAllocator, With<WorldRoot>>,
     seed: Res<ZooSeed>,
     mut commands: Commands,
 ) {
@@ -135,7 +138,10 @@ pub(super) fn start_paid_research_projects(
         let Some(definition) = definitions.find_research(availability.item) else {
             continue;
         };
-        let Ok(id) = ids.allocate(member.root) else {
+        let Ok(mut ids) = ids.get_mut(member.root) else {
+            continue;
+        };
+        let Ok(id) = ids.allocate() else {
             continue;
         };
         let hz = definitions.timing().fixed_hz;
@@ -196,10 +202,15 @@ pub(super) fn release_retired_research_payment(
 
 pub(super) fn apply_research_duration_overrides(
     mut requests: MessageReader<SetResearchDuration>,
-    worlds: Query<&WorldResearchItems, With<WorldRoot>>,
+    active_world: Query<Entity, (With<WorldRoot>, With<WorldLoadCompleted>)>,
+    worlds: Query<(Entity, &WorldResearchItems), With<WorldRoot>>,
     mut durations: Query<&mut ResearchDurationOverride>,
 ) {
-    let Some(items) = worlds.iter().next() else {
+    let Some((_, items)) = active_world
+        .single()
+        .ok()
+        .and_then(|world| worlds.get(world).ok())
+    else {
         return;
     };
     for request in requests.read() {
@@ -300,69 +311,71 @@ pub(super) fn complete_research_projects_and_apply_authored_unlocks(
 pub(super) fn refresh_authored_research_availability(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
-    fame: Res<super::fame_types::Fame>,
     roots: Query<
-        Ref<openzt2_world_state::world_spawn::selected_world_identity::SelectedWorldIdentity>,
+        (
+            Ref<openzt2_world_state::world_spawn::selected_world_identity::SelectedWorldIdentity>,
+            Ref<super::fame_types::ZooMaximumFame>,
+            Option<&super::research_types::WorldResearchItemMembers>,
+        ),
         With<WorldRoot>,
     >,
     mut availability: Query<(
+        &WorldMember,
         &mut ResearchProjectAvailability,
         Option<&ResearchAvailabilityUnlockCountdown>,
     )>,
     added: Query<
         Entity,
-        Or<(
-            Added<ResearchProjectAvailability>,
-            Added<ResearchAvailabilityUnlockCountdown>,
-        )>,
+        (
+            With<ResearchProjectAvailability>,
+            Or<(
+                Added<ResearchProjectAvailability>,
+                Added<ResearchAvailabilityUnlockCountdown>,
+                Changed<WorldMember>,
+            )>,
+        ),
     >,
     mut expired: RemovedComponents<ResearchAvailabilityUnlockCountdown>,
-    mut last_maximum: Local<Option<f32>>,
     mut changed: MessageWriter<ProgressionFactChanged>,
 ) {
-    let asset_changed = active_definitions.is_changed() || definitions.is_changed();
+    let assets_changed = active_definitions.is_changed() || definitions.is_changed();
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };
-    let Some(identity) = roots.iter().next() else {
-        return;
-    };
-    let refresh_world =
-        asset_changed || identity.is_changed() || *last_maximum != fame.maximum_percent_reached;
-    *last_maximum = fame.maximum_percent_reached;
-    let research_mode = matches!(
-        identity.mode,
-        openzt2_world_state::game_session_types::WorldSessionMode::Campaign
-            | openzt2_world_state::game_session_types::WorldSessionMode::Challenge
-    );
-    let mut project =
-        |mut availability: Mut<ResearchProjectAvailability>,
-         countdown: Option<&ResearchAvailabilityUnlockCountdown>| {
-            let available = research_mode
-                && countdown.is_none()
-                && definitions
-                    .find_research(availability.item)
-                    .is_some_and(|research| {
-                        research.minimum_fame_percent == 0.0
-                            || fame
-                                .maximum_percent_reached
-                                .is_some_and(|maximum| maximum >= research.minimum_fame_percent)
-                    });
-            if availability.available != available {
-                availability.available = available;
-                changed.write(ProgressionFactChanged::Research(availability.item));
-            }
-        };
-    if refresh_world {
-        expired.clear();
-        for (availability, countdown) in &mut availability {
-            project(availability, countdown);
+    let mut dirty = Vec::new();
+    for (identity, maximum, members) in &roots {
+        if assets_changed || identity.is_changed() || maximum.is_changed() {
+            dirty.extend(members.into_iter().flat_map(RelationshipTarget::iter));
         }
-    } else {
-        for entity in added.iter().chain(expired.read()) {
-            if let Ok((availability, countdown)) = availability.get_mut(entity) {
-                project(availability, countdown);
-            }
+    }
+    dirty.extend(added.iter().chain(expired.read()));
+    let mut seen = EntityHashSet::default();
+    dirty.retain(|&entity| seen.insert(entity));
+    let mut dirty = availability.iter_many_mut(dirty);
+    while let Some(row) = dirty.fetch_next() {
+        let Ok((member, mut availability, countdown)) = row else {
+            continue;
+        };
+        let Ok((identity, maximum, _)) = roots.get(member.root) else {
+            continue;
+        };
+        let supported_mode = matches!(
+            identity.mode,
+            WorldSessionMode::Campaign | WorldSessionMode::Challenge
+        );
+        let available = supported_mode
+            && countdown.is_none()
+            && definitions
+                .find_research(availability.item)
+                .is_some_and(|research| {
+                    research.minimum_fame_percent == 0.0
+                        || maximum
+                            .0
+                            .is_some_and(|maximum| maximum >= research.minimum_fame_percent)
+                });
+        if availability.available != available {
+            availability.available = available;
+            changed.write(ProgressionFactChanged::Research(availability.item));
         }
     }
 }

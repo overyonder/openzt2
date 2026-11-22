@@ -440,7 +440,7 @@ pub(super) fn project_widget(
                         Name::new("timed UI action"),
                         UiDocumentOwner(document_root),
                         ChildOf(entity),
-                        UiTimedActionDue(std::time::Duration::from_millis(u64::from(event.due_ms))),
+                        UiTimedActionDue(event.due),
                     ))
                     .id();
                 use openzt2_game_data::ui_document::timed_presentation::UiTimedEventAction;

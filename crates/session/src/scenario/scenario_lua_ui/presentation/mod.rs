@@ -1,14 +1,33 @@
 use super::*;
+use bevy::ecs::{relationship::RelationshipTarget, system::SystemParam};
+use openzt2_interface_state::ui::{
+    authored_ui_action_projection_components::UiPresentationActions,
+    authored_ui_activation_contracts::UiNodeActivated,
+    authored_ui_node_projection_components::UiDocumentMembers,
+};
+use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
+use openzt2_zoo_state::scenario::{
+    scenario_session_types::{ScenarioTutorialRuleActive, SetScenarioFencePlacementMode},
+    timed_scenario_ui_actions::{PendingScenarioUiSelection, ScenarioUiSelectionCompleted},
+};
 
 #[cfg(test)]
 mod tests;
 use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
+use openzt2_game_assets::world_definitions::{
+    world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions,
+    world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
+};
 use openzt2_game_data::ui_document::{
     action::presentation::UiPresentationAction,
     document::{UiDocument, UiDocumentRole},
     widget::UiWidgetRecord,
 };
 use openzt2_interface_state::information::catalogue_types::ScenarioDisabledCatalogueDefinitions;
+use openzt2_interface_state::information::{
+    entity_selection_types::SelectionRequest,
+    zoo_message_types::{ZooMessage, ZooMessages},
+};
 use openzt2_interface_state::{
     input::input_types::{ActionRequest, ActionSource, GameAction},
     ui::{
@@ -19,20 +38,71 @@ use openzt2_interface_state::{
 use openzt2_ui::animation::UiShowHideAnimation;
 use openzt2_ui::authored_ui_presentation_action_application::RequestUiPresentationAction;
 use openzt2_zoo_state::audio::audio_playback_message_types::PlayAudioCue;
+use openzt2_zoo_state::{
+    aquatic::tank_geometry_edit_types::SetTankWallHeights,
+    construction::{
+        construction_interaction_types::CancelConstruction,
+        construction_tool_and_placement_policy_types::{
+            ConstructionPlacementPolicy, ConstructionTool, FencePlacementShape,
+            SelectConstructionTool,
+        },
+    },
+};
 use std::collections::{BTreeMap, VecDeque};
 
-#[derive(Resource, Default)]
-pub(super) struct PendingScenarioUi {
+#[derive(Component, Default)]
+pub(in crate::scenario) struct ScenarioUiState {
     nodes: VecDeque<(Vec<String>, NodeOperation)>,
+    hidden: VecDeque<(Vec<String>, NodeOperation)>,
+    fence_placement_mode: Option<SetScenarioFencePlacementMode>,
     pub(super) enabled: BTreeMap<String, bool>,
     pub(super) shown: BTreeMap<String, bool>,
-    selection_settling_frames: u8,
+    pub(in crate::scenario) continuation: Option<AssetId>,
+    selection: Option<ScenarioUiSelectionCompleted>,
+    cached: BTreeMap<(Entity, AssetId), CachedPanel>,
 }
 
-/// Native script calls run a toggle's authored chain to the end before returning.
-/// Here each link takes a frame, so the next call has to wait for it: tutorials
-/// select a tab and deselect its parent in consecutive calls.
-const SELECTION_SETTLING_FRAMES: u8 = 6;
+#[derive(Default)]
+struct CachedPanel {
+    visible: bool,
+    draft: Vec<UiPresentationAction>,
+    entries: VecDeque<Vec<UiPresentationAction>>,
+}
+
+#[derive(Message, Debug, Clone, Copy)]
+pub(in crate::scenario) enum ScenarioConstructionRequest {
+    Select(ConstructionTool),
+    Place(AssetId),
+    Mode(SetScenarioFencePlacementMode),
+    ReturnToSelection,
+}
+
+#[derive(Component)]
+pub(super) struct ScenarioUiDocuments {
+    _documents: Vec<Handle<UiDocumentAsset>>,
+}
+
+pub(super) fn preload_scenario_ui_documents(
+    mut commands: Commands,
+    server: Res<AssetServer>,
+    worlds: Query<Entity, (With<WorldRoot>, Without<ScenarioUiDocuments>)>,
+) {
+    use openzt2_game_assets::ui_document::ui_document_role_asset_path_selection::select_bevy_asset_path_for_canonical_ui_document_role;
+    for owner in &worlds {
+        let documents = [
+            UiDocumentRole::Tutorial,
+            UiDocumentRole::Scenario,
+            UiDocumentRole::ChallengeOffer,
+        ]
+        .into_iter()
+        .filter_map(select_bevy_asset_path_for_canonical_ui_document_role)
+        .map(|path| server.load(path))
+        .collect::<Vec<Handle<UiDocumentAsset>>>();
+        commands.entity(owner).insert(ScenarioUiDocuments {
+            _documents: documents,
+        });
+    }
+}
 
 /// Adds a text node's laid-out height to a show/hide animation's final height.
 #[derive(Component)]
@@ -65,35 +135,20 @@ pub(super) fn fit_animation_heights_to_text(
 }
 
 pub(super) fn clear_scenario_ui(
-    mut pending: ResMut<PendingScenarioUi>,
     mut requests: MessageReader<ScenarioUiCommand>,
     mut disabled_catalogue: ResMut<ScenarioDisabledCatalogueDefinitions>,
 ) {
     disabled_catalogue.0.clear();
-    *pending = Default::default();
     requests.clear();
 }
 
-pub(super) fn role_for(path: &[String]) -> Option<UiDocumentRole> {
-    match path.first()?.trim().to_ascii_lowercase().as_str() {
-        "scenario win  layout" => Some(UiDocumentRole::ScenarioWin),
-        "scenario failed layout" => Some(UiDocumentRole::ScenarioFailed),
-        "tutorial complete" => Some(UiDocumentRole::TutorialComplete),
-        "generic ok layout" => Some(UiDocumentRole::GenericOk),
-        "goals layout" | "goalpanel" | "goal panel" | "introduction tab" | "primary goals tab"
-        | "show all goals" => Some(UiDocumentRole::Scenario),
-        "tutorial layout"
-        | "tutorial block out"
-        | "tutorial info"
-        | "tutorial text"
-        | "tutorial heading text"
-        | "tutorial image"
-        | "tutorial ring"
-        | "ring timer"
-        | "continue tutorial"
-        | "edge arrow layout" => Some(UiDocumentRole::Tutorial),
-        _ => None,
-    }
+fn role_for(documents: &Assets<UiDocumentAsset>, path: &[String]) -> Option<UiDocumentRole> {
+    let mut roles = documents.iter().filter_map(|(_, asset)| {
+        let document = asset.canonical_ui_document();
+        resolve_node(document, path).map(|_| document.role)
+    });
+    let first = roles.next()?;
+    roles.all(|role| role == first).then_some(first)
 }
 
 pub(super) fn resolve_node(document: &UiDocument, path: &[String]) -> Option<AssetId> {
@@ -143,17 +198,34 @@ fn ancestors(
     .take(document.nodes.len())
 }
 
+#[derive(SystemParam)]
+pub(super) struct ScenarioUiProjectionEvents<'w, 's> {
+    activations: MessageReader<'w, 's, UiNodeActivated>,
+    document_assets: MessageReader<'w, 's, AssetEvent<UiDocumentAsset>>,
+    selection_completed: MessageReader<'w, 's, ScenarioUiSelectionCompleted>,
+    timed_completed: MessageWriter<'w, TimedScenarioUiActionCompleted>,
+    authored: Query<'w, 's, (&'static UiDocumentOwner, &'static UiPresentationActions)>,
+}
+
 pub(super) fn apply_scenario_ui_commands(
     mut requests: MessageReader<ScenarioUiCommand>,
-    mut pending: ResMut<PendingScenarioUi>,
-    mut continuation: ResMut<ScenarioContinuation>,
+    mut state: Query<&mut ScenarioUiState>,
+    worlds: Query<Entity, With<WorldRoot>>,
+    mut events: ScenarioUiProjectionEvents,
     mut roles: MessageWriter<ShowUiRole>,
     owners: Query<Entity, With<InGameUiOwner>>,
     roots: Query<(Entity, &UiDocumentRoot)>,
     added_nodes: Query<(&UiNodeId, &UiDocumentOwner), Added<UiNodeId>>,
     documents: Res<Assets<UiDocumentAsset>>,
-    mut presentation: MessageWriter<RequestUiPresentationAction>,
-    mut actions: MessageWriter<ActionRequest>,
+    mut presentation: ParamSet<(
+        MessageReader<RequestUiPresentationAction>,
+        MessageWriter<RequestUiPresentationAction>,
+    )>,
+    (mut actions, mut construction, mut subjects): (
+        MessageWriter<ActionRequest>,
+        MessageWriter<ScenarioConstructionRequest>,
+        MessageWriter<SelectionRequest>,
+    ),
     (mut sounds, mut disabled_catalogue, mut research_durations, mut unlocks): (
         MessageWriter<PlayAudioCue>,
         ResMut<ScenarioDisabledCatalogueDefinitions>,
@@ -168,23 +240,139 @@ pub(super) fn apply_scenario_ui_commands(
         &UiDocumentOwner,
         &mut UiShowHideAnimation,
     )>,
-    all_nodes: Query<(Entity, &UiNodeId, &UiDocumentOwner)>,
+    (all_nodes, members): (
+        Query<(Entity, &UiNodeId, &UiDocumentOwner, &Visibility)>,
+        Query<&UiDocumentMembers>,
+    ),
     mut commands: Commands,
 ) {
+    let Some(owner) = worlds
+        .single()
+        .ok()
+        .or_else(|| owners.single().ok())
+        .or_else(|| roots.iter().next().map(|(entity, _)| entity))
+    else {
+        for request in requests.read() {
+            if let ScenarioUiCommand::Node {
+                operation: NodeOperation::ScriptCompleted(action),
+                ..
+            } = request
+            {
+                events
+                    .timed_completed
+                    .write(TimedScenarioUiActionCompleted(*action));
+            }
+        }
+        return;
+    };
+    let mut current = state.get_mut(owner).ok();
+    let state_added = current.as_ref().is_some_and(|state| state.is_added());
+    let mut initial = ScenarioUiState::default();
+    let pending = current.as_deref_mut().unwrap_or(&mut initial);
+    let selection_completed = events
+        .selection_completed
+        .read()
+        .any(|completed| pending.selection.as_ref() == Some(completed));
+    if selection_completed
+        || pending
+            .selection
+            .is_some_and(|selection| !roots.contains(selection.document_root))
+    {
+        pending.selection = None;
+    }
+
+    let mut direct = presentation.p0();
+    let advances = direct
+        .read()
+        .filter_map(|request| match request.action {
+            UiPresentationAction::AdvanceTargetNodeMessageCursor { target_node } => {
+                Some((request.document_root, target_node))
+            }
+            _ => None,
+        })
+        .chain(events.activations.read().flat_map(|event| {
+            let (root, actions) = events.authored.get(event.node).ok().unzip();
+            let root_entity = root.map(|root| root.0);
+            let source = root_entity
+                .and_then(|entity| roots.get(entity).ok())
+                .and_then(|(_, root)| documents.get(&root.document));
+            actions
+                .zip(source)
+                .into_iter()
+                .flat_map(move |(actions, asset)| {
+                    actions
+                        .authored_action_records(asset)
+                        .filter_map(move |record| match record.action {
+                            UiPresentationAction::AdvanceTargetNodeMessageCursor {
+                                target_node,
+                            } if record.trigger == event.trigger => {
+                                root_entity.map(|entity| (entity, target_node))
+                            }
+                            _ => None,
+                        })
+                })
+        }))
+        .collect::<Vec<_>>();
+    let mut presentation = presentation.p1();
+    for advance in advances {
+        if let Some(panel) = pending.cached.get_mut(&advance) {
+            if let Some(entry) = panel.entries.pop_front() {
+                panel.visible = true;
+                let _ = presentation.write_batch(entry.into_iter().map(|action| {
+                    RequestUiPresentationAction {
+                        document_root: advance.0,
+                        action,
+                    }
+                }));
+            } else {
+                panel.visible = false;
+            }
+        }
+    }
+
+    let projected = !added_nodes.is_empty();
+    let assets_changed = events.document_assets.read().count() > 0;
+    if projected || assets_changed {
+        pending.nodes.append(&mut pending.hidden);
+    }
     let mut changed_enabled = Vec::new();
-    let mut changed_shown = Vec::new();
     for request in requests.read() {
         match request {
             ScenarioUiCommand::Node { path, operation } => {
                 pending.nodes.push_back((path.clone(), operation.clone()))
             }
+            ScenarioUiCommand::Tool(tool) => pending.nodes.push_back((
+                Vec::new(),
+                NodeOperation::Construction(ScenarioConstructionRequest::Select(*tool)),
+            )),
+            ScenarioUiCommand::PlacementObject(definition) => pending.nodes.push_back((
+                Vec::new(),
+                NodeOperation::Construction(ScenarioConstructionRequest::Place(*definition)),
+            )),
+            ScenarioUiCommand::FencePlacementMode(mode) => pending.nodes.push_back((
+                Vec::new(),
+                NodeOperation::Construction(ScenarioConstructionRequest::Mode(*mode)),
+            )),
+            ScenarioUiCommand::Select(entity) => pending
+                .nodes
+                .push_back((Vec::new(), NodeOperation::SelectSubject(*entity))),
             ScenarioUiCommand::Enabled { name, enabled } => {
-                pending.enabled.insert(name.to_ascii_lowercase(), *enabled);
-                changed_enabled.push(name.to_ascii_lowercase());
-            }
-            ScenarioUiCommand::Shown { name, visible } => {
-                pending.shown.insert(name.to_ascii_lowercase(), *visible);
-                changed_shown.push(name.to_ascii_lowercase());
+                let key = name.to_ascii_lowercase();
+                for (_, asset) in documents.iter() {
+                    let document = asset.canonical_ui_document();
+                    for (index, node) in document.nodes.iter().enumerate() {
+                        if node.name.eq_ignore_ascii_case(name) {
+                            continue;
+                        }
+                        if ancestors(document, index)
+                            .any(|ancestor| ancestor.name.eq_ignore_ascii_case(name))
+                        {
+                            pending.enabled.remove(&node.name.to_ascii_lowercase());
+                        }
+                    }
+                }
+                pending.enabled.insert(key.clone(), *enabled);
+                changed_enabled.push(key);
             }
             ScenarioUiCommand::ResearchDuration {
                 definition,
@@ -215,77 +403,10 @@ pub(super) fn apply_scenario_ui_commands(
                 });
             }
             ScenarioUiCommand::NextScenario(name) => {
-                continuation.scenario = name
+                pending.continuation = name
                     .as_deref()
                     .filter(|name| !name.is_empty())
-                    .map(AssetId::from_key)
-            }
-            ScenarioUiCommand::Tool(tool) => {
-                let tool = *tool;
-                commands.queue(move |world: &mut World| {
-                    world.write_message(openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::SelectConstructionTool(tool));
-                });
-            }
-            ScenarioUiCommand::TankWallHeight(height) => {
-                let height = *height;
-                commands.queue(move |world: &mut World| {
-                    world.write_message(
-                        openzt2_zoo_state::aquatic::tank_geometry_edit_types::SetTankWallHeights(
-                            height,
-                        ),
-                    );
-                });
-            }
-            ScenarioUiCommand::ZooMessage {
-                text,
-                timeout_seconds,
-            } => {
-                let text = text.clone();
-                let timeout_seconds = *timeout_seconds;
-                commands.queue(move |world: &mut World| {
-                    let now = world.resource::<Time<Real>>().elapsed_secs_f64();
-                    world
-                        .get_resource_or_init::<openzt2_interface_state::information::zoo_message_types::ZooMessages>()
-                        .messages
-                        .push(openzt2_interface_state::information::zoo_message_types::ZooMessage {
-                            text,
-                            expires_at_seconds: now + timeout_seconds,
-                        });
-                });
-            }
-            ScenarioUiCommand::PlacementObject(definition) => {
-                let definition = *definition;
-                commands.queue(move |world: &mut World| {
-                    let definitions = world.resource::<openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions>();
-                    let assets = world.resource::<Assets<openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset>>();
-                    let tool = definitions.get(assets).and_then(|catalogue| {
-                        if catalogue.find_fence(definition).is_some() {
-                            Some(openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::ConstructionTool::Fence(definition))
-                        } else if catalogue.find_path(definition).is_some() {
-                            Some(openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::ConstructionTool::Path(definition))
-                        } else if catalogue.find_placeable(definition).is_some() {
-                            Some(openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::ConstructionTool::Place(definition))
-                        } else {
-                            None
-                        }
-                    });
-                    if let Some(tool) = tool {
-                        world.write_message(openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::SelectConstructionTool(tool));
-                    } else {
-                        warn!(?definition, "scenario selected a placement type absent from definitions");
-                    }
-                });
-            }
-            ScenarioUiCommand::Select(entity) => {
-                let entity = *entity;
-                commands.queue(move |world: &mut World| {
-                    world.write_message(
-                        openzt2_interface_state::information::entity_selection_types::SelectionRequest {
-                            entity,
-                            source: ActionSource::System,
-                        },
-                    );
-                });
+                    .map(AssetId::from_key);
             }
             ScenarioUiCommand::Overhead => {
                 actions.write(ActionRequest {
@@ -293,28 +414,10 @@ pub(super) fn apply_scenario_ui_commands(
                     source: ActionSource::System,
                 });
             }
+            _ => {}
         }
     }
-    if !changed_enabled.is_empty() || !changed_shown.is_empty() || !added_nodes.is_empty() {
-        // Disabling a control disables everything beneath it, and a later
-        // `UI_ENABLE` can bring one child back: the tutorials disable "Zoom and
-        // Rotate" and then enable "Zoom In". A newer call on a parent replaces those.
-        for (_, root) in &roots {
-            let Some(asset) = documents.get(&root.document) else {
-                continue;
-            };
-            let document = asset.canonical_ui_document();
-            for (index, node) in document.nodes.iter().enumerate() {
-                let key = node.name.to_ascii_lowercase();
-                if !changed_enabled.contains(&key)
-                    && ancestors(document, index).any(|ancestor| {
-                        changed_enabled.contains(&ancestor.name.to_ascii_lowercase())
-                    })
-                {
-                    pending.enabled.remove(&key);
-                }
-            }
-        }
+    if !changed_enabled.is_empty() || projected || state_added {
         // Restrictions also apply to controls created after the script ran.
         for (root_entity, root) in &roots {
             let Some(asset) = documents.get(&root.document) else {
@@ -345,8 +448,8 @@ pub(super) fn apply_scenario_ui_commands(
                 }) && std::iter::once(node)
                     .chain(ancestors(document, index))
                     .any(|node| node.name.eq_ignore_ascii_case("buy area"));
-                if let Some((restricted, enabled)) = restriction {
-                    if changed_enabled.contains(&restricted) || added() {
+                if let Some((_, enabled)) = restriction {
+                    if !changed_enabled.is_empty() || state_added || added() {
                         presentation.write(RequestUiPresentationAction {
                             document_root: root_entity,
                             action: UiPresentationAction::SetTargetNodeInteractionEnabled {
@@ -373,7 +476,7 @@ pub(super) fn apply_scenario_ui_commands(
                     }
                 }
                 if let Some(&visible) = pending.shown.get(&key) {
-                    if changed_shown.contains(&key) || added() {
+                    if state_added || added() {
                         presentation.write(RequestUiPresentationAction {
                             document_root: root_entity,
                             action: UiPresentationAction::SetTargetNodeVisible {
@@ -387,7 +490,7 @@ pub(super) fn apply_scenario_ui_commands(
         }
     }
     // Scripts also address buy-panel rows, by the name of what each one sells.
-    if !changed_enabled.is_empty() {
+    if !changed_enabled.is_empty() || state_added {
         disabled_catalogue.0 = pending
             .enabled
             .iter()
@@ -396,63 +499,59 @@ pub(super) fn apply_scenario_ui_commands(
             .collect();
     }
     let count = pending.nodes.len();
-    pending.selection_settling_frames = pending.selection_settling_frames.saturating_sub(1);
     for _ in 0..count {
-        if pending.selection_settling_frames > 0 {
+        if pending.selection.is_some() {
             break;
         }
         let Some((path, operation)) = pending.nodes.pop_front() else {
             break;
         };
         if matches!(operation, NodeOperation::SelectionMode) {
-            use openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::{
-                ConstructionTool, SelectConstructionTool,
-            };
-            commands.queue(|world: &mut World| {
-                world.write_message(openzt2_zoo_state::construction::construction_interaction_types::CancelConstruction);
-                world.write_message(SelectConstructionTool(ConstructionTool::Inspect));
+            construction.write(ScenarioConstructionRequest::ReturnToSelection);
+            continue;
+        }
+        if let NodeOperation::Construction(request) = operation {
+            construction.write(request);
+            continue;
+        }
+        if let NodeOperation::SelectSubject(entity) = operation {
+            subjects.write(SelectionRequest {
+                entity,
+                source: ActionSource::System,
             });
             continue;
         }
         if matches!(operation, NodeOperation::MeasureText) {
             continue;
         }
-        let role = role_for(&path);
+        if let NodeOperation::ScriptCompleted(action) = operation {
+            events
+                .timed_completed
+                .write(TimedScenarioUiActionCompleted(action));
+            continue;
+        }
         let target = roots.iter().find_map(|(entity, root)| {
             let document = documents.get(&root.document)?.canonical_ui_document();
-            if role.is_some_and(|role| role != document.role) {
-                return None;
-            }
-            resolve_node(document, &path).map(|id| (entity, id))
+            let id = resolve_node(document, &path)?;
+            let ready = members.get(entity).is_ok_and(|members| {
+                all_nodes
+                    .iter_many(members.iter())
+                    .flatten()
+                    .any(|(_, node, ..)| node.id == id)
+            });
+            ready.then_some((entity, id))
         });
         let Some((root, target_node)) = target else {
-            if let (Some(role), Ok(owner)) = (role, owners.single()) {
-                if roots.iter().any(|(_, root)| {
-                    documents
-                        .get(&root.document)
-                        .is_some_and(|asset| asset.canonical_ui_document().role == role)
-                }) {
-                    warn!(
-                        ?path,
-                        ?role,
-                        "scenario UI target is absent or ambiguous in its authored document"
-                    );
-                    continue;
-                }
-                // Scripts prepare hidden surfaces without showing them: the
-                // tutorial selects a goal tab long before the player opens the
-                // goal panel. The tutorial's own layout is always present.
-                match (&operation, role) {
-                    (_, UiDocumentRole::Tutorial) | (NodeOperation::Visible(true), _) => {
+            if let Some(role) = role_for(&documents, &path) {
+                if matches!(operation, NodeOperation::Visible(true))
+                    || role == UiDocumentRole::Tutorial
+                {
+                    if let Ok(owner) = owners.single() {
                         roles.write(ShowUiRole { role, owner });
                     }
-                    (NodeOperation::Visible(false), _) => continue,
-                    _ => {}
                 }
-                pending.nodes.push_back((path, operation));
-            } else {
-                warn!(?path, "scenario UI target has no projected document");
             }
+            pending.hidden.push_back((path, operation));
             continue;
         };
         let action = match operation {
@@ -461,7 +560,14 @@ pub(super) fn apply_scenario_ui_commands(
                 visible,
             },
             NodeOperation::Selected(active) => {
-                pending.selection_settling_frames = SELECTION_SETTLING_FRAMES;
+                let selection = ScenarioUiSelectionCompleted {
+                    document_root: root,
+                    target_node,
+                };
+                pending.selection = Some(selection);
+                commands
+                    .entity(root)
+                    .insert(PendingScenarioUiSelection(selection));
                 UiPresentationAction::SetTargetNodeSelectionAndTimedSequencesActive {
                     document_role: None,
                     target_node,
@@ -481,8 +587,11 @@ pub(super) fn apply_scenario_ui_commands(
                 UiPresentationAction::SetTargetNodeTextLiteral { target_node, text }
             }
             // Goal rows are already projected from the canonical objective collection.
-            NodeOperation::RefreshGoals | NodeOperation::SelectionMode => continue,
-            NodeOperation::MeasureText => continue,
+            NodeOperation::RefreshGoals
+            | NodeOperation::SelectionMode
+            | NodeOperation::Construction(_)
+            | NodeOperation::SelectSubject(_) => continue,
+            NodeOperation::MeasureText | NodeOperation::ScriptCompleted(_) => continue,
             NodeOperation::Modal(modal) => {
                 UiPresentationAction::SetTargetNodeModal { target_node, modal }
             }
@@ -561,7 +670,7 @@ pub(super) fn apply_scenario_ui_commands(
                     .and_then(|id| {
                         all_nodes
                             .iter()
-                            .find(|(_, node, owner)| owner.0 == root && node.id == id)
+                            .find(|(_, node, owner, _)| owner.0 == root && node.id == id)
                             .map(|(text, ..)| text)
                     });
                 match text {
@@ -580,9 +689,224 @@ pub(super) fn apply_scenario_ui_commands(
                 continue;
             }
         };
+        let document = documents
+            .get(&roots.get(root).expect("resolved document").1.document)
+            .expect("resolved document asset")
+            .canonical_ui_document();
+        let panel = document.nodes.iter().position(|node| node.id == target_node)
+            .and_then(|index| std::iter::once(&document.nodes[index]).chain(ancestors(document, index)).find(|node| {
+                node.cacheable_from_lua || node.actions.iter().any(|record| matches!(
+                    record,
+                    openzt2_game_data::ui_document::action::UiActionRecord::Presentation(record)
+                        if matches!(record.action, UiPresentationAction::AdvanceTargetNodeMessageCursor { target_node } if target_node == node.id)
+                ))
+            }));
+        if let Some(panel) = panel {
+            let cache = pending.cached.entry((root, panel.id)).or_insert_with(|| {
+                let visible = members.get(root).is_ok_and(|members| {
+                    all_nodes
+                        .iter_many(members.iter())
+                        .flatten()
+                        .any(|(_, node, _, visibility)| {
+                            node.id == panel.id && *visibility != Visibility::Hidden
+                        })
+                });
+                CachedPanel {
+                    visible,
+                    ..Default::default()
+                }
+            });
+            let closes_panel = matches!(action, UiPresentationAction::SetTargetNodeVisible { target_node, visible: false } if target_node == panel.id);
+            let opens_panel = matches!(action, UiPresentationAction::SetTargetNodeVisible { target_node, visible: true } if target_node == panel.id);
+            let prepares_panel = matches!(
+                action,
+                UiPresentationAction::SetTargetNodeTextFromLocalizationKey { .. }
+                    | UiPresentationAction::SetTargetNodeTextLiteral { .. }
+                    | UiPresentationAction::SetTargetNodeModal { .. }
+                    | UiPresentationAction::SetTargetNodeVisible { .. }
+            );
+            if closes_panel {
+                cache.visible = false;
+            } else if opens_panel {
+                cache.draft.push(action);
+                let entry = std::mem::take(&mut cache.draft);
+                if cache.visible {
+                    cache.entries.push_back(entry);
+                } else {
+                    cache.visible = true;
+                    let _ = presentation.write_batch(entry.into_iter().map(|action| {
+                        RequestUiPresentationAction {
+                            document_root: root,
+                            action,
+                        }
+                    }));
+                }
+                continue;
+            } else if prepares_panel {
+                cache.draft.push(action);
+                continue;
+            }
+        } else if let UiPresentationAction::SetTargetNodeVisible { visible, .. } = action {
+            if let [name] = path.as_slice() {
+                pending.shown.insert(name.to_ascii_lowercase(), visible);
+            }
+        }
         presentation.write(RequestUiPresentationAction {
             document_root: root,
             action,
         });
+    }
+    if current.is_none()
+        && (!initial.nodes.is_empty()
+            || !initial.hidden.is_empty()
+            || !initial.enabled.is_empty()
+            || !initial.shown.is_empty()
+            || initial.continuation.is_some()
+            || initial.selection.is_some()
+            || !initial.cached.is_empty())
+    {
+        commands.entity(owner).insert(initial);
+    }
+}
+
+pub(super) fn apply_scenario_tool_requests(
+    mut requests: MessageReader<ScenarioConstructionRequest>,
+    mut tools: MessageWriter<SelectConstructionTool>,
+    mut cancel: MessageWriter<CancelConstruction>,
+    current_tool: Res<ConstructionTool>,
+    mut policy: ResMut<ConstructionPlacementPolicy>,
+    mut state: Query<&mut ScenarioUiState, With<WorldRoot>>,
+    definitions: Res<WorldDefinitions>,
+    assets: Res<Assets<WorldDefinitionAsset>>,
+) {
+    let definitions = definitions.get(&assets);
+    let mut state = state.single_mut().ok();
+    let mut mode = state.as_ref().and_then(|state| state.fence_placement_mode);
+    let mut current = *current_tool;
+    for request in requests.read() {
+        match request {
+            ScenarioConstructionRequest::Select(tool) => {
+                current = *tool;
+                tools.write(SelectConstructionTool(current));
+            }
+            ScenarioConstructionRequest::Place(definition) => {
+                let tool = definitions.and_then(|view| {
+                    if view.find_fence(*definition).is_some() {
+                        let fence = if mode == Some(SetScenarioFencePlacementMode::Gate) {
+                            view.find_gate_fence(*definition)
+                                .map_or(*definition, |gate| gate.id)
+                        } else {
+                            *definition
+                        };
+                        Some(ConstructionTool::Fence(fence))
+                    } else if view.find_path(*definition).is_some() {
+                        Some(ConstructionTool::Path(*definition))
+                    } else if view.find_placeable(*definition).is_some() {
+                        Some(ConstructionTool::Place(*definition))
+                    } else {
+                        None
+                    }
+                });
+                if let Some(tool) = tool {
+                    current = tool;
+                    tools.write(SelectConstructionTool(current));
+                } else {
+                    warn!(
+                        ?definition,
+                        "scenario selected a placement type absent from definitions"
+                    );
+                }
+            }
+            ScenarioConstructionRequest::Mode(next) => {
+                mode = Some(*next);
+                if let Some(state) = state.as_mut() {
+                    state
+                        .reborrow()
+                        .map_unchanged(|state| &mut state.fence_placement_mode)
+                        .set_if_neq(mode);
+                }
+                let shape = match next {
+                    SetScenarioFencePlacementMode::RubberBand
+                    | SetScenarioFencePlacementMode::Gate => FencePlacementShape::Freeform,
+                    SetScenarioFencePlacementMode::Rectangle => FencePlacementShape::Rectangle,
+                    SetScenarioFencePlacementMode::Octagon => FencePlacementShape::Octagon,
+                };
+                cancel.write(CancelConstruction);
+                policy
+                    .reborrow()
+                    .map_unchanged(|policy| &mut policy.fence_shape)
+                    .set_if_neq(shape);
+                if *next == SetScenarioFencePlacementMode::Gate {
+                    if let ConstructionTool::Fence(fence) = current {
+                        if let Some(gate) = definitions.and_then(|view| view.find_gate_fence(fence))
+                        {
+                            current = ConstructionTool::Fence(gate.id);
+                            tools.write(SelectConstructionTool(current));
+                        }
+                    }
+                }
+            }
+            ScenarioConstructionRequest::ReturnToSelection => {
+                cancel.write(CancelConstruction);
+                current = ConstructionTool::Inspect;
+                tools.write(SelectConstructionTool(current));
+            }
+        }
+    }
+}
+
+pub(super) fn apply_scenario_tank_requests(
+    mut requests: MessageReader<ScenarioUiCommand>,
+    mut heights: MessageWriter<SetTankWallHeights>,
+) {
+    for request in requests.read() {
+        if let ScenarioUiCommand::TankWallHeight(height) = request {
+            heights.write(SetTankWallHeights(*height));
+        }
+    }
+}
+
+pub(super) fn apply_scenario_zoo_messages(
+    mut requests: MessageReader<ScenarioUiCommand>,
+    time: Res<Time<Real>>,
+    mut messages: ResMut<ZooMessages>,
+) {
+    for request in requests.read() {
+        if let ScenarioUiCommand::ZooMessage {
+            text,
+            timeout_seconds,
+        } = request
+        {
+            messages.messages.push(ZooMessage {
+                text: text.clone(),
+                expires_at_seconds: time.elapsed_secs_f64() + timeout_seconds,
+            });
+        }
+    }
+}
+
+pub(super) fn apply_scenario_tutorial_status(
+    mut requests: MessageReader<ScenarioUiCommand>,
+    mut roots: Query<(Entity, Option<&mut ScenarioTutorialRuleActive>), With<WorldRoot>>,
+    mut commands: Commands,
+) {
+    let Some(active) = requests
+        .read()
+        .filter_map(|request| match request {
+            ScenarioUiCommand::TutorialRuleActive(active) => Some(*active),
+            _ => None,
+        })
+        .last()
+    else {
+        return;
+    };
+    if let Ok((root, existing)) = roots.single_mut() {
+        if let Some(mut existing) = existing {
+            existing.set_if_neq(ScenarioTutorialRuleActive(active));
+        } else {
+            commands
+                .entity(root)
+                .insert(ScenarioTutorialRuleActive(active));
+        }
     }
 }

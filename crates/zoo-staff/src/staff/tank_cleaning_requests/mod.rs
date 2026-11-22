@@ -28,7 +28,9 @@ use super::{
 )]
 pub(crate) fn request_keeper_cleaning_for_dirty_tanks(
     mut commands: Commands,
-    mut ids: ResMut<openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator>,
+    mut identifiers: Query<
+        &mut openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator,
+    >,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     grid: Res<TopologyGrid>,
@@ -99,7 +101,11 @@ pub(crate) fn request_keeper_cleaning_for_dirty_tanks(
                     site
                 }
                 None => {
-                    let Ok(id) = ids.allocate(world.root) else {
+                    let Some(id) = identifiers
+                        .get_mut(world.root)
+                        .ok()
+                        .and_then(|mut allocator| allocator.allocate().ok())
+                    else {
                         continue;
                     };
                     commands
@@ -113,10 +119,11 @@ pub(crate) fn request_keeper_cleaning_for_dirty_tanks(
                 }
             };
             requests.write(StaffJobRequest {
-                kind: StaffJobKind::MaintainTank,
+                kind: Some(StaffJobKind::MaintainTank),
                 target: site,
                 urgency,
                 token: Some(token),
+                routing: Default::default(),
             });
             continue;
         }
@@ -125,7 +132,7 @@ pub(crate) fn request_keeper_cleaning_for_dirty_tanks(
         };
         for (job, _) in jobs
             .iter()
-            .filter(|(_, job)| job.kind == StaffJobKind::MaintainTank && job.target == site)
+            .filter(|(_, job)| job.kind == Some(StaffJobKind::MaintainTank) && job.target == site)
         {
             cancellations.write(CancelStaffJobRequest { job });
         }

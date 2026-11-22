@@ -8,6 +8,9 @@ use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiNodeId;
 use openzt2_world::world_spawn::prefab_presentation_render_tree::spawn_prefab_render_tree;
 use openzt2_world_state::world_spawn::prefab_fixed_function_world_lighting_policy::PrefabFixedFunctionWorldLightingPolicy;
+use openzt2_world_state::world_spawn::{
+    world_load_completion_marker::WorldLoadCompleted, world_membership_types::WorldRoot,
+};
 use openzt2_zoo_state::progression::fame_types::Fame;
 
 const STAR_RENDER_LAYER: usize = 28;
@@ -143,25 +146,26 @@ pub(super) fn hydrate_fame_stars(
 }
 
 pub(super) fn present_fame_stars(
-    fame: Res<Fame>,
+    fame: Query<&Fame, (With<WorldRoot>, With<WorldLoadCompleted>)>,
     owners: Query<&InheritedVisibility, With<FameStarTarget>>,
     scenes: Query<(&FameStarSceneFor, Has<UnframedFameStars>)>,
     mut stars: Query<(&FameStar, &mut Visibility, &ChildOf)>,
 ) {
+    let half_stars = fame.single().map_or(0, |fame| fame.half_stars);
     for (star, mut visibility, parent) in &mut stars {
         let visible = scenes
             .get(parent.parent())
             .ok()
             .and_then(|(owner, _)| owners.get(owner.0).ok())
             .is_some_and(|visible| visible.get());
-        let full_count = fame.half_stars.min(10) / 2;
+        let full_count = half_stars.min(10) / 2;
         let framing = scenes
             .get(parent.parent())
             .is_ok_and(|(_, unframed)| unframed)
             && star.index == 0
             && !star.half;
         let filled = if star.half {
-            star.index == full_count && fame.half_stars % 2 == 1
+            star.index == full_count && half_stars % 2 == 1
         } else {
             star.index < full_count
         };

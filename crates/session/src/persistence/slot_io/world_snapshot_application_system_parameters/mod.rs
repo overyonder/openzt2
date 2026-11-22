@@ -5,53 +5,19 @@ use openzt2_game_assets::species::species_asset_types::SpeciesAssets;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_zoo_state::aquatic::aquatic_simulation_types::Tank;
-use openzt2_zoo_state::economy::guest_admission_types::AdmissionPrice;
-use openzt2_zoo_state::economy::guest_admission_types::ZooAdmissionsOpen;
-use openzt2_zoo_state::economy::monthly_finance_types::MonthlyFinanceHistory;
-use openzt2_zoo_state::economy::zoo_cash_types::ZooCash;
 use openzt2_interface_state::photos::photo_album_types::PhotoAlbum;
 use openzt2_interface_state::photos::photo_challenge_types::PhotoChallenge;
 use openzt2_interface_state::photos::photo_challenge_types::PhotoChallengeProgress;
-use openzt2_zoo_state::shows::show_platform_upgrade_types::RestoreShowPlatformUpgrade;
 use openzt2_zoo_state::shows::show_stage_types::ShowName;
 use openzt2_zoo_state::shows::show_stage_types::ShowStage;
 use openzt2_zoo_state::shows::show_stage_types::ShowStageOpenState;
-use openzt2_zoo_state::transport_tours::transport_circuit_types::CircuitMember;
-use openzt2_zoo_state::transport_tours::transport_circuit_types::TransportCircuit;
-use openzt2_zoo_state::transport_tours::transport_vehicle_types::TransportVehicle;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
-use openzt2_world_state::world_spawn::world_hydration_completion::WorldLoadFinished;
+use openzt2_world_state::world_spawn::persistent_id_index::PersistentIdIndex;
 use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
-use openzt2_world_state::world_spawn::world_load_failure::WorldLoadFailed;
-use openzt2_world_state::world_spawn::world_load_request_acceptance::BeginWorldLoad;
-use openzt2_world_state::world_spawn::world_unloading::UnloadWorld;
-
-use openzt2_interface_state::persistence::save_slot_types::WorldSnapshotLoadedFromSlot;
-
-use super::super::persistence_failure_types::WorldSnapshotPersistenceFailed;
-
-#[derive(SystemParam)]
-pub(in crate::persistence) struct WorldSnapshotApplicationMessages<'w, 's> {
-    pub(super) begin_world_load_requests: MessageWriter<'w, BeginWorldLoad>,
-    pub(super) world_unload_requests: MessageWriter<'w, UnloadWorld>,
-    pub(super) completed_world_loads: MessageReader<'w, 's, WorldLoadFinished>,
-    pub(super) failed_world_loads: MessageReader<'w, 's, WorldLoadFailed>,
-    pub(super) original_snapshot_loads: MessageWriter<
-        'w,
-        openzt2_interface_state::persistence::saved_game_source_types::OriginalSavedGameLoaded,
-    >,
-    pub(super) original_snapshot_failures: MessageWriter<
-        'w,
-        openzt2_interface_state::persistence::saved_game_source_types::OriginalSavedGameLoadFailed,
-    >,
-    pub(super) completed_snapshot_loads: MessageWriter<'w, WorldSnapshotLoadedFromSlot>,
-    pub(super) persistence_failures: MessageWriter<'w, WorldSnapshotPersistenceFailed>,
-    pub(super) show_platform_upgrade_restore_requests:
-        MessageWriter<'w, RestoreShowPlatformUpgrade>,
-}
 
 #[derive(SystemParam)]
 pub(in crate::persistence) struct WorldSnapshotApplicationState<'w, 's> {
+    pub(super) persistent_ids: Res<'w, PersistentIdIndex>,
     pub(super) behavior:
         super::behavior_snapshot_application::parameters::BehaviorSnapshotApplication<'w, 's>,
     pub(super) topology:
@@ -59,21 +25,6 @@ pub(in crate::persistence) struct WorldSnapshotApplicationState<'w, 's> {
     pub(super) scenario: super::scenario_snapshot_section::ScenarioSnapshotApplication<'w, 's>,
     pub(super) placements: super::placement_snapshot_section::PlacementSnapshotEntities<'w, 's>,
     pub(super) placement_models: Res<'w, Assets<bevy::gltf::Gltf>>,
-    pub(super) placement_footprints: Option<Res<'w, openzt2_zoo_state::placement::object_placement_geometry::ScenePlacementFootprints>>,
-    pub(super) placement_readiness: Query<
-        'w,
-        's,
-        (
-            &'static PersistentId,
-            &'static DefinitionId,
-            &'static Transform,
-            Option<&'static openzt2_world_state::world_spawn::prefab_source_asset_handle::PrefabSourceAssetHandle>,
-            Has<openzt2_zoo_state::placement::placed_object_types::PlacedObjectDefinitionReference>,
-            Has<openzt2_zoo_state::donations::donation_opportunity_types::DonationUsePoint>,
-        ),
-    >,
-    pub(super) photo_baseline:
-        super::photo_snapshot_baseline_readiness::PhotoSnapshotBaselineReadiness<'w, 's>,
     pub(super) baseline_waste:
         Query<'w, 's, Entity, super::maintenance_snapshot_capture::LooseWasteSnapshotFilter>,
     pub(super) prefabs: Res<'w, Assets<openzt2_game_assets::scene_prefab::ScenePrefabAsset>>,
@@ -86,17 +37,6 @@ pub(in crate::persistence) struct WorldSnapshotApplicationState<'w, 's> {
     pub(super) active_world_definitions: Res<'w, WorldDefinitions>,
     pub(super) entities_with_persistent_identifiers: Query<'w, 's, (Entity, &'static PersistentId)>,
     pub(super) entities_with_definition_identifiers: Query<'w, 's, (Entity, &'static DefinitionId)>,
-    pub(super) transport_entities_with_persistent_identifiers: Query<
-        'w,
-        's,
-        (Entity, &'static PersistentId),
-        Or<(
-            With<TransportCircuit>,
-            With<CircuitMember>,
-            With<TransportVehicle>,
-            With<openzt2_zoo_state::transport_tours::transport_track_construction_types::TransportTrackConstructionPiece>,
-        )>,
-    >,
     pub(super) show_stages_with_mutable_snapshot_state: Query<
         'w,
         's,
@@ -108,14 +48,11 @@ pub(in crate::persistence) struct WorldSnapshotApplicationState<'w, 's> {
         ),
         With<ShowStage>,
     >,
-    pub(super) loaded_photo_images: ResMut<'w, Assets<Image>>,
     pub(super) photo_challenges_with_mutable_progress:
         Query<'w, 's, (&'static PhotoChallenge, &'static mut PhotoChallengeProgress)>,
     pub(super) tank_persistent_identifiers: Query<'w, 's, &'static PersistentId, With<Tank>>,
-    pub(super) zoo_cash: ResMut<'w, ZooCash>,
-    pub(super) zoo_admission_price: ResMut<'w, AdmissionPrice>,
-    pub(super) zoo_admissions_open_state: ResMut<'w, ZooAdmissionsOpen>,
-    pub(super) monthly_finance_history: ResMut<'w, MonthlyFinanceHistory>,
+    pub(super) restored_tanks:
+        Query<'w, 's, super::tank_snapshot_application::RestoredTankComponents>,
     pub(super) photo_album_persistent_identifiers:
         Query<'w, 's, &'static PersistentId, With<PhotoAlbum>>,
 }

@@ -10,7 +10,7 @@ use openzt2_interface_state::persistence::profile_types::SelectProfile;
 use openzt2_interface_state::persistence::save_slot_types::DeleteWorldSnapshotFromSlot;
 use openzt2_interface_state::persistence::save_slot_types::LoadSaveSlotCatalogue;
 use openzt2_interface_state::persistence::save_slot_types::LoadWorldSnapshotFromSlot;
-use openzt2_interface_state::persistence::save_slot_types::SaveWorldSnapshotToSlot;
+use openzt2_interface_state::persistence::save_slot_types::SaveSlotId;
 
 use super::persistence_failure_types::WorldSnapshotPersistenceFailed;
 
@@ -18,9 +18,33 @@ use super::persistence_failure_types::WorldSnapshotPersistenceFailed;
 #[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct OpenLoadSlotCatalogueAfterWorldSnapshotSave;
 
+#[derive(Component)]
+pub(crate) struct ReturnToMainMenuAfterSave;
+
+#[derive(Component)]
+pub(crate) struct ExitApplicationAfterSave;
+
+#[derive(Component, Debug, Clone, Copy)]
+pub(crate) struct SaveDialogSubmission {
+    pub(crate) document: Entity,
+    pub(crate) owner: Entity,
+}
+
+#[derive(Message)]
+pub(crate) struct SaveSnapshotFromDialog {
+    pub(crate) slot: SaveSlotId,
+    pub(crate) dialog: SaveDialogSubmission,
+}
+
+#[derive(Message)]
+pub(crate) struct SaveDialogSnapshotSaved {
+    pub(crate) operation: Entity,
+    pub(crate) dialog: SaveDialogSubmission,
+}
+
 #[derive(SystemParam)]
 pub(super) struct PersistenceUiActionMessageWriters<'w> {
-    pub(super) save_world_snapshot_requests: MessageWriter<'w, SaveWorldSnapshotToSlot>,
+    pub(super) save_world_snapshot_requests: MessageWriter<'w, SaveSnapshotFromDialog>,
     pub(super) load_original_saved_game_requests: MessageWriter<
         'w,
         openzt2_interface_state::persistence::saved_game_source_types::LoadOriginalSavedGame,

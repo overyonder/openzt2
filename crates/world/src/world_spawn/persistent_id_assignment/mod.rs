@@ -11,7 +11,7 @@ use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 pub(super) fn assign_requested_persistent_ids(
     mut commands: Commands,
     mut requests: MessageReader<AssignPersistentId>,
-    mut allocator: ResMut<PersistentIdAllocator>,
+    mut allocators: Query<&mut PersistentIdAllocator>,
     members: Query<&WorldMember, Without<PersistentId>>,
     mut assigned: MessageWriter<PersistentIdAssigned>,
     mut failed: MessageWriter<PersistentIdAssignmentFailed>,
@@ -32,7 +32,14 @@ pub(super) fn assign_requested_persistent_ids(
             });
             continue;
         }
-        match allocator.allocate(request.root) {
+        let Ok(mut allocator) = allocators.get_mut(request.root) else {
+            failed.write(PersistentIdAssignmentFailed {
+                entity: request.entity,
+                reason: PersistentIdError::WrongWorld,
+            });
+            continue;
+        };
+        match allocator.allocate() {
             Ok(id) => {
                 assigned_this_update.insert(request.entity);
                 commands.entity(request.entity).insert(id);

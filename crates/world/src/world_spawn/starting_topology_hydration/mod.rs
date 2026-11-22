@@ -7,7 +7,14 @@ use bevy::prelude::Res;
 use bevy::prelude::Transform;
 use bevy::prelude::Vec3;
 use bevy::prelude::Visibility;
+use bevy::prelude::With;
+use bevy::prelude::Without;
 use openzt2_game_data::AssetId;
+use openzt2_world_state::world_spawn::selected_world_document_handles::SelectedWorldDocumentHandles;
+use openzt2_world_state::world_spawn::selected_world_identity::SelectedWorldIdentity;
+use openzt2_world_state::world_spawn::world_load_completion_marker::{
+    ImportedPersistentIdsReserved, StartingFenceTopologyHydrated, StartingTerrainHydrated,
+};
 
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
@@ -34,24 +41,38 @@ pub(super) fn hydrate_all_starting_fence_nodes_and_edges_into_topology_once(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     grid: Res<TopologyGrid>,
-    mut pending: Query<(Entity, &mut WorldHydration)>,
+    pending: Query<
+        (
+            Entity,
+            &SelectedWorldIdentity,
+            &SelectedWorldDocumentHandles,
+        ),
+        (
+            With<WorldHydration>,
+            With<ImportedPersistentIdsReserved>,
+            With<StartingTerrainHydrated>,
+            Without<StartingFenceTopologyHydrated>,
+            Without<WorldLoadFailure>,
+        ),
+    >,
 ) {
-    let Ok((root, mut pending)) = pending.single_mut() else {
+    let Ok((root, selected_world, documents)) = pending.single() else {
         return;
     };
-    if !pending.starting_topology_hydration_is_pending() {
-        return;
-    }
-    let Some(asset) = scenarios.get(pending.starting_zoo_document_asset_handle()) else {
-        pending.record_failure(WorldLoadFailure::MissingScenario);
+    let Some(asset) = scenarios.get(&documents.start) else {
+        commands
+            .entity(root)
+            .insert_if_new(WorldLoadFailure::MissingScenario);
         return;
     };
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };
     let catalog = &asset.document;
-    let Some(start) = catalog.find_starting_zoo(pending.starting_zoo_id()) else {
-        pending.record_failure(WorldLoadFailure::InvalidRecord(0));
+    let Some(start) = catalog.find_starting_zoo(selected_world.start) else {
+        commands
+            .entity(root)
+            .insert_if_new(WorldLoadFailure::InvalidRecord(0));
         return;
     };
     let nodes = start.topology_nodes.as_slice();
@@ -63,15 +84,19 @@ pub(super) fn hydrate_all_starting_fence_nodes_and_edges_into_topology_once(
             if !active_definitions.is_complete() {
                 return;
             }
-            pending.record_failure(WorldLoadFailure::MissingDependency(source_definition));
+            commands
+                .entity(root)
+                .insert_if_new(WorldLoadFailure::MissingDependency(source_definition));
             return;
         }
         let a_index = fence.a as usize;
         let b_index = fence.b as usize;
         if nodes.get(a_index).is_none() || nodes.get(b_index).is_none() {
-            pending.record_failure(WorldLoadFailure::InvalidRecord(
-                u32::try_from(a_index.max(b_index)).unwrap_or(u32::MAX),
-            ));
+            commands
+                .entity(root)
+                .insert_if_new(WorldLoadFailure::InvalidRecord(
+                    u32::try_from(a_index.max(b_index)).unwrap_or(u32::MAX),
+                ));
             return;
         }
     }
@@ -157,7 +182,7 @@ pub(super) fn hydrate_all_starting_fence_nodes_and_edges_into_topology_once(
             });
         }
     }
-    pending.record_starting_topology_hydration_completion();
+    commands.entity(root).insert(StartingFenceTopologyHydrated);
 }
 
 fn resolve_starting_fence_definition(

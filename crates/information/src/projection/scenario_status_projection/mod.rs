@@ -20,19 +20,21 @@ use openzt2_zoo_state::scenario::scenario_objective_types::ScenarioObjectiveDead
 use openzt2_zoo_state::scenario::scenario_objective_types::ScenarioObjectiveProgress;
 use openzt2_zoo_state::scenario::scenario_objective_types::ScenarioObjectiveStatus;
 use openzt2_zoo_state::scenario::scenario_session_types::ActiveScenarioSession;
+use openzt2_zoo_state::scenario::scenario_session_types::ScenarioDocument;
 use openzt2_zoo_state::scenario::scenario_session_types::ScenarioSessionState;
-use openzt2_zoo_state::scenario::scenario_session_types::SelectedScenarioDocument;
 
 // Scenario bindings need both objective state and localized presentation data.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn project_active_scenario_status_to_authored_information_bindings(
-    selected_scenario_document: Option<Res<SelectedScenarioDocument>>,
     scenario_documents: Res<Assets<WorldScenarioDocumentAsset>>,
     world_scenarios: Res<WorldScenarios>,
     active_localization: Res<LocalizationPrecedenceIndex>,
     localization_assets: Res<Assets<LocalizationAsset>>,
     zoo_clock: Res<ZooClock>,
-    active_scenario_sessions: Query<&ActiveScenarioSession>,
+    active_scenario_sessions: Query<
+        (&ActiveScenarioSession, &ScenarioDocument),
+        With<openzt2_world_state::world_spawn::world_membership_types::WorldRoot>,
+    >,
     scenario_objectives: Query<(
         &ScenarioObjective,
         &ScenarioObjectiveStatus,
@@ -47,9 +49,9 @@ pub(crate) fn project_active_scenario_status_to_authored_information_bindings(
     let world_scenarios = world_scenarios.get(&scenario_documents);
     // Challenge maps have no selected campaign document, but their accepted
     // challenges' objective text still projects into the goal list.
-    let selected_scenario_document = selected_scenario_document
-        .as_deref()
-        .and_then(|selection| scenario_documents.get(&selection.0))
+    let active_scenario = active_scenario_sessions.single().ok();
+    let selected_scenario_document = active_scenario
+        .and_then(|(_, selection)| scenario_documents.get(&selection.0))
         .map(|asset| &asset.document);
     let localization_catalogue =
         active_localization.borrow_loaded_localization_view(&localization_assets);
@@ -100,10 +102,9 @@ pub(crate) fn project_active_scenario_status_to_authored_information_bindings(
     let Some(scenario_document) = selected_scenario_document else {
         return;
     };
-    let active_scenario_session = active_scenario_sessions.iter().next();
-    let scenario_is_running = active_scenario_sessions
-        .iter()
-        .any(|session| matches!(session.state, ScenarioSessionState::Running));
+    let active_scenario_session = active_scenario.map(|(session, _)| session);
+    let scenario_is_running = active_scenario_session
+        .is_some_and(|session| matches!(session.state, ScenarioSessionState::Running));
 
     for (property_binding, mut projected_visibility) in &mut authored_boolean_visibility {
         let should_be_visible = match &property_binding.0 {

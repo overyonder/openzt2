@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 use openzt2_game_data::world_definitions::staff_management::StaffJobKind;
 use openzt2_game_data::AssetId;
+use openzt2_zoo_state::staff::staff_job_types::StaffJobRouting;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum StaffRequestControllerSample {
@@ -15,6 +16,7 @@ pub(super) struct StaffRequestRowIdentity {
     pub(super) binder: Option<AssetId>,
     pub(super) attribute_key: Option<AssetId>,
     pub(super) token: Option<AssetId>,
+    pub(super) routing: StaffJobRouting,
     pub(super) ordinal: u16,
 }
 
@@ -39,9 +41,9 @@ pub(super) struct StaffRequestRuntimeBinding {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct StaffRequestJobKey {
-    pub(super) kind: StaffJobKind,
     pub(super) target: Entity,
     pub(super) token: AssetId,
+    pub(super) routing: StaffJobRouting,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

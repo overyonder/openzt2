@@ -28,7 +28,7 @@ pub(super) fn apply_world_ui_selection(
         let subject = request.entity.map(|entity| {
             containers
                 .get(entity)
-                .map_or(entity, |contained| contained.0)
+                .map_or(entity, ContainedCratedAnimal::occupant)
         });
         if subject.is_none_or(|entity| inspectable.contains(entity)) {
             current = subject;

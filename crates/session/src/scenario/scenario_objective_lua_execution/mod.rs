@@ -1,97 +1,98 @@
-use bevy::prelude::*;
+use bevy::{ecs::relationship::RelationshipTarget, prelude::*};
 use openzt2_game_data::world_scenario::ScenarioScriptPhase;
 
 use openzt2_game_assets::lua_script::lua_script_archive_path_index::LuaScriptArchivePathIndex;
 use openzt2_game_assets::lua_script::lua_script_asset_loading::LuaScriptAsset;
-use openzt2_game_assets::world_scenario::world_scenario_asset_set_state_and_borrowing_queries::WorldScenarios;
 use openzt2_game_assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset;
 
-use openzt2_zoo_state::scenario::scenario_objective_types::ScenarioObjective;
 use openzt2_zoo_state::scenario::scenario_objective_types::ScenarioObjectiveProgress;
 use openzt2_zoo_state::scenario::scenario_objective_types::ScenarioObjectiveStatus;
 use openzt2_zoo_state::scenario::scenario_objective_types::ScenarioObjectiveStatusChanged;
-use openzt2_zoo_state::scenario::scenario_session_types::SelectedScenarioDocument;
+use openzt2_zoo_state::scenario::scenario_objective_types::{
+    ScenarioObjective, ScenarioObjectiveGroup, ScenarioObjectiveGroups, ScenarioObjectiveOf,
+    ScenarioObjectivePrerequisites, ScenarioObjectiveRequires, ScenarioObjectives,
+};
+use openzt2_zoo_state::scenario::scenario_session_types::ScenarioDocument;
 use openzt2_zoo_state::scenario::{
     scenario_script_timing_types::ScenarioScriptTiming,
     scenario_session_types::{ActiveScenarioSession, ScenarioSessionState},
 };
 
 use super::{
-    challenge_offer_types::CreateScenarioChallengeOfferFromLuaSourcePathRequest,
-    scenario_lua_command_publication::publish_commands_produced_by_scenario_lua_script,
+    challenge_offer_types::ScenarioChallengeOffer,
+    scenario_lua_command_publication::ScenarioLuaOutputs,
     scenario_lua_query_fact_collection::ScenarioLuaQueryFactSources,
     scenario_lua_types::ScenarioLuaVirtualMachineContexts,
     scenario_lua_virtual_machine::execute_loaded_scenario_lua_script_binding,
 };
 
+#[derive(Message, Clone, Copy, PartialEq, Eq, Hash)]
+pub(super) struct EvaluatedScenarioTerminal(pub Entity);
+
 pub(super) fn evaluate_active_scenario_objective_lua_condition_scripts(
-    scenarios: Res<WorldScenarios>,
-    selected: Option<Res<SelectedScenarioDocument>>,
+    sources: Query<(
+        Entity,
+        &ScenarioDocument,
+        Option<&super::challenge_offer_types::ScenarioChallengeRuleContext>,
+    )>,
     time: Res<Time<Fixed>>,
     simulation: Res<
         openzt2_world_state::simulation_time::simulation_control_types::SimulationControl,
     >,
-    mut sessions: Query<(Entity, &ActiveScenarioSession, &mut ScenarioScriptTiming)>,
+    mut sessions: Query<(
+        Entity,
+        &ScenarioDocument,
+        Option<&ActiveScenarioSession>,
+        Option<&ScenarioChallengeOffer>,
+        &mut ScenarioScriptTiming,
+    )>,
     scenario_assets: Res<Assets<WorldScenarioDocumentAsset>>,
     scripts: Res<Assets<LuaScriptAsset>>,
     script_index: Res<LuaScriptArchivePathIndex>,
     mut runtime: NonSendMut<ScenarioLuaVirtualMachineContexts>,
-    fact_sources: ScenarioLuaQueryFactSources,
+    (fact_sources, direct): (
+        ScenarioLuaQueryFactSources,
+        super::scenario_lua_entity_commands::ScenarioLuaDirectAccess,
+    ),
     spawn_sources: super::scenario_lua_entity_commands::ScenarioAnimalSpawnSources,
+    members: Query<&ScenarioObjectives>,
+    edges: Query<&ScenarioObjectiveRequires>,
     mut objectives: Query<(
         Entity,
         &ScenarioObjective,
         &mut ScenarioObjectiveStatus,
         &ScenarioObjectiveProgress,
+        &ScenarioObjectiveOf,
+        Option<&ScenarioObjectivePrerequisites>,
     )>,
     mut changed: MessageWriter<ScenarioObjectiveStatusChanged>,
-    mut outputs: (
-        MessageWriter<openzt2_zoo_state::economy::scenario_economy_command_types::ScenarioEconomyCommand>,
-        MessageWriter<openzt2_zoo_state::progression::award_and_progression_fact_types::AdjustScenarioAwardPointTotalRequest>,
-        MessageWriter<CreateScenarioChallengeOfferFromLuaSourcePathRequest>,
-        MessageWriter<super::challenge_offer_types::ScenarioChallengePanelRequest>,
-        MessageWriter<openzt2_zoo_state::scenario::scenario_objective_types::ShowScenarioRuleRequest>,
-        MessageWriter<openzt2_zoo_state::progression::adoption_and_content_availability_types::MakeScenarioContentAvailableRequest>,
-        MessageWriter<super::scenario_photo_challenge_selection::SelectCurrentPhotoChallengeSetRequest>,
-        MessageWriter<openzt2_zoo_state::progression::profile_scenario_variables::SetProfileScenarioVariable>,
-        MessageWriter<openzt2_zoo_state::progression::profile_scenario_variables::PersistProfileScenarioVariables>,
-        MessageWriter<super::scenario_lua_ui::ScenarioUiCommand>,
-        MessageWriter<super::scenario_lua_entity_commands::ScenarioEntityCommand>,
-        MessageWriter<openzt2_zoo_state::progression::fame_types::SetScenarioMaximumFame>,
-    ),
+    mut finished: MessageWriter<EvaluatedScenarioTerminal>,
+    mut outputs: ScenarioLuaOutputs,
 ) {
-    let scenarios = scenarios.get(&scenario_assets);
-    let handle_for = |scenario| {
-        selected
-            .as_ref()
-            .map(|selected| &selected.0)
-            .filter(|handle| {
-                scenario_assets
-                    .get(*handle)
-                    .is_some_and(|asset| asset.document.find_scenario_record(scenario).is_some())
-            })
-            .or_else(|| scenarios.as_ref()?.handle_for_scenario(scenario))
-    };
     let mut evaluation_due = std::collections::BTreeMap::new();
     let mut always_run_due = Vec::new();
-    for (entity, session, mut timing) in &mut sessions {
-        let Some(handle) = handle_for(session.definition) else {
-            continue;
-        };
-        let Some(definition) = scenario_assets
-            .get(handle)
-            .and_then(|asset| asset.document.find_scenario_record(session.definition))
+    for (entity, source, session, offer, mut timing) in &mut sessions {
+        let Some(scenario) = session
+            .map(|session| session.definition)
+            .or_else(|| offer.map(|offer| offer.definition))
         else {
             continue;
         };
-        let (evaluate, always_run) =
-            timing.advance(time.delta_secs(), definition.evaluation_interval_seconds);
+        let Some(definition) = scenario_assets
+            .get(&source.0)
+            .and_then(|asset| asset.document.find_scenario_record(scenario))
+        else {
+            continue;
+        };
+        let evaluate = timing.evaluation_is_due(&time, definition.evaluation_interval_seconds);
+        let always_run = !simulation.paused && timing.always_run_is_due(&time);
         evaluation_due.insert(
-            session.definition,
-            evaluate && session.state == ScenarioSessionState::Running,
+            entity,
+            evaluate
+                && session.is_none_or(|session| session.state == ScenarioSessionState::Running),
         );
-        if always_run && !simulation.paused {
-            always_run_due.push((entity, session.definition));
+        if always_run {
+            always_run_due.push((entity, scenario));
         }
     }
     let spawn_sources = std::cell::RefCell::new(spawn_sources);
@@ -100,127 +101,158 @@ pub(super) fn evaluate_active_scenario_objective_lua_condition_scripts(
             .borrow_mut()
             .resolve(kind, position, rotation, reserved)
     };
-    let mut queries = fact_sources.borrow_scenario_lua_query_facts();
+    let contained = |entity| fact_sources.contained_entities(entity);
+    let direct = std::cell::RefCell::new(direct);
+    let waste = |entity, value| direct.borrow_mut().waste(entity, value);
+    let profile = |key, value: Option<Option<&str>>| direct.borrow_mut().profile(key, value);
+    let mut queries = fact_sources.borrow_scenario_lua_query_facts(&contained);
+    queries.waste = Some(&waste);
+    queries.profile = Some(&profile);
     queries.spawn_animal = Some(&spawn_animal);
-    for (entity, objective, mut status, progress) in &mut objectives {
-        if *status != ScenarioObjectiveStatus::Active {
-            continue;
-        }
-        if evaluation_due.get(&objective.scenario) == Some(&false) {
-            continue;
-        }
-        let Some(handle) = handle_for(objective.scenario) else {
+    for (owner, source, context) in &sources {
+        let Ok(members) = members.get(owner) else {
             continue;
         };
-        let Some(asset) = scenario_assets.get(handle) else {
-            continue;
-        };
-        let Some(record) = asset
-            .document
-            .find_scenario_objective(objective.scenario, objective.record_index)
-        else {
-            continue;
-        };
-        if simulation.paused && !record.update_when_paused {
-            continue;
-        }
-        let source = SelectedScenarioDocument(handle.clone());
-        for binding in asset
-            .document
-            .scenario_script_bindings
-            .iter()
-            .filter(|binding| {
-                (binding.scenario, binding.objective, binding.phase)
-                    == (objective.scenario, record.id, ScenarioScriptPhase::Evaluate)
-            })
-        {
-            match execute_loaded_scenario_lua_script_binding(
-                &mut runtime,
-                &source,
-                &scenario_assets,
-                &scripts,
-                &script_index,
-                binding,
-                queries,
-            ) {
-                Ok(result) if result.failure.is_some() => {
-                    if let Some(error) = &result.failure {
-                        error!(entry = %binding.entry, %error, "scenario Lua call failed");
-                    }
-                    publish_commands_produced_by_scenario_lua_script(
-                        entity,
-                        result,
-                        &mut outputs.0,
-                        &mut outputs.1,
-                        &mut outputs.2,
-                        &mut outputs.3,
-                        &mut outputs.4,
-                        &mut outputs.5,
-                        &mut outputs.6,
-                        &mut outputs.7,
-                        &mut outputs.8,
-                        &mut outputs.9,
-                        &mut outputs.10,
-                        &mut outputs.11,
-                    );
-                }
-                Ok(result) if result.condition_status != ScenarioObjectiveStatus::Active => {
-                    let next_status = result.condition_status;
-                    publish_commands_produced_by_scenario_lua_script(
-                        entity,
-                        result,
-                        &mut outputs.0,
-                        &mut outputs.1,
-                        &mut outputs.2,
-                        &mut outputs.3,
-                        &mut outputs.4,
-                        &mut outputs.5,
-                        &mut outputs.6,
-                        &mut outputs.7,
-                        &mut outputs.8,
-                        &mut outputs.9,
-                        &mut outputs.10,
-                        &mut outputs.11,
-                    );
-                    *status = next_status;
-                    changed.write(ScenarioObjectiveStatusChanged {
-                        objective: entity,
-                        status: *status,
-                        current: progress.current,
-                        target: progress.target,
-                    });
-                }
-                Ok(result) => publish_commands_produced_by_scenario_lua_script(
-                    entity,
-                    result,
-                    &mut outputs.0,
-                    &mut outputs.1,
-                    &mut outputs.2,
-                    &mut outputs.3,
-                    &mut outputs.4,
-                    &mut outputs.5,
-                    &mut outputs.6,
-                    &mut outputs.7,
-                    &mut outputs.8,
-                    &mut outputs.9,
-                    &mut outputs.10,
-                    &mut outputs.11,
-                ),
-                Err(error) => error!(entry = %binding.entry, %error, "scenario Lua call failed"),
+        let mut ordered = objectives
+            .as_readonly()
+            .iter_many(members.iter())
+            .flatten()
+            .map(|(entity, objective, ..)| (objective.record_index, entity))
+            .collect::<Vec<_>>();
+        ordered.sort_unstable_by_key(|(index, _)| *index);
+        for (_, entity) in ordered {
+            let activate = objectives.as_readonly().get(entity).is_ok_and(
+                |(_, _, status, _, _, prerequisites)| {
+                    *status == ScenarioObjectiveStatus::Inactive
+                        && prerequisites.is_some_and(|prerequisites| {
+                            prerequisites.iter().all(|edge| {
+                                edges.get(edge).is_ok_and(|required| {
+                                    objectives.as_readonly().get(required.0).is_ok_and(
+                                        |(_, _, status, ..)| {
+                                            *status == ScenarioObjectiveStatus::Satisfied
+                                        },
+                                    )
+                                })
+                            })
+                        })
+                },
+            );
+            let Ok((entity, objective, mut status, progress, _, _)) = objectives.get_mut(entity)
+            else {
+                continue;
+            };
+            if activate {
+                status.set_if_neq(ScenarioObjectiveStatus::Active);
             }
-            if *status != ScenarioObjectiveStatus::Active {
-                break;
+            if *status != ScenarioObjectiveStatus::Active
+                || evaluation_due.get(&owner) == Some(&false)
+            {
+                continue;
+            }
+            let Some(asset) = scenario_assets.get(&source.0) else {
+                continue;
+            };
+            let Some(record) = asset
+                .document
+                .find_scenario_objective(objective.scenario, objective.record_index)
+            else {
+                continue;
+            };
+            if simulation.paused && !record.update_when_paused {
+                continue;
+            }
+            for binding in asset
+                .document
+                .scenario_script_bindings
+                .iter()
+                .filter(|binding| {
+                    (binding.scenario, binding.objective, binding.phase)
+                        == (objective.scenario, record.id, ScenarioScriptPhase::Evaluate)
+                })
+            {
+                match execute_loaded_scenario_lua_script_binding(
+                    &mut runtime,
+                    context.map_or(owner, |context| context.0),
+                    source,
+                    &scenario_assets,
+                    &scripts,
+                    &script_index,
+                    binding,
+                    queries,
+                ) {
+                    Ok(result) if result.failure.is_some() => {
+                        if let Some(error) = &result.failure {
+                            error!(entry = %binding.entry, %error, "scenario Lua call failed");
+                        }
+                        outputs.publish(entity, result);
+                    }
+                    Ok(result) if result.condition_status != ScenarioObjectiveStatus::Active => {
+                        let next_status = result.condition_status;
+                        outputs.publish(entity, result);
+                        *status = next_status;
+                        changed.write(ScenarioObjectiveStatusChanged {
+                            objective: entity,
+                            status: *status,
+                            current: progress.current,
+                            target: progress.target,
+                        });
+                        finished.write(EvaluatedScenarioTerminal(entity));
+                        let phase = if next_status == ScenarioObjectiveStatus::Satisfied {
+                            ScenarioScriptPhase::Success
+                        } else {
+                            ScenarioScriptPhase::Failure
+                        };
+                        for terminal in
+                            asset
+                                .document
+                                .scenario_script_bindings
+                                .iter()
+                                .filter(|binding| {
+                                    (binding.scenario, binding.objective, binding.phase)
+                                        == (objective.scenario, record.id, phase)
+                                })
+                        {
+                            match execute_loaded_scenario_lua_script_binding(
+                                &mut runtime,
+                                context.map_or(owner, |context| context.0),
+                                source,
+                                &scenario_assets,
+                                &scripts,
+                                &script_index,
+                                terminal,
+                                queries,
+                            ) {
+                                Ok(result) => {
+                                    if let Some(error) = &result.failure {
+                                        error!(entry = %terminal.entry, %error, "scenario Lua terminal call failed");
+                                    }
+                                    outputs.publish(entity, result);
+                                }
+                                Err(error) => {
+                                    error!(entry = %terminal.entry, %error, "scenario Lua terminal call failed")
+                                }
+                            }
+                        }
+                        break;
+                    }
+                    Ok(result) => outputs.publish(entity, result),
+                    Err(error) => {
+                        error!(entry = %binding.entry, %error, "scenario Lua call failed")
+                    }
+                }
+                if *status != ScenarioObjectiveStatus::Active {
+                    break;
+                }
             }
         }
     }
     for (entity, scenario) in always_run_due {
-        let Some(handle) = handle_for(scenario) else {
+        let Ok((_, source, context)) = sources.get(entity) else {
             continue;
         };
-        let Some(asset) = scenario_assets.get(handle) else {
+        let Some(asset) = scenario_assets.get(&source.0) else {
             continue;
         };
-        let source = SelectedScenarioDocument(handle.clone());
         for binding in asset
             .document
             .scenario_script_bindings
@@ -231,7 +263,8 @@ pub(super) fn evaluate_active_scenario_objective_lua_condition_scripts(
         {
             match execute_loaded_scenario_lua_script_binding(
                 &mut runtime,
-                &source,
+                context.map_or(entity, |context| context.0),
+                source,
                 &scenario_assets,
                 &scripts,
                 &script_index,
@@ -242,22 +275,7 @@ pub(super) fn evaluate_active_scenario_objective_lua_condition_scripts(
                     if let Some(error) = &result.failure {
                         error!(entry = %binding.entry, %error, "scenario Lua always-run call failed");
                     }
-                    publish_commands_produced_by_scenario_lua_script(
-                        entity,
-                        result,
-                        &mut outputs.0,
-                        &mut outputs.1,
-                        &mut outputs.2,
-                        &mut outputs.3,
-                        &mut outputs.4,
-                        &mut outputs.5,
-                        &mut outputs.6,
-                        &mut outputs.7,
-                        &mut outputs.8,
-                        &mut outputs.9,
-                        &mut outputs.10,
-                        &mut outputs.11,
-                    );
+                    outputs.publish(entity, result);
                 }
                 Err(error) => {
                     error!(entry = %binding.entry, %error, "scenario Lua always-run call failed")
@@ -268,56 +286,52 @@ pub(super) fn evaluate_active_scenario_objective_lua_condition_scripts(
 }
 
 pub(super) fn execute_scenario_objective_success_and_failure_lua_scripts(
-    scenarios: Res<WorldScenarios>,
-    selected: Option<Res<SelectedScenarioDocument>>,
+    sources: Query<(
+        &ScenarioDocument,
+        Option<&super::challenge_offer_types::ScenarioChallengeRuleContext>,
+    )>,
     scenario_assets: Res<Assets<WorldScenarioDocumentAsset>>,
     scripts: Res<Assets<LuaScriptAsset>>,
     script_index: Res<LuaScriptArchivePathIndex>,
     mut runtime: NonSendMut<ScenarioLuaVirtualMachineContexts>,
-    fact_sources: ScenarioLuaQueryFactSources,
-    spawn_sources: super::scenario_lua_entity_commands::ScenarioAnimalSpawnSources,
-    objectives: Query<(&ScenarioObjective, &ScenarioObjectiveStatus)>,
-    mut changed: MessageReader<ScenarioObjectiveStatusChanged>,
-    mut outputs: (
-        MessageWriter<openzt2_zoo_state::economy::scenario_economy_command_types::ScenarioEconomyCommand>,
-        MessageWriter<openzt2_zoo_state::progression::award_and_progression_fact_types::AdjustScenarioAwardPointTotalRequest>,
-        MessageWriter<CreateScenarioChallengeOfferFromLuaSourcePathRequest>,
-        MessageWriter<super::challenge_offer_types::ScenarioChallengePanelRequest>,
-        MessageWriter<openzt2_zoo_state::scenario::scenario_objective_types::ShowScenarioRuleRequest>,
-        MessageWriter<openzt2_zoo_state::progression::adoption_and_content_availability_types::MakeScenarioContentAvailableRequest>,
-        MessageWriter<super::scenario_photo_challenge_selection::SelectCurrentPhotoChallengeSetRequest>,
-        MessageWriter<openzt2_zoo_state::progression::profile_scenario_variables::SetProfileScenarioVariable>,
-        MessageWriter<openzt2_zoo_state::progression::profile_scenario_variables::PersistProfileScenarioVariables>,
-        MessageWriter<super::scenario_lua_ui::ScenarioUiCommand>,
-        MessageWriter<super::scenario_lua_entity_commands::ScenarioEntityCommand>,
-        MessageWriter<openzt2_zoo_state::progression::fame_types::SetScenarioMaximumFame>,
+    (fact_sources, direct): (
+        ScenarioLuaQueryFactSources,
+        super::scenario_lua_entity_commands::ScenarioLuaDirectAccess,
     ),
+    spawn_sources: super::scenario_lua_entity_commands::ScenarioAnimalSpawnSources,
+    objectives: Query<(
+        &ScenarioObjective,
+        &ScenarioObjectiveStatus,
+        &ScenarioObjectiveOf,
+    )>,
+    members: Query<(&ScenarioObjectives, &ScenarioObjectiveGroups)>,
+    mut groups: Query<&mut ScenarioObjectiveGroup>,
+    mut changed: MessageReader<ScenarioObjectiveStatusChanged>,
+    mut evaluated: MessageReader<EvaluatedScenarioTerminal>,
+    mut outputs: ScenarioLuaOutputs,
 ) {
-    let scenarios = scenarios.get(&scenario_assets);
-    let handle_for = |scenario| {
-        selected
-            .as_ref()
-            .map(|selected| &selected.0)
-            .filter(|handle| {
-                scenario_assets
-                    .get(*handle)
-                    .is_some_and(|asset| asset.document.find_scenario_record(scenario).is_some())
-            })
-            .or_else(|| scenarios.as_ref()?.handle_for_scenario(scenario))
-    };
     let spawn_sources = std::cell::RefCell::new(spawn_sources);
     let spawn_animal = |kind, position, rotation, reserved: &[_]| {
         spawn_sources
             .borrow_mut()
             .resolve(kind, position, rotation, reserved)
     };
-    let mut queries = fact_sources.borrow_scenario_lua_query_facts();
+    let contained = |entity| fact_sources.contained_entities(entity);
+    let direct = std::cell::RefCell::new(direct);
+    let waste = |entity, value| direct.borrow_mut().waste(entity, value);
+    let profile = |key, value: Option<Option<&str>>| direct.borrow_mut().profile(key, value);
+    let mut queries = fact_sources.borrow_scenario_lua_query_facts(&contained);
+    queries.waste = Some(&waste);
+    queries.profile = Some(&profile);
     queries.spawn_animal = Some(&spawn_animal);
-    let events = changed.read().copied().collect::<Vec<_>>();
+    let evaluated = evaluated
+        .read()
+        .map(|event| event.0)
+        .collect::<bevy::platform::collections::HashSet<_>>();
     let mut invocations = Vec::new();
     let mut affected_scenarios = std::collections::BTreeMap::new();
-    for event in &events {
-        let Ok((objective, _)) = objectives.get(event.objective) else {
+    for event in changed.read() {
+        let Ok((objective, _, owner)) = objectives.get(event.objective) else {
             continue;
         };
         let phase = match event.status {
@@ -325,10 +339,10 @@ pub(super) fn execute_scenario_objective_success_and_failure_lua_scripts(
             ScenarioObjectiveStatus::Failed => ScenarioScriptPhase::Failure,
             ScenarioObjectiveStatus::Inactive | ScenarioObjectiveStatus::Active => continue,
         };
-        let Some(handle) = handle_for(objective.scenario) else {
+        let Ok((source, _)) = sources.get(owner.0) else {
             continue;
         };
-        let Some(asset) = scenario_assets.get(handle) else {
+        let Some(asset) = scenario_assets.get(&source.0) else {
             continue;
         };
         let Some(record) = asset
@@ -337,67 +351,65 @@ pub(super) fn execute_scenario_objective_success_and_failure_lua_scripts(
         else {
             continue;
         };
-        invocations.push((event.objective, objective.scenario, record.id, phase));
-        affected_scenarios.insert(objective.scenario, event.objective);
+        if !evaluated.contains(&event.objective) {
+            invocations.push((
+                event.objective,
+                owner.0,
+                objective.scenario,
+                record.id,
+                phase,
+            ));
+        }
+        affected_scenarios.insert(owner.0, (objective.scenario, event.objective));
     }
-    for (scenario, source_entity) in affected_scenarios {
-        let Some(handle) = handle_for(scenario) else {
+    for (scenario_owner, (scenario, source_entity)) in affected_scenarios {
+        let Ok((source, _)) = sources.get(scenario_owner) else {
             continue;
         };
-        let Some(asset) = scenario_assets.get(handle) else {
+        let Some(asset) = scenario_assets.get(&source.0) else {
             continue;
         };
         let Some(definition) = asset.document.find_scenario_record(scenario) else {
             continue;
         };
-        let mut after = std::collections::BTreeMap::new();
-        let mut before = std::collections::BTreeMap::new();
-        for (objective, status) in &objectives {
-            if objective.scenario != scenario {
-                continue;
-            }
-            let Some(record) = definition.objectives.get(objective.record_index as usize) else {
-                continue;
-            };
-            after.insert(record.id, *status);
-            before.insert(record.id, *status);
-        }
-        for event in &events {
-            let Ok((objective, _)) = objectives.get(event.objective) else {
-                continue;
-            };
-            if objective.scenario != scenario {
-                continue;
-            }
+        let Ok((members, group_entities)) = members.get(scenario_owner) else {
+            continue;
+        };
+        let mut statuses = std::collections::BTreeMap::new();
+        for (objective, status, _) in objectives.iter_many(members.iter()).flatten() {
             if let Some(record) = definition.objectives.get(objective.record_index as usize) {
-                before.insert(record.id, ScenarioObjectiveStatus::Active);
+                statuses.insert(record.id, *status);
             }
         }
-        // Groups are in postorder, so each direct child group is resolved first.
-        for group in &definition.objective_groups {
-            let previous = super::scenario_group_completion::derive_group_status(group, &before);
-            let current = super::scenario_group_completion::derive_group_status(group, &after);
-            before.insert(group.id, previous);
-            after.insert(group.id, current);
-            if previous == current {
+        // Groups are created in authored postorder so nested children commit first.
+        for entity in group_entities.iter() {
+            let Ok(mut live) = groups.get_mut(entity) else {
+                continue;
+            };
+            let Some(group) = definition.objective_groups.get(live.record_index) else {
+                continue;
+            };
+            let current = super::scenario_group_completion::derive_group_status(group, &statuses);
+            statuses.insert(group.id, current);
+            if live.status == current {
                 continue;
             }
+            live.status = current;
             let phase = match current {
                 ScenarioObjectiveStatus::Satisfied => ScenarioScriptPhase::Success,
                 ScenarioObjectiveStatus::Failed => ScenarioScriptPhase::Failure,
                 _ => continue,
             };
-            invocations.push((source_entity, scenario, group.id, phase));
+            invocations.push((source_entity, scenario_owner, scenario, group.id, phase));
         }
     }
-    for (source_entity, scenario, objective_id, phase) in invocations {
-        let Some(handle) = handle_for(scenario) else {
+    for (source_entity, owner, scenario, objective_id, phase) in invocations {
+        let Ok((source, context)) = sources.get(owner) else {
             continue;
         };
-        let Some(asset) = scenario_assets.get(handle) else {
+        let Some(asset) = scenario_assets.get(&source.0) else {
             continue;
         };
-        let source = SelectedScenarioDocument(handle.clone());
         for binding in asset
             .document
             .scenario_script_bindings
@@ -409,7 +421,8 @@ pub(super) fn execute_scenario_objective_success_and_failure_lua_scripts(
         {
             match execute_loaded_scenario_lua_script_binding(
                 &mut runtime,
-                &source,
+                context.map_or(owner, |context| context.0),
+                source,
                 &scenario_assets,
                 &scripts,
                 &script_index,
@@ -420,22 +433,7 @@ pub(super) fn execute_scenario_objective_success_and_failure_lua_scripts(
                     if let Some(error) = &result.failure {
                         error!(entry = %binding.entry, %error, "scenario Lua terminal call failed");
                     }
-                    publish_commands_produced_by_scenario_lua_script(
-                        source_entity,
-                        result,
-                        &mut outputs.0,
-                        &mut outputs.1,
-                        &mut outputs.2,
-                        &mut outputs.3,
-                        &mut outputs.4,
-                        &mut outputs.5,
-                        &mut outputs.6,
-                        &mut outputs.7,
-                        &mut outputs.8,
-                        &mut outputs.9,
-                        &mut outputs.10,
-                        &mut outputs.11,
-                    );
+                    outputs.publish(source_entity, result);
                 }
                 Err(error) => {
                     error!(entry = %binding.entry, %error, "scenario Lua terminal call failed")

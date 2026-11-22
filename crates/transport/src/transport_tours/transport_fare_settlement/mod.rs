@@ -76,6 +76,7 @@ pub(super) fn publish_transport_trip(
 ) {
     completed_transport_trips.write(TransportTripCompleted {
         guest,
+        station: pending_fare.station,
         circuit: pending_fare.circuit,
         score: pending_fare.score,
         rating: pending_fare.rating,

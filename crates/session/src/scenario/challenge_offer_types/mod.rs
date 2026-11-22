@@ -17,6 +17,12 @@ pub struct ScenarioChallengeOffer {
     pub state: ScenarioChallengeOfferState,
 }
 
+#[derive(Component)]
+pub(crate) struct ScenarioChallengeLuaCandidate(pub(crate) AssetId);
+
+#[derive(Component)]
+pub(crate) struct ScenarioChallengeRuleContext(pub(crate) Entity);
+
 #[derive(Component, Debug, Clone, Copy)]
 pub struct ScenarioChallengeSelectionRandomNumberGenerator(DeterministicRng);
 
@@ -29,6 +35,14 @@ impl ScenarioChallengeSelectionRandomNumberGenerator {
             openzt2_world_state::world_spawn::persistent_id_types::PersistentId(1),
             openzt2_world_state::simulation_time::deterministic_random_stream::RngDomain::Challenge,
         ))
+    }
+
+    pub(crate) fn from_raw(state: [u64; 2]) -> Self {
+        Self(DeterministicRng::from_raw(state))
+    }
+
+    pub(crate) fn to_raw(self) -> [u64; 2] {
+        self.0.to_raw()
     }
 
     pub(crate) fn generate_next_challenge_selection_value(&mut self) -> u32 {
@@ -76,8 +90,8 @@ pub(crate) enum ScenarioChallengeAcceptanceRejectionReason {
 }
 
 /// The authored modal in `ui/layout/challenge.xml` that offers a challenge.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum ScenarioChallengePanelSurface {
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(crate) enum ScenarioChallengePanelSurface {
     /// `challenge layout`, opened by `showchallengepanel`.
     Offer,
     /// `instant challenge layout`, opened by `showinstantchallengepanel`.
@@ -87,6 +101,7 @@ pub(super) enum ScenarioChallengePanelSurface {
 /// Native UI operations emitted while a challenge's authored Lua runs.
 #[derive(Message, Debug, Clone, Copy)]
 pub(super) struct ScenarioChallengePanelRequest {
+    pub(super) source: Option<Entity>,
     pub(super) scenario: AssetId,
     /// The offer surface the script showed, if it showed one.
     pub(super) show: Option<ScenarioChallengePanelSurface>,
@@ -98,9 +113,12 @@ pub(super) struct ScenarioChallengePanelRequest {
 
 /// The localization key currently displayed as this offer's challenge text.
 #[derive(Component, Debug, Clone, Copy)]
-pub(super) struct ScenarioChallengePanelText(pub(super) AssetId);
+pub(crate) struct ScenarioChallengePanelText(pub(crate) AssetId);
 
 /// The localization key currently displayed as this offer's instant-challenge
 /// description.
 #[derive(Component, Debug, Clone, Copy)]
-pub(super) struct ScenarioChallengePanelDescription(pub(super) AssetId);
+pub(crate) struct ScenarioChallengePanelDescription(pub(crate) AssetId);
+
+#[derive(Component)]
+pub(crate) struct ReopenRestoredScenarioChallengePanel;

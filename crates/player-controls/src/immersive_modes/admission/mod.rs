@@ -256,6 +256,10 @@ pub(super) fn admit_validated_mode(
     if mode == ImmersiveMode::GuestView {
         entity.insert(GuestViewTileCount::default());
     }
+    if mode == ImmersiveMode::FossilSearch {
+        entity.insert(openzt2_zoo_state::extinct_animals::fossil_recovery_types::ActiveFossilSonarArtifactTracking::default());
+        commands.write_message(openzt2_zoo_state::extinct_animals::fossil_recovery_types::ActivateFossilSiteMarkersRequest);
+    }
     if admission.lock_subject {
         if let Some(subject) = subject {
             commands.entity(subject).insert((

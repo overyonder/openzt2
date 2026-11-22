@@ -5,6 +5,7 @@ use bevy::{ecs::system::SystemParam, prelude::*};
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
 use openzt2_game_data::AssetId;
 use openzt2_world_state::world_spawn::{
+    persistent_id_index::PersistentIdIndex,
     persistent_id_types::{PersistentId, PersistentIdAllocator},
     world_membership_types::WorldMember,
 };
@@ -324,8 +325,6 @@ fn validate_fence_topology_records(records: &[TopologySnapshot]) -> Result<(), F
 #[derive(SystemParam)]
 pub(super) struct FenceTopologySnapshotApplication<'w, 's> {
     entities: FenceTopologySnapshotEntities<'w, 's>,
-    persistent: Query<'w, 's, (Entity, &'static PersistentId)>,
-    grid: Res<'w, TopologyGrid>,
 }
 
 impl FenceTopologySnapshotApplication<'_, '_> {
@@ -345,25 +344,21 @@ impl FenceTopologySnapshotApplication<'_, '_> {
     }
 }
 
-pub(super) fn apply_fence_topology_records(
+pub(super) fn spawn_saved_topology_nodes(
     commands: &mut Commands,
     records: &[TopologySnapshot],
-    application: &mut FenceTopologySnapshotApplication,
+    application: &FenceTopologySnapshotApplication,
     definitions: WorldDefinitionsView<'_>,
     allocator: &mut PersistentIdAllocator,
     replaced_entities: &[Entity],
+    identities: &PersistentIdIndex,
     root: Entity,
-) -> Result<BTreeMap<u64, Entity>, Failure> {
-    validate_fence_topology_records(records)?;
-    let mut existing = BTreeMap::new();
-    for (entity, id) in &application.persistent {
-        if replaced_entities.contains(&entity) {
-            continue;
-        }
-        if existing.insert(id.0, entity).is_some() {
-            return Err(Failure::DuplicatePersistentEntityIdentifier);
-        }
-    }
+) -> Result<Option<IRect>, Failure> {
+    let existing = |id| {
+        identities
+            .get(root, id)
+            .filter(|entity| !replaced_entities.contains(entity))
+    };
     let baseline_edges = application
         .entities
         .fences
@@ -389,17 +384,17 @@ pub(super) fn apply_fence_topology_records(
         })
         .collect::<Result<Vec<_>, Failure>>()?;
     for record in records {
-        if let Some(entity) = existing.get(&record.id().0) {
+        if let Some(entity) = existing(record.id()) {
             let same_kind = match record {
                 TopologySnapshot::Node { .. } => application
                     .entities
                     .nodes
-                    .get(*entity)
+                    .get(entity)
                     .is_ok_and(|(_, _, _, member)| member.root == root),
                 TopologySnapshot::Fence { .. } => application
                     .entities
                     .fences
-                    .get(*entity)
+                    .get(entity)
                     .is_ok_and(|(_, _, _, _, _, member)| member.root == root),
                 _ => false,
             };
@@ -418,7 +413,7 @@ pub(super) fn apply_fence_topology_records(
             }
         }
         allocator
-            .reserve_imported(root, record.id())
+            .reserve_imported(record.id())
             .map_err(|_| Failure::CapacityExceeded)?;
     }
     let ids: BTreeSet<_> = records.iter().map(|record| record.id().0).collect();
@@ -444,22 +439,36 @@ pub(super) fn apply_fence_topology_records(
             }
         }
     }
-    let mut nodes = BTreeMap::new();
-    let mut restored = BTreeMap::new();
     for record in records {
         let TopologySnapshot::Node { id, cell } = record else {
             continue;
         };
-        let entity = existing
-            .get(&id.0)
-            .copied()
-            .unwrap_or_else(|| commands.spawn_empty().id());
+        let entity = existing(*id).unwrap_or_else(|| commands.spawn_empty().id());
         commands
             .entity(entity)
             .insert((*id, TopologyNode { cell: *cell }, WorldMember { root }));
-        nodes.insert(id.0, (entity, *cell));
-        restored.insert(id.0, entity);
     }
+    Ok(bounds)
+}
+
+pub(super) fn restore_snapshot_fence_edges(
+    commands: &mut Commands,
+    records: &[TopologySnapshot],
+    root: Entity,
+    identities: &PersistentIdIndex,
+    nodes: &Query<&TopologyNode>,
+    grid: TopologyGrid,
+    mut bounds: Option<IRect>,
+) -> Result<(), Failure> {
+    let resolve = |id| -> Result<(Entity, IVec3), Failure> {
+        let entity = identities
+            .get(root, id)
+            .ok_or(Failure::BrokenPersistentEntityReference)?;
+        let node = nodes
+            .get(entity)
+            .map_err(|_| Failure::BrokenPersistentEntityReference)?;
+        Ok((entity, node.cell))
+    };
     for record in records {
         let TopologySnapshot::Fence {
             id,
@@ -472,16 +481,15 @@ pub(super) fn apply_fence_topology_records(
         else {
             continue;
         };
-        let (a, b) = (nodes[&a.0], nodes[&b.0]);
-        let entity = existing
-            .get(&id.0)
-            .copied()
+        let (a, b) = (resolve(*a)?, resolve(*b)?);
+        let entity = identities
+            .get(root, *id)
             .unwrap_or_else(|| commands.spawn_empty().id());
         commands.entity(entity).insert((
             *id,
             FenceEdge::between(*definition, a.0, b.0),
             WorldMember { root },
-            calculate_topology_edge_world_transform(a.1, b.1, *application.grid),
+            calculate_topology_edge_world_transform(a.1, b.1, grid),
         ));
         commands
             .entity(entity)
@@ -492,7 +500,6 @@ pub(super) fn apply_fence_topology_records(
         if let Some(top) = wall_top {
             commands.entity(entity).insert(*top);
         }
-        restored.insert(id.0, entity);
         bounds = merge_topology_changed_cell_bounds(
             bounds,
             calculate_topology_edge_cell_bounds(a.1, b.1),
@@ -504,7 +511,7 @@ pub(super) fn apply_fence_topology_records(
             bounds,
         });
     }
-    Ok(restored)
+    Ok(())
 }
 
 #[cfg(test)]

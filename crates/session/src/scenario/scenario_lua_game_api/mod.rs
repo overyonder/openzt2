@@ -27,9 +27,6 @@ pub(super) fn install_scenario_game_query_and_command_functions<'scope, 'env: 's
         Option<super::challenge_offer_types::ScenarioChallengePanelRequest>,
     >,
     current_photo_challenge_set: &'env RefCell<Option<openzt2_game_data::AssetId>>,
-    profile_variables: &'env RefCell<
-        Vec<openzt2_zoo_state::progression::profile_scenario_variables::SetProfileScenarioVariable>,
-    >,
     persist_profile_variables: &'env std::cell::Cell<bool>,
     ui: &'env RefCell<Vec<super::scenario_lua_ui::ScenarioUiCommand>>,
     entity_operations: &'env super::scenario_lua_entity_commands::PendingEntityOperations,
@@ -39,26 +36,28 @@ pub(super) fn install_scenario_game_query_and_command_functions<'scope, 'env: 's
         "getuservar",
         scope.create_function(move |_, name: String| {
             let key = openzt2_game_data::AssetId::from_key(&name);
-            let pending = profile_variables.borrow();
-            Ok(pending
-                .iter()
-                .rev()
-                .find(|change| change.key == key)
-                .map_or_else(
-                    || queries.profile_variables.get(key).map(str::to_owned),
-                    |change| change.value.clone(),
-                ))
+            queries
+                .profile
+                .ok_or_else(|| mlua::Error::runtime("profile scenario variables are unavailable"))?(
+                key, None,
+            )
         })?,
     )?;
-    globals.set("setuservar", scope.create_function(move |_, (name, value): (String, Option<String>)| {
-        if name.is_empty() || value.as_ref().is_some_and(|value| value.len() > 1024) {
-            return Err(mlua::Error::runtime("invalid profile scenario variable"));
-        }
-        profile_variables.borrow_mut().push(openzt2_zoo_state::progression::profile_scenario_variables::SetProfileScenarioVariable {
-            key: openzt2_game_data::AssetId::from_key(&name), value,
-        });
-        Ok(())
-    })?)?;
+    globals.set(
+        "setuservar",
+        scope.create_function(move |_, (name, value): (String, Option<String>)| {
+            if name.is_empty() || value.as_ref().is_some_and(|value| value.len() > 1024) {
+                return Err(mlua::Error::runtime("invalid profile scenario variable"));
+            }
+            queries.profile.ok_or_else(|| {
+                mlua::Error::runtime("profile scenario variables are unavailable")
+            })?(
+                openzt2_game_data::AssetId::from_key(&name),
+                Some(value.as_deref()),
+            )?;
+            Ok(())
+        })?,
+    )?;
     globals.set(
         "saveOptions",
         scope.create_function(move |_, _: MultiValue| {
@@ -104,7 +103,11 @@ pub(super) fn install_scenario_game_query_and_command_functions<'scope, 'env: 's
     )?;
     globals.set(
         "getHalfStars",
-        scope.create_function(move |_, ()| Ok(i64::from(queries.zoo_fame.half_stars)))?,
+        scope.create_function(move |_, ()| {
+            Ok(i64::from(
+                queries.zoo_fame.map_or(0, |fame| fame.half_stars),
+            ))
+        })?,
     )?;
     globals.set(
         "currenttimeofday",
@@ -213,12 +216,14 @@ pub(super) fn install_scenario_game_query_and_command_functions<'scope, 'env: 's
     status.set(
         "ZT_GET_ZOO_FAME",
         scope.create_function(move |_, _: Table| {
-            Ok(f32::from(queries.zoo_fame.half_stars) * 10.0)
+            Ok(f32::from(queries.zoo_fame.map_or(0, |fame| fame.half_stars)) * 10.0)
         })?,
     )?;
     status.set(
         "ZT_GET_FAME_HALFSTARS",
-        scope.create_function(move |_, _: Table| Ok(queries.zoo_fame.half_stars))?,
+        scope.create_function(move |_, _: Table| {
+            Ok(queries.zoo_fame.map_or(0, |fame| fame.half_stars))
+        })?,
     )?;
     status.set(
         "ZT_SET_MAX_FAME_REACHED",
@@ -315,33 +320,24 @@ pub(super) fn install_scenario_game_query_and_command_functions<'scope, 'env: 's
         "ZT_GET_ZOO_CASH",
         scope.create_function(move |_, _: MultiValue| Ok(queries.zoo_cash.0 .0 / 100))?,
     )?;
-    // The shipped game raises this while a tutorial step is on screen. Nothing
-    // here reads it yet.
     status.set(
         "ZT_SET_TUTORIALRULE_ACTIVE",
-        scope.create_function(|_, _: MultiValue| Ok(()))?,
+        scope.create_function(move |_, (_, active): (Table, Value)| {
+            let active = match active {
+                Value::Boolean(active) => active,
+                Value::Integer(active) => active != 0,
+                Value::Number(active) => active != 0.0,
+                _ => return Ok(()),
+            };
+            ui.borrow_mut()
+                .push(super::scenario_lua_ui::ScenarioUiCommand::TutorialRuleActive(active));
+            Ok(())
+        })?,
     )?;
     economy_manager.set(
         "ZT_GET_INFO",
         scope.create_function(move |_, (_, request): (Table, Table)| {
-            use openzt2_zoo_state::economy::monthly_finance_types::FinanceMetric;
-            use openzt2_zoo_state::economy::monthly_finance_types::FinancePeriod;
-
-            if request.get::<String>("_type")? != "ZTEconomyInfo"
-                || request.get::<String>("period")? != "lifetime"
-                || request.get::<String>("category")? != "admissions"
-                || request.get::<String>("type")? != "totalUsers"
-            {
-                return Err(mlua::Error::runtime(
-                    "ZT_GET_INFO only exposes lifetime admissions totalUsers",
-                ));
-            }
-            if !queries.finance_history.has_initialized_month() {
-                return Err(mlua::Error::runtime("finance history is not initialized"));
-            }
-            Ok(queries
-                .finance_history
-                .finance_metric_value(FinanceMetric::TotalUsers, FinancePeriod::Lifetime))
+            finance_value(queries, &request)
         })?,
     )?;
     let ui_root =
@@ -507,6 +503,7 @@ fn install_scenario_rule_visibility_command<'scope, 'env: 'scope>(
         scope.create_function(move |_, (_, name): (Table, String)| {
             shown_rules.borrow_mut().push(
                 openzt2_zoo_state::scenario::scenario_objective_types::ShowScenarioRuleRequest {
+                    source: None,
                     scenario,
                     rule: openzt2_game_data::AssetId::from_key(&name),
                 },
@@ -514,4 +511,78 @@ fn install_scenario_rule_visibility_command<'scope, 'env: 'scope>(
             Ok(())
         })?,
     )
+}
+
+fn finance_value(queries: ScenarioLuaQueryFacts<'_>, request: &Table) -> mlua::Result<f64> {
+    use openzt2_zoo_state::economy::monthly_finance_types::{FinanceMetric, FinancePeriod};
+    if request.get::<String>("_type")? != "ZTEconomyInfo" {
+        return Err(mlua::Error::runtime("expected ZTEconomyInfo"));
+    }
+    let period = request.get::<String>("period")?;
+    let category = request.get::<String>("category")?;
+    let metric = request.get::<String>("type")?;
+    let history = queries.finance_history;
+    let value = match period.as_str() {
+        "monthly" => {
+            let month = request.get::<Option<u32>>("month")?;
+            let row = month.map_or_else(
+                || history.current_month_finance(),
+                |month| {
+                    history
+                        .retained_month_finance_records()
+                        .find(|row| row.month_ordinal == month)
+                },
+            );
+            let Some(row) = row else {
+                return Ok(0.0);
+            };
+            let (income, expenses) = match category.as_str() {
+                "admissions" => {
+                    return Ok(f64::from(match metric.as_str() {
+                        "totalUsers" => row.total_users,
+                        "users" => row.active_users,
+                        _ => 0,
+                    }))
+                }
+                "admissions_income" => (row.admission_income.0, 0),
+                "cash_grants" => (row.cash_grants.0, 0),
+                "donations_income" => (row.donation_income.0, 0),
+                "concessions_food_drink" => (row.food_drink_sales.0, 0),
+                "recycling" => (row.recycling_income.0, 0),
+                "concessions_gifts" => (row.gift_sales.0, 0),
+                "animal_adoption" => (0, row.animal_adoption.0),
+                "animal_upkeep" => (0, row.animal_upkeep.0),
+                "construction" => (0, row.construction.0),
+                "research" => (0, row.research.0),
+                "staff_salaries" => (0, row.staff_salaries.0),
+                "upkeep" => (0, row.upkeep.0),
+                "generalEconomyComponent" => (row.income.0, row.expenses.0),
+                _ => (0, 0),
+            };
+            match metric.as_str() {
+                "income" => income,
+                "expenses" => expenses,
+                "profit" => income.saturating_sub(expenses),
+                "cash" if category == "generalEconomyComponent" => row.closing_cash.0,
+                _ => 0,
+            }
+        }
+        "lifetime" => {
+            let metric = match (category.as_str(), metric.as_str()) {
+                ("admissions", "users" | "totalUsers") => {
+                    return Ok(history
+                        .finance_metric_value(FinanceMetric::TotalUsers, FinancePeriod::Lifetime)
+                        as f64);
+                }
+                ("donations_income", "income" | "profit") => FinanceMetric::DonationIncome,
+                ("generalEconomyComponent", "income") => FinanceMetric::Income,
+                ("generalEconomyComponent", "expenses") => FinanceMetric::Expenses,
+                ("generalEconomyComponent", "profit") => FinanceMetric::Profit,
+                _ => return Ok(0.0),
+            };
+            history.finance_metric_value(metric, FinancePeriod::Lifetime)
+        }
+        _ => return Ok(0.0),
+    };
+    Ok(value as f64 / 100.0)
 }

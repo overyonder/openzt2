@@ -1,6 +1,7 @@
 use bevy::ecs::entity_disabling::Disabled;
 use bevy::prelude::*;
 use openzt2_game_data::AssetId;
+use openzt2_world_state::world_spawn::world_load_completion_marker::WorldClockInitialized;
 
 use crate::world_spawn::world_unloading::unload_requested_worlds_and_their_members;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator;
@@ -95,13 +96,15 @@ fn repeated_unload_retires_owned_hierarchies_before_the_next_system() {
         ))
         .id();
     let unrelated = app.world_mut().spawn_empty().id();
-    app.insert_resource(PersistentIdAllocator::new(root))
-        .insert_resource(ZooClock {
-            fractional_tick: Default::default(),
-            tick: 17,
-            absolute_day: 1,
-            tick_in_day: 2,
-        });
+    app.world_mut()
+        .entity_mut(root)
+        .insert((PersistentIdAllocator::default(), WorldClockInitialized));
+    app.insert_resource(ZooClock {
+        fractional_tick: Default::default(),
+        tick: 17,
+        absolute_day: 1,
+        tick_in_day: 2,
+    });
     app.insert_resource(HierarchyRetirementExpectation {
         retired: vec![
             root,
@@ -120,7 +123,7 @@ fn repeated_unload_retires_owned_hierarchies_before_the_next_system() {
         app.world_mut().write_message(UnloadWorld(requested));
     }
     assert_no_invalid_entity_commands_during(|| app.update());
-    assert!(!app.world().contains_resource::<PersistentIdAllocator>());
+    assert!(!app.world().get::<PersistentIdAllocator>(root).is_some());
     assert!(!app.world().contains_resource::<ZooClock>());
     // A retained request cannot act on any later world or requeue old targets.
     app.world_mut().write_message(UnloadWorld(root));
@@ -145,7 +148,9 @@ fn delayed_unload_cannot_retire_a_later_worlds_allocator_or_simulation() {
             scenario: AssetId::from_key("later"),
         })
         .id();
-    app.insert_resource(PersistentIdAllocator::new(later));
+    app.world_mut()
+        .entity_mut(later)
+        .insert((PersistentIdAllocator::default(), WorldClockInitialized));
     let later_member = app
         .world_mut()
         .spawn((WorldMember { root: later }, Disabled))
@@ -162,16 +167,10 @@ fn delayed_unload_cannot_retire_a_later_worlds_allocator_or_simulation() {
     assert!(app.world().get_entity(old).is_err());
     assert!(app.world().get_entity(later).is_ok());
     assert!(app.world().get_entity(later_member).is_ok());
-    assert!(app
-        .world()
-        .resource::<PersistentIdAllocator>()
-        .owns_world(later));
+    assert!(app.world().get::<PersistentIdAllocator>(later).is_some());
     assert_eq!(*app.world().resource::<ZooClock>(), clock);
     app.world_mut().write_message(UnloadWorld(old));
     app.update();
-    assert!(app
-        .world()
-        .resource::<PersistentIdAllocator>()
-        .owns_world(later));
+    assert!(app.world().get::<PersistentIdAllocator>(later).is_some());
     assert_eq!(*app.world().resource::<ZooClock>(), clock);
 }

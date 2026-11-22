@@ -9,6 +9,9 @@ use super::{
 use bevy::{ecs::resource::IsResource, prelude::*};
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 use openzt2_world_state::world_spawn::world_entity_crating::WorldEntityIsCrated;
+use openzt2_zoo_state::animal_behavior::animal_lineage::{
+    AnimalFather, AnimalMate, AnimalMother, PregnancyFather,
+};
 use openzt2_zoo_state::animal_behavior::behavior_token_types::{
     BehaviorSelfToken, ClaimedBehaviorSelfToken,
 };
@@ -45,7 +48,6 @@ pub(super) fn capture_animal_snapshot_records(
     let mut records = Vec::with_capacity(animals.iter().len());
     for animal in animals {
         let transform = required_animal_component::<Transform>(animal)?;
-        let parents = required_animal_component::<Parents>(animal)?;
         let welfare = if let Some(welfare) = animal.get::<AnimalWelfare>() {
             Some(AnimalWelfareSnapshotRecord {
                 need_adjustment_timer: animal
@@ -99,19 +101,23 @@ pub(super) fn capture_animal_snapshot_records(
             rotation: transform.rotation.to_array(),
             scale: transform.scale.to_array(),
             parents: [
-                parents.mother.map(persistent_reference).transpose()?,
-                parents.father.map(persistent_reference).transpose()?,
+                animal
+                    .get::<AnimalMother>()
+                    .map(|link| persistent_reference(link.0))
+                    .transpose()?,
+                animal
+                    .get::<AnimalFather>()
+                    .map(|link| persistent_reference(link.0))
+                    .transpose()?,
             ],
             pregnancy: animal
-                .get::<Pregnancy>()
-                .and_then(|pregnancy| pregnancy.father)
-                .map(|father| persistent_reference(father).map(|father| (father, 0)))
+                .get::<PregnancyFather>()
+                .map(|father| persistent_reference(father.0).map(|father| (father, 0)))
                 .transpose()?,
-            pregnant_without_father: animal
-                .get::<Pregnancy>()
-                .is_some_and(|pregnancy| pregnancy.father.is_none()),
+            pregnant_without_father: animal.contains::<Pregnancy>()
+                && !animal.contains::<PregnancyFather>(),
             mate: animal
-                .get::<Mate>()
+                .get::<AnimalMate>()
                 .map(|mate| persistent_reference(mate.0))
                 .transpose()?,
             pending_tokens: {

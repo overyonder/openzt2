@@ -17,6 +17,7 @@ pub struct ShowScheduleRowOrder(pub u16);
 /// Links an ordered show or break row to its physical stage.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 #[relationship(relationship_target = ShowStageRows)]
+#[require(ScheduledShowRating)]
 pub struct ScheduledShowRow {
     pub stage: Entity,
 }
@@ -24,6 +25,10 @@ pub struct ScheduledShowRow {
 #[derive(Component)]
 #[relationship_target(relationship = ScheduledShowRow, linked_spawn)]
 pub struct ShowStageRows(Vec<Entity>);
+
+/// The weighted rating retained between performances of this scheduled show.
+#[derive(Component, Default)]
+pub struct ScheduledShowRating(pub Option<f32>);
 
 /// Whether one authored scheduled show row is enabled.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]

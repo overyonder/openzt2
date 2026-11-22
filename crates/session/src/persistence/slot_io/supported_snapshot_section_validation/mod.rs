@@ -1,141 +1,190 @@
+use bevy::prelude::Component;
 use openzt2_game_data::AssetId;
+use openzt2_zoo_state::topology::topology_edit_types::TopologySnapshot;
 
 use super::super::{
-    persistence_failure_types::WorldSnapshotPersistenceFailure,
+    persistence_failure_types::WorldSnapshotPersistenceFailure as Failure,
     progression_snapshot_section_encoding::decode_and_validate_progression_snapshot_section,
-    simulation_time_snapshot_section::decode_simulation_time_snapshot_record,
+    progression_snapshot_types::ProgressionSnapshotRecords,
+    simulation_time_snapshot_section::{
+        decode_simulation_time_snapshot_record, SimulationTimeSnapshotRecord,
+    },
     snapshot_container_encoding_and_validation::validate_world_snapshot_container_and_section_directory,
-    snapshot_container_types::{ValidatedWorldSnapshotContainer, WorldSnapshotSectionKind},
+    snapshot_container_types::WorldSnapshotSectionKind,
 };
 use super::{
-    animal_adoption_offer_inventory_snapshot_section::decode_and_validate_animal_adoption_offer_inventory_snapshot_section,
+    animal_adoption_offer_inventory_snapshot_section::{
+        decode_and_validate_animal_adoption_offer_inventory_snapshot_section,
+        AnimalAdoptionOffersSnapshot,
+    },
+    animal_snapshot_types::AnimalSnapshotRecord,
+    behavior_snapshot_types::BehaviorActorSnapshot,
+    donation_snapshot_section::DonationSnapshotRecord,
     economy_snapshot_section_encoding::decode_and_validate_economy_snapshot_section,
+    economy_snapshot_types::EconomySnapshotRecords,
+    maintenance_snapshot_types::MaintenanceSnapshot,
     photo_snapshot_section_encoding::decode_and_validate_photo_snapshot_section,
+    photo_snapshot_types::{PhotoChallengeProgressSnapshotRecord, PhotoSnapshotRecord},
+    placement_snapshot_section::PlacementSnapshotRecord,
+    runtime_continuation_snapshot_types::RuntimeContinuationSnapshot,
+    scenario_snapshot_section::ScenarioSnapshot,
     show_snapshot_section_encoding::decode_and_validate_show_snapshot_section,
+    show_snapshot_types::ShowSnapshotRecords,
+    staff_snapshot_types::StaffSnapshotRecord,
     tank_snapshot_section_encoding::decode_and_validate_tank_snapshot_section,
+    tank_snapshot_types::LoadedTankSnapshotRecord,
+    terrain_snapshot_types::TerrainSnapshotRecord,
     transport_snapshot_section_encoding::decode_and_validate_transport_snapshot_section,
+    transport_snapshot_types::TransportSnapshotRecords,
     world_snapshot_section_encoding::decode_and_validate_world_snapshot_section,
+    world_snapshot_types::WorldSnapshotRecord,
 };
 
-pub(super) fn validate_supported_snapshot_container_and_every_section_payload(
-    snapshot_container_bytes: &[u8],
-    required_profile_identifier: AssetId,
-) -> Result<ValidatedWorldSnapshotContainer, WorldSnapshotPersistenceFailure> {
-    let validated_snapshot_container = validate_world_snapshot_container_and_section_directory(
-        snapshot_container_bytes,
-        required_profile_identifier,
+#[derive(Component)]
+pub(super) struct DecodedSnapshot {
+    pub(super) profile: AssetId,
+    pub(super) world: WorldSnapshotRecord,
+    pub(super) terrain: Option<TerrainSnapshotRecord>,
+    pub(super) behavior: Vec<BehaviorActorSnapshot>,
+    pub(super) sections: Option<SnapshotRestoreSections>,
+}
+
+pub(super) struct SnapshotRestoreSections {
+    pub(super) runtime: Option<RuntimeContinuationSnapshot>,
+    pub(super) topology: Option<Vec<TopologySnapshot>>,
+    pub(super) maintenance: MaintenanceSnapshot,
+    pub(super) animals: Vec<AnimalSnapshotRecord>,
+    pub(super) staff: Vec<StaffSnapshotRecord>,
+    pub(super) adoption: Option<AnimalAdoptionOffersSnapshot>,
+    pub(super) tanks: Vec<LoadedTankSnapshotRecord>,
+    pub(super) placements: Option<Vec<PlacementSnapshotRecord>>,
+    pub(super) donations: Vec<DonationSnapshotRecord>,
+    pub(super) economy: Option<EconomySnapshotRecords>,
+    pub(super) scenario: Option<ScenarioSnapshot>,
+    pub(super) progression: ProgressionSnapshotRecords,
+    pub(super) time: SimulationTimeSnapshotRecord,
+    pub(super) shows: ShowSnapshotRecords,
+    pub(super) transport: TransportSnapshotRecords,
+    pub(super) photos: Vec<PhotoSnapshotRecord>,
+    pub(super) photo_challenges: Vec<PhotoChallengeProgressSnapshotRecord>,
+}
+
+pub(super) fn decode_snapshot_for_world_restore(
+    bytes: &[u8],
+    profile: AssetId,
+) -> Result<DecodedSnapshot, Failure> {
+    use WorldSnapshotSectionKind as Section;
+    let container = validate_world_snapshot_container_and_section_directory(bytes, profile)?;
+    let entry = |kind| container.section_directory_entry(kind);
+    let payload = |kind| {
+        let section = entry(kind);
+        Ok::<_, Failure>(&bytes[section.payload_byte_range_within_container(bytes.len())?])
+    };
+    let world = decode_and_validate_world_snapshot_section(bytes, entry(Section::World))?;
+    let terrain = super::terrain_snapshot_container_section::decode_terrain_snapshot_section(
+        bytes,
+        entry(Section::Terrain),
     )?;
-    let world_section =
-        validated_snapshot_container.section_directory_entry(WorldSnapshotSectionKind::World);
-    let world_snapshot_record =
-        decode_and_validate_world_snapshot_section(snapshot_container_bytes, world_section)?;
-    for snapshot_section in WorldSnapshotSectionKind::ENCODING_ORDER.into_iter().skip(1) {
-        let section_byte_range =
-            validated_snapshot_container.section_directory_entry(snapshot_section);
-        if snapshot_section == WorldSnapshotSectionKind::Terrain {
-            let terrain =
-                super::terrain_snapshot_container_section::decode_terrain_snapshot_section(
-                    snapshot_container_bytes,
-                    section_byte_range,
-                )?;
-            if terrain.is_some() != world_snapshot_record.source_document.is_some() {
-                return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection);
-            }
-        } else if snapshot_section == WorldSnapshotSectionKind::RuntimeContinuation {
-            super::runtime_continuation_snapshot_section::decode_runtime_continuation_section(
-                snapshot_container_bytes,
-                section_byte_range,
-            )?;
-        } else if snapshot_section == WorldSnapshotSectionKind::Topology {
-            super::fence_topology_snapshot_section::decode_fence_topology_records(
-                snapshot_container_bytes,
-                section_byte_range,
-            )?;
-        } else if snapshot_section == WorldSnapshotSectionKind::Maintenance {
-            super::maintenance_snapshot_section_encoding::decode_maintenance_snapshot(
-                snapshot_container_bytes,
-                section_byte_range,
-            )?;
-        } else if snapshot_section == WorldSnapshotSectionKind::Behavior {
-            super::behavior_snapshot_section_encoding::decode_behavior_actor_snapshots(
-                snapshot_container_bytes,
-                section_byte_range,
-            )?;
-        } else if snapshot_section == WorldSnapshotSectionKind::Animals {
-            super::animal_snapshot_section_encoding::decode_animal_snapshot_records(
-                snapshot_container_bytes,
-                section_byte_range,
-            )?;
-        } else if snapshot_section == WorldSnapshotSectionKind::Staff {
-            super::staff_snapshot_section_encoding::decode_staff_snapshot_records(
-                snapshot_container_bytes,
-                section_byte_range,
-            )?;
-        } else if snapshot_section == WorldSnapshotSectionKind::AdoptionOffers {
-            let section_payload_bytes = &snapshot_container_bytes[section_byte_range
-                .payload_byte_range_within_container(snapshot_container_bytes.len())?];
-            decode_and_validate_animal_adoption_offer_inventory_snapshot_section(
-                section_payload_bytes,
-                section_byte_range.encoded_record_count,
-                world_snapshot_record.session_mode,
-            )?;
-        } else if snapshot_section == WorldSnapshotSectionKind::Aquatic {
-            decode_and_validate_tank_snapshot_section(
-                snapshot_container_bytes,
-                section_byte_range,
-            )?;
-        } else if snapshot_section == WorldSnapshotSectionKind::Placement {
-            super::placement_snapshot_section::decode_placement_records(
-                snapshot_container_bytes,
-                section_byte_range,
-            )?;
-        } else if snapshot_section == WorldSnapshotSectionKind::Donations {
-            super::donation_snapshot_section::decode_donation_records(
-                snapshot_container_bytes,
-                section_byte_range,
-            )?;
-        } else if snapshot_section == WorldSnapshotSectionKind::Economy {
-            decode_and_validate_economy_snapshot_section(
-                snapshot_container_bytes,
-                section_byte_range,
-            )?;
-        } else if snapshot_section == WorldSnapshotSectionKind::Scenario {
-            super::scenario_snapshot_section::decode(snapshot_container_bytes, section_byte_range)?;
-        } else if snapshot_section == WorldSnapshotSectionKind::Progression {
-            let section_payload_bytes = &snapshot_container_bytes[section_byte_range
-                .payload_byte_range_within_container(snapshot_container_bytes.len())?];
-            decode_and_validate_progression_snapshot_section(
-                section_payload_bytes,
-                section_byte_range.encoded_record_count,
-            )?;
-        } else if snapshot_section == WorldSnapshotSectionKind::SimulationTime {
-            if section_byte_range.encoded_record_count != 1 {
-                return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection);
-            }
-            let section_payload_bytes = &snapshot_container_bytes[section_byte_range
-                .payload_byte_range_within_container(snapshot_container_bytes.len())?];
-            decode_simulation_time_snapshot_record(section_payload_bytes)?;
-        } else if snapshot_section == WorldSnapshotSectionKind::Shows {
-            decode_and_validate_show_snapshot_section(
-                snapshot_container_bytes,
-                section_byte_range,
-            )?;
-        } else if snapshot_section == WorldSnapshotSectionKind::Transport {
-            decode_and_validate_transport_snapshot_section(
-                snapshot_container_bytes,
-                section_byte_range,
-            )?;
-        } else if snapshot_section == WorldSnapshotSectionKind::Photos {
-            decode_and_validate_photo_snapshot_section(
-                snapshot_container_bytes,
-                section_byte_range,
-            )?;
-        } else if section_byte_range.encoded_record_count != 0
-            || section_byte_range.payload_byte_count != 0
-        {
-            return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection);
+    if terrain.is_some() != world.source_document.is_some()
+        || entry(Section::SimulationTime).encoded_record_count != 1
+    {
+        return Err(Failure::CorruptSnapshotSection);
+    }
+    let behavior = super::behavior_snapshot_section_encoding::decode_behavior_actor_snapshots(
+        bytes,
+        entry(Section::Behavior),
+    )?;
+    let (photos, photo_challenges) =
+        decode_and_validate_photo_snapshot_section(bytes, entry(Section::Photos))?;
+    let sections = SnapshotRestoreSections {
+        runtime: super::runtime_continuation_snapshot_section::decode_runtime_continuation_section(
+            bytes,
+            entry(Section::RuntimeContinuation),
+        )?,
+        topology: super::fence_topology_snapshot_section::decode_fence_topology_records(
+            bytes,
+            entry(Section::Topology),
+        )?,
+        maintenance: super::maintenance_snapshot_section_encoding::decode_maintenance_snapshot(
+            bytes,
+            entry(Section::Maintenance),
+        )?,
+        animals: super::animal_snapshot_section_encoding::decode_animal_snapshot_records(
+            bytes,
+            entry(Section::Animals),
+        )?,
+        staff: super::staff_snapshot_section_encoding::decode_staff_snapshot_records(
+            bytes,
+            entry(Section::Staff),
+        )?,
+        adoption: decode_and_validate_animal_adoption_offer_inventory_snapshot_section(
+            payload(Section::AdoptionOffers)?,
+            entry(Section::AdoptionOffers).encoded_record_count,
+            world.session_mode,
+        )?,
+        tanks: decode_and_validate_tank_snapshot_section(bytes, entry(Section::Aquatic))?,
+        placements: super::placement_snapshot_section::decode_placement_records(
+            bytes,
+            entry(Section::Placement),
+        )?,
+        donations: super::donation_snapshot_section::decode_donation_records(
+            bytes,
+            entry(Section::Donations),
+        )?,
+        economy: Some(decode_and_validate_economy_snapshot_section(
+            bytes,
+            entry(Section::Economy),
+        )?),
+        scenario: super::scenario_snapshot_section::decode(bytes, entry(Section::Scenario))?,
+        progression: decode_and_validate_progression_snapshot_section(
+            payload(Section::Progression)?,
+            entry(Section::Progression).encoded_record_count,
+        )?,
+        time: decode_simulation_time_snapshot_record(payload(Section::SimulationTime)?)?,
+        shows: decode_and_validate_show_snapshot_section(bytes, entry(Section::Shows))?,
+        transport: decode_and_validate_transport_snapshot_section(
+            bytes,
+            entry(Section::Transport),
+        )?,
+        photos,
+        photo_challenges,
+    };
+    super::native_crate_snapshot_links::validate_native_crate_links(
+        &sections.animals,
+        sections.placements.as_deref().unwrap_or_default(),
+    )?;
+    for kind in Section::ENCODING_ORDER {
+        match kind {
+            Section::World
+            | Section::Terrain
+            | Section::RuntimeContinuation
+            | Section::Topology
+            | Section::Maintenance
+            | Section::Behavior
+            | Section::Animals
+            | Section::Staff
+            | Section::AdoptionOffers
+            | Section::Aquatic
+            | Section::Placement
+            | Section::Donations
+            | Section::Economy
+            | Section::Scenario
+            | Section::Progression
+            | Section::SimulationTime
+            | Section::Shows
+            | Section::Transport
+            | Section::Photos => continue,
+            _ => {}
+        }
+        if entry(kind).encoded_record_count != 0 || entry(kind).payload_byte_count != 0 {
+            return Err(Failure::CorruptSnapshotSection);
         }
     }
-
-    Ok(validated_snapshot_container)
+    Ok(DecodedSnapshot {
+        profile,
+        world,
+        terrain,
+        behavior,
+        sections: Some(sections),
+    })
 }

@@ -39,13 +39,13 @@ pub(crate) fn request_animal_health_effects_after_authored_staff_behavior_finish
         return;
     };
     for (job_entity, job, _, claim) in &mut jobs {
-        if !matches!(job.kind, StaffJobKind::Treat | StaffJobKind::Capture) {
+        let Some(kind @ (StaffJobKind::Treat | StaffJobKind::Capture)) = job.kind else {
             continue;
-        }
-        if (job.kind == StaffJobKind::Treat
+        };
+        if (kind == StaffJobKind::Treat
             && (job.token == Some(AssetId::from_key("t_cureanimal"))
                 || job.token == Some(AssetId::from_key("t_healanimal"))))
-            || (job.kind == StaffJobKind::Capture
+            || (kind == StaffJobKind::Capture
                 && job.token == Some(AssetId::from_key("t_crateanimal")))
         {
             continue;
@@ -53,7 +53,7 @@ pub(crate) fn request_animal_health_effects_after_authored_staff_behavior_finish
         let Ok((disease, escaped, tranquilized)) = animals.get(job.target) else {
             continue;
         };
-        let effect_requested = match job.kind {
+        let effect_requested = match kind {
             StaffJobKind::Treat => disease
                 .and_then(|disease| catalogue.find_disease(disease.definition))
                 .and_then(|disease_definition| {
@@ -113,7 +113,7 @@ pub(crate) fn complete_staff_jobs_after_animal_health_effects_apply(
 ) {
     for captured_animal in captured_animals.read() {
         for (job_entity, job, claim, _) in &mut jobs {
-            if job.kind == StaffJobKind::Capture
+            if job.kind == Some(StaffJobKind::Capture)
                 && job_entity == captured_animal.job
                 && job.target == captured_animal.animal
                 && claim.staff == captured_animal.staff
@@ -124,17 +124,20 @@ pub(crate) fn complete_staff_jobs_after_animal_health_effects_apply(
                 completed_jobs.write(StaffJobCompleted {
                     staff: claim.staff,
                     job: job_entity,
-                    kind: job.kind,
+                    kind: StaffJobKind::Capture,
                     target: job.target,
                 });
             }
         }
     }
     for (job_entity, job, claim, mut awaiting_effect) in &mut jobs {
+        let Some(kind) = job.kind else {
+            continue;
+        };
         let Ok((treatment, tranquilized)) = animals.get(job.target) else {
             continue;
         };
-        let effect_applied = match job.kind {
+        let effect_applied = match kind {
             StaffJobKind::Treat => {
                 if treatment.is_some_and(|treatment| treatment.provider == claim.staff) {
                     awaiting_effect.observed_active_treatment = true;
@@ -150,7 +153,7 @@ pub(crate) fn complete_staff_jobs_after_animal_health_effects_apply(
             completed_jobs.write(StaffJobCompleted {
                 staff: claim.staff,
                 job: job_entity,
-                kind: job.kind,
+                kind,
                 target: job.target,
             });
         }

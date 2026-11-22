@@ -1,270 +1,148 @@
-use avian3d::prelude::{SpatialQuery, SpatialQueryFilter};
-use bevy::prelude::*;
-use openzt2_game_data::AssetId;
+use std::cell::RefCell;
 
-use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use avian3d::prelude::{SpatialQuery, SpatialQueryFilter};
+use bevy::{ecs::entity::EntityHashMap, prelude::*};
+
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
-use openzt2_interface_state::input::input_types::ActionRequest;
-use openzt2_interface_state::input::input_types::GameAction;
-use openzt2_zoo_state::animal_health::tranquilizer_eligibility_calculation::authored_tranquilizer_allows_animal_state;
-use openzt2_zoo_state::animal_health::types::AimTranquilizer;
-use openzt2_zoo_state::animal_health::types::Dead;
-use openzt2_zoo_state::animal_health::types::Escaped;
-use openzt2_zoo_state::animal_health::types::FireTranquilizer;
-use openzt2_zoo_state::animal_health::types::Rampaging;
-use openzt2_zoo_state::animal_health::types::TranquilizerTool;
-use openzt2_zoo_state::animal_lifecycle::types::Animal;
-use openzt2_zoo_state::audio::audio_playback_message_types::PlayAudioCue;
-use openzt2_zoo_state::audio::audio_playback_message_types::StopAudioCue;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_interface_state::camera::camera_runtime_state_types::ZooCamera;
+use openzt2_interface_state::input::input_types::{ActionRequest, GameAction, MousePointer};
+use openzt2_interface_state::ui::input_frame_capture_types::AuthoredModalInputCapture;
 use openzt2_interface_state::ui::ui_document_lifecycle_contracts::HideUiDocument;
+use openzt2_zoo_state::animal_health::tranquilizer_eligibility_calculation::authored_tranquilizer_allows_animal_state;
+use openzt2_zoo_state::animal_health::types::{
+    Dead, Escaped, Rampaging, TranquilizeRequest, TranquilizerFireOutcome, TranquilizerFired,
+    TranquilizerHud, TranquilizerReticle, TranquilizerTool,
+};
+use openzt2_zoo_state::animal_lifecycle::types::Animal;
+use openzt2_zoo_state::audio::audio_playback_message_types::{PlayAudioCue, StopAudioCue};
 
 use super::animal_care_control_types::{
-    AnimalCareTarget, TranquilizerAudioFeedback, TranquilizerControl,
+    AnimalCareTarget, TranquilizerAimSample, TranquilizerAudioFeedback, TranquilizerControl,
+    TranquilizerMisfireTimer,
 };
 
-pub(super) fn initialize_tranquilizer_tool_from_active_world_definitions(
+pub(super) fn initialize_tranquilizer_tool(
     mut commands: Commands,
-    world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
-    active_world_definitions: Res<WorldDefinitions>,
-    added_tranquilizer_controls: Query<(Entity, &AnimalCareTarget), Added<TranquilizerControl>>,
+    assets: Res<Assets<WorldDefinitionAsset>>,
+    definitions: Res<WorldDefinitions>,
+    pending: Query<
+        (Entity, &AnimalCareTarget),
+        (With<TranquilizerControl>, Without<TranquilizerTool>),
+    >,
 ) {
-    if added_tranquilizer_controls.is_empty() {
-        return;
-    }
-    let Some(world_definitions) = active_world_definitions.get(&world_definition_assets) else {
+    let Ok((controller, initial_target)) = pending.single() else {
         return;
     };
-    let Some(tranquilizer_definition) = world_definitions.tranquilizers().next() else {
+    let Some(definitions) = definitions.get(&assets) else {
         return;
     };
-    let Some(tranquilizer_mode_policy) = world_definitions.tranquilizer_mode() else {
+    let (Some(dose), Some(policy)) = (
+        definitions.tranquilizers().next(),
+        definitions.tranquilizer_mode(),
+    ) else {
         return;
     };
-    for (controller_entity, animal_care_target) in &added_tranquilizer_controls {
-        commands.entity(controller_entity).insert((
-            TranquilizerTool {
-                target: animal_care_target.animal_entity,
-                tranquilizer: AssetId(tranquilizer_definition.id.0),
-                charge_points: 0.0,
-                required_charge_points: tranquilizer_mode_policy.required_charge_points,
-            },
-            TranquilizerAudioFeedback::default(),
-        ));
-    }
+    commands.entity(controller).insert((
+        TranquilizerTool {
+            target: initial_target.animal_entity,
+            tranquilizer: dose.id,
+            charge_points: 0.0,
+            required_charge_points: policy.required_charge_points,
+        },
+        TranquilizerAimSample::default(),
+        TranquilizerAudioFeedback::default(),
+        TranquilizerMisfireTimer::default(),
+        TranquilizerHud {
+            distance_m: 0.0,
+            in_range: false,
+            reticle: TranquilizerReticle::NoTarget,
+            misfire_visible: false,
+        },
+    ));
 }
 
-/// Uses Avian's ECS-native spatial query as the sole world picking authority.
-/// The selected animal is written directly onto the controller's tool.
-#[allow(clippy::too_many_arguments, clippy::type_complexity)]
-pub(super) fn aim_charge_fire_or_cancel_active_tranquilizer_controls(
-    time: Res<Time>,
+type EligibleAnimals<'w, 's> = Query<
+    'w,
+    's,
+    (&'static GlobalTransform, Has<Escaped>, Has<Rampaging>),
+    (With<Animal>, Without<Dead>),
+>;
+
+pub(super) fn sample_tranquilizer_aim(
     spatial_query: SpatialQuery,
     parents: Query<&ChildOf>,
-    animals: Query<
-        (&GlobalTransform, Option<&Escaped>, Option<&Rampaging>),
-        (With<Animal>, Without<Dead>),
-    >,
-    zoo_cameras: Query<&GlobalTransform, With<ZooCamera>>,
-    world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
-    active_world_definitions: Res<WorldDefinitions>,
-    pointer_input: (
-        openzt2_interface_state::input::input_types::MousePointer,
-        Res<openzt2_interface_state::ui::input_frame_capture_types::AuthoredModalInputCapture>,
-    ),
-    mut tranquilizer_controls: Query<
-        (
-            Entity,
-            &mut TranquilizerTool,
-            &mut TranquilizerAudioFeedback,
-        ),
+    animals: EligibleAnimals,
+    cameras: Query<(Entity, &GlobalTransform), With<ZooCamera>>,
+    assets: Res<Assets<WorldDefinitionAsset>>,
+    definitions: Res<WorldDefinitions>,
+    modal_input: Res<AuthoredModalInputCapture>,
+    mut controller: Query<
+        (&TranquilizerTool, &mut TranquilizerAimSample),
         With<TranquilizerControl>,
     >,
-    mut action_requests: MessageReader<ActionRequest>,
-    mut aim_requests: MessageWriter<AimTranquilizer>,
-    mut fire_requests: MessageWriter<FireTranquilizer>,
-    mut play_audio_cue_requests: MessageWriter<PlayAudioCue>,
-    mut stop_audio_cue_requests: MessageWriter<StopAudioCue>,
-    mut commands: Commands,
-    mut hide_ui_document_requests: MessageWriter<HideUiDocument>,
 ) {
-    let (pointer, modal_input) = pointer_input;
-    let trigger_pressed = pointer.primary_is_pressed();
+    let Ok((tool, mut aim)) = controller.single_mut() else {
+        return;
+    };
     if modal_input.0.is_some() {
-        action_requests.clear();
-        // Losing input capture is not a trigger release. Keep the tool's
-        // gameplay charge under its existing pause/lifetime owner, but retire
-        // the physical hold and its looping audio so closing a dialog cannot
-        // turn a release that happened inside the UI into a delayed shot.
-        for (controller, _, mut audio_feedback) in &mut tranquilizer_controls {
-            if audio_feedback.trigger_is_held {
-                stop_audio_cue_requests.write(StopAudioCue {
-                    emitter: Some(controller),
-                    selection: controller.to_bits().wrapping_add(1),
-                });
-            }
-            audio_feedback.trigger_is_held = false;
-        }
         return;
     }
-    if tranquilizer_controls.is_empty() {
-        return;
-    }
-    let Ok(zoo_camera_transform) = zoo_cameras.single() else {
+    let Some(definitions) = definitions.get(&assets) else {
+        aim.set_if_neq(TranquilizerAimSample::default());
         return;
     };
-    let Some(world_definitions) = active_world_definitions.get(&world_definition_assets) else {
+    let (Ok((camera, view)), Some(dose), Some(policy)) = (
+        cameras.single(),
+        definitions.find_tranquilizer(tool.tranquilizer),
+        definitions.tranquilizer_mode(),
+    ) else {
+        aim.set_if_neq(TranquilizerAimSample::default());
         return;
     };
-    let Some(active_tranquilizer_definition) = world_definitions.tranquilizers().next() else {
-        return;
-    };
-    let Some(tranquilizer_mode_policy) = world_definitions.tranquilizer_mode() else {
-        return;
-    };
-    let targeted_animal_entity = spatial_query
-        .cast_ray_predicate(
-            zoo_camera_transform.translation(),
-            zoo_camera_transform.forward(),
-            f32::MAX,
-            false,
-            &SpatialQueryFilter::DEFAULT,
-            &|entity| {
-                find_animal_ancestor(entity, &parents, &animals).is_some_and(|animal_entity| {
-                    animals
-                        .get(animal_entity)
-                        .is_ok_and(|(_, escaped, rampaging)| {
+    let owners = RefCell::new(EntityHashMap::<Option<Entity>>::default());
+    let origin = view.translation();
+    let hit = spatial_query.cast_ray_predicate(
+        origin,
+        view.forward(),
+        f32::MAX,
+        false,
+        &SpatialQueryFilter::DEFAULT,
+        &|collider| {
+            owners
+                .borrow_mut()
+                .entry(collider)
+                .or_insert_with(|| {
+                    find_animal_ancestor(collider, &parents, &animals).filter(|entity| {
+                        animals.get(*entity).is_ok_and(|(_, escaped, rampaging)| {
                             authored_tranquilizer_allows_animal_state(
-                                active_tranquilizer_definition.eligible_states,
-                                escaped.is_some(),
-                                rampaging.is_some(),
+                                dose.eligible_states,
+                                escaped,
+                                rampaging,
                             )
                         })
+                    })
                 })
-            },
-        )
-        .and_then(|hit| find_animal_ancestor(hit.entity, &parents, &animals));
-
-    for (controller_entity, mut tranquilizer_tool, mut audio_feedback) in &mut tranquilizer_controls
-    {
-        if world_definitions
-            .find_tranquilizer(tranquilizer_tool.tranquilizer)
-            .is_none()
-        {
-            continue;
-        }
-        tranquilizer_tool.target = targeted_animal_entity;
-        let targeted_animal_is_in_range = targeted_animal_entity
-            .and_then(|animal_entity| animals.get(animal_entity).ok())
-            .is_some_and(|(animal_transform, _, _)| {
-                zoo_camera_transform
-                    .translation()
-                    .distance(animal_transform.translation())
-                    <= tranquilizer_mode_policy.range_cm as f32 / 100.0
-            });
-        let trigger_is_charging = targeted_animal_is_in_range && trigger_pressed;
-        let charge_audio_selection = controller_entity.to_bits().wrapping_add(1);
-        let charge_rate_points_per_second = if trigger_is_charging {
-            tranquilizer_mode_policy.charge_points_per_second
-        } else {
-            -tranquilizer_mode_policy.charge_decrease_points_per_second
-        };
-        tranquilizer_tool.charge_points = (tranquilizer_tool.charge_points
-            + time.delta_secs() * charge_rate_points_per_second)
-            .clamp(0.0, tranquilizer_tool.required_charge_points);
-
-        if trigger_is_charging
-            && (targeted_animal_entity != audio_feedback.targeted_animal_entity
-                || !audio_feedback.trigger_is_held)
-        {
-            if audio_feedback.trigger_is_held {
-                stop_audio_cue_requests.write(StopAudioCue {
-                    emitter: Some(controller_entity),
-                    selection: charge_audio_selection,
-                });
-            }
-            let begin_or_lost_target_cue = targeted_animal_entity.map_or(
-                AssetId(tranquilizer_mode_policy.lose_tracking_cue.0),
-                |_| AssetId(tranquilizer_mode_policy.begin_charge_cue.0),
-            );
-            play_audio_cue_requests.write(PlayAudioCue {
-                cue: begin_or_lost_target_cue,
-                emitter: Some(controller_entity),
-                selection: controller_entity.to_bits(),
-                priority: 192,
-                force_looped: false,
-            });
-            play_audio_cue_requests.write(PlayAudioCue {
-                cue: AssetId(tranquilizer_mode_policy.charge_cue.0),
-                emitter: Some(controller_entity),
-                selection: charge_audio_selection,
-                priority: 191,
-                force_looped: true,
-            });
-        } else if !trigger_is_charging && audio_feedback.trigger_is_held {
-            stop_audio_cue_requests.write(StopAudioCue {
-                emitter: Some(controller_entity),
-                selection: charge_audio_selection,
-            });
-        }
-        if targeted_animal_entity.is_none() && audio_feedback.targeted_animal_entity.is_some() {
-            play_audio_cue_requests.write(PlayAudioCue {
-                cue: AssetId(tranquilizer_mode_policy.lose_tracking_cue.0),
-                emitter: Some(controller_entity),
-                selection: controller_entity.to_bits(),
-                priority: 192,
-                force_looped: false,
-            });
-        }
-        let charge_is_ready =
-            tranquilizer_tool.charge_points >= tranquilizer_tool.required_charge_points;
-        if charge_is_ready && !audio_feedback.charge_is_ready {
-            play_audio_cue_requests.write(PlayAudioCue {
-                cue: AssetId(tranquilizer_mode_policy.end_charge_cue.0),
-                emitter: Some(controller_entity),
-                selection: controller_entity.to_bits(),
-                priority: 192,
-                force_looped: false,
-            });
-        }
-        audio_feedback.targeted_animal_entity = targeted_animal_entity;
-        audio_feedback.charge_is_ready = charge_is_ready;
-        if audio_feedback.trigger_is_held && !trigger_pressed {
-            fire_requests.write(FireTranquilizer {
-                controller: controller_entity,
-            });
-        }
-        audio_feedback.trigger_is_held = trigger_pressed;
-        aim_requests.write(AimTranquilizer {
-            controller: controller_entity,
-        });
-        for action_request in action_requests.read() {
-            if action_request.action == GameAction::Cancel {
-                stop_audio_cue_requests.write(StopAudioCue {
-                    emitter: Some(controller_entity),
-                    selection: charge_audio_selection,
-                });
-                commands.entity(controller_entity).remove::<(
-                    TranquilizerControl,
-                    TranquilizerTool,
-                    openzt2_zoo_state::animal_health::types::TranquilizerHud,
-                    TranquilizerAudioFeedback,
-                )>();
-                hide_ui_document_requests.write(HideUiDocument {
-                    owner: controller_entity,
-                });
-            }
-        }
-    }
+                .is_some()
+        },
+    );
+    let owners = owners.into_inner();
+    let target = hit.and_then(|hit| owners.get(&hit.entity).copied().flatten());
+    let distance_m = target
+        .and_then(|target| animals.get(target).ok())
+        .map_or(0.0, |(pose, ..)| origin.distance(pose.translation()));
+    aim.set_if_neq(TranquilizerAimSample {
+        camera: Some(camera),
+        target,
+        distance_m,
+        in_range: target.is_some() && distance_m <= policy.range_cm as f32 / 100.0,
+    });
 }
 
 fn find_animal_ancestor(
     mut entity: Entity,
     parents: &Query<&ChildOf>,
-    animals: &Query<
-        (&GlobalTransform, Option<&Escaped>, Option<&Rampaging>),
-        (With<Animal>, Without<Dead>),
-    >,
+    animals: &EligibleAnimals,
 ) -> Option<Entity> {
     loop {
         if animals.contains(entity) {
@@ -272,4 +150,173 @@ fn find_animal_ancestor(
         }
         entity = parents.get(entity).ok()?.parent();
     }
+}
+
+pub(super) fn apply_tranquilizer_input(
+    time: Res<Time>,
+    assets: Res<Assets<WorldDefinitionAsset>>,
+    definitions: Res<WorldDefinitions>,
+    (pointer, modal_input): (MousePointer, Res<AuthoredModalInputCapture>),
+    mut controller: Query<
+        (
+            Entity,
+            &TranquilizerAimSample,
+            &mut TranquilizerTool,
+            &mut TranquilizerHud,
+            &mut TranquilizerAudioFeedback,
+            &mut TranquilizerMisfireTimer,
+        ),
+        With<TranquilizerControl>,
+    >,
+    mut actions: MessageReader<ActionRequest>,
+    mut tranquilize: MessageWriter<TranquilizeRequest>,
+    mut fired: MessageWriter<TranquilizerFired>,
+    mut play: MessageWriter<PlayAudioCue>,
+    mut stop: MessageWriter<StopAudioCue>,
+    mut close_hud: MessageWriter<HideUiDocument>,
+    mut commands: Commands,
+) {
+    let Ok((controller, aim, mut tool, mut hud, mut feedback, mut misfire)) =
+        controller.single_mut()
+    else {
+        actions.clear();
+        return;
+    };
+    let loop_selection = controller.to_bits().wrapping_add(1);
+    if let Some(timer) = &mut misfire.0 {
+        timer.tick(time.delta());
+        if timer.is_finished() {
+            misfire.0 = None;
+        }
+    }
+    if modal_input.0.is_some() {
+        actions.clear();
+        if feedback.trigger_is_held {
+            stop.write(StopAudioCue {
+                emitter: Some(controller),
+                selection: loop_selection,
+            });
+            feedback.trigger_is_held = false;
+        }
+        if hud.misfire_visible != misfire.0.is_some() {
+            hud.misfire_visible = misfire.0.is_some();
+        }
+        return;
+    }
+    let cancel = actions
+        .read()
+        .any(|request| request.action == GameAction::Cancel);
+    actions.clear();
+    if cancel {
+        stop.write(StopAudioCue {
+            emitter: Some(controller),
+            selection: loop_selection,
+        });
+        commands.entity(controller).remove::<(
+            TranquilizerControl,
+            TranquilizerAimSample,
+            TranquilizerTool,
+            TranquilizerHud,
+            TranquilizerAudioFeedback,
+            TranquilizerMisfireTimer,
+        )>();
+        close_hud.write(HideUiDocument { owner: controller });
+        return;
+    }
+    let Some(policy) = definitions
+        .get(&assets)
+        .and_then(|definitions| definitions.tranquilizer_mode())
+    else {
+        return;
+    };
+    let Some(source) = aim.camera else {
+        return;
+    };
+    let trigger = pointer.primary_is_pressed();
+    let charging = aim.in_range && trigger;
+    let mut next = *tool;
+    next.target = aim.target;
+    next.required_charge_points = policy.required_charge_points;
+    let rate = if charging {
+        policy.charge_points_per_second
+    } else {
+        -policy.charge_decrease_points_per_second
+    };
+    next.charge_points =
+        (next.charge_points + time.delta_secs() * rate).clamp(0.0, next.required_charge_points);
+    let mut ready = next.charge_points >= next.required_charge_points;
+    let mut cue = |cue, selection, priority, force_looped| {
+        play.write(PlayAudioCue {
+            cue,
+            emitter: Some(controller),
+            selection,
+            priority,
+            force_looped,
+        });
+    };
+    if charging && (aim.target != feedback.targeted_animal_entity || !feedback.trigger_is_held) {
+        if feedback.trigger_is_held {
+            stop.write(StopAudioCue {
+                emitter: Some(controller),
+                selection: loop_selection,
+            });
+        }
+        cue(policy.begin_charge_cue, controller.to_bits(), 192, false);
+        cue(policy.charge_cue, loop_selection, 191, true);
+    } else if !charging && feedback.trigger_is_held {
+        stop.write(StopAudioCue {
+            emitter: Some(controller),
+            selection: loop_selection,
+        });
+    }
+    if aim.target.is_none() && feedback.targeted_animal_entity.is_some() {
+        cue(policy.lose_tracking_cue, controller.to_bits(), 192, false);
+    }
+    if ready && !feedback.charge_is_ready {
+        cue(policy.end_charge_cue, controller.to_bits(), 192, false);
+    }
+    feedback.targeted_animal_entity = aim.target;
+    feedback.charge_is_ready = ready;
+    if feedback.trigger_is_held && !trigger {
+        let outcome = match (ready, aim.target, aim.in_range) {
+            (false, _, _) => TranquilizerFireOutcome::Misfire,
+            (true, None, _) => TranquilizerFireOutcome::NoTarget,
+            (true, Some(_), false) => TranquilizerFireOutcome::OutOfRange,
+            (true, Some(animal), true) => {
+                // Sedation revalidates the shot against the next simulation step.
+                tranquilize.write(TranquilizeRequest {
+                    animal,
+                    source,
+                    tranquilizer: next.tranquilizer,
+                });
+                TranquilizerFireOutcome::Shot
+            }
+        };
+        fired.write(TranquilizerFired {
+            controller,
+            tranquilizer: next.tranquilizer,
+            outcome,
+        });
+        next.charge_points = 0.0;
+        ready = false;
+        if outcome == TranquilizerFireOutcome::Misfire {
+            misfire.0 = Some(Timer::from_seconds(
+                policy.misfire_duration_seconds,
+                TimerMode::Once,
+            ));
+        }
+    }
+    feedback.trigger_is_held = trigger;
+    tool.set_if_neq(next);
+    hud.set_if_neq(TranquilizerHud {
+        distance_m: aim.distance_m,
+        in_range: aim.in_range,
+        reticle: match (aim.target, aim.in_range, ready) {
+            (None, _, _) => TranquilizerReticle::NoTarget,
+            (Some(_), false, _) => TranquilizerReticle::OutOfRange,
+            (Some(_), true, false) => TranquilizerReticle::Charging,
+            (Some(_), true, true) => TranquilizerReticle::Ready,
+        },
+        misfire_visible: misfire.0.is_some(),
+    });
 }

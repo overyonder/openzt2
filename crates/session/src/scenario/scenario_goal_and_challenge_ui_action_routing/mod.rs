@@ -20,6 +20,8 @@ pub(super) fn route_scenario_goal_and_challenge_ui_actions(
     nodes: AuthoredScenarioUiActionDocumentQueries,
     offers: Query<&ScenarioChallengeOffer>,
     parents: Query<&ChildOf>,
+    mut categories: Query<&mut ScenarioObjectiveCategoryFilter>,
+    mut statuses: Query<&mut ScenarioObjectiveStatusFilter>,
     mut challenge_acceptance: MessageWriter<RespondToScenarioChallengeRequest>,
 ) {
     for activation in activations.read() {
@@ -38,14 +40,20 @@ pub(super) fn route_scenario_goal_and_challenge_ui_actions(
             }
             match &record.action {
                 UiScenarioAction::SetObjectiveFilter { filter } => {
-                    commands
-                        .entity(owner.0)
-                        .insert(ScenarioObjectiveCategoryFilter(AssetId(filter.0)));
+                    let next = ScenarioObjectiveCategoryFilter(AssetId(filter.0));
+                    if let Ok(mut current) = categories.get_mut(owner.0) {
+                        current.set_if_neq(next);
+                    } else {
+                        commands.entity(owner.0).insert(next);
+                    }
                 }
                 UiScenarioAction::SetObjectiveStatusFilter { filter } => {
-                    commands
-                        .entity(owner.0)
-                        .insert(ScenarioObjectiveStatusFilter::from(filter));
+                    let next = ScenarioObjectiveStatusFilter::from(filter);
+                    if let Ok(mut current) = statuses.get_mut(owner.0) {
+                        current.set_if_neq(next);
+                    } else {
+                        commands.entity(owner.0).insert(next);
+                    }
                 }
                 UiScenarioAction::AcceptChallenge | UiScenarioAction::DeclineChallenge => {
                     let Ok(parent) = parents.get(owner.0) else {

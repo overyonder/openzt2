@@ -6,7 +6,6 @@ use openzt2_game_data::ui_document::{
 };
 
 use openzt2_game_assets::texture::source_image_asset_path_selection::select_bevy_image_asset_path_for_blue_fang_source_image;
-use openzt2_interface_state::persistence::profile_types::LoadProfileIndex;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentRoot;
 use openzt2_interface_state::ui::ui_document_lifecycle_contracts::ShowUiRole;
 use openzt2_ui::authored_ui_text_content_binding::UiTextBinding;
@@ -17,12 +16,11 @@ use openzt2_interface_state::shell::shell_selection_types::ShellSelection;
 
 const MAIN_MENU_LOGO_TEXTURE_PATH: &str = "ui/shared/zoo2logo.dds";
 
-pub(super) fn create_main_menu_screen_and_request_profile_index(
+pub(super) fn create_main_menu_screen(
     mut commands: Commands,
     assets: Res<AssetServer>,
     mut selection: ResMut<ShellSelection>,
     mut requested_ui_roles: MessageWriter<ShowUiRole>,
-    mut profile_index_load_requests: MessageWriter<LoadProfileIndex>,
     mut phase_transitions: MessageReader<StateTransitionEvent<GamePhase>>,
 ) {
     let main_menu_screen_owner = commands
@@ -61,7 +59,6 @@ pub(super) fn create_main_menu_screen_and_request_profile_index(
             MainMenuLogoFallback,
             ChildOf(main_menu_screen_owner),
         ));
-        profile_index_load_requests.write(LoadProfileIndex);
     }
     requested_ui_roles.write(ShowUiRole {
         role: UiDocumentRole::MainMenu,

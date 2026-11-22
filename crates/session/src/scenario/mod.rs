@@ -6,7 +6,7 @@ pub mod challenge_offer_types;
 mod profile_scenario_variable_application;
 mod scenario_goal_and_challenge_ui_action_routing;
 mod scenario_goal_panel_presentation;
-mod scenario_group_completion;
+pub(crate) mod scenario_group_completion;
 mod scenario_instantiation;
 mod scenario_lua_command_publication;
 mod scenario_lua_entity_commands;
@@ -35,8 +35,8 @@ use challenge_offer_types::{
     ScenarioChallengeAcceptanceRejected, ScenarioChallengeAccepted,
 };
 use openzt2_zoo_state::scenario::scenario_objective_types::ScenarioObjectiveStatusChanged;
+use openzt2_zoo_state::scenario::scenario_session_types::ActiveScenarioSession;
 use openzt2_zoo_state::scenario::scenario_session_types::ScenarioTerminalResult;
-use openzt2_zoo_state::scenario::scenario_session_types::SelectedScenarioDocument;
 
 use bevy::prelude::*;
 
@@ -70,6 +70,7 @@ impl Plugin for ScenarioPlugin {
             .add_message::<CreateScenarioChallengeOfferFromLuaSourcePathRequest>()
             .add_message::<ScenarioTerminalResult>()
             .add_message::<ScenarioObjectiveStatusChanged>()
+            .add_message::<scenario_objective_lua_execution::EvaluatedScenarioTerminal>()
             .add_message::<openzt2_zoo_state::scenario::scenario_objective_types::ShowScenarioRuleRequest>()
             .add_message::<scenario_photo_challenge_selection::SelectCurrentPhotoChallengeSetRequest>()
             .add_systems(
@@ -135,6 +136,7 @@ impl Plugin for ScenarioPlugin {
                     scenario_ui_modification_presentation::
                         apply_mode_scenario_ui_modifications_to_projected_nodes,
                     challenge_offer_presentation::project_authored_challenge_panel_text,
+                    challenge_offer_presentation::reopen_restored_challenge_panel,
                     scenario_goal_panel_presentation::
                         set_authored_scenario_goal_panel_row_counts,
                     scenario_goal_panel_presentation::
@@ -155,20 +157,14 @@ impl Plugin for ScenarioPlugin {
             )
             .add_systems(
                 FixedUpdate,
-                scenario_objective_lua_execution::
-                    evaluate_active_scenario_objective_lua_condition_scripts
-                    .in_set(ScenarioFixedUpdateStage::EvaluateObjectiveAndChallengeScripts)
-                    .run_if(in_state(GamePhase::InGame)),
-            )
-            .add_systems(
-                FixedUpdate,
                 (
                     scenario_objective_progression::
-                        activate_scenario_objectives_with_satisfied_prerequisites,
-                    scenario_objective_progression::
-                        fail_expired_objectives_and_remove_expired_challenge_offers,
+                        expire_active_objectives,
+                    scenario_objective_lua_execution::
+                        evaluate_active_scenario_objective_lua_condition_scripts
+                        .before(scenario_objective_progression::expire_active_objectives),
+                    scenario_objective_progression::remove_expired_challenge_offers,
                 )
-                    .chain()
                     .in_set(ScenarioFixedUpdateStage::EvaluateObjectiveAndChallengeScripts)
                     .run_if(in_state(GamePhase::InGame)),
             )
@@ -190,28 +186,17 @@ impl Plugin for ScenarioPlugin {
                     .in_set(ScenarioFixedUpdateStage::ApplyTerminalScenarioResults)
                     .run_if(in_state(GamePhase::InGame)),
             )
-            .add_systems(
-                OnExit(GamePhase::InGame),
-                remove_selected_scenario_document_resource_when_leaving_game,
-            );
+            .add_systems(Update, scenario_lua_virtual_machine_invalidation::remove_unloaded_scenario_lua_contexts);
     }
 }
 
-fn remove_selected_scenario_document_resource_when_leaving_game(
-    mut commands: Commands,
-    mut runtime: NonSendMut<scenario_lua_types::ScenarioLuaVirtualMachineContexts>,
-) {
-    runtime.clear_finished_zoo_session();
-    commands.remove_resource::<SelectedScenarioDocument>();
-}
-
 fn scenario_or_challenge_gameplay_is_active(
-    selected: Option<Res<SelectedScenarioDocument>>,
+    selected: Query<(), With<ActiveScenarioSession>>,
     worlds: Query<
         &openzt2_world_state::world_spawn::selected_world_identity::SelectedWorldIdentity,
     >,
 ) -> bool {
-    selected.is_some()
+    !selected.is_empty()
         || worlds.iter().any(|world| {
             world.mode == openzt2_world_state::game_session_types::WorldSessionMode::Challenge
         })

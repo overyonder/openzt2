@@ -1,4 +1,7 @@
 use bevy::prelude::*;
+use openzt2_game_data::world_definitions::staff_management::{
+    StaffJobCapabilityFlags, StaffJobKind,
+};
 use openzt2_game_data::AssetId;
 
 use crate::economy::money_types::Money;
@@ -10,16 +13,24 @@ pub struct Staff;
 pub struct StaffRole(pub AssetId);
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StaffJobCapabilities(StaffJobCapabilityFlags);
+
+impl StaffJobCapabilities {
+    pub const fn new(capabilities: StaffJobCapabilityFlags) -> Self {
+        Self(capabilities)
+    }
+
+    pub const fn supports(self, kind: StaffJobKind) -> bool {
+        self.0
+            .contains_all(StaffJobCapabilityFlags::for_job_kind(kind))
+    }
+}
+
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Employment {
     pub wage: Money,
     pub hired_tick: u64,
     pub hired_month_ordinal: u32,
-}
-
-#[derive(Component, Debug, Clone, Copy, PartialEq)]
-pub struct PendingStaffHire {
-    pub role: AssetId,
-    pub position: Vec3,
 }
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]

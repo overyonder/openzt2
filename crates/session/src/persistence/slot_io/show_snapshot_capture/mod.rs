@@ -4,7 +4,7 @@ use bevy::{
 };
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 use openzt2_zoo_state::shows::show_schedule_types::{
-    ScheduledShowBreakRow, ScheduledShowPerformancePlan, ScheduledShowRow,
+    ScheduledShowBreakRow, ScheduledShowPerformancePlan, ScheduledShowRating, ScheduledShowRow,
     ScheduledShowTrickPerformance, ScheduledTrickPerformer, ShowScheduleRowOrder, ShowTrickSlots,
 };
 
@@ -18,7 +18,7 @@ use super::{
         ScheduledShowBreakSnapshotRecord, ScheduledShowPerformanceSnapshotRecord,
         ScheduledShowSnapshotRecord, ShowStageSnapshotRecord,
     },
-    world_snapshot_capture_system_parameters::WorldSnapshotCaptureQueries,
+    world_snapshot_capture_system_parameters::ShowStageCaptureQueries,
 };
 
 #[derive(SystemParam)]
@@ -34,6 +34,7 @@ pub(in crate::persistence) struct ShowScheduleSnapshotQueries<'w, 's> {
             Option<&'static ScheduledShowPerformancePlan>,
             Option<&'static ScheduledShowRowActivationState>,
             Option<&'static ShowTrickSlots>,
+            Option<&'static ScheduledShowRating>,
         ),
     >,
     slots: Query<
@@ -47,7 +48,7 @@ pub(in crate::persistence) struct ShowScheduleSnapshotQueries<'w, 's> {
 }
 
 pub(super) fn capture_sorted_show_snapshot_records_from_live_world(
-    world_snapshot_capture_queries: &WorldSnapshotCaptureQueries,
+    world_snapshot_capture_queries: &ShowStageCaptureQueries,
     schedule: &ShowScheduleSnapshotQueries,
 ) -> Result<
     (
@@ -125,7 +126,7 @@ pub(super) fn capture_sorted_show_snapshot_records_from_live_world(
     };
     let mut scheduled_show_snapshot_records = Vec::new();
     let mut scheduled_show_break_snapshot_records = Vec::new();
-    for (id, row, order, interval, plan, activation, slots) in &schedule.rows {
+    for (id, row, order, interval, plan, activation, slots, rating) in &schedule.rows {
         let stage_persistent_identifier = entity_persistent_identifier(row.stage)
             .ok_or(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference)?;
         if !world_snapshot_capture_queries
@@ -167,7 +168,12 @@ pub(super) fn capture_sorted_show_snapshot_records_from_live_world(
                 duration_simulation_ticks: performance.duration_ticks,
             });
         }
+        let rating = rating.and_then(|rating| rating.0);
+        if rating.is_some_and(|rating| !rating.is_finite()) {
+            return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection);
+        }
         scheduled_show_snapshot_records.push(ScheduledShowSnapshotRecord {
+            rating,
             persistent_identifier: *id,
             stage_persistent_identifier,
             schedule_row_order: order.0,

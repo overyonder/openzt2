@@ -27,7 +27,19 @@ pub struct ScenarioTerminalResult {
     pub state: ScenarioSessionState,
 }
 
-#[derive(Resource, Debug, Clone)]
-pub struct SelectedScenarioDocument(
+#[derive(Component, Debug, Clone)]
+pub struct ScenarioDocument(
     pub Handle<openzt2_game_assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset>,
 );
+
+/// The tutorial has an authored rule active in this zoo.
+#[derive(Component, Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct ScenarioTutorialRuleActive(pub bool);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SetScenarioFencePlacementMode {
+    RubberBand,
+    Rectangle,
+    Octagon,
+    Gate,
+}

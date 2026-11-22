@@ -1,9 +1,12 @@
+use std::sync::Arc;
+
 use bevy::prelude::*;
+use openzt2_game_assets::animation::animation_set_asset_types::AnimationTimelineCommand;
 use openzt2_game_data::animation::animation_text_key::AuthoredAnimationTextAction;
 use openzt2_world_state::animation_playback::animation_event_message_types::{
-    AnimationAiCommandRequested, AnimationDockCommand, AnimationDockCommandRequested,
-    AnimationWhapRequested,
+    AnimationAiCommandRequested, AnimationObjectCommand, AnimationWhapRequested,
 };
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::DispatchBehaviorAnimationTextKeys;
 
 use crate::animation_playback::authored_animation_control_text_action_execution::set_animation_playback_controller_speed_from_authored_percent;
 use crate::animation_playback::authored_animation_text_action_execution_context::AuthoredAnimationTextActionExecutionContext;
@@ -17,24 +20,56 @@ impl<const REAL_TIME: bool> AuthoredAnimationTextActionExecutionContext<'_, '_, 
         animation_playback_controller_entity: Entity,
         animation_playback_controller: &mut AnimationPlaybackController,
         event_time_milliseconds: u32,
-        authored_animation_text_command: &openzt2_game_assets::animation::animation_set_asset_types::AnimationTimelineCommand,
+        authored_animation_text_command: &AnimationTimelineCommand,
     ) {
-        let resolved_action_target_entity = authored_animation_text_command
-            .joint
-            .and_then(|joint_key| {
-                let rig = self
-                    .animation_rig_joints
-                    .get(animation_playback_controller_entity)
-                    .ok()?;
-                self.named_animation_joint_targets
-                    .iter_many(rig.joints())
-                    .matched()
-                    .find_map(|(joint, target)| {
-                        (target.authored_joint_id == joint_key).then_some(joint)
-                    })
-            })
-            .unwrap_or(animation_playback_controller_entity);
+        self.execute_text_command(
+            animation_playback_controller_entity,
+            animation_playback_controller,
+            event_time_milliseconds,
+            animation_playback_controller_entity,
+            authored_animation_text_command,
+        );
+    }
 
+    fn execute_text_command(
+        &mut self,
+        animation_playback_controller_entity: Entity,
+        animation_playback_controller: &mut AnimationPlaybackController,
+        event_time_milliseconds: u32,
+        default_joint: Entity,
+        authored_animation_text_command: &AnimationTimelineCommand,
+    ) {
+        let action_joint = authored_animation_text_command.joint.and_then(|joint_key| {
+            let rig = self
+                .animation_rig_joints
+                .get(animation_playback_controller_entity)
+                .ok()?;
+            self.named_animation_joint_targets
+                .iter_many(rig.joints())
+                .matched()
+                .find_map(|(joint, target)| {
+                    (target.authored_joint_id == joint_key).then_some(joint)
+                })
+        });
+        if action_joint.is_none()
+            && authored_animation_text_command.joint.is_some()
+            && matches!(
+                &*authored_animation_text_command.action,
+                AuthoredAnimationTextAction::CreateObject { .. }
+                    | AuthoredAnimationTextAction::CreateObjectOverride { .. }
+            )
+        {
+            return;
+        }
+        let resolved_action_target_entity = action_joint.unwrap_or(default_joint);
+
+        let object_command = || AnimationObjectCommand {
+            controller: animation_playback_controller_entity,
+            playback_generation: animation_playback_controller.playback_generation,
+            request_id: animation_playback_controller.explicit_clip_request_id,
+            joint: resolved_action_target_entity,
+            action: (*authored_animation_text_command.action).clone(),
+        };
         match &*authored_animation_text_command.action {
             AuthoredAnimationTextAction::PlaySound { .. }
             | AuthoredAnimationTextAction::RunParticleSystem { .. }
@@ -47,24 +82,23 @@ impl<const REAL_TIME: bool> AuthoredAnimationTextActionExecutionContext<'_, '_, 
                     action: authored_animation_text_command.action.clone(),
                 });
             }
+            AuthoredAnimationTextAction::CreateObject { .. }
+            | AuthoredAnimationTextAction::CreateObjectOverride { .. }
+            | AuthoredAnimationTextAction::DestroyObject { .. } => {
+                self.binder_commands
+                    .write(
+                        super::AnimationNamedPhysicalPresentationCommand::<REAL_TIME>(
+                            object_command(),
+                        ),
+                    );
+            }
             AuthoredAnimationTextAction::AttachPendingObject
             | AuthoredAnimationTextAction::SpawnObject
             | AuthoredAnimationTextAction::AttachNamedObject { .. }
-            | AuthoredAnimationTextAction::CreateObject { .. }
-            | AuthoredAnimationTextAction::CreateObjectOverride { .. }
-            | AuthoredAnimationTextAction::DestroyObject { .. }
             | AuthoredAnimationTextAction::KillAnimationSubject
             | AuthoredAnimationTextAction::TriggerSurfaceEffect { .. }
             | AuthoredAnimationTextAction::DetachObject => {
-                self.object_commands.write(
-                    openzt2_world_state::animation_playback::animation_event_message_types::AnimationObjectCommand {
-                        controller: animation_playback_controller_entity,
-                        playback_generation: animation_playback_controller.playback_generation,
-                        request_id: animation_playback_controller.explicit_clip_request_id,
-                        joint: resolved_action_target_entity,
-                        action: (*authored_animation_text_command.action).clone(),
-                    },
-                );
+                self.object_commands.write(object_command());
             }
             AuthoredAnimationTextAction::PlayAnimationGraphNode {
                 animation_graph_node_asset_key,
@@ -116,53 +150,54 @@ impl<const REAL_TIME: bool> AuthoredAnimationTextActionExecutionContext<'_, '_, 
                     .ai_commands
                     .write(AnimationAiCommandRequested {
                         controller: animation_playback_controller_entity,
+                        playback_generation: animation_playback_controller.playback_generation,
+                        request_id: animation_playback_controller.explicit_clip_request_id,
+                        milliseconds: event_time_milliseconds,
                         target: resolved_action_target_entity,
                         command: command.clone(),
                     });
             }
             AuthoredAnimationTextAction::ApplyWhapImpulse {
                 impulse_angle_degrees,
-                impulse_duration_frames,
+                impulse_random_offset_degrees,
             } => {
                 self.animation_control_text_action_execution
                     .whap_requests
                     .write(AnimationWhapRequested {
                         controller: animation_playback_controller_entity,
+                        playback_generation: animation_playback_controller.playback_generation,
+                        request_id: animation_playback_controller.explicit_clip_request_id,
                         target: resolved_action_target_entity,
                         angle_degrees: *impulse_angle_degrees,
-                        duration_frames: *impulse_duration_frames,
+                        random_offset_degrees: *impulse_random_offset_degrees,
                     });
             }
             AuthoredAnimationTextAction::SetGroundFit(mode) => {
-                let settings = openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationGroundFitMode(*mode);
                 let control = &mut self.animation_control_text_action_execution;
                 if let Ok(mut current) = control
                     .ground_fit
                     .get_mut(animation_playback_controller_entity)
                 {
-                    current.set_if_neq(settings);
-                } else {
-                    control
-                        .commands
-                        .entity(animation_playback_controller_entity)
-                        .try_insert(settings);
+                    current.apply_authored_key(*mode);
                 }
             }
             AuthoredAnimationTextAction::SetDockControllerEnabled(enabled) => {
-                self.animation_control_text_action_execution
-                    .dock_commands
-                    .write(AnimationDockCommandRequested {
-                        controller: animation_playback_controller_entity,
-                        command: AnimationDockCommand::Enable(*enabled),
-                    });
+                if let Ok(mut cycles) = self
+                    .animation_control_text_action_execution
+                    .decal_cycles
+                    .get_mut(animation_playback_controller_entity)
+                {
+                    cycles.set_enabled_from_key(*enabled);
+                }
             }
             AuthoredAnimationTextAction::GoToDockControllerNode(node) => {
-                self.animation_control_text_action_execution
-                    .dock_commands
-                    .write(AnimationDockCommandRequested {
-                        controller: animation_playback_controller_entity,
-                        command: AnimationDockCommand::GoToNode(*node),
-                    });
+                if let Ok(mut cycles) = self
+                    .animation_control_text_action_execution
+                    .decal_cycles
+                    .get_mut(animation_playback_controller_entity)
+                {
+                    cycles.set_stop_from_key(*node);
+                }
             }
             AuthoredAnimationTextAction::SetAnimationPlaybackSpeed {
                 playback_speed_percent,
@@ -184,6 +219,39 @@ impl<const REAL_TIME: bool> AuthoredAnimationTextActionExecutionContext<'_, '_, 
             AuthoredAnimationTextAction::UnrecognizedAuthoredCommand(_) => {
                 unreachable!("asset loader admitted an unlowered animation text-key command")
             }
+        }
+    }
+}
+
+pub(super) fn execute_behavior_animation_text_key_aliases(
+    mut aliases: MessageReader<DispatchBehaviorAnimationTextKeys>,
+    mut controllers: Query<&mut AnimationPlaybackController>,
+    mut execution: AuthoredAnimationTextActionExecutionContext<false>,
+) {
+    for alias in aliases.read() {
+        let Ok(mut playback) = controllers.get_mut(alias.controller) else {
+            continue;
+        };
+        if playback.playback_generation != alias.playback_generation
+            || playback.explicit_clip_request_id != Some(alias.request_id)
+        {
+            continue;
+        }
+        for command in &alias.commands {
+            let timeline_command = AnimationTimelineCommand {
+                joint: command
+                    .target_skeleton_joint_asset_key
+                    .as_deref()
+                    .map(openzt2_game_data::AssetId::from_key),
+                action: Arc::new(command.animation_text_action.clone()),
+            };
+            execution.execute_text_command(
+                alias.controller,
+                &mut playback,
+                alias.milliseconds,
+                alias.joint,
+                &timeline_command,
+            );
         }
     }
 }

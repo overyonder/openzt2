@@ -52,7 +52,7 @@ pub(super) fn acknowledge_staff_target_termination_owned_by_terminal_maintenance
         let Ok((job, claim, assigned, applied)) = jobs.get(current.job()) else {
             continue;
         };
-        if job.kind != StaffJobKind::SweepLitter
+        if job.kind != Some(StaffJobKind::SweepLitter)
             || !action.0.kill_target
             || action.0.kill_subject
             || task.next_action_tick > clock.tick
@@ -110,7 +110,7 @@ pub(super) fn acknowledge_staff_target_termination_owned_by_terminal_maintenance
         let Ok((job, claim, assigned, Some(applied))) = jobs.get(current.job()) else {
             continue;
         };
-        if job.kind == StaffJobKind::SweepLitter
+        if job.kind == Some(StaffJobKind::SweepLitter)
             && claim.staff == actor
             && assigned.execution_id == Some(execution_id)
             && applied.0 == execution_id
@@ -119,7 +119,7 @@ pub(super) fn acknowledge_staff_target_termination_owned_by_terminal_maintenance
             completed.write(StaffJobCompleted {
                 staff: actor,
                 job: current.job(),
-                kind: job.kind,
+                kind: StaffJobKind::SweepLitter,
                 target: job.target,
             });
         }

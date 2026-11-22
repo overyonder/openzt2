@@ -149,6 +149,7 @@ fn create_challenge_ui_text_node<'scope, 'env: 'scope>(
 
 const fn empty_challenge_panel_request(scenario: AssetId) -> ScenarioChallengePanelRequest {
     ScenarioChallengePanelRequest {
+        source: None,
         scenario,
         show: None,
         text: None,

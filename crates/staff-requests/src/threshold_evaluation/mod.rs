@@ -14,11 +14,14 @@ use openzt2_zoo_state::animal_health::types::Escaped;
 use openzt2_zoo_state::animal_lifecycle::types::Animal;
 use openzt2_zoo_state::animal_welfare::types::HealthNeed;
 use openzt2_zoo_state::animal_welfare::types::Hunger;
+use openzt2_zoo_state::animal_welfare::types::HygieneNeed;
+use openzt2_zoo_state::animal_welfare::types::StimulationNeed;
 use openzt2_zoo_state::animal_welfare::types::Thirst;
 use openzt2_zoo_state::animal_welfare::types::MAX_NEED_Q16;
 use openzt2_world_state::world_spawn::world_entity_crating::WorldEntityIsCrated;
 use openzt2_zoo_state::staff::staff_job_types::authored_staff_request_urgency;
 use openzt2_zoo_state::staff::staff_job_types::StaffJob;
+use openzt2_zoo_state::staff::staff_job_types::StaffJobRouting;
 use openzt2_zoo_state::staff::staff_lifecycle_messages::CancelStaffJobRequest;
 use openzt2_zoo_state::staff::staff_lifecycle_messages::StaffJobRequest;
 use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
@@ -51,6 +54,8 @@ type AnimalRequestFacts = (
     Option<&'static Hunger>,
     Option<&'static Thirst>,
     Option<&'static HealthNeed>,
+    Option<&'static HygieneNeed>,
+    Option<&'static StimulationNeed>,
     Has<Escaped>,
     Has<Disease>,
 );
@@ -61,6 +66,8 @@ enum AnimalRequestAttribute {
     Hunger,
     Thirst,
     Health,
+    Hygiene,
+    Stimulation,
     Escaped,
     Diseased,
 }
@@ -71,6 +78,8 @@ impl AnimalRequestAttribute {
             ("hunger", Self::Hunger),
             ("thirst", Self::Thirst),
             ("health", Self::Health),
+            ("hygiene", Self::Hygiene),
+            ("stimulation", Self::Stimulation),
             ("b_escaped", Self::Escaped),
             ("b_disease", Self::Diseased),
         ]
@@ -80,10 +89,12 @@ impl AnimalRequestAttribute {
 
     fn sample(
         self,
-        (hunger, thirst, health, escaped, diseased): (
+        (hunger, thirst, health, hygiene, stimulation, escaped, diseased): (
             Option<&Hunger>,
             Option<&Thirst>,
             Option<&HealthNeed>,
+            Option<&HygieneNeed>,
+            Option<&StimulationNeed>,
             bool,
             bool,
         ),
@@ -99,6 +110,8 @@ impl AnimalRequestAttribute {
             Self::Hunger => hunger.map(|need| deprivation(need.0)),
             Self::Thirst => thirst.map(|need| deprivation(need.0)),
             Self::Health => health.map(|need| deprivation(need.0)),
+            Self::Hygiene => hygiene.map(|need| deprivation(need.0)),
+            Self::Stimulation => stimulation.map(|need| deprivation(need.0)),
             Self::Escaped => Some(StaffRequestControllerSample::Boolean(escaped)),
             Self::Diseased => Some(StaffRequestControllerSample::Boolean(diseased)),
         }
@@ -113,24 +126,32 @@ fn bind_rows(
     rows.iter()
         .enumerate()
         .filter(|(_, row)| row.id == definition)
-        .scan(std::collections::HashMap::<(Option<AssetId>, Option<AssetId>, Option<AssetId>), u16>::new(), |ordinals, (row_index, row)| {
-            let key = (row.binder, row.attribute_key, row.request.token);
-            let ordinal = ordinals.entry(key).or_insert(0);
-            let state = StaffRequestRuntimeState {
-                row: StaffRequestRowIdentity {
-                    definition,
-                    binder: row.binder,
-                    attribute_key: row.attribute_key,
-                    token: row.request.token,
-                    ordinal: *ordinal,
-                },
-                row_index,
-                job_kind: row.request.token.and_then(&kind_for_token),
-                previous: None,
-            };
-            *ordinal = ordinal.saturating_add(1);
-            Some(state)
-        })
+        .scan(
+            std::collections::HashMap::new(),
+            |ordinals, (row_index, row)| {
+                let routing = StaffJobRouting {
+                    subject_type: row.request.subject_type,
+                    recipient: row.request.staff,
+                };
+                let key = (row.binder, row.attribute_key, row.request.token, routing);
+                let ordinal = ordinals.entry(key).or_insert(0_u16);
+                let state = StaffRequestRuntimeState {
+                    row: StaffRequestRowIdentity {
+                        definition,
+                        binder: row.binder,
+                        attribute_key: row.attribute_key,
+                        token: row.request.token,
+                        routing,
+                        ordinal: *ordinal,
+                    },
+                    row_index,
+                    job_kind: row.request.token.and_then(&kind_for_token),
+                    previous: None,
+                };
+                *ordinal = ordinal.saturating_add(1);
+                Some(state)
+            },
+        )
         .collect()
 }
 
@@ -160,7 +181,7 @@ pub(super) fn bind_staff_request_rows_on_definition_change(
     all_entities: Query<Entity, With<DefinitionId>>,
     changed_entities: Query<Entity, Changed<DefinitionId>>,
     mut entities: Query<(&DefinitionId, Option<&mut StaffRequestRuntimeBinding>)>,
-    jobs: Query<(Entity, &StaffJob)>,
+    jobs: Query<(Entity, &StaffJob, Option<&StaffJobRouting>)>,
     mut cancellations: MessageWriter<CancelStaffJobRequest>,
 ) {
     let assets_changed = asset_events
@@ -185,11 +206,22 @@ pub(super) fn bind_staff_request_rows_on_definition_change(
                 .iter()
                 .take(if definitions_changed { 0 } else { usize::MAX }),
         );
+    let staff_manager = definitions.staff_manager();
     let kind_for_token = |token| {
         definitions
             .find_staff_job(token)
             .map(|job| job.kind)
-            .or_else(|| built_in_request_kind(token))
+            .or_else(|| {
+                staff_manager
+                    .is_none_or(|policy| {
+                        policy
+                            .tokens
+                            .iter()
+                            .any(|rule| rule.token == token && rule.name == Some(token))
+                    })
+                    .then(|| terminal_job_kind_for_token(token))
+                    .flatten()
+            })
     };
     for entity in candidates {
         let Ok((definition, binding)) = entities.get_mut(entity) else {
@@ -198,9 +230,32 @@ pub(super) fn bind_staff_request_rows_on_definition_change(
         let Some(rows) = definitions.staff_request_rows(definition.0) else {
             continue;
         };
+        let previous = binding
+            .as_deref()
+            .map_or(&[][..], |binding| binding.rows.as_slice());
+        let mut next = reconcile_rows(definition.0, rows, previous, kind_for_token);
+        next.retain(|state| {
+            state.row.token.is_some_and(|token| {
+                staff_manager.is_none_or(|policy| {
+                    policy
+                        .tokens
+                        .iter()
+                        .any(|rule| rule.token == token && rule.name.is_some())
+                })
+            })
+        });
         if let Some(mut binding) = binding {
-            let next = reconcile_rows(definition.0, rows, &binding.rows, kind_for_token);
-            cancel_removed_rows(entity, &binding.rows, &next, &jobs, &mut cancellations);
+            for old in &binding.rows {
+                if next
+                    .iter()
+                    .any(|state| state.row == old.row && state.job_kind == old.job_kind)
+                {
+                    continue;
+                }
+                if let Some(key) = old.job_key(entity) {
+                    cancel_staff_jobs(key, Some(key.routing), &jobs, &mut cancellations);
+                }
+            }
             if next.is_empty() {
                 commands
                     .entity(entity)
@@ -208,10 +263,10 @@ pub(super) fn bind_staff_request_rows_on_definition_change(
             } else if next != binding.rows {
                 binding.rows = next;
             }
-        } else if !rows.is_empty() {
-            commands.entity(entity).insert(StaffRequestRuntimeBinding {
-                rows: bind_rows(definition.0, rows, kind_for_token),
-            });
+        } else if !next.is_empty() {
+            commands
+                .entity(entity)
+                .insert(StaffRequestRuntimeBinding { rows: next });
         }
     }
 }
@@ -237,7 +292,7 @@ pub(super) fn evaluate_staff_request_rows(
         AnimalRequestFacts,
         (With<Animal>, Without<Dead>, Without<WorldEntityIsCrated>),
     >,
-    jobs: Query<(Entity, &StaffJob)>,
+    jobs: Query<(Entity, &StaffJob, Option<&StaffJobRouting>)>,
     mut requests: MessageWriter<StaffJobRequest>,
     mut cancellations: MessageWriter<CancelStaffJobRequest>,
 ) {
@@ -300,18 +355,8 @@ pub(super) fn evaluate_staff_request_rows(
                     // A dead, crated or no-longer-initialized animal cannot own
                     // care work. Resume with a fresh sample if it returns.
                     state.previous = None;
-                    if let Some(token) = row.request.token {
-                        if let Some(kind) = state.job_kind {
-                            cancel_matching_job(
-                                StaffRequestJobKey {
-                                    kind,
-                                    target: entity,
-                                    token,
-                                },
-                                &jobs,
-                                &mut cancellations,
-                            );
-                        }
+                    if let Some(key) = state.job_key(entity) {
+                        cancel_staff_jobs(key, None, &jobs, &mut cancellations);
                     }
                     continue;
                 };
@@ -329,7 +374,20 @@ pub(super) fn evaluate_staff_request_rows(
                 entity,
                 Some(sample),
             ) {
-                emit_job_event(event, &jobs, &mut requests, &mut cancellations);
+                match event {
+                    StaffRequestJobEvent::Raised { key, urgency } => {
+                        requests.write(StaffJobRequest {
+                            kind: state.job_kind,
+                            target: key.target,
+                            urgency,
+                            token: Some(key.token),
+                            routing: key.routing,
+                        });
+                    }
+                    StaffRequestJobEvent::Cancelled { key } => {
+                        cancel_staff_jobs(key, None, &jobs, &mut cancellations);
+                    }
+                }
             }
         }
     }
@@ -353,67 +411,31 @@ fn filter_schedule_row(
     Some(row)
 }
 
-fn cancel_removed_rows(
-    target: Entity,
-    previous: &[StaffRequestRuntimeState],
-    next: &[StaffRequestRuntimeState],
-    jobs: &Query<(Entity, &StaffJob)>,
-    cancellations: &mut MessageWriter<CancelStaffJobRequest>,
-) {
-    for old in previous {
-        if next
-            .iter()
-            .any(|state| state.row == old.row && state.job_kind == old.job_kind)
-        {
-            continue;
-        }
-        let Some(token) = old.row.token else {
-            continue;
-        };
-        let Some(kind) = old.job_kind else {
-            continue;
-        };
-        cancel_matching_job(
-            StaffRequestJobKey {
-                kind,
-                target,
-                token,
-            },
-            jobs,
-            cancellations,
-        );
+impl StaffRequestRuntimeState {
+    fn job_key(&self, owner: Entity) -> Option<StaffRequestJobKey> {
+        self.row.routing.subject_type?;
+        // Binding a controller sets the payload target to the watched entity.
+        Some(StaffRequestJobKey {
+            target: owner,
+            token: self.row.token?,
+            routing: self.row.routing,
+        })
     }
 }
 
-fn emit_job_event(
-    event: StaffRequestJobEvent,
-    jobs: &Query<(Entity, &StaffJob)>,
-    requests: &mut MessageWriter<StaffJobRequest>,
-    cancellations: &mut MessageWriter<CancelStaffJobRequest>,
-) {
-    match event {
-        StaffRequestJobEvent::Raised { key, urgency } => {
-            requests.write(StaffJobRequest {
-                kind: key.kind,
-                target: key.target,
-                urgency,
-                token: Some(key.token),
-            });
-        }
-        StaffRequestJobEvent::Cancelled { key } => {
-            cancel_matching_job(key, jobs, cancellations);
-        }
-    }
-}
-
-fn cancel_matching_job(
+fn cancel_staff_jobs(
     key: StaffRequestJobKey,
-    jobs: &Query<(Entity, &StaffJob)>,
+    required_routing: Option<StaffJobRouting>,
+    jobs: &Query<(Entity, &StaffJob, Option<&StaffJobRouting>)>,
     cancellations: &mut MessageWriter<CancelStaffJobRequest>,
 ) {
-    for (job_entity, job) in jobs.iter() {
-        if job.kind == key.kind && job.target == key.target && job.token == Some(key.token) {
-            cancellations.write(CancelStaffJobRequest { job: job_entity });
+    for (entity, job, routing) in jobs.iter() {
+        if job.target == key.target
+            && job.token == Some(key.token)
+            && required_routing
+                .is_none_or(|required| routing.copied().unwrap_or_default() == required)
+        {
+            cancellations.write(CancelStaffJobRequest { job: entity });
         }
     }
 }
@@ -435,7 +457,6 @@ fn evaluate_staff_request_row(
             .is_none()
             .then(StaffRequestThresholdState::default)
     });
-    let token = row.request.token?;
     let trigger_on_creation = previous.is_none() && row.trigger_on_creation;
     let previous = previous.unwrap_or_default();
     let current = current.unwrap_or_default();
@@ -446,11 +467,7 @@ fn evaluate_staff_request_row(
     } else {
         return None;
     };
-    let key = StaffRequestJobKey {
-        kind: state.job_kind?,
-        target,
-        token,
-    };
+    let key = state.job_key(target)?;
     if event {
         Some(StaffRequestJobEvent::Raised {
             key,
@@ -461,7 +478,7 @@ fn evaluate_staff_request_row(
     }
 }
 
-fn built_in_request_kind(token: AssetId) -> Option<StaffJobKind> {
+fn terminal_job_kind_for_token(token: AssetId) -> Option<StaffJobKind> {
     if token == fill_food_container_token() || token == AssetId::from_key("t_feedanimal") {
         Some(StaffJobKind::Feed)
     } else if token == AssetId::from_key("t_wateranimal") {

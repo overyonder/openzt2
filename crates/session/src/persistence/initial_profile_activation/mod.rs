@@ -1,63 +1,98 @@
-use bevy::prelude::{Assets, Local, MessageReader, MessageWriter, Res};
-use openzt2_game_data::AssetId;
-
+use bevy::prelude::*;
 use openzt2_game_assets::localization::{
     localization_asset_types::LocalizationAsset,
     localization_precedence_index::LocalizationPrecedenceIndex,
 };
+use openzt2_game_data::AssetId;
+use openzt2_interface_state::persistence::profile_types::{
+    CreateProfile, LoadProfileIndex, ProfileCreated, ProfileIndex, ProfileIndexReady,
+    ProfileOperationFailed, SelectProfile,
+};
 
-use openzt2_interface_state::persistence::profile_types::CreateProfile;
-use openzt2_interface_state::persistence::profile_types::LoadProfileIndex;
-use openzt2_interface_state::persistence::profile_types::ProfileCreated;
-use openzt2_interface_state::persistence::profile_types::ProfileIndex;
-use openzt2_interface_state::persistence::profile_types::ProfileIndexReady;
-use openzt2_interface_state::persistence::profile_types::SelectProfile;
+#[derive(Component)]
+pub(super) struct AwaitingStartupProfileIndex;
 
-pub(super) fn request_initial_profile_index_from_persistence_startup(
-    mut profile_index_load_requests: MessageWriter<LoadProfileIndex>,
+#[derive(Component)]
+pub(super) struct AwaitingLocalizedDefaultProfileName;
+
+pub(super) fn begin_startup_profile_activation(
+    mut commands: Commands,
+    mut load_index: MessageWriter<LoadProfileIndex>,
 ) {
-    profile_index_load_requests.write(LoadProfileIndex);
+    commands.spawn(AwaitingStartupProfileIndex);
+    load_index.write(LoadProfileIndex);
 }
 
-/// Selects the saved profile, or creates the localized first-run profile.
-pub(super) fn select_persisted_profile_or_create_localized_first_profile(
-    mut profile_index_ready_messages: MessageReader<ProfileIndexReady>,
-    mut profile_created_messages: MessageReader<ProfileCreated>,
-    profile_index: Res<ProfileIndex>,
-    active_localization_assets: Res<LocalizationPrecedenceIndex>,
-    localization_assets: Res<Assets<LocalizationAsset>>,
-    mut profile_activation_pending: Local<bool>,
-    mut profile_creation_requests: MessageWriter<CreateProfile>,
-    mut profile_selection_requests: MessageWriter<SelectProfile>,
+pub(super) fn activate_initial_profile_from_loaded_index(
+    mut commands: Commands,
+    pending: Query<Entity, With<AwaitingStartupProfileIndex>>,
+    mut ready: MessageReader<ProfileIndexReady>,
+    mut failures: MessageReader<ProfileOperationFailed>,
+    index: Res<ProfileIndex>,
+    mut select: MessageWriter<SelectProfile>,
 ) {
-    *profile_activation_pending |= profile_index_ready_messages.read().next().is_some();
-    if *profile_activation_pending {
-        if let Some(profile_identifier) = profile_index.selected_profile_identifier.or_else(|| {
-            profile_index
+    let index_ready = !ready.is_empty();
+    ready.clear();
+    let index_failed = failures
+        .read()
+        .any(|failure| failure.affected_profile_identifier.is_none());
+    failures.clear();
+    let Ok(operation) = pending.single() else {
+        return;
+    };
+    if index_ready {
+        if let Some(profile) = index.selected_profile_identifier.or_else(|| {
+            index
                 .profile_records
                 .first()
-                .map(|profile_record| profile_record.profile_identifier)
+                .map(|record| record.profile_identifier)
         }) {
-            profile_selection_requests.write(SelectProfile {
-                requested_profile_identifier: profile_identifier,
+            select.write(SelectProfile {
+                requested_profile_identifier: profile,
             });
-            *profile_activation_pending = false;
-        } else if let Some(localized_default_profile_display_name) = active_localization_assets
-            .borrow_loaded_localization_view(&localization_assets)
-            .and_then(|localization_asset| {
-                localization_asset
-                    .find_plain_localized_text(AssetId::from_key("mainmenu:profile_default"))
-            })
-        {
-            profile_creation_requests.write(CreateProfile {
-                requested_profile_display_name: localized_default_profile_display_name.to_owned(),
-            });
-            *profile_activation_pending = false;
+            commands.entity(operation).despawn();
+        } else {
+            commands
+                .entity(operation)
+                .remove::<AwaitingStartupProfileIndex>()
+                .insert(AwaitingLocalizedDefaultProfileName);
         }
+    } else if index_failed {
+        commands.entity(operation).despawn();
     }
-    for profile_created_message in profile_created_messages.read() {
-        profile_selection_requests.write(SelectProfile {
-            requested_profile_identifier: profile_created_message.created_profile_identifier,
+}
+
+pub(super) fn create_initial_profile_after_default_name_loads(
+    mut commands: Commands,
+    pending: Query<Entity, With<AwaitingLocalizedDefaultProfileName>>,
+    localization: Res<LocalizationPrecedenceIndex>,
+    assets: Res<Assets<LocalizationAsset>>,
+    mut create: MessageWriter<CreateProfile>,
+) {
+    let Ok(operation) = pending.single() else {
+        return;
+    };
+    let Some(display_name) = localization
+        .borrow_loaded_localization_view(&assets)
+        .and_then(|view| {
+            view.find_plain_localized_text(AssetId::from_key("mainmenu:profile_default"))
+        })
+    else {
+        return;
+    };
+    create.write(CreateProfile {
+        requested_profile_display_name: display_name.to_owned(),
+    });
+    commands.entity(operation).despawn();
+}
+
+pub(super) fn select_created_profiles(
+    mut created: MessageReader<ProfileCreated>,
+    mut select: MessageWriter<SelectProfile>,
+) {
+    for created in created.read() {
+        select.write(SelectProfile {
+            requested_profile_identifier: created.created_profile_identifier,
         });
     }
 }

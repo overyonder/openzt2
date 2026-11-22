@@ -1,11 +1,13 @@
+use bevy::ecs::{entity_disabling::Disabled, query::Allow};
+use openzt2_game_assets::application_lifecycle::GamePhase;
+use openzt2_game_assets::saved_world_asset_source::SavedWorldTerrainAsset;
 use std::collections::BTreeMap;
 use bevy::prelude::info;
 use bevy::prelude::warn;
 use bevy::prelude::AssetServer;
 use bevy::prelude::Assets;
-use bevy::prelude::Commands;
+use bevy::prelude::{Commands, Component, DespawnOnExit, Entity};
 use bevy::prelude::Handle;
-use bevy::prelude::Local;
 use bevy::prelude::MessageReader;
 use bevy::prelude::MessageWriter;
 use bevy::prelude::Name;
@@ -33,40 +35,55 @@ use openzt2_world_state::world_spawn::world_load_failure::WorldLoadFailure;
 use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 use openzt2_world_state::world_spawn::world_load_request_acceptance::BeginWorldLoad;
 use openzt2_world_state::world_spawn::world_load_request_acceptance::WorldLoadOperationOwner;
+use super::world_prefab_record_hydration::StartingPrefabWindow;
+
+#[derive(Component)]
+pub struct PendingWorldLoad {
+    request: BeginWorldLoad,
+    demanded_starts: BTreeMap<AssetId, Handle<WorldScenarioDocumentAsset>>,
+}
+
+pub fn admit_first_world_load_request(
+    mut commands: Commands,
+    mut requests: MessageReader<BeginWorldLoad>,
+    pending: Query<(), With<PendingWorldLoad>>,
+) {
+    let first = requests.read().next().copied();
+    requests.clear();
+    if let Some(request) = first.filter(|_| pending.is_empty()) {
+        commands.spawn((
+            PendingWorldLoad {
+                request,
+                demanded_starts: BTreeMap::new(),
+            },
+            DespawnOnExit(GamePhase::Loading),
+        ));
+    }
+}
 
 pub fn accept_queued_world_load_after_required_assets_resolve(
     mut commands: Commands,
-    mut requests: MessageReader<BeginWorldLoad>,
     scenarios: Res<Assets<WorldScenarioDocumentAsset>>,
     active_scenarios: Res<WorldScenarios>,
     asset_server: Res<AssetServer>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
-    roots: Query<(), With<WorldRoot>>,
-    pending: Query<&WorldHydration>,
+    roots: Query<(), (With<WorldRoot>, Allow<Disabled>)>,
+    mut pending: Query<(Entity, &mut PendingWorldLoad)>,
+    saved_terrain_assets: Query<&SavedWorldTerrainAsset>,
     mut failed: MessageWriter<WorldLoadFailed>,
-    mut queued: Local<Option<BeginWorldLoad>>,
-    mut demanded_starts: Local<BTreeMap<AssetId, Handle<WorldScenarioDocumentAsset>>>,
 ) {
-    for request in requests.read() {
-        if queued.is_none() {
-            demanded_starts.clear();
-        }
-        queued.get_or_insert(*request);
+    let Ok((load_entity, mut pending)) = pending.single_mut() else {
+        return;
+    };
+    if !roots.is_empty() {
+        return;
     }
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };
-    let Some(request) = *queued else {
-        return;
-    };
-    if !roots.is_empty() || !pending.is_empty() {
-        // Starting a load is idempotent while a world root or hydration
-        // job already owns the transition. A second activation must not
-        // turn a valid in-flight load into a failure.
-        return;
-    }
-
+    let request = pending.request;
+    let demanded_starts = &mut pending.demanded_starts;
     let saved_document = request
         .saved_world_document
         .and_then(|identifier| asset_server.get_id_handle(identifier));
@@ -80,8 +97,7 @@ pub fn accept_queued_world_load_after_required_assets_resolve(
             scenario: request.scenario,
             reason: WorldLoadFailure::MissingScenario,
         });
-        *queued = None;
-        demanded_starts.clear();
+        commands.entity(load_entity).despawn();
         return;
     }
     let Some((
@@ -98,7 +114,7 @@ pub fn accept_queued_world_load_after_required_assets_resolve(
         &scenarios,
         &active_scenarios,
         &asset_server,
-        &mut demanded_starts,
+        demanded_starts,
         request.scenario,
         saved_document.as_ref(),
     )
@@ -127,8 +143,7 @@ pub fn accept_queued_world_load_after_required_assets_resolve(
                 scenario: request.scenario,
                 reason: WorldLoadFailure::MissingScenario,
             });
-            *queued = None;
-            demanded_starts.clear();
+            commands.entity(load_entity).despawn();
         }
         return;
     };
@@ -142,8 +157,7 @@ pub fn accept_queued_world_load_after_required_assets_resolve(
             scenario: request.scenario,
             reason: WorldLoadFailure::MissingScenario,
         });
-        *queued = None;
-        demanded_starts.clear();
+        commands.entity(load_entity).despawn();
         return;
     };
     if start_record.next_persistent_identifier == Some(0) {
@@ -153,26 +167,29 @@ pub fn accept_queued_world_load_after_required_assets_resolve(
             scenario: request.scenario,
             reason: WorldLoadFailure::InvalidRecord(0),
         });
-        *queued = None;
-        demanded_starts.clear();
+        commands.entity(load_entity).despawn();
         return;
     }
     let zoo_name = &start_record.name;
-    let Some(terrain_path) = scenarios
-        .get(&map_asset)
-        .and_then(|document| document.terrain_path(terrain))
-    else {
+    let terrain_handle = request
+        .operation
+        .and_then(|operation| saved_terrain_assets.get(operation).ok())
+        .filter(|saved| saved.identifier == terrain)
+        .map(|saved| saved.handle.clone())
+        .or_else(|| {
+            let source = scenarios.get(&map_asset)?.terrain_path(terrain)?;
+            Some(asset_server.load::<TerrainAsset>(source.to_owned()))
+        });
+    let Some(terrain_handle) = terrain_handle else {
         failed.write(WorldLoadFailed {
             operation: request.operation,
             root: None,
             scenario: request.scenario,
             reason: WorldLoadFailure::MissingDependency(terrain),
         });
-        *queued = None;
-        demanded_starts.clear();
+        commands.entity(load_entity).despawn();
         return;
     };
-    let terrain_handle = asset_server.load::<TerrainAsset>(terrain_path.to_owned());
     let selection = SelectedWorldIdentity {
         requested: request.scenario,
         map,
@@ -200,11 +217,11 @@ pub fn accept_queued_world_load_after_required_assets_resolve(
             .insert(WorldLoadOperationOwner(operation));
     }
     let allocator = match start_record.next_persistent_identifier {
-        Some(next) => PersistentIdAllocator::from_snapshot(root, next)
+        Some(next) => PersistentIdAllocator::from_snapshot(next)
             .expect("validated starting persistent identifier"),
-        None => PersistentIdAllocator::new(root),
+        None => PersistentIdAllocator::default(),
     };
-    commands.insert_resource(allocator);
+    commands.entity(root).insert(allocator);
     info!(?root, scenario = ?request.scenario, "accepted world load and installed its persistent-id allocator");
     let default_starting_cash = match request.mode {
         openzt2_world_state::game_session_types::WorldSessionMode::Challenge => 3_000_000,
@@ -263,7 +280,7 @@ pub fn accept_queued_world_load_after_required_assets_resolve(
         );
     }
     info!(fame_half_stars, starting_fame_percent = ?starting_fame.map(|policy| policy.percent), "initialized starting zoo fame");
-    commands.insert_resource(Fame {
+    commands.entity(root).insert(Fame {
         current_percent: starting_fame.map(|policy| policy.percent),
         half_stars: fame_half_stars,
         maximum_reached: fame_half_stars,
@@ -271,16 +288,11 @@ pub fn accept_queued_world_load_after_required_assets_resolve(
             .map(|policy| policy.percent)
             .or(start_record.maximum_fame_percent_reached),
     });
-    commands
-        .entity(root)
-        .insert(WorldHydration::new_pending_world_hydration(
-            request.scenario,
-            start_asset,
-            start,
-            record_count,
-        ));
-    *queued = None;
-    demanded_starts.clear();
+    commands.entity(root).insert((
+        WorldHydration::new_pending_world_hydration(record_count),
+        StartingPrefabWindow::default(),
+    ));
+    commands.entity(load_entity).despawn();
 }
 
 fn locate_selected_starting_zoo(

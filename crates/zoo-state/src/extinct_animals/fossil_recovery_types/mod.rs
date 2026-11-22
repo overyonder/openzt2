@@ -6,11 +6,11 @@ use openzt2_world_state::simulation_time::deterministic_random_stream::Determini
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FossilRecoverySite {
     pub fossil_set_definition_identifier: AssetId,
-    pub all_pieces_collected: bool,
 }
 
-#[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct ActiveFossilSearchMarker;
+/// The world zoo's highest fossil search tier opened so far.
+#[derive(Component, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FossilDiscoveryLevel(pub u8);
 
 /// Current fossil-sonar result for the active mode controller.
 #[derive(Component, Debug, Clone, Copy, Default, PartialEq)]

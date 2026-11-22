@@ -80,7 +80,6 @@ fn child_lookup_scopes_duplicate_text_names_to_the_requested_surface() {
     goals.role = UiDocumentRole::Scenario;
     goals.nodes = vec![node("goalpanel", 0, "goal-list")];
     let path = vec!["goal panel".into()];
-    assert_eq!(role_for(&path), Some(UiDocumentRole::Scenario));
     assert_eq!(
         resolve_node(&goals, &path),
         Some(AssetId::from_key("goal-list"))

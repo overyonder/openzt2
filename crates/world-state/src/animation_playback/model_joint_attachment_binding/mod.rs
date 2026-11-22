@@ -3,6 +3,14 @@
 use bevy::animation::AnimationTargetId;
 use bevy::prelude::*;
 
+/// The local presentation pose of an item held at a model joint or actor root.
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub struct CarriedPrefabPresentation {
+    pub anchor: Entity,
+    /// Final pose of the prefab root in the joint's coordinate system.
+    pub local_transform: Transform,
+}
+
 /// Pending scene-local lookup; retains only the instance and joint identity.
 #[derive(Component)]
 pub struct PendingModelJointAttachment {

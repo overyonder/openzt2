@@ -14,9 +14,37 @@ pub struct AnimationHeadLook {
 }
 
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
-pub struct AnimationGroundFitMode(pub i32);
+pub struct AnimationGroundFitControls {
+    pub quadruped_tilt_off: Option<bool>,
+    pub prefer_quadruped: bool,
+    pub leg_fit_enabled: Option<bool>,
+}
+
+impl Default for AnimationGroundFitControls {
+    fn default() -> Self {
+        Self {
+            quadruped_tilt_off: None,
+            prefer_quadruped: true,
+            leg_fit_enabled: None,
+        }
+    }
+}
+
+impl AnimationGroundFitControls {
+    pub const fn apply_authored_key(&mut self, mode: i32) {
+        self.leg_fit_enabled = Some(mode != 0);
+        match mode {
+            0 => self.quadruped_tilt_off = Some(true),
+            1 => self.quadruped_tilt_off = Some(false),
+            2 => self.prefer_quadruped = false,
+            4 => self.prefer_quadruped = true,
+            _ => {}
+        }
+    }
+}
 
 #[derive(Component, Clone, Debug)]
+#[require(AnimationGroundFitControls)]
 pub struct AnimationPlaybackController {
     /// Changes on every clip entry, including restarting the same clip.
     pub playback_generation: u64,

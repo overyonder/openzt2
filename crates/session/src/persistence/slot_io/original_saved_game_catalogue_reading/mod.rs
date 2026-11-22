@@ -1,4 +1,4 @@
-use std::{io, path::Path, time::UNIX_EPOCH};
+use std::{io, time::UNIX_EPOCH};
 
 use openzt2_game_assets::{
     original_saved_game_source::OriginalSavedGameSources,
@@ -26,10 +26,8 @@ pub(super) fn read_original_saved_game_catalogue(
     let mut failures = Vec::new();
     for file in files {
         let read_record = || -> io::Result<OriginalSavedGameRecord> {
-            let source_identifier = sources.register(&file.save_file_path)?;
-            let bytes = sources.read_member(
-                source_identifier,
-                Path::new("saved/world.zt2"),
+            let (source_identifier, bytes) = sources.read_catalogue_world(
+                &file.save_file_path,
                 MAXIMUM_WORLD_SNAPSHOT_CONTAINER_BYTE_COUNT,
             )?;
             let world_display_name = read_saved_world_display_name(&bytes)?;

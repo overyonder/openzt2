@@ -50,7 +50,7 @@ pub(crate) fn apply_authored_disease_cures_for_live_staff_claims(
         let target = current
             .and_then(|current| jobs.get(current.job()).ok())
             .filter(|(job, claim, behavior)| {
-                job.kind == StaffJobKind::Treat
+                job.kind == Some(StaffJobKind::Treat)
                     && job.token == Some(AssetId::from_key("t_cureanimal"))
                     && claim.staff == actor
                     && behavior.execution_id == Some(task.execution_id)

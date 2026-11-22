@@ -3,3 +3,4 @@
 pub mod scenario_objective_types;
 pub mod scenario_script_timing_types;
 pub mod scenario_session_types;
+pub mod timed_scenario_ui_actions;

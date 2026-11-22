@@ -1,46 +1,111 @@
-use bevy::prelude::{Component, Entity};
-use openzt2_game_data::AssetId;
-
-use openzt2_world_state::game_session_types::WorldSessionMode;
-
+use bevy::prelude::{Component, Entity, Handle};
+use openzt2_game_assets::{
+    behavior::behavior_asset_types::BehaviorDocumentAsset, scene_prefab::ScenePrefabAsset,
+    world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset,
+};
 use openzt2_interface_state::persistence::saved_game_source_types::SavedGameSource;
 
-#[derive(Component, Clone)]
+use super::super::persistence_failure_types::WorldSnapshotPersistenceFailure;
+
+#[derive(Component)]
 pub(crate) struct PendingSnapshotApplication {
-    pub(super) world_snapshot: Option<super::world_snapshot_types::WorldSnapshotRecord>,
-    pub(super) terrain_snapshot: Option<super::terrain_snapshot_types::TerrainSnapshotRecord>,
-    pub(super) saved_world_document: Option<bevy::prelude::Handle<openzt2_game_assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset>>,
-    pub(super) terrain_restored: bool,
-    pub(super) behavior_documents: Vec<
-        bevy::prelude::Handle<
-            openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset,
-        >,
-    >,
-    pub(super) placement_hydration: Option<Vec<u64>>,
     pub(in crate::persistence) source: SavedGameSource,
-    pub(in crate::persistence) scenario_definition_identifier: Option<AssetId>,
-    pub(in crate::persistence) session_mode: Option<WorldSessionMode>,
-    pub(in crate::persistence) baseline_world_load_requested: bool,
-    pub(in crate::persistence) baseline_world_load_completed: bool,
-    pub(in crate::persistence) baseline_world_root: Option<Entity>,
-    pub(super) maintenance_prefabs:
-        Vec<bevy::prelude::Handle<openzt2_game_assets::scene_prefab::ScenePrefabAsset>>,
+    pub(super) saved_world_document: Option<Handle<WorldScenarioDocumentAsset>>,
 }
 
-impl std::fmt::Debug for PendingSnapshotApplication {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("PendingSnapshotApplication")
-            .field("source", &self.source)
-            .field("world_decoded", &self.world_snapshot.is_some())
-            .field("terrain_decoded", &self.terrain_snapshot.is_some())
-            .field("saved_world_document", &self.saved_world_document)
-            .field("terrain_restored", &self.terrain_restored)
-            .field("scenario", &self.scenario_definition_identifier)
-            .field("mode", &self.session_mode)
-            .field("baseline_requested", &self.baseline_world_load_requested)
-            .field("baseline_completed", &self.baseline_world_load_completed)
-            .field("baseline_root", &self.baseline_world_root)
-            .finish()
-    }
+#[derive(Component)]
+pub(super) struct SnapshotBytes(pub(super) Vec<u8>);
+
+#[derive(Component)]
+pub(super) struct PrepareSnapshotBaseline;
+
+#[derive(Component)]
+pub(super) struct AwaitingSavedWorldDocument;
+
+#[derive(Component)]
+pub(super) struct AwaitingWorldRetirement;
+
+#[derive(Component)]
+pub(in crate::persistence) struct AwaitingSnapshotWorldLoad;
+
+#[derive(Component)]
+pub(super) struct RestoreSnapshotTerrain(pub(super) Entity);
+
+#[derive(Component)]
+pub(super) struct AwaitingSnapshotTerrainNavigation {
+    pub(super) root: Entity,
+    pub(super) previous_change: bevy::ecs::change_detection::Tick,
 }
+
+#[derive(Component)]
+pub(super) struct AwaitingSnapshotDomainBaseline(pub(super) Entity);
+
+#[derive(Component)]
+pub(super) struct RestoreSnapshotSections {
+    pub(super) root: Entity,
+    pub(super) prefabs: Vec<Handle<ScenePrefabAsset>>,
+    pub(super) behavior_documents: Vec<Handle<BehaviorDocumentAsset>>,
+}
+
+#[derive(Component)]
+pub(super) struct RestoreSavedFenceEdges(pub(super) Option<bevy::math::IRect>);
+
+#[derive(Component)]
+pub(super) struct RestoreTransportIdentities;
+
+#[derive(Component)]
+pub(super) struct AttachSavedWorldState {
+    pub(super) root: Entity,
+    pub(super) behavior_documents: Vec<Handle<BehaviorDocumentAsset>>,
+}
+
+#[derive(Component)]
+pub(super) struct RestoreTransportState {
+    pub(super) records: super::transport_snapshot_types::TransportSnapshotRecords,
+}
+
+#[derive(Component)]
+pub(super) struct AttachSnapshotEconomy(
+    pub(super) Option<super::economy_snapshot_types::EconomySnapshotRecords>,
+);
+
+#[derive(Component)]
+pub(super) struct AttachSnapshotMaintenance(
+    pub(super) Vec<super::maintenance_snapshot_types::MaintainedObjectSnapshotRecord>,
+);
+
+#[derive(Component)]
+pub(super) struct AttachSnapshotDonations(
+    pub(super) Vec<super::donation_snapshot_section::DonationSnapshotRecord>,
+);
+
+#[derive(Component)]
+pub(super) struct RestoreRuntimeContinuation {
+    pub(super) record:
+        Option<super::runtime_continuation_snapshot_types::RuntimeContinuationSnapshot>,
+    pub(super) actors: ResumeSnapshotActors,
+    pub(super) photo_challenges:
+        Vec<super::photo_snapshot_types::PhotoChallengeProgressSnapshotRecord>,
+}
+
+#[derive(Component)]
+pub(super) struct ResumeSnapshotActors {
+    pub(super) root: Entity,
+    pub(super) placement_identifiers: Vec<u64>,
+    pub(super) behavior_documents: Vec<Handle<BehaviorDocumentAsset>>,
+}
+
+#[derive(Component)]
+pub(super) struct SnapshotRestored(pub(super) Entity);
+
+#[derive(Component)]
+pub(super) enum SnapshotRestoreFailed {
+    BeforeReplacement(WorldSnapshotPersistenceFailure),
+    DuringReplacement {
+        reason: WorldSnapshotPersistenceFailure,
+        root_to_unload: Option<Entity>,
+    },
+}
+
+#[derive(Component)]
+pub(super) struct SnapshotSectionRestore<T: Send + Sync + 'static>(pub(super) Option<T>);

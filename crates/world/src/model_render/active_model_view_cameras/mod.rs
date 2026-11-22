@@ -49,7 +49,7 @@ pub(super) fn register_active_model_view_cameras(app: &mut App) {
     );
 }
 
-fn refresh_active_model_view_cameras(
+pub(super) fn refresh_active_model_view_cameras(
     mut views: ResMut<ActiveModelViewCameras>,
     cameras: Query<(
         Entity,

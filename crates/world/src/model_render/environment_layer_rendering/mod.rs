@@ -1,348 +1,277 @@
-use bevy::app::{HierarchyPropagatePlugin, Propagate, PropagateSet};
-use bevy::core_pipeline::core_3d::{Transparent3d, TransparentSortingInfo3d};
-use bevy::ecs::entity::EntityHashMap;
-use bevy::ecs::query::QueryItem;
-use bevy::extract::extract_instances::{ExtractInstance, ExtractedInstances};
-use bevy::pbr::{
-    get_mesh_instance_world_from_local, EntitiesNeedingSpecialization, MeshInputUniform,
-    MeshUniform, PreparedMaterial, RenderMaterialInstances, RenderMeshInstances,
-    SpecializedMaterialPipelineCache,
+use std::collections::BTreeMap;
+
+use bevy::camera::{
+    visibility::RenderLayers, Camera3dDepthLoadOp, CameraOutputMode, CameraUpdateSystems, Exposure,
+    Hdr, RenderTarget,
 };
+use bevy::pbr::DistanceFog;
 use bevy::prelude::*;
-use bevy::render::{
-    batching::gpu_preprocessing::BatchedInstanceBuffers,
-    camera::ExtractedCamera,
-    erased_render_asset::ErasedRenderAssets,
-    mesh::{allocator::MeshAllocator, RenderMesh},
-    render_asset::RenderAssets,
-    render_phase::{
-        CachedRenderPipelinePhaseItem, DrawFunctions, PhaseItem, PhaseItemExtraIndex,
-        SortedPhaseItem, ViewSortedRenderPhases,
-    },
-    render_resource::{LoadOp, RenderPassDescriptor, StoreOp},
-    renderer::{RenderContext, ViewQuery},
-    sync_world::MainEntity,
-    view::{ExtractedView, RenderVisibleEntities, ViewDepthStencilTexture, ViewTarget},
-};
-use openzt2_game_assets::material::runtime::{
-    effect_pass_gpu_data::EffectPassMaterial, effect_pass_stencil_reference::DrawEffectPass,
-};
-use openzt2_world_state::model_render::{
-    authored_effect_technique_pass_submission_order::AuthoredEffectTechniquePassSubmissionOrder,
-    environment_render_layer::EnvironmentRenderLayer,
+use bevy::render::view::{Msaa, Tonemapping};
+use openzt2_interface_state::camera::camera_runtime_state_types::ZooCamera;
+use openzt2_world_state::{
+    model_render::environment_render_layer::EnvironmentRenderLayer,
+    world_spawn::world_membership_types::WorldMember,
 };
 
-use super::authored_effect_technique_pass_submission_order::{
-    transparent_draw_sort_key, TransparentDrawSortKey,
-};
+pub(super) const FIRST_ENVIRONMENT_RENDER_LAYER: usize = 64;
 
-#[derive(Component, Clone, Copy, PartialEq)]
-pub(super) struct EnvironmentPrimitiveLayer(EnvironmentRenderLayer);
+#[derive(Component)]
+struct EnvironmentStackCamera(Option<u16>);
 
-impl ExtractInstance<bevy::render::RenderApp> for EnvironmentPrimitiveLayer {
-    type QueryData = &'static Self;
-    type QueryFilter = With<Mesh3d>;
-    fn extract(item: QueryItem<'_, '_, Self::QueryData>) -> Option<Self> {
-        Some(*item)
-    }
+#[derive(Component)]
+struct EnvironmentWorldCameraState {
+    color: ClearColorConfig,
+    depth: Camera3dDepthLoadOp,
 }
 
 pub(super) fn register_inherited_environment_render_layers(app: &mut App) {
-    app.add_plugins(HierarchyPropagatePlugin::<EnvironmentPrimitiveLayer>::new(PostUpdate))
-        .add_systems(
-            PostUpdate,
-            (
-                publish_environment_render_layer_sources
-                    .after(super::authored_model_material_pass_projection::project_authored_model_material_passes)
-                    .before(PropagateSet::<EnvironmentPrimitiveLayer>::default()),
-                requeue_world_draws_after_environment_layer_removal::<StandardMaterial>
-                    .after(PropagateSet::<EnvironmentPrimitiveLayer>::default())
-                    .after(bevy::pbr::check_entities_needing_specialization::<StandardMaterial>),
-                requeue_world_draws_after_environment_layer_removal::<EffectPassMaterial>
-                    .after(PropagateSet::<EnvironmentPrimitiveLayer>::default())
-                    .after(bevy::pbr::check_entities_needing_specialization::<EffectPassMaterial>),
-            ),
-        );
-}
-
-fn publish_environment_render_layer_sources(
-    mut commands: Commands,
-    changed: Query<(Entity, &EnvironmentRenderLayer), Changed<EnvironmentRenderLayer>>,
-    mut removed: RemovedComponents<EnvironmentRenderLayer>,
-    mut sources: Query<&mut Propagate<EnvironmentPrimitiveLayer>>,
-) {
-    for (entity, &layer) in &changed {
-        let source = Propagate(EnvironmentPrimitiveLayer(layer));
-        if let Ok(mut current) = sources.get_mut(entity) {
-            current.set_if_neq(source);
-        } else {
-            commands.entity(entity).insert(source);
-        }
-    }
-    for entity in removed.read() {
-        if !changed.contains(entity) {
-            if let Ok(mut target) = commands.get_entity(entity) {
-                target.remove::<Propagate<EnvironmentPrimitiveLayer>>();
-            }
-        }
-    }
-}
-
-fn requeue_world_draws_after_environment_layer_removal<M: bevy::pbr::Material>(
-    mut removed: RemovedComponents<EnvironmentPrimitiveLayer>,
-    ordinary_meshes: Query<(), (With<MeshMaterial3d<M>>, Without<EnvironmentPrimitiveLayer>)>,
-    mut specializations: ResMut<EntitiesNeedingSpecialization<M>>,
-) {
-    specializations.changed.extend(
-        removed
-            .read()
-            .filter(|&entity| ordinary_meshes.contains(entity)),
+    app.add_systems(
+        PostUpdate,
+        (
+            route_authored_environment_layers
+                .before(super::model_scene_visibility_and_shadow_projection::publish_model_draw_shadow_policy_sources),
+            synchronize_environment_camera_stack
+                .before(super::active_model_view_cameras::refresh_active_model_view_cameras)
+                .before(CameraUpdateSystems)
+                .before(TransformSystems::Propagate),
+        ),
     );
 }
 
-pub(super) struct EnvironmentPhaseItem {
-    layer: EnvironmentRenderLayer,
-    order: Option<AuthoredEffectTechniquePassSubmissionOrder>,
-    sort_key: TransparentDrawSortKey,
-    draw: Transparent3d,
+fn environment_render_mask(layer: u16) -> RenderLayers {
+    RenderLayers::none().with(FIRST_ENVIRONMENT_RENDER_LAYER + usize::from(layer))
 }
 
-impl PhaseItem for EnvironmentPhaseItem {
-    // A batch cannot span a depth-clear boundary between environment layers.
-    const AUTOMATIC_BATCHING: bool = false;
-
-    fn entity(&self) -> Entity {
-        self.draw.entity()
-    }
-    fn main_entity(&self) -> MainEntity {
-        self.draw.main_entity()
-    }
-    fn draw_function(&self) -> bevy::material::labels::DrawFunctionId {
-        self.draw.draw_function()
-    }
-    fn batch_range(&self) -> &std::ops::Range<u32> {
-        self.draw.batch_range()
-    }
-    fn batch_range_mut(&mut self) -> &mut std::ops::Range<u32> {
-        self.draw.batch_range_mut()
-    }
-    fn extra_index(&self) -> PhaseItemExtraIndex {
-        self.draw.extra_index()
-    }
-    fn batch_range_and_extra_index_mut(
-        &mut self,
-    ) -> (&mut std::ops::Range<u32>, &mut PhaseItemExtraIndex) {
-        self.draw.batch_range_and_extra_index_mut()
-    }
-}
-
-impl CachedRenderPipelinePhaseItem for EnvironmentPhaseItem {
-    fn cached_pipeline(&self) -> bevy::render::render_resource::CachedRenderPipelineId {
-        self.draw.cached_pipeline()
-    }
-}
-
-impl SortedPhaseItem for EnvironmentPhaseItem {
-    type SortKey = (u16, TransparentDrawSortKey);
-
-    fn sort_key(&self) -> Self::SortKey {
-        (self.layer.layer, self.sort_key)
-    }
-
-    fn sort(
-        items: &mut indexmap::IndexMap<(Entity, MainEntity), Self, bevy::ecs::entity::EntityHash>,
-    ) {
-        items.sort_by_key(|_, item| item.sort_key());
-    }
-
-    fn recalculate_sort_keys(
-        items: &mut indexmap::IndexMap<(Entity, MainEntity), Self, bevy::ecs::entity::EntityHash>,
-        _: &ExtractedView,
-    ) {
-        let mut invocation_distances = EntityHashMap::default();
-        for item in items.values() {
-            if let Some(order) = item.order {
-                order.record_invocation_distance(&mut invocation_distances, item.draw.distance);
-            }
-        }
-        for item in items.values_mut() {
-            item.sort_key = transparent_draw_sort_key(
-                item.order.as_ref(),
-                item.draw.distance,
-                &invocation_distances,
-            );
-        }
-    }
-
-    fn indexed(&self) -> bool {
-        self.draw.indexed
-    }
-}
-
-pub(super) fn queue_environment_layers(
-    layers: Res<ExtractedInstances<EnvironmentPrimitiveLayer, bevy::render::RenderApp>>,
-    orders: Res<
-        ExtractedInstances<AuthoredEffectTechniquePassSubmissionOrder, bevy::render::RenderApp>,
+fn route_authored_environment_layers(
+    mut commands: Commands,
+    mut sources: Query<
+        (Entity, &EnvironmentRenderLayer, Option<&mut RenderLayers>),
+        Changed<EnvironmentRenderLayer>,
     >,
-    mut phases: ResMut<ViewSortedRenderPhases<EnvironmentPhaseItem>>,
-    materials: Res<ErasedRenderAssets<PreparedMaterial>>,
-    material_instances: Res<RenderMaterialInstances>,
-    mesh_instances: Res<RenderMeshInstances>,
-    mesh_assets: Res<RenderAssets<RenderMesh>>,
-    mesh_allocator: Res<MeshAllocator>,
-    buffers: Option<Res<BatchedInstanceBuffers<MeshUniform, MeshInputUniform>>>,
-    pipelines: Res<SpecializedMaterialPipelineCache>,
-    draws: Res<DrawFunctions<EnvironmentPhaseItem>>,
-    views: Query<(&ExtractedView, &RenderVisibleEntities)>,
+    mut removed: RemovedComponents<EnvironmentRenderLayer>,
 ) {
-    let draw_function = draws.read().id::<DrawEffectPass>();
-    phases.retain(|retained, _| {
-        views
-            .iter()
-            .any(|(view, _)| view.retained_view_entity == *retained)
-    });
-    for (view, visibility) in &views {
-        let view_id = view.retained_view_entity;
-        let (Some(visible), Some(pipelines)) =
-            (visibility.get::<Mesh3d>(), pipelines.get(&view_id))
-        else {
-            phases.remove(&view_id);
-            continue;
-        };
-        phases.prepare_for_new_frame(view_id);
-        let phase = phases.get_mut(&view_id).unwrap();
-        let rangefinder = view.rangefinder3d();
-        let mut queued = bevy::render::sync_world::MainEntityHashSet::default();
-        for (_, entity) in visible.iter_visible() {
-            let Some(layer) = layers.get(entity) else {
-                continue;
-            };
-            let Some(&pipeline) = pipelines.get(entity) else {
-                continue;
-            };
-            let Some(material) = material_instances
-                .instances
-                .get(entity)
-                .and_then(|instance| materials.get(instance.asset_id))
-            else {
-                continue;
-            };
-            if !matches!(
-                material.properties.alpha_mode,
-                bevy::material::AlphaMode::Blend
-                    | bevy::material::AlphaMode::Premultiplied
-                    | bevy::material::AlphaMode::Add
-                    | bevy::material::AlphaMode::Multiply
-            ) {
-                continue;
-            }
-            let Some(mesh) = mesh_instances.render_mesh_queue_data(*entity) else {
-                continue;
-            };
-            let mesh_id = mesh.mesh_asset_id();
-            let Some(asset) = mesh_assets.get(mesh_id) else {
-                continue;
-            };
-            let Some(slabs) = mesh_allocator.mesh_slabs(&mesh_id) else {
-                continue;
-            };
-            let centre = get_mesh_instance_world_from_local(
-                *entity,
-                mesh.current_uniform_index,
-                &mesh_instances,
-                buffers.as_deref(),
-            )
-            .transform_point3(asset.aabb_center);
-            let sorting_info = TransparentSortingInfo3d::Sorted {
-                mesh_center: centre,
-                depth_bias: material.properties.depth_bias,
-            };
-            if queued.insert(*entity) {
-                phase.add_retained(EnvironmentPhaseItem {
-                    layer: layer.0,
-                    order: orders.get(entity).copied(),
-                    sort_key: default(),
-                    draw: Transparent3d {
-                        entity: (Entity::PLACEHOLDER, *entity),
-                        draw_function,
-                        pipeline,
-                        batch_range: 0..1,
-                        extra_index: PhaseItemExtraIndex::None,
-                        indexed: slabs.index_slab_id.is_some(),
-                        distance: sorting_info.sort_distance(&rangefinder),
-                        sorting_info,
-                    },
-                });
-            }
+    for (entity, layer, layers) in &mut sources {
+        let mask = environment_render_mask(layer.layer);
+        if let Some(mut layers) = layers {
+            layers.set_if_neq(mask);
+        } else {
+            commands.entity(entity).insert(mask);
         }
-        phase.items.retain(|(_, entity), _| queued.contains(entity));
+    }
+    for entity in removed.read().filter(|&entity| !sources.contains(entity)) {
+        commands.entity(entity).try_remove::<RenderLayers>();
     }
 }
 
-pub(super) fn render_environment_layers_before_world(
-    world: &World,
-    view: ViewQuery<(
-        &ExtractedCamera,
-        &ExtractedView,
-        &ViewTarget,
-        &ViewDepthStencilTexture,
-    )>,
-    phases: Res<ViewSortedRenderPhases<EnvironmentPhaseItem>>,
-    mut context: RenderContext,
+#[allow(clippy::type_complexity)]
+fn synchronize_environment_camera_stack(
+    mut commands: Commands,
+    layers: Query<(&EnvironmentRenderLayer, &WorldMember, &Visibility)>,
+    mut world_cameras: Query<
+        (
+            Entity,
+            &WorldMember,
+            &mut Camera,
+            &mut Camera3d,
+            Ref<Projection>,
+            Ref<RenderTarget>,
+            &Exposure,
+            &Msaa,
+            Has<Hdr>,
+            Option<Ref<DistanceFog>>,
+            Option<&EnvironmentWorldCameraState>,
+            Option<&Children>,
+        ),
+        (With<ZooCamera>, Without<EnvironmentStackCamera>),
+    >,
+    mut stacked_cameras: Query<
+        (
+            &EnvironmentStackCamera,
+            &mut Camera,
+            &mut Camera3d,
+            &mut Projection,
+            &mut RenderTarget,
+            &mut Exposure,
+            &mut Msaa,
+            Has<Hdr>,
+            Option<&mut DistanceFog>,
+        ),
+        Without<ZooCamera>,
+    >,
 ) {
-    let view_entity = view.entity();
-    let (camera, extracted, target, depth) = view.into_inner();
-    let Some(phase) = phases.get(&extracted.retained_view_entity) else {
-        return;
-    };
-    let mut clear_depth = false;
-    let mut start = 0;
-    while let Some((_, item)) = phase.items.get_index(start) {
-        let layer = item.layer;
-        let end = start
-            + phase
-                .items
-                .values()
-                .skip(start)
-                .take_while(|item| item.layer.layer == layer.layer)
-                .count();
-        // These attachments share Bevy's first-use clear state with the world
-        // passes. Drawing the sky first consumes their normal initial clear.
-        let mut depth_attachment = depth.get_attachment(StoreOp::Store);
-        if clear_depth {
-            if let Some(operations) = &mut depth_attachment.depth_ops {
-                operations.load = LoadOp::Clear(0.0);
+    for (
+        world_camera,
+        member,
+        mut view,
+        mut view_3d,
+        projection,
+        target,
+        exposure,
+        msaa,
+        hdr,
+        fog,
+        previous,
+        children,
+    ) in &mut world_cameras
+    {
+        let mut authored_layers = BTreeMap::new();
+        for (layer, owner, visibility) in &layers {
+            if owner.root == member.root && *visibility != Visibility::Hidden {
+                *authored_layers.entry(layer.layer).or_insert(false) |= layer.clear_depth_after;
             }
         }
-        let mut pass = context.begin_tracked_render_pass(RenderPassDescriptor {
-            label: Some("authored environment layer"),
-            color_attachments: &[Some(target.get_color_attachment())],
-            depth_stencil_attachment: Some(depth_attachment),
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
-        if let Some(viewport) = &camera.viewport {
-            pass.set_camera_viewport(viewport);
+        let mut existing = BTreeMap::new();
+        for child in children.into_iter().flatten() {
+            if let Ok((layer, ..)) = stacked_cameras.get(*child) {
+                existing.insert(layer.0, *child);
+            }
         }
-        if let Err(error) = phase.render_range(&mut pass, world, view_entity, start..end) {
-            error!(?error, "environment layer draw failed");
+        if authored_layers.is_empty() {
+            for child in existing.into_values() {
+                commands.entity(child).despawn();
+            }
+            if let Some(previous) = previous {
+                view.clear_color = previous.color;
+                view_3d.depth_load_op = previous.depth.clone();
+                commands
+                    .entity(world_camera)
+                    .remove::<EnvironmentWorldCameraState>();
+            }
+            continue;
         }
-        clear_depth = layer.clear_depth_after;
-        start = end;
+        let background = previous.map_or(view.clear_color, |previous| previous.color);
+        if previous.is_none() {
+            commands
+                .entity(world_camera)
+                .insert(EnvironmentWorldCameraState {
+                    color: background,
+                    depth: view_3d.depth_load_op.clone(),
+                });
+        }
+        if !matches!(view.clear_color, ClearColorConfig::None) {
+            view.clear_color = ClearColorConfig::None;
+        }
+        let mut clear_depth = true;
+        let first_order =
+            view.order - isize::try_from(authored_layers.len() + 1).expect("u16 layer count");
+        // The empty first view clears the shared color target before the
+        // authored views load and composite into it.
+        for (ordinal, (layer, clear_depth_after)) in std::iter::once((None, true))
+            .chain(
+                authored_layers
+                    .into_iter()
+                    .map(|(layer, clear)| (Some(layer), clear)),
+            )
+            .enumerate()
+        {
+            let order = first_order + isize::try_from(ordinal).expect("u16 layer index");
+            let color = if layer.is_some() {
+                ClearColorConfig::None
+            } else {
+                background
+            };
+            let mut camera_entity;
+            if let Some(child) = existing.remove(&layer) {
+                let Ok((
+                    _,
+                    mut camera,
+                    mut camera_3d,
+                    mut child_projection,
+                    mut child_target,
+                    mut child_exposure,
+                    mut child_msaa,
+                    child_hdr,
+                    child_fog,
+                )) = stacked_cameras.get_mut(child)
+                else {
+                    continue;
+                };
+                if view.is_changed() || camera.order != order {
+                    camera.order = order;
+                    camera.viewport = view.viewport.clone();
+                    camera.is_active = view.is_active;
+                    camera.sub_camera_view = view.sub_camera_view;
+                }
+                set_depth_boundary(&mut camera_3d, clear_depth);
+                if projection.is_changed() {
+                    *child_projection = (*projection).clone();
+                }
+                if target.is_changed() {
+                    *child_target = (*target).clone();
+                }
+                if child_exposure.ev100.to_bits() != exposure.ev100.to_bits() {
+                    *child_exposure = *exposure;
+                }
+                child_msaa.set_if_neq(*msaa);
+                camera_entity = commands.entity(child);
+                match (fog.as_ref(), child_fog) {
+                    (Some(fog), Some(mut current)) if fog.is_changed() => {
+                        *current = (**fog).clone()
+                    }
+                    (Some(fog), None) => {
+                        camera_entity.insert((**fog).clone());
+                    }
+                    (None, Some(_)) => {
+                        camera_entity.remove::<DistanceFog>();
+                    }
+                    _ => {}
+                }
+                if hdr && !child_hdr {
+                    camera_entity.insert(Hdr);
+                } else if !hdr && child_hdr {
+                    camera_entity.remove::<Hdr>();
+                }
+            } else {
+                camera_entity = commands.spawn((
+                    EnvironmentStackCamera(layer),
+                    Camera {
+                        order,
+                        clear_color: color,
+                        output_mode: CameraOutputMode::Skip,
+                        viewport: view.viewport.clone(),
+                        is_active: view.is_active,
+                        sub_camera_view: view.sub_camera_view,
+                        ..default()
+                    },
+                    Camera3d {
+                        depth_load_op: depth_load_operation(clear_depth),
+                        depth_texture_usages: view_3d.depth_texture_usages,
+                    },
+                    Transform::IDENTITY,
+                    (*projection).clone(),
+                    (*target).clone(),
+                    *exposure,
+                    *msaa,
+                    Tonemapping::None,
+                    layer.map_or_else(RenderLayers::none, environment_render_mask),
+                    ChildOf(world_camera),
+                ));
+                if hdr {
+                    camera_entity.insert(Hdr);
+                }
+                if let Some(fog) = fog.as_ref() {
+                    camera_entity.insert((**fog).clone());
+                }
+            }
+            clear_depth = clear_depth_after;
+        }
+        set_depth_boundary(&mut view_3d, clear_depth);
+        for child in existing.into_values() {
+            commands.entity(child).despawn();
+        }
     }
-    if clear_depth {
-        let mut attachment = depth.get_attachment(StoreOp::Store);
-        if let Some(operations) = &mut attachment.depth_ops {
-            operations.load = LoadOp::Clear(0.0);
-        }
-        let _pass = context.begin_tracked_render_pass(RenderPassDescriptor {
-            label: Some("authored environment depth boundary"),
-            color_attachments: &[],
-            depth_stencil_attachment: Some(attachment),
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
+}
+
+fn depth_load_operation(clear: bool) -> Camera3dDepthLoadOp {
+    if clear {
+        Camera3dDepthLoadOp::Clear(0.0)
+    } else {
+        Camera3dDepthLoadOp::Load
+    }
+}
+
+fn set_depth_boundary(camera: &mut Mut<Camera3d>, clear: bool) {
+    if matches!(camera.depth_load_op, Camera3dDepthLoadOp::Clear(_)) != clear {
+        camera.depth_load_op = depth_load_operation(clear);
     }
 }

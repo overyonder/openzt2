@@ -209,7 +209,7 @@ fn prepare_runtime(
     restore_globals(&lua, saved, replace_initialized_globals)?;
     Ok(ScenarioLuaVirtualMachine {
         lua_virtual_machine: lua,
-        scenario_document_asset_identifier: document,
+        scenario_document_asset_identifier: Some(document),
         loaded_lua_script_asset_identifiers: loaded.into_inner(),
         executed_source_paths: saved.modules.clone(),
     })
@@ -269,10 +269,10 @@ pub(crate) fn normalize_original_saved_scenario_lua_state(
 impl super::scenario_lua_types::ScenarioLuaVirtualMachineContexts {
     pub(crate) fn capture_saved_scenario_state(
         &self,
-        scenario: openzt2_game_data::AssetId,
+        owner: Entity,
     ) -> mlua::Result<Option<ScenarioLuaSavedState>> {
-        self.virtual_machines_by_scenario_identifier
-            .get(&scenario)
+        self.virtual_machines
+            .get(&super::scenario_lua_types::ScenarioLuaRuntimeOwner::Scenario(owner))
             .map(capture_runtime)
             .transpose()
     }
@@ -288,11 +288,13 @@ impl super::scenario_lua_types::ScenarioLuaVirtualMachineContexts {
 
     pub(crate) fn install_saved_scenario_state(
         &mut self,
-        scenario: openzt2_game_data::AssetId,
+        owner: Entity,
         prepared: PreparedScenarioLuaRuntime,
     ) {
-        self.virtual_machines_by_scenario_identifier
-            .insert(scenario, prepared.0);
+        self.virtual_machines.insert(
+            super::scenario_lua_types::ScenarioLuaRuntimeOwner::Scenario(owner),
+            prepared.0,
+        );
     }
 }
 
@@ -321,8 +323,7 @@ mod tests {
         restore_globals(&lua, &saved_arguments, false).unwrap();
         let context = ScenarioLuaVirtualMachine {
             lua_virtual_machine: lua,
-            scenario_document_asset_identifier: Handle::<WorldScenarioDocumentAsset>::default()
-                .id(),
+            scenario_document_asset_identifier: None,
             loaded_lua_script_asset_identifiers: BTreeSet::new(),
             executed_source_paths: Vec::new(),
         };
@@ -392,8 +393,7 @@ mod tests {
         let before: (i64, f64, i64, bool) = evaluate.call(data).unwrap();
         let context = ScenarioLuaVirtualMachine {
             lua_virtual_machine: lua,
-            scenario_document_asset_identifier: Handle::<WorldScenarioDocumentAsset>::default()
-                .id(),
+            scenario_document_asset_identifier: None,
             loaded_lua_script_asset_identifiers: BTreeSet::new(),
             executed_source_paths: Vec::new(),
         };

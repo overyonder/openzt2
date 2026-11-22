@@ -1,10 +1,11 @@
 use std::{
     cell::{Cell, RefCell},
     collections::BTreeSet,
+    rc::Rc,
 };
 
 use super::zoo_rating_input_types::{GuestRatingFacts, LivingAnimalPopulation};
-use bevy::prelude::*;
+use bevy::{ecs::{entity_disabling::Disabled, query::Allow}, prelude::*};
 use mlua::{Function, Lua, MultiValue, Scope, Table, Value};
 use openzt2_game_assets::lua_script::{
     lua_script_archive_path_index::LuaScriptArchivePathIndex,
@@ -14,6 +15,7 @@ use openzt2_game_assets::lua_script::{
         install_lua_script_dependency_loading_functions,
     },
 };
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
 use openzt2_game_data::AssetId;
 use openzt2_world_state::world_spawn::world_membership_types::{
     DefinitionId, WorldMember, WorldRoot,
@@ -83,10 +85,14 @@ pub(super) fn resolve_winning_fame_script(
 
 #[derive(Default)]
 pub(super) struct FameScriptOutput {
-    pub(super) fame: Option<(u8, f32)>,
-    pub(super) notices: Vec<(String, f64)>,
-    pub(super) gate_changes: Vec<FameGateAppearanceRequested>,
+    pub(super) effects: Vec<FameScriptEffect>,
     pub(super) presentation: FameAuthoredPresentation,
+}
+
+pub(super) enum FameScriptEffect {
+    Fame(u8, f32),
+    Notice(String, f64),
+    Gate(FameGateAppearanceRequested),
 }
 
 impl AuthoredFameScript {
@@ -100,7 +106,7 @@ impl AuthoredFameScript {
         award_points: u32,
         scenario_points: u32,
         animals_released: u32,
-        gates: &[(Entity, AssetId)],
+        gates: &[(Entity, Option<&str>)],
         variables: Option<&ProfileScenarioVariables>,
     ) -> mlua::Result<FameScriptOutput> {
         if !assets.contains(self.handle.id()) {
@@ -148,7 +154,10 @@ impl AuthoredFameScript {
                     let stars: u8 = result.get(1)?;
                     let percent: f32 = result.get(2)?;
                     if stars <= 10 && percent.is_finite() && (0.0..=100.0).contains(&percent) {
-                        output_ref.borrow_mut().fame = Some((stars, percent));
+                        output_ref
+                            .borrow_mut()
+                            .effects
+                            .push(FameScriptEffect::Fame(stars, percent));
                         maximum_ref.set(Some(
                             maximum_ref
                                 .get()
@@ -204,7 +213,7 @@ fn install_fame_scene<'scope, 'env: 'scope>(
     status: &Table,
     animals: &'env LivingAnimalPopulation,
     guests: &'env GuestRatingFacts,
-    gates: &'env [(Entity, AssetId)],
+    gates: &'env [(Entity, Option<&'env str>)],
     variables: Option<&'env ProfileScenarioVariables>,
     output: &'env RefCell<FameScriptOutput>,
 ) -> mlua::Result<()> {
@@ -249,31 +258,23 @@ fn install_fame_scene<'scope, 'env: 'scope>(
         guest_rows.set(index + 1, item)?;
     }
     let gate_rows = lua.create_table()?;
-    for (index, &(gate, definition)) in gates.iter().enumerate() {
+    for (index, &(gate, binder)) in gates.iter().enumerate() {
         let value = lua.create_table()?;
+        let binder = Rc::new(RefCell::new(binder.map(str::to_owned)));
+        let current_binder = Rc::clone(&binder);
         value.set(
             "BFG_GET_BINDER_TYPE",
-            lua.create_function(move |_, _: Table| {
-                Ok([
-                    "frontgate_df",
-                    "frontgate_fame02",
-                    "frontgate_fame03",
-                    "frontgate_fame04",
-                    "frontgate_fame05",
-                ]
-                .into_iter()
-                .find(|key| AssetId::from_key(key) == definition))
-            })?,
+            scope.create_function(move |_, _: Table| Ok(current_binder.borrow().clone()))?,
         )?;
         value.set(
             "BFG_ENTITY_MORPH_TO_NEW_ENTITY",
             scope.create_function(move |_, (_, args): (Table, Table)| {
-                let binder: String = args.get(1)?;
-                let definition = AssetId::from_key(&binder.to_ascii_lowercase());
-                output
-                    .borrow_mut()
-                    .gate_changes
-                    .push(FameGateAppearanceRequested { gate, definition });
+                let requested: String = args.get(1)?;
+                let definition = AssetId::from_key(&requested.to_ascii_lowercase());
+                *binder.borrow_mut() = Some(requested);
+                output.borrow_mut().effects.push(FameScriptEffect::Gate(
+                    FameGateAppearanceRequested { gate, definition },
+                ));
                 Ok(())
             })?,
         )?;
@@ -339,8 +340,8 @@ fn install_fame_scene<'scope, 'env: 'scope>(
         scope.create_function(move |_, (key, _, timeout): (String, Value, Option<f64>)| {
             output
                 .borrow_mut()
-                .notices
-                .push((key, timeout.unwrap_or_default()));
+                .effects
+                .push(FameScriptEffect::Notice(key, timeout.unwrap_or_default()));
             Ok(())
         })?,
     )?;
@@ -410,16 +411,33 @@ fn create_fame_ui_root<'scope, 'env: 'scope>(
     Ok(root)
 }
 
-pub(super) fn entrance_gate_definitions(
+pub(super) fn entrance_gate_definitions<'a>(
     world: Entity,
+    definitions: WorldDefinitionsView<'a>,
     gates: &Query<
-        (Entity, &WorldMember, &DefinitionId),
-        With<openzt2_world_state::world_spawn::zoo_entrance_anchor_synchronization::ZooEntrance>,
+        (
+            Entity,
+            &WorldMember,
+            &DefinitionId,
+            Option<&openzt2_zoo_state::progression::fame_types::PendingFameGatePrefab>,
+        ),
+        (
+            With<
+                openzt2_world_state::world_spawn::zoo_entrance_anchor_synchronization::ZooEntrance,
+            >,
+            Allow<Disabled>,
+        ),
     >,
-) -> Vec<(Entity, AssetId)> {
+) -> Vec<(Entity, Option<&'a str>)> {
     gates
         .iter()
-        .filter(|(_, member, _)| member.root == world)
-        .map(|(gate, _, definition)| (gate, definition.0))
+        .filter(|(_, member, _, _)| member.root == world)
+        .map(|(gate, _, applied, pending)| {
+            let definition = pending.map_or(applied.0, |pending| pending.definition);
+            (gate, definitions.object_binder_type(definition))
+        })
         .collect()
 }
+
+#[cfg(test)]
+mod tests;

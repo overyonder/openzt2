@@ -13,6 +13,7 @@ use super::{
     animal_adoption_offer_inventory_snapshot_section::{
         append_encoded_animal_adoption_offer_inventory_snapshot_section,
         validate_animal_adoption_offer_inventory_presence_for_session_mode,
+        AnimalAdoptionOffersSnapshot,
     },
     economy_snapshot_section_encoding::append_encoded_economy_snapshot_section,
     economy_snapshot_types::EconomySnapshotRecords,
@@ -37,9 +38,7 @@ pub(super) fn append_captured_world_snapshot_sections_and_finalize_container(
     world_snapshot_record: &WorldSnapshotRecord,
     terrain_snapshot_record: Option<&super::terrain_snapshot_types::TerrainSnapshotRecord>,
     scenario_snapshot: Option<&super::scenario_snapshot_section::ScenarioSnapshot>,
-    animal_adoption_offer_inventory: Option<
-        &openzt2_animals::animal_lifecycle::adoption_offer_inventory_types::AnimalAdoptionOfferInventory,
-    >,
+    animal_adoption_offer_inventory: Option<&AnimalAdoptionOffersSnapshot>,
     animal_snapshot_records: &[super::animal_snapshot_types::AnimalSnapshotRecord],
     maintenance_snapshot: &super::maintenance_snapshot_types::MaintenanceSnapshot,
     staff_snapshot_records: &[super::staff_snapshot_types::StaffSnapshotRecord],

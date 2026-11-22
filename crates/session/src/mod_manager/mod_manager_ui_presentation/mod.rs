@@ -1,4 +1,4 @@
-use bevy::{asset::UntypedAssetId, prelude::*};
+use bevy::prelude::*;
 use bevy::{
     picking::{events::PointerPress, hover::DirectlyHovered, pointer::PointerButton},
     ui::Pressed,
@@ -9,15 +9,17 @@ use openzt2_interface_state::ui::authored_ui_interaction_enabled_state::UiIntera
 
 use openzt2_interface_state::shell::shell_selection_types::ShellScreen;
 
-use crate::shell::shell_navigation_request_types::ReturnToMainMenu;
 use openzt2_game_assets::{
     application_lifecycle::GamePhase, asset_source::AssetArchives,
     ui_document::ui_document_role_asset_path_selection::select_bevy_asset_path_for_canonical_ui_document_role,
 };
 
+use super::archive_reload_operation::AssetArchiveReloadOperation;
+use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
+
 use super::mod_manager_types::{
-    AssetArchiveEnabledStateCheckbox, AssetArchiveReloadState, ModManagerOverlayButton,
-    ModManagerOverlayRoot, ModManagerReloadInputBlocker,
+    AssetArchiveEnabledStateCheckbox, ModManagerOverlayButton, ModManagerOverlayRoot,
+    ModManagerReloadInputBlocker,
 };
 
 pub(super) fn spawn_mod_manager_overlay_from_asset_archives(
@@ -194,7 +196,7 @@ pub(super) fn spawn_mod_manager_overlay_from_asset_archives(
 
 pub(super) fn apply_mod_manager_visibility_controls(
     phase: Res<State<GamePhase>>,
-    reload_state: Res<AssetArchiveReloadState>,
+    reloads: Query<(), With<AssetArchiveReloadOperation>>,
     shell_screens: Query<&ShellScreen>,
     mut presses: MessageReader<PointerPress>,
     controls: Query<&ModManagerOverlayButton>,
@@ -204,7 +206,7 @@ pub(super) fn apply_mod_manager_visibility_controls(
         || !shell_screens
             .iter()
             .any(|screen| *screen == ShellScreen::MainMenu)
-        || reload_state.is_in_progress()
+        || !reloads.is_empty()
     {
         presses.clear();
         return;
@@ -222,10 +224,11 @@ pub(super) fn apply_mod_manager_visibility_controls(
 }
 
 pub(super) fn toggle_selected_asset_archive_enabled_state(
+    mut commands: Commands,
     mut asset_archives: ResMut<AssetArchives>,
     asset_server: Res<AssetServer>,
     phase: Res<State<GamePhase>>,
-    mut reload_state: ResMut<AssetArchiveReloadState>,
+    reloads: Query<(), With<AssetArchiveReloadOperation>>,
     shell_screens: Query<&ShellScreen>,
     mut presses: MessageReader<PointerPress>,
     archive_checkboxes: Query<&AssetArchiveEnabledStateCheckbox>,
@@ -234,7 +237,7 @@ pub(super) fn toggle_selected_asset_archive_enabled_state(
         || !shell_screens
             .iter()
             .any(|screen| *screen == ShellScreen::MainMenu)
-        || reload_state.is_in_progress()
+        || !reloads.is_empty()
     {
         presses.clear();
         return;
@@ -265,71 +268,44 @@ pub(super) fn toggle_selected_asset_archive_enabled_state(
                 return;
             }
         };
-        let mut pending_loaded_asset_identifiers = Vec::new();
-        for loaded_asset_identifier in changed_bevy_asset_paths
-            .iter()
-            .flat_map(|path| asset_server.get_path_ids(path.to_owned()))
-        {
-            if !pending_loaded_asset_identifiers.contains(&loaded_asset_identifier) {
-                pending_loaded_asset_identifiers.push(loaded_asset_identifier);
-            }
-        }
         let Some(main_menu_document_path) =
             select_bevy_asset_path_for_canonical_ui_document_role(UiDocumentRole::MainMenu)
         else {
             error!("main-menu UI document has no canonical asset path");
             return;
         };
-        let main_menu_document = asset_server.load(main_menu_document_path.clone());
-        asset_server.reload(main_menu_document_path);
-        reload_state.begin(pending_loaded_asset_identifiers, main_menu_document);
+        let menu_path = bevy::asset::AssetPath::parse(&main_menu_document_path).into_owned();
+        let existing_menu = asset_server.get_handle::<UiDocumentAsset>(menu_path.clone());
+        let main_menu = existing_menu
+            .clone()
+            .unwrap_or_else(|| asset_server.load(menu_path.clone()));
+        let mut operation = AssetArchiveReloadOperation::new();
+        let mut menu_reload_requested = false;
+        for path in changed_bevy_asset_paths
+            .into_iter()
+            .collect::<std::collections::BTreeSet<_>>()
+        {
+            let asset_path = bevy::asset::AssetPath::from(path);
+            menu_reload_requested |= asset_path == menu_path;
+            for handle in asset_server.get_handles_untyped(asset_path.clone()) {
+                operation.expect_reload(handle);
+            }
+            if !asset_server.watching_for_changes() {
+                asset_server.reload(asset_path.clone());
+            }
+        }
+        if existing_menu.is_some() && !menu_reload_requested {
+            asset_server.reload(menu_path);
+        }
+        operation.expect_reload(main_menu.untyped());
+        commands.spawn(operation);
         return;
     }
-}
-
-pub(super) fn finish_asset_archive_reload_and_request_main_menu_document_rebuild(
-    asset_server: Res<AssetServer>,
-    mut reload_state: ResMut<AssetArchiveReloadState>,
-    mut return_to_main_menu: MessageWriter<ReturnToMainMenu>,
-) {
-    if !reload_state.is_in_progress()
-        || reload_state.wait_for_asset_source_event_observation()
-        || reload_state
-            .pending_loaded_asset_identifiers()
-            .iter()
-            .any(|asset_identifier| asset_load_is_not_finished(&asset_server, *asset_identifier))
-        || reload_state
-            .main_menu_document()
-            .is_some_and(|main_menu_document| {
-                asset_load_is_not_finished(&asset_server, main_menu_document.id().untyped())
-            })
-    {
-        return;
-    }
-    reload_state.finish();
-    return_to_main_menu.write(ReturnToMainMenu);
-}
-
-fn asset_load_is_not_finished(
-    asset_server: &AssetServer,
-    asset_identifier: UntypedAssetId,
-) -> bool {
-    asset_server.get_load_states(asset_identifier).is_some_and(
-        |(asset, _, recursive_dependencies)| {
-            asset.is_loading()
-                || recursive_dependencies.is_loading()
-                || asset.is_loaded()
-                    && matches!(
-                        recursive_dependencies,
-                        bevy::asset::RecursiveDependencyLoadState::NotLoaded
-                    )
-        },
-    )
 }
 
 pub(super) fn synchronize_mod_manager_visibility_and_reload_input_blocking(
     phase: Res<State<GamePhase>>,
-    reload_state: Res<AssetArchiveReloadState>,
+    reloads: Query<(), With<AssetArchiveReloadOperation>>,
     shell_screens: Query<&ShellScreen>,
     mut mod_manager_overlay_roots: Query<
         (&ModManagerOverlayRoot, &mut Node, &mut Visibility),
@@ -394,7 +370,7 @@ pub(super) fn synchronize_mod_manager_visibility_and_reload_input_blocking(
         }
     }
     for (mut reload_input_blocker, mut visibility) in &mut reload_input_blockers {
-        let display = if mod_manager_is_available && reload_state.is_in_progress() {
+        let display = if mod_manager_is_available && !reloads.is_empty() {
             Display::Flex
         } else {
             Display::None
@@ -411,14 +387,14 @@ pub(super) fn synchronize_mod_manager_visibility_and_reload_input_blocking(
 }
 
 pub(super) fn present_asset_archive_checkbox_interaction_state(
-    reload_state: Res<AssetArchiveReloadState>,
+    reloads: Query<(), With<AssetArchiveReloadOperation>>,
     mut archive_checkboxes: Query<
         (&DirectlyHovered, Has<Pressed>, &mut BackgroundColor),
         With<AssetArchiveEnabledStateCheckbox>,
     >,
 ) {
     for (hovered, pressed, mut background) in &mut archive_checkboxes {
-        let color = if reload_state.is_in_progress() {
+        let color = if !reloads.is_empty() {
             Color::srgb(0.08, 0.08, 0.10)
         } else {
             match (hovered.get(), pressed) {

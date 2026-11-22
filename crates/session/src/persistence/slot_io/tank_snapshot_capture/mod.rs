@@ -2,11 +2,11 @@ use openzt2_zoo_state::aquatic::aquatic_simulation_types::tank_habitat_seed_cell
 
 use super::{
     tank_snapshot_types::TankSnapshotRecord,
-    world_snapshot_capture_system_parameters::WorldSnapshotCaptureQueries,
+    world_snapshot_capture_system_parameters::TankCaptureQueries,
 };
 
 pub(super) fn capture_sorted_tank_snapshot_records_from_live_world(
-    world_snapshot_capture_queries: &WorldSnapshotCaptureQueries,
+    world_snapshot_capture_queries: &TankCaptureQueries,
 ) -> Vec<TankSnapshotRecord> {
     let mut tank_snapshot_records = world_snapshot_capture_queries
         .tanks_with_snapshot_state

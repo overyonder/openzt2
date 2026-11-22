@@ -275,7 +275,7 @@ pub fn advance_behavior_task_to_next_action(
 ) {
     behavior_task.action = behavior_task.action.saturating_add(1);
     behavior_task.repetitions = 0;
-    behavior_task.next_action_tick = current_simulation_tick.saturating_add(1);
+    behavior_task.next_action_tick = current_simulation_tick;
 }
 
 #[derive(Component, Clone, Debug)]

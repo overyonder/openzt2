@@ -14,9 +14,8 @@ fn requested_identity_is_inserted_once_before_completion_is_observed() {
         .add_message::<PersistentIdAssigned>()
         .add_message::<PersistentIdAssignmentFailed>()
         .add_systems(Update, assign_requested_persistent_ids);
-    let root = app.world_mut().spawn_empty().id();
+    let root = app.world_mut().spawn(PersistentIdAllocator::default()).id();
     let entity = app.world_mut().spawn(WorldMember { root }).id();
-    app.insert_resource(PersistentIdAllocator::new(root));
     app.world_mut()
         .resource_mut::<Messages<AssignPersistentId>>()
         .write(AssignPersistentId { entity, root });
@@ -31,7 +30,13 @@ fn requested_identity_is_inserted_once_before_completion_is_observed() {
         app.world().get::<PersistentId>(entity),
         Some(&PersistentId(1))
     );
-    assert_eq!(app.world().resource::<PersistentIdAllocator>().next(), 2);
+    assert_eq!(
+        app.world()
+            .get::<PersistentIdAllocator>(root)
+            .unwrap()
+            .next(),
+        2
+    );
     assert_eq!(
         app.world_mut()
             .resource_mut::<Messages<PersistentIdAssignmentFailed>>()
@@ -57,7 +62,13 @@ fn requested_identity_is_inserted_once_before_completion_is_observed() {
         .resource_mut::<Messages<AssignPersistentId>>()
         .write(AssignPersistentId { entity, root });
     app.update();
-    assert_eq!(app.world().resource::<PersistentIdAllocator>().next(), 2);
+    assert_eq!(
+        app.world()
+            .get::<PersistentIdAllocator>(root)
+            .unwrap()
+            .next(),
+        2
+    );
     assert!(app
         .world_mut()
         .resource_mut::<Messages<PersistentIdAssignmentFailed>>()

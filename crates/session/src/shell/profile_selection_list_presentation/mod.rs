@@ -42,13 +42,20 @@ pub(super) fn request_authored_profile_selection_list_row_count(
 pub(super) fn project_profile_index_entries_into_authored_rows(
     mut commands: Commands,
     index: Res<ProfileIndex>,
-    rows: Query<(Entity, Ref<UiListRow>, &ChildOf)>,
+    mut rows: Query<(
+        Entity,
+        Ref<UiListRow>,
+        &ChildOf,
+        Option<&mut ProfileChoice>,
+        Option<&mut Visibility>,
+    )>,
     lists: Query<&UiListPolicy>,
     children: Query<&Children>,
     bindings: Query<&UiTextBinding>,
     mut texts: Query<&mut Text>,
+    mut values: Query<&mut UiValue>,
 ) {
-    for (row_entity, row, parent) in &rows {
+    for (row_entity, row, parent, choice, visibility) in &mut rows {
         if !lists
             .get(parent.parent())
             .is_ok_and(|policy| policy.source == UiWidgetLiveCollectionSource::ProfileIndex)
@@ -58,17 +65,29 @@ pub(super) fn project_profile_index_entries_into_authored_rows(
         if !index.is_changed() && !row.is_added() && !row.is_changed() {
             continue;
         }
-        let Some(profile) = index.profile_records.get(usize::from(row.index)) else {
+        let profile = index.profile_records.get(usize::from(row.index));
+        let next_visibility = if profile.is_some() {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+        if let Some(mut visibility) = visibility {
+            visibility.set_if_neq(next_visibility);
+        } else {
+            commands.entity(row_entity).insert(next_visibility);
+        }
+        let Some(profile) = profile else {
             commands
                 .entity(row_entity)
                 .remove::<(ProfileChoice, UiValue)>();
-            commands.entity(row_entity).insert(Visibility::Hidden);
             continue;
         };
-        commands.entity(row_entity).insert((
-            ProfileChoice(profile.profile_identifier),
-            Visibility::Inherited,
-        ));
+        let next_choice = ProfileChoice(profile.profile_identifier);
+        if let Some(mut choice) = choice {
+            choice.set_if_neq(next_choice);
+        } else {
+            commands.entity(row_entity).insert(next_choice);
+        }
         project_profile_index_entry_into_authored_row_subtree(
             &mut commands,
             row_entity,
@@ -77,6 +96,7 @@ pub(super) fn project_profile_index_entries_into_authored_rows(
             &children,
             &bindings,
             &mut texts,
+            &mut values,
         );
     }
 }
@@ -90,8 +110,14 @@ fn project_profile_index_entry_into_authored_row_subtree(
     children: &Query<&Children>,
     bindings: &Query<&UiTextBinding>,
     texts: &mut Query<&mut Text>,
+    values: &mut Query<&mut UiValue>,
 ) {
-    commands.entity(entity).insert(UiValue(i64::from(index)));
+    let next = UiValue(i64::from(index));
+    if let Ok(mut value) = values.get_mut(entity) {
+        value.set_if_neq(next);
+    } else {
+        commands.entity(entity).insert(next);
+    }
     if bindings
         .get(entity)
         .is_ok_and(|binding| binding.0 == UiTextPropertyBindingSource::ProfileName)
@@ -115,6 +141,7 @@ fn project_profile_index_entry_into_authored_row_subtree(
             children,
             bindings,
             texts,
+            values,
         );
     }
 }

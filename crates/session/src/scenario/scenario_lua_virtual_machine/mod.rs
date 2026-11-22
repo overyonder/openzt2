@@ -11,7 +11,7 @@ use openzt2_game_assets::lua_script::lua_script_module_execution::install_lua_sc
 use openzt2_game_assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset;
 
 use openzt2_zoo_state::scenario::scenario_objective_types::ScenarioObjectiveStatus;
-use openzt2_zoo_state::scenario::scenario_session_types::SelectedScenarioDocument;
+use openzt2_zoo_state::scenario::scenario_session_types::ScenarioDocument;
 
 use super::{
     scenario_lua_game_api::{
@@ -19,21 +19,25 @@ use super::{
         install_scenario_game_query_and_command_functions,
     },
     scenario_lua_types::{
-        ScenarioLuaQueryFacts, ScenarioLuaScriptResult, ScenarioLuaVirtualMachine,
-        ScenarioLuaVirtualMachineContexts,
+        ScenarioLuaQueryFacts, ScenarioLuaRuntimeOwner, ScenarioLuaScriptResult,
+        ScenarioLuaVirtualMachine, ScenarioLuaVirtualMachineContexts,
     },
 };
 
 impl ScenarioLuaVirtualMachineContexts {
-    pub(super) fn clear_finished_zoo_session(&mut self) {
-        self.virtual_machines_by_scenario_identifier.clear();
+    pub(crate) fn remove_owner(&mut self, owner: Entity) {
+        self.virtual_machines
+            .remove(&ScenarioLuaRuntimeOwner::Scenario(owner));
     }
 
     pub(super) fn clear_finished_challenge_rule_state(
         &mut self,
-        scenario: openzt2_game_data::AssetId,
+        owner: Entity,
     ) -> mlua::Result<()> {
-        let Some(context) = self.virtual_machines_by_scenario_identifier.get(&scenario) else {
+        let Some(context) = self
+            .virtual_machines
+            .get(&ScenarioLuaRuntimeOwner::Scenario(owner))
+        else {
             return Ok(());
         };
         let globals = context.lua_virtual_machine.globals();
@@ -48,12 +52,12 @@ impl ScenarioLuaVirtualMachineContexts {
 
     pub(super) fn set_challenge_response(
         &mut self,
-        scenario: openzt2_game_data::AssetId,
+        owner: Entity,
         accepted: bool,
     ) -> mlua::Result<()> {
         let context = self
-            .virtual_machines_by_scenario_identifier
-            .get(&scenario)
+            .virtual_machines
+            .get(&ScenarioLuaRuntimeOwner::Scenario(owner))
             .ok_or_else(|| mlua::Error::runtime("challenge has no running Lua context"))?;
         let state: mlua::Table = context
             .lua_virtual_machine
@@ -69,10 +73,11 @@ impl ScenarioLuaVirtualMachineContexts {
         >,
         changed_lua_script_asset_identifiers: &BTreeSet<bevy::asset::AssetId<LuaScriptAsset>>,
     ) {
-        self.virtual_machines_by_scenario_identifier
+        self.virtual_machines
             .retain(|_, scenario_lua_virtual_machine| {
-                !changed_scenario_document_asset_identifiers
-                    .contains(&scenario_lua_virtual_machine.scenario_document_asset_identifier)
+                scenario_lua_virtual_machine
+                    .scenario_document_asset_identifier
+                    .is_none_or(|id| !changed_scenario_document_asset_identifiers.contains(&id))
                     && scenario_lua_virtual_machine
                         .loaded_lua_script_asset_identifiers
                         .is_disjoint(changed_lua_script_asset_identifiers)
@@ -81,24 +86,27 @@ impl ScenarioLuaVirtualMachineContexts {
 
     pub(super) fn execute_scenario_lua_script_binding(
         &mut self,
-        scenario_identifier: openzt2_game_data::AssetId,
-        scenario_document_asset_identifier: bevy::asset::AssetId<WorldScenarioDocumentAsset>,
+        owner: ScenarioLuaRuntimeOwner,
+        scenario_document_asset_identifier: Option<
+            bevy::asset::AssetId<WorldScenarioDocumentAsset>,
+        >,
         lua_script_source_path: &str,
         lua_script_asset_handle: &Handle<LuaScriptAsset>,
         lua_script_assets: &Assets<LuaScriptAsset>,
         lua_script_path_index: &LuaScriptArchivePathIndex,
         scenario_script_binding: &ScenarioScriptBinding,
         scenario_lua_query_facts: ScenarioLuaQueryFacts<'_>,
+        authored_arguments: Option<&[&str]>,
     ) -> mlua::Result<ScenarioLuaScriptResult> {
-        let context = self
-            .virtual_machines_by_scenario_identifier
-            .entry(scenario_identifier)
-            .or_insert_with(|| ScenarioLuaVirtualMachine {
-                executed_source_paths: Vec::new(),
-                lua_virtual_machine: Lua::new(),
-                scenario_document_asset_identifier,
-                loaded_lua_script_asset_identifiers: BTreeSet::new(),
-            });
+        let context =
+            self.virtual_machines
+                .entry(owner)
+                .or_insert_with(|| ScenarioLuaVirtualMachine {
+                    executed_source_paths: Vec::new(),
+                    lua_virtual_machine: Lua::new(),
+                    scenario_document_asset_identifier,
+                    loaded_lua_script_asset_identifiers: BTreeSet::new(),
+                });
         if context.scenario_document_asset_identifier != scenario_document_asset_identifier {
             *context = ScenarioLuaVirtualMachine {
                 executed_source_paths: Vec::new(),
@@ -114,6 +122,7 @@ impl ScenarioLuaVirtualMachineContexts {
             lua_script_path_index,
             scenario_script_binding,
             scenario_lua_query_facts,
+            authored_arguments,
         )
     }
 }
@@ -127,6 +136,7 @@ impl ScenarioLuaVirtualMachine {
         lua_script_path_index: &LuaScriptArchivePathIndex,
         scenario_script_binding: &ScenarioScriptBinding,
         scenario_lua_query_facts: ScenarioLuaQueryFacts<'_>,
+        authored_arguments: Option<&[&str]>,
     ) -> mlua::Result<ScenarioLuaScriptResult> {
         let requested_economy_operations = RefCell::new(Vec::new());
         let requested_award_point_adjustments = RefCell::new(Vec::new());
@@ -139,7 +149,6 @@ impl ScenarioLuaVirtualMachine {
         let ui = RefCell::new(Vec::new());
         let entity_operations =
             RefCell::new(super::scenario_lua_entity_commands::EntityOperations::default());
-        let profile_variables = RefCell::new(Vec::new());
         let persist_profile_variables = std::cell::Cell::new(false);
         let loaded_lua_script_asset_identifiers = RefCell::new(std::mem::take(
             &mut self.loaded_lua_script_asset_identifiers,
@@ -184,7 +193,6 @@ impl ScenarioLuaVirtualMachine {
                     &available_content,
                     &requested_challenge_panel,
                     &current_photo_challenge_set,
-                    &profile_variables,
                     &persist_profile_variables,
                     &ui,
                     &entity_operations,
@@ -193,6 +201,23 @@ impl ScenarioLuaVirtualMachine {
                     .lua_virtual_machine
                     .globals()
                     .get(scenario_script_binding.entry.as_str())?;
+                active_lua_script_source_path_stack
+                    .borrow_mut()
+                    .push(lua_script_source_path.to_owned());
+                if let Some(authored_arguments) = authored_arguments {
+                    let arguments = authored_arguments
+                        .iter()
+                        .map(|argument| {
+                            self.lua_virtual_machine
+                                .create_string(argument)
+                                .map(Value::String)
+                        })
+                        .collect::<mlua::Result<Vec<_>>>()?;
+                    return Ok(convert_lua_rule_result_to_objective_status(
+                        scenario_lua_function
+                            .call::<Value>(mlua::MultiValue::from_vec(arguments))?,
+                    ));
+                }
                 // Each native rule owns the argument table shared by its Evaluate,
                 // Success and Failure calls. Authored scripts store fields such as
                 // `data.accept` here across ticks; calling with nil loses that state.
@@ -220,7 +245,6 @@ impl ScenarioLuaVirtualMachine {
             };
             Ok(ScenarioLuaScriptResult {
                 entities: std::mem::take(&mut *entity_operations.borrow_mut()).finish(),
-                profile_variables: profile_variables.borrow_mut().drain(..).collect(),
                 persist_profile_variables: persist_profile_variables.get(),
                 ui: ui.borrow_mut().drain(..).collect(),
                 failure,
@@ -251,7 +275,8 @@ impl ScenarioLuaVirtualMachine {
 
 pub(super) fn execute_loaded_scenario_lua_script_binding(
     scenario_lua_virtual_machine_contexts: &mut ScenarioLuaVirtualMachineContexts,
-    selected_scenario_document: &SelectedScenarioDocument,
+    owner: Entity,
+    selected_scenario_document: &ScenarioDocument,
     scenario_document_assets: &Assets<WorldScenarioDocumentAsset>,
     lua_script_assets: &Assets<LuaScriptAsset>,
     lua_script_path_index: &LuaScriptArchivePathIndex,
@@ -270,50 +295,14 @@ pub(super) fn execute_loaded_scenario_lua_script_binding(
             ))
         })?;
     scenario_lua_virtual_machine_contexts.execute_scenario_lua_script_binding(
-        scenario_script_binding.scenario,
-        selected_scenario_document.0.id(),
+        ScenarioLuaRuntimeOwner::Scenario(owner),
+        Some(selected_scenario_document.0.id()),
         lua_script_source_path,
         lua_script_asset_handle,
         lua_script_assets,
         lua_script_path_index,
         scenario_script_binding,
         scenario_lua_query_facts,
-    )
-}
-
-/// Calls another entry point of the script a binding loaded, in the same VM.
-pub(super) fn execute_loaded_scenario_lua_script_entry(
-    scenario_lua_virtual_machine_contexts: &mut ScenarioLuaVirtualMachineContexts,
-    selected_scenario_document: &SelectedScenarioDocument,
-    scenario_document_assets: &Assets<WorldScenarioDocumentAsset>,
-    lua_script_assets: &Assets<LuaScriptAsset>,
-    lua_script_path_index: &LuaScriptArchivePathIndex,
-    scenario_script_binding: &ScenarioScriptBinding,
-    entry: &str,
-    scenario_lua_query_facts: ScenarioLuaQueryFacts<'_>,
-) -> mlua::Result<ScenarioLuaScriptResult> {
-    let scenario_document_asset = scenario_document_assets
-        .get(&selected_scenario_document.0)
-        .ok_or_else(|| mlua::Error::runtime("scenario document is not loaded"))?;
-    let (lua_script_source_path, lua_script_asset_handle) = scenario_document_asset
-        .script(scenario_script_binding)
-        .ok_or_else(|| {
-            mlua::Error::runtime(format!(
-                "script {} was not resolved",
-                scenario_script_binding.script
-            ))
-        })?;
-    scenario_lua_virtual_machine_contexts.execute_scenario_lua_script_binding(
-        scenario_script_binding.scenario,
-        selected_scenario_document.0.id(),
-        lua_script_source_path,
-        lua_script_asset_handle,
-        lua_script_assets,
-        lua_script_path_index,
-        &ScenarioScriptBinding {
-            entry: entry.to_owned(),
-            ..scenario_script_binding.clone()
-        },
-        scenario_lua_query_facts,
+        None,
     )
 }

@@ -1,6 +1,9 @@
 use bevy::prelude::*;
 use openzt2_game_data::localization::LocalizationFormatArgument;
 use openzt2_game_data::ui_document::node_property_binding::UiTextPropertyBindingSource;
+use openzt2_world_state::world_spawn::{
+    world_load_completion_marker::WorldLoadCompleted, world_membership_types::WorldRoot,
+};
 
 use openzt2_game_assets::localization::{
     localization_asset_types::LocalizationAsset,
@@ -14,8 +17,7 @@ use super::{fame_types::Fame, rating_types::ZooRating, research_types::ResearchP
 pub(super) fn project_progression_facts_into_authored_ui_text(
     active_localization: Res<LocalizationPrecedenceIndex>,
     localizations: Res<Assets<LocalizationAsset>>,
-    fame: Res<Fame>,
-    rating: Res<ZooRating>,
+    worlds: Query<(Ref<Fame>, Ref<ZooRating>), (With<WorldRoot>, With<WorldLoadCompleted>)>,
     projects: Query<Ref<ResearchProject>>,
     mut removed_projects: RemovedComponents<ResearchProject>,
     mut fields: Query<(Ref<UiTextBinding>, &mut Text)>,
@@ -24,14 +26,19 @@ pub(super) fn project_progression_facts_into_authored_ui_text(
     else {
         return;
     };
+    let world = worlds.single().ok();
     let project = projects.iter().next();
     let project_removed = removed_projects.read().next().is_some();
     let localization_changed = active_localization.is_changed() || localizations.is_changed();
 
     for (binding, mut text) in &mut fields {
         let source_changed = match &binding.0 {
-            UiTextPropertyBindingSource::ZooFame { .. } => fame.is_changed(),
-            UiTextPropertyBindingSource::ZooRating { .. } => rating.is_changed(),
+            UiTextPropertyBindingSource::ZooFame { .. } => {
+                world.as_ref().is_some_and(|(fame, _)| fame.is_changed())
+            }
+            UiTextPropertyBindingSource::ZooRating { .. } => world
+                .as_ref()
+                .is_some_and(|(_, rating)| rating.is_changed()),
             UiTextPropertyBindingSource::ResearchProgress { .. } => {
                 project_removed || project.as_ref().is_some_and(|project| project.is_changed())
             }
@@ -47,15 +54,18 @@ pub(super) fn project_progression_facts_into_authored_ui_text(
                 let _ = localization.write_localized_text_with_format_arguments(
                     *format,
                     &[LocalizationFormatArgument::Integer(i64::from(
-                        fame.half_stars,
+                        world.as_ref().map_or(0, |(fame, _)| fame.half_stars),
                     ))],
                     &mut text.0,
                 );
             }
             UiTextPropertyBindingSource::ZooRating { format } => {
-                if !rating.overall_available {
+                let Some((_, rating)) = world
+                    .as_ref()
+                    .filter(|(_, rating)| rating.overall_available)
+                else {
                     continue;
-                }
+                };
                 let _ = localization.write_localized_text_with_format_arguments(
                     *format,
                     &[LocalizationFormatArgument::PercentBasisPoints(

@@ -1,383 +1,252 @@
-use bevy::prelude::{Commands, Entity, Local, MessageWriter, NextState, Query, Res, ResMut, With};
+mod baseline;
+mod continuation;
+mod domains;
+mod sections;
 
-use openzt2_game_assets::application_lifecycle::GamePhase;
-use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator;
-use openzt2_world_state::world_spawn::world_load_request_acceptance::BeginWorldLoad;
-use openzt2_world_state::world_spawn::world_load_request_acceptance::WorldLoadOperationOwner;
-use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
-use openzt2_world_state::world_spawn::world_unloading::UnloadWorld;
-
-use openzt2_interface_state::persistence::profile_types::ProfileOptions;
-use openzt2_interface_state::persistence::save_slot_types::WorldSnapshotLoadedFromSlot;
-use openzt2_interface_state::persistence::saved_game_source_types::{
-    OriginalSavedGameLoadFailed, OriginalSavedGameLoaded, SavedGameSource,
-};
-
-use super::super::{
-    persistence_failure_types::{
-        WorldSnapshotPersistenceFailed, WorldSnapshotPersistenceFailure,
-        WorldSnapshotPersistenceOperation,
+use bevy::{
+    asset::{LoadState, RecursiveDependencyLoadState, UntypedAssetLoadFailedEvent},
+    ecs::{
+        schedule::ScheduleConfigs,
+        system::{ScheduleSystem, SystemParam},
     },
-    progression_snapshot_application::ProgressionSnapshotApplicationParameters,
-    snapshot_container_types::{ReusableWorldSnapshotByteBuffer, WorldSnapshotSectionKind},
+    prelude::*,
 };
-use super::pending_snapshot_application_types::PendingSnapshotApplication;
+use openzt2_game_assets::{
+    application_lifecycle::GamePhase,
+    behavior::behavior_asset_types::BehaviorDocumentAsset,
+    lua_script::{
+        lua_script_archive_path_index::LuaScriptArchivePathIndex,
+        lua_script_asset_loading::LuaScriptAsset,
+    },
+    saved_world_asset_source::SavedWorldTerrainAsset,
+    scene_prefab::ScenePrefabAsset,
+    species::species_asset_types::{SpeciesAsset, SpeciesAssets},
+    terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset,
+    world_definitions::{
+        world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions,
+        world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
+    },
+    world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset,
+};
+use openzt2_interface_state::persistence::{
+    profile_types::ProfileOptions,
+    save_slot_types::WorldSnapshotLoadedFromSlot,
+    saved_game_source_types::{
+        OriginalSavedGameLoadFailed, OriginalSavedGameLoaded, SavedGameSource,
+    },
+};
+use openzt2_interface_state::photos::photo_challenge_types::{
+    PhotoChallengeCatalogueIndex, PhotoChallengeProgress,
+};
+use openzt2_world_state::world_spawn::{
+    persistent_id_index::PersistentIdIndex,
+    persistent_id_types::{PersistentId, PersistentIdAllocator},
+    world_hydration_completion::WorldLoadFinished,
+    world_load_failure::WorldLoadFailed,
+    world_load_request_acceptance::{BeginWorldLoad, WorldLoadOperationOwner},
+    world_membership_types::{DefinitionId, WorldRoot},
+    world_unloading::UnloadWorld,
+};
+use openzt2_zoo_state::{
+    economy::{
+        guest_admission_types::{AdmissionPrice, ZooAdmissionsOpen},
+        monthly_finance_types::MonthlyFinanceHistory,
+        zoo_cash_types::ZooCash,
+    },
+    locomotion::locomotion_types::{ActiveTerrainDerivedNavigationGraph, LocomotionCapacity},
+    progression::research_types::{
+        ResearchProject, ResearchProjectPersistentId, WorldResearchItems,
+    },
+    topology::topology_graph_types::{TopologyGrid, TopologyNode},
+};
+
 use super::{
-    loaded_snapshot_live_world_application::decode_validate_and_apply_snapshot_to_loaded_baseline_world,
-    persistence_failure_message_publication::publish_persistence_failure_for_slot_operation,
-    supported_snapshot_section_validation::validate_supported_snapshot_container_and_every_section_payload,
-    world_snapshot_application_system_parameters::{
-        WorldSnapshotApplicationMessages, WorldSnapshotApplicationState,
+    super::{
+        persistence_failure_types::{
+            WorldSnapshotPersistenceFailed, WorldSnapshotPersistenceFailure as Failure,
+            WorldSnapshotPersistenceOperation,
+        },
+        progression_snapshot_application::{
+            restore_saved_research_projects, ProgressionSnapshotApplicationParameters,
+            SavedResearchProjects,
+        },
+        simulation_time_snapshot_section::SimulationTimeSnapshotLoadResources,
+        snapshot_container_types::ReusableWorldSnapshotByteBuffer,
     },
-    world_snapshot_section_encoding::decode_and_validate_world_snapshot_section,
+    behavior_snapshot_application::{
+        parameters::BehaviorSnapshotApplication, restore_behavior_actor_snapshots,
+    },
+    donation_snapshot_section::{restore_donation_totals, RestoredDonationComponents},
+    economy_snapshot_application::{
+        apply_economy_snapshot_records_to_live_economy_resources_and_facilities,
+        RestoredFacilityEconomy,
+    },
+    fence_topology_snapshot_section::restore_snapshot_fence_edges,
+    loaded_snapshot_live_world_application::restore_snapshot_sections,
+    maintenance_snapshot_application::{
+        apply_maintained_object_records, RestoredMaintenanceComponents,
+    },
+    pending_snapshot_application_types::{
+        AttachSavedWorldState, AttachSnapshotDonations, AttachSnapshotEconomy,
+        AttachSnapshotMaintenance, AwaitingSavedWorldDocument, AwaitingSnapshotDomainBaseline,
+        AwaitingSnapshotTerrainNavigation, AwaitingSnapshotWorldLoad, AwaitingWorldRetirement,
+        PendingSnapshotApplication, PrepareSnapshotBaseline, RestoreRuntimeContinuation,
+        RestoreSavedFenceEdges, RestoreSnapshotSections, RestoreSnapshotTerrain,
+        RestoreTransportIdentities, RestoreTransportState, ResumeSnapshotActors, SnapshotBytes,
+        SnapshotRestoreFailed, SnapshotRestored, SnapshotSectionRestore,
+    },
+    persistence_failure_message_publication::publish_persistence_failure_for_slot_operation,
+    photo_snapshot_application::restore_snapshot_photo_challenge_completion,
+    photo_snapshot_baseline_readiness::PhotoSnapshotBaselineReadiness,
+    runtime_continuation_snapshot_application::{
+        restore_entity_name_registration, restore_saved_entity_names, restore_world_audio_preset,
+        RuntimeContinuationApplication, SavedEntityNames, SavedNameRegistration,
+    },
+    saved_world_snapshot_preparation::SavedWorldSnapshotPreparation,
+    supported_snapshot_section_validation::{decode_snapshot_for_world_restore, DecodedSnapshot},
+    terrain_snapshot_application_parameters::TerrainSnapshotApplicationParameters,
+    transport_snapshot_application::{
+        restore_transport_sections, spawn_missing_transport_identities,
+        RestoredTransportComponents, SavedTransportEntities,
+    },
+    world_snapshot_application_system_parameters::WorldSnapshotApplicationState,
 };
 
-pub(in super::super) fn coordinate_pending_snapshot_validation_baseline_world_loading_and_application(
+fn finish_snapshot_restore(
     mut commands: Commands,
-    mut pending_snapshot_application: Query<(Entity, &mut PendingSnapshotApplication)>,
-    profile_options: Res<ProfileOptions>,
-    world_roots: Query<Entity, With<WorldRoot>>,
-    replacement_worlds: Query<(Entity, &WorldLoadOperationOwner), With<WorldRoot>>,
-    mut next_game_phase: ResMut<NextState<GamePhase>>,
-    mut persistent_identifier_allocator: Option<ResMut<PersistentIdAllocator>>,
-    mut snapshot_scratch_storage: ResMut<ReusableWorldSnapshotByteBuffer>,
-    world_snapshot_application_messages: WorldSnapshotApplicationMessages,
-    live_world_snapshot_application_state: WorldSnapshotApplicationState,
-    mut progression_snapshot_application_parameters: ProgressionSnapshotApplicationParameters,
-    mut simulation_time_snapshot_application_resources: super::super::simulation_time_snapshot_section::SimulationTimeSnapshotLoadResources,
-    mut reported_load_state: Local<Option<String>>,
-    mut terrain_application: super::terrain_snapshot_application_parameters::TerrainSnapshotApplicationParameters,
-    mut saved_world_preparation: super::saved_world_snapshot_preparation::SavedWorldSnapshotPreparation,
+    restored: Query<(Entity, &PendingSnapshotApplication, &SnapshotRestored)>,
+    failed: Query<(Entity, &PendingSnapshotApplication, &SnapshotRestoreFailed)>,
+    mut phase: ResMut<NextState<GamePhase>>,
+    mut unload: MessageWriter<UnloadWorld>,
+    mut loaded: MessageWriter<WorldSnapshotLoadedFromSlot>,
+    mut loaded_original: MessageWriter<OriginalSavedGameLoaded>,
+    mut failures: MessageWriter<WorldSnapshotPersistenceFailed>,
+    mut original_failures: MessageWriter<OriginalSavedGameLoadFailed>,
 ) {
-    let WorldSnapshotApplicationMessages {
-        mut begin_world_load_requests,
-        mut world_unload_requests,
-        mut completed_world_loads,
-        mut failed_world_loads,
-        mut completed_snapshot_loads,
-        mut original_snapshot_loads,
-        mut original_snapshot_failures,
-        mut persistence_failures,
-        mut show_platform_upgrade_restore_requests,
-    } = world_snapshot_application_messages;
-    let Ok((pending_snapshot_application_entity, mut pending_snapshot_application)) =
-        pending_snapshot_application.single_mut()
-    else {
-        *reported_load_state = None;
-        return;
-    };
-    let photo_readiness = pending_snapshot_application
-        .baseline_world_root
-        .and_then(|root| {
-            persistent_identifier_allocator.as_ref().map(|allocator| {
-                live_world_snapshot_application_state
-                    .photo_baseline
-                    .is_ready_for_snapshot_application(root, allocator)
-            })
-        });
-    let load_state = format!(
-        "{pending_snapshot_application:?}; clock_ready={}; photo_readiness={photo_readiness:?}; species_ready={}",
-        simulation_time_snapshot_application_resources.is_initialized(),
-        live_world_snapshot_application_state.active_species
-            .get(&live_world_snapshot_application_state.species_assets).is_some(),
-    );
-    if reported_load_state.as_ref() != Some(&load_state) {
-        bevy::log::info!(state = %load_state, "snapshot application state changed");
-        *reported_load_state = Some(load_state);
-    }
-    if pending_snapshot_application.baseline_world_load_requested {
-        if pending_snapshot_application.baseline_world_root.is_none() {
-            pending_snapshot_application.baseline_world_root =
-                replacement_worlds.iter().find_map(|(root, owner)| {
-                    (owner.0 == pending_snapshot_application_entity).then_some(root)
-                });
-        }
-        if !snapshot_scratch_storage.contains_validated_snapshot_container {
-            if let Some(root) = pending_snapshot_application.baseline_world_root {
-                world_unload_requests.write(UnloadWorld(root));
-            }
-            next_game_phase.set(GamePhase::MapSelection);
-            discard_pending_snapshot_application_after_load_failure(
-                &mut commands,
-                pending_snapshot_application_entity,
-                pending_snapshot_application.source,
-                WorldSnapshotPersistenceFailure::CorruptSnapshotSection,
-                &mut snapshot_scratch_storage,
-                &mut persistence_failures,
-                &mut original_snapshot_failures,
-            );
-            return;
-        }
-        if !pending_snapshot_application.baseline_world_load_completed {
-            let baseline_failed = failed_world_loads.read().any(|result| {
-                result.operation == Some(pending_snapshot_application_entity)
-                    && Some(result.scenario)
-                        == pending_snapshot_application.scenario_definition_identifier
-                    && pending_snapshot_application
-                        .baseline_world_root
-                        .is_none_or(|root| result.root == Some(root))
-            });
-            if baseline_failed {
-                next_game_phase.set(GamePhase::MapSelection);
-                discard_pending_snapshot_application_after_load_failure(
-                    &mut commands,
-                    pending_snapshot_application_entity,
-                    pending_snapshot_application.source,
-                    WorldSnapshotPersistenceFailure::UnknownAssetIdentifier,
-                    &mut snapshot_scratch_storage,
-                    &mut persistence_failures,
-                    &mut original_snapshot_failures,
-                );
-            } else {
-                for result in completed_world_loads.read() {
-                    if result.operation == Some(pending_snapshot_application_entity)
-                        && Some(result.scenario)
-                            == pending_snapshot_application.scenario_definition_identifier
-                        && Some(result.root) == pending_snapshot_application.baseline_world_root
-                    {
-                        pending_snapshot_application.baseline_world_load_completed = true;
-                    }
-                }
-            }
-            return;
-        }
-        let Some(root) = pending_snapshot_application.baseline_world_root else {
-            return;
-        };
-        if !pending_snapshot_application.terrain_restored {
-            let terrain_result =
-                if let Some(terrain) = &pending_snapshot_application.terrain_snapshot {
-                    terrain_application
-                        .apply(
-                            terrain,
-                            root,
-                            pending_snapshot_application_entity,
-                            &mut commands,
-                        )
-                        .map(|()| true)
-                } else {
-                    Ok(false)
-                };
-            match terrain_result {
-                Ok(changed) => {
-                    pending_snapshot_application.terrain_restored = true;
-                    pending_snapshot_application.terrain_snapshot = None;
-                    if changed {
-                        return;
-                    }
-                }
-                Err(WorldSnapshotPersistenceFailure::SnapshotTransactionInFlight) => return,
-                Err(reason) => {
-                    world_unload_requests.write(UnloadWorld(root));
-                    next_game_phase.set(GamePhase::MapSelection);
-                    discard_pending_snapshot_application_after_load_failure(
-                        &mut commands,
-                        pending_snapshot_application_entity,
-                        pending_snapshot_application.source,
-                        reason,
-                        &mut snapshot_scratch_storage,
-                        &mut persistence_failures,
-                        &mut original_snapshot_failures,
-                    );
-                    return;
-                }
-            }
-        }
-        let snapshot_application_result = match persistent_identifier_allocator.as_mut() {
-            Some(persistent_identifier_allocator)
-                if world_roots.get(root).is_ok()
-                    && persistent_identifier_allocator.owns_world(root) =>
-            {
-                let pending = &mut *pending_snapshot_application;
-                decode_validate_and_apply_snapshot_to_loaded_baseline_world(
-                    &mut commands,
-                    &snapshot_scratch_storage.snapshot_container_bytes,
-                    profile_options.profile_identifier,
-                    pending.source,
-                    root,
-                    persistent_identifier_allocator,
-                    live_world_snapshot_application_state,
-                    &mut progression_snapshot_application_parameters,
-                    &mut simulation_time_snapshot_application_resources,
-                    &mut show_platform_upgrade_restore_requests,
-                    &mut pending.maintenance_prefabs,
-                    &mut pending.placement_hydration,
-                    &mut pending.behavior_documents,
-                )
-            }
-            _ => Err(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference),
-        };
-        match snapshot_application_result {
-            Ok(false) => {}
-            Ok(true) => {
-                bevy::log::info!(?root, "snapshot application completed; entering game");
-                next_game_phase.set(GamePhase::InGame);
-                commands
-                    .entity(pending_snapshot_application_entity)
-                    .despawn();
-                commands.entity(root).remove::<WorldLoadOperationOwner>();
-                match pending_snapshot_application.source {
-                    SavedGameSource::Native(save_slot_identifier) => {
-                        completed_snapshot_loads.write(WorldSnapshotLoadedFromSlot {
-                            save_slot_identifier,
-                        });
-                    }
-                    SavedGameSource::Original(source_identifier) => {
-                        original_snapshot_loads
-                            .write(OriginalSavedGameLoaded { source_identifier });
-                    }
-                }
-                snapshot_scratch_storage.clear_logical_contents();
-            }
-            Err(persistence_failure) => {
-                bevy::log::warn!(
-                    ?root,
-                    ?persistence_failure,
-                    "snapshot application failed; returning to map selection"
-                );
-                world_unload_requests.write(UnloadWorld(root));
-                next_game_phase.set(GamePhase::MapSelection);
-                discard_pending_snapshot_application_after_load_failure(
-                    &mut commands,
-                    pending_snapshot_application_entity,
-                    pending_snapshot_application.source,
-                    persistence_failure,
-                    &mut snapshot_scratch_storage,
-                    &mut persistence_failures,
-                    &mut original_snapshot_failures,
-                );
-            }
-        }
-        return;
-    }
-    if let (Some(scenario), Some(mode)) = (
-        pending_snapshot_application.scenario_definition_identifier,
-        pending_snapshot_application.session_mode,
-    ) {
-        if !world_roots.is_empty() {
-            return;
-        }
-        // A later operation must not consume an earlier load's retained messages.
-        completed_world_loads.clear();
-        failed_world_loads.clear();
-        begin_world_load_requests.write(BeginWorldLoad {
-            saved_world_document: pending_snapshot_application
-                .saved_world_document
-                .as_ref()
-                .map(|handle| handle.id()),
-            operation: Some(pending_snapshot_application_entity),
-            scenario,
-            mode,
-            profile: profile_options.profile_identifier,
-            starting_cash_cents: None,
-        });
-        pending_snapshot_application.baseline_world_load_requested = true;
-        return;
-    }
-    if pending_snapshot_application.world_snapshot.is_none() {
-        let decoded = validate_supported_snapshot_container_and_every_section_payload(
-            &snapshot_scratch_storage.snapshot_container_bytes,
-            profile_options.profile_identifier,
-        )
-        .and_then(|snapshot| {
-            let world = decode_and_validate_world_snapshot_section(
-                &snapshot_scratch_storage.snapshot_container_bytes,
-                snapshot.section_directory_entry(WorldSnapshotSectionKind::World),
-            )?;
-            let terrain =
-                super::terrain_snapshot_container_section::decode_terrain_snapshot_section(
-                    &snapshot_scratch_storage.snapshot_container_bytes,
-                    snapshot.section_directory_entry(WorldSnapshotSectionKind::Terrain),
-                )?;
-            Ok((world, terrain))
-        });
-        match decoded {
-            Ok((world, terrain)) => {
-                pending_snapshot_application.world_snapshot = Some(world);
-                pending_snapshot_application.terrain_snapshot = terrain;
-                snapshot_scratch_storage.contains_validated_snapshot_container = true;
-            }
-            Err(reason) => {
-                discard_pending_snapshot_application_after_load_failure(
-                    &mut commands,
-                    pending_snapshot_application_entity,
-                    pending_snapshot_application.source,
-                    reason,
-                    &mut snapshot_scratch_storage,
-                    &mut persistence_failures,
-                    &mut original_snapshot_failures,
-                );
-                return;
-            }
-        }
-    }
-    let preparation = {
-        let PendingSnapshotApplication {
-            world_snapshot,
-            terrain_snapshot,
-            saved_world_document,
-            ..
-        } = &mut *pending_snapshot_application;
-        let Some(world) = world_snapshot.as_ref() else {
-            return;
-        };
-        saved_world_preparation.prepare(world, terrain_snapshot.as_ref(), saved_world_document)
-    };
-    match preparation {
-        Ok(false) => return,
-        Ok(true) => {}
-        Err(reason) => {
-            discard_pending_snapshot_application_after_load_failure(
-                &mut commands,
-                pending_snapshot_application_entity,
-                pending_snapshot_application.source,
+    for (operation, pending, failure) in &failed {
+        let reason = match *failure {
+            SnapshotRestoreFailed::BeforeReplacement(reason) => reason,
+            SnapshotRestoreFailed::DuringReplacement {
                 reason,
-                &mut snapshot_scratch_storage,
-                &mut persistence_failures,
-                &mut original_snapshot_failures,
-            );
-            return;
+                root_to_unload,
+            } => {
+                if let Some(root) = root_to_unload {
+                    unload.write(UnloadWorld(root));
+                }
+                phase.set(GamePhase::MapSelection);
+                reason
+            }
+        };
+        match pending.source {
+            SavedGameSource::Native(slot) => {
+                publish_persistence_failure_for_slot_operation(
+                    &mut failures,
+                    WorldSnapshotPersistenceOperation::LoadFromSlot,
+                    slot,
+                    reason,
+                );
+            }
+            SavedGameSource::Original(source_identifier) => {
+                original_failures.write(OriginalSavedGameLoadFailed {
+                    source_identifier,
+                    reason: format!("{reason:?}"),
+                });
+            }
         }
+        commands.entity(operation).despawn();
     }
-    let Some(world) = pending_snapshot_application.world_snapshot.take() else {
-        return;
-    };
-    for entity in &world_roots {
-        world_unload_requests.write(UnloadWorld(entity));
+    for (operation, pending, restored) in &restored {
+        let root = restored.0;
+        info!(?root, "snapshot application completed; entering game");
+        phase.set(GamePhase::InGame);
+        commands.entity(root).remove::<WorldLoadOperationOwner>();
+        match pending.source {
+            SavedGameSource::Native(save_slot_identifier) => {
+                loaded.write(WorldSnapshotLoadedFromSlot {
+                    save_slot_identifier,
+                });
+            }
+            SavedGameSource::Original(source_identifier) => {
+                loaded_original.write(OriginalSavedGameLoaded { source_identifier });
+            }
+        }
+        commands.entity(operation).despawn();
     }
-    pending_snapshot_application.scenario_definition_identifier =
-        Some(world.scenario_definition_identifier);
-    pending_snapshot_application.session_mode = Some(world.session_mode);
-    next_game_phase.set(GamePhase::Loading);
 }
 
-fn discard_pending_snapshot_application_after_load_failure(
-    commands: &mut Commands,
-    pending_snapshot_application_entity: Entity,
-    source: SavedGameSource,
-    persistence_failure: WorldSnapshotPersistenceFailure,
-    snapshot_scratch_storage: &mut ReusableWorldSnapshotByteBuffer,
-    persistence_failure_messages: &mut MessageWriter<WorldSnapshotPersistenceFailed>,
-    original_failures: &mut MessageWriter<OriginalSavedGameLoadFailed>,
-) {
-    commands
-        .entity(pending_snapshot_application_entity)
-        .despawn();
-    match source {
-        SavedGameSource::Native(save_slot_identifier) => {
-            publish_persistence_failure_for_slot_operation(
-                persistence_failure_messages,
-                WorldSnapshotPersistenceOperation::LoadFromSlot,
-                save_slot_identifier,
-                persistence_failure,
+pub(in crate::persistence) fn restore_pending_snapshots() -> ScheduleConfigs<ScheduleSystem> {
+    (
+        (
+            baseline::decode_snapshot_operation.run_if(any_with_component::<SnapshotBytes>),
+            baseline::prepare_snapshot_baseline
+                .run_if(any_with_component::<PrepareSnapshotBaseline>),
+            baseline::retire_world_once_saved_assets_are_ready,
+        )
+            .chain(),
+        baseline::begin_snapshot_baseline_load
+            .run_if(any_with_component::<AwaitingWorldRetirement>)
+            .run_if(in_state(GamePhase::Loading))
+            .after(baseline::retire_world_once_saved_assets_are_ready),
+        (
+            baseline::receive_snapshot_baseline_result,
+            baseline::restore_snapshot_terrain.run_if(any_with_component::<RestoreSnapshotTerrain>),
+            baseline::accept_restored_terrain_navigation
+                .run_if(any_with_component::<AwaitingSnapshotTerrainNavigation>),
+            baseline::accept_snapshot_domain_baseline
+                .run_if(any_with_component::<AwaitingSnapshotDomainBaseline>),
+            sections::apply_snapshot_sections
+                .run_if(sections::snapshot_section_dependencies_changed),
+            sections::prepare_transport_identities
+                .run_if(any_with_component::<RestoreTransportIdentities>),
+            (
+                sections::apply_saved_fence_edges,
+                sections::attach_saved_economy,
+                sections::attach_saved_maintenance,
+                sections::attach_saved_donations,
             )
-        }
-        SavedGameSource::Original(source_identifier) => {
-            original_failures.write(OriginalSavedGameLoadFailed {
-                source_identifier,
-                reason: format!("{persistence_failure:?}"),
-            });
-        }
-    }
-    snapshot_scratch_storage.clear_logical_contents();
+                .run_if(any_with_component::<AttachSavedWorldState>),
+            sections::distribute_saved_snapshot_sections
+                .run_if(any_with_component::<AttachSavedWorldState>),
+            (
+                domains::restore_snapshot_clock,
+                domains::restore_world_metadata,
+                domains::restore_snapshot_animal_links,
+                domains::restore_snapshot_adoption,
+                domains::restore_snapshot_progression,
+                domains::restore_snapshot_shows,
+                domains::restore_snapshot_images,
+            )
+                .run_if(any_with_component::<RestoreRuntimeContinuation>),
+            (
+                sections::restore_transport_state
+                    .run_if(any_with_component::<RestoreTransportState>),
+                sections::restore_research_projects
+                    .run_if(any_with_component::<SavedResearchProjects>),
+            ),
+            domains::restore_snapshot_scenario
+                .run_if(any_with_component::<RestoreRuntimeContinuation>),
+            (
+                continuation::restore_runtime_continuation,
+                continuation::restore_fossil_continuation
+                    .after(continuation::restore_runtime_continuation)
+                    .before(continuation::restore_snapshot_names)
+                    .before(continuation::restore_snapshot_name_registration),
+                continuation::restore_snapshot_names,
+                continuation::restore_snapshot_name_registration,
+                continuation::restore_snapshot_audio,
+                continuation::restore_photo_challenge_completion,
+            )
+                .run_if(any_with_component::<RestoreRuntimeContinuation>),
+            continuation::runtime_continuation_is_restored
+                .run_if(any_with_component::<RestoreRuntimeContinuation>),
+        )
+            .chain(),
+        continuation::resume_snapshot_actors
+            .run_if(any_with_component::<ResumeSnapshotActors>)
+            .after(continuation::runtime_continuation_is_restored),
+        finish_snapshot_restore
+            .after(baseline::retire_world_once_saved_assets_are_ready)
+            .after(continuation::resume_snapshot_actors),
+    )
+        .into_configs()
 }

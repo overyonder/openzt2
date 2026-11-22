@@ -8,11 +8,16 @@ use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 
+use openzt2_zoo_state::scenario::{
+    scenario_script_timing_types::ScenarioScriptTiming, scenario_session_types::ScenarioDocument,
+};
+
 use super::{
     challenge_offer_types::{
         CreateScenarioChallengeOfferFromLuaSourcePathRequest, RespondToScenarioChallengeRequest,
         ScenarioChallengeAcceptanceRejected, ScenarioChallengeAcceptanceRejectionReason,
-        ScenarioChallengeAccepted, ScenarioChallengeOffer, ScenarioChallengeOfferState,
+        ScenarioChallengeAccepted, ScenarioChallengeLuaCandidate, ScenarioChallengeOffer,
+        ScenarioChallengeOfferState, ScenarioChallengeRuleContext,
     },
     scenario_instantiation::spawn_authored_challenge_objectives,
     scenario_lua_types::ScenarioLuaVirtualMachineContexts,
@@ -21,15 +26,15 @@ use super::{
 pub(super) fn create_challenge_offers_requested_by_scenario_scripts(
     mut commands: Commands,
     mut requests: MessageReader<CreateScenarioChallengeOfferFromLuaSourcePathRequest>,
-    roots: Query<Entity, With<WorldRoot>>,
+    mut roots: Query<(Entity, &mut PersistentIdAllocator), With<WorldRoot>>,
     existing: Query<(), With<ScenarioChallengeOffer>>,
+    contexts: Query<(Entity, &ScenarioChallengeLuaCandidate, &WorldMember)>,
     scenarios: Res<WorldScenarios>,
     assets: Res<Assets<WorldScenarioDocumentAsset>>,
-    mut allocator: ResMut<PersistentIdAllocator>,
     clock: Res<ZooClock>,
     mut runtime: NonSendMut<ScenarioLuaVirtualMachineContexts>,
 ) {
-    let Ok(root) = roots.single() else {
+    let Ok((root, mut allocator)) = roots.single_mut() else {
         return;
     };
     let Some(scenarios) = scenarios.get(&assets) else {
@@ -54,27 +59,56 @@ pub(super) fn create_challenge_offers_requested_by_scenario_scripts(
             error!(path = %request.source_path, "Lua challenge offer references an unloaded scenario");
             continue;
         };
-        let Some(asset) = scenarios.document_for_scenario(source_id) else {
+        let Some(handle) = scenarios.handle_for_scenario(source_id) else {
+            continue;
+        };
+        let Some(asset) = assets.get(handle) else {
             continue;
         };
         let required_ids = u64::try_from(record.objectives.len())
             .ok()
             .and_then(|count| count.checked_add(1));
-        if !allocator.owns_world(root)
-            || required_ids
-                .and_then(|count| allocator.next().checked_add(count))
-                .is_none()
+        if required_ids
+            .and_then(|count| allocator.next().checked_add(count))
+            .is_none()
         {
             error!(path = %request.source_path, "Lua challenge offer cannot allocate objective identities");
             continue;
         }
-        if let Err(error) = runtime.clear_finished_challenge_rule_state(record.id) {
+        let owner = contexts
+            .iter()
+            .find(|(_, candidate, member)| candidate.0 == record.id && member.root == root)
+            .map(|(entity, _, _)| entity)
+            .unwrap_or_else(|| {
+                commands
+                    .spawn((
+                        WorldMember { root },
+                        ScenarioChallengeLuaCandidate(record.id),
+                        ScenarioDocument(handle.clone()),
+                    ))
+                    .id()
+            });
+        if let Err(error) = runtime.clear_finished_challenge_rule_state(owner) {
             error!(%error, "new challenge could not initialize its rule state");
             continue;
         }
-        let Ok(id) = allocator.allocate(root) else {
+        let Ok(id) = allocator.allocate() else {
             continue;
         };
+        let offer = commands
+            .spawn((
+                WorldMember { root },
+                id,
+                ScenarioDocument(handle.clone()),
+                ScenarioChallengeRuleContext(owner),
+                ScenarioScriptTiming::default(),
+                ScenarioChallengeOffer {
+                    definition: record.id,
+                    expires_tick: u64::MAX,
+                    state: ScenarioChallengeOfferState::Offered,
+                },
+            ))
+            .id();
         // BFS_ADDSCENARIO starts its rules now. Their authored Evaluate Lua
         // opens the offer and waits for the player's response; deferring rules
         // until acceptance prevents that dialog from ever being requested.
@@ -82,21 +116,14 @@ pub(super) fn create_challenge_offers_requested_by_scenario_scripts(
             &mut commands,
             &mut allocator,
             root,
+            offer,
             record.id,
             &asset.document,
             clock.tick,
         ) {
+            commands.entity(offer).despawn();
             continue;
         }
-        commands.spawn((
-            WorldMember { root },
-            id,
-            ScenarioChallengeOffer {
-                definition: record.id,
-                expires_tick: u64::MAX,
-                state: ScenarioChallengeOfferState::Offered,
-            },
-        ));
         info!(path = %request.source_path, tick = clock.tick, "challenge offered");
         break;
     }
@@ -106,21 +133,21 @@ pub(super) fn validate_and_apply_requested_challenge_responses(
     mut requests: MessageReader<RespondToScenarioChallengeRequest>,
     clock: Res<ZooClock>,
     mut runtime: NonSendMut<ScenarioLuaVirtualMachineContexts>,
-    mut offers: Query<&mut ScenarioChallengeOffer>,
+    mut offers: Query<(&mut ScenarioChallengeOffer, &ScenarioChallengeRuleContext)>,
     mut accepted: MessageWriter<ScenarioChallengeAccepted>,
     mut rejected: MessageWriter<ScenarioChallengeAcceptanceRejected>,
 ) {
     for request in requests.read() {
         let reason = match offers.get_mut(request.offer) {
             Err(_) => Some(ScenarioChallengeAcceptanceRejectionReason::Missing),
-            Ok(offer) if offer.state != ScenarioChallengeOfferState::Offered => {
+            Ok((offer, _)) if offer.state != ScenarioChallengeOfferState::Offered => {
                 Some(ScenarioChallengeAcceptanceRejectionReason::AlreadyActive)
             }
-            Ok(offer) if clock.tick >= offer.expires_tick => {
+            Ok((offer, _)) if clock.tick >= offer.expires_tick => {
                 Some(ScenarioChallengeAcceptanceRejectionReason::Expired)
             }
-            Ok(mut offer) => {
-                match runtime.set_challenge_response(offer.definition, request.accept) {
+            Ok((mut offer, owner)) => {
+                match runtime.set_challenge_response(owner.0, request.accept) {
                     Ok(()) => {
                         offer.state = if request.accept {
                             ScenarioChallengeOfferState::Active

@@ -2,11 +2,21 @@ use std::collections::HashSet;
 
 use openzt2_game_data::AssetId;
 
-use openzt2_animals::animal_lifecycle::adoption_offer_inventory_types::AnimalAdoptionOffer;
-use openzt2_animals::animal_lifecycle::adoption_offer_inventory_types::AnimalAdoptionOfferInventory;
-use openzt2_animals::animal_lifecycle::adoption_offer_inventory_types::AnimalAdoptionOfferSlot;
+use bevy::{
+    ecs::{relationship::RelationshipTarget, system::SystemParam},
+    prelude::*,
+};
+use openzt2_animals::animal_lifecycle::adoption_offer_types::{
+    AdoptionOfferClock, AdoptionOfferCooldown, AdoptionOfferForOption, AdoptionOfferOption,
+    AdoptionOfferOptions, AdoptionOfferRandom, AdoptionOfferSupply, CurrentAdoptionOffer,
+};
 use openzt2_game_assets::species::species_asset_types::SpeciesView;
 use openzt2_world_state::game_session_types::WorldSessionMode;
+use openzt2_world_state::{
+    simulation_time::deterministic_random_stream::DeterministicRng,
+    world_spawn::world_membership_types::{WorldMember, WorldRoot},
+};
+use openzt2_zoo_state::animal_lifecycle::animal_adoption_contracts::PendingAdoption;
 use openzt2_zoo_state::progression::fame_types::Fame;
 
 use super::super::persistence_failure_types::WorldSnapshotPersistenceFailure;
@@ -16,36 +26,200 @@ const ANIMAL_ADOPTION_OFFER_SNAPSHOT_BYTE_COUNT: usize = 34;
 const ANIMAL_ADOPTION_OFFER_SLOT_SNAPSHOT_BYTE_COUNT: usize =
     8 + 2 * ANIMAL_ADOPTION_OFFER_SNAPSHOT_BYTE_COUNT;
 
+#[derive(Debug, PartialEq)]
+pub(super) struct AnimalAdoptionOffersSnapshot {
+    random_state_and_stream: [u64; 2],
+    slots: Vec<AdoptionOfferSlotSnapshot>,
+}
+
+impl AnimalAdoptionOffersSnapshot {
+    pub(super) fn slot_count(&self) -> usize {
+        self.slots.len()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct AdoptionOfferSlotSnapshot {
+    repopulate_after_seconds: [f32; 2],
+    offers: [Option<AdoptionOfferSnapshot>; 2],
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct AdoptionOfferSnapshot {
+    species: AssetId,
+    remaining_by_sex: [u16; 2],
+    unlock_remaining_seconds: f32,
+    remove_remaining_seconds: Option<f32>,
+    dismiss_cooldown_seconds: f32,
+}
+
+#[derive(SystemParam)]
+pub(super) struct AdoptionOfferSnapshotCapture<'w, 's> {
+    roots: Query<
+        'w,
+        's,
+        (
+            Entity,
+            Option<&'static AdoptionOfferClock>,
+            Option<&'static AdoptionOfferRandom>,
+            Option<&'static AdoptionOfferOptions>,
+        ),
+        With<WorldRoot>,
+    >,
+    options: Query<
+        'w,
+        's,
+        (
+            &'static AdoptionOfferOption,
+            Option<&'static AdoptionOfferCooldown>,
+            Option<&'static CurrentAdoptionOffer>,
+        ),
+    >,
+    supplies: Query<'w, 's, &'static AdoptionOfferSupply>,
+    adoptions: Query<'w, 's, &'static PendingAdoption>,
+}
+
+impl AdoptionOfferSnapshotCapture<'_, '_> {
+    pub(super) fn capture(
+        &self,
+    ) -> Result<Option<AnimalAdoptionOffersSnapshot>, WorldSnapshotPersistenceFailure> {
+        let invalid = WorldSnapshotPersistenceFailure::CorruptSnapshotSection;
+        let (root, clock, random, options) = self.roots.single().map_err(|_| invalid)?;
+        let (clock, random) = match (clock, random, options) {
+            (None, None, None) => return Ok(None),
+            (Some(clock), Some(random), _) => (clock.0, random.0.to_raw()),
+            _ => return Err(invalid),
+        };
+        if self
+            .adoptions
+            .iter()
+            .any(|adoption| adoption.world == root && adoption.offer_slot_index.is_some())
+        {
+            return Err(WorldSnapshotPersistenceFailure::SnapshotTransactionInFlight);
+        }
+
+        let members = options.into_iter().flat_map(RelationshipTarget::iter);
+        let option_count = options.map_or(0, |options| options.iter().count());
+        if option_count % 2 != 0 || option_count / 2 > usize::from(u16::MAX) {
+            return Err(invalid);
+        }
+        let mut slots = vec![AdoptionOfferSlotSnapshot::default(); option_count / 2];
+        let mut seen_options = vec![[false; 2]; slots.len()];
+        let remaining = |deadline: f64| (deadline - clock).max(0.0) as f32;
+        for entity in members {
+            let (option, cooldown, current) = self.options.get(entity).map_err(|_| invalid)?;
+            let slot_index = usize::from(option.slot);
+            let option_index = usize::from(option.option);
+            let slot = slots.get_mut(slot_index).ok_or(invalid)?;
+            let seen = seen_options[slot_index]
+                .get_mut(option_index)
+                .ok_or(invalid)?;
+            if std::mem::replace(seen, true) || option.world != root {
+                return Err(invalid);
+            }
+            if let Some(current) = current {
+                let supply = self
+                    .supplies
+                    .get(*current.collection())
+                    .map_err(|_| invalid)?;
+                if supply.available_by_sex == [0; 2] {
+                    return Err(WorldSnapshotPersistenceFailure::SnapshotTransactionInFlight);
+                }
+                slot.offers[option_index] = Some(AdoptionOfferSnapshot {
+                    species: supply.species,
+                    remaining_by_sex: supply.available_by_sex,
+                    unlock_remaining_seconds: remaining(supply.unlock_at),
+                    remove_remaining_seconds: supply
+                        .remove_at
+                        .map(remaining)
+                        .filter(|seconds| *seconds > 0.0),
+                    dismiss_cooldown_seconds: supply.dismiss_cooldown,
+                });
+                if supply.remove_at.is_some()
+                    && slot.offers[option_index]
+                        .is_some_and(|offer| offer.remove_remaining_seconds.is_none())
+                {
+                    return Err(WorldSnapshotPersistenceFailure::SnapshotTransactionInFlight);
+                }
+            } else if let Some(cooldown) = cooldown {
+                slot.repopulate_after_seconds[option_index] = remaining(cooldown.0);
+            }
+        }
+        Ok(Some(AnimalAdoptionOffersSnapshot {
+            random_state_and_stream: random,
+            slots,
+        }))
+    }
+}
+
+pub(super) fn spawn_saved_adoption_offers(
+    commands: &mut Commands,
+    root: Entity,
+    snapshot: AnimalAdoptionOffersSnapshot,
+) {
+    commands.entity(root).insert((
+        AdoptionOfferClock(0.0),
+        AdoptionOfferRandom(DeterministicRng::from_raw(snapshot.random_state_and_stream)),
+    ));
+    for (slot, state) in snapshot.slots.into_iter().enumerate() {
+        for option in 0..2u8 {
+            let mut entity = commands.spawn(AdoptionOfferOption {
+                world: root,
+                slot: slot as u16,
+                option,
+            });
+            let index = usize::from(option);
+            if let Some(offer) = state.offers[index] {
+                let option_entity = entity.id();
+                commands.spawn((
+                    WorldMember { root },
+                    AdoptionOfferForOption(option_entity),
+                    AdoptionOfferSupply::new(
+                        offer.species,
+                        offer.remaining_by_sex,
+                        f64::from(offer.unlock_remaining_seconds),
+                        offer.remove_remaining_seconds.map(f64::from),
+                        offer.dismiss_cooldown_seconds,
+                    ),
+                ));
+            } else if state.repopulate_after_seconds[index] > 0.0 {
+                entity.insert(AdoptionOfferCooldown(f64::from(
+                    state.repopulate_after_seconds[index],
+                )));
+            }
+        }
+    }
+}
+
 pub(super) fn append_encoded_animal_adoption_offer_inventory_snapshot_section(
     snapshot_section_bytes: &mut Vec<u8>,
-    inventory: Option<&AnimalAdoptionOfferInventory>,
+    inventory: Option<&AnimalAdoptionOffersSnapshot>,
 ) {
     // The section envelope distinguishes absence from a present zero-slot
     // inventory: absence has no payload, while presence retains its RNG state.
     let Some(inventory) = inventory else {
         return;
     };
-    let slots = inventory.slots();
-    let random_state_and_stream = inventory.random_state_and_stream();
+    let slots = &inventory.slots;
+    let random_state_and_stream = inventory.random_state_and_stream;
     random_state_and_stream
         .iter()
         .for_each(|value| snapshot_section_bytes.extend_from_slice(&value.to_le_bytes()));
     for slot in slots {
-        let offers = slot.offers();
-        let repopulate_after_seconds = slot.repopulate_after_seconds();
+        let offers = slot.offers;
+        let repopulate_after_seconds = slot.repopulate_after_seconds;
         repopulate_after_seconds.iter().for_each(|seconds| {
             snapshot_section_bytes.extend_from_slice(&seconds.to_le_bytes());
         });
         offers.iter().for_each(|offer| {
             snapshot_section_bytes.push(u8::from(offer.is_some()));
-            let species = offer.map_or(AssetId::default(), AnimalAdoptionOffer::species);
-            let remaining_by_sex = offer.map_or([0; 2], AnimalAdoptionOffer::remaining_by_sex);
+            let species = offer.map_or(AssetId::default(), |offer| offer.species);
+            let remaining_by_sex = offer.map_or([0; 2], |offer| offer.remaining_by_sex);
             let unlock_remaining_seconds =
-                offer.map_or(0.0, AnimalAdoptionOffer::unlock_remaining_seconds);
-            let remove_remaining_seconds =
-                offer.and_then(AnimalAdoptionOffer::remove_remaining_seconds);
+                offer.map_or(0.0, |offer| offer.unlock_remaining_seconds);
+            let remove_remaining_seconds = offer.and_then(|offer| offer.remove_remaining_seconds);
             let dismiss_cooldown_seconds =
-                offer.map_or(0.0, AnimalAdoptionOffer::dismiss_cooldown_seconds);
+                offer.map_or(0.0, |offer| offer.dismiss_cooldown_seconds);
             snapshot_section_bytes.extend_from_slice(&species.0);
             remaining_by_sex.iter().for_each(|remaining| {
                 snapshot_section_bytes.extend_from_slice(&remaining.to_le_bytes());
@@ -63,7 +237,7 @@ pub(super) fn decode_and_validate_animal_adoption_offer_inventory_snapshot_secti
     snapshot_section_bytes: &[u8],
     declared_slot_record_count: u32,
     session_mode: WorldSessionMode,
-) -> Result<Option<AnimalAdoptionOfferInventory>, WorldSnapshotPersistenceFailure> {
+) -> Result<Option<AnimalAdoptionOffersSnapshot>, WorldSnapshotPersistenceFailure> {
     if snapshot_section_bytes.is_empty() {
         if declared_slot_record_count != 0 {
             return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection);
@@ -134,38 +308,32 @@ pub(super) fn decode_and_validate_animal_adoption_offer_inventory_snapshot_secti
                 {
                     return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection);
                 }
-                Ok(Some(
-                    AnimalAdoptionOffer::from_restored_adoption_offer_state(
-                        species,
-                        remaining_by_sex,
-                        unlock_remaining_seconds,
-                        remove_remaining_seconds,
-                        dismiss_cooldown_seconds,
-                    ),
-                ))
+                Ok(Some(AdoptionOfferSnapshot {
+                    species,
+                    remaining_by_sex,
+                    unlock_remaining_seconds,
+                    remove_remaining_seconds,
+                    dismiss_cooldown_seconds,
+                }))
             });
             let [first_offer, second_offer] = offers;
-            Ok(
-                AnimalAdoptionOfferSlot::from_restored_adoption_offer_slot_state(
-                    [first_offer?, second_offer?],
-                    repopulate_after_seconds,
-                ),
-            )
+            Ok(AdoptionOfferSlotSnapshot {
+                offers: [first_offer?, second_offer?],
+                repopulate_after_seconds,
+            })
         })
         .collect::<Result<Vec<_>, WorldSnapshotPersistenceFailure>>()?;
     if reader.remaining_byte_count() != 0 {
         return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection);
     }
-    Ok(Some(
-        AnimalAdoptionOfferInventory::from_restored_adoption_offer_inventory_state(
-            slots,
-            random_state_and_stream,
-        ),
-    ))
+    Ok(Some(AnimalAdoptionOffersSnapshot {
+        slots,
+        random_state_and_stream,
+    }))
 }
 
 pub(super) fn validate_animal_adoption_offer_inventory_presence_for_session_mode(
-    inventory: Option<&AnimalAdoptionOfferInventory>,
+    inventory: Option<&AnimalAdoptionOffersSnapshot>,
     session_mode: WorldSessionMode,
 ) -> Result<(), WorldSnapshotPersistenceFailure> {
     match (session_mode, inventory) {
@@ -177,7 +345,7 @@ pub(super) fn validate_animal_adoption_offer_inventory_presence_for_session_mode
 }
 
 pub(super) fn validate_animal_adoption_offer_inventory_against_loaded_authored_content(
-    inventory: &AnimalAdoptionOfferInventory,
+    inventory: &AnimalAdoptionOffersSnapshot,
     species: SpeciesView<'_>,
     configuration: &openzt2_game_data::world_definitions::catalogue_and_progression::animal_adoption_offer_definition_types::AnimalAdoptionOfferConfiguration,
     fame: Fame,
@@ -195,15 +363,15 @@ pub(super) fn validate_animal_adoption_offer_inventory_against_loaded_authored_c
                 .max()
                 .unwrap_or_default(),
         );
-    let slots = inventory.slots();
+    let slots = &inventory.slots;
     if slots.len() != usize::from(expected_slot_count) {
         return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection);
     }
     if slots.iter().any(|slot| {
-        slot.offers()
+        slot.offers
             .into_iter()
             .flatten()
-            .any(|offer| species.find(offer.species()).is_none())
+            .any(|offer| species.find(offer.species).is_none())
     }) {
         return Err(WorldSnapshotPersistenceFailure::UnknownAssetIdentifier);
     }
@@ -283,24 +451,22 @@ mod tests {
         payload.extend_from_slice(&[0x11; 16]);
         payload.extend_from_slice(&[3, 0, 5, 0, 0, 0, 192, 63, 1, 0, 0, 200, 64, 0, 0, 128, 62]);
         payload.extend_from_slice(&[0; 34]);
-        let expected = AnimalAdoptionOfferInventory::from_restored_adoption_offer_inventory_state(
-            vec![
-                AnimalAdoptionOfferSlot::from_restored_adoption_offer_slot_state(
-                    [
-                        Some(AnimalAdoptionOffer::from_restored_adoption_offer_state(
-                            AssetId([0x11; 16]),
-                            [3, 5],
-                            1.5,
-                            Some(6.25),
-                            0.25,
-                        )),
-                        None,
-                    ],
-                    [0.0, 2.5],
-                ),
-            ],
-            [0x0807_0605_0403_0201, 3],
-        );
+        let expected = AnimalAdoptionOffersSnapshot {
+            slots: vec![AdoptionOfferSlotSnapshot {
+                offers: [
+                    Some(AdoptionOfferSnapshot {
+                        species: AssetId([0x11; 16]),
+                        remaining_by_sex: [3, 5],
+                        unlock_remaining_seconds: 1.5,
+                        remove_remaining_seconds: Some(6.25),
+                        dismiss_cooldown_seconds: 0.25,
+                    }),
+                    None,
+                ],
+                repopulate_after_seconds: [0.0, 2.5],
+            }],
+            random_state_and_stream: [0x0807_0605_0403_0201, 3],
+        };
         for mode in [
             WorldSessionMode::Freeform,
             WorldSessionMode::Challenge,
@@ -327,11 +493,10 @@ mod tests {
             WorldSessionMode::Freeform,
         )
         .unwrap();
-        let expected_zero_slots =
-            AnimalAdoptionOfferInventory::from_restored_adoption_offer_inventory_state(
-                Vec::new(),
-                [0x0807_0605_0403_0201, 3],
-            );
+        let expected_zero_slots = AnimalAdoptionOffersSnapshot {
+            slots: Vec::new(),
+            random_state_and_stream: [0x0807_0605_0403_0201, 3],
+        };
         assert_eq!(zero_slots.as_ref(), Some(&expected_zero_slots));
         let mut encoded_zero_slots = Vec::new();
         append_encoded_animal_adoption_offer_inventory_snapshot_section(

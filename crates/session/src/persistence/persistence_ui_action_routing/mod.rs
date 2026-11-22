@@ -30,7 +30,6 @@ use openzt2_interface_state::persistence::save_slot_types::DeleteWorldSnapshotFr
 use openzt2_interface_state::persistence::save_slot_types::LoadSaveSlotCatalogue;
 use openzt2_interface_state::persistence::save_slot_types::LoadWorldSnapshotFromSlot;
 use openzt2_interface_state::persistence::save_slot_types::SaveSlotId;
-use openzt2_interface_state::persistence::save_slot_types::SaveWorldSnapshotToSlot;
 
 use super::{
     persistence_failure_types::{
@@ -39,6 +38,7 @@ use super::{
     },
     persistence_ui_types::{
         OpenLoadSlotCatalogueAfterWorldSnapshotSave, PersistenceUiActionMessageWriters,
+        SaveDialogSubmission, SaveSnapshotFromDialog,
     },
 };
 use openzt2_interface_state::ui::authored_ui_action_projection_components::UiPersistenceActions;
@@ -114,6 +114,10 @@ pub(super) fn route_authored_persistence_ui_actions_to_domain_requests(
         let Some(ui_document_asset) = ui_document_assets.get(&ui_document_root.document) else {
             continue;
         };
+        let save_dialog = SaveDialogSubmission {
+            document: ui_document_owner.0,
+            owner: lifecycle_owner.parent(),
+        };
         let authored_persistence_actions =
             authored_persistence_action_range.authored_action_records(ui_document_asset);
         for authored_persistence_action in authored_persistence_actions {
@@ -124,8 +128,9 @@ pub(super) fn route_authored_persistence_ui_actions_to_domain_requests(
                 UiPersistenceAction::SaveWorldSnapshotToSlot { save_slot } => {
                     persistence_action_messages
                         .save_world_snapshot_requests
-                        .write(SaveWorldSnapshotToSlot {
-                            save_slot_identifier: SaveSlotId(*save_slot),
+                        .write(SaveSnapshotFromDialog {
+                            slot: SaveSlotId(*save_slot),
+                            dialog: save_dialog,
                         });
                 }
                 UiPersistenceAction::LoadWorldSnapshotFromSlot { save_slot } => {
@@ -193,8 +198,9 @@ pub(super) fn route_authored_persistence_ui_actions_to_domain_requests(
                     }
                     persistence_action_messages
                         .save_world_snapshot_requests
-                        .write(SaveWorldSnapshotToSlot {
-                            save_slot_identifier: SaveSlotId(slot),
+                        .write(SaveSnapshotFromDialog {
+                            slot: SaveSlotId(slot),
+                            dialog: save_dialog,
                         });
                 }
                 UiPersistenceAction::DeleteWorldSnapshotFromSelectedSlot => {

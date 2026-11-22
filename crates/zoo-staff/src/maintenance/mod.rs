@@ -1,3 +1,6 @@
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
+    BehaviorStep, BehaviorStepFixedSet, BehaviorStepSet,
+};
 use openzt2_zoo_state::maintenance::ZooCleanlinessProjection;
 mod animal_habitat_waste_cleaning_staff_job_execution;
 mod animal_waste_production;
@@ -49,7 +52,7 @@ impl Plugin for MaintenancePlugin {
     fn build(&self, game_application: &mut App) {
         game_application
             .add_message::<openzt2_zoo_state::maintenance::maintenance_types::AdjustFacilityContainedWaste>()
-            .init_resource::<ZooCleanlinessPermille>()
+            .register_required_components::<WorldRoot, ZooCleanlinessPermille>()
             .register_required_components::<WorldRoot, ZooCleanlinessTotals>();
 
         game_application.add_systems(
@@ -62,11 +65,14 @@ impl Plugin for MaintenancePlugin {
 
         game_application
             .add_systems(
-                FixedUpdate,
-                authored_trash_level_application::request_authored_trash_level_changes
-                    .in_set(FixedGameSet::Think)
-                    .in_set(openzt2_zoo_state::maintenance::maintenance_types::FacilityWasteBehaviorModification)
-                    .run_if(in_state(GamePhase::InGame)),
+                BehaviorStep,
+                (
+                    authored_trash_level_application::request_authored_trash_level_changes,
+                    authored_trash_level_application::apply_authored_trash_level_changes
+                        .after(authored_trash_level_application::request_authored_trash_level_changes),
+                    apply_authored_staff_habitat_waste_termination,
+                ).in_set(BehaviorStepSet::Actions)
+                    .in_set(openzt2_zoo_state::maintenance::maintenance_types::FacilityWasteBehaviorModification),
             )
             .add_systems(
                 FixedUpdate,
@@ -85,9 +91,7 @@ impl Plugin for MaintenancePlugin {
                 FixedUpdate,
                 (
                     initialize_animal_waste_production_schedule,
-                    authored_trash_level_application::apply_authored_trash_level_changes,
-                    apply_completed_service_maintenance_effects_to_facilities
-                        .after_ignore_deferred(authored_trash_level_application::apply_authored_trash_level_changes),
+                    apply_completed_service_maintenance_effects_to_facilities.after(BehaviorStepFixedSet::Act),
                     produce_due_animal_habitat_waste
                         .after(initialize_animal_waste_production_schedule),
                 )
@@ -106,11 +110,8 @@ impl Plugin for MaintenancePlugin {
             )
             .add_systems(
                 FixedUpdate,
-                (
-                    apply_authored_staff_habitat_waste_termination,
-                    complete_applied_habitat_cleanup_after_behavior_exits,
-                )
-                    .chain()
+                complete_applied_habitat_cleanup_after_behavior_exits
+                    .after(BehaviorStepFixedSet::Act)
                     .in_set(FixedGameSet::Act)
                     .before(settle_staff_jobs_after_authored_behavior_finishes)
                     .run_if(in_state(GamePhase::InGame)),

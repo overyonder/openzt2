@@ -82,19 +82,18 @@ pub(super) fn apply_staff_snapshot_records(
     allocator: &mut PersistentIdAllocator,
     baseline_staff: &[Entity],
     definitions: WorldDefinitionsView<'_>,
-) -> Result<std::collections::BTreeMap<u64, Entity>, WorldSnapshotPersistenceFailure> {
+) -> Result<(), WorldSnapshotPersistenceFailure> {
     if records.len() != resolved_prefabs.len() {
         return Err(WorldSnapshotPersistenceFailure::UnknownAssetIdentifier);
     }
     for record in records {
         allocator
-            .reserve_imported(world_root, PersistentId(record.persistent_identifier))
+            .reserve_imported(PersistentId(record.persistent_identifier))
             .map_err(|_| WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference)?;
     }
     for &entity in baseline_staff {
         commands.entity(entity).despawn();
     }
-    let mut restored_identities = std::collections::BTreeMap::new();
     for (record, handle) in records.iter().zip(resolved_prefabs) {
         let staff = spawn_loaded_scene_prefab_as_world_instance(
             commands,
@@ -110,7 +109,6 @@ pub(super) fn apply_staff_snapshot_records(
             None,
             RigidBody::Dynamic,
         );
-        restored_identities.insert(record.persistent_identifier, staff);
         // The saved root pose already includes the authored root transform.
         commands.entity(staff).insert((
             Transform {
@@ -146,5 +144,5 @@ pub(super) fn apply_staff_snapshot_records(
             );
         }
     }
-    Ok(restored_identities)
+    Ok(())
 }

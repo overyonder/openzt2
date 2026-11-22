@@ -10,9 +10,7 @@ use openzt2_game_data::{
     AssetId,
 };
 
-use super::continuations::{
-    suspend_behavior_frame, BehaviorContinuationFrames, BehaviorContinuations,
-};
+use super::continuations::{BehaviorContinuationFrames, BehaviorContinuations};
 use super::MAXIMUM_BEHAVIOR_TASK_RETURN_FRAME_COUNT;
 use super::{
     advance_behavior_task_to_next_action, BehaviorTaskExecutionPhase, BehaviorTaskExecutionState,
@@ -53,6 +51,57 @@ pub struct RunBehaviorMorphEntity {
     pub period: std::time::Duration,
 }
 
+#[derive(Clone, Copy)]
+pub enum BehaviorAnimationEffect {
+    Detach {
+        entity: AssetId,
+        rule: AssetId,
+    },
+    Kill {
+        termination: action::termination::BehaviorTerminationAction,
+        radius: Option<(f32, AssetId)>,
+        destroy: bool,
+    },
+    Whap {
+        angle_degrees: Option<f32>,
+        random_offset_degrees: Option<f32>,
+    },
+}
+
+#[derive(Component)]
+pub struct TimedBehaviorAnimationEffect(pub BehaviorAnimationEffect);
+
+#[derive(Component)]
+pub struct RunBehaviorAnimationEffect(pub BehaviorAnimationEffect);
+
+#[derive(Component)]
+pub struct BehaviorAnimationTextKeys(
+    pub openzt2_game_data::behavior::action_record::BehaviorAnimationTextKeyAliases,
+);
+
+#[derive(Component)]
+pub struct BehaviorPlaySetInterrupt(pub AssetId);
+
+#[derive(Component)]
+pub struct SuspendedBehaviorSetInterrupt {
+    pub trigger: AssetId,
+    pub target: Option<Entity>,
+}
+
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct BehaviorAnimationKeyDelivery;
+
+#[derive(Message, Clone)]
+pub struct DispatchBehaviorAnimationTextKeys {
+    pub controller: Entity,
+    pub playback_generation: u64,
+    pub request_id: usize,
+    pub joint: Entity,
+    pub milliseconds: u32,
+    pub commands:
+        Vec<openzt2_game_data::animation::animation_text_key::AuthoredAnimationTextCommand>,
+}
+
 #[derive(Component)]
 pub struct RunBehaviorAnimationClip(pub action::animation::BehaviorAnimationClipAction);
 
@@ -80,6 +129,8 @@ pub struct RunBehaviorSpawnObject {
 pub struct RunBehaviorSpawnChild {
     pub entity: AssetId,
     pub pose: action::spawn::BehaviorSpawnPosePolicy,
+    pub fade_in: std::time::Duration,
+    pub within_habitat: bool,
 }
 
 #[derive(Component)]
@@ -239,12 +290,6 @@ pub struct RunBehaviorRandomAnimation {
 
 #[derive(Component)]
 pub struct RunBehaviorPlaceTarget(pub action::place_target::BehaviorPlaceTargetAction);
-
-#[derive(Component)]
-pub struct RunBehaviorMorphTarget(pub AssetId);
-
-#[derive(Component)]
-pub struct RunBehaviorDestroyTarget;
 
 #[derive(Component)]
 pub struct RunBehaviorLocomotionSwitchSet(
@@ -438,6 +483,73 @@ enum InstructionOutcome {
     },
 }
 
+#[derive(bevy::ecs::schedule::ScheduleLabel, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct BehaviorStep;
+
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BehaviorStepSet {
+    Actions,
+    Finish,
+}
+
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BehaviorStepFixedSet {
+    Think,
+    Act,
+}
+
+#[derive(Resource, Default)]
+pub struct BehaviorStepProgress {
+    advanced: bool,
+    started_at: bevy::ecs::change_detection::Tick,
+}
+
+impl BehaviorStepProgress {
+    pub fn record_advance(&mut self) {
+        self.advanced = true;
+    }
+}
+
+pub fn drive_behavior_steps(world: &mut World) {
+    loop {
+        let started_at = world.change_tick();
+        let mut progress = world.resource_mut::<BehaviorStepProgress>();
+        progress.started_at = started_at;
+        progress.advanced = false;
+        world.run_schedule(BehaviorStep);
+        if !world.resource::<BehaviorStepProgress>().advanced {
+            break;
+        }
+    }
+}
+
+/// A child that remains active returns control to its parent until the next
+/// simulation update. The next instruction materialized by a completion is
+/// eligible in the following pass of this update.
+pub fn defer_incomplete_behavior_steps(
+    clock: Res<openzt2_world_state::simulation_time::simulation_clock_types::ZooClock>,
+    progress: Res<BehaviorStepProgress>,
+    change: bevy::ecs::system::SystemChangeTick,
+    mut tasks: Query<
+        (
+            Ref<RunningBehaviorInstruction>,
+            &mut BehaviorTaskExecutionState,
+        ),
+        Without<super::PendingBehaviorTaskFailure>,
+    >,
+) {
+    for (instruction, mut task) in &mut tasks {
+        if task.next_action_tick <= clock.tick
+            && instruction.is_current(&task)
+            && !instruction
+                .last_changed()
+                .is_newer_than(progress.started_at, change.this_run())
+        {
+            task.next_action_tick = clock.tick.saturating_add(1);
+        }
+    }
+}
+
 #[derive(EntityEvent)]
 pub struct BehaviorInstructionCompleted {
     #[event_target]
@@ -448,10 +560,15 @@ pub struct BehaviorInstructionCompleted {
 
 pub fn apply_behavior_instruction_completion(
     completion: On<BehaviorInstructionCompleted>,
-    mut tasks: Query<(&mut BehaviorTaskExecutionState, &RunningBehaviorInstruction)>,
+    mut tasks: Query<(
+        &mut BehaviorTaskExecutionState,
+        &RunningBehaviorInstruction,
+        Option<&BehaviorPlaySetInterrupt>,
+    )>,
+    mut progress: Option<ResMut<BehaviorStepProgress>>,
     mut commands: Commands,
 ) {
-    let Ok((mut task, instruction)) = tasks.get_mut(completion.actor) else {
+    let Ok((mut task, instruction, interrupt)) = tasks.get_mut(completion.actor) else {
         return;
     };
     if completion.id == instruction.id && instruction.is_current(&task) {
@@ -467,7 +584,7 @@ pub fn apply_behavior_instruction_completion(
                 task.phase = after.phase;
                 task.action = after.action_after_refill;
                 task.repetitions = 0;
-                task.next_action_tick = tick.saturating_add(1);
+                task.next_action_tick = *tick;
             }
             InstructionOutcome::CompleteWithTarget { target, tick } => {
                 task.target = *target;
@@ -500,7 +617,16 @@ pub fn apply_behavior_instruction_completion(
                     crate::animal_behavior::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation(completion.actor, &mut commands);
                     return;
                 }
-                suspend_behavior_frame(completion.actor, frame, &mut commands);
+                let mut suspended = commands.spawn((
+                    super::continuations::BehaviorContinuationOf(completion.actor),
+                    super::continuations::SuspendedBehaviorFrame(frame),
+                ));
+                if let Some(interrupt) = interrupt {
+                    suspended.insert(SuspendedBehaviorSetInterrupt {
+                        trigger: interrupt.0,
+                        target: task.target,
+                    });
+                }
                 task.depth += 1;
                 task.program = set.program;
                 task.document = set.document.clone();
@@ -508,11 +634,14 @@ pub fn apply_behavior_instruction_completion(
                 task.phase = BehaviorTaskExecutionPhase::Set;
                 task.action = 0;
                 task.repetitions = 0;
-                task.next_action_tick = set.tick.saturating_add(1);
+                task.next_action_tick = set.tick;
                 if let Some(target) = set.target {
                     task.target = target;
                 }
             }
+        }
+        if let Some(progress) = progress.as_deref_mut() {
+            progress.record_advance();
         }
         let actor = completion.actor;
         commands.queue(move |world: &mut World| materialize_behavior_instruction(world, actor));
@@ -535,6 +664,7 @@ pub fn resume_suspended_behavior_instruction(
     resume: On<ResumeSuspendedBehaviorInstruction>,
     mut tasks: Query<&mut BehaviorTaskExecutionState>,
     continuations: BehaviorContinuationFrames,
+    mut progress: Option<ResMut<BehaviorStepProgress>>,
     mut commands: Commands,
 ) {
     let Ok(mut task) = tasks.get_mut(resume.actor) else {
@@ -549,6 +679,9 @@ pub fn resume_suspended_behavior_instruction(
     task.restore_suspended_instruction(&resume.instruction, resume.depth, resume.tick);
     if resume.advance {
         advance_behavior_task_to_next_action(&mut task, resume.tick);
+    }
+    if let Some(progress) = progress.as_deref_mut() {
+        progress.record_advance();
     }
     let actor = resume.actor;
     commands.queue(move |world: &mut World| materialize_behavior_instruction(world, actor));
@@ -595,7 +728,7 @@ pub(super) fn discard_running_behavior_instruction(mut world: DeferredWorld, con
             actor.despawn_related::<BehaviorContinuations>();
             if let Some((id, component)) = discarded {
                 if actor.get::<RunningBehaviorInstruction>().is_some_and(|instruction| instruction.id == id) {
-                    actor.remove_by_id(component).remove::<(RunningBehaviorInstruction, BehaviorLocomotionIntent)>();
+                    actor.remove_by_id(component).remove::<(RunningBehaviorInstruction, BehaviorLocomotionIntent, TimedBehaviorAnimationEffect, BehaviorAnimationTextKeys, BehaviorPlaySetInterrupt)>();
                 }
             }
         },
@@ -679,10 +812,12 @@ fn lower_behavior_instruction(world: &mut World, actor: Entity, force: bool) {
         reservation,
     );
     if let Some(component) = old_component {
-        world
-            .entity_mut(actor)
-            .remove_by_id(component)
-            .remove::<RunningBehaviorInstruction>();
+        world.entity_mut(actor).remove_by_id(component).remove::<(
+            RunningBehaviorInstruction,
+            TimedBehaviorAnimationEffect,
+            BehaviorAnimationTextKeys,
+            BehaviorPlaySetInterrupt,
+        )>();
     }
     let speed = match &action {
         Some(BehaviorAction::Wander(action)) => Some(action.locomotion_speed),
@@ -705,6 +840,111 @@ fn lower_behavior_instruction(world: &mut World, actor: Entity, force: bool) {
         return;
     };
     match action {
+        BehaviorAction::AnimationWithTextKeys { animation, keys } => {
+            world
+                .entity_mut(actor)
+                .insert(BehaviorAnimationTextKeys(keys));
+            insert_action(
+                world,
+                actor,
+                instruction,
+                RunBehaviorAnimationClip(animation),
+            );
+        }
+        BehaviorAction::AttachWithTextKeys { attachment, keys } => {
+            world
+                .entity_mut(actor)
+                .insert(BehaviorAnimationTextKeys(keys));
+            insert_action(
+                world,
+                actor,
+                instruction,
+                RunBehaviorAttachObject(attachment),
+            );
+        }
+        BehaviorAction::DetachWithAnimation {
+            detach,
+            animation,
+            keys,
+        } => {
+            world.entity_mut(actor).insert((
+                BehaviorAnimationTextKeys(keys),
+                TimedBehaviorAnimationEffect(BehaviorAnimationEffect::Detach {
+                    entity: detach.entity,
+                    rule: detach.detach_rule,
+                }),
+            ));
+            insert_action(
+                world,
+                actor,
+                instruction,
+                RunBehaviorAnimationClip(animation),
+            );
+        }
+        BehaviorAction::AnimationKill {
+            animation,
+            termination,
+            radius,
+            destroy,
+        } => {
+            let effect = BehaviorAnimationEffect::Kill {
+                termination,
+                radius,
+                destroy,
+            };
+            if let Some(animation) = animation {
+                world
+                    .entity_mut(actor)
+                    .insert(TimedBehaviorAnimationEffect(effect));
+                insert_action(
+                    world,
+                    actor,
+                    instruction,
+                    RunBehaviorAnimationClip(animation),
+                );
+            } else {
+                insert_action(
+                    world,
+                    actor,
+                    instruction,
+                    RunBehaviorAnimationEffect(effect),
+                );
+            }
+        }
+        BehaviorAction::Whap {
+            animation,
+            angle_degrees,
+            random_offset_degrees,
+        } => {
+            let effect = BehaviorAnimationEffect::Whap {
+                angle_degrees,
+                random_offset_degrees,
+            };
+            if let Some(animation) = animation {
+                world
+                    .entity_mut(actor)
+                    .insert(TimedBehaviorAnimationEffect(effect));
+                insert_action(
+                    world,
+                    actor,
+                    instruction,
+                    RunBehaviorAnimationClip(animation),
+                );
+            } else {
+                insert_action(
+                    world,
+                    actor,
+                    instruction,
+                    RunBehaviorAnimationEffect(effect),
+                );
+            }
+        }
+        BehaviorAction::PlaySetWithInterrupt { set, interrupt } => {
+            world
+                .entity_mut(actor)
+                .insert(BehaviorPlaySetInterrupt(interrupt));
+            insert_action(world, actor, instruction, RunBehaviorPlaySet(set));
+        }
         BehaviorAction::Script {
             context,
             file,
@@ -802,7 +1042,28 @@ fn lower_behavior_instruction(world: &mut World, actor: Entity, force: bool) {
             world,
             actor,
             instruction,
-            RunBehaviorSpawnChild { entity, pose },
+            RunBehaviorSpawnChild {
+                entity,
+                pose,
+                fade_in: std::time::Duration::ZERO,
+                within_habitat: false,
+            },
+        ),
+        BehaviorAction::SpawnChildWithPlacement {
+            entity,
+            pose,
+            fade_in,
+            within_habitat,
+        } => insert_action(
+            world,
+            actor,
+            instruction,
+            RunBehaviorSpawnChild {
+                entity,
+                pose,
+                fade_in,
+                within_habitat,
+            },
         ),
         BehaviorAction::SpawnObjectAtActor { entity, pose } => insert_action(
             world,
@@ -945,12 +1206,6 @@ fn lower_behavior_instruction(world: &mut World, actor: Entity, force: bool) {
         ),
         BehaviorAction::PlaceTarget(action) => {
             insert_action(world, actor, instruction, RunBehaviorPlaceTarget(action))
-        }
-        BehaviorAction::MorphTarget(action) => {
-            insert_action(world, actor, instruction, RunBehaviorMorphTarget(action))
-        }
-        BehaviorAction::DestroyTarget => {
-            insert_action(world, actor, instruction, RunBehaviorDestroyTarget)
         }
         BehaviorAction::LocomotionSwitchSet(action) => insert_action(
             world,

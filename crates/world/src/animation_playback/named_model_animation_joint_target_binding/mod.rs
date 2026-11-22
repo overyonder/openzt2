@@ -4,8 +4,8 @@ use bevy::ecs::system::SystemParam;
 use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 use openzt2_game_assets::animation::animation_set_asset_types::AnimationSetAsset;
+use openzt2_game_assets::scene_prefab::transform_animation_lowering::PrefabTransformClocks;
 use openzt2_world_state::world_spawn::prefab_authored_rotation_cycle_advancement::PrefabRealTimeRotationClock;
-use openzt2_world_state::world_spawn::prefab_authored_transform_animation_advancement::PrefabTransformPlaybackClock;
 
 use openzt2_world_state::animation_graph::animation_graph_playback_state_types::AnimationGraphPlaybackState;
 
@@ -43,7 +43,7 @@ pub(super) fn bind_new_named_model_entities_and_new_animation_playback_controlle
             Option<&StandardBevyAnimationJointBlendPose>,
         ),
         (
-            Without<PrefabTransformPlaybackClock>,
+            Without<PrefabTransformClocks>,
             Without<PrefabRealTimeRotationClock>,
         ),
     >,

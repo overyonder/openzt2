@@ -11,6 +11,9 @@ use super::show_snapshot_types::{
     ScheduledShowSnapshotRecord, ShowSnapshotRecords, ShowStageSnapshotRecord,
 };
 
+const SHOW_RATINGS_EXTENSION: &[u8; 4] = b"SRAT";
+const ABSENT_SHOW_RATING: u32 = u32::MAX;
+
 pub(super) fn append_encoded_show_snapshot_section(
     bytes: &mut Vec<u8>,
     stages: &[ShowStageSnapshotRecord],
@@ -57,6 +60,17 @@ pub(super) fn append_encoded_show_snapshot_section(
         bytes.extend_from_slice(&pause.schedule_row_order.to_le_bytes());
         bytes.push(u8::from(pause.is_active));
         bytes.extend_from_slice(&pause.duration_simulation_ticks.to_le_bytes());
+    }
+    if scheduled.iter().any(|show| show.rating.is_some()) {
+        bytes.extend_from_slice(SHOW_RATINGS_EXTENSION);
+        for show in scheduled {
+            bytes.extend_from_slice(
+                &show
+                    .rating
+                    .map_or(ABSENT_SHOW_RATING, f32::to_bits)
+                    .to_le_bytes(),
+            );
+        }
     }
 }
 
@@ -226,6 +240,7 @@ pub(super) fn decode_and_validate_show_snapshot_section(
             schedule_row_order: order,
             is_active: enabled,
             performance_capacity: capacity,
+            rating: None,
             performance_records: slots,
         });
     }
@@ -284,11 +299,28 @@ pub(super) fn decode_and_validate_show_snapshot_section(
             duration_simulation_ticks: duration_ticks,
         });
     }
-    (cursor == payload.len())
-        .then_some(ShowSnapshotRecords {
-            stage_records: stages,
-            scheduled_show_records: scheduled,
-            scheduled_break_records: breaks,
-        })
-        .ok_or(WorldSnapshotPersistenceFailure::CorruptSnapshotSection)
+    let remaining = &payload[cursor..];
+    if !remaining.is_empty() {
+        let ratings = remaining
+            .strip_prefix(SHOW_RATINGS_EXTENSION)
+            .ok_or(WorldSnapshotPersistenceFailure::CorruptSnapshotSection)?;
+        if ratings.len() != scheduled.len().saturating_mul(size_of::<u32>()) {
+            return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection);
+        }
+        for (row, bits) in scheduled.iter_mut().zip(ratings.as_chunks::<4>().0) {
+            let bits = u32::from_le_bytes(*bits);
+            if bits != ABSENT_SHOW_RATING {
+                let rating = f32::from_bits(bits);
+                if !rating.is_finite() {
+                    return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection);
+                }
+                row.rating = Some(rating);
+            }
+        }
+    }
+    Ok(ShowSnapshotRecords {
+        stage_records: stages,
+        scheduled_show_records: scheduled,
+        scheduled_break_records: breaks,
+    })
 }

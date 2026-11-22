@@ -71,7 +71,7 @@ pub(super) fn index_winning_staff_token_tasks(
         for object in &task.objects {
             let candidates = index
                 .0
-                .entry(AssetId::from_key(&object.to_ascii_lowercase()))
+                .entry(AssetId::from_key(&object.trim().to_ascii_lowercase()))
                 .or_default();
             if candidates.last() != Some(&task.id) {
                 candidates.push(task.id);
@@ -315,7 +315,8 @@ fn evaluate_candidate_eligibility_fact(
     })
 }
 
-pub(super) fn staff_behavior_task_satisfies_authored_request_token(
+#[cfg(test)]
+fn staff_behavior_task_satisfies_authored_request_token(
     behavior_task: &BehaviorTask,
     request_token: Option<AssetId>,
 ) -> bool {

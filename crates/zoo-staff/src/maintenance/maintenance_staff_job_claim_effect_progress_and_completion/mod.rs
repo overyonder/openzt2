@@ -13,7 +13,7 @@ pub(super) fn staff_member_owns_active_job(
     required_job_kind: StaffJobKind,
     staff_current_jobs: &Query<&CurrentJob>,
 ) -> bool {
-    staff_job.kind == required_job_kind
+    staff_job.kind == Some(required_job_kind)
         && staff_current_jobs
             .get(job_claim.staff)
             .is_ok_and(|current_job| current_job.job() == staff_job_entity)
@@ -23,11 +23,12 @@ pub(super) fn create_completed_staff_job_message(
     staff_job_entity: Entity,
     staff_job: &StaffJob,
     staff_member_entity: Entity,
+    kind: StaffJobKind,
 ) -> StaffJobCompleted {
     StaffJobCompleted {
         staff: staff_member_entity,
         job: staff_job_entity,
-        kind: staff_job.kind,
+        kind,
         target: staff_job.target,
     }
 }

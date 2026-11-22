@@ -6,6 +6,7 @@ mod transport_track_preview_presentation;
 
 mod sky_tower_navigation;
 mod topology;
+mod tour_donation;
 mod tour_score_calculations;
 mod tour_view_scoring;
 mod transport_circuit_validation;
@@ -37,7 +38,9 @@ use openzt2_zoo_state::construction::FixedConstructionPreparedDomainEditMaterial
 use openzt2_zoo_state::construction::FixedConstructionSet;
 
 use openzt2_zoo_state::transport_tours::tour_scoring_types::TransportTripCompleted;
-use openzt2_zoo_state::transport_tours::transport_circuit_types::OpenCircuitRequest;
+use openzt2_zoo_state::transport_tours::transport_circuit_types::{
+    OpenCircuitRequest, TransportCircuit,
+};
 use openzt2_zoo_state::transport_tours::transport_rider_types::BoardTransportRequest;
 use openzt2_zoo_state::transport_tours::transport_topology_types::AttachTransportStationRequest;
 use openzt2_zoo_state::transport_tours::transport_topology_types::ConnectTransportTrackRequest;
@@ -58,13 +61,25 @@ pub struct TransportToursPlugin;
 
 impl Plugin for TransportToursPlugin {
     fn build(&self, app: &mut App) {
-        use openzt2_zoo_state::topology::persistent_edit_lookup::PersistentEditLookupPlugin;
-        if !app.is_plugin_added::<PersistentEditLookupPlugin>() {
-            app.add_plugins(PersistentEditLookupPlugin);
+        use openzt2_world_state::world_spawn::persistent_id_index::PersistentIdIndexPlugin;
+        if !app.is_plugin_added::<PersistentIdIndexPlugin>() {
+            app.add_plugins(PersistentIdIndexPlugin);
         }
         transport_relationship_cleanup::install(app);
-        app.add_observer(transport_passenger_mounts::eject_passengers_after_vehicle_charge)
-            .add_systems(FixedUpdate, transport_passenger_mounts::project_seated_passenger_poses
+        app.register_required_components_with::<
+            TransportCircuit,
+            openzt2_zoo_state::donations::donation_opportunity_types::DonationOpportunity,
+        >(tour_donation::tour_donation_opportunity)
+            .init_asset::<tour_donation::TourDonationPolicy>()
+            .init_asset_loader::<tour_donation::TourDonationPolicyLoader>()
+            .add_systems(
+                Startup,
+                (
+                    transport_track_piece_presentation::load_transport_track_materials,
+                    tour_donation::load_tour_donation_policy,
+                ),
+            );
+        app.add_systems(FixedUpdate, transport_passenger_mounts::project_seated_passenger_poses
                 .after(transport_vehicle_movement::advance_transport_vehicles_along_canonical_track_segments)
                 .in_set(FixedGameSet::Navigate).run_if(in_state(GamePhase::InGame)));
         vehicle_generation::install(app);
@@ -161,10 +176,11 @@ impl Plugin for TransportToursPlugin {
                 FixedUpdate,
                 (
                     transport_track_sale_steps::begin_requested_transport_track_sales,
-                    crate::transport_tours::transport_track_construction_transaction::apply_prepared_transport_track_construction_edits,
-                    crate::transport_tours::topology::apply_transport_station_and_track_topology_mutation_requests,
+                    crate::transport_tours::transport_track_construction_transaction::apply_prepared_transport_track_construction_edits
+                        .after(transport_track_sale_steps::begin_requested_transport_track_sales),
+                    crate::transport_tours::topology::apply_transport_station_and_track_topology_mutation_requests
+                        .after(crate::transport_tours::transport_track_construction_transaction::apply_prepared_transport_track_construction_edits),
                 )
-                    .chain()
                     .in_set(FixedConstructionSet::Apply)
                     .after(openzt2_zoo_state::construction::ConstructionDomainApplicationDispatchSet)
                     .after(openzt2_zoo_state::construction::ConstructionFailureRollbackDispatchSet)
@@ -174,9 +190,9 @@ impl Plugin for TransportToursPlugin {
                 FixedUpdate,
                 (
                     crate::transport_tours::transport_track_construction_transaction::acknowledge_completed_transport_track_topology_applications,
-                    transport_track_sale_steps::settle_acknowledged_transport_track_sale_steps,
+                    transport_track_sale_steps::settle_acknowledged_transport_track_sale_steps
+                        .after(crate::transport_tours::transport_track_construction_transaction::acknowledge_completed_transport_track_topology_applications),
                 )
-                    .chain()
                     .in_set(FixedConstructionSet::Cleanup)
                     .before(openzt2_zoo_state::construction::ConstructionDomainAcknowledgementCollectionSet)
                     .run_if(in_state(GamePhase::InGame)),
@@ -184,12 +200,14 @@ impl Plugin for TransportToursPlugin {
             .add_systems(
                 Update,
                 (
-                    transport_ui_action_routing::set_transport_circuit_fares,
+                    transport_ui_action_routing::set_transport_circuit_fares
+                        .after(openzt2_zoo_state::economy::EconomyUiPolicyApplicationSet),
                     crate::transport_tours::transport_ui_action_routing::select_authored_transport_vehicle_for_selected_compatible_circuit,
-                    crate::transport_tours::transport_ui_action_routing::route_authored_transport_ui_actions_to_selected_circuit_and_path_deletion_operations,
-                    crate::transport_tours::vehicle_generation::start_transport_vehicle_purchases,
+                    crate::transport_tours::transport_ui_action_routing::route_authored_transport_ui_actions_to_selected_circuit_and_path_deletion_operations
+                        .after(crate::transport_tours::transport_ui_action_routing::select_authored_transport_vehicle_for_selected_compatible_circuit),
+                    crate::transport_tours::vehicle_generation::start_transport_vehicle_purchases
+                        .after(crate::transport_tours::transport_ui_action_routing::route_authored_transport_ui_actions_to_selected_circuit_and_path_deletion_operations),
                 )
-                    .chain()
                     .run_if(in_state(GamePhase::InGame)),
             )
             .add_systems(
@@ -197,13 +215,17 @@ impl Plugin for TransportToursPlugin {
                 (
                     crate::transport_tours::transport_guest_arrival::request_transport_boarding_for_owned_guest_arrivals,
                     crate::transport_tours::transport_guest_arrival::cancel_interrupted_transport_queues,
-                    crate::transport_tours::transport_rider_boarding::accept_affordable_transport_boarding_requests_at_reachable_stations,
+                    crate::transport_tours::transport_rider_boarding::accept_affordable_transport_boarding_requests_at_reachable_stations
+                        .after(crate::transport_tours::transport_guest_arrival::request_transport_boarding_for_owned_guest_arrivals)
+                        .after(crate::transport_tours::transport_guest_arrival::cancel_interrupted_transport_queues),
                     crate::transport_tours::sky_tower_navigation::request_sky_tower_rider_navigation_to_authored_endpoint,
                     crate::transport_tours::tour_view_scoring::observe_visible_tour_subjects_and_accumulate_rider_scores,
-                    crate::transport_tours::transport_rider_disembarkation::disembark_transport_riders_and_request_service_fare_transactions,
-                    crate::transport_tours::transport_rider_boarding::board_waiting_guests_when_transport_vehicle_arrives,
+                    crate::transport_tours::transport_rider_disembarkation::disembark_transport_riders_and_request_service_fare_transactions
+                        .after(crate::transport_tours::tour_view_scoring::observe_visible_tour_subjects_and_accumulate_rider_scores),
+                    crate::transport_tours::transport_rider_boarding::board_waiting_guests_when_transport_vehicle_arrives
+                        .after(crate::transport_tours::transport_rider_boarding::accept_affordable_transport_boarding_requests_at_reachable_stations)
+                        .after(crate::transport_tours::transport_rider_disembarkation::disembark_transport_riders_and_request_service_fare_transactions),
                 )
-                    .chain()
                     .in_set(FixedGameSet::Act)
                     .run_if(in_state(GamePhase::InGame)),
             )
@@ -211,15 +233,20 @@ impl Plugin for TransportToursPlugin {
                 Update,
                 (
                     crate::transport_tours::transport_definition_hydration::hydrate_transport_entities_from_authored_world_definitions,
-                    crate::transport_tours::transport_construction_intent_routing::attach_committed_transport_stations_to_compatible_or_new_circuits,
-                    transport_definition_hydration::materialize_restored_transport_prefabs,
-                    transport_definition_hydration::request_reopening_saved_transport_circuits,
-                    crate::transport_tours::transport_definition_hydration::initialize_transport_vehicle_routes_from_first_stable_circuit_edge,
+                    crate::transport_tours::transport_construction_intent_routing::attach_committed_transport_stations_to_compatible_or_new_circuits
+                        .after(transport_definition_hydration::hydrate_transport_entities_from_authored_world_definitions),
+                    transport_definition_hydration::materialize_restored_transport_prefabs
+                        .after(transport_definition_hydration::hydrate_transport_entities_from_authored_world_definitions),
+                    transport_definition_hydration::request_reopening_saved_transport_circuits
+                        .after(transport_definition_hydration::hydrate_transport_entities_from_authored_world_definitions),
+                    crate::transport_tours::transport_definition_hydration::initialize_transport_vehicle_routes_from_first_stable_circuit_edge
+                        .after(transport_definition_hydration::hydrate_transport_entities_from_authored_world_definitions),
                     transport_passenger_mounts::hydrate_vehicle_seats
                         .after(transport_definition_hydration::hydrate_transport_entities_from_authored_world_definitions),
-                    transport_passenger_mounts::resolve_authored_vehicle_seat_mounts,
+                    transport_passenger_mounts::resolve_authored_vehicle_seat_mounts
+                        .after(transport_passenger_mounts::hydrate_vehicle_seats)
+                        .after(transport_definition_hydration::materialize_restored_transport_prefabs),
                 )
-                    .chain()
                     .run_if(in_state(GamePhase::InGame)),
             )
             .add_systems(
@@ -240,10 +267,10 @@ impl Plugin for TransportToursPlugin {
                 FixedUpdate,
                 (
                     crate::transport_tours::transport_fare_settlement::complete_paid_transport_trips_and_publish_guest_reactions,
-                    crate::transport_tours::transport_fare_settlement::discard_rejected_transport_fares,
+                    crate::transport_tours::transport_fare_settlement::discard_rejected_transport_fares
+                        .after(crate::transport_tours::transport_fare_settlement::complete_paid_transport_trips_and_publish_guest_reactions),
                     crate::transport_tours::transport_circuit_validation::close_changed_transport_circuits_and_apply_open_requests,
                 )
-                    .chain()
                     .in_set(FixedGameSet::Cleanup)
                     .run_if(in_state(GamePhase::InGame)),
             );

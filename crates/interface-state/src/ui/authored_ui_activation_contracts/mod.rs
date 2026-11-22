@@ -10,13 +10,6 @@ pub struct UiNodeActivated {
     pub trigger: UiTrigger,
 }
 
-/// An authored timed callback, queued in the sequence's deadline order.
-#[derive(Message, Clone, Debug)]
-pub struct RunAuthoredTimedScenarioScript {
-    pub document_root: Entity,
-    pub command: std::sync::Arc<str>,
-}
-
 /// The command attached to the activated `UITool` control.
 #[derive(Message, Debug, Clone, Copy)]
 pub struct ActivateAuthoredUiTool {

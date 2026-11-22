@@ -8,7 +8,7 @@ use openzt2_game_data::ui_document::action::information::{
 
 use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::RequestedUiListRowCount;
 use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::UiListRow;
-use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
+use openzt2_world_state::simulation_time::simulation_clock_types::ZooDay;
 use openzt2_zoo_state::animal_lifecycle::types::Animal;
 use openzt2_zoo_state::animal_lifecycle::types::Pregnancy;
 use openzt2_zoo_state::animal_welfare::types::AnimalWelfare;
@@ -261,14 +261,12 @@ pub(crate) fn project_live_world_entities_to_visible_information_list_rows(
         Option<&VehicleRiders>,
     )>,
     entity_names: Query<&Name>,
-    zoo_clock: Res<ZooClock>,
-    mut previous_day: Local<u32>,
+    zoo_day: Res<ZooDay>,
     mut commands: Commands,
 ) {
+    let day_changed = zoo_day.is_changed();
     let removed = membership.removals();
     let removed_sort_inputs = inputs.take_removed_inputs();
-    let day_changed = *previous_day != zoo_clock.absolute_day;
-    *previous_day = zoo_clock.absolute_day;
     let dirty_lists = changed_rows
         .iter()
         .map(ChildOf::parent)
@@ -353,9 +351,8 @@ pub(crate) fn project_live_world_entities_to_visible_information_list_rows(
                                         .unwrap_or(u16::MAX);
                                 projection_candidate.total_capacity = facility.capacity;
                             }
-                            projection_candidate.months_open = opened.map_or(0, |opened| {
-                                zoo_clock.absolute_day.saturating_sub(opened.0) / 30
-                            });
+                            projection_candidate.months_open =
+                                opened.map_or(0, |opened| zoo_day.0.saturating_sub(opened.0) / 30);
                             if let Some(profit) = profit {
                                 projection_candidate.profit_cents = profit.total.0;
                                 projection_candidate.average_profit_cents = profit.average().0;
@@ -369,9 +366,8 @@ pub(crate) fn project_live_world_entities_to_visible_information_list_rows(
                     .for_each(|(entity, inspectable, donation_total, opened, profit)| {
                         let mut projection_candidate =
                             create_projection_candidate(entity, inspectable);
-                        projection_candidate.months_open = opened.map_or(0, |opened| {
-                            zoo_clock.absolute_day.saturating_sub(opened.0) / 30
-                        });
+                        projection_candidate.months_open =
+                            opened.map_or(0, |opened| zoo_day.0.saturating_sub(opened.0) / 30);
                         if let Some(donation_total) = donation_total {
                             projection_candidate.profit_cents = donation_total.amount.0;
                             projection_candidate.average_profit_cents = (donation_total.count != 0)

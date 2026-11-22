@@ -96,6 +96,7 @@ pub(in crate::persistence) struct BehaviorSnapshotEntityData {
     pub(super) entity_pursuit: Option<&'static openzt2_zoo_state::locomotion::locomotion_types::EntityPursuit>,
     pub(super) global_transform: Option<&'static GlobalTransform>,
     pub(super) habitat_region: Option<&'static HabitatRegion>,
+    pub(super) staff_job_routing: Option<&'static openzt2_zoo_state::staff::staff_job_types::StaffJobRouting>,
     pub(super) job_claim: Option<&'static openzt2_zoo_state::staff::staff_job_types::JobClaim>,
     pub(super) job_progress: Option<&'static openzt2_zoo_state::staff::staff_job_types::JobProgress>,
     pub(super) linear_velocity: Option<&'static avian3d::prelude::LinearVelocity>,

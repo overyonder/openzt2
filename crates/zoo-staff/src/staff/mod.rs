@@ -1,5 +1,8 @@
 //! Staff are ordinary world entities; work requests become contended job entities.
 
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
+    BehaviorStep, BehaviorStepFixedSet, BehaviorStepSet,
+};
 use openzt2_zoo_state::staff::StaffBehaviorSettlement;
 use openzt2_zoo_state::staff::StaffJobRequestCreation;
 mod authored_disease_cure_execution;
@@ -10,6 +13,7 @@ mod spawned_staff_identification;
 mod staff_animal_health_job_execution;
 mod staff_assignment_cleanup;
 mod staff_assignment_interaction;
+mod staff_behavior_capability_projection;
 use openzt2_zoo_state::staff::staff_assignment_types;
 pub(crate) mod staff_behavior_fact_completion_execution;
 mod staff_behavior_terminal_target_termination_acknowledgement;
@@ -39,8 +43,8 @@ use bevy::prelude::*;
 
 use staff_assignment_types::SetStaffWorkerDutyAssignment;
 use staff_lifecycle_messages::{
-    CancelStaffJobRequest, FireStaffRequest, HireStaffRequest, StaffFired, StaffHired,
-    StaffJobCancelled, StaffJobCompleted, StaffJobRequest,
+    BeginStaffHirePlacement, CancelStaffJobRequest, FireStaffRequest, HireStaffRequest, StaffFired,
+    StaffHired, StaffJobCancelled, StaffJobCompleted, StaffJobRequest,
 };
 
 use openzt2_game_assets::application_lifecycle::GamePhase;
@@ -56,6 +60,7 @@ impl Plugin for StaffPlugin {
         app.add_observer(staff_assignment_cleanup::release_staff_restrictions_when_target_leaves_world)
             .init_resource::<staff_job_eligibility::StaffTasksByRequestToken>()
             .add_message::<StaffJobRequest>()
+            .add_message::<BeginStaffHirePlacement>()
             .add_message::<HireStaffRequest>()
             .add_message::<FireStaffRequest>()
             .add_message::<StaffHired>()
@@ -69,9 +74,9 @@ impl Plugin for StaffPlugin {
                 (
                     authored_initial_staff_animation_projection::request_authored_initial_staff_animation_for_newly_resolved_prefab_models,
                     authored_initial_staff_animation_projection::project_staff_animation_owners,
-                    staff_placement_interaction::begin_staff_placement_from_staff_purchase_choice,
+                    staff_placement_interaction::begin_staff_placement_from_hire_action,
                     staff_placement_interaction::validate_staff_placement_preview_against_world_and_zoo_cash
-                        .after(staff_placement_interaction::begin_staff_placement_from_staff_purchase_choice),
+                        .after(staff_placement_interaction::begin_staff_placement_from_hire_action),
                     staff_placement_interaction::request_staff_hiring_from_confirmed_placement
                         .after(staff_placement_interaction::validate_staff_placement_preview_against_world_and_zoo_cash),
                     staff_placement_interaction::clear_staff_placement_after_leaving_placement_tool
@@ -93,8 +98,11 @@ impl Plugin for StaffPlugin {
                 FixedUpdate,
                 (
                     spawned_staff_identification::identify_spawned_staff_from_world_definition,
-                    worker_duty_assignment::enable_every_maintenance_worker_duty_for_new_staff_by_default
+                    staff_behavior_capability_projection::project_loaded_behavior_capabilities_onto_staff
                         .after(spawned_staff_identification::identify_spawned_staff_from_world_definition),
+                    worker_duty_assignment::initialize_supported_worker_duties
+                        .after(staff_behavior_capability_projection::project_loaded_behavior_capabilities_onto_staff)
+                        .after_ignore_deferred(staff_job_eligibility::index_winning_staff_token_tasks),
                     staff_navigation_agent_projection::project_authored_staff_locomotion_onto_staff_entities
                         .after(spawned_staff_identification::identify_spawned_staff_from_world_definition),
                     tank_cleaning_requests::request_keeper_cleaning_for_dirty_tanks
@@ -110,7 +118,7 @@ impl Plugin for StaffPlugin {
                     staff_job_claiming::claim_highest_ranked_compatible_jobs_for_available_staff
                         .after(staff_job_completion_and_cancellation::mark_explicit_staff_job_cancellations)
                         .after_ignore_deferred(staff_job_eligibility::index_winning_staff_token_tasks)
-                        .after(worker_duty_assignment::enable_every_maintenance_worker_duty_for_new_staff_by_default)
+                        .after(worker_duty_assignment::initialize_supported_worker_duties)
                         .after(staff_navigation_agent_projection::project_authored_staff_locomotion_onto_staff_entities)
                         .after_ignore_deferred(staff_request_candidate_cleanup::clear_unsuccessful_candidates_at_authored_manager_interval),
                     idle_staff_task_selection::interrupt_idle_staff_tasks_for_claimed_jobs
@@ -120,25 +128,27 @@ impl Plugin for StaffPlugin {
                     idle_staff_task_selection::start_staff_token_tasks
                         .after(staff_job_behavior_start_and_completion::start_unstarted_authored_behavior_tasks_for_claimed_staff_jobs),
                     idle_staff_task_selection::start_authored_idle_staff_tasks
-                        .after(idle_staff_task_selection::start_staff_token_tasks),
-                    idle_staff_task_selection::execute_staff_exit_tank_gate_actions
-                        .after(idle_staff_task_selection::start_authored_idle_staff_tasks),
+                        .after(idle_staff_task_selection::start_staff_token_tasks)
+                        .before(BehaviorStepFixedSet::Think),
                 )
                     .in_set(FixedGameSet::Think),
             )
             .add_systems(
+                BehaviorStep,
+                (
+                    idle_staff_task_selection::execute_staff_exit_tank_gate_actions,
+                    authored_disease_cure_execution::apply_authored_disease_cures_for_live_staff_claims,
+                    staff_behavior_fact_completion_execution::acknowledge_staff_job_completion_fact_actions_owned_by_terminal_domain_systems,
+                    staff_behavior_terminal_target_termination_acknowledgement::acknowledge_staff_target_termination_owned_by_terminal_maintenance_systems,
+                ).in_set(BehaviorStepSet::Actions),
+            )
+            .add_systems(
                 FixedUpdate,
                 (
-                    authored_disease_cure_execution::apply_authored_disease_cures_for_live_staff_claims,
                     staff_job_behavior_start_and_completion::release_staff_assignment_after_authored_behavior_failure_finishes
-                        .after(authored_disease_cure_execution::apply_authored_disease_cures_for_live_staff_claims),
-                    staff_behavior_fact_completion_execution::acknowledge_staff_job_completion_fact_actions_owned_by_terminal_domain_systems
-                        .after(staff_job_behavior_start_and_completion::release_staff_assignment_after_authored_behavior_failure_finishes),
-                    staff_behavior_terminal_target_termination_acknowledgement::acknowledge_staff_target_termination_owned_by_terminal_maintenance_systems
-                        .after(staff_job_behavior_start_and_completion::release_staff_assignment_after_authored_behavior_failure_finishes),
+                        .after(BehaviorStepFixedSet::Act),
                     staff_job_behavior_start_and_completion::settle_staff_jobs_after_authored_behavior_finishes
                         .after(staff_job_behavior_start_and_completion::release_staff_assignment_after_authored_behavior_failure_finishes)
-                        .after(staff_behavior_terminal_target_termination_acknowledgement::acknowledge_staff_target_termination_owned_by_terminal_maintenance_systems)
                         .in_set(StaffBehaviorSettlement),
                     staff_facility_operation_job_execution::apply_completed_tank_maintenance_work
                         .after(staff_job_behavior_start_and_completion::release_staff_assignment_after_authored_behavior_failure_finishes),
@@ -162,7 +172,7 @@ impl Plugin for StaffPlugin {
             )
             .add_systems(
                 FixedUpdate,
-                staff_hiring_lifecycle::request_staff_hiring
+                staff_hiring_lifecycle::request_staff_hire_payment
                     .in_set(FixedConstructionSet::RequestEconomy),
             )
             .add_systems(
@@ -180,11 +190,11 @@ impl Plugin for StaffPlugin {
             .add_systems(
                 FixedUpdate,
                 (
-                    staff_hiring_lifecycle::mark_paid_staff_hires_for_prefab_spawning,
-                    staff_hiring_lifecycle::spawn_paid_staff_hires_from_ready_prefabs,
-                    staff_hiring_lifecycle::discard_rejected_staff_hires,
+                    staff_hiring_lifecycle::accept_paid_employee_placements,
+                    staff_hiring_lifecycle::spawn_paid_employees_from_ready_prefabs
+                        .after(staff_hiring_lifecycle::accept_paid_employee_placements),
+                    staff_hiring_lifecycle::discard_rejected_employee_placements,
                 )
-                    .chain()
                     .in_set(FixedConstructionSet::CompleteEconomy),
             );
     }

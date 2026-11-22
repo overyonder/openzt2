@@ -10,10 +10,14 @@ use openzt2_interface_state::ui::authored_ui_action_projection_components::UiAni
 use openzt2_interface_state::ui::authored_ui_activation_contracts::UiNodeActivated;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentRoot;
+use openzt2_interface_state::ui::ui_document_lifecycle_contracts::HideUiDocument;
 use openzt2_interface_state::ui::ui_document_lifecycle_contracts::ShowUiRole;
+use openzt2_zoo_state::animal_health::types::{TranquilizerHud, TranquilizerTool};
+use openzt2_zoo_state::audio::audio_playback_message_types::StopAudioCue;
 
 use super::animal_care_control_types::{
-    AnimalCareTarget, DiseaseTreatmentControl, TranquilizerControl,
+    AnimalCareTarget, DiseaseTreatmentControl, TranquilizerAimSample, TranquilizerAudioFeedback,
+    TranquilizerControl, TranquilizerMisfireTimer,
 };
 
 pub(super) fn route_animal_health_tool_actions_from_activated_ui_nodes(
@@ -23,8 +27,12 @@ pub(super) fn route_animal_health_tool_actions_from_activated_ui_nodes(
     ui_nodes: Query<(&UiAnimalHealthActions, &UiDocumentOwner)>,
     ui_document_roots: Query<&UiDocumentRoot>,
     selected_entity: WorldUiSelection,
+    active_tranquilizers: Query<Entity, With<TranquilizerControl>>,
     mut show_ui_document_requests: MessageWriter<ShowUiRole>,
+    mut hide_ui_document_requests: MessageWriter<HideUiDocument>,
+    mut stop_audio: MessageWriter<StopAudioCue>,
 ) {
+    let mut tranquilizer_activation = None;
     for activation in ui_node_activations.read() {
         let Ok((action_records, document_owner)) = ui_nodes.get(activation.node) else {
             continue;
@@ -49,18 +57,41 @@ pub(super) fn route_animal_health_tool_actions_from_activated_ui_nodes(
                     ));
                 }
                 UiAnimalHealthAction::EnterTranquilizerMode => {
-                    commands.entity(activation.node).insert((
-                        TranquilizerControl,
-                        AnimalCareTarget {
-                            animal_entity: selected_entity.subject(),
-                        },
-                    ));
-                    show_ui_document_requests.write(ShowUiRole {
-                        role: UiDocumentRole::TranquilizerHud,
-                        owner: activation.node,
-                    });
+                    tranquilizer_activation = Some(activation.node);
                 }
             }
         }
+    }
+    if let Some(controller) = tranquilizer_activation {
+        for previous in &active_tranquilizers {
+            if previous == controller {
+                continue;
+            }
+            commands.entity(previous).remove::<(
+                TranquilizerControl,
+                TranquilizerAimSample,
+                TranquilizerTool,
+                TranquilizerHud,
+                TranquilizerAudioFeedback,
+                TranquilizerMisfireTimer,
+            )>();
+            stop_audio.write(StopAudioCue {
+                emitter: Some(previous),
+                selection: previous.to_bits().wrapping_add(1),
+            });
+            hide_ui_document_requests.write(HideUiDocument { owner: previous });
+        }
+        if !active_tranquilizers.contains(controller) {
+            commands.entity(controller).insert((
+                TranquilizerControl,
+                AnimalCareTarget {
+                    animal_entity: selected_entity.subject(),
+                },
+            ));
+        }
+        show_ui_document_requests.write(ShowUiRole {
+            role: UiDocumentRole::TranquilizerHud,
+            owner: controller,
+        });
     }
 }

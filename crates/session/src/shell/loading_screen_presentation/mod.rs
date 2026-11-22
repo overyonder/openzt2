@@ -43,7 +43,12 @@ pub(super) fn show_authored_loading_screen(
 #[allow(clippy::too_many_arguments)]
 pub(super) fn project_world_loading_progress(
     definitions: Res<WorldDefinitions>,
-    hydration: Query<&WorldHydration>,
+    hydration: Query<(
+        &WorldHydration,
+        Has<
+            openzt2_world_state::world_spawn::world_load_completion_marker::StartingTerrainHydrated,
+        >,
+    )>,
     completed: Query<(), With<WorldLoadCompleted>>,
     screens: Query<(), With<LoadingScreen>>,
     roots: Query<(&UiDocumentRoot, &ChildOf)>,
@@ -59,23 +64,24 @@ pub(super) fn project_world_loading_progress(
     )>,
     mut visuals: Query<(&ChildOf, &UiVisualLayer, &mut UiSourceRect)>,
 ) {
-    let (finished, total, status) = if let Some(hydration) = hydration.iter().next() {
-        if hydration.terrain_hydration_is_pending() {
-            (0, 0, "loadstatus:initnodes")
+    let (finished, total, status) =
+        if let Some((hydration, terrain_hydrated)) = hydration.iter().next() {
+            if !terrain_hydrated {
+                (0, 0, "loadstatus:initnodes")
+            } else {
+                let (finished, total) = hydration.prefab_loading_progress();
+                (finished, total, "loadstatus:attachentities")
+            }
+        } else if !completed.is_empty() {
+            (1, 1, "loadstatus:attachentities")
         } else {
-            let (finished, total) = hydration.prefab_loading_progress();
-            (finished, total, "loadstatus:attachentities")
-        }
-    } else if !completed.is_empty() {
-        (1, 1, "loadstatus:attachentities")
-    } else {
-        let (finished, total) = definitions.loading_progress();
-        if finished < total {
-            (finished, total, "loadstatus:objects")
-        } else {
-            (0, 0, "loadstatus:map")
-        }
-    };
+            let (finished, total) = definitions.loading_progress();
+            if finished < total {
+                (finished, total, "loadstatus:objects")
+            } else {
+                (0, 0, "loadstatus:map")
+            }
+        };
     let fraction = if total == 0 {
         0.0
     } else {

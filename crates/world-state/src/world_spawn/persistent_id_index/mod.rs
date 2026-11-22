@@ -1,23 +1,25 @@
-use bevy::{platform::collections::HashMap, prelude::*};
-use openzt2_world_state::world_spawn::{
-    persistent_id_types::PersistentId, world_membership_types::WorldMember,
+use crate::world_spawn::{persistent_id_types::PersistentId, world_membership_types::WorldMember};
+use bevy::{
+    ecs::{entity_disabling::Disabled, query::Allow},
+    platform::collections::HashMap,
+    prelude::*,
 };
 
-/// Resolves saved edit operands in their own world, including after recreation.
+/// Resolves persistent IDs to their live entities within a zoo.
 #[derive(Resource, Default)]
-pub struct PersistentEditLookup(HashMap<(Entity, u64), Entity>);
+pub struct PersistentIdIndex(HashMap<(Entity, u64), Entity>);
 
-impl PersistentEditLookup {
+impl PersistentIdIndex {
     pub fn get(&self, world: Entity, id: PersistentId) -> Option<Entity> {
         self.0.get(&(world, id.0)).copied()
     }
 }
 
-pub struct PersistentEditLookupPlugin;
+pub struct PersistentIdIndexPlugin;
 
-impl Plugin for PersistentEditLookupPlugin {
+impl Plugin for PersistentIdIndexPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<PersistentEditLookup>()
+        app.init_resource::<PersistentIdIndex>()
             .add_observer(insert_id)
             .add_observer(insert_member)
             .add_observer(discard_id)
@@ -27,24 +29,24 @@ impl Plugin for PersistentEditLookupPlugin {
 
 fn insert_id(
     inserted: On<Insert<PersistentId>>,
-    entities: Query<(&PersistentId, &WorldMember)>,
-    mut lookup: ResMut<PersistentEditLookup>,
+    entities: Query<(&PersistentId, &WorldMember), Allow<Disabled>>,
+    mut lookup: ResMut<PersistentIdIndex>,
 ) {
     index(inserted.entity, &entities, &mut lookup);
 }
 
 fn insert_member(
     inserted: On<Insert<WorldMember>>,
-    entities: Query<(&PersistentId, &WorldMember)>,
-    mut lookup: ResMut<PersistentEditLookup>,
+    entities: Query<(&PersistentId, &WorldMember), Allow<Disabled>>,
+    mut lookup: ResMut<PersistentIdIndex>,
 ) {
     index(inserted.entity, &entities, &mut lookup);
 }
 
 fn index(
     entity: Entity,
-    entities: &Query<(&PersistentId, &WorldMember)>,
-    lookup: &mut PersistentEditLookup,
+    entities: &Query<(&PersistentId, &WorldMember), Allow<Disabled>>,
+    lookup: &mut PersistentIdIndex,
 ) {
     if let Ok((id, member)) = entities.get(entity) {
         lookup.0.insert((member.root, id.0), entity);
@@ -53,24 +55,24 @@ fn index(
 
 fn discard_id(
     discarded: On<Discard<PersistentId>>,
-    entities: Query<(&PersistentId, &WorldMember)>,
-    mut lookup: ResMut<PersistentEditLookup>,
+    entities: Query<(&PersistentId, &WorldMember), Allow<Disabled>>,
+    mut lookup: ResMut<PersistentIdIndex>,
 ) {
     discard(discarded.entity, &entities, &mut lookup);
 }
 
 fn discard_member(
     discarded: On<Discard<WorldMember>>,
-    entities: Query<(&PersistentId, &WorldMember)>,
-    mut lookup: ResMut<PersistentEditLookup>,
+    entities: Query<(&PersistentId, &WorldMember), Allow<Disabled>>,
+    mut lookup: ResMut<PersistentIdIndex>,
 ) {
     discard(discarded.entity, &entities, &mut lookup);
 }
 
 fn discard(
     entity: Entity,
-    entities: &Query<(&PersistentId, &WorldMember)>,
-    lookup: &mut PersistentEditLookup,
+    entities: &Query<(&PersistentId, &WorldMember), Allow<Disabled>>,
+    lookup: &mut PersistentIdIndex,
 ) {
     if let Ok((id, member)) = entities.get(entity) {
         let key = (member.root, id.0);

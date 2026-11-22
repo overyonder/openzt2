@@ -53,6 +53,7 @@ pub(super) fn advance_active_staff_litter_sweeping_jobs(
             staff_job_entity,
             staff_job,
             job_claim.staff,
+            StaffJobKind::SweepLitter,
         ));
     }
 }

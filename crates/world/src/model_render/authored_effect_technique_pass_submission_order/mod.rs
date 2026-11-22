@@ -35,12 +35,6 @@ pub(super) fn sort_transparent_effect_phase(
     orders: Res<
         ExtractedInstances<AuthoredEffectTechniquePassSubmissionOrder, bevy::render::RenderApp>,
     >,
-    layers: Res<
-        ExtractedInstances<
-            super::environment_layer_rendering::EnvironmentPrimitiveLayer,
-            bevy::render::RenderApp,
-        >,
-    >,
     views: Query<&ExtractedView>,
     mut phases: ResMut<ViewSortedRenderPhases<Transparent3d>>,
     mut invocation_distances: Local<EntityHashMap<(bool, f32)>>,
@@ -49,11 +43,6 @@ pub(super) fn sort_transparent_effect_phase(
         let Some(phase) = phases.get_mut(&view.retained_view_entity) else {
             continue;
         };
-        // The environment queue uses its own phase and prepares its own draws.
-        // Exclude the duplicate while the stock material queue still targets Transparent3d.
-        phase
-            .items
-            .retain(|_, item| !layers.contains_key(&item.main_entity()));
         phase.recalculate_sort_keys(view);
         sort_draws(phase, &orders, &mut invocation_distances);
     }

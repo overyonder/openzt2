@@ -10,12 +10,14 @@ use openzt2_game_assets::{
         world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset,
     },
 };
-use openzt2_interface_state::photos::photo_album_types::DefaultPhotoAlbumStorageInitializedForWorld;
 use openzt2_interface_state::photos::photo_album_types::DEFAULT_PHOTO_ALBUM_NAME_KEY;
+use openzt2_interface_state::photos::photo_album_types::{
+    DefaultPhotoAlbum, DefaultPhotoAlbumStorageInitializedForWorld,
+};
 use openzt2_interface_state::photos::photo_challenge_types::PhotoChallengeCatalogueBound;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator;
 use openzt2_world_state::world_spawn::world_load_completion_marker::WorldLoadCompleted;
-use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
+use openzt2_world_state::world_spawn::world_membership_types::{WorldMember, WorldRoot};
 
 use super::super::persistence_failure_types::WorldSnapshotPersistenceFailure;
 
@@ -26,6 +28,8 @@ pub(super) struct PhotoSnapshotBaselineReadiness<'w, 's> {
     scenario_assets: Res<'w, Assets<WorldScenarioDocumentAsset>>,
     localization: Res<'w, LocalizationPrecedenceIndex>,
     localization_assets: Res<'w, Assets<LocalizationAsset>>,
+    named_default_albums:
+        Query<'w, 's, &'static WorldMember, (With<DefaultPhotoAlbum>, With<Name>)>,
     roots: Query<
         'w,
         's,
@@ -43,6 +47,16 @@ impl PhotoSnapshotBaselineReadiness<'_, '_> {
         root: Entity,
         allocator: &PersistentIdAllocator,
     ) -> Result<bool, WorldSnapshotPersistenceFailure> {
+        let Ok((challenges, storage)) = self.roots.get(root) else {
+            return Ok(false);
+        };
+        let album_is_named = self
+            .named_default_albums
+            .iter()
+            .any(|member| member.root == root);
+        if storage.is_some() && challenges.is_some() && album_is_named {
+            return Ok(true);
+        }
         if self
             .scenarios
             .catalogue_document_load_has_failed(&self.server, &self.scenario_assets)
@@ -83,15 +97,9 @@ impl PhotoSnapshotBaselineReadiness<'_, '_> {
                 Err(WorldSnapshotPersistenceFailure::UnknownAssetIdentifier)
             };
         }
-        if !allocator.owns_world(root) {
-            return Err(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference);
-        }
-        let Ok((challenges, storage)) = self.roots.get(root) else {
-            return Ok(false);
-        };
         if storage.is_none() && allocator.next() == u64::MAX {
             return Err(WorldSnapshotPersistenceFailure::CapacityExceeded);
         }
-        Ok(storage.is_some() && challenges.is_some())
+        Ok(false)
     }
 }

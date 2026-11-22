@@ -141,6 +141,7 @@ impl Plugin for LocomotionPlugin {
                         .after(topology_navigation_edge_invalidation::synchronize_fence_navigation_crossings)
                         .run_if(on_message::<TestReachability>),
                     entity_pursuit_execution::accept_entity_pursuit_requests
+                        .after(openzt2_zoo_state::behavior_task_execution_types::running_actions::BehaviorStepFixedSet::Think)
                         .after(navigation_agent_initialization::initialize_navigation_agents_with_bounded_runtime_state)
                         .after_ignore_deferred(tank_water_navigation_overlay::project_tank_water_onto_navigation_cells)
                         .in_set(NavigationRequestAcceptance)

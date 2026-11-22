@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 use openzt2_zoo_state::economy::{facility_economy_types::Price, money_types::Money};
+use openzt2_zoo_state::transport_tours::authored_station_fare::station_fare;
 
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
@@ -24,7 +25,7 @@ pub(super) fn attach_committed_transport_stations_to_compatible_or_new_circuits(
     transport_circuits: Query<(Entity, &WorldMember, &CircuitMembers), With<TransportCircuit>>,
     existing_station_members: Query<&TransportStation>,
     mut station_attachments: MessageWriter<AttachTransportStationRequest>,
-    mut ids: ResMut<PersistentIdAllocator>,
+    mut ids: Query<&mut PersistentIdAllocator>,
     mut commands: Commands,
 ) {
     let Some(world_definitions) = active_world_definitions.get(&world_definition_assets) else {
@@ -59,14 +60,23 @@ pub(super) fn attach_committed_transport_stations_to_compatible_or_new_circuits(
         let circuit = if let Some(circuit) = compatible_circuit {
             circuit
         } else {
-            let Ok(id) = ids.allocate(station_world_member.root) else {
+            let Some(id) = ids
+                .get_mut(station_world_member.root)
+                .ok()
+                .and_then(|mut allocator| allocator.allocate().ok())
+            else {
                 continue;
             };
             commands
                 .spawn((
                     id,
                     DefinitionId(transport_station.definition),
-                    fare.copied().unwrap_or(Price(Money::ZERO)),
+                    fare.copied().unwrap_or_else(|| {
+                        Price(
+                            station_fare(world_definitions, transport_station.definition, None)
+                                .unwrap_or(Money::ZERO),
+                        )
+                    }),
                     TransportCircuit {
                         definition: transport_station.definition,
                         closed: true,

@@ -31,8 +31,13 @@ pub(super) fn initialize_catalogue_unlock_storage_from_active_world_definitions(
         Res<openzt2_zoo_state::progression::profile_scenario_variables::ProfileScenarioVariables>,
     >,
     mut unlocked_catalogue_definitions: ResMut<UnlockedCatalogueDefinitionSet>,
+    active_world: Query<Entity, (With<WorldRoot>, With<WorldLoadCompleted>)>,
 ) {
-    let Some(root) = roots.iter().next() else {
+    let Some(root) = active_world
+        .single()
+        .ok()
+        .filter(|&world| roots.contains(world))
+    else {
         return;
     };
     let Some(definitions) = active_definitions.get(&definitions) else {
@@ -75,7 +80,11 @@ pub(super) fn initialize_catalogue_unlock_storage_from_active_world_definitions(
 pub(super) fn reconcile_authored_research_items(
     mut commands: Commands,
     mut roots: Query<
-        (Entity, Option<&mut WorldResearchItems>),
+        (
+            Entity,
+            &mut PersistentIdAllocator,
+            Option<&mut WorldResearchItems>,
+        ),
         (With<WorldLoadCompleted>, With<WorldRoot>),
     >,
     definitions: Res<Assets<WorldDefinitionAsset>>,
@@ -86,30 +95,30 @@ pub(super) fn reconcile_authored_research_items(
         &ResearchProjectAvailability,
         Has<ResearchItemInWorld>,
     )>,
-    mut identifiers: ResMut<PersistentIdAllocator>,
 ) {
     let definitions_changed = active_definitions.is_changed() || definitions.is_changed();
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };
-    for (root, mut current) in &mut roots {
-        if !identifiers.owns_world(root) || (!definitions_changed && current.is_some()) {
+    for (root, mut identifiers, mut current) in &mut roots {
+        if !definitions_changed && current.is_some() {
             continue;
         }
-        let mut existing = if let Some(current) = current.as_deref() {
-            current
-                .definitions
-                .iter()
-                .filter(|(_, &item)| research_availability.contains(item))
-                .map(|(&definition, &item)| (definition, item))
-                .collect()
-        } else {
-            research_availability
-                .iter()
-                .filter(|(_, world, ..)| world.root == root)
-                .map(|(entity, _, item, _)| (item.item, entity))
-                .collect::<std::collections::BTreeMap<_, _>>()
-        };
+        let mut existing: std::collections::BTreeMap<_, _> =
+            if let Some(current) = current.as_deref() {
+                current
+                    .definitions
+                    .iter()
+                    .filter(|(_, &item)| research_availability.contains(item))
+                    .map(|(&definition, &item)| (definition, item))
+                    .collect()
+            } else {
+                research_availability
+                    .iter()
+                    .filter(|(_, world, ..)| world.root == root)
+                    .map(|(entity, _, item, _)| (item.item, entity))
+                    .collect::<std::collections::BTreeMap<_, _>>()
+            };
         let new_count = definitions
             .research()
             .filter(|research| !existing.contains_key(&research.id))
@@ -132,7 +141,7 @@ pub(super) fn reconcile_authored_research_items(
                 }
                 item
             } else {
-                let Ok(identifier) = identifiers.allocate(root) else {
+                let Ok(identifier) = identifiers.allocate() else {
                     return;
                 };
                 commands

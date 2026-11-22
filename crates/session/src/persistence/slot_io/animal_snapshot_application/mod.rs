@@ -10,17 +10,20 @@ use openzt2_game_assets::species::species_asset_types::SpeciesView;
 use openzt2_world_state::simulation_time::deterministic_random_stream::DeterministicRng;
 use openzt2_world_state::simulation_time::deterministic_random_stream::RngDomain;
 use openzt2_world_state::simulation_time::deterministic_random_stream::ZooSeed;
+use openzt2_world_state::world_spawn::persistent_id_index::PersistentIdIndex;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator;
 use openzt2_world_state::world_spawn::world_entity_crating::WorldEntityIsCrated;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
+use openzt2_zoo_state::animal_behavior::animal_lineage::{
+    insert_animal_parentage, AnimalMate, PregnancyFather,
+};
 use openzt2_zoo_state::animal_behavior::behavior_token_types::BehaviorSelfToken;
 use openzt2_zoo_state::animal_health::types::Dead;
 use openzt2_zoo_state::animal_health::types::DeathCause;
 use openzt2_zoo_state::animal_lifecycle::types::*;
 use openzt2_zoo_state::animal_welfare::types::*;
 use openzt2_zoo_state::locomotion::locomotion_types::CaffeineMode;
-use std::collections::BTreeMap;
 
 pub(super) fn resolve_saved_animal_components(
     records: &[AnimalSnapshotRecord],
@@ -58,24 +61,23 @@ pub(super) fn resolve_saved_animal_components(
         .collect()
 }
 
-pub(super) fn apply_animal_snapshot_records(
+pub(super) fn spawn_saved_animals(
     commands: &mut Commands,
     records: &[AnimalSnapshotRecord],
     resolved_components: Vec<ResolvedAnimalSpawnComponents>,
     world_root: Entity,
     allocator: &mut PersistentIdAllocator,
     baseline_animals: &Query<Entity, With<Animal>>,
-) -> Result<BTreeMap<u64, Entity>, WorldSnapshotPersistenceFailure> {
+) -> Result<(), WorldSnapshotPersistenceFailure> {
     // Reserve every identifier before queuing any entity mutations.
     for record in records {
         allocator
-            .reserve_imported(world_root, PersistentId(record.persistent_identifier))
+            .reserve_imported(PersistentId(record.persistent_identifier))
             .map_err(|_| WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference)?;
     }
     for animal in baseline_animals {
         commands.entity(animal).despawn();
     }
-    let mut entities = BTreeMap::new();
     for (record, resolved) in records.iter().zip(resolved_components) {
         let animal = spawn_animal_entity_from_resolved_components(
             commands,
@@ -92,7 +94,6 @@ pub(super) fn apply_animal_snapshot_records(
             Parents::NONE,
             record.born_tick,
         );
-        entities.insert(record.persistent_identifier, animal);
         let mut entity = commands.entity(animal);
         if let Some(name) = &record.name {
             entity.insert(Name::new(name.clone()));
@@ -175,24 +176,41 @@ pub(super) fn apply_animal_snapshot_records(
             ));
         }
     }
-    // Every animal exists before resolving lineage, independent of record ordering.
+    Ok(())
+}
+
+pub(super) fn restore_animal_relationships(
+    commands: &mut Commands,
+    records: &[AnimalSnapshotRecord],
+    identities: &PersistentIdIndex,
+    root: Entity,
+) -> Result<(), WorldSnapshotPersistenceFailure> {
+    let resolve = |id| {
+        identities
+            .get(root, PersistentId(id))
+            .ok_or(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference)
+    };
     for record in records {
-        let mut animal = commands.entity(entities[&record.persistent_identifier]);
-        animal.insert(Parents {
-            mother: record.parents[0].map(|id| entities[&id]),
-            father: record.parents[1].map(|id| entities[&id]),
-        });
+        let recipient = resolve(record.persistent_identifier)?;
+        let mut animal = commands.entity(recipient);
+        insert_animal_parentage(
+            &mut animal,
+            Parents {
+                mother: record.parents[0].map(resolve).transpose()?,
+                father: record.parents[1].map(resolve).transpose()?,
+            },
+        );
         if let Some((father, _)) = record.pregnancy {
-            animal.insert(Pregnancy {
-                father: Some(entities[&father]),
-            });
+            animal.insert((
+                Pregnancy { father: None },
+                PregnancyFather(resolve(father)?),
+            ));
         } else if record.pregnant_without_father {
             animal.insert(Pregnancy { father: None });
         }
         if let Some(mate) = record.mate {
-            animal.insert(Mate(entities[&mate]));
+            animal.insert(AnimalMate(resolve(mate)?));
         }
-        let recipient = animal.id();
         for token in &record.pending_tokens {
             commands.spawn((
                 BehaviorSelfToken {
@@ -201,12 +219,12 @@ pub(super) fn apply_animal_snapshot_records(
                     expires_at: token.expires_at,
                     payload: token
                         .payload
-                        .and_then(|payload| entities.get(&payload).copied()),
+                        .and_then(|id| identities.get(root, PersistentId(id))),
                     retain_on_failure: token.retain_on_failure,
                 },
                 ChildOf(recipient),
             ));
         }
     }
-    Ok(entities)
+    Ok(())
 }

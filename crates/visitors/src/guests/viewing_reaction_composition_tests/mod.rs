@@ -21,6 +21,7 @@ pub(super) fn policy_document() -> WorldDefinitionDocument {
     let id = AssetId::from_key("viewing-test");
     WorldDefinitionDocument {
         objects: vec![WorldObjectDefinition {
+            authored_runtime: Default::default(),
             audio_cue_prefixes: Vec::new(),
             surface_effect_strength: None,
             presentation_caustic_policies: Vec::new(),

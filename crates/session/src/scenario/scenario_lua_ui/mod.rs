@@ -1,27 +1,28 @@
 //! Scenario script operations enter the existing authored UI projection pipeline.
 
-mod presentation;
+pub(super) mod presentation;
 
 use bevy::prelude::*;
 use mlua::{Lua, Scope, Table};
 use openzt2_game_assets::lua_script::lua_script_archive_path_index::LuaScriptArchivePathIndex;
 use openzt2_game_assets::lua_script::lua_script_asset_loading::LuaScriptAsset;
-use openzt2_game_assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset;
 use openzt2_game_data::ui_document::{
     document::UiDocument, node_layout::UiNodeRegionMetric, widget::UiWidgetRecord,
 };
+use openzt2_game_data::world_scenario::{ScenarioScriptBinding, ScenarioScriptPhase};
 use openzt2_game_data::AssetId;
-use openzt2_interface_state::ui::{
-    authored_ui_activation_contracts::RunAuthoredTimedScenarioScript,
-    authored_ui_node_projection_components::UiDocumentRoot,
+use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentRoot;
+use openzt2_zoo_state::scenario::scenario_session_types::{
+    ActiveScenarioSession, ScenarioDocument,
 };
-use openzt2_zoo_state::scenario::scenario_session_types::SelectedScenarioDocument;
+use openzt2_zoo_state::scenario::timed_scenario_ui_actions::{
+    RunTimedScenarioUiAction, TimedScenarioUiActionCompleted,
+};
 use std::cell::RefCell;
 
 use super::{
     scenario_lua_query_fact_collection::ScenarioLuaQueryFactSources,
     scenario_lua_types::{ScenarioLuaQueryFacts, ScenarioLuaVirtualMachineContexts},
-    scenario_lua_virtual_machine::execute_loaded_scenario_lua_script_entry,
 };
 
 #[derive(Message, Debug, Clone)]
@@ -44,10 +45,6 @@ pub(super) enum ScenarioUiCommand {
         name: String,
         enabled: bool,
     },
-    Shown {
-        name: String,
-        visible: bool,
-    },
     Sound(String),
     UnlockDefinition(AssetId),
     ResearchDuration {
@@ -57,12 +54,17 @@ pub(super) enum ScenarioUiCommand {
     NextScenario(Option<String>),
     Overhead,
     Select(Option<Entity>),
+    TutorialRuleActive(bool),
+    FencePlacementMode(openzt2_zoo_state::scenario::scenario_session_types::SetScenarioFencePlacementMode),
 }
 
 #[derive(Debug, Clone)]
 pub(super) enum NodeOperation {
     /// Returns to the selection tool once earlier node calls have settled.
     SelectionMode,
+    ScriptCompleted(Entity),
+    Construction(presentation::ScenarioConstructionRequest),
+    SelectSubject(Option<Entity>),
     Visible(bool),
     Selected(bool),
     Press,
@@ -88,34 +90,36 @@ pub(super) enum NodeOperation {
 const INDEX_PATH_STEP: char = '\u{1}';
 const REFERENCE_PATH_SEPARATOR: char = '\u{2}';
 
-#[derive(Resource, Default)]
-pub(super) struct ScenarioContinuation {
-    pub(super) scenario: Option<AssetId>,
-}
-
 pub(super) fn register(app: &mut App) {
     use openzt2_game_assets::application_lifecycle::GamePhase;
     app.add_message::<ScenarioUiCommand>()
-        .init_resource::<ScenarioContinuation>()
-        .init_resource::<presentation::PendingScenarioUi>()
+        .add_message::<RunTimedScenarioUiAction>()
+        .add_message::<TimedScenarioUiActionCompleted>()
+        .add_message::<openzt2_zoo_state::scenario::timed_scenario_ui_actions::ScenarioUiSelectionCompleted>()
+        .add_message::<presentation::ScenarioConstructionRequest>()
         .init_resource::<openzt2_interface_state::information::catalogue_types::ScenarioDisabledCatalogueDefinitions>()
         .add_systems(
             Update,
             (
                 run_authored_timed_scenario_scripts,
                 presentation::apply_scenario_ui_commands,
-                presentation::fit_animation_heights_to_text,
+                presentation::apply_scenario_tool_requests,
             )
                 .chain()
-                .in_set(openzt2_interface_state::ui::UiSet::DomainProjection)
-                .run_if(in_state(GamePhase::InGame)),
+                .in_set(openzt2_interface_state::ui::UiSet::DomainProjection),
         )
         .add_systems(
-            OnExit(GamePhase::InGame),
-            |mut continuation: ResMut<ScenarioContinuation>| {
-                continuation.scenario = None;
-            },
+            Update,
+            (
+                presentation::fit_animation_heights_to_text,
+                presentation::apply_scenario_tank_requests,
+                presentation::apply_scenario_zoo_messages,
+                presentation::apply_scenario_tutorial_status,
+            ).in_set(openzt2_interface_state::ui::UiSet::DomainProjection),
         )
+        .add_systems(Update, presentation::preload_scenario_ui_documents
+            .in_set(openzt2_world_state::application_schedule::GameSet::Intent)
+            .run_if(in_state(GamePhase::InGame)))
         .add_systems(OnExit(GamePhase::InGame), presentation::clear_scenario_ui);
 }
 
@@ -139,15 +143,10 @@ pub(super) fn install_manager_commands<'scope, 'env: 'scope>(
         manager.set(
             method,
             scope.create_function(move |_, (_, name): (Table, String)| {
-                let command = if presentation::role_for(std::slice::from_ref(&name)).is_some() {
-                    ScenarioUiCommand::Node {
-                        path: vec![name],
-                        operation: NodeOperation::Visible(visible),
-                    }
-                } else {
-                    ScenarioUiCommand::Shown { name, visible }
-                };
-                commands.borrow_mut().push(command);
+                commands.borrow_mut().push(ScenarioUiCommand::Node {
+                    path: vec![name],
+                    operation: NodeOperation::Visible(visible),
+                });
                 Ok(())
             })?,
         )?;
@@ -251,8 +250,21 @@ pub(super) fn create_mode_adapter<'scope, 'env: 'scope>(
                             authored_type_id(&value.to_string_lossy()),
                         ));
                     }
-                    // A gate is its own fence type, so the type named next decides.
-                    "ZT_SETFENCEPLACEMENTMODE" => {}
+                    "ZT_SETFENCEPLACEMENTMODE" => {
+                        use openzt2_zoo_state::scenario::scenario_session_types::SetScenarioFencePlacementMode as Mode;
+                        if let mlua::Value::String(value) = value {
+                            let mode = match value.to_str()?.as_ref() {
+                                "rubber-band" => Some(Mode::RubberBand),
+                                "rectangle" => Some(Mode::Rectangle),
+                                "octagon" => Some(Mode::Octagon),
+                                "gate" => Some(Mode::Gate),
+                                _ => None,
+                            };
+                            if let Some(mode) = mode {
+                                commands.borrow_mut().push(ScenarioUiCommand::FencePlacementMode(mode));
+                            }
+                        }
+                    }
                     "ZT_IS_TYPE_ON_CURSOR" => {
                         let mlua::Value::String(value) = value else {
                             return Err(mlua::Error::runtime("cursor type must be a string"));
@@ -386,15 +398,11 @@ fn locate_ui_node<'a>(
     queries: ScenarioLuaQueryFacts<'a>,
     path: &[String],
 ) -> Option<LocatedUiNode<'a>> {
-    let role = presentation::role_for(path);
     queries.ui_roots.iter().find_map(|(root_entity, root)| {
         let document = queries
             .ui_documents
             .get(&root.document)?
             .canonical_ui_document();
-        if role.is_some_and(|role| role != document.role) {
-            return None;
-        }
         let id = presentation::resolve_node(document, path)?;
         let (node, _, inherited, computed, transform, selected, enabled, interaction) = queries
             .ui_nodes
@@ -812,67 +820,97 @@ fn install_node_methods<'scope, 'env: 'scope>(
 }
 
 fn run_authored_timed_scenario_scripts(
-    mut requests: MessageReader<RunAuthoredTimedScenarioScript>,
-    roots: Query<(), With<UiDocumentRoot>>,
-    selected: Option<Res<SelectedScenarioDocument>>,
-    scenario_assets: Res<Assets<WorldScenarioDocumentAsset>>,
+    mut requests: MessageReader<RunTimedScenarioUiAction>,
+    roots: Query<&UiDocumentRoot>,
+    active_scenarios: Query<(Entity, &ActiveScenarioSession, &ScenarioDocument)>,
     scripts: Res<Assets<LuaScriptAsset>>,
     script_index: Res<LuaScriptArchivePathIndex>,
     mut runtime: NonSendMut<ScenarioLuaVirtualMachineContexts>,
-    fact_sources: ScenarioLuaQueryFactSources,
-    mut ui: MessageWriter<ScenarioUiCommand>,
+    (fact_sources, direct): (
+        ScenarioLuaQueryFactSources,
+        super::scenario_lua_entity_commands::ScenarioLuaDirectAccess,
+    ),
+    mut outputs: super::scenario_lua_command_publication::ScenarioLuaOutputs,
+    mut completed: MessageWriter<TimedScenarioUiActionCompleted>,
 ) {
-    let Some(selected) = selected else {
-        requests.clear();
-        return;
-    };
-    let Some(asset) = scenario_assets.get(&selected.0) else {
-        requests.clear();
-        return;
-    };
+    let contained = |entity| fact_sources.contained_entities(entity);
+    let direct = std::cell::RefCell::new(direct);
+    let waste = |entity, value| direct.borrow_mut().waste(entity, value);
+    let profile = |key, value: Option<Option<&str>>| direct.borrow_mut().profile(key, value);
+    let mut queries = fact_sources.borrow_scenario_lua_query_facts(&contained);
+    queries.waste = Some(&waste);
+    queries.profile = Some(&profile);
     for request in requests.read() {
-        if !roots.contains(request.document_root) {
-            continue;
-        }
-        let mut words = request.command.split_ascii_whitespace();
-        let (Some("global"), Some(path), Some(entry), None) =
-            (words.next(), words.next(), words.next(), words.next())
-        else {
-            warn!(command = %request.command, "unsupported timed scenario script command");
-            continue;
-        };
-        let path = path.replace('\\', "/");
-        let Some(binding) = asset
-            .document
-            .scenario_script_bindings
-            .iter()
-            .find(|binding| {
-                binding.script.eq_ignore_ascii_case(&path)
-                    || asset
-                        .script(binding)
-                        .is_some_and(|(resolved, _)| resolved.eq_ignore_ascii_case(&path))
-            })
-        else {
-            warn!(%path, "timed UI script is not bound to the active scenario");
-            continue;
-        };
-        match execute_loaded_scenario_lua_script_entry(
-            &mut runtime,
-            &selected,
-            &scenario_assets,
-            &scripts,
-            &script_index,
-            binding,
-            entry,
-            fact_sources.borrow_scenario_lua_query_facts(),
-        ) {
-            Ok(result) => {
-                if let Some(failure) = result.failure {
-                    error!(%failure, %entry, "timed scenario script failed");
+        let delivered = (|| {
+            let Ok(root) = roots.get(request.document_root) else {
+                return false;
+            };
+            let mut words = request.command.split_ascii_whitespace();
+            let (Some(context), Some(path), Some(entry)) =
+                (words.next(), words.next(), words.next())
+            else {
+                warn!(command = %request.command, "unsupported timed scenario script command");
+                return false;
+            };
+            let referring_path = root
+                .document
+                .path()
+                .map(|path| path.path().to_string_lossy());
+            let Some((script_path, script_handle)) =
+                script_index.resolve(referring_path.as_deref().unwrap_or(""), path)
+            else {
+                warn!(%path, "timed UI script does not resolve");
+                return false;
+            };
+            use super::scenario_lua_types::ScenarioLuaRuntimeOwner;
+            let (owner, scenario, document_id) = if context.eq_ignore_ascii_case("scenario") {
+                let Ok((owner, active, document)) = active_scenarios.single() else {
+                    return false;
+                };
+                (
+                    ScenarioLuaRuntimeOwner::Scenario(owner),
+                    active.definition,
+                    Some(document.0.id()),
+                )
+            } else {
+                let context = AssetId::from_virtual_path(context);
+                (ScenarioLuaRuntimeOwner::NamedUi(context), context, None)
+            };
+            let arguments = words.collect::<Vec<_>>();
+            match runtime.execute_scenario_lua_script_binding(
+                owner,
+                document_id,
+                script_path,
+                script_handle,
+                &scripts,
+                &script_index,
+                &ScenarioScriptBinding {
+                    scenario,
+                    objective: AssetId::default(),
+                    script: script_path.to_owned(),
+                    entry: entry.to_owned(),
+                    phase: ScenarioScriptPhase::AlwaysRun,
+                },
+                queries,
+                Some(&arguments),
+            ) {
+                Ok(result) => {
+                    if let Some(failure) = &result.failure {
+                        error!(%failure, %entry, "timed scenario script failed");
+                    }
+                    outputs.publish(queries.world.unwrap_or(request.document_root), result);
                 }
-                ui.write_batch(result.ui);
+                Err(failure) => error!(%failure, %entry, "timed scenario script failed"),
             }
-            Err(failure) => error!(%failure, %entry, "timed scenario script failed"),
+            true
+        })();
+        if delivered {
+            outputs.write_timed_boundary(ScenarioUiCommand::Node {
+                path: Vec::new(),
+                operation: NodeOperation::ScriptCompleted(request.action),
+            });
+        } else {
+            completed.write(TimedScenarioUiActionCompleted(request.action));
         }
     }
 }
@@ -887,38 +925,36 @@ pub(crate) struct ScenarioUiSavedState {
 }
 
 #[derive(bevy::ecs::system::SystemParam)]
-pub(crate) struct ScenarioUiSnapshotCapture<'w> {
-    pending: Option<Res<'w, presentation::PendingScenarioUi>>,
-    continuation: Option<Res<'w, ScenarioContinuation>>,
+pub(crate) struct ScenarioUiSnapshotCapture<'w, 's> {
+    pending: Query<
+        'w,
+        's,
+        &'static presentation::ScenarioUiState,
+        With<openzt2_world_state::world_spawn::world_membership_types::WorldRoot>,
+    >,
 }
 
-impl ScenarioUiSnapshotCapture<'_> {
+impl ScenarioUiSnapshotCapture<'_, '_> {
     pub(crate) fn capture(&self) -> ScenarioUiSavedState {
-        ScenarioUiSavedState {
-            enabled: self
-                .pending
-                .as_ref()
-                .map(|pending| pending.enabled.clone())
-                .unwrap_or_default(),
-            shown: self
-                .pending
-                .as_ref()
-                .map(|pending| pending.shown.clone())
-                .unwrap_or_default(),
-            continuation: self
-                .continuation
-                .as_ref()
-                .and_then(|continuation| continuation.scenario),
-        }
+        self.pending.single().map_or_else(
+            |_| ScenarioUiSavedState::default(),
+            |pending| ScenarioUiSavedState {
+                enabled: pending.enabled.clone(),
+                shown: pending.shown.clone(),
+                continuation: pending.continuation,
+            },
+        )
     }
 }
 
-pub(crate) fn restore_saved_scenario_ui(commands: &mut Commands, saved: ScenarioUiSavedState) {
-    let mut pending = presentation::PendingScenarioUi::default();
-    pending.enabled = saved.enabled;
-    pending.shown = saved.shown;
-    commands.insert_resource(pending);
-    commands.insert_resource(ScenarioContinuation {
-        scenario: saved.continuation,
-    });
+pub(crate) fn restore_saved_scenario_ui(
+    commands: &mut Commands,
+    root: Entity,
+    saved: ScenarioUiSavedState,
+) {
+    let mut state = presentation::ScenarioUiState::default();
+    state.enabled = saved.enabled;
+    state.shown = saved.shown;
+    state.continuation = saved.continuation;
+    commands.entity(root).insert(state);
 }

@@ -125,7 +125,7 @@ pub(super) fn route_photo_ui_actions(
     active_albums: Query<Entity, (With<PhotoAlbum>, With<ActivePhotoAlbum>)>,
     mut capacities: Query<&mut PhotoAlbumCapacityPages, With<PhotoAlbum>>,
     (members, mut orders): (Query<&AlbumPhotos>, Query<&mut PhotoAlbumOrder>),
-    mut allocator: ResMut<PersistentIdAllocator>,
+    mut allocators: Query<&mut PersistentIdAllocator>,
     mut deletions: MessageWriter<DeletePhotoRequest>,
     mut captures: MessageWriter<CapturePhotoRequest>,
     mut immersive_mode_exits: MessageWriter<ExitImmersiveMode>,
@@ -220,7 +220,11 @@ pub(super) fn route_photo_ui_actions(
                         active.and_then(|id| albums.get(id).ok())
                     {
                         if let (Some(member), Ok(name)) = (member, names.get(album_entity)) {
-                            if let Ok(id) = allocator.allocate(member.root) {
+                            if let Some(id) = allocators
+                                .get_mut(member.root)
+                                .ok()
+                                .and_then(|mut allocator| allocator.allocate().ok())
+                            {
                                 let album = commands
                                     .spawn((
                                         PhotoAlbum {

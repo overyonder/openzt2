@@ -91,8 +91,10 @@ use super::{
     },
     economy_snapshot_section_encoding::append_encoded_economy_snapshot_section,
     economy_snapshot_types::EconomySnapshotRecords,
-    loaded_snapshot_application_execution::coordinate_pending_snapshot_validation_baseline_world_loading_and_application,
-    pending_snapshot_application_types::PendingSnapshotApplication,
+    loaded_snapshot_application_execution::restore_pending_snapshots,
+    pending_snapshot_application_types::{
+        AwaitingSnapshotWorldLoad, PendingSnapshotApplication, SnapshotBytes,
+    },
     photo_snapshot_section_encoding::append_encoded_photo_snapshot_section,
     photo_snapshot_types::{PhotoChallengeProgressSnapshotRecord, PhotoSnapshotRecord},
     world_snapshot_section_encoding::append_encoded_world_snapshot_section,
@@ -110,13 +112,14 @@ pub(crate) fn loading_app() -> (App, Entity) {
         MinimalPlugins,
         AssetPlugin::default(),
         bevy::state::app::StatesPlugin,
+        openzt2_world_state::world_spawn::persistent_id_index::PersistentIdIndexPlugin,
     ))
     .insert_state(GamePhase::Loading)
     .init_resource::<ReusableWorldSnapshotByteBuffer>()
     .init_resource::<openzt2_zoo_state::topology::topology_graph_types::TopologyIndex>()
     .init_resource::<openzt2_zoo_state::topology::topology_graph_types::TopologyGrid>()
     .add_message::<openzt2_zoo_state::topology::topology_edit_types::TopologyChanged>()
-    .init_resource::<Assets<openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset>>()
+    .init_asset::<openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset>()
     .init_resource::<openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionSequence>()
     .add_message::<openzt2_zoo_state::locomotion::locomotion_types::Arrived>()
     .add_message::<openzt2_zoo_state::locomotion::locomotion_types::NavigationFailed>()
@@ -126,17 +129,16 @@ pub(crate) fn loading_app() -> (App, Entity) {
     .init_resource::<Assets<LocalizationAsset>>()
     .init_resource::<LocalizationPrecedenceIndex>()
     .init_asset::<WorldScenarioDocumentAsset>()
+    .init_asset::<openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset>()
     .init_resource::<WorldScenarios>()
-    .init_resource::<Assets<SpeciesAsset>>()
+    .init_asset::<SpeciesAsset>()
     .init_resource::<SpeciesAssets>()
     .init_resource::<Assets<WorldDefinitionAsset>>()
     .init_resource::<WorldDefinitions>()
-    .init_resource::<Assets<ScenePrefabAsset>>()
-    .init_resource::<Assets<bevy::gltf::Gltf>>()
+    .init_asset::<ScenePrefabAsset>()
+    .init_asset::<bevy::gltf::Gltf>()
     .init_resource::<Assets<Image>>()
-    .init_resource::<Fame>()
     .init_resource::<FameHistory>()
-    .init_resource::<ZooRating>()
     .init_resource::<UnlockedCatalogueDefinitionSet>()
     .init_resource::<ScenarioAwardPointTotal>()
     .init_resource::<TotalEndangeredAnimalBirthCount>()
@@ -175,21 +177,24 @@ pub(crate) fn loading_app() -> (App, Entity) {
     .add_systems(PreUpdate, index_loaded_world_scenario_assets_by_identifier)
     .add_systems(
         Update,
-        coordinate_pending_snapshot_validation_baseline_world_loading_and_application
+        restore_pending_snapshots()
             .after(GameSet::Intent),
     );
     let root = app
         .world_mut()
         .spawn((
             WorldRoot { scenario: SCENARIO },
+            Fame::default(),
+            ZooRating::default(),
             WorldLoadCompleted,
+            openzt2_world_state::world_spawn::world_load_completion_marker::WorldClockInitialized,
             Name::new("baseline"),
         ))
         .id();
-    let mut allocator = PersistentIdAllocator::new(root);
+    let mut allocator = PersistentIdAllocator::default();
     // Imported baseline objects precede default storage in the ordinary loader.
-    allocator.reserve_imported(root, PersistentId(6)).unwrap();
-    app.insert_resource(allocator);
+    allocator.reserve_imported(PersistentId(6)).unwrap();
+    app.world_mut().entity_mut(root).insert(allocator);
 
     let species = SpeciesDocument::default();
     let handle = app
@@ -340,26 +345,18 @@ pub(crate) fn prepare_photo_snapshot_application(world: &mut World) {
         .single(world)
         .unwrap();
     let bytes = saved_photo_container(world);
-    world.insert_resource(ReusableWorldSnapshotByteBuffer {
-        snapshot_container_bytes: bytes,
-        contains_validated_snapshot_container: true,
-    });
+    let verified = super::supported_snapshot_section_validation::decode_snapshot_for_world_restore(
+        &bytes, PROFILE,
+    )
+    .unwrap();
     let pending = world
-        .spawn(PendingSnapshotApplication {
-            world_snapshot: None,
-            terrain_snapshot: None,
-            saved_world_document: None,
-            terrain_restored: false,
-            behavior_documents: Vec::new(),
-            source: openzt2_interface_state::persistence::saved_game_source_types::SavedGameSource::Native(SaveSlotId(0)),
-            scenario_definition_identifier: Some(SCENARIO),
-            session_mode: Some(WorldSessionMode::Freeform),
-            baseline_world_load_requested: true,
-            baseline_world_load_completed: false,
-            baseline_world_root: Some(root),
-            maintenance_prefabs: vec![],
-            placement_hydration: None,
-        })
+        .spawn((
+            PendingSnapshotApplication {
+                source: openzt2_interface_state::persistence::saved_game_source_types::SavedGameSource::Native(SaveSlotId(0)),
+                saved_world_document: None,
+            },
+            verified, AwaitingSnapshotWorldLoad,
+        ))
         .id();
     world
         .entity_mut(root)
@@ -389,56 +386,41 @@ pub(crate) fn prepare_unvalidated_snapshot_application(
     world: &mut World,
     bytes: Vec<u8>,
 ) -> Entity {
-    world.insert_resource(ReusableWorldSnapshotByteBuffer {
-        snapshot_container_bytes: bytes,
-        contains_validated_snapshot_container: false,
-    });
     world
-        .spawn(PendingSnapshotApplication {
-            world_snapshot: None,
-            terrain_snapshot: None,
-            saved_world_document: None,
-            terrain_restored: false,
-            behavior_documents: Vec::new(),
-            source: openzt2_interface_state::persistence::saved_game_source_types::SavedGameSource::Native(SaveSlotId(0)),
-            scenario_definition_identifier: None,
-            session_mode: None,
-            baseline_world_load_requested: false,
-            baseline_world_load_completed: false,
-            baseline_world_root: None,
-            maintenance_prefabs: vec![],
-            placement_hydration: None,
-        })
+        .spawn((
+            PendingSnapshotApplication {
+                source: openzt2_interface_state::persistence::saved_game_source_types::SavedGameSource::Native(SaveSlotId(0)),
+                saved_world_document: None,
+            },
+            SnapshotBytes(bytes),
+        ))
         .id()
 }
 
 #[test]
 fn prevalidation_rejection_preserves_the_active_world_and_simulation() {
-    use bevy::ecs::system::RunSystemOnce;
-    use openzt2_simulation_time::simulation_time_world_lifecycle::remove_simulation_time_after_leaving_world;
     use openzt2_world::world_spawn::world_unloading::despawn_all_world_roots_and_members_when_leaving_ingame;
 
     let (mut app, root) = loading_app();
     app.insert_state(GamePhase::InGame).add_systems(
         OnExit(GamePhase::InGame),
-        (
-            despawn_all_world_roots_and_members_when_leaving_ingame,
-            remove_simulation_time_after_leaving_world,
-        ),
+        despawn_all_world_roots_and_members_when_leaving_ingame,
     );
     let operation = prepare_unvalidated_snapshot_application(app.world_mut(), vec![0; 16]);
-    let next_identifier = app.world().resource::<PersistentIdAllocator>().next();
+    let next_identifier = app
+        .world()
+        .get::<PersistentIdAllocator>(root)
+        .unwrap()
+        .next();
     let clock = *app.world().resource::<ZooClock>();
     let calendar = *app.world().resource::<ZooCalendar>();
     let control = *app.world().resource::<SimulationControl>();
     let seed = *app.world().resource::<ZooSeed>();
     // This boundary exercises the coordinator and its deferred commands; the
     // fixture does not install the input/rendering dependencies of Photos UI.
-    app.world_mut()
-        .run_system_once(
-            coordinate_pending_snapshot_validation_baseline_world_loading_and_application,
-        )
-        .unwrap();
+    let mut restore = Schedule::default();
+    restore.add_systems(restore_pending_snapshots());
+    restore.run(app.world_mut());
     assert!(matches!(
         app.world().resource::<NextState<GamePhase>>(),
         NextState::Unchanged
@@ -449,12 +431,12 @@ fn prevalidation_rejection_preserves_the_active_world_and_simulation() {
         GamePhase::InGame
     );
     assert!(app.world().get_entity(root).is_ok());
-    assert!(app
-        .world()
-        .resource::<PersistentIdAllocator>()
-        .owns_world(root));
+    assert!(app.world().get::<PersistentIdAllocator>(root).is_some());
     assert_eq!(
-        app.world().resource::<PersistentIdAllocator>().next(),
+        app.world()
+            .get::<PersistentIdAllocator>(root)
+            .unwrap()
+            .next(),
         next_identifier
     );
     assert_eq!(*app.world().resource::<ZooClock>(), clock);
@@ -477,46 +459,27 @@ fn prevalidation_rejection_preserves_the_active_world_and_simulation() {
 
 #[test]
 fn snapshot_replacement_is_requested_after_ingame_teardown_removes_world_resources() {
-    use bevy::ecs::system::RunSystemOnce;
-    use openzt2_simulation_time::simulation_time_world_lifecycle::remove_simulation_time_after_leaving_world;
     use openzt2_world::world_spawn::world_unloading::despawn_all_world_roots_and_members_when_leaving_ingame;
 
     let (mut app, old_root) = loading_app();
     app.insert_state(GamePhase::InGame).add_systems(
         OnExit(GamePhase::InGame),
-        (
-            despawn_all_world_roots_and_members_when_leaving_ingame,
-            remove_simulation_time_after_leaving_world,
-        ),
+        despawn_all_world_roots_and_members_when_leaving_ingame,
     );
     let bytes = saved_photo_container(app.world_mut());
-    app.insert_resource(ReusableWorldSnapshotByteBuffer {
-        snapshot_container_bytes: bytes,
-        contains_validated_snapshot_container: false,
-    });
     let pending = app
         .world_mut()
-        .spawn(PendingSnapshotApplication {
-            world_snapshot: None,
-            terrain_snapshot: None,
-            saved_world_document: None,
-            terrain_restored: false,
-            behavior_documents: Vec::new(),
-            source: openzt2_interface_state::persistence::saved_game_source_types::SavedGameSource::Native(SaveSlotId(0)),
-            scenario_definition_identifier: None,
-            session_mode: None,
-            baseline_world_load_requested: false,
-            baseline_world_load_completed: false,
-            baseline_world_root: None,
-            maintenance_prefabs: vec![],
-            placement_hydration: None,
-        })
+        .spawn((
+            PendingSnapshotApplication {
+                source: openzt2_interface_state::persistence::saved_game_source_types::SavedGameSource::Native(SaveSlotId(0)),
+                saved_world_document: None,
+            },
+            SnapshotBytes(bytes),
+        ))
         .id();
-    app.world_mut()
-        .run_system_once(
-            coordinate_pending_snapshot_validation_baseline_world_loading_and_application,
-        )
-        .unwrap();
+    let mut restore = Schedule::default();
+    restore.add_systems(restore_pending_snapshots());
+    restore.run(app.world_mut());
     assert!(matches!(
         app.world().resource::<NextState<GamePhase>>(),
         NextState::Pending(GamePhase::Loading)
@@ -527,17 +490,15 @@ fn snapshot_replacement_is_requested_after_ingame_teardown_removes_world_resourc
         GamePhase::Loading
     );
     assert!(app.world().get_entity(old_root).is_err());
-    assert!(!app.world().contains_resource::<PersistentIdAllocator>());
+    assert!(app.world().get::<PersistentIdAllocator>(old_root).is_none());
     assert!(!app.world().contains_resource::<ZooClock>());
     assert!(!app.world().contains_resource::<ZooCalendar>());
     assert!(!app.world().contains_resource::<SimulationControl>());
     assert!(!app.world().contains_resource::<ZooSeed>());
-    assert!(
-        app.world()
-            .get::<PendingSnapshotApplication>(pending)
-            .unwrap()
-            .baseline_world_load_requested
-    );
+    assert!(app
+        .world()
+        .get::<AwaitingSnapshotWorldLoad>(pending)
+        .is_some());
     let requests = app.world().resource::<Messages<BeginWorldLoad>>();
     let mut cursor = requests.get_cursor();
     let request = cursor.read(requests).next().unwrap();
@@ -597,27 +558,19 @@ fn loading_initializes_photo_receivers_before_snapshot_reference_validation_and_
         .resource_mut::<WorldScenarios>()
         .queue_test_document(pending_catalogue.clone());
     let bytes = saved_photo_container(app.world_mut());
-    app.insert_resource(ReusableWorldSnapshotByteBuffer {
-        snapshot_container_bytes: bytes,
-        contains_validated_snapshot_container: true,
-    });
+    let verified = super::supported_snapshot_section_validation::decode_snapshot_for_world_restore(
+        &bytes, PROFILE,
+    )
+    .unwrap();
     let pending = app
         .world_mut()
-        .spawn(PendingSnapshotApplication {
-            world_snapshot: None,
-            terrain_snapshot: None,
-            saved_world_document: None,
-            terrain_restored: false,
-            behavior_documents: Vec::new(),
-            source: openzt2_interface_state::persistence::saved_game_source_types::SavedGameSource::Native(SaveSlotId(0)),
-            scenario_definition_identifier: Some(SCENARIO),
-            session_mode: Some(WorldSessionMode::Freeform),
-            baseline_world_load_requested: true,
-            baseline_world_load_completed: false,
-            baseline_world_root: Some(root),
-            maintenance_prefabs: vec![],
-            placement_hydration: None,
-        })
+        .spawn((
+            PendingSnapshotApplication {
+                source: openzt2_interface_state::persistence::saved_game_source_types::SavedGameSource::Native(SaveSlotId(0)),
+                saved_world_document: None,
+            },
+            verified, AwaitingSnapshotWorldLoad,
+        ))
         .id();
     app.world_mut()
         .entity_mut(root)

@@ -26,7 +26,7 @@ pub(super) fn apply_completed_tank_maintenance_work(
         let Ok((job, claim, behavior)) = jobs.get(current.job()) else {
             continue;
         };
-        if job.kind != StaffJobKind::MaintainTank
+        if job.kind != Some(StaffJobKind::MaintainTank)
             || claim.staff != outcome.actor
             || behavior.execution_id != Some(outcome.execution_id)
         {
@@ -35,7 +35,7 @@ pub(super) fn apply_completed_tank_maintenance_work(
         completed.write(StaffJobCompleted {
             staff: outcome.actor,
             job: current.job(),
-            kind: job.kind,
+            kind: StaffJobKind::MaintainTank,
             target: job.target,
         });
     }

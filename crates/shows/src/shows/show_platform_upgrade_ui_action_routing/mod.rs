@@ -5,7 +5,7 @@ use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_quer
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_construction::construction::{
-    construction_history::ConstructionHistoryPolicy,
+    construction_history::WorldConstructionHistory,
     construction_lifecycle::{PreparedDomain, Preparing},
 };
 use openzt2_zoo_state::construction::construction_transaction_types::EditTransaction;
@@ -42,8 +42,8 @@ pub(super) fn route_authored_show_platform_upgrade_actions_into_selection_edits_
     installed_upgrades: Query<&InstalledShowPlatformUpgrade>,
     stage_upgrades: Query<&ShowPlatformUpgrades>,
     mut selected_upgrades: Query<&mut SelectedShowPlatformUpgrade>,
+    mut histories: Query<&mut WorldConstructionHistory>,
     pending_deletions: Query<&ShowPlatformDeletionPending>,
-    mut edit_history: ResMut<ConstructionHistoryPolicy>,
 ) {
     for activation in activations.read() {
         let Ok((authored_actions, document_owner)) = action_nodes.get(activation.node) else {
@@ -113,7 +113,10 @@ pub(super) fn route_authored_show_platform_upgrade_actions_into_selection_edits_
                     let Some(world_member) = world_member else {
                         continue;
                     };
-                    let Some(sequence) = edit_history.allocate_sequence() else {
+                    let Ok(mut history) = histories.get_mut(world_member.root) else {
+                        continue;
+                    };
+                    let Some(sequence) = history.allocate_sequence() else {
                         continue;
                     };
                     commands.spawn((

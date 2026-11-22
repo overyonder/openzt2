@@ -9,10 +9,12 @@ use openzt2_world_state::world_spawn::{
     world_membership_types::WorldMember,
 };
 use openzt2_zoo_state::terrain::{
-    terrain_chunk_types::TerrainChunk,
+    terrain_chunk_types::{EditedTerrainSamples, TerrainChunk},
     terrain_edit_types::{TerrainChanged, TerrainPresentationRestored, TerrainWaterChanged},
     terrain_navigation_change_types::TerrainNavigationRestored,
-    terrain_water_presentation_types::TerrainWaterRegionSource,
+    terrain_water_presentation_types::{
+        TerrainWaterRegionEdit, TerrainWaterRegionRetired, TerrainWaterRegionSource,
+    },
 };
 
 #[derive(SystemParam)]
@@ -24,10 +26,28 @@ pub(in crate::persistence) struct TerrainSnapshotApplicationParameters<'w, 's> {
         >,
     >,
     roots: Query<'w, 's, &'static SelectedWorldTerrainAssetHandle>,
-    chunks: Query<'w, 's, (Entity, &'static WorldMember, &'static TerrainChunk)>,
+    chunks: Query<
+        'w,
+        's,
+        (
+            Entity,
+            &'static WorldMember,
+            &'static TerrainChunk,
+            Option<&'static mut EditedTerrainSamples>,
+        ),
+    >,
     members: Query<'w, 's, &'static WorldMember>,
     parents: Query<'w, 's, &'static ChildOf>,
-    sources: Query<'w, 's, (Entity, &'static TerrainWaterRegionSource)>,
+    sources: Query<
+        'w,
+        's,
+        (
+            Entity,
+            &'static TerrainWaterRegionSource,
+            Option<&'static mut TerrainWaterRegionEdit>,
+            Has<TerrainWaterRegionRetired>,
+        ),
+    >,
     changed: Option<ResMut<'w, Messages<TerrainChanged>>>,
     water: Option<ResMut<'w, Messages<TerrainWaterChanged>>>,
     navigation: Option<ResMut<'w, Messages<TerrainNavigationRestored>>>,
@@ -87,10 +107,12 @@ impl TerrainSnapshotApplicationParameters<'_, '_> {
             &terrain.0,
             root,
             self.chunks
-                .iter()
-                .filter(|(_, member, _)| member.root == root)
-                .map(|(entity, _, chunk)| (entity, chunk)),
-            self.sources.iter().filter(|(owner, _)| belongs(*owner)),
+                .iter_mut()
+                .filter(|(_, member, _, _)| member.root == root)
+                .map(|(entity, _, chunk, samples)| (entity, chunk, samples)),
+            self.sources
+                .iter_mut()
+                .filter(|(owner, ..)| belongs(*owner)),
             commands,
         )?;
         for bounds in result.changed_chunks {

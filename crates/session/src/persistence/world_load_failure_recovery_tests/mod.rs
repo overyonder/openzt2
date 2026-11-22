@@ -22,23 +22,25 @@ use crate::persistence::{
 };
 use openzt2_game_assets::{
     application_lifecycle::GamePhase,
-    {
-        terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset,
-        world_scenario::{
-            world_scenario_asset_set_state_and_borrowing_queries::WorldScenarios,
-            world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset,
-        },
+    world_scenario::{
+        world_scenario_asset_set_state_and_borrowing_queries::WorldScenarios,
+        world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset,
     },
 };
 
 use openzt2_world::world_spawn::world_hydration_completion::complete_or_fail_finished_world_hydration;
-use openzt2_world::world_spawn::world_load_request_acceptance::accept_queued_world_load_after_required_assets_resolve;
+use openzt2_world::world_spawn::world_load_request_acceptance::{
+    accept_queued_world_load_after_required_assets_resolve, admit_first_world_load_request,
+};
 use openzt2_world::world_spawn::world_unloading::unload_requested_worlds_and_their_members;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator;
 use openzt2_world_state::world_spawn::world_hydration_completion::WorldLoadFinished;
 use openzt2_world_state::world_spawn::world_hydration_types::WorldHydration;
-use openzt2_world_state::world_spawn::world_load_completion_marker::WorldLoadCompleted;
 use openzt2_world_state::world_spawn::world_load_completion_marker::WorldLoadCompletionSet;
+use openzt2_world_state::world_spawn::world_load_completion_marker::{
+    ImportedPersistentIdsReserved, StartingFenceTopologyHydrated, StartingPathsHydrated,
+    StartingSpawnValuesApplied, StartingTerrainHydrated, WorldClockInitialized, WorldLoadCompleted,
+};
 use openzt2_world_state::world_spawn::world_load_failure::WorldLoadFailed;
 use openzt2_world_state::world_spawn::world_load_failure::WorldLoadFailure;
 use openzt2_world_state::world_spawn::world_load_request_acceptance::BeginWorldLoad;
@@ -49,10 +51,11 @@ use openzt2_world_state::world_spawn::world_unloading::UnloadWorld;
 
 fn recovery_app() -> (App, Entity) {
     let (mut app, root) = loading_app();
-    app.init_asset::<TerrainAsset>().add_systems(
+    app.add_systems(
         Update,
         (
             unload_requested_worlds_and_their_members,
+            admit_first_world_load_request.run_if(in_state(GamePhase::Loading)),
             accept_queued_world_load_after_required_assets_resolve
                 .run_if(in_state(GamePhase::Loading)),
             initialize_simulation_time_from_selected_world.run_if(in_state(GamePhase::Loading)),
@@ -133,10 +136,7 @@ fn begin_normal_reentry(app: &mut App) -> Entity {
         .query_filtered::<Entity, With<WorldRoot>>()
         .single(app.world())
         .unwrap();
-    assert!(app
-        .world()
-        .resource::<PersistentIdAllocator>()
-        .owns_world(root));
+    assert!(app.world().get::<PersistentIdAllocator>(root).is_some());
     assert!(app.world().get::<WorldHydration>(root).is_some());
     assert!(app.world().get::<WorldLoadOperationOwner>(root).is_none());
     assert!(app.world().contains_resource::<ZooClock>());
@@ -146,7 +146,7 @@ fn begin_normal_reentry(app: &mut App) -> Entity {
 #[test]
 fn post_baseline_reference_failure_retires_its_world_and_allows_normal_reentry() {
     let (mut app, root) = recovery_app();
-    let start = install_start_document(&mut app);
+    let _start = install_start_document(&mut app);
     initialize_fixture_album_localization(app.world_mut());
     prepare_photo_snapshot_application(app.world_mut());
     let operation = app
@@ -158,18 +158,25 @@ fn post_baseline_reference_failure_retires_its_world_and_allows_normal_reentry()
     let unrelated = app.world_mut().spawn_empty().id();
     // Geometry and imported-ID reservation have reached the completion boundary.
     // The completion owner still publishes the actual root and operation.
-    let mut hydration = WorldHydration::new_pending_world_hydration(SCENARIO, start, SCENARIO, 0);
-    hydration.record_persistent_id_reservation_completion();
-    hydration.record_terrain_hydration_completion();
-    hydration.record_starting_topology_hydration_completion();
-    hydration.record_starting_path_hydration_completion();
-    hydration.record_authored_world_spawn_value_application_completion();
     app.world_mut()
         .entity_mut(root)
         .remove::<WorldLoadCompleted>()
-        .insert(hydration);
+        .insert((
+            WorldHydration::new_pending_world_hydration(0),
+            WorldClockInitialized,
+            ImportedPersistentIdsReserved,
+            StartingTerrainHydrated,
+            StartingFenceTopologyHydrated,
+            StartingPathsHydrated,
+            StartingSpawnValuesApplied,
+        ));
     app.update();
-    app.update();
+    if matches!(
+        app.world().resource::<NextState<GamePhase>>(),
+        NextState::Unchanged
+    ) {
+        app.update();
+    }
     // The checksum-valid snapshot contains a second challenge absent from the
     // loaded catalogue. Its real reference-validation failure requests cleanup.
     let failures = app
@@ -196,7 +203,7 @@ fn post_baseline_reference_failure_retires_its_world_and_allows_normal_reentry()
     assert!(app.world().get_entity(root).is_err());
     assert!(app.world().get_entity(member).is_err());
     assert!(app.world().get_entity(unrelated).is_ok());
-    assert!(!app.world().contains_resource::<PersistentIdAllocator>());
+    assert!(app.world().get::<PersistentIdAllocator>(root).is_none());
     assert!(!app.world().contains_resource::<ZooClock>());
     assert!(!app.world().contains_resource::<ZooCalendar>());
     assert!(!app.world().contains_resource::<SimulationControl>());
@@ -277,8 +284,8 @@ fn pending_catalogue_waits_then_accepts_the_same_ordinary_request() {
         .unwrap();
     assert!(app
         .world()
-        .resource::<PersistentIdAllocator>()
-        .owns_world(replacement));
+        .get::<PersistentIdAllocator>(replacement)
+        .is_some());
     assert!(app.world().get::<WorldHydration>(replacement).is_some());
     assert!(app
         .world()
@@ -289,20 +296,22 @@ fn pending_catalogue_waits_then_accepts_the_same_ordinary_request() {
 #[test]
 fn hydration_failure_retires_simulation_before_the_snapshot_coordinator_observes_it() {
     let (mut app, root) = recovery_app();
-    let handle = install_start_document(&mut app);
+    let _handle = install_start_document(&mut app);
     prepare_photo_snapshot_application(app.world_mut());
     let operation = app
         .world_mut()
         .query_filtered::<Entity, With<PendingSnapshotApplication>>()
         .single(app.world())
         .unwrap();
-    let mut hydration = WorldHydration::new_pending_world_hydration(SCENARIO, handle, SCENARIO, 0);
-    hydration.record_failure(WorldLoadFailure::MissingDependency(AssetId([77; 16])));
-    app.world_mut().entity_mut(root).insert(hydration);
+    app.world_mut().entity_mut(root).insert((
+        WorldHydration::new_pending_world_hydration(0),
+        WorldClockInitialized,
+        WorldLoadFailure::MissingDependency(AssetId([77; 16])),
+    ));
     app.update();
     assert!(app.world().get_entity(root).is_err());
     assert!(app.world().get_entity(operation).is_err());
-    assert!(!app.world().contains_resource::<PersistentIdAllocator>());
+    assert!(app.world().get::<PersistentIdAllocator>(root).is_none());
     assert!(!app.world().contains_resource::<ZooClock>());
     assert!(!app.world().contains_resource::<ZooCalendar>());
     assert!(!app.world().contains_resource::<SimulationControl>());
@@ -359,10 +368,7 @@ fn stale_same_scenario_results_do_not_complete_or_fail_a_later_snapshot_operatio
         .single(app.world())
         .is_ok());
     assert!(app.world().get_entity(root).is_ok());
-    assert!(app
-        .world()
-        .resource::<PersistentIdAllocator>()
-        .owns_world(root));
+    assert!(app.world().get::<PersistentIdAllocator>(root).is_some());
     assert!(app
         .world()
         .resource::<Messages<WorldSnapshotPersistenceFailed>>()

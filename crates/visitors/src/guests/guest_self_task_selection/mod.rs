@@ -22,7 +22,7 @@ use openzt2_zoo_state::animal_behavior::behavior_target_retry_delays::BehaviorTa
 use openzt2_zoo_state::maintenance::maintenance_types::FacilityContainedWaste;
 use openzt2_zoo_state::animal_behavior::behavior_candidate_selection::candidate_requirements_are_satisfied;
 use openzt2_zoo_state::animal_behavior::behavior_candidate_selection::score_supported_behavior_task;
-use openzt2_zoo_state::animal_behavior::behavior_candidate_selection::BehaviorCandidateRanking;
+use openzt2_zoo_state::animal_behavior::behavior_candidate_selection::{BehaviorCandidateRanking, BehaviorTargetBiome};
 use openzt2_zoo_state::animal_behavior::behavior_task_effective_score_types::BehaviorTaskEffectiveScore;
 use openzt2_zoo_state::animal_behavior::behavior_set_start_request_types::PendingBehaviorSet;
 use openzt2_zoo_state::behavior_task_execution_types::SynchronizedBehaviorParticipant;
@@ -39,6 +39,8 @@ use openzt2_zoo_state::habitat::habitat_types::HabitatMember;
 use openzt2_zoo_state::locomotion::locomotion_types::Destination;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_zoo_state::topology::topology_graph_types::PathTile;
+use openzt2_zoo_state::shows::running_show_types::{GuestShowNeed, ShowViewingLocations};
+use bevy::ecs::relationship::RelationshipTarget;
 use openzt2_zoo_state::transport_tours::transport_rider_types::TransportRider;
 use openzt2_zoo_state::transport_tours::transport_rider_types::WaitingForTransport;
 use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
@@ -70,7 +72,7 @@ pub(super) fn select_idle_guest_tasks(
     world_definitions: Res<WorldDefinitions>,
     clock: Res<ZooClock>,
     fixed_time: Res<Time<Fixed>>,
-    price_effect: BehaviorPriceEffectContext,
+    (price_effect, biomes): (BehaviorPriceEffectContext, BehaviorTargetBiome),
     mut executions: ResMut<BehaviorTaskExecutionSequence>,
     mut guests: Query<
         (
@@ -80,6 +82,7 @@ pub(super) fn select_idle_guest_tasks(
             &mut GuestRng,
             GuestTaskNeedFacts,
             &GuestNeedTriggers,
+            Option<&GuestShowNeed>,
             &GlobalTransform,
             &WorldMember,
             Option<&mut GuestTaskCooldowns>,
@@ -110,6 +113,10 @@ pub(super) fn select_idle_guest_tasks(
         Query<(Entity, &BehaviorSelfToken), Without<ClaimedBehaviorSelfToken>>,
     ),
     memberships: InteractionContainerMemberships,
+    (show_locations, location_targets): (
+        Query<(&WorldMember, &ShowViewingLocations)>,
+        Query<&ChildOf>,
+    ),
     (paths, viewable_animals, presentations, controllers): (
         Query<(Entity, &GlobalTransform, &WorldMember, &PathTile)>,
         Query<(&GlobalTransform, &Visibility, &WorldMember), (With<Animal>, With<HabitatMember>)>,
@@ -146,6 +153,9 @@ pub(super) fn select_idle_guest_tasks(
     // finds: path tiles with an animal in its habitat within viewing range.
     let view_sensor = AssetId::from_key("viewanimals");
     let path_sensor = AssetId::from_key("path");
+    let watch_sensor = AssetId::from_key("watchshow");
+    let watch_token = AssetId::from_key("t_watchshow");
+    let show_attribute = AssetId::from_key("show");
     let viewing_paths = definitions
         .guest_viewing()
         .map(|viewing| {
@@ -183,6 +193,7 @@ pub(super) fn select_idle_guest_tasks(
         mut random,
         need_facts,
         triggers,
+        show_need,
         transform,
         world,
         mut cooldowns,
@@ -212,6 +223,60 @@ pub(super) fn select_idle_guest_tasks(
                 Some((item, object, waste.map(|waste| waste.contained_waste_units)))
             })
             .collect::<Vec<_>>();
+        let active_tokens: Vec<_> = tokens
+            .iter_many(token_owners.get(guest).ok().into_iter().flatten().copied())
+            .flatten()
+            .filter(|(_, token)| token.available_at <= clock.tick && clock.tick < token.expires_at)
+            .collect();
+        let source_need = |attribute| {
+            if attribute == show_attribute {
+                show_need.map(GuestShowNeed::source_need)
+            } else {
+                need_facts.source_need(attribute, triggers)
+            }
+        };
+        let mut show_targets = Vec::new();
+        let watching = active_tokens
+            .iter()
+            .find(|(_, token)| token.name == watch_token);
+        if let Some((_, token)) = watching {
+            if let Some((_, locations)) = token
+                .payload
+                .and_then(|stage| show_locations.get(stage).ok())
+                .filter(|(member, _)| member.root == world.root)
+            {
+                show_targets.extend(locations.iter().filter_map(|location| {
+                    let entity = location_targets.get(location).ok()?.parent();
+                    if let Ok((_, pose, member, tile)) = paths.get(entity) {
+                        if member.root != world.root {
+                            return None;
+                        }
+                        let elevated = definitions
+                            .find_path(tile.definition)
+                            .is_some_and(|path| path.elevated);
+                        Some((entity, None, Some(elevated), None, pose.translation()))
+                    } else {
+                        let (_, id, pose, member, waste) = targets.get(entity).ok()?;
+                        if member.root != world.root {
+                            return None;
+                        }
+                        Some((
+                            entity,
+                            Some(definitions.find_object(id.0)?),
+                            None,
+                            waste.map(|waste| waste.contained_waste_units),
+                            pose.translation(),
+                        ))
+                    }
+                }));
+                let here = transform.translation();
+                show_targets.sort_unstable_by(|left, right| {
+                    here.distance_squared(left.4)
+                        .total_cmp(&here.distance_squared(right.4))
+                        .then_with(|| left.0.cmp(&right.0))
+                });
+            }
+        }
         let mut ranking = BehaviorCandidateRanking::new(policy.minimum_score);
         let diagnostics = bevy::log::tracing::enabled!(bevy::log::Level::DEBUG);
         let subject_types = definition.behavior_subject_type_identifiers.as_slice();
@@ -362,7 +427,8 @@ pub(super) fn select_idle_guest_tasks(
                     task,
                     policy.outside_range_need_value,
                     transform.translation().distance(target_position),
-                    |attribute| need_facts.source_need(attribute, triggers),
+                    || biomes.at(target_position),
+                    source_need,
                     |value| {
                         price_effect.sample(value, Some(target), |upper| {
                             random.0.range_u32(upper).unwrap_or_default()
@@ -377,7 +443,7 @@ pub(super) fn select_idle_guest_tasks(
                             openzt2_game_data::behavior::score::BehaviorScore::AttributeValue {
                                 attribute,
                                 ..
-                            } => Some(need_facts.source_need(*attribute, triggers)),
+                            } => Some(source_need(*attribute)),
                             _ => None,
                         })
                         .collect::<Vec<_>>();
@@ -396,13 +462,55 @@ pub(super) fn select_idle_guest_tasks(
                         task,
                         target,
                         object.map(|(item, ..)| item),
-                        from_token,
                     ),
                     task.priority.unwrap_or_default(),
                     score,
                     |upper| random.0.range_u32(upper),
                 );
             };
+            if task.sensor_tag == Some(watch_sensor) {
+                if let Some(&(token_entity, token)) = watching {
+                    for &(target, object, elevated, waste, position) in &show_targets {
+                        if !task.targets.iter().any(|target_type| {
+                            let required = AssetId::from_key(target_type);
+                            if elevated.is_some() {
+                                required == path_sensor
+                            } else {
+                                object.is_some_and(|object| matches_type(object, required))
+                            }
+                        }) {
+                            continue;
+                        }
+                        if let (Some(object), Some(tag)) = (object, task.reservation_tag) {
+                            let mut slots = object
+                                .interaction_slots
+                                .iter()
+                                .enumerate()
+                                .filter(|(_, slot)| slot.reservation_tag == tag && !slot.is_queue)
+                                .peekable();
+                            if slots.peek().is_some()
+                                && !slots.any(|(index, slot)| {
+                                    memberships.actor_slot(target, guest) == Some(index)
+                                        || memberships.occupied_places(target, index)
+                                            < usize::from(slot.capacity)
+                                })
+                            {
+                                continue;
+                            }
+                        }
+                        consider_target(
+                            target,
+                            object,
+                            elevated,
+                            waste,
+                            position,
+                            Some((token_entity, token.name, None, None)),
+                            false,
+                        );
+                    }
+                }
+                continue;
+            }
             let mut consider_with_held_items =
                 |target, target_definition, elevated, waste, position| {
                     if task.objects.is_empty() {
@@ -429,6 +537,25 @@ pub(super) fn select_idle_guest_tasks(
                                     waste,
                                     position,
                                     Some((entity, object.id, Some(object), waste_level)),
+                                    false,
+                                );
+                            }
+                        }
+                        for &(entity, token) in &active_tokens {
+                            if task
+                                .objects
+                                .iter()
+                                .any(|name| AssetId::from_key(name) == token.name)
+                                && (token.name != AssetId::from_key("t_donationtour")
+                                    || token.payload == Some(target))
+                            {
+                                consider_target(
+                                    target,
+                                    target_definition,
+                                    elevated,
+                                    waste,
+                                    position,
+                                    Some((entity, token.name, None, None)),
                                     false,
                                 );
                             }
@@ -529,16 +656,11 @@ pub(super) fn select_idle_guest_tasks(
                 }
             }
             if task.targets.iter().any(|target| target == "fromtoken") {
-                for (token_entity, token) in tokens
-                    .iter_many(token_owners.get(guest).ok().into_iter().flatten().copied())
-                    .flatten()
-                {
-                    if clock.tick < token.available_at
-                        || clock.tick >= token.expires_at
-                        || !task
-                            .objects
-                            .iter()
-                            .any(|name| AssetId::from_key(name) == token.name)
+                for &(token_entity, token) in &active_tokens {
+                    if !task
+                        .objects
+                        .iter()
+                        .any(|name| AssetId::from_key(name) == token.name)
                     {
                         continue;
                     }
@@ -563,8 +685,7 @@ pub(super) fn select_idle_guest_tasks(
                 }
             }
         }
-        let Some(((document, declaration, task, target, object, from_token), score)) =
-            ranking.finish(true)
+        let Some(((document, declaration, task, target, object), score)) = ranking.finish(true)
         else {
             debug!(?guest, "idle guest found no task scoring above the minimum");
             continue;
@@ -596,12 +717,10 @@ pub(super) fn select_idle_guest_tasks(
         debug!(?guest, task = %task.name, ?target, self_target = target == guest,
             "idle guest chose a task");
         let execution_id = executions.next();
-        if from_token {
-            if let Some(token) = object {
-                commands
-                    .entity(token)
-                    .insert(ClaimedBehaviorSelfToken { execution_id });
-            }
+        if let Some(token) = object.filter(|&entity| tokens.contains(entity)) {
+            commands
+                .entity(token)
+                .insert(ClaimedBehaviorSelfToken { execution_id });
         }
         commands.entity(guest).insert(BehaviorTaskEffectiveScore {
             execution_id,

@@ -160,6 +160,7 @@ pub(super) fn encode_original_saved_game_snapshot(
             )?,
         ),
         guest_favourite_animal_trend: Some(favourite),
+        domain_continuation: None,
     };
     let progression = super::super::progression_snapshot_types::ProgressionSnapshotRecords {
         fame,

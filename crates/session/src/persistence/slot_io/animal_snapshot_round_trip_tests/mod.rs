@@ -9,7 +9,7 @@ use super::{
         },
         snapshot_container_types::{WorldSnapshotSectionDirectoryEntry, WorldSnapshotSectionKind},
     },
-    animal_snapshot_application::apply_animal_snapshot_records,
+    animal_snapshot_application::{restore_animal_relationships, spawn_saved_animals},
     animal_snapshot_capture::{
         capture_animal_snapshot_records, AnimalSnapshotEntities, PendingTokenSnapshotEntities,
     },
@@ -24,10 +24,16 @@ use openzt2_game_data::{
     species::{LifeStage, Sex, SpeciesFlags, SpeciesVariantFlags},
     AssetId,
 };
+use openzt2_world_state::world_spawn::persistent_id_index::{
+    PersistentIdIndex, PersistentIdIndexPlugin,
+};
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator;
 use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
+use openzt2_zoo_state::animal_behavior::animal_lineage::{
+    AnimalFather, AnimalMate, AnimalMother, PregnancyFather,
+};
 use openzt2_zoo_state::animal_lifecycle::types::*;
 use openzt2_zoo_state::animal_welfare::types::*;
 use openzt2_zoo_state::habitat::habitat_types::HabitatLocatable;
@@ -51,7 +57,6 @@ fn spawn_named_animal(
             AnimalSex(sex),
             AnimalLifeStage(stage),
             Age { born_tick: 81 },
-            Parents::NONE,
             Name::new(name.to_owned()),
             Transform::from_xyz(12.75 + id as f32, 3.5, -42.125)
                 .with_rotation(Quat::from_rotation_y(0.75))
@@ -139,18 +144,16 @@ fn populated_animal_ecs_survives_container_round_trip_into_a_different_world() {
             cause: openzt2_zoo_state::animal_health::types::DeathCause::Authored(AssetId([9; 16])),
             since_tick: 201,
         });
-    source.entity_mut(child).insert(Parents {
-        mother: Some(mother),
-        father: Some(father),
-    });
+    source
+        .entity_mut(child)
+        .insert((AnimalMother(mother), AnimalFather(father)));
     source
         .entity_mut(mother)
         .insert(openzt2_zoo_state::locomotion::locomotion_types::CaffeineMode::Decaffeinated);
     source.entity_mut(mother).insert((
-        Pregnancy {
-            father: Some(father),
-        },
-        Mate(father),
+        Pregnancy { father: None },
+        PregnancyFather(father),
+        AnimalMate(father),
     ));
     // The gestation token waits, unclaimed, for the Birth task.
     source.spawn((
@@ -209,24 +212,28 @@ fn populated_animal_ecs_survives_container_round_trip_into_a_different_world() {
     )
     .unwrap();
 
-    let mut destination = World::new();
+    let mut app = App::new();
+    app.add_plugins(PersistentIdIndexPlugin);
+    let destination = app.world_mut();
     for _ in 0..12 {
         destination.spawn_empty();
     }
     let root = destination.spawn_empty().id();
     let unrelated = destination.spawn((PersistentId(4), Name::new("keep"))).id();
     let baseline = destination.spawn((Animal, PersistentId(51))).id();
-    destination.insert_resource(PersistentIdAllocator::new(root));
+    destination
+        .entity_mut(root)
+        .insert(PersistentIdAllocator::default());
     let resolved = records.iter().map(resolved_components).collect();
     let mut state = SystemState::<(
         Commands,
-        ResMut<PersistentIdAllocator>,
+        Query<&mut PersistentIdAllocator>,
         Query<Entity, With<Animal>>,
-    )>::new(&mut destination);
-    let restored = {
-        let (mut commands, mut allocator, baseline_animals) =
-            state.get_mut(&mut destination).unwrap();
-        apply_animal_snapshot_records(
+    )>::new(destination);
+    {
+        let (mut commands, mut allocator, baseline_animals) = state.get_mut(destination).unwrap();
+        let mut allocator = allocator.get_mut(root).unwrap();
+        spawn_saved_animals(
             &mut commands,
             &records,
             resolved,
@@ -234,12 +241,23 @@ fn populated_animal_ecs_survives_container_round_trip_into_a_different_world() {
             &mut allocator,
             &baseline_animals,
         )
-        .unwrap()
-    };
-    state.apply(&mut destination);
+        .unwrap();
+    }
+    state.apply(destination);
+    let mut links = SystemState::<(Commands, Res<PersistentIdIndex>)>::new(destination);
+    let (mut commands, index) = links.get_mut(destination).unwrap();
+    restore_animal_relationships(&mut commands, &records, &index, root).unwrap();
+    let restored = records
+        .iter()
+        .map(|record| {
+            let id = record.persistent_identifier;
+            (id, index.get(root, PersistentId(id)).unwrap())
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
+    links.apply(destination);
     assert!(destination.get_entity(baseline).is_err());
     assert!(destination.get_entity(unrelated).is_ok());
-    assert_eq!(capture(&mut destination), expected);
+    assert_eq!(capture(destination), expected);
     assert!(destination
         .get::<EnvironmentHabitatAssessed>(restored[&51])
         .is_some());
@@ -253,27 +271,27 @@ fn populated_animal_ecs_survives_container_round_trip_into_a_different_world() {
         Some(&Visibility::Hidden)
     );
     assert_eq!(
-        destination.get::<Parents>(restored_child).unwrap().mother,
-        Some(restored[&51])
+        destination.get::<AnimalMother>(restored_child).unwrap().0,
+        restored[&51]
     );
     assert_eq!(
-        destination.get::<Parents>(restored_child).unwrap().father,
-        Some(restored[&72])
+        destination.get::<AnimalFather>(restored_child).unwrap().0,
+        restored[&72]
     );
     assert_eq!(
-        destination.get::<Pregnancy>(restored[&51]).unwrap().father,
-        Some(restored[&72])
+        destination.get::<PregnancyFather>(restored[&51]).unwrap().0,
+        restored[&72]
     );
     assert_eq!(
-        destination.get::<Mate>(restored[&51]),
-        Some(&Mate(restored[&72]))
+        destination.get::<AnimalMate>(restored[&51]).unwrap().0,
+        restored[&72]
     );
     let tokens = destination
         .query::<(
             &openzt2_zoo_state::animal_behavior::behavior_token_types::BehaviorSelfToken,
             &ChildOf,
         )>()
-        .iter(&destination)
+        .iter(destination)
         .map(|(token, holder)| {
             (
                 token.name,
@@ -319,14 +337,15 @@ fn populated_animal_ecs_survives_container_round_trip_into_a_different_world() {
     assert_eq!(
         destination
             .query_filtered::<Entity, (With<Animal>, Without<AnimalWelfare>)>()
-            .iter(&destination)
+            .iter(destination)
             .count(),
         0
     );
     assert_eq!(
         destination
-            .resource_mut::<PersistentIdAllocator>()
-            .allocate(root)
+            .get_mut::<PersistentIdAllocator>(root)
+            .unwrap()
+            .allocate()
             .unwrap(),
         PersistentId(73)
     );
@@ -382,10 +401,14 @@ fn older_welfare_records_without_baseline_ownership_load_for_reassessment() {
 
 #[test]
 fn empty_saved_population_removes_baseline_animals() {
-    let mut destination = World::new();
+    let mut app = App::new();
+    app.add_plugins(PersistentIdIndexPlugin);
+    let destination = app.world_mut();
     let root = destination.spawn_empty().id();
     let baseline = destination.spawn((Animal, PersistentId(9))).id();
-    destination.insert_resource(PersistentIdAllocator::new(root));
+    destination
+        .entity_mut(root)
+        .insert(PersistentIdAllocator::default());
     let bytes = encode_animal_snapshot_records(&[]).unwrap();
     let records = decode_animal_snapshot_records(
         &bytes,
@@ -398,50 +421,44 @@ fn empty_saved_population_removes_baseline_animals() {
     .unwrap();
     let mut state = SystemState::<(
         Commands,
-        ResMut<PersistentIdAllocator>,
+        Query<&mut PersistentIdAllocator>,
         Query<Entity, With<Animal>>,
-    )>::new(&mut destination);
+    )>::new(destination);
     {
-        let (mut commands, mut allocator, animals) = state.get_mut(&mut destination).unwrap();
-        assert!(apply_animal_snapshot_records(
+        let (mut commands, mut allocator, animals) = state.get_mut(destination).unwrap();
+        let mut allocator = allocator.single_mut().unwrap();
+        spawn_saved_animals(
             &mut commands,
             &records,
             vec![],
             root,
             &mut allocator,
-            &animals
+            &animals,
         )
-        .unwrap()
-        .is_empty());
+        .unwrap();
     }
-    state.apply(&mut destination);
+    state.apply(destination);
     assert!(destination.get_entity(baseline).is_err());
-    assert!(capture(&mut destination).is_empty());
+    assert!(capture(destination).is_empty());
 }
 
 #[test]
 fn native_crate_relationship_preserves_relocated_pose_and_restored_identity() {
     use super::native_crate_snapshot_links::{
-        apply_native_crate_links, capture_native_crate_links, validate_native_crate_links,
+        capture_native_crate_links, restore_crate_relationships, validate_native_crate_links,
         NativeCrateSnapshotEntities,
     };
     use super::placement_snapshot_section::PlacementSnapshotRecord;
     use openzt2_world_state::world_spawn::world_entity_crating::{
         AnimalCrate, ContainedCratedAnimal, WorldEntityIsCrated,
     };
-    use std::collections::BTreeMap;
 
     let mut source = World::new();
     let root = source.spawn_empty().id();
     let animal = spawn_named_animal(&mut source, 11, "Lion", Sex::Male, LifeStage::Adult);
     let pose = Transform::from_xyz(80.0, 2.0, -10.0).with_rotation(Quat::from_rotation_y(1.25));
     let crate_entity = source
-        .spawn((
-            PersistentId(12),
-            WorldMember { root },
-            pose,
-            ContainedCratedAnimal(animal),
-        ))
+        .spawn((PersistentId(12), WorldMember { root }, pose))
         .id();
     source.entity_mut(animal).insert((
         WorldMember { root },
@@ -481,12 +498,16 @@ fn native_crate_relationship_preserves_relocated_pose_and_restored_identity() {
     let legacy: Vec<AnimalSnapshotRecord> = serde_json::from_value(legacy).unwrap();
     assert_eq!(legacy[0].crate_identifier, None);
 
-    let mut destination = World::new();
+    let mut app = App::new();
+    app.add_plugins(PersistentIdIndexPlugin);
+    let destination = app.world_mut();
     for _ in 0..8 {
         destination.spawn_empty();
     }
     let restored_root = destination.spawn_empty().id();
-    destination.insert_resource(PersistentIdAllocator::new(restored_root));
+    destination
+        .entity_mut(restored_root)
+        .insert(PersistentIdAllocator::default());
     let restored_crate = destination
         .spawn((
             PersistentId(12),
@@ -498,12 +519,13 @@ fn native_crate_relationship_preserves_relocated_pose_and_restored_identity() {
         .id();
     let mut state = SystemState::<(
         Commands,
-        ResMut<PersistentIdAllocator>,
+        Query<&mut PersistentIdAllocator>,
         Query<Entity, With<Animal>>,
-    )>::new(&mut destination);
-    let restored = {
-        let (mut commands, mut allocator, baseline) = state.get_mut(&mut destination).unwrap();
-        let restored = apply_animal_snapshot_records(
+    )>::new(destination);
+    {
+        let (mut commands, mut allocator, baseline) = state.get_mut(destination).unwrap();
+        let mut allocator = allocator.get_mut(restored_root).unwrap();
+        spawn_saved_animals(
             &mut commands,
             &records,
             records.iter().map(resolved_components).collect(),
@@ -512,17 +534,13 @@ fn native_crate_relationship_preserves_relocated_pose_and_restored_identity() {
             &baseline,
         )
         .unwrap();
-        apply_native_crate_links(
-            &mut commands,
-            &records,
-            &restored,
-            &BTreeMap::from([(12, restored_crate)]),
-        )
-        .unwrap();
-        restored
-    };
-    state.apply(&mut destination);
-    let restored_animal = restored[&11];
+    }
+    state.apply(destination);
+    let mut links = SystemState::<(Commands, Res<PersistentIdIndex>)>::new(destination);
+    let (mut commands, index) = links.get_mut(destination).unwrap();
+    restore_crate_relationships(&mut commands, &records, &index, restored_root).unwrap();
+    let restored_animal = index.get(restored_root, PersistentId(11)).unwrap();
+    links.apply(destination);
     assert_ne!(restored_animal, animal);
     assert_eq!(
         destination.get::<AnimalCrate>(restored_animal).unwrap().0,
@@ -532,7 +550,7 @@ fn native_crate_relationship_preserves_relocated_pose_and_restored_identity() {
         destination
             .get::<ContainedCratedAnimal>(restored_crate)
             .unwrap()
-            .0,
+            .occupant(),
         restored_animal
     );
     assert_eq!(

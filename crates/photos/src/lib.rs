@@ -68,13 +68,15 @@ impl Plugin for PhotosPlugin {
                 (
                     (
                         begin_requested_album_photo_captures
+                            .after(album_actions::route_photo_ui_actions)
                             .after(initialize_default_photo_album_and_camera_roll_for_loaded_worlds)
                             .after(photo_mode_presentation_lifecycle::show_authored_photo_mode_document_for_entered_photo_mode),
                         begin_requested_camera_screenshot_captures,
                     ).chain(),
                     photo_capture::expire_pending_album_photo_captures
                         .before(begin_requested_album_photo_captures),
-                    delete_requested_photos_and_release_unpersisted_images,
+                    delete_requested_photos_and_release_unpersisted_images
+                        .after(album_actions::route_photo_ui_actions),
                     photo_mode_presentation_lifecycle::
                         show_authored_photo_mode_document_for_entered_photo_mode,
                     photo_mode_presentation_lifecycle::
@@ -136,12 +138,7 @@ impl Plugin for PhotosPlugin {
             )
                 .in_set(GameSet::Intent)
                 .after(openzt2_world_state::world_spawn::world_load_completion_marker::WorldLoadCompletionSet)
-                .run_if(in_state(GamePhase::Loading).or_else(in_state(GamePhase::InGame)))
-                .run_if(
-                    resource_exists::<
-                        openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator,
-                    >,
-                ),
+                .run_if(in_state(GamePhase::Loading).or_else(in_state(GamePhase::InGame))),
         );
         app.add_systems(
             Update,

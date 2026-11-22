@@ -63,12 +63,12 @@ pub fn cancel_requested_jobs_and_jobs_with_invalid_world_relations(
     explicitly_requested_jobs.extend(cancellation_requests.read().map(|request| request.job));
     for (job_entity, job, claim, behavior, applied_cleanup, applied_litter, cancelling) in &jobs {
         let target_is_live = world_members.get(job.target).is_ok()
-            && !(job.kind == StaffJobKind::Treat && dead_animals.contains(job.target));
+            && !(job.kind == Some(StaffJobKind::Treat) && dead_animals.contains(job.target));
         let target_was_consumed = claim.is_some()
             && behavior.is_some_and(|behavior| match job.kind {
-                StaffJobKind::CleanHabitat => applied_cleanup
+                Some(StaffJobKind::CleanHabitat) => applied_cleanup
                     .is_some_and(|applied| behavior.execution_id == Some(applied.execution_id)),
-                StaffJobKind::SweepLitter => {
+                Some(StaffJobKind::SweepLitter) => {
                     applied_litter.is_some_and(|applied| behavior.execution_id == Some(applied.0))
                 }
                 _ => false,
@@ -79,9 +79,9 @@ pub fn cancel_requested_jobs_and_jobs_with_invalid_world_relations(
         {
             continue;
         }
-        if target_is_live {
+        if let Some(kind) = job.kind.filter(|_| target_is_live) {
             cancelled_jobs.write(StaffJobCancelled {
-                kind: job.kind,
+                kind,
                 target: job.target,
                 token: job.token,
             });

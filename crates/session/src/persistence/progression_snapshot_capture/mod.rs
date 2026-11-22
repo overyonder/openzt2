@@ -31,14 +31,20 @@ use super::{
 
 #[derive(SystemParam)]
 pub(super) struct ProgressionSnapshotCaptureQueries<'w, 's> {
-    fame: Res<'w, Fame>,
-    zoo_rating: Res<'w, ZooRating>,
     unlocked_catalogue_definitions: Res<'w, UnlockedCatalogueDefinitionSet>,
     scenario_award_points: Res<'w, ScenarioAwardPointTotal>,
     endangered_animal_birth_count: Res<'w, TotalEndangeredAnimalBirthCount>,
     fame_history: Res<'w, FameHistory>,
-    world_adoption_availability_policy:
-        Query<'w, 's, Option<&'static AnimalAdoptionAvailabilityPolicy>, With<WorldRoot>>,
+    world_progression: Query<
+        'w,
+        's,
+        (
+            &'static Fame,
+            &'static ZooRating,
+            Option<&'static AnimalAdoptionAvailabilityPolicy>,
+        ),
+        With<WorldRoot>,
+    >,
     research_projects: Query<
         'w,
         's,
@@ -106,15 +112,11 @@ pub(super) fn capture_progression_snapshot_records_from_live_world(
         return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection);
     }
 
-    let animal_adoption_availability_policy = progression_snapshot_capture_queries
-        .world_adoption_availability_policy
+    let (fame, zoo_rating, adoption_policy) = progression_snapshot_capture_queries
+        .world_progression
         .single()
-        .map(|optional_adoption_availability_policy| {
-            optional_adoption_availability_policy
-                .copied()
-                .unwrap_or_default()
-        })
         .map_err(|_| WorldSnapshotPersistenceFailure::CorruptSnapshotSection)?;
+    let animal_adoption_availability_policy = adoption_policy.copied().unwrap_or_default();
 
     let mut research_project_snapshot_records = progression_snapshot_capture_queries
         .research_projects
@@ -193,8 +195,8 @@ pub(super) fn capture_progression_snapshot_records_from_live_world(
         .sort_unstable_by_key(|record| record.persistent_identifier.0);
 
     let progression_snapshot_records = ProgressionSnapshotRecords {
-        fame: *progression_snapshot_capture_queries.fame,
-        zoo_rating: *progression_snapshot_capture_queries.zoo_rating,
+        fame: *fame,
+        zoo_rating: *zoo_rating,
         unlocked_catalogue_definition_count: progression_snapshot_capture_queries
             .unlocked_catalogue_definitions
             .definition_count,

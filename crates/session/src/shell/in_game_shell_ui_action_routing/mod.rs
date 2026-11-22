@@ -13,10 +13,13 @@ use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocum
 use openzt2_interface_state::ui::ui_document_lifecycle_contracts::GameViewDocumentOwner;
 use openzt2_interface_state::ui::ui_document_lifecycle_contracts::ShowUiRole;
 
+use crate::persistence::persistence_ui_types::{
+    ExitApplicationAfterSave, ReturnToMainMenuAfterSave,
+};
+
 use super::{
     exit_confirmation_presentation::ExitConfirmationPending,
     in_game_options_overlay_lifecycle::InGameOptionsOverlay,
-    post_save_navigation::{ExitApplicationAfterSave, ReturnToMainMenuAfterSave},
     shell_navigation_request_types::{ExitApplication, ReturnToMainMenu},
 };
 use openzt2_interface_state::ui::authored_ui_action_projection_components::UiShellActions;

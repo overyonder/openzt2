@@ -1,18 +1,23 @@
+use super::world_unloading::retire_world_root;
 use bevy::prelude::*;
 use openzt2_interface_state::shell::shell_screen_presentation_types::LoadingScreen;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentRoot;
-use openzt2_world_state::simulation_time::simulation_time_resource_removal::remove_world_simulation_time_resources;
-use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator;
+use openzt2_world_state::world_spawn::starting_animal_hydration::PendingStartingAnimal;
 use openzt2_world_state::world_spawn::world_hydration_completion::WorldLoadFinished;
-use openzt2_world_state::world_spawn::world_hydration_types::WorldHydration;
-use openzt2_world_state::world_spawn::world_load_completion_marker::WorldLoadCompleted;
-use openzt2_world_state::world_spawn::world_load_failure::WorldLoadFailed;
+use openzt2_world_state::world_spawn::world_hydration_types::{
+    PendingStartingAnimals, PendingTerrainProjections, StartingAnimalPendingFor,
+    TerrainProjectionPendingFor, WorldHydration,
+};
+use openzt2_world_state::world_spawn::world_load_completion_marker::{
+    StartingFenceTopologyHydrated, StartingPathsHydrated, StartingSpawnValuesApplied,
+    StartingTerrainHydrated, WorldClockInitialized, WorldLoadCompleted,
+};
+use openzt2_world_state::world_spawn::world_load_failure::{WorldLoadFailed, WorldLoadFailure};
 use openzt2_world_state::world_spawn::world_load_request_acceptance::WorldLoadOperationOwner;
-use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
+use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 use openzt2_zoo_state::terrain::terrain_chunk_presentation_types::{
     TerrainChunkRejected, TerrainRenderChunk,
 };
-use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainChunk;
 
 /// Wait for the loading document before cached hydration can occupy the frame.
 pub(super) fn loading_screen_is_ready(
@@ -26,67 +31,81 @@ pub(super) fn loading_screen_is_ready(
     })
 }
 
+pub(super) fn conclude_starting_animal_projection(
+    removed: On<Remove<PendingStartingAnimal>>,
+    mut commands: Commands,
+) {
+    commands
+        .entity(removed.entity)
+        .try_remove::<StartingAnimalPendingFor>();
+}
+
+pub(super) fn conclude_terrain_mesh_projection(
+    added: On<Add<TerrainRenderChunk>>,
+    mut commands: Commands,
+) {
+    commands
+        .entity(added.entity)
+        .try_remove::<TerrainProjectionPendingFor>();
+}
+
+pub(super) fn conclude_rejected_terrain_mesh_projection(
+    added: On<Add<TerrainChunkRejected>>,
+    mut commands: Commands,
+) {
+    commands
+        .entity(added.entity)
+        .try_remove::<TerrainProjectionPendingFor>();
+}
+
 pub fn complete_or_fail_finished_world_hydration(
     mut commands: Commands,
-    pending: Query<(Entity, &WorldHydration, Option<&WorldLoadOperationOwner>)>,
-    allocator: Option<Res<PersistentIdAllocator>>,
-    members: Query<(Entity, &WorldMember)>,
-    unprojected_terrain: Query<
-        (),
+    failures: Query<
         (
-            With<TerrainChunk>,
-            Without<TerrainRenderChunk>,
-            Without<TerrainChunkRejected>,
+            Entity,
+            &WorldRoot,
+            &WorldLoadFailure,
+            Option<&WorldLoadOperationOwner>,
+            Has<WorldClockInitialized>,
         ),
+        With<WorldHydration>,
     >,
-    starting_animals: Query<
-        &WorldMember,
-        With<openzt2_world_state::world_spawn::starting_animal_hydration::PendingStartingAnimal>,
+    completed_roots: Query<
+        (Entity, &WorldRoot, Option<&WorldLoadOperationOwner>),
+        (
+            With<WorldHydration>,
+            With<WorldClockInitialized>,
+            With<StartingTerrainHydrated>,
+            With<StartingPathsHydrated>,
+            With<StartingFenceTopologyHydrated>,
+            With<StartingSpawnValuesApplied>,
+            Without<PendingTerrainProjections>,
+            Without<PendingStartingAnimals>,
+            Without<WorldLoadFailure>,
+        ),
     >,
     mut finished: MessageWriter<WorldLoadFinished>,
     mut failed: MessageWriter<WorldLoadFailed>,
 ) {
-    let Ok((root, pending, operation)) = pending.single() else {
-        return;
-    };
-    if let Some(reason) = pending.failure() {
-        warn!(
-            root = ?root,
-            scenario = ?pending.selected_scenario_id(),
-            hydration = ?pending,
-            ?reason,
-            "world hydration failed"
-        );
-        for (entity, member) in &members {
-            if member.root == root {
-                commands.entity(entity).despawn();
-            }
-        }
-        commands.entity(root).despawn();
-        if allocator
-            .as_ref()
-            .is_some_and(|allocator| allocator.owns_world(root))
-        {
-            commands.remove_resource::<PersistentIdAllocator>();
-            remove_world_simulation_time_resources(&mut commands);
-        }
+    for (root, world, reason, operation, initialized_clock) in &failures {
+        warn!(?root, scenario = ?world.scenario, ?reason, "world hydration failed");
+        retire_world_root(&mut commands, root, initialized_clock);
         failed.write(WorldLoadFailed {
             operation: operation.map(|owner| owner.0),
             root: Some(root),
-            scenario: pending.selected_scenario_id(),
-            reason,
+            scenario: world.scenario,
+            reason: *reason,
         });
-    } else if pending.is_complete()
-        && unprojected_terrain.is_empty()
-        && !starting_animals.iter().any(|member| member.root == root)
-    {
-        // Surface composition stalls frames for seconds; keep it behind the loading screen.
-        commands.entity(root).insert(WorldLoadCompleted);
+    }
+    for (root, world, operation) in &completed_roots {
+        commands
+            .entity(root)
+            .remove::<WorldHydration>()
+            .insert(WorldLoadCompleted);
         finished.write(WorldLoadFinished {
             operation: operation.map(|owner| owner.0),
-            scenario: pending.selected_scenario_id(),
+            scenario: world.scenario,
             root,
         });
-        commands.entity(root).remove::<WorldHydration>();
     }
 }

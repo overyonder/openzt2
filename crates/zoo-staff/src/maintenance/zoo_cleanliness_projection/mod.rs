@@ -105,24 +105,20 @@ pub(super) fn aggregate_changed_waste_into_zoo_cleanliness_totals(
 pub(super) fn project_zoo_cleanliness_from_totals_and_policy(
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,
-    world_totals: Query<Ref<ZooCleanlinessTotals>, With<WorldRoot>>,
-    mut zoo_cleanliness: ResMut<ZooCleanlinessPermille>,
+    mut worlds: Query<(Ref<ZooCleanlinessTotals>, &mut ZooCleanlinessPermille), With<WorldRoot>>,
 ) {
-    let Ok(cleanliness_totals) = world_totals.single() else {
-        zoo_cleanliness.set_if_neq(ZooCleanlinessPermille(None));
-        return;
-    };
-    if !cleanliness_totals.is_changed()
-        && !active_world_definitions.is_changed()
-        && !world_definition_assets.is_changed()
-    {
-        return;
-    }
-    let projected = active_world_definitions
+    let policy = active_world_definitions
         .get(&world_definition_assets)
-        .and_then(|world_definitions| world_definitions.cleanliness_policy())
-        .map(|policy| calculate_weighted_zoo_cleanliness_permille(*cleanliness_totals, policy));
-    zoo_cleanliness.set_if_neq(ZooCleanlinessPermille(projected));
+        .and_then(|definitions| definitions.cleanliness_policy());
+    let policy_changed =
+        active_world_definitions.is_changed() || world_definition_assets.is_changed();
+    for (totals, mut cleanliness) in &mut worlds {
+        if totals.is_changed() || policy_changed {
+            cleanliness.set_if_neq(ZooCleanlinessPermille(
+                policy.map(|policy| calculate_weighted_zoo_cleanliness_permille(*totals, policy)),
+            ));
+        }
+    }
 }
 
 #[inline]

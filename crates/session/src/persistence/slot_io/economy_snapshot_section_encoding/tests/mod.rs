@@ -108,7 +108,15 @@ fn revision_zero_facility_records_keep_their_profit_and_age() {
 
 #[test]
 fn complete_absence_clears_retained_state_and_legacy_absence_preserves_it() {
+    use super::super::economy_snapshot_application::{
+        apply_economy_snapshot_records_to_live_economy_resources_and_facilities,
+        RestoredFacilityEconomy,
+    };
     use bevy::{ecs::system::SystemState, prelude::*};
+    use openzt2_world_state::world_spawn::{
+        persistent_id_index::{PersistentIdIndex, PersistentIdIndexPlugin},
+        world_membership_types::WorldMember,
+    };
     use openzt2_zoo_state::economy::{
         behavior_transaction_state::EconomyUsage,
         facility_economy_types::*,
@@ -116,7 +124,10 @@ fn complete_absence_clears_retained_state_and_legacy_absence_preserves_it() {
         monthly_finance_types::MonthlyFinanceHistory,
         zoo_cash_types::{UnlimitedZooCash, ZooCash},
     };
-    let mut world = World::new();
+    let mut app = App::new();
+    app.add_plugins(PersistentIdIndexPlugin);
+    let world = app.world_mut();
+    let root = world.spawn_empty().id();
     world.init_resource::<ZooCash>();
     world.init_resource::<AdmissionPrice>();
     world.init_resource::<ZooAdmissionsOpen>();
@@ -124,6 +135,8 @@ fn complete_absence_clears_retained_state_and_legacy_absence_preserves_it() {
     world.insert_resource(UnlimitedZooCash);
     let entity = world
         .spawn((
+            PersistentId(42),
+            WorldMember { root },
             Wallet(Money(900)),
             FacilityPriceIndex(4),
             ObjectEconomyFactsResolved,
@@ -132,11 +145,13 @@ fn complete_absence_clears_retained_state_and_legacy_absence_preserves_it() {
         .id();
     let mut state = SystemState::<(
         Commands,
+        Res<PersistentIdIndex>,
+        Query<RestoredFacilityEconomy>,
         ResMut<ZooCash>,
         ResMut<AdmissionPrice>,
         ResMut<ZooAdmissionsOpen>,
         ResMut<MonthlyFinanceHistory>,
-    )>::new(&mut world);
+    )>::new(world);
     for complete in [false, true] {
         let mut saved = economy();
         saved.unlimited_cash = None;
@@ -154,13 +169,29 @@ fn complete_absence_clears_retained_state_and_legacy_absence_preserves_it() {
             usage: None,
         }];
         {
-            let (mut commands, mut cash, mut price, mut admissions, mut history) =
-                state.get_mut(&mut world).unwrap();
-            super::super::economy_snapshot_application::apply_economy_snapshot_records_to_live_economy_resources_and_facilities(
-            &mut commands, saved, &std::collections::BTreeMap::from([(42, entity)]), &mut cash, &mut price, &mut admissions, &mut history,
-        ).unwrap();
+            let (
+                mut commands,
+                identities,
+                mut facilities,
+                mut cash,
+                mut price,
+                mut admissions,
+                mut history,
+            ) = state.get_mut(world).unwrap();
+            apply_economy_snapshot_records_to_live_economy_resources_and_facilities(
+                &mut commands,
+                saved,
+                &identities,
+                root,
+                &mut facilities,
+                &mut cash,
+                &mut price,
+                &mut admissions,
+                &mut history,
+            )
+            .unwrap();
         }
-        state.apply(&mut world);
+        state.apply(world);
         assert_eq!(world.get::<Wallet>(entity).is_none(), complete);
         assert_eq!(world.get::<FacilityPriceIndex>(entity).is_none(), complete);
         assert_eq!(

@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use openzt2_world_state::world_spawn::{world_load_completion_marker::WorldLoadCompleted, world_membership_types::WorldRoot};
 use openzt2_game_data::world_definitions::catalogue_and_progression::research_and_unlock_definition_types::UnlockRequirement;
 
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
@@ -65,7 +66,7 @@ pub(super) fn apply_catalogue_definition_unlock_requests(
 /// `ApplyCatalogueDefinitionUnlockRequest`, preserving that package's
 /// operation correlation without retaining a scenario mirror in progression.
 pub(super) fn apply_authored_catalogue_unlock_requirements_from_progression_facts(
-    fame: Res<Fame>,
+    fame: Query<Ref<Fame>, (With<WorldRoot>, With<WorldLoadCompleted>)>,
     profile_variables: Option<
         Res<openzt2_zoo_state::progression::profile_scenario_variables::ProfileScenarioVariables>,
     >,
@@ -94,7 +95,7 @@ pub(super) fn apply_authored_catalogue_unlock_requirements_from_progression_fact
             }
         }
     }
-    if fame.is_changed() {
+    if let Some(fame) = fame.single().ok().filter(|fame| fame.is_changed()) {
         for definition in definitions.unlocks() {
             if matches!(
                 &definition.requirement,
