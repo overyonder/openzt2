@@ -36,6 +36,7 @@ pub(super) struct AuthoredAnimationSoundResolution<'w, 's> {
         (
             Option<&'static DefinitionId>,
             Option<&'static AnimationPresentationOwner>,
+            Option<&'static openzt2_zoo_state::animal_lifecycle::types::AnimalLifeStage>,
         ),
     >,
     parents: Query<'w, 's, &'static ChildOf>,
@@ -67,16 +68,29 @@ impl AuthoredAnimationSoundResolution<'_, '_> {
         let identity = std::iter::once(target)
             .chain(self.parents.iter_ancestors(target))
             .find_map(|entity| {
-                let (definition, owner) = self.identities.get(entity).ok()?;
-                definition
-                    .copied()
-                    .or_else(|| self.identities.get(owner?.gameplay_entity).ok()?.0.copied())
+                let (definition, owner, stage) = self.identities.get(entity).ok()?;
+                match definition {
+                    Some(definition) => Some((*definition, stage)),
+                    None => {
+                        let (definition, _, stage) =
+                            self.identities.get(owner?.gameplay_entity).ok()?;
+                        Some((*definition?, stage))
+                    }
+                }
             });
-        let prefixes = identity
-            .and_then(|identity| definitions?.find_object(identity.0))
-            .map_or(&[][..], |definition| {
-                definition.audio_cue_prefixes.as_slice()
-            });
+        let mut prefixes = identity
+            .and_then(|(identity, _)| definitions?.find_object(identity.0))
+            .map_or_else(Vec::new, |definition| definition.audio_cue_prefixes.clone());
+        // An animal's sounds are named for its species and age, such as
+        // `Ankylosaurus_Adult_Stand_Yawn`, while it is defined by its species.
+        if let (Some((_, Some(stage))), Some(species)) = (identity, prefixes.first().cloned()) {
+            use openzt2_game_data::species::LifeStage;
+            let age = match stage.0 {
+                LifeStage::Juvenile | LifeStage::Young => "Young",
+                LifeStage::Adult | LifeStage::Elder => "Adult",
+            };
+            prefixes.insert(0, format!("{species}_{age}"));
+        }
         let mut suffixes = vec![String::new()];
         if terrain_sound {
             let surface = self.terrain_surface(position);
@@ -105,7 +119,7 @@ impl AuthoredAnimationSoundResolution<'_, '_> {
             }
         }
         for suffix in suffixes.iter().rev() {
-            for prefix in prefixes {
+            for prefix in &prefixes {
                 let id = cue_id(&format!("{prefix}_{name}{suffix}"));
                 if audio.cue(id).is_some() {
                     return Some(id);
