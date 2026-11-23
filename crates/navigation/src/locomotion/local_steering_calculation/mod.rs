@@ -5,6 +5,7 @@ use openzt2_zoo_state::locomotion::locomotion_types::Destination;
 use openzt2_zoo_state::locomotion::locomotion_types::DirectLocomotion;
 use openzt2_zoo_state::locomotion::locomotion_types::LocomotionMode;
 use openzt2_zoo_state::locomotion::locomotion_types::NavAgent;
+use openzt2_zoo_state::locomotion::locomotion_types::NavFlags;
 use openzt2_zoo_state::locomotion::locomotion_types::Route;
 use openzt2_zoo_state::locomotion::locomotion_types::SpatialCell;
 use openzt2_zoo_state::locomotion::locomotion_types::SpatialGrid;
@@ -70,7 +71,12 @@ pub(super) fn calculate_route_following_and_separation_steering(
         let mut desired_velocity = route_direction * navigation_agent.max_speed_mps;
         desired_velocity +=
             contact_steering.direction * navigation_agent.max_speed_mps * contact_steering.factor;
-        let final_approach = planned_route.cursor + 1 == planned_route.points.len()
+        // Only people stop short of an occupied spot, such as a viewpoint;
+        // an animal walking to a dish or a keeper's site still arrives.
+        let is_person =
+            navigation_agent.capabilities.0 & (NavFlags::GUEST.0 | NavFlags::STAFF.0) != 0;
+        let final_approach = is_person
+            && planned_route.cursor + 1 == planned_route.points.len()
             && navigation_agent_position
                 .xz()
                 .distance(destination.world.xz())
@@ -361,14 +367,17 @@ mod avoidance_tests {
         assert!(world.get::<Transform>(right).unwrap().translation.x > 0.25);
     }
 
-    #[test]
-    fn a_walker_stops_beside_someone_standing_on_its_destination() {
+    /// Whether a walker with `capabilities` stops beside someone standing on
+    /// its destination, one step from it.
+    fn stops_beside_occupied_destination(
+        capabilities: openzt2_zoo_state::locomotion::locomotion_types::NavFlags,
+    ) -> bool {
         let mut world = World::new();
         let agent = NavAgent {
             radius_m: 0.1,
             max_speed_mps: 1.0,
             acceleration_mps2: 1.0,
-            capabilities: openzt2_zoo_state::locomotion::locomotion_types::NavFlags::GUEST,
+            capabilities,
         };
         let spot = Vec3::new(2.0, 0.0, 0.0);
         let mut route = Route::with_capacity(1);
@@ -408,6 +417,14 @@ mod avoidance_tests {
         system.initialize(&mut world);
         system.run((), &mut world).unwrap();
         let route = world.get::<Route>(walker).unwrap();
-        assert_eq!(route.cursor, route.points.len());
+        route.cursor == route.points.len()
+    }
+
+    #[test]
+    fn a_walker_stops_beside_someone_standing_on_its_destination() {
+        use openzt2_zoo_state::locomotion::locomotion_types::NavFlags;
+        assert!(stops_beside_occupied_destination(NavFlags::GUEST));
+        // An animal still walks up to its dish, as to a keeper's site.
+        assert!(!stops_beside_occupied_destination(NavFlags::ANIMAL));
     }
 }
