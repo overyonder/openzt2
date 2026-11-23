@@ -259,11 +259,20 @@ pub struct BehaviorFeedbackLog {
     pub thoughts: Vec<BehaviorFeedbackThought>,
 }
 
-/// A localized feedback text and the entity named in its `%s`, if any.
+/// A localized feedback text and what its `%s` names, if anything.
 #[derive(Clone, Debug, PartialEq)]
 pub struct BehaviorFeedbackLine {
     pub localization_key: String,
-    pub named: Option<Entity>,
+    pub named: Option<BehaviorFeedbackName>,
+}
+
+/// What a feedback text names in its `%s`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BehaviorFeedbackName {
+    /// An entity by its own name, such as "African Elephant 1".
+    Entity(Entity),
+    /// An animal's species, such as "African Elephant".
+    Species(Entity),
 }
 
 #[derive(Clone, Debug, PartialEq)]

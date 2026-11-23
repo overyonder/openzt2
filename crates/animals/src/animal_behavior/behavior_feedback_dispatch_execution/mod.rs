@@ -9,6 +9,7 @@ use openzt2_zoo_state::behavior_task_execution_types::find_current_behavior_task
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorFeedbackDispatched;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorFeedbackLine;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorFeedbackLog;
+use openzt2_zoo_state::behavior_task_execution_types::BehaviorFeedbackName;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
 
 pub(super) fn dispatch_current_authored_behavior_feedback_and_advance(
@@ -60,6 +61,7 @@ pub(super) fn record_dispatched_behavior_feedback(
     fixed_time: Res<Time<Fixed>>,
     tasks: Query<&BehaviorTaskExecutionState>,
     mut logs: Query<&mut BehaviorFeedbackLog>,
+    occupancy: Res<super::interaction_container_occupancy::InteractionContainerOccupancy>,
 ) {
     let ticks_per_second = 1.0 / fixed_time.timestep().as_secs_f64().max(1e-6);
     for dispatch in dispatched.read() {
@@ -70,17 +72,19 @@ pub(super) fn record_dispatched_behavior_feedback(
             continue;
         };
         let task = tasks.get(dispatch.actor).ok();
-        let named = |use_entity: bool, use_target: bool, use_object: bool| {
-            if use_target {
-                task.and_then(BehaviorTaskExecutionState::target)
-            } else if use_object {
-                task.and_then(|task| task.object)
-            } else if use_entity {
-                Some(dispatch.actor)
-            } else {
-                None
-            }
+        let target = task.and_then(BehaviorTaskExecutionState::target);
+        let target_task = target.and_then(|target| tasks.get(target).ok());
+        let related = FeedbackRelated {
+            actor: dispatch.actor,
+            target,
+            object: task.and_then(|task| task.object),
+            // The food in a dish, say, rather than the dish.
+            target_contents: target
+                .and_then(|target| occupancy.members_of_container(target).next()),
+            target_target: target_task.and_then(BehaviorTaskExecutionState::target),
+            target_object: target_task.and_then(|task| task.object),
         };
+        let named = |flags: FeedbackNameFlags| feedback_name(flags, &related);
         let mut log = logs.get(dispatch.actor).cloned().unwrap_or_default();
         for entry in &feedback.entries {
             match entry {
@@ -88,12 +92,18 @@ pub(super) fn record_dispatched_behavior_feedback(
                     localization_key,
                     use_entity_name,
                     use_target_name,
+                    use_target_contents,
                     use_object_name,
-                    ..
                 } => {
                     log.action = Some(BehaviorFeedbackLine {
                         localization_key: localization_key.clone(),
-                        named: named(*use_entity_name, *use_target_name, *use_object_name),
+                        named: named(FeedbackNameFlags {
+                            entity: *use_entity_name,
+                            target: *use_target_name,
+                            target_contents: *use_target_contents,
+                            object: *use_object_name,
+                            ..FeedbackNameFlags::default()
+                        }),
                     });
                 }
                 BehaviorFeedbackEntry::Thought {
@@ -101,7 +111,9 @@ pub(super) fn record_dispatched_behavior_feedback(
                     timeout_seconds,
                     use_entity_name,
                     use_target_name,
+                    use_target_target,
                     use_target_object,
+                    use_target_species,
                     ..
                 } => {
                     let timeout_ticks =
@@ -109,7 +121,14 @@ pub(super) fn record_dispatched_behavior_feedback(
                     log.think(
                         BehaviorFeedbackLine {
                             localization_key: localization_key.clone(),
-                            named: named(*use_entity_name, *use_target_name, *use_target_object),
+                            named: named(FeedbackNameFlags {
+                                entity: *use_entity_name,
+                                target: *use_target_name,
+                                target_target: *use_target_target,
+                                target_object: *use_target_object,
+                                target_species: *use_target_species,
+                                ..FeedbackNameFlags::default()
+                            }),
                         },
                         simulation_clock.tick,
                         simulation_clock.tick.saturating_add(timeout_ticks),
@@ -126,6 +145,56 @@ pub(super) fn record_dispatched_behavior_feedback(
             actor.insert(log);
         }
     }
+}
+
+/// The entities a feedback text may name, around the actor's task.
+struct FeedbackRelated {
+    actor: Entity,
+    target: Option<Entity>,
+    object: Option<Entity>,
+    target_contents: Option<Entity>,
+    target_target: Option<Entity>,
+    target_object: Option<Entity>,
+}
+
+/// What the flags ask a feedback text to name, the most specific first.
+fn feedback_name(
+    flags: FeedbackNameFlags,
+    related: &FeedbackRelated,
+) -> Option<BehaviorFeedbackName> {
+    use BehaviorFeedbackName::{Entity as Named, Species};
+    if flags.target_contents {
+        related.target_contents.map(Named)
+    } else if flags.target_target {
+        related.target_target.map(Named)
+    } else if flags.target_object {
+        related.target_object.map(Named)
+    } else if flags.target_species {
+        related.target.map(Species)
+    } else if flags.target {
+        related.target.map(Named)
+    } else if flags.object {
+        related.object.map(Named)
+    } else if flags.entity {
+        Some(Named(related.actor))
+    } else {
+        None
+    }
+}
+
+/// The authored `use*` flags saying what a feedback text names.
+#[derive(Clone, Copy, Default)]
+struct FeedbackNameFlags {
+    entity: bool,
+    target: bool,
+    /// The target container's contents, such as the food in a dish.
+    target_contents: bool,
+    /// The target's own task target, such as the dish an animal eats from.
+    target_target: bool,
+    /// The target's own task object.
+    target_object: bool,
+    target_species: bool,
+    object: bool,
 }
 
 fn feedback_action<'a>(
@@ -156,4 +225,55 @@ fn feedback_action<'a>(
         }
     };
     phase.lowered_actions().get(dispatch.action)
+}
+
+#[cfg(test)]
+mod feedback_name_tests {
+    use super::*;
+
+    #[test]
+    fn a_text_names_what_its_flags_ask_for() {
+        let [actor, target, contents, dish] =
+            [1, 2, 3, 4].map(|index| Entity::from_raw_u32(index).unwrap());
+        let related = FeedbackRelated {
+            actor,
+            target: Some(target),
+            object: None,
+            target_contents: Some(contents),
+            target_target: Some(dish),
+            target_object: None,
+        };
+        let name = |flags| feedback_name(flags, &related);
+        let flags = FeedbackNameFlags::default;
+        assert_eq!(
+            name(FeedbackNameFlags {
+                target_contents: true,
+                target: true,
+                ..flags()
+            }),
+            Some(BehaviorFeedbackName::Entity(contents))
+        );
+        assert_eq!(
+            name(FeedbackNameFlags {
+                target_target: true,
+                ..flags()
+            }),
+            Some(BehaviorFeedbackName::Entity(dish))
+        );
+        assert_eq!(
+            name(FeedbackNameFlags {
+                target_species: true,
+                ..flags()
+            }),
+            Some(BehaviorFeedbackName::Species(target))
+        );
+        assert_eq!(
+            name(FeedbackNameFlags {
+                entity: true,
+                ..flags()
+            }),
+            Some(BehaviorFeedbackName::Entity(actor))
+        );
+        assert_eq!(name(flags()), None);
+    }
 }

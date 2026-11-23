@@ -22,7 +22,9 @@ use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_interface_state::information::entity_selection_types::Inspectable;
 use openzt2_interface_state::information::entity_selection_types::SelectedEntity;
 use openzt2_ui::authored_ui_text_content_binding::UiTextBinding;
-use openzt2_zoo_state::behavior_task_execution_types::{BehaviorFeedbackLine, BehaviorFeedbackLog};
+use openzt2_zoo_state::behavior_task_execution_types::{
+    BehaviorFeedbackLine, BehaviorFeedbackLog, BehaviorFeedbackName,
+};
 
 use super::text_replacement_operations::replace_projected_ui_text_if_changed;
 
@@ -45,14 +47,22 @@ pub(crate) fn project_selected_entity_current_action(
         return;
     };
     let world_definitions = active_world_definitions.get(&world_definition_assets);
-    let name_of = |entity: Entity| -> Option<String> {
+    // An entity reads as its own name, falling back to its kind's; a
+    // species reads as the kind's name alone.
+    let name_of = |named: BehaviorFeedbackName| -> Option<String> {
+        let (entity, own_name) = match named {
+            BehaviorFeedbackName::Entity(entity) => (entity, true),
+            BehaviorFeedbackName::Species(entity) => (entity, false),
+        };
         let (name, inspectable) = names.get(entity).ok()?;
-        name.map(|name| name.as_str().to_owned()).or_else(|| {
-            let definition = world_definitions?.find_object(inspectable?.definition)?;
-            localization
-                .find_plain_localized_text(definition.name_key)
-                .map(str::to_owned)
-        })
+        name.filter(|_| own_name)
+            .map(|name| name.as_str().to_owned())
+            .or_else(|| {
+                let definition = world_definitions?.find_object(inspectable?.definition)?;
+                localization
+                    .find_plain_localized_text(definition.name_key)
+                    .map(str::to_owned)
+            })
     };
     let action = logs
         .get(selected)
@@ -80,7 +90,7 @@ pub(crate) fn project_selected_entity_current_action(
 fn feedback_line_text<'a>(
     line: &BehaviorFeedbackLine,
     localized: impl Fn(AssetId) -> Option<&'a str>,
-    name_of: impl Fn(Entity) -> Option<String>,
+    name_of: impl Fn(BehaviorFeedbackName) -> Option<String>,
 ) -> Option<String> {
     let text = localized(AssetId::from_key(&canonicalize_source_document_record_key(
         &line.localization_key,
@@ -97,7 +107,7 @@ mod tests {
     fn an_action_names_its_target() {
         let line = BehaviorFeedbackLine {
             localization_key: "staffactions:GoHealAnimal".into(),
-            named: Some(Entity::PLACEHOLDER),
+            named: Some(BehaviorFeedbackName::Entity(Entity::PLACEHOLDER)),
         };
         let key = AssetId::from_key("staffactions:gohealanimal");
         let text = feedback_line_text(
@@ -173,14 +183,22 @@ pub(crate) fn project_selected_entity_thoughts_to_list_rows(
         return;
     };
     let world_definitions = active_world_definitions.get(&world_definition_assets);
-    let name_of = |entity: Entity| -> Option<String> {
+    // An entity reads as its own name, falling back to its kind's; a
+    // species reads as the kind's name alone.
+    let name_of = |named: BehaviorFeedbackName| -> Option<String> {
+        let (entity, own_name) = match named {
+            BehaviorFeedbackName::Entity(entity) => (entity, true),
+            BehaviorFeedbackName::Species(entity) => (entity, false),
+        };
         let (name, inspectable) = names.get(entity).ok()?;
-        name.map(|name| name.as_str().to_owned()).or_else(|| {
-            let definition = world_definitions?.find_object(inspectable?.definition)?;
-            localization
-                .find_plain_localized_text(definition.name_key)
-                .map(str::to_owned)
-        })
+        name.filter(|_| own_name)
+            .map(|name| name.as_str().to_owned())
+            .or_else(|| {
+                let definition = world_definitions?.find_object(inspectable?.definition)?;
+                localization
+                    .find_plain_localized_text(definition.name_key)
+                    .map(str::to_owned)
+            })
     };
     for (row_entity, row) in &rows {
         let Ok((policy, owner)) = lists.get(row.list) else {
