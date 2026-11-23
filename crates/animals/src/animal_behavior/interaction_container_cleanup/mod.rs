@@ -24,7 +24,15 @@ pub(super) fn release_people_whose_task_moved_on(
         )>,
     >,
 ) {
-    for (person, task) in &people {
-        occupancy.release_after_task_moved_on(person, task.and_then(|task| task.target()));
+    // Only the members themselves, not every person in the zoo.
+    let moved_on = occupancy
+        .memberships()
+        .filter_map(|(member, _)| {
+            let (_, task) = people.get(member).ok()?;
+            Some((member, task.and_then(|task| task.target())))
+        })
+        .collect::<Vec<_>>();
+    for (person, target) in moved_on {
+        occupancy.release_after_task_moved_on(person, target);
     }
 }

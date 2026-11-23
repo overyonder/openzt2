@@ -108,6 +108,13 @@ impl InteractionContainerOccupancy {
         true
     }
 
+    /// Every member and the container it is in.
+    pub fn memberships(&self) -> impl Iterator<Item = (Entity, Entity)> + '_ {
+        self.members.iter().flat_map(|(container, members)| {
+            members.iter().map(move |(member, _)| (*member, *container))
+        })
+    }
+
     /// Leaves a container, its queue or its service place, once the actor's
     /// task no longer targets it, as when a guest gives up waiting or walks
     /// off with what they bought. Otherwise they would hold the place forever.

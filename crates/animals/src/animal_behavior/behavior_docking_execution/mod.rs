@@ -84,31 +84,9 @@ pub(super) fn start_current_supported_behavior_docking_actions(
         openzt2_zoo_state::locomotion::locomotion_types::NavigationRequestSequence,
     >,
     mut docking_requests: MessageWriter<DockAt>,
-    (mut occupancy, walking_to_their_place): (
-        ResMut<super::interaction_container_occupancy::InteractionContainerOccupancy>,
-        Query<(Entity, &BehaviorTaskExecutionState), With<PendingBehaviorDockingCompletion>>,
-    ),
+    mut occupancy: ResMut<super::interaction_container_occupancy::InteractionContainerOccupancy>,
 ) {
     let world_definitions = active_world_definitions.get(&world_definition_assets);
-    // Everyone in a queue, standing in it or still walking to their place:
-    // running a set that walks up to it.
-    let waiting_in_queues = behavior_tasks
-        .iter()
-        .map(|(actor, .., task)| (actor, task))
-        .chain(walking_to_their_place.iter())
-        .filter(|(_, task)| {
-            behavior_document_assets
-                .get(&task.document)
-                .and_then(|document| document.behavior_set_at_index(task.declaration))
-                .is_some_and(|set| {
-                    set.actions
-                        .lowered_actions()
-                        .iter()
-                        .any(|action| matches!(action, BehaviorAction::DockQueue(_)))
-                })
-        })
-        .filter_map(|(actor, task)| Some((actor, task.target()?, task.execution_id)))
-        .collect::<Vec<_>>();
     for (actor, navigation_agent, locomotion_mode, mut behavior_task) in &mut behavior_tasks {
         if behavior_task.next_action_tick > simulation_clock.tick {
             continue;
@@ -149,12 +127,15 @@ pub(super) fn start_current_supported_behavior_docking_actions(
         // so the service dock that follows still walks to its reserved slot.
         if let Some(queue_approach) = queue_approach {
             let tag = behavior_task.reservation_tag(&behavior_document_assets);
-            let Some(queue_node_name) = target_definition.and_then(|definition| {
+            let Some((queue_slot, queue_node_name)) = target_definition.and_then(|definition| {
                 definition
                     .interaction_slots
                     .iter()
-                    .find(|slot| slot.is_queue && tag.is_none_or(|tag| slot.reservation_tag == tag))
-                    .map(|slot| slot.target_node_name.as_str())
+                    .enumerate()
+                    .find(|(_, slot)| {
+                        slot.is_queue && tag.is_none_or(|tag| slot.reservation_tag == tag)
+                    })
+                    .map(|(index, slot)| (index, slot.target_node_name.as_str()))
             }) else {
                 super::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation(
                     actor, &mut commands,
@@ -180,14 +161,15 @@ pub(super) fn start_current_supported_behavior_docking_actions(
                 };
                 node.translation()
             };
-            let place = waiting_in_queues
+            // The queue's members in the order they joined it, as the wait
+            // that admitted them keeps it.
+            let members = occupancy
+                .members_in_slot(target, queue_slot)
+                .collect::<Vec<_>>();
+            let place = members
                 .iter()
-                .filter(|(other, other_target, joined)| {
-                    *other != actor
-                        && *other_target == target
-                        && *joined < behavior_task.execution_id
-                })
-                .count();
+                .position(|member| *member == actor)
+                .unwrap_or(members.len());
             let (spot, direction) = queue_place(
                 queue_node_position,
                 target_transform.translation(),
