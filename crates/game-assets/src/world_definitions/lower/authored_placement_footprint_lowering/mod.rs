@@ -352,7 +352,7 @@ pub(super) fn authored_placement_bounds_from_shadow_collision_or_dimensions(
 }
 
 /// `ZTPlacementData dockArrowStyle` (`special`, `standard` or `none`) and
-/// `dockArrowSize`, which `zt.exe` reads for the entrance arrow.
+/// `dockArrowSize`, which the original game reads for the entrance arrow.
 fn authored_dock_arrow(
     record: &RecordView<'_, '_>,
 ) -> Result<Option<openzt2_game_data::world_definitions::object_placement::DockArrow>, BindError> {

@@ -83,7 +83,8 @@ pub struct ObjectPlacementPreviewMaterials {
     pub grid_cardinal: [Handle<StandardMaterial>; 3],
     pub grid_diagonal: [Handle<StandardMaterial>; 3],
     pub grid_radius: [f32; 3],
-    /// `ui/fx/footprint/entrance_arrow.tga`, which `zt.exe` names itself.
+    /// `ui/fx/footprint/entrance_arrow.tga`, which the original game names in code
+    /// rather than in its data files.
     pub entrance_arrow: Handle<StandardMaterial>,
     pub model_valid: Color,
     pub model_invalid: Color,
