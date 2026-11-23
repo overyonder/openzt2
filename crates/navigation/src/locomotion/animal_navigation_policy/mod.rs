@@ -13,13 +13,20 @@ use openzt2_zoo_state::locomotion::locomotion_types::NavigationFailure;
 use openzt2_zoo_state::locomotion::locomotion_types::Route;
 
 #[derive(SystemParam)]
-pub(super) struct AnimalNavigationPolicy<'w> {
+pub struct AnimalNavigationPolicy<'w> {
     assets: Option<Res<'w, Assets<SpeciesAsset>>>,
     index: Option<Res<'w, SpeciesAssets>>,
 }
 
 impl AnimalNavigationPolicy<'_> {
-    pub(super) fn agent_with_authored_collision_limits(
+    /// The agent with an animal's authored collision radius, and the steepest
+    /// slope it may walk in radians. A person, without an animal variant, keeps
+    /// its agent and has no slope limit.
+    ///
+    /// # Errors
+    ///
+    /// `NoRoute` when the animal's species has no valid collision policy.
+    pub fn agent_with_authored_collision_limits(
         &self,
         agent: &NavAgent,
         animal: Option<&AnimalVariant>,
