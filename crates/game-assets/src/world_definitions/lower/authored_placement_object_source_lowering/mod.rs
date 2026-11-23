@@ -236,9 +236,15 @@ pub(super) fn bind_authored_placement_object(
     let object_kind = authored_world_object_kind(record);
     let view_class = authored_world_object_information_view_class(record, object_kind);
     let information_button = record.descendant_named("UIToggleButton");
-    let icon = information_button
-        .and_then(|button| find_descendant(button, "default"))
-        .and_then(|element| element.attribute_named_any(&["image"]))
+    // A guest such as `Guest_Adult_F_01` takes its icon from the family it
+    // inherits from, `Guest_Adult_F`, which authors the button.
+    let icon = authored_type_family_components(record, "UIToggleButton")
+        .into_iter()
+        .find_map(|button| {
+            find_descendant(button, "default")
+                .and_then(|element| element.attribute_named_any(&["image"]))
+                .filter(|image| !image.trim().is_empty())
+        })
         .map(id)
         .unwrap_or_default();
     let name_key = information_button
