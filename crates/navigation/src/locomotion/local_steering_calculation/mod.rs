@@ -40,6 +40,7 @@ pub(super) fn calculate_route_following_and_separation_steering(
             Option<&LocomotionMode>,
             &mut ContactSteering,
             &mut Steering,
+            Has<openzt2_zoo_state::locomotion::locomotion_types::Docking>,
         ),
         Without<DirectLocomotion>,
     >,
@@ -56,6 +57,7 @@ pub(super) fn calculate_route_following_and_separation_steering(
         locomotion_mode,
         mut contact_steering,
         mut steering,
+        docking,
     ) in &mut route_following_navigation_agents
     {
         let Some(current_route_target) = planned_route.current() else {
@@ -72,10 +74,13 @@ pub(super) fn calculate_route_following_and_separation_steering(
         desired_velocity +=
             contact_steering.direction * navigation_agent.max_speed_mps * contact_steering.factor;
         // Only people stop short of an occupied spot, such as a viewpoint;
-        // an animal walking to a dish or a keeper's site still arrives.
+        // an animal walking to a dish or a keeper's site still arrives. A
+        // dock, such as a place in a stand's queue, completes only on its
+        // spot, which whoever holds it is about to leave, so it waits there.
         let is_person =
             navigation_agent.capabilities.0 & (NavFlags::GUEST.0 | NavFlags::STAFF.0) != 0;
         let final_approach = is_person
+            && !docking
             && planned_route.cursor + 1 == planned_route.points.len()
             && navigation_agent_position
                 .xz()
@@ -367,10 +372,11 @@ mod avoidance_tests {
         assert!(world.get::<Transform>(right).unwrap().translation.x > 0.25);
     }
 
-    /// Whether a walker with `capabilities` stops beside someone standing on
-    /// its destination, one step from it.
+    /// Whether a walker with `capabilities`, docking or not, stops beside
+    /// someone standing on its destination, one step from it.
     fn stops_beside_occupied_destination(
         capabilities: openzt2_zoo_state::locomotion::locomotion_types::NavFlags,
+        docking: bool,
     ) -> bool {
         let mut world = World::new();
         let agent = NavAgent {
@@ -397,6 +403,18 @@ mod avoidance_tests {
                 Steering::default(),
             ))
             .id();
+        if docking {
+            let target = world.spawn_empty().id();
+            world.entity_mut(walker).insert(
+                openzt2_zoo_state::locomotion::locomotion_types::Docking {
+                    request_id: 1,
+                    target,
+                    point: spot,
+                    forward: Vec3::Z,
+                    radius_m: 0.1,
+                },
+            );
+        }
         let stander = world
             .spawn((
                 agent,
@@ -423,8 +441,11 @@ mod avoidance_tests {
     #[test]
     fn a_walker_stops_beside_someone_standing_on_its_destination() {
         use openzt2_zoo_state::locomotion::locomotion_types::NavFlags;
-        assert!(stops_beside_occupied_destination(NavFlags::GUEST));
+        assert!(stops_beside_occupied_destination(NavFlags::GUEST, false));
         // An animal still walks up to its dish, as to a keeper's site.
-        assert!(!stops_beside_occupied_destination(NavFlags::ANIMAL));
+        assert!(!stops_beside_occupied_destination(NavFlags::ANIMAL, false));
+        // A dock completes only on its spot, so a guest waits for a place in
+        // a queue rather than stopping beside it for good.
+        assert!(!stops_beside_occupied_destination(NavFlags::GUEST, true));
     }
 }
