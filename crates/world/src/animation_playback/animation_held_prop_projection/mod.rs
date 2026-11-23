@@ -4,6 +4,7 @@
 //! takes it away.
 
 use bevy::prelude::*;
+use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::animation::animation_set_asset_types::AnimationSetAsset;
@@ -69,6 +70,10 @@ fn transition_clips_between<'a>(set: &'a AnimationSetAsset, from: &str, to: &str
 pub(super) struct AnimationHeldProp {
     controller: Entity,
     name: AssetId,
+    /// The actor and the behavior task that was running when the prop
+    /// appeared. An interrupted task never plays the clip that puts the prop
+    /// away, so the prop goes with the task.
+    task: Option<(Entity, u64)>,
 }
 
 pub(super) fn create_and_destroy_animation_held_props(
@@ -84,6 +89,7 @@ pub(super) fn create_and_destroy_animation_held_props(
     mut animation_sets: ResMut<Assets<AnimationSetAsset>>,
     asset_server: Res<AssetServer>,
     joints: Query<(Entity, &AnimationJointTarget)>,
+    tasks: Query<&BehaviorTaskExecutionState>,
 ) {
     let Some(definitions) = active_definitions.get(&definition_assets) else {
         events.clear();
@@ -235,6 +241,13 @@ pub(super) fn create_and_destroy_animation_held_props(
                 "animation creates an object its actor has no binder for");
             continue;
         };
+        let task = std::iter::once(event.controller)
+            .chain(parents.iter_ancestors(event.controller))
+            .find_map(|entity| identities.get(entity).ok()?.1)
+            .and_then(|owner| {
+                let task = tasks.get(owner.gameplay_entity).ok()?;
+                Some((owner.gameplay_entity, task.execution_id))
+            });
         debug!(controller = ?event.controller, object = %key, "animation shows a held object");
         commands.spawn((
             Transform::from_scale(Vec3::splat(binder.scale)),
@@ -245,8 +258,26 @@ pub(super) fn create_and_destroy_animation_held_props(
             AnimationHeldProp {
                 controller: event.controller,
                 name,
+                task,
             },
         ));
+    }
+}
+
+/// Takes away a prop whose task ended or was replaced before its animation
+/// put it away, as when a worker sweeping is interrupted.
+pub(super) fn release_held_props_of_interrupted_tasks(
+    mut commands: Commands,
+    props: Query<(Entity, &AnimationHeldProp)>,
+    tasks: Query<&BehaviorTaskExecutionState>,
+) {
+    for (entity, prop) in &props {
+        let Some((actor, execution)) = prop.task else {
+            continue;
+        };
+        if tasks.get(actor).map(|task| task.execution_id).ok() != Some(execution) {
+            commands.entity(entity).despawn();
+        }
     }
 }
 
@@ -298,5 +329,44 @@ mod tests {
             ["Sweep_2Stand", "Stand_2Walk"]
         );
         assert!(transition_clips_between(&set, "Sweep", "Swim").is_empty());
+    }
+
+    #[test]
+    fn a_prop_goes_with_its_interrupted_task() {
+        use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
+        let mut world = World::new();
+        let actor = world.spawn_empty().id();
+        let held = |world: &mut World, execution| {
+            world
+                .spawn(AnimationHeldProp {
+                    controller: Entity::PLACEHOLDER,
+                    name: AssetId::default(),
+                    task: Some((actor, execution)),
+                })
+                .id()
+        };
+        let current = held(&mut world, 1);
+        let stale = held(&mut world, 0);
+        world.entity_mut(actor).insert(BehaviorTaskExecutionState {
+            execution_id: 1,
+            program: AssetId::default(),
+            target: None,
+            object: None,
+            document: Default::default(),
+            declaration: 0,
+            phase:
+                openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionPhase::Set,
+            action: 0,
+            repetitions: 0,
+            next_action_tick: 0,
+            interaction_slot: None,
+            stack: Default::default(),
+        });
+        let mut system = IntoSystem::into_system(release_held_props_of_interrupted_tasks);
+        system.initialize(&mut world);
+        system.run((), &mut world).unwrap();
+        world.flush();
+        assert!(world.get_entity(current).is_ok());
+        assert!(world.get_entity(stale).is_err());
     }
 }

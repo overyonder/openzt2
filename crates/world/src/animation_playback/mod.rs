@@ -75,7 +75,11 @@ impl Plugin for AnimationPlaybackPlugin {
             )
             .add_systems(
                 FixedUpdate,
-                animation_held_prop_projection::create_and_destroy_animation_held_props
+                (
+                    animation_held_prop_projection::create_and_destroy_animation_held_props,
+                    animation_held_prop_projection::release_held_props_of_interrupted_tasks,
+                )
+                    .chain()
                     .in_set(openzt2_world_state::animation_playback::animation_event_message_types::AnimationObjectCommandDelivery),
             )
             .add_systems(
