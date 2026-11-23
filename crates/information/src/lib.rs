@@ -144,6 +144,8 @@ impl Plugin for InformationPlugin {
                     projection::selected_animal_need_list_projection::request_selected_animal_state_row_counts,
                     projection::selected_animal_need_list_projection::project_selected_animal_states_to_authored_list_rows,
                     projection::selected_entity_feedback_projection::request_selected_entity_thought_row_counts,
+                    projection::selected_guest_need_list_projection::request_selected_guest_need_row_counts,
+                    projection::selected_guest_need_list_projection::project_selected_guest_needs_to_list_rows,
                     projection::selected_entity_feedback_projection::project_selected_entity_thoughts_to_list_rows,
                 )
                     .chain()

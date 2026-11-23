@@ -269,6 +269,9 @@ pub(super) fn unbound_list_source(
         {
             UiWidgetLiveCollectionSource::SelectedAnimalAdvancedNeeds
         }
+        (UiDocumentRole::EntityInfo, Some(name)) if name.eq_ignore_ascii_case("guest needs") => {
+            UiWidgetLiveCollectionSource::SelectedGuestNeeds
+        }
         (UiDocumentRole::EntityInfo, Some(name)) if name.eq_ignore_ascii_case("thoughts") => {
             UiWidgetLiveCollectionSource::SelectedEntityThoughts
         }
@@ -355,7 +358,8 @@ pub(super) fn list_row_document(
             }
             UiWidgetLiveCollectionSource::SelectedAnimalBasicNeeds
             | UiWidgetLiveCollectionSource::SelectedAnimalAdvancedNeeds
-            | UiWidgetLiveCollectionSource::SelectedAnimalStates => {
+            | UiWidgetLiveCollectionSource::SelectedAnimalStates
+            | UiWidgetLiveCollectionSource::SelectedGuestNeeds => {
                 AssetId::from_virtual_path(SELECTED_ANIMAL_NEED_ROW_DOCUMENT)
             }
             UiWidgetLiveCollectionSource::SelectedEntityThoughts => {

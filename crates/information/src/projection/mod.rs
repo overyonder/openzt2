@@ -14,6 +14,7 @@ pub(super) mod selected_animal_need_list_projection;
 pub(super) mod selected_animal_summary_projection;
 pub(super) mod selected_entity_feedback_projection;
 pub(super) mod selected_entity_identity_projection;
+pub(super) mod selected_guest_need_list_projection;
 pub(super) mod show_status_projection;
 pub(super) mod staff_status_projection;
 pub(super) mod text_replacement_operations;

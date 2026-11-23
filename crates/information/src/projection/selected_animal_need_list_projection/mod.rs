@@ -123,9 +123,9 @@ fn happiness_row(points: &NeedPoints) -> (i64, f32, Color) {
     (icon, (balance + 100.0) / 2.0, color)
 }
 
-const SATISFIED_COLOR: Color = Color::srgb(0.0, 1.0, 0.0);
-const PRESSING_COLOR: Color = Color::srgb(1.0, 1.0, 0.0);
-const CRITICAL_COLOR: Color = Color::srgb(1.0, 0.0, 20.0 / 255.0);
+pub(super) const SATISFIED_COLOR: Color = Color::srgb(0.0, 1.0, 0.0);
+pub(super) const PRESSING_COLOR: Color = Color::srgb(1.0, 1.0, 0.0);
+pub(super) const CRITICAL_COLOR: Color = Color::srgb(1.0, 0.0, 20.0 / 255.0);
 
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(crate) fn project_selected_animal_states_to_authored_list_rows(
@@ -258,7 +258,7 @@ pub(crate) fn project_selected_animal_states_to_authored_list_rows(
 }
 
 /// The `needs.xml` word for a need's colour band.
-fn status_label(color: Color) -> &'static str {
+pub(super) fn status_label(color: Color) -> &'static str {
     if color == SATISFIED_COLOR {
         "entityneeds:satisfied"
     } else if color == PRESSING_COLOR {
@@ -268,7 +268,7 @@ fn status_label(color: Color) -> &'static str {
     }
 }
 
-fn set_tooltip_status(
+pub(super) fn set_tooltip_status(
     commands: &mut Commands,
     row: Entity,
     current: Option<&UiTooltipStatusKey>,
@@ -289,7 +289,7 @@ fn set_tooltip_status(
 }
 
 /// Fills a `needsitem.xml` icon's foreground from the bottom up.
-fn set_need_icon_fill(
+pub(super) fn set_need_icon_fill(
     row_entity: Entity,
     fill_percent: f32,
     color: Color,

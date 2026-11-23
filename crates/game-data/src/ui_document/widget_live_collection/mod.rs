@@ -20,6 +20,8 @@ pub enum UiWidgetLiveCollectionSource {
     /// The selected animal's, guest's or staff member's current thoughts,
     /// newest first.
     SelectedEntityThoughts,
+    /// The selected guest's happiness and needs.
+    SelectedGuestNeeds,
     ScenarioObjectives,
     ZoopediaTableOfContents,
     OverviewLayers,
