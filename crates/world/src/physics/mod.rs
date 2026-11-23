@@ -59,13 +59,13 @@ impl Plugin for ZooPhysicsPlugin {
                 FixedPostUpdate,
                 (
                     fit_objects_with_changed_inputs_or_terrain.run_if(
-                        resource_exists::<TerrainIndex>.and_then(
+                        any_with_component::<TerrainIndex>.and_then(
                             any_match_filter::<ChangedTerrainFitting>
                                 .or_else(on_message::<TerrainChanged>)
                                 .or_else(any_match_filter::<Added<NavAgent>>)
                                 .or_else(any_component_removed::<NavAgent>)
                                 .or_else(any_component_removed::<TerrainFittingSurface>)
-                                .or_else(resource_changed::<TerrainIndex>),
+                                .or_else(any_match_filter::<Changed<TerrainIndex>>),
                         ),
                     ),
                     replace_loaded_model_collider_requests_with_avian_triangle_meshes,

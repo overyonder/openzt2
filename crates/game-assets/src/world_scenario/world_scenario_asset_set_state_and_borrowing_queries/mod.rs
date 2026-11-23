@@ -5,7 +5,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use bevy::prelude::*;
 use openzt2_game_data::AssetId;
 
-use super::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset;
+use super::{
+    world_scenario_asset_set_refresh_and_indexing::{ScenarioCatalogueIndex, ScenarioSourceOrder},
+    world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset,
+};
 
 #[derive(Debug)]
 pub(super) struct ScenarioDocumentHandle {
@@ -15,34 +18,36 @@ pub(super) struct ScenarioDocumentHandle {
 
 #[derive(Resource, Default)]
 pub struct WorldScenarios {
-    pub(super) discovered: bool,
-    pub(super) discovery_changed: bool,
+    pub(super) catalogue_initialized: bool,
+    pub(super) sources: BTreeMap<ScenarioSourceOrder, Handle<WorldScenarioDocumentAsset>>,
+    pub(super) source_orders:
+        BTreeMap<bevy::asset::AssetId<WorldScenarioDocumentAsset>, ScenarioSourceOrder>,
     pub(super) pending: BTreeSet<bevy::asset::AssetId<WorldScenarioDocumentAsset>>,
-    pub(super) required_ids: BTreeSet<bevy::asset::AssetId<WorldScenarioDocumentAsset>>,
     pub(super) failed: BTreeSet<bevy::asset::AssetId<WorldScenarioDocumentAsset>>,
-    pub(super) source_ids: BTreeSet<bevy::asset::AssetId<WorldScenarioDocumentAsset>>,
-    pub(super) published_dependencies: BTreeSet<bevy::asset::AssetId<WorldScenarioDocumentAsset>>,
-    pub(super) handles: Vec<Handle<WorldScenarioDocumentAsset>>,
-    pub(super) locations: BTreeMap<AssetId, Handle<WorldScenarioDocumentAsset>>,
-    pub(super) maps: BTreeMap<AssetId, Handle<WorldScenarioDocumentAsset>>,
-    pub(super) starts: BTreeMap<AssetId, Handle<WorldScenarioDocumentAsset>>,
-    pub(super) campaigns: BTreeMap<AssetId, Handle<WorldScenarioDocumentAsset>>,
+    pub(super) goal_sources:
+        BTreeMap<ScenarioSourceOrder, BTreeSet<bevy::asset::AssetId<WorldScenarioDocumentAsset>>>,
+    pub(super) goal_owners:
+        BTreeMap<bevy::asset::AssetId<WorldScenarioDocumentAsset>, BTreeSet<ScenarioSourceOrder>>,
+    pub(super) campaign_orders: BTreeMap<ScenarioSourceOrder, Vec<AssetId>>,
     pub(super) campaign_order: Vec<AssetId>,
-    pub(super) scenarios: BTreeMap<AssetId, ScenarioDocumentHandle>,
-    pub(super) photo_challenges: BTreeMap<AssetId, Handle<WorldScenarioDocumentAsset>>,
-    pub(super) photo_sets: BTreeMap<AssetId, Handle<WorldScenarioDocumentAsset>>,
-    pub(super) terrains: BTreeMap<AssetId, Handle<WorldScenarioDocumentAsset>>,
-    pub(super) textures: BTreeMap<AssetId, Handle<WorldScenarioDocumentAsset>>,
-    pub(super) start_paths: BTreeMap<AssetId, Box<str>>,
+    #[cfg(any(test, feature = "testing"))]
+    pub(super) queued_test_sources: Vec<Handle<WorldScenarioDocumentAsset>>,
+    pub(super) locations: ScenarioCatalogueIndex<Handle<WorldScenarioDocumentAsset>>,
+    pub(super) maps: ScenarioCatalogueIndex<Handle<WorldScenarioDocumentAsset>>,
+    pub(super) starts: ScenarioCatalogueIndex<Handle<WorldScenarioDocumentAsset>>,
+    pub(super) campaigns: ScenarioCatalogueIndex<Handle<WorldScenarioDocumentAsset>>,
+    pub(super) photo_challenges: ScenarioCatalogueIndex<Handle<WorldScenarioDocumentAsset>>,
+    pub(super) photo_sets: ScenarioCatalogueIndex<Handle<WorldScenarioDocumentAsset>>,
+    pub(super) terrains: ScenarioCatalogueIndex<Handle<WorldScenarioDocumentAsset>>,
+    pub(super) textures: ScenarioCatalogueIndex<Handle<WorldScenarioDocumentAsset>>,
+    pub(super) scenarios: ScenarioCatalogueIndex<ScenarioDocumentHandle>,
+    pub(super) start_paths: ScenarioCatalogueIndex<Box<str>>,
 }
 
 impl WorldScenarios {
     #[cfg(any(test, feature = "testing"))]
     pub fn queue_test_document(&mut self, handle: Handle<WorldScenarioDocumentAsset>) {
-        self.source_ids.insert(handle.id());
-        self.handles.push(handle);
-        self.discovered = true;
-        self.discovery_changed = true;
+        self.queued_test_sources.push(handle);
     }
 
     #[cfg(any(test, feature = "testing"))]
@@ -51,18 +56,20 @@ impl WorldScenarios {
         handle: Handle<WorldScenarioDocumentAsset>,
         document: &openzt2_game_data::world_scenario::WorldScenarioDocument,
     ) {
+        let order = (usize::MAX, self.sources.len());
         for campaign in &document.campaigns {
-            self.campaigns.insert(campaign.id, handle.clone());
+            self.campaigns.insert(order, campaign.id, handle.clone());
             if !self.campaign_order.contains(&campaign.id) {
                 self.campaign_order.push(campaign.id);
             }
         }
         for map in &document.maps {
-            self.maps.insert(map.id, handle.clone());
-            self.terrains.insert(map.terrain, handle.clone());
+            self.maps.insert(order, map.id, handle.clone());
+            self.terrains.insert(order, map.terrain, handle.clone());
         }
         for scenario in &document.scenarios {
             self.scenarios.insert(
+                order,
                 scenario.id,
                 ScenarioDocumentHandle {
                     record: scenario.id,
@@ -71,14 +78,15 @@ impl WorldScenarios {
             );
         }
         for challenge in &document.photo_challenges {
-            self.photo_challenges.insert(challenge.id, handle.clone());
+            self.photo_challenges
+                .insert(order, challenge.id, handle.clone());
         }
         for set in &document.photo_challenge_sets {
-            self.photo_sets.insert(set.id, handle.clone());
+            self.photo_sets.insert(order, set.id, handle.clone());
         }
-        self.discovered = true;
-        self.source_ids.insert(handle.id());
-        self.handles.push(handle);
+        self.catalogue_initialized = true;
+        self.source_orders.insert(handle.id(), order);
+        self.sources.insert(order, handle);
     }
 
     pub fn has_pending_document_loads(
@@ -95,7 +103,7 @@ impl WorldScenarios {
     ) -> bool {
         !self.has_pending_document_loads_from_publication()
             && self.failed.is_empty()
-            && !self.handles.is_empty()
+            && !self.sources.is_empty()
     }
 
     pub fn catalogue_document_load_has_failed(
@@ -107,7 +115,14 @@ impl WorldScenarios {
     }
 
     fn has_pending_document_loads_from_publication(&self) -> bool {
-        !self.discovered || self.discovery_changed || !self.pending.is_empty()
+        !self.catalogue_initialized || !self.pending.is_empty() || self.has_queued_test_sources()
+    }
+
+    fn has_queued_test_sources(&self) -> bool {
+        #[cfg(any(test, feature = "testing"))]
+        return !self.queued_test_sources.is_empty();
+        #[cfg(not(any(test, feature = "testing")))]
+        false
     }
 
     pub fn get<'a>(
@@ -167,7 +182,7 @@ impl<'a> WorldScenariosView<'a> {
 
     fn asset(
         self,
-        index: &'a BTreeMap<AssetId, Handle<WorldScenarioDocumentAsset>>,
+        index: &'a ScenarioCatalogueIndex<Handle<WorldScenarioDocumentAsset>>,
         id: AssetId,
     ) -> Option<&'a WorldScenarioDocumentAsset> {
         self.assets.get(index.get(&id)?)

@@ -33,7 +33,6 @@ pub(in super::super) fn lower_blue_fang_scene_prefab(
     document: &BlueFangBfbDocument,
     source: &str,
     animation_manifest: Option<&str>,
-    footprint_collision_hull: Option<Vec<[f32; 3]>>,
 ) -> Result<ScenePrefabDocument> {
     let model_path = source.to_owned();
     let mut builder = ScenePrefabDocumentAssembler::new(&model_path);
@@ -159,7 +158,15 @@ pub(in super::super) fn lower_blue_fang_scene_prefab(
             );
         }
     }
-    for collision in document.collision_boxes() {
+    let footprint_shape_blocks = document
+        .hierarchy()
+        .filter(|node| node.name.eq_ignore_ascii_case("footprint"))
+        .filter_map(|node| node.block_id.checked_add(1))
+        .collect::<std::collections::BTreeSet<_>>();
+    for collision in document
+        .collision_boxes()
+        .filter(|collision| !footprint_shape_blocks.contains(&collision.block_id))
+    {
         if collision
             .half_extents
             .iter()
@@ -237,6 +244,5 @@ pub(in super::super) fn lower_blue_fang_scene_prefab(
             ScenePrefabAssetDependencyKind::Animation,
         );
     }
-    builder.replace_colliders_with_footprint_collision_hull(footprint_collision_hull)?;
     builder.finish()
 }

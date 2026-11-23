@@ -56,7 +56,7 @@ pub(super) fn project_terrain_brush_cursor_onto_terrain_surfaces(
     mut materials: ResMut<Assets<StandardMaterial>>,
     terrain_assets: Res<Assets<TerrainAsset>>,
     terrain_chunks: Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
-    terrain_index: Res<TerrainIndex>,
+    terrain_index: Single<&TerrainIndex>,
     dirty_chunks: Query<(&TerrainChunk, &TerrainRenderPending), Changed<TerrainRenderPending>>,
     previews: Query<(
         Entity,
@@ -66,6 +66,7 @@ pub(super) fn project_terrain_brush_cursor_onto_terrain_surfaces(
         Option<&MeshMaterial3d<StandardMaterial>>,
     )>,
 ) {
+    let terrain_index = terrain_index.into_inner();
     let changed_height_bounds: Vec<_> = dirty_chunks
         .iter()
         .filter_map(|(chunk, pending)| {

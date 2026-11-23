@@ -26,13 +26,15 @@ pub(crate) fn assign_selected_staff_to_habitat_under_world_pointer(
     >,
     world_pointer_ray: Res<WorldPointerRay>,
     spatial_query: SpatialQuery,
-    habitat_index: Res<HabitatIndex>,
-    topology_grid: Res<TopologyGrid>,
+    habitat_index: Single<&HabitatIndex>,
+    topology_grid: Single<&TopologyGrid>,
     assignment_modes: Query<(), (With<UiDocumentRoot>, With<StaffAssignmentMode>)>,
     selected_entity: WorldUiSelection,
     staff_assignments: Query<Option<&StaffAssignmentArea>, With<Staff>>,
     mut commands: Commands,
 ) {
+    let habitat_index = habitat_index.into_inner();
+    let topology_grid = topology_grid.into_inner();
     let primary_just_pressed = pointer_inputs.read().any(|input| {
         input.pointer_id.is_mouse() && input.button_just_pressed(PointerButton::Primary)
     });

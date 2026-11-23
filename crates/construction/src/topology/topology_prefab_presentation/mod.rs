@@ -10,8 +10,9 @@ use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
 use openzt2_world_state::animation_graph::animation_presentation_relationship_types::AnimationPresentationOwner;
 
 use crate::topology::path_support_hydration::PathSupportPrefab;
-use crate::topology::topology_presentation_types::FenceTerrainEndpointSkewPresentation;
-use crate::topology::topology_presentation_types::TopologyPresentation;
+use crate::topology::topology_presentation_types::{
+    EmptyTopologyPresentation, FenceSkewInner, TopologyPresentationRoot,
+};
 use openzt2_zoo_state::topology::fence_segment_presentation_types::FenceSegmentPrefab;
 use openzt2_zoo_state::topology::fence_segment_presentation_types::FenceTerrainEndpointPresentationCells;
 use openzt2_zoo_state::topology::gate_operation_types::Gate;
@@ -30,7 +31,7 @@ pub(super) fn hydrate_topology_prefab_presentations(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     grid: Single<&TopologyGrid>,
-    topology: Query<
+    mut topology: Query<
         (
             Entity,
             Option<&FenceSegmentPrefab>,
@@ -39,9 +40,11 @@ pub(super) fn hydrate_topology_prefab_presentations(
             Option<&FenceEdge>,
             Option<&PathTile>,
             Option<&PathSupportPrefab>,
+            Option<&mut Visibility>,
+            Option<&Children>,
         ),
         (
-            Without<TopologyPresentation>,
+            Without<EmptyTopologyPresentation>,
             Or<(
                 With<FenceSegmentPrefab>,
                 With<PathTile>,
@@ -49,19 +52,42 @@ pub(super) fn hydrate_topology_prefab_presentations(
             )>,
         ),
     >,
+    presentation_roots: Query<Option<&Children>, With<TopologyPresentationRoot>>,
+    inner_skews: Query<(), With<FenceSkewInner>>,
 ) {
     let grid = grid.into_inner();
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };
-    for (topology_entity, fence, cells, gate, edge, path, support) in &topology {
+    for (topology_entity, fence, cells, gate, edge, path, support, visibility, children) in
+        &mut topology
+    {
+        let existing = children
+            .into_iter()
+            .flat_map(|children| children.iter())
+            .find_map(|child| {
+                presentation_roots
+                    .get(child)
+                    .ok()
+                    .map(|children| (child, children))
+            });
+        if let Some((root, root_children)) = existing {
+            if fence.is_none()
+                || root_children.is_some_and(|children| {
+                    children.iter().any(|child| inner_skews.contains(child))
+                })
+            {
+                continue;
+            }
+            commands.entity(root).try_despawn();
+        }
         // Ground-path boundaries own these meshes, including curbs loaded
         // from a saved zoo. A saved edge must not retain its old corner after
         // the neighboring path changes.
         if edge.is_some_and(|edge| definitions.is_automatic_ground_path_curb(edge.definition)) {
             commands
                 .entity(topology_entity)
-                .insert(TopologyPresentation(None));
+                .insert(EmptyTopologyPresentation);
             continue;
         }
         // A gate edge presents its authored segment model and, beside it, the
@@ -90,21 +116,26 @@ pub(super) fn hydrate_topology_prefab_presentations(
         let Some(scene) = scene.filter(|id| *id != AssetId::default()) else {
             commands
                 .entity(topology_entity)
-                .insert(TopologyPresentation(None));
+                .insert(EmptyTopologyPresentation);
             continue;
         };
         let Some(handle) = definitions.scene(scene) else {
             continue;
         };
-        commands
-            .entity(topology_entity)
-            .insert(Visibility::Inherited);
-        let presentation_root = if fence.is_some() {
+        if let Some(mut visibility) = visibility {
+            visibility.set_if_neq(Visibility::Inherited);
+        } else {
+            commands
+                .entity(topology_entity)
+                .insert(Visibility::Inherited);
+        }
+        if fence.is_some() {
             let first_transform = commands
                 .spawn((
                     Transform::IDENTITY,
                     Visibility::Inherited,
                     ChildOf(topology_entity),
+                    TopologyPresentationRoot,
                 ))
                 .id();
             let second_transform = commands
@@ -112,6 +143,7 @@ pub(super) fn hydrate_topology_prefab_presentations(
                     Transform::IDENTITY,
                     Visibility::Inherited,
                     ChildOf(first_transform),
+                    FenceSkewInner,
                 ))
                 .id();
             let mut model = commands.spawn((
@@ -163,26 +195,15 @@ pub(super) fn hydrate_topology_prefab_presentations(
                     },
                 ));
             }
-            commands
-                .entity(topology_entity)
-                .insert(FenceTerrainEndpointSkewPresentation {
-                    first_transform,
-                    second_transform,
-                });
-            first_transform
         } else {
-            commands
-                .spawn((
-                    Transform::IDENTITY,
-                    Visibility::Inherited,
-                    ChildOf(topology_entity),
-                    PrefabPresentation::new(handle),
-                ))
-                .id()
-        };
-        commands
-            .entity(topology_entity)
-            .insert(TopologyPresentation(Some(presentation_root)));
+            commands.spawn((
+                Transform::IDENTITY,
+                Visibility::Inherited,
+                ChildOf(topology_entity),
+                TopologyPresentationRoot,
+                PrefabPresentation::new(handle),
+            ));
+        }
     }
 }
 

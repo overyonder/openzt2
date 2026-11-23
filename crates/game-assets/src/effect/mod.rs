@@ -1,9 +1,7 @@
 //! Blue Fang particle effects lowered on demand and prepared once for Hanabi.
 
 use bevy::{asset::AssetApp, prelude::*};
-use openzt2_game_data::{
-    particle::authored_particle_system::ParticleEffectSimulationClock, AssetId,
-};
+use openzt2_game_data::AssetId;
 use std::collections::BTreeMap;
 
 pub mod authored_particle_system_hanabi_effect_preparation;
@@ -31,11 +29,8 @@ pub(crate) mod prepared_effect_emitters;
 pub mod source;
 use effect_asset_loading::EffectAssetLoader;
 use effect_instance_runtime_systems::{
-    activate_authored_particle_spawners_for_emission_window,
-    apply_authored_particle_emission_and_close_finished_spawners,
     confirm_particle_readbacks_before_draining_collision_children,
-    retire_drained_particle_effect_trees, retire_empty_particle_effect_document_roots,
-    select_effect_simulation_delta_time_from_authored_clock,
+    retire_empty_particle_effect_document_roots, tick_authored_particle_emitters,
 };
 use effect_instance_spawning_and_preparation::{
     enqueue_requested_effect_instances_for_preparation, reconcile_loaded_particle_effect_instances,
@@ -74,7 +69,6 @@ impl ParticleEffectDocumentAsset {
 
 #[derive(Component, Clone, Debug)]
 pub struct LiveParticleEffectInstance {
-    simulation_clock: ParticleEffectSimulationClock,
     effect_asset: Handle<ParticleEffectDocumentAsset>,
     emitter_id: AssetId,
 }
@@ -109,7 +103,7 @@ pub struct ParticleEffectAssetAndRuntimePlugin;
 impl Plugin for ParticleEffectAssetAndRuntimePlugin {
     fn build(&self, app: &mut App) {
         app.init_asset::<ParticleEffectDocumentAsset>()
-            .init_resource::<particle_wave_surface::ParticleWaveCameraFog>()
+            .add_observer(effect_instance_runtime_systems::retire_drained_particle_effect_tree)
             .add_plugins(particle_plane_binding::ParticleEffectPlaneBindingPlugin)
             .add_systems(
                 PostUpdate,
@@ -147,30 +141,29 @@ impl Plugin for ParticleEffectAssetAndRuntimePlugin {
             )
             .add_systems(
                 PostUpdate,
-                select_effect_simulation_delta_time_from_authored_clock
-                    .before(activate_authored_particle_spawners_for_emission_window),
-            )
-            .add_systems(
-                PostUpdate,
-                effect_instance_runtime_systems::publish_ready_particle_effect_graphs
-                    .after(bevy_hanabi::EffectSystems::CompileEffects),
-            )
-            .add_systems(
-                PostUpdate,
-                activate_authored_particle_spawners_for_emission_window
-                    .after(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate)
-                    .after(effect_instance_runtime_systems::publish_ready_particle_effect_graphs)
-                    .before(bevy_hanabi::EffectSystems::TickSpawners),
+                (
+                    effect_instance_runtime_systems::publish_ready_particle_effect_graphs
+                        .after(bevy_hanabi::EffectSystems::CompileEffects),
+                    tick_authored_particle_emitters
+                        .after(
+                            effect_instance_runtime_systems::publish_ready_particle_effect_graphs,
+                        )
+                        .in_set(bevy_hanabi::EffectSystems::TickSpawners),
+                ),
             )
             .add_systems(
                 PostUpdate,
                 (
-                    explicit_particle_emission::upload_explicit_particle_emission_points
+                    explicit_particle_emission::collect_requested_particle_points.run_if(
+                        on_message::<explicit_particle_emission::AppendParticleEffectPoints>,
+                    ),
+                    explicit_particle_emission::clear_submitted_particle_points,
+                    explicit_particle_emission::upload_queued_particle_points
+                        .after(explicit_particle_emission::collect_requested_particle_points)
+                        .after(explicit_particle_emission::clear_submitted_particle_points)
                         .before(confirm_particle_readbacks_before_draining_collision_children),
                     (
-                        apply_authored_particle_emission_and_close_finished_spawners,
                         confirm_particle_readbacks_before_draining_collision_children,
-                        retire_drained_particle_effect_trees,
                         retire_empty_particle_effect_document_roots,
                     )
                         .chain(),
@@ -180,16 +173,9 @@ impl Plugin for ParticleEffectAssetAndRuntimePlugin {
             .add_systems(
                 PostUpdate,
                 (
-                    particle_wave_surface::publish_particle_wave_camera_fog
-                        .after(TransformSystems::Propagate)
-                        .run_if(
-                            any_match_filter::<
-                                With<particle_wave_surface::ParticleEffectWaveSurface>,
-                            >,
-                        ),
-                    particle_wave_surface::upload_particle_wave_surface_uniforms
-                        .after(particle_wave_surface::publish_particle_wave_camera_fog)
-                        .before(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate)
+                    particle_wave_surface::project_particle_view_fog
+                        .after(TransformSystems::Propagate),
+                    particle_wave_surface::write_particle_wave_surface_uniforms
                         .before(bevy_hanabi::EffectSystems::UpdatePropertiesFromAsset),
                 ),
             );

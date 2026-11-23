@@ -6,6 +6,8 @@ use super::camera_runtime_state_types::CameraMode;
 #[derive(Message, Clone, Copy, Debug, PartialEq)]
 pub struct SetCameraMode {
     pub mode: CameraMode,
+    /// A standalone target. A relative mode without one uses its admitted session's subject.
+    pub subject: Option<Entity>,
     pub definition: AssetId,
     pub transition_seconds: Option<f32>,
 }

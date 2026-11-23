@@ -304,6 +304,7 @@ fn create_effect_pass_material_asset(
     };
     let blend = state.blend()?;
     let (depth_write_enabled, depth_compare) = state.effective_depth_state();
+    let (depth_bias_bits, slope_scale_depth_bias_bits) = state.effective_depth_bias_bits();
     let (stencil, stencil_reference) = state.effective_stencil();
     let independent_opaque = standalone_pass
         && blend.is_none()
@@ -644,6 +645,8 @@ fn create_effect_pass_material_asset(
             polygon_mode: state.polygon,
             depth_write_enabled,
             depth_compare,
+            depth_bias_bits,
+            slope_scale_depth_bias_bits,
             stencil,
             stencil_reference,
             independent_opaque,

@@ -129,8 +129,8 @@ pub(super) fn spawn_paid_employees_from_ready_prefabs(
     active_definitions: Res<WorldDefinitions>,
     prefabs: Res<Assets<ScenePrefabAsset>>,
     models: Res<Assets<Gltf>>,
-    clock: Res<ZooClock>,
-    calendar: Res<ZooCalendar>,
+    clock: Single<&ZooClock>,
+    calendar: Single<&ZooCalendar>,
     mut identifiers: Query<&mut PersistentIdAllocator>,
     mut hired: MessageWriter<StaffHired>,
 ) {

@@ -1,10 +1,10 @@
 use super::*;
 use bevy::asset::{
-    io::{
-        memory::{Dir, MemoryAssetReader},
-        AssetSourceBuilder, AssetSourceId, Reader,
-    },
     AssetLoader, LoadContext,
+    io::{
+        AssetSourceBuilder, AssetSourceId, Reader,
+        memory::{Dir, MemoryAssetReader},
+    },
 };
 use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
 use openzt2_game_data::behavior::action_record::BehaviorAction;
@@ -26,13 +26,13 @@ use openzt2_world_state::simulation_time::deterministic_random_stream::{
     DeterministicRng, RngDomain, ZooSeed,
 };
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
-use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
-    activate_due_behavior_instructions, activated_behavior_actor, update_waiting_behavior_actors,
-};
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionPhase;
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
+    activate_due_behavior_instructions, activated_behavior_actor,
+};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Loads any `.testprefab` as a one-entity scene once the test opens the gate.
 #[derive(TypePath)]
@@ -160,7 +160,9 @@ fn dropped_litter_waits_for_its_model_and_spawns_once() {
     .init_asset::<openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset>()
     .init_resource::<WorldDefinitions>()
     .add_observer(activated_behavior_actor::<RunBehaviorSpawnObjectAtActor>.pipe(spawn_behavior_objects_at_actor))
-        .add_systems(Update, (activate_due_behavior_instructions, update_waiting_behavior_actors.pipe(spawn_behavior_objects_at_actor)));
+    .add_observer(super::super::resume_prefab_spawn.pipe(spawn_behavior_objects_at_actor))
+    .add_observer(super::super::release_obsolete_spawn_demand)
+    .add_systems(Update, (activate_due_behavior_instructions, super::super::wake_prefab_spawn_actions));
 
     let trash = AssetId::from_key("TrashGround");
     let definitions = WorldDefinitionDocument {
@@ -273,10 +275,11 @@ fn dropped_litter_waits_for_its_model_and_spawns_once() {
             .action,
         0
     );
-    assert!(app
-        .world()
-        .get::<PendingAtActorSpawnPrefab>(guest)
-        .is_some());
+    assert!(
+        app.world()
+            .get::<PendingAtActorSpawnPrefab>(guest)
+            .is_some()
+    );
 
     gate.store(true, Ordering::Release);
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
@@ -295,8 +298,9 @@ fn dropped_litter_waits_for_its_model_and_spawns_once() {
             .action,
         1
     );
-    assert!(app
-        .world()
-        .get::<PendingAtActorSpawnPrefab>(guest)
-        .is_none());
+    assert!(
+        app.world()
+            .get::<PendingAtActorSpawnPrefab>(guest)
+            .is_none()
+    );
 }

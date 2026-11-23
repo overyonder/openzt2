@@ -16,7 +16,13 @@ use crate::{
 #[derive(Debug)]
 pub(crate) struct AuthoredBinderSources {
     directories: io::Result<BTreeSet<PathBuf>>,
-    declarations: OnceLock<BTreeMap<String, Vec<PathBuf>>>,
+    declarations: OnceLock<BTreeMap<String, Vec<BinderDeclaration>>>,
+}
+
+#[derive(Debug)]
+struct BinderDeclaration {
+    path: PathBuf,
+    reference_types: BTreeSet<String>,
 }
 
 impl Default for AuthoredBinderSources {
@@ -53,18 +59,16 @@ impl AuthoredBinderSources {
                 .is_some_and(|extension| extension.eq_ignore_ascii_case("xml"))
     }
 
-    pub(super) fn resolve_binder_type_source_path(
+    fn declarations(
         &self,
         archives: &AssetArchives,
-        from: &str,
-        binder_type: &str,
-    ) -> io::Result<Option<PathBuf>> {
+    ) -> io::Result<&BTreeMap<String, Vec<BinderDeclaration>>> {
         let directories = self
             .directories
             .as_ref()
             .map_err(|error| io::Error::new(error.kind(), error.to_string()))?;
-        let declarations = self.declarations.get_or_init(|| {
-            let mut paths_by_type = BTreeMap::<String, Vec<PathBuf>>::new();
+        Ok(self.declarations.get_or_init(|| {
+            let mut paths_by_type = BTreeMap::<String, Vec<BinderDeclaration>>::new();
             for path in directories.iter().flat_map(|directory| archives.source_paths_under(directory))
                 .filter(|path| self.contains_path(path)).collect::<BTreeSet<_>>()
             {
@@ -81,18 +85,62 @@ impl AuthoredBinderSources {
                 };
                 if document.root.name.eq_ignore_ascii_case("BFTypedBinder") {
                     if let Some(binder_type) = document.root.attribute_named_any(&["binderType"]) {
+                        let reference_types = crate::species::source::collect_authored_species_type_source_references(&document)
+                            .into_iter().map(|reference| canonicalize_source_document_record_key(&reference)).collect();
                         paths_by_type.entry(canonicalize_source_document_record_key(binder_type))
-                            .or_default().push(path);
+                            .or_default().push(BinderDeclaration { path, reference_types });
                     }
                 }
             }
             paths_by_type
-        });
+        }))
+    }
+
+    pub(crate) fn animal_binder_paths(
+        &self,
+        archives: &AssetArchives,
+    ) -> io::Result<BTreeSet<PathBuf>> {
+        let declarations = self.declarations(archives)?;
+        let mut animal_types = BTreeSet::from(["animal"]);
+        loop {
+            let new_types = declarations
+                .iter()
+                .filter(|(key, _)| !animal_types.contains(key.as_str()))
+                .filter(|(_, candidates)| {
+                    candidates.iter().any(|candidate| {
+                        candidate
+                            .reference_types
+                            .iter()
+                            .any(|key| animal_types.contains(key.as_str()))
+                    })
+                })
+                .map(|(key, _)| key.as_str())
+                .collect::<Vec<_>>();
+            if new_types.is_empty() {
+                break;
+            }
+            animal_types.extend(new_types);
+        }
+        Ok(animal_types
+            .into_iter()
+            .filter_map(|key| declarations.get(key))
+            .flatten()
+            .map(|declaration| declaration.path.clone())
+            .collect())
+    }
+
+    pub(crate) fn resolve_binder_type_source_path(
+        &self,
+        archives: &AssetArchives,
+        from: &str,
+        binder_type: &str,
+    ) -> io::Result<Option<PathBuf>> {
+        let declarations = self.declarations(archives)?;
         match declarations
             .get(&canonicalize_source_document_record_key(binder_type))
             .map(Vec::as_slice)
         {
-            Some([path]) => Ok(Some(path.clone())),
+            Some([declaration]) => Ok(Some(declaration.path.clone())),
             Some(_) => Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!("{from} references ambiguous authored binder type {binder_type}"),

@@ -1,144 +1,267 @@
-//! Discovery and precedence indexing of all behavior documents in the active archive overlay.
+//! Discovery and precedence indexing of behavior documents.
 
-use std::{collections::BTreeMap, path::Path};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+};
 
-use bevy::prelude::*;
+use bevy::{
+    asset::{AssetId as DocumentId, AssetLoadFailedEvent, LoadState},
+    prelude::*,
+};
 use openzt2_game_data::{behavior::document::BehaviorDocument, AssetId};
 
 use super::behavior_asset_types::{
-    BehaviorDeclarationLocation, BehaviorDocumentAsset, LoadedBehaviorDocumentCollection,
+    BehaviorDeclarationLocation, BehaviorDeclarationRows, BehaviorDocumentAsset,
+    IndexedBehaviorDocument, LoadedBehaviorDocumentCollection,
 };
 use crate::asset_source::{ArchiveOverlayChanged, AssetArchives};
 
-pub(super) fn refresh_behavior_documents_after_archive_change(
-    behavior_source_archives: Res<AssetArchives>,
+pub(super) fn discover_behavior_documents(
+    archives: Res<AssetArchives>,
     asset_server: Res<AssetServer>,
-    mut overlay_changes: Option<MessageReader<ArchiveOverlayChanged>>,
-    mut loaded_behavior_documents: ResMut<LoadedBehaviorDocumentCollection>,
+    assets: Res<Assets<BehaviorDocumentAsset>>,
+    mut overlay_changes: MessageReader<ArchiveOverlayChanged>,
+    mut collection: ResMut<LoadedBehaviorDocumentCollection>,
 ) {
-    let changed = overlay_changes.as_mut().is_some_and(|changes| {
-        let relevant = changes
-            .read()
-            .flat_map(|change| &change.changes)
-            .any(|change| is_behavior_document_asset_path(&change.normalized_asset_path));
-        changes.clear();
-        relevant
-    });
-    if !behavior_source_archives.is_added() && !changed {
+    let changed_paths: BTreeSet<&Path> = overlay_changes
+        .read()
+        .flat_map(|message| &message.changes)
+        .map(|change| change.normalized_asset_path.as_path())
+        .filter(|path| is_behavior_document_asset_path(path))
+        .collect();
+    if !archives.is_added() && changed_paths.is_empty() {
         return;
     }
-    loaded_behavior_documents.behavior_document_assets = behavior_source_archives
-        .resolved_paths()
-        .iter()
-        .filter(|asset_path| is_behavior_document_asset_path(asset_path))
-        .cloned()
-        .map(|asset_path| asset_server.load::<BehaviorDocumentAsset>(asset_path))
+
+    let index = collection.bypass_change_detection();
+    let mut retained = BTreeSet::new();
+    let mut published_rows_changed = false;
+    for entry in archives.resolved_archive_entries().iter() {
+        let path = &entry.normalized_asset_path;
+        if !is_behavior_document_asset_path(path) {
+            continue;
+        }
+        let handle = asset_server.load::<BehaviorDocumentAsset>(path.clone());
+        let id = handle.id();
+        retained.insert(id);
+        let precedence = (entry.archive_priority_index, entry.zip_entry_ordinal);
+        if let Some(document) = index.documents.get_mut(&id) {
+            if changed_paths.contains(path.as_path()) {
+                index.pending.insert(id);
+            }
+            if document.precedence != precedence {
+                let rows = std::mem::take(&mut document.rows);
+                remove_rows(index, id, &rows);
+                let Some(document) = index.documents.get_mut(&id) else {
+                    continue;
+                };
+                document.precedence = precedence;
+                published_rows_changed |= replace_rows(index, id, rows);
+            }
+            continue;
+        }
+        index.documents.insert(
+            id,
+            IndexedBehaviorDocument {
+                handle,
+                precedence,
+                rows: BehaviorDeclarationRows::default(),
+            },
+        );
+        match asset_server.get_load_state(id) {
+            Some(LoadState::Loaded) => {
+                if let Some(asset) = assets.get(id) {
+                    published_rows_changed |= replace_rows(index, id, declaration_rows(asset));
+                }
+            }
+            Some(LoadState::Failed(_)) => {}
+            _ => {
+                index.pending.insert(id);
+            }
+        }
+    }
+    let removed: Vec<_> = index
+        .documents
+        .keys()
+        .filter(|id| !retained.contains(id))
+        .copied()
         .collect();
-    loaded_behavior_documents.index_ready = false;
+    for id in removed {
+        if let Some(document) = index.documents.remove(&id) {
+            published_rows_changed |= remove_rows(index, id, &document.rows);
+            index.pending.remove(&id);
+        }
+    }
+    publish_readiness(&mut collection, published_rows_changed);
 }
 
-fn is_behavior_document_asset_path(asset_path: &Path) -> bool {
-    asset_path.extension().is_some_and(|extension| {
+fn is_behavior_document_asset_path(path: &Path) -> bool {
+    path.extension().is_some_and(|extension| {
         extension.eq_ignore_ascii_case("beh") || extension.eq_ignore_ascii_case("tsk")
     })
 }
 
-pub(super) fn rebuild_behavior_declaration_indexes_after_asset_change(
-    asset_server: Res<AssetServer>,
-    behavior_document_assets: Res<Assets<BehaviorDocumentAsset>>,
-    mut behavior_asset_events: MessageReader<AssetEvent<BehaviorDocumentAsset>>,
-    mut loaded_behavior_documents: ResMut<LoadedBehaviorDocumentCollection>,
+pub(super) fn update_behavior_declarations(
+    assets: Res<Assets<BehaviorDocumentAsset>>,
+    mut asset_events: MessageReader<AssetEvent<BehaviorDocumentAsset>>,
+    mut failures: MessageReader<AssetLoadFailedEvent<BehaviorDocumentAsset>>,
+    mut collection: ResMut<LoadedBehaviorDocumentCollection>,
 ) {
-    let any_behavior_asset_changed = behavior_asset_events.read().fold(false, |changed, event| {
-        changed | !matches!(event, AssetEvent::Unused { .. })
-    });
-    if any_behavior_asset_changed {
-        loaded_behavior_documents.index_ready = false;
-    }
-    if loaded_behavior_documents.index_ready {
-        return;
-    }
-    if loaded_behavior_documents
-        .behavior_document_assets
-        .iter()
-        .any(|handle| {
-            !matches!(
-                asset_server.get_load_state(handle.id()),
-                Some(bevy::asset::LoadState::Loaded | bevy::asset::LoadState::Failed(_))
-            )
-        })
-    {
-        return;
-    }
-    let mut behavior_sets_by_identifier =
-        BTreeMap::<AssetId, Vec<BehaviorDeclarationLocation>>::new();
-    let mut behavior_tasks_by_unique_identifier =
-        BTreeMap::<AssetId, Vec<BehaviorDeclarationLocation>>::new();
-    for behavior_document_handle in &loaded_behavior_documents.behavior_document_assets {
-        let Some(behavior_document_asset) = behavior_document_assets.get(behavior_document_handle)
-        else {
-            continue;
-        };
-        match &behavior_document_asset.behavior_document {
-            BehaviorDocument::Sets(behavior_set_declarations) => {
-                behavior_set_declarations.iter().enumerate().for_each(
-                    |(declaration_index, behavior_set)| {
-                        let declaration_location = BehaviorDeclarationLocation {
-                            behavior_document_asset: behavior_document_handle.clone(),
-                            declaration_index,
-                        };
-                        behavior_sets_by_identifier
-                            .entry(behavior_set.id)
-                            .or_default()
-                            .push(declaration_location.clone());
-                        behavior_sets_by_identifier
-                            .entry(AssetId::from_key(behavior_set.name.trim()))
-                            .or_default()
-                            .push(declaration_location.clone());
-                        behavior_sets_by_identifier
-                            .entry(AssetId::from_key(
-                                &behavior_set.name.trim().to_ascii_lowercase(),
-                            ))
-                            .or_default()
-                            .push(declaration_location);
-                    },
-                );
+    let index = collection.bypass_change_detection();
+    let mut changed = BTreeSet::new();
+    for event in asset_events.read() {
+        match *event {
+            AssetEvent::Added { id } | AssetEvent::Modified { id } | AssetEvent::Removed { id }
+                if index.documents.contains_key(&id) =>
+            {
+                changed.insert(id);
             }
-            BehaviorDocument::Tasks(behavior_tasks) => {
-                behavior_tasks
-                    .iter()
-                    .enumerate()
-                    .for_each(|(declaration_index, behavior_task)| {
-                        behavior_tasks_by_unique_identifier
-                            .entry(AssetId::from_key(
-                                &behavior_task.name.trim().to_ascii_lowercase(),
-                            ))
-                            .or_default()
-                            .push(BehaviorDeclarationLocation {
-                                behavior_document_asset: behavior_document_handle.clone(),
-                                declaration_index,
-                            });
-                    });
+            _ => {}
+        }
+    }
+    let mut published_rows_changed = false;
+    for failure in failures.read() {
+        let id = failure.id;
+        if index.documents.contains_key(&id) && !changed.contains(&id) {
+            index.pending.remove(&id);
+            published_rows_changed |= replace_rows(index, id, BehaviorDeclarationRows::default());
+        }
+    }
+    for id in changed {
+        index.pending.remove(&id);
+        let rows = assets
+            .get(id)
+            .map_or_else(BehaviorDeclarationRows::default, declaration_rows);
+        published_rows_changed |= replace_rows(index, id, rows);
+    }
+    publish_readiness(&mut collection, published_rows_changed);
+}
+
+fn publish_readiness(
+    collection: &mut ResMut<LoadedBehaviorDocumentCollection>,
+    rows_changed: bool,
+) {
+    let ready = collection.pending.is_empty();
+    if collection.index_ready != ready {
+        collection.index_ready = ready;
+    } else if ready && rows_changed {
+        collection.set_changed();
+    }
+}
+
+fn declaration_rows(asset: &BehaviorDocumentAsset) -> BehaviorDeclarationRows {
+    let mut rows = BehaviorDeclarationRows::default();
+    match &asset.behavior_document {
+        BehaviorDocument::Sets(sets) => {
+            for (index, set) in sets.iter().enumerate() {
+                let name = set.name.trim();
+                rows.sets.extend([
+                    (set.id, index),
+                    (AssetId::from_key(name), index),
+                    (AssetId::from_key(&name.to_ascii_lowercase()), index),
+                ]);
+            }
+            rows.sets.sort_unstable();
+            rows.sets.dedup();
+        }
+        BehaviorDocument::Tasks(tasks) => {
+            rows.tasks
+                .extend(tasks.iter().enumerate().map(|(index, task)| {
+                    (
+                        AssetId::from_key(&task.name.trim().to_ascii_lowercase()),
+                        index,
+                    )
+                }));
+        }
+    }
+    rows
+}
+
+fn replace_rows(
+    collection: &mut LoadedBehaviorDocumentCollection,
+    id: DocumentId<BehaviorDocumentAsset>,
+    rows: BehaviorDeclarationRows,
+) -> bool {
+    let Some(document) = collection.documents.get_mut(&id) else {
+        return false;
+    };
+    if document.rows == rows {
+        return false;
+    }
+    let handle = document.handle.clone();
+    let previous = std::mem::replace(&mut document.rows, rows);
+    remove_rows(collection, id, &previous);
+    let document = &collection.documents[&id];
+    insert_rows(
+        &collection.documents,
+        &mut collection.behavior_sets_by_identifier,
+        &document.rows.sets,
+        &handle,
+        document.precedence,
+    );
+    insert_rows(
+        &collection.documents,
+        &mut collection.behavior_tasks_by_unique_identifier,
+        &document.rows.tasks,
+        &handle,
+        document.precedence,
+    );
+    true
+}
+
+fn insert_rows(
+    documents: &BTreeMap<DocumentId<BehaviorDocumentAsset>, IndexedBehaviorDocument>,
+    index: &mut BTreeMap<AssetId, Vec<BehaviorDeclarationLocation>>,
+    rows: &[(AssetId, usize)],
+    handle: &Handle<BehaviorDocumentAsset>,
+    precedence: (usize, usize),
+) {
+    for &(key, declaration_index) in rows {
+        let locations = index.entry(key).or_default();
+        let order = (precedence, declaration_index);
+        let position = locations.partition_point(|location| {
+            (
+                documents[&location.behavior_document_asset.id()].precedence,
+                location.declaration_index,
+            ) < order
+        });
+        locations.insert(
+            position,
+            BehaviorDeclarationLocation {
+                behavior_document_asset: handle.clone(),
+                declaration_index,
+            },
+        );
+    }
+}
+
+fn remove_rows(
+    collection: &mut LoadedBehaviorDocumentCollection,
+    id: DocumentId<BehaviorDocumentAsset>,
+    rows: &BehaviorDeclarationRows,
+) -> bool {
+    fn remove_locations(
+        index: &mut BTreeMap<AssetId, Vec<BehaviorDeclarationLocation>>,
+        rows: &[(AssetId, usize)],
+        id: DocumentId<BehaviorDocumentAsset>,
+    ) {
+        for (key, _) in rows {
+            if let std::collections::btree_map::Entry::Occupied(mut entry) = index.entry(*key) {
+                entry
+                    .get_mut()
+                    .retain(|location| location.behavior_document_asset.id() != id);
+                if entry.get().is_empty() {
+                    entry.remove();
+                }
             }
         }
     }
-    behavior_sets_by_identifier
-        .values_mut()
-        .for_each(remove_duplicate_behavior_declaration_locations);
-    loaded_behavior_documents.behavior_sets_by_identifier = behavior_sets_by_identifier;
-    behavior_tasks_by_unique_identifier
-        .values_mut()
-        .for_each(remove_duplicate_behavior_declaration_locations);
-    loaded_behavior_documents.behavior_tasks_by_unique_identifier =
-        behavior_tasks_by_unique_identifier;
-    loaded_behavior_documents.index_ready = true;
-}
-
-fn remove_duplicate_behavior_declaration_locations(
-    declaration_locations: &mut Vec<BehaviorDeclarationLocation>,
-) {
-    declaration_locations.dedup_by(|left_location, right_location| {
-        left_location.behavior_document_asset.id() == right_location.behavior_document_asset.id()
-            && left_location.declaration_index == right_location.declaration_index
-    });
+    remove_locations(&mut collection.behavior_sets_by_identifier, &rows.sets, id);
+    remove_locations(
+        &mut collection.behavior_tasks_by_unique_identifier,
+        &rows.tasks,
+        id,
+    );
+    !(rows.sets.is_empty() && rows.tasks.is_empty())
 }

@@ -56,12 +56,13 @@ use super::super::{EmotePresentation, UiCachedMessages, UiExclusiveHoverPresenta
 
 pub(super) fn apply_document_presentation(
     event: On<DocumentPresentation>,
-    control: Option<Res<SimulationControl>>,
+    controls: Query<&SimulationControl>,
     mut operations: MessageWriter<AuthoredUiDocumentOperation>,
     mut documents: crate::projection::ui_document_opening::LiveUiDocumentEffects,
 ) {
-    let transfer_pause = control
-        .as_deref()
+    let transfer_pause = controls
+        .single()
+        .ok()
         .is_some_and(SimulationControl::temporary_ui_pause_is_held);
     let (role, operation, transfer_pause) = match event.operation {
         DocumentOperation::ShowDocumentRole { document_role } => {

@@ -10,6 +10,7 @@ use openzt2_game_data::terrain::TerrainUnits;
 use openzt2_game_data::terrain::TerrainWaterDepth;
 use openzt2_game_data::terrain::TerrainWaterRegion;
 use openzt2_game_data::world_definitions::document::WorldDefinitionDocument;
+use openzt2_world_state::world_spawn::world_membership_types::{WorldMember, WorldRoot};
 
 use openzt2_zoo_state::terrain::dry_surface_eligibility::TerrainDrySurfaceEligibility;
 use openzt2_zoo_state::terrain::terrain_edit_data_types::TerrainWaterAffiliation;
@@ -113,7 +114,14 @@ fn edited_water_world() -> (World, Entity, Handle<TerrainAsset>) {
     let mut definitions = WorldDefinitions::default();
     definitions.index_test_document(definition_handle, &document);
     world.insert_resource(definitions);
-    world.insert_resource(TopologyGrid::default());
+    let root = world
+        .spawn((
+            WorldRoot {
+                scenario: default(),
+            },
+            TopologyGrid::default(),
+        ))
+        .id();
     let projection = world.register_system(
         crate::terrain::water_regions::authored_membership::project_terrain_water_membership,
     );
@@ -129,6 +137,7 @@ fn edited_water_world() -> (World, Entity, Handle<TerrainAsset>) {
     >();
     let chunk = world
         .spawn((
+            WorldMember { root },
             TerrainChunk {
                 source_coord: IVec2::ZERO,
                 coord: IVec2::ZERO,
@@ -148,7 +157,7 @@ fn edited_water_world() -> (World, Entity, Handle<TerrainAsset>) {
             },
         ))
         .id();
-    world.insert_resource(TerrainIndex {
+    world.entity_mut(root).insert(TerrainIndex {
         chunks: [(IVec2::ZERO, chunk)].into(),
         origin: Vec2::new(0.0, -16.0),
         chunk_span_m: 16.0,
@@ -164,10 +173,14 @@ struct MembershipProjection(SystemId);
 fn on_land(world: &mut World, point: Vec2) -> Option<bool> {
     let projection = world.resource::<MembershipProjection>().0;
     world.run_system(projection).unwrap();
+    let root = world
+        .query_filtered::<Entity, With<WorldRoot>>()
+        .single(world)
+        .unwrap();
     SystemState::<TerrainDrySurfaceEligibility>::new(world)
         .get(world)
         .unwrap()
-        .on_land(point)
+        .on_land(root, point)
 }
 
 fn set_affiliations(

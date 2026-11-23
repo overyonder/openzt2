@@ -201,7 +201,7 @@ const WATER_NEIGHBORS: [IVec2; 4] = [IVec2::NEG_X, IVec2::X, IVec2::NEG_Y, IVec2
 pub(super) fn rebuild_edited_water_regions(
     mut commands: Commands,
     terrain_assets: Res<Assets<TerrainAsset>>,
-    terrain_index: Res<TerrainIndex>,
+    terrain_index: Single<&TerrainIndex>,
     chunks: Query<(Entity, &TerrainChunk, Option<&EditedTerrainSamples>)>,
     authored: Query<(Entity, &TerrainWaterRegionSource), With<NaturalWaterRegion>>,
     pending: Query<(Entity, &TerrainChunk, &TerrainWaterTargetsPending)>,
@@ -217,6 +217,7 @@ pub(super) fn rebuild_edited_water_regions(
         &ChildOf,
     )>,
 ) {
+    let terrain_index = terrain_index.into_inner();
     let mut dirty_by_terrain = HashMap::<bevy::asset::AssetId<TerrainAsset>, Vec<IRect>>::new();
     for (entity, chunk, pending) in &pending {
         let Some(count) = terrain_assets

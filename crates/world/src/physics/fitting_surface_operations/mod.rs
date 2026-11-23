@@ -2,6 +2,7 @@
 
 use avian3d::prelude::*;
 use bevy::prelude::*;
+use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use openzt2_zoo_state::locomotion::locomotion_types::NavAgent;
@@ -50,11 +51,12 @@ pub(super) type ChangedTerrainFitting = (
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub(super) fn fit_objects_with_changed_inputs_or_terrain(
     mut commands: Commands,
-    terrain_index: Option<Res<TerrainIndex>>,
+    indexes: Query<Ref<TerrainIndex>>,
     terrain_assets: Option<Res<Assets<TerrainAsset>>>,
     mut terrain_changed: MessageReader<TerrainChanged>,
     terrain_chunks: Query<(
         &TerrainChunk,
+        &WorldMember,
         Option<&EditedTerrainSamples>,
         Option<&TerrainChunkFittings>,
     )>,
@@ -67,6 +69,7 @@ pub(super) fn fit_objects_with_changed_inputs_or_terrain(
         (
             Entity,
             &TerrainFittingSurface,
+            &WorldMember,
             Option<&RigidBody>,
             &mut Transform,
             Option<&FittingInTerrainChunk>,
@@ -74,7 +77,7 @@ pub(super) fn fit_objects_with_changed_inputs_or_terrain(
         (Without<NavAgent>, Without<FallingReleasedObject>),
     >,
 ) {
-    let (Some(index), Some(assets)) = (terrain_index, terrain_assets) else {
+    let Some(assets) = terrain_assets else {
         return;
     };
     for entity in agents_added.iter().chain(surfaces_removed.read()) {
@@ -82,14 +85,21 @@ pub(super) fn fit_objects_with_changed_inputs_or_terrain(
             .entity(entity)
             .try_remove::<FittingInTerrainChunk>();
     }
-    let mut candidates: bevy::ecs::entity::EntityHashSet = if index.is_changed() {
-        objects.iter().map(|(entity, ..)| entity).collect()
-    } else {
-        changed.iter().collect()
-    };
+    let mut candidates: bevy::ecs::entity::EntityHashSet = { changed.iter().collect() };
+    if indexes.iter().any(|index| index.is_changed()) {
+        candidates.extend(objects.iter().filter_map(|(entity, _, member, ..)| {
+            indexes
+                .get(member.root)
+                .is_ok_and(|index| index.is_changed())
+                .then_some(entity)
+        }));
+    }
     candidates.extend(agents_removed.read());
     for edit in terrain_changed.read() {
-        let Ok((chunk, _, _)) = terrain_chunks.get(edit.chunk) else {
+        let Ok((chunk, member, _, _)) = terrain_chunks.get(edit.chunk) else {
+            continue;
+        };
+        let Ok(index) = indexes.get(member.root) else {
             continue;
         };
         let min = chunk.origin + edit.min.as_vec2() * chunk.spacing_m;
@@ -109,12 +119,12 @@ pub(super) fn fit_objects_with_changed_inputs_or_terrain(
                 let Some(&chunk) = index.chunks.get(&IVec2::new(x, z)) else {
                     continue;
                 };
-                let Ok((_, _, Some(members))) = terrain_chunks.get(chunk) else {
+                let Ok((_, _, _, Some(members))) = terrain_chunks.get(chunk) else {
                     continue;
                 };
                 use bevy::ecs::relationship::RelationshipTarget;
                 for entity in members.iter() {
-                    if let Ok((_, _, _, transform, _)) = objects.get(entity) {
+                    if let Ok((_, _, _, _, transform, _)) = objects.get(entity) {
                         let position = transform.translation.xz();
                         if position.cmpge(min).all() && position.cmple(max).all() {
                             candidates.insert(entity);
@@ -125,14 +135,18 @@ pub(super) fn fit_objects_with_changed_inputs_or_terrain(
         }
     }
     for entity in candidates {
-        let Ok((_, surface, body, mut transform, previous_chunk)) = objects.get_mut(entity) else {
+        let Ok((_, surface, member, body, mut transform, previous_chunk)) = objects.get_mut(entity)
+        else {
             continue;
         };
         let position = transform.translation.xz();
         let chunk = if body == Some(&RigidBody::Dynamic) {
             None
         } else {
-            terrain_chunk_at(&index, position)
+            indexes
+                .get(member.root)
+                .ok()
+                .and_then(|index| terrain_chunk_at(&index, position))
         };
         if previous_chunk.map(|binding| binding.0) != chunk {
             if let Some(chunk) = chunk {
@@ -144,7 +158,7 @@ pub(super) fn fit_objects_with_changed_inputs_or_terrain(
         let Some(chunk) = chunk else {
             continue;
         };
-        let Ok((chunk, edited, _)) = terrain_chunks.get(chunk) else {
+        let Ok((chunk, _, edited, _)) = terrain_chunks.get(chunk) else {
             continue;
         };
         let Some(point) = assets
@@ -163,7 +177,7 @@ pub(super) fn fit_objects_with_changed_inputs_or_terrain(
             .zip(
                 water
                     .as_ref()
-                    .and_then(|water| water.water_surface_height(position)),
+                    .and_then(|water| water.water_surface_height(member.root, position)),
             )
             .map_or(ground, |(offset, water_height)| {
                 ground.max(water_height + offset)

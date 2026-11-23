@@ -30,7 +30,8 @@ use openzt2_zoo_state::terrain::terrain_water_renderer_types::{
 use openzt2_zoo_state::terrain::terrain_water_underwater_particle_types::TerrainWaterRegionLight;
 use openzt2_zoo_state::terrain::terrain_water_view_state::TerrainWaterCameraPose;
 use openzt2_zoo_state::terrain::terrain_water_view_state::{
-    TerrainWaterRegionFade, TerrainWaterRegionVisibility, TerrainWaterViewState,
+    TerrainWaterCaptureSelection, TerrainWaterRegionFade, TerrainWaterRegionVisibility,
+    TerrainWaterTrainingFade,
 };
 
 pub(super) fn initialize_authored_terrain_water_region_material_state(
@@ -311,13 +312,21 @@ pub(super) fn project_authored_terrain_water_surface_coverage(
 
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(super) fn update_authored_terrain_water_renderer_inputs(
-    view: Option<Res<TerrainWaterViewState>>,
     environment_map: Option<Res<WaterEnvironmentMapSample>>,
     waves: Query<&NativeTerrainWaterGeometricWaveShaderState>,
     phase: Res<State<openzt2_game_assets::application_lifecycle::GamePhase>>,
     targets: Query<(&AuthoredTerrainWaterRendererTargets, &Children)>,
     terrain_assets: Res<Assets<TerrainAsset>>,
-    zoo_camera: Query<(&Camera, Ref<Projection>, Option<&TerrainWaterCameraPose>), With<ZooCamera>>,
+    zoo_camera: Query<
+        (
+            &Camera,
+            Ref<Projection>,
+            Option<&TerrainWaterCameraPose>,
+            Option<&TerrainWaterCaptureSelection>,
+            Option<&TerrainWaterTrainingFade>,
+        ),
+        With<ZooCamera>,
+    >,
     scene_bounds: Query<(&Aabb, &GlobalTransform, Option<&RenderLayers>), With<Mesh3d>>,
     mut camera_transforms: Query<
         (
@@ -355,17 +364,20 @@ pub(super) fn update_authored_terrain_water_renderer_inputs(
     let Ok((targets, captures)) = targets.single() else {
         return;
     };
-    let camera = zoo_camera
-        .single()
-        .ok()
-        .and_then(|(camera, projection, pose)| {
-            pose.and_then(|pose| pose.0)
-                .map(|transform| (camera, projection, transform))
-        });
-    let water_plane = view
+    let selected_camera = zoo_camera.single().ok();
+    let water_plane = selected_camera
         .as_ref()
-        .filter(|view| view.selection_resolved())
-        .and_then(|view| view.surface_height());
+        .and_then(|(_, _, _, selection, _)| *selection)
+        .filter(|selection| selection.resolved)
+        .and_then(|selection| selection.region.map(|(_, height)| height));
+    let training_opacity_mix = selected_camera
+        .as_ref()
+        .and_then(|(_, _, _, _, fade)| *fade)
+        .map_or(0.0, |fade| fade.0);
+    let camera = selected_camera.and_then(|(camera, projection, pose, _, _)| {
+        pose.and_then(|pose| pose.0)
+            .map(|transform| (camera, projection, transform))
+    });
     let mut enabled = false;
     let mut fallback_enabled = false;
     let mut visible_count = 0;
@@ -654,8 +666,7 @@ pub(super) fn update_authored_terrain_water_renderer_inputs(
                 !above || fallback,
                 (!fallback && fraction > 0.0).then_some(fraction),
                 (!above && scroll.is_none() && fraction > 0.0).then_some(fraction),
-                view.as_ref()
-                    .map_or(0.0, |view| view.training_opacity_mix()),
+                training_opacity_mix,
             );
             if let Some(scroll) = scroll {
                 let offsets = scroll.offsets;
@@ -685,15 +696,7 @@ pub(super) fn update_authored_terrain_water_renderer_inputs(
                     );
                     material.bind_float_vector_effect_semantic(
                         "ReflectOpacity",
-                        Vec4::new(
-                            1.0,
-                            0.5 - 1.5
-                                * view
-                                    .as_ref()
-                                    .map_or(0.0, |view| view.training_opacity_mix()),
-                            0.0,
-                            0.05,
-                        ),
+                        Vec4::new(1.0, 0.5 - 1.5 * training_opacity_mix, 0.0, 0.05),
                     );
                 }
             }

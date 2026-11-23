@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use openzt2_zoo_state::construction::construction_interaction_types::ConstructionPreview;
@@ -24,7 +25,7 @@ use openzt2_zoo_state::terrain::terrain_edit_types::TerrainEditPrepared;
 pub(super) fn prepare_terrain_sample_deltas_for_construction_transactions(
     mut commands: Commands,
     mut requests: MessageReader<PrepareConstruction>,
-    index: Res<TerrainIndex>,
+    terrain: Query<&TerrainIndex>,
     assets: Res<Assets<TerrainAsset>>,
     water_regions: openzt2_zoo_state::terrain::terrain_water_presentation_types::TerrainWaterRegionQuery,
     water_membership: Query<
@@ -40,13 +41,15 @@ pub(super) fn prepare_terrain_sample_deltas_for_construction_transactions(
         &TerrainBrushPreview,
         Option<&TerrainBrushPath>,
         &ConstructionPreview,
+        &WorldMember,
         Option<&mut TerrainBrushDraft>,
     )>,
     mut prepared: MessageWriter<TerrainEditPrepared>,
     mut rejected: MessageWriter<TerrainEditPreparationRejected>,
 ) {
     for request in requests.read() {
-        let Ok((preview, path, construction, draft)) = previews.get_mut(request.preview) else {
+        let Ok((preview, path, construction, member, draft)) = previews.get_mut(request.preview)
+        else {
             continue;
         };
         let cost = match construction.validity {
@@ -78,6 +81,13 @@ pub(super) fn prepare_terrain_sample_deltas_for_construction_transactions(
             });
             continue;
         }
+        let Ok(index) = terrain.get(member.root) else {
+            rejected.write(TerrainEditPreparationRejected {
+                transaction: request.transaction,
+                reason: PlacementFailure::OutsideMap,
+            });
+            continue;
+        };
         if !terrain_brush_preview_and_path_are_valid(preview, path) {
             rejected.write(TerrainEditPreparationRejected {
                 transaction: request.transaction,

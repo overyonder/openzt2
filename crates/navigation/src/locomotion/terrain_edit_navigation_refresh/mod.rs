@@ -1,11 +1,14 @@
 use bevy::prelude::*;
+use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use openzt2_zoo_state::terrain::terrain_chunk_types::EditedTerrainSamples;
 use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainChunk;
 use openzt2_zoo_state::terrain::terrain_navigation_cell_queries::read_navigation_cell_geometry_from_terrain_samples;
 use openzt2_zoo_state::terrain::terrain_navigation_change_types::TerrainNavigationChanged;
-use openzt2_zoo_state::terrain::terrain_navigation_change_types::TerrainNavigationRestored;
+use openzt2_zoo_state::terrain::terrain_navigation_change_types::{
+    SnapshotTerrainNavigationPending, SnapshotTerrainNavigationReady, TerrainNavigationRestored,
+};
 
 use openzt2_zoo_state::locomotion::locomotion_types::ActiveTerrainDerivedNavigationGraph;
 use openzt2_zoo_state::locomotion::locomotion_types::Destination;
@@ -15,15 +18,15 @@ use openzt2_zoo_state::locomotion::terrain_derived_navigation_graph_types::Terra
 /// Refreshes restored terrain before saved actor routes are applied.
 pub(super) fn refresh_navigation_graph_after_terrain_restoration(
     mut restored_terrain: MessageReader<TerrainNavigationRestored>,
-    active_navigation_graph: Option<ResMut<ActiveTerrainDerivedNavigationGraph>>,
+    mut graphs: Query<&mut ActiveTerrainDerivedNavigationGraph>,
     terrain_assets: Res<Assets<TerrainAsset>>,
-    terrain_chunks: Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
+    terrain_chunks: Query<(&TerrainChunk, Option<&EditedTerrainSamples>, &WorldMember)>,
 ) {
-    let Some(mut graph) = active_navigation_graph else {
-        return;
-    };
     for restored in restored_terrain.read() {
-        let Ok((chunk, edited)) = terrain_chunks.get(restored.chunk) else {
+        let Ok((chunk, edited, member)) = terrain_chunks.get(restored.chunk) else {
+            continue;
+        };
+        let Ok(mut graph) = graphs.get_mut(member.root) else {
             continue;
         };
         let Some(terrain) = terrain_assets.get(&chunk.asset) else {
@@ -40,31 +43,50 @@ pub(super) fn refresh_navigation_graph_after_terrain_restoration(
     }
 }
 
+pub(super) fn acknowledge_restored_terrain_navigation(
+    mut pending: MessageReader<SnapshotTerrainNavigationPending>,
+    mut ready: MessageWriter<SnapshotTerrainNavigationReady>,
+    graphs: Query<(), With<ActiveTerrainDerivedNavigationGraph>>,
+) {
+    for pending in pending
+        .read()
+        .filter(|pending| graphs.contains(pending.root))
+    {
+        ready.write(SnapshotTerrainNavigationReady {
+            root: pending.root,
+            operation: pending.operation,
+        });
+    }
+}
+
 /// Refreshes edited cells before the next route-planning pass.
 // Bevy system parameters are consumed by value when the system is registered.
 #[allow(clippy::needless_pass_by_value)]
 pub(super) fn refresh_navigation_graph_after_terrain_edits(
     mut terrain_navigation_changes: MessageReader<TerrainNavigationChanged>,
-    mut active_navigation_graph: Option<ResMut<ActiveTerrainDerivedNavigationGraph>>,
+    mut graphs: Query<&mut ActiveTerrainDerivedNavigationGraph>,
     terrain_assets: Res<Assets<TerrainAsset>>,
-    terrain_chunks: Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
+    terrain_chunks: Query<(&TerrainChunk, Option<&EditedTerrainSamples>, &WorldMember)>,
     mut changed: MessageWriter<NavigationTerrainGraphChanged>,
 ) {
-    let mut received_terrain_change = false;
+    let mut changed_roots = bevy::ecs::entity::EntityHashSet::default();
     for terrain_change in terrain_navigation_changes.read() {
-        let Some(active_navigation_graph) = active_navigation_graph.as_mut() else {
-            continue;
-        };
-        let Ok((terrain_chunk, edited_terrain_samples)) = terrain_chunks.get(terrain_change.chunk)
+        let Ok((terrain_chunk, edited_terrain_samples, member)) =
+            terrain_chunks.get(terrain_change.chunk)
         else {
             continue;
         };
         let Some(terrain_asset) = terrain_assets.get(&terrain_chunk.asset) else {
             continue;
         };
-        received_terrain_change = true;
+        let Ok(mut graph) = graphs.get_mut(member.root) else {
+            continue;
+        };
+        if changed_roots.insert(member.root) {
+            changed.write(NavigationTerrainGraphChanged(member.root));
+        }
         refresh_terrain_derived_navigation_graph_cells_from_changed_terrain_samples(
-            active_navigation_graph.terrain_derived_navigation_graph_mut(),
+            graph.terrain_derived_navigation_graph_mut(),
             terrain_chunk,
             terrain_asset,
             edited_terrain_samples,
@@ -72,34 +94,37 @@ pub(super) fn refresh_navigation_graph_after_terrain_edits(
             terrain_change.max,
         );
     }
-    if received_terrain_change {
-        changed.write(NavigationTerrainGraphChanged);
-    }
 }
 
 #[derive(Message)]
-pub(super) struct NavigationTerrainGraphChanged;
+pub(super) struct NavigationTerrainGraphChanged(pub(super) Entity);
 
 pub(super) fn invalidate_routes_after_navigation_geometry_changes(
     mut terrain_changes: MessageReader<NavigationTerrainGraphChanged>,
     mut path_changes: MessageReader<
         super::path_surface_navigation_projection::NavigationPathGraphChanged,
     >,
-    capacity: Option<Res<openzt2_zoo_state::locomotion::locomotion_types::LocomotionCapacity>>,
-    mut routes: Query<(&mut Route, &mut Destination)>,
+    mut water_changes: MessageReader<
+        super::tank_water_navigation_overlay::TankNavigationWaterChanged,
+    >,
+    mut routes: Query<(&mut Route, &mut Destination, &WorldMember)>,
 ) {
-    let changed = (terrain_changes.read().count() != 0) | (path_changes.read().count() != 0);
-    if !changed {
+    let changed: bevy::ecs::entity::EntityHashSet = terrain_changes
+        .read()
+        .map(|event| event.0)
+        .chain(path_changes.read().map(|event| event.root))
+        .chain(water_changes.read().map(|event| event.0))
+        .collect();
+    if changed.is_empty() {
         return;
     }
-    let point_capacity = capacity.map_or(0, |capacity| capacity.max_route_points);
     routes
         .par_iter_mut()
-        .for_each(|(mut route, mut destination)| {
-            route.clear();
-            if route.points.capacity() < point_capacity {
-                route.points.reserve_exact(point_capacity);
+        .for_each(|(mut route, mut destination, member)| {
+            if !changed.contains(&member.root) {
+                return;
             }
+            route.clear();
             destination.set_changed();
         });
 }

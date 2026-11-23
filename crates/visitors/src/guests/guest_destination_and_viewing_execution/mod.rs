@@ -18,7 +18,7 @@ use openzt2_zoo_state::locomotion::locomotion_types::Arrived;
 use openzt2_zoo_state::locomotion::locomotion_types::NavAgent;
 use openzt2_zoo_state::locomotion::locomotion_types::NavigateTo;
 use openzt2_zoo_state::locomotion::locomotion_types::NavigationFailed;
-use openzt2_zoo_state::locomotion::locomotion_types::NavigationRequestSequence;
+use openzt2_zoo_state::locomotion::locomotion_types::NavigationRequestGeneration;
 use openzt2_zoo_state::locomotion::locomotion_types::{SpatialGrid, SpatialGridMembership};
 use openzt2_zoo_state::maintenance::maintenance_types::AnimalHabitatWaste;
 use openzt2_zoo_state::maintenance::maintenance_types::LooseLitterWaste;
@@ -72,7 +72,7 @@ use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainIndex;
 pub(crate) fn choose_guest_destination(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
-    grid: Res<SpatialGrid>,
+    grid: Single<&SpatialGrid>,
     spatial_membership: SpatialGridMembership,
     spatial_query: SpatialQuery,
     parents: Query<&ChildOf>,
@@ -116,7 +116,7 @@ pub(crate) fn choose_guest_destination(
     viewing_areas: Query<(Entity, &GlobalTransform, &ViewingGroundSlots, &WorldMember)>,
     animals: Query<(&GlobalTransform, &Visibility, &SpeciesHandle, &WorldMember), With<Animal>>,
     mut commands: Commands,
-    mut navigation_request_sequence: ResMut<NavigationRequestSequence>,
+    mut navigation_generations: Query<&mut NavigationRequestGeneration>,
     mut navigate: MessageWriter<NavigateTo>,
 ) {
     let Some(definitions) = active_definitions.get(&definitions) else {
@@ -277,7 +277,10 @@ pub(crate) fn choose_guest_destination(
             }
         }
         if let Some((entity, destination, purpose)) = selected {
-            let request_id = navigation_request_sequence.next();
+            let Ok(mut generation) = navigation_generations.get_mut(guest) else {
+                continue;
+            };
+            let request_id = generation.advance();
             let mut entity_commands = commands.entity(guest);
             entity_commands.insert((
                 GuestDestination { entity, purpose },
@@ -363,7 +366,9 @@ fn choose_viewing_opportunity(
                     if cx < 0 || cy < 0 || cx >= grid.width as i32 || cy >= grid.height as i32 {
                         continue;
                     }
-                    for subject in spatial_membership.members(cy as u32 * grid.width + cx as u32) {
+                    for subject in
+                        spatial_membership.members(world, cy as u32 * grid.width + cx as u32)
+                    {
                         let Ok((subject_transform, visibility, species, member)) =
                             animals.get(subject)
                         else {
@@ -422,7 +427,7 @@ pub(super) fn project_authored_viewing_ground_slots(
     mut commands: Commands,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
-    terrain_index: Res<TerrainIndex>,
+    terrain_index: Single<Ref<TerrainIndex>>,
     terrain_assets: Res<Assets<TerrainAsset>>,
     terrain_chunks: Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
     changed_terrain: Query<(), Or<(Changed<TerrainChunk>, Changed<EditedTerrainSamples>)>>,
@@ -573,7 +578,7 @@ pub(crate) fn cancel_failed_guest_destinations(
     arriving_guests: Query<(&GuestPhase, &WorldMember, &NavAgent), With<Guest>>,
     entrances: Query<(&PersistentId, &WorldMember, &ZooEntrance)>,
     mut reported_entrance_failures: Local<bevy::ecs::entity::EntityHashSet>,
-    mut navigation_request_sequence: ResMut<NavigationRequestSequence>,
+    mut navigation_generations: Query<&mut NavigationRequestGeneration>,
     mut navigate: MessageWriter<NavigateTo>,
     mut commands: Commands,
 ) {
@@ -606,7 +611,10 @@ pub(crate) fn cancel_failed_guest_destinations(
                     entrance = ?entrance.inside,
                     "arriving guest has no route to the entrance; retrying");
             }
-            let request_id = navigation_request_sequence.next();
+            let Ok(mut generation) = navigation_generations.get_mut(failure.entity) else {
+                continue;
+            };
+            let request_id = generation.advance();
             request.0 = Some(request_id);
             navigate.write(NavigateTo {
                 entity: failure.entity,
@@ -619,7 +627,7 @@ pub(crate) fn cancel_failed_guest_destinations(
 }
 
 pub(crate) fn begin_viewing(
-    mut service_request_sequence: ResMut<ServiceRequestSequence>,
+    mut service_request_sequences: Query<&mut ServiceRequestSequence>,
     mut arrived: MessageReader<Arrived>,
     mut failures: MessageReader<NavigationFailed>,
     mut guests: Query<
@@ -649,7 +657,7 @@ pub(crate) fn begin_viewing(
         With<openzt2_zoo_state::locomotion::locomotion_types::Destination>,
     )>>,
     mut commands: Commands,
-    clock: Res<ZooClock>,
+    clocks: Query<&ZooClock>,
 ) {
     // Both results may be queued before this consumer runs. Failure must win
     // before an arrival can hand off a service and discard its request identity.
@@ -706,12 +714,14 @@ pub(crate) fn begin_viewing(
                             .get(subject)
                             .is_ok_and(|animal| animal.root == world.root)
                 });
-                if !eligible || interruptions.contains(guest) {
+                let clock = world.and_then(|world| clocks.get(world.root).ok());
+                let Some(clock) = clock.filter(|_| eligible && !interruptions.contains(guest))
+                else {
                     commands
                         .entity(guest)
                         .remove::<(GuestDestination, GuestViewingTarget)>();
                     continue;
-                }
+                };
                 commands.entity(guest).insert(Viewing {
                     subject,
                     area: Some(destination.entity),
@@ -725,7 +735,10 @@ pub(crate) fn begin_viewing(
                     commands.entity(guest).remove::<GuestDestination>();
                     continue;
                 };
-                let Some(sequence) = service_request_sequence.allocate() else {
+                let Some(sequence) = world
+                    .and_then(|world| service_request_sequences.get_mut(world.root).ok())
+                    .and_then(|mut sequence| sequence.allocate())
+                else {
                     warn!(?guest, "service request sequence exhausted");
                     commands.entity(guest).remove::<GuestDestination>();
                     continue;
@@ -765,7 +778,7 @@ pub(crate) fn advance_viewing(
     viewing_areas: Query<&Visibility, With<ViewingOpportunity>>,
     animals: Query<(&GlobalTransform, &Visibility), With<Animal>>,
     mut commands: Commands,
-    clock: Res<ZooClock>,
+    clock: Single<&ZooClock>,
 ) {
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
@@ -820,12 +833,12 @@ pub(crate) fn advance_viewing(
 }
 
 pub(crate) fn react_to_visible_litter(
-    grid: Res<SpatialGrid>,
+    grid: Single<&SpatialGrid>,
     spatial_membership: SpatialGridMembership,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     waste: Query<
-        (Entity, &GlobalTransform),
+        (Entity, &GlobalTransform, &WorldMember),
         Or<(Added<LooseLitterWaste>, Added<AnimalHabitatWaste>)>,
     >,
     mut guests: Query<(&GlobalTransform, &GuestArchetype, &mut GuestRng), With<Guest>>,
@@ -834,11 +847,11 @@ pub(crate) fn react_to_visible_litter(
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };
-    for (subject, transform) in &waste {
+    for (subject, transform, world) in &waste {
         let Some(cell) = grid.cell_of(transform.translation().xz()) else {
             continue;
         };
-        for guest in spatial_membership.members(cell) {
+        for guest in spatial_membership.members(world.root, cell) {
             let Ok((_, archetype, _)) = guests.get_mut(guest) else {
                 continue;
             };

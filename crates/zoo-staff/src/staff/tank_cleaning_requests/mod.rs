@@ -33,7 +33,7 @@ pub(crate) fn request_keeper_cleaning_for_dirty_tanks(
     >,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
-    grid: Res<TopologyGrid>,
+    grids: Query<&TopologyGrid>,
     surfaces: DrySurfaceEligibility,
     tanks: Query<
         (
@@ -84,7 +84,9 @@ pub(crate) fn request_keeper_cleaning_for_dirty_tanks(
             if dirtiness < policy.dirt_threshold {
                 return None;
             }
-            let point = tank_cleaning_point(&region, &geometry, *grid, &surfaces)?;
+            let world = world?;
+            let grid = *grids.get(world.root).ok()?;
+            let point = tank_cleaning_point(world.root, &region, &geometry, grid, &surfaces)?;
             Some((token, urgency, point))
         });
         if let Some((token, urgency, point)) = requested {
@@ -141,6 +143,7 @@ pub(crate) fn request_keeper_cleaning_for_dirty_tanks(
 }
 
 fn tank_cleaning_point(
+    root: Entity,
     region: &HabitatRegion,
     geometry: &TankGeometry,
     grid: TopologyGrid,
@@ -155,7 +158,7 @@ fn tank_cleaning_point(
         .chain(cells[..cells.len() / 2].iter())
         .find(|cell| {
             surfaces
-                .ground_height(centre(cell))
+                .ground_height(root, centre(cell))
                 .is_some_and(|ground| ground < geometry.water_height)
         })?;
     let point = centre(chosen);

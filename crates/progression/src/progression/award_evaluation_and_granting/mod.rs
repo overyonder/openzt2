@@ -225,13 +225,13 @@ pub(super) fn evaluate_all_progression_award_conditions_and_queue_grants(
 
 pub(super) fn grant_earned_progression_awards(
     mut candidates: MessageReader<ProgressionAwardGrantCandidate>,
-    clock: Res<ZooClock>,
+    clocks: Query<&ZooClock>,
     assets: Res<Assets<WorldDefinitionAsset>>,
     definitions: Res<WorldDefinitions>,
     mut awards: Query<(&WorldMember, &mut ProgressionAward)>,
     active_world: Query<Entity, (With<WorldRoot>, With<WorldLoadCompleted>)>,
     mut ids: Query<&mut PersistentIdAllocator, With<WorldRoot>>,
-    mut unlocks: ResMut<UnlockedCatalogueDefinitionSet>,
+    mut root_unlocks: Query<&mut UnlockedCatalogueDefinitionSet>,
     mut commands: Commands,
     mut granted: MessageWriter<ProgressionAwardGranted>,
     mut changed: MessageWriter<ProgressionFactChanged>,
@@ -258,6 +258,9 @@ pub(super) fn grant_earned_progression_awards(
         {
             continue;
         }
+        let Ok(clock) = clocks.get(world.root) else {
+            continue;
+        };
         let Ok(mut ids) = ids.get_mut(world.root) else {
             continue;
         };
@@ -279,6 +282,9 @@ pub(super) fn grant_earned_progression_awards(
             award: candidate.award,
             definition: definition.id,
         });
+        let Ok(mut unlocks) = root_unlocks.get_mut(world.root) else {
+            continue;
+        };
         for &target in &definition.unlocks {
             if let Some(index) = find_catalogue_definition_index(definitions, target) {
                 if mark_catalogue_definition_unlocked_at_index(&mut unlocks, index) == Some(true) {

@@ -21,6 +21,7 @@ pub mod animal_spawn_resolution;
 pub mod animal_spawn_resolution_types;
 mod authored_entity_morph;
 mod egg_incubation;
+pub mod egg_incubation_types;
 pub mod scripted_animal_spawning;
 mod starting_animal_hydration;
 use openzt2_zoo_state::animal_lifecycle::types;
@@ -58,6 +59,10 @@ impl Plugin for AnimalLifecyclePlugin {
         );
         adoption_offer_execution::register_adoption_offers(app);
         animal_ageing_execution::register_animal_ageing(app);
+        app.register_required_components::<
+            openzt2_world_state::world_spawn::world_membership_types::WorldRoot,
+            adoption_placement_execution::AnimalPlacementSequence,
+        >();
         app.add_systems(Update, (
             starting_animal_hydration::hydrate_starting_animals,
             crate::animal_welfare::systems::initialize_animal_needs
@@ -78,6 +83,8 @@ impl Plugin for AnimalLifecyclePlugin {
             .add_message::<AnimalBorn>()
             .add_message::<ReleaseAnimal>()
             .add_message::<AnimalReleased>()
+            .add_observer(outgoing_animal_adoption_execution::settle_departing_animal)
+            .add_observer(animal_presentation_attachment::initialize_authored_animal_animation_repetition)
             .add_message::<scripted_animal_spawning::ScriptedAnimalSpawnRequest>()
             .add_systems(
                 FixedUpdate,
@@ -103,13 +110,8 @@ impl Plugin for AnimalLifecyclePlugin {
                     )
                         .chain()
                         .after(ObjectPlacementPreviewUpdateSet),
-                    (
-                        animal_presentation_attachment::
-                            attach_selected_species_variant_models_to_animal_entities,
-                        animal_presentation_attachment::
-                            apply_authored_initial_animal_animation_repetition_policy_after_attachment,
-                    )
-                        .chain(),
+                    animal_presentation_attachment::
+                        attach_selected_species_variant_models_to_animal_entities,
                 )
                     .in_set(GameSet::Intent),
             )
@@ -126,7 +128,6 @@ impl Plugin for AnimalLifecyclePlugin {
                     animal_adoption_execution::reject_animal_adoptions_after_rejected_transactions,
                     animal_adoption_execution::remove_settled_animal_adoption_refunds,
                 )
-                    .chain()
                     .in_set(FixedConstructionSet::CompleteEconomy)
                     .run_if(in_state(GamePhase::InGame)),
             )

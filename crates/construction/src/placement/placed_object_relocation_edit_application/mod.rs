@@ -14,7 +14,6 @@ use openzt2_zoo_state::placement::object_placement_validation::object_placement_
 use openzt2_zoo_state::placement::placed_object_types::PlacedObjectDefinitionReference;
 use openzt2_zoo_state::placement::placed_object_types::PlacedObjectFootprintOccupancy;
 use openzt2_zoo_state::placement::placement_occupancy_index::PlacedObjectFootprintQueries;
-use openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementCellCollectionScratch;
 use openzt2_zoo_state::placement::placement_preview_types::PlacementRotationRequest;
 use openzt2_zoo_state::placement::placement_preview_types::RelocatingPlacedObject;
 use openzt2_zoo_state::placement::placement_transaction_types::PreparedObjectPlacementMutation;
@@ -28,7 +27,7 @@ pub(super) fn apply_prepared_placed_object_relocation_edit(
     catalogue: openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView<'_>,
     root: Entity,
     placement: &PlacedObjectFootprintQueries,
-    scratch: &mut ObjectPlacementCellCollectionScratch,
+    scratch: &mut Vec<IVec2>,
     footprints: &ScenePlacementFootprints,
     placed: &mut Query<(
         &PersistentId,
@@ -93,7 +92,7 @@ pub(super) fn apply_prepared_placed_object_relocation_edit(
     else {
         return false;
     };
-    if !collect_occupied_placement_cells_for_transform(geometry, &transform, &mut scratch.cells)
+    if !collect_occupied_placement_cells_for_transform(geometry, &transform, scratch)
         .is_some_and(|expected| expected == cells)
     {
         return false;

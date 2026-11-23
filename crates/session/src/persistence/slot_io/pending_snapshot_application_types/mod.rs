@@ -34,7 +34,6 @@ pub(super) struct RestoreSnapshotTerrain(pub(super) Entity);
 #[derive(Component)]
 pub(super) struct AwaitingSnapshotTerrainNavigation {
     pub(super) root: Entity,
-    pub(super) previous_change: bevy::ecs::change_detection::Tick,
 }
 
 #[derive(Component)]

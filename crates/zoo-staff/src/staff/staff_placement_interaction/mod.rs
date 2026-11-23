@@ -67,8 +67,8 @@ pub(super) fn begin_staff_placement_from_hire_action(
 }
 
 pub(super) fn validate_staff_placement_preview_against_world_and_zoo_cash(
-    zoo_cash: Res<ZooCash>,
-    unlimited_zoo_cash: Option<Res<UnlimitedZooCash>>,
+    zoo_cash: Single<&ZooCash>,
+    unlimited_zoo_cash: Option<Single<&UnlimitedZooCash>>,
     cursors: Query<(&ConstructionCursor, &ObjectPlacementPreviewRequest), With<StaffPlacementRole>>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
@@ -94,7 +94,7 @@ pub(super) fn validate_staff_placement_preview_against_world_and_zoo_cash(
             PlacementValidity::Invalid(PlacementFailure::OutsideMap)
         } else if !hydrated {
             PlacementValidity::Pending
-        } else if unlimited_zoo_cash.is_none() && zoo_cash.0 < cost {
+        } else if unlimited_zoo_cash.as_ref().is_none_or(|policy| !policy.0) && zoo_cash.0 < cost {
             PlacementValidity::Invalid(PlacementFailure::Unaffordable)
         } else {
             PlacementValidity::Valid { cost }

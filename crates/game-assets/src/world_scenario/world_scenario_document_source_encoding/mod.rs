@@ -1,13 +1,13 @@
 //! Binary encoding of canonical world source documents.
 
 use super::world_scenario_document_source::WorldScenarioDocumentSource;
-use openzt2_game_data::world_scenario::WORLD_SCENARIO_VERSION;
 use openzt2_game_data::AssetId;
+use openzt2_game_data::world_scenario::WORLD_SCENARIO_VERSION;
 use std::{collections::BTreeSet, io};
 
 const MAGIC: &[u8; 8] = b"OZTWORLD";
-const SOURCE_VERSION: u32 = 1;
-pub(crate) const WORLD_SCENARIO_DOCUMENT_SOURCE_HEADER_BYTE_COUNT: usize = 16;
+const SOURCE_VERSION: u32 = 2;
+const WORLD_SCENARIO_DOCUMENT_SOURCE_HEADER_BYTE_COUNT: usize = 16;
 
 pub fn encode_world_scenario_document_source(
     source: &WorldScenarioDocumentSource,
@@ -28,7 +28,7 @@ pub fn decode_world_scenario_document_source(
 ) -> io::Result<WorldScenarioDocumentSource> {
     if bytes.len() < WORLD_SCENARIO_DOCUMENT_SOURCE_HEADER_BYTE_COUNT
         || &bytes[..8] != MAGIC
-        || bytes[8..12] != SOURCE_VERSION.to_le_bytes()
+        || (bytes[8..12] != SOURCE_VERSION.to_le_bytes() && bytes[8..12] != 1_u32.to_le_bytes())
         || bytes[12..16] != WORLD_SCENARIO_VERSION.to_le_bytes()
     {
         return Err(io::Error::new(
@@ -36,9 +36,25 @@ pub fn decode_world_scenario_document_source(
             "invalid world source version",
         ));
     }
-    let (source, remaining) =
-        postcard::take_from_bytes(&bytes[WORLD_SCENARIO_DOCUMENT_SOURCE_HEADER_BYTE_COUNT..])
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    let payload = &bytes[WORLD_SCENARIO_DOCUMENT_SOURCE_HEADER_BYTE_COUNT..];
+    let decode_error = |error| io::Error::new(io::ErrorKind::InvalidData, error);
+    let (source, remaining) = if bytes[8..12] == 1_u32.to_le_bytes() {
+        let ((document, starting_zoos, terrains, scenes, textures), remaining) =
+            postcard::take_from_bytes(payload).map_err(decode_error)?;
+        (
+            WorldScenarioDocumentSource {
+                document,
+                starting_zoos,
+                terrains,
+                scenes,
+                textures,
+                authored: Default::default(),
+            },
+            remaining,
+        )
+    } else {
+        postcard::take_from_bytes(payload).map_err(decode_error)?
+    };
     if !remaining.is_empty() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,

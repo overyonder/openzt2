@@ -21,4 +21,5 @@ pub struct LoweredNativeModel {
     pub scene_prefab_document: openzt2_game_data::scene_prefab::ScenePrefabDocument,
     pub particle_effects: Vec<LoweredNativeModelParticleEffect>,
     pub materials: Vec<LoweredNativeModelMaterial>,
+    pub(crate) embedded_textures: Vec<(String, bevy::prelude::Image)>,
 }

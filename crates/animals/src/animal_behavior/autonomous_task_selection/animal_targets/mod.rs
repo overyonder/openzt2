@@ -4,8 +4,9 @@
 use bevy::{ecs::system::SystemParam, prelude::*};
 use openzt2_game_data::behavior::eligibility::{
     BehaviorCandidateEligibilityFact, BehaviorEligibilityFactInput, BehaviorEligibilityFactValue,
-    BehaviorEntityStateEligibilityFact, BehaviorSpatialEligibilityFact,
+    BehaviorEntityStateEligibilityFact, BehaviorRelationshipEligibilityFact, BehaviorSpatialEligibilityFact,
 };
+use openzt2_game_data::AssetId;
 use openzt2_world_state::world_spawn::world_entity_crating::WorldEntityIsCrated;
 use openzt2_zoo_state::animal_behavior::animal_lineage::AnimalLineage;
 use openzt2_zoo_state::animal_health::types::Dead;
@@ -56,7 +57,12 @@ impl AnimalTargetSources<'_, '_> {
         target: Entity,
         target_facts: &AnimalCandidateFactsItem,
         fact: &BehaviorCandidateEligibilityFact,
+        tick: u64,
+        ticks_per_day: u32,
     ) -> bool {
+        if let BehaviorEligibilityFactInput::Relationship(relationship) = fact.fact_input {
+            return self.relationship_satisfies(subject, subject_facts, target, target_facts, relationship, fact);
+        }
         let BehaviorEligibilityFactValue::Q16(expected) = fact.expected_value else {
             return false;
         };
@@ -87,8 +93,66 @@ impl AnimalTargetSources<'_, '_> {
                     !inside
                 };
             }
-            _ => return target_facts.satisfies(fact),
+            _ => return target_facts.satisfies(fact, tick, ticks_per_day),
         };
         compare_q16(actual, expected, fact.comparison)
+    }
+
+    fn relationship_satisfies(
+        &self,
+        subject: Entity,
+        subject_facts: &AnimalCandidateFactsItem,
+        target: Entity,
+        target_facts: &AnimalCandidateFactsItem,
+        relationship: BehaviorRelationshipEligibilityFact,
+        fact: &BehaviorCandidateEligibilityFact,
+    ) -> bool {
+        let holds = match relationship {
+            BehaviorRelationshipEligibilityFact::SameSpecies => {
+                subject_facts.species.species == target_facts.species.species
+            }
+            BehaviorRelationshipEligibilityFact::HasTrick => return false,
+            BehaviorRelationshipEligibilityFact::Family | BehaviorRelationshipEligibilityFact::Relation => {
+                let parents = self.lineage.parents(subject);
+                let target_parents = self.lineage.parents(target);
+                let mother = parents.mother == Some(target);
+                let father = parents.father == Some(target);
+                let child = target_parents.mother == Some(subject) || target_parents.father == Some(subject);
+                let sibling = subject != target
+                    && (parents.mother.is_some_and(|mother| Some(mother) == target_parents.mother)
+                        || parents.father.is_some_and(|father| Some(father) == target_parents.father));
+                let mate = subject_facts.mate.is_some_and(|mate| mate.0 == target);
+                let grandparent = |parent: Option<Entity>, maternal: bool| {
+                    parent.is_some_and(|parent| {
+                        let parents = self.lineage.parents(parent);
+                        (if maternal { parents.mother } else { parents.father }) == Some(target)
+                    })
+                };
+                let relations = [
+                    ("mother", mother),
+                    ("father", father),
+                    ("child", child),
+                    ("sibling", sibling),
+                    ("grandmm", grandparent(parents.mother, true)),
+                    ("grandmf", grandparent(parents.mother, false)),
+                    ("grandfm", grandparent(parents.father, true)),
+                    ("grandff", grandparent(parents.father, false)),
+                ];
+                if relationship == BehaviorRelationshipEligibilityFact::Relation {
+                    if let BehaviorEligibilityFactValue::Symbol(expected) = fact.expected_value {
+                        let found = (mate && expected == AssetId::from_key("mate"))
+                            || relations.iter().any(|(name, related)| *related && expected == AssetId::from_key(name));
+                        return compare_q16(i32::from(found) * Q16_ONE, Q16_ONE, fact.comparison);
+                    }
+                    mate || relations.iter().any(|&(_, related)| related)
+                } else {
+                    relations.iter().any(|&(_, related)| related)
+                }
+            }
+        };
+        let BehaviorEligibilityFactValue::Q16(expected) = fact.expected_value else {
+            return false;
+        };
+        compare_q16(i32::from(holds) * Q16_ONE, expected, fact.comparison)
     }
 }

@@ -77,6 +77,7 @@ pub struct StartResearchProjectRequest {
 
 #[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ResearchProjectCompleted {
+    pub root: Entity,
     pub project: Entity,
     pub definition: AssetId,
 }

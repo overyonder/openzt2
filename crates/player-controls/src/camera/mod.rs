@@ -14,18 +14,22 @@ use openzt2_interface_state::camera::world_pointer_ray_types;
 use camera_control_message_types::{
     AimFreeCameraAt, CameraMoved, FocusCamera, PositionFreeCamera, RestoreCameraMode, SetCameraMode,
 };
+use systems::overhead_camera_advancement::{
+    advance_overhead_camera_controls, fit_and_present_overhead_camera_pose,
+    project_unlifted_overhead_camera_pose, sample_overhead_camera_fitting_surface,
+    OverheadFittingSurface, OverheadUnliftedPose,
+};
 use systems::{
     camera_action_intent_projection::project_camera_actions_into_camera_intent,
     camera_definition_hydration::apply_view_distance_graphics_setting_to_zoo_camera_far_planes,
     camera_mode_transitions::{
         advance_camera_transition, apply_camera_return, apply_free_camera_pose,
-        begin_camera_transition, request_return_when_camera_target_disappears,
+        begin_camera_transition,
     },
     camera_motion_reporting::report_camera_motion,
     default_ui_camera_routing::route_default_ui_camera,
     ground_fitted_free_camera_initialization::initialize_ground_fitted_free_camera_from_overhead_focus,
     mouse_look_cursor_projection::project_camera_mouse_look_onto_primary_window_cursor,
-    overhead_camera_advancement::{advance_overhead_camera, CameraFittingSurfaceSample},
     overhead_camera_zoom_policy::apply_overhead_camera_zoom_graphics_setting,
     pointer_ray_projection::project_pointer_ray,
     subject_camera_following::update_subject_camera_pose,
@@ -47,7 +51,9 @@ pub(crate) struct CameraUiActionRouting;
 
 impl Plugin for ZooCameraPlugin {
     fn build(&self, app: &mut App) {
-        app.register_required_components::<camera_runtime_state_types::ZooCamera, CameraFittingSurfaceSample>()
+        app.register_required_components::<camera_runtime_state_types::ZooCamera, OverheadUnliftedPose>()
+            .register_required_components::<camera_runtime_state_types::ZooCamera, OverheadFittingSurface>()
+            .add_observer(systems::camera_mode_transitions::restore_camera_on_standalone_subject_loss)
             .init_resource::<WorldPointerRay>()
             .add_message::<SetCameraMode>()
             .add_message::<RestoreCameraMode>()
@@ -68,9 +74,15 @@ impl Plugin for ZooCameraPlugin {
                         .after(apply_free_camera_pose)
                         .after(project_camera_actions_into_camera_intent),
                     project_camera_mouse_look_onto_primary_window_cursor.after(apply_camera_return),
-                    request_return_when_camera_target_disappears.after(begin_camera_transition).before(apply_camera_return),
                 )
                     .in_set(GameSet::Intent),
+            )
+            .add_systems(
+                Update,
+                systems::camera_action_intent_projection::project_authored_edge_pan_availability
+                    .after(openzt2_interface_state::ui::UiSet::Projection)
+                    .before(openzt2_interface_state::ui::UiSet::Interaction)
+                    .in_set(GameSet::Ui),
             )
             .add_systems(
                 Update,
@@ -82,16 +94,20 @@ impl Plugin for ZooCameraPlugin {
                         .before(advance_camera_transition),
                     apply_overhead_camera_zoom_graphics_setting
                         .after(spawn_zoo_camera),
+                    (
+                        advance_overhead_camera_controls,
+                        project_unlifted_overhead_camera_pose,
+                        sample_overhead_camera_fitting_surface,
+                        fit_and_present_overhead_camera_pose.before(advance_camera_transition),
+                    ).chain().after(apply_overhead_camera_zoom_graphics_setting),
                     apply_view_distance_graphics_setting_to_zoo_camera_far_planes
                         .after(spawn_zoo_camera)
-                        .after(photo_zoom::apply_photo_camera_zoom),
-                    advance_overhead_camera.after(apply_overhead_camera_zoom_graphics_setting),
+                        .before(photo_zoom::apply_photo_camera_zoom),
                     photo_zoom::bind_photo_zoom_sliders.after(spawn_zoo_camera),
                     photo_zoom::apply_photo_camera_zoom.after(photo_zoom::bind_photo_zoom_sliders),
                     advance_camera_transition
                         .after(spawn_zoo_camera),
                     update_subject_camera_pose
-                        .after(advance_overhead_camera)
                         .after(advance_camera_transition),
                 )
                     .in_set(GameSet::Presentation)

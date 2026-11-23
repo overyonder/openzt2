@@ -6,6 +6,17 @@ use openzt2_game_data::world_scenario::{
 };
 use std::{io, path::Path};
 
+pub(super) fn resolve_scenario_script_path(
+    archives: &AssetArchives,
+    declaring_path: &str,
+    reference: &str,
+) -> io::Result<String> {
+    archives
+        .resolve_script_reference(Path::new(declaring_path), reference)
+        .map(|path| path.to_string_lossy().replace('\\', "/"))
+        .ok_or_else(|| unresolved_reference(declaring_path, "scenario script", reference))
+}
+
 pub(super) fn load_scenario_script_dependencies(
     document: &WorldScenarioDocument,
     archives: &AssetArchives,
@@ -16,10 +27,7 @@ pub(super) fn load_scenario_script_dependencies(
         .scenario_script_bindings
         .iter()
         .map(|binding| {
-            let resolved = archives
-                .resolve_script_reference(Path::new(path), &binding.script)
-                .ok_or_else(|| unresolved_reference(path, "scenario script", &binding.script))?;
-            let resolved = resolved.to_string_lossy().replace('\\', "/");
+            let resolved = resolve_scenario_script_path(archives, path, &binding.script)?;
             Ok((binding.clone(), resolved.clone(), context.load(resolved)))
         })
         .collect()

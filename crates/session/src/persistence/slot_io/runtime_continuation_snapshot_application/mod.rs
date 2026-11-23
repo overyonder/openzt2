@@ -23,13 +23,11 @@ use openzt2_zoo_state::{
     entity_naming_types::{EntityNameRegistered, EntityNameTagCounters},
 };
 use openzt2_zoo_state::{
-    behavior_task_execution_types::BehaviorTaskExecutionSequence,
     economy::service_types::ServiceRequestSequence,
     guests::{
         guest_simulation_types::GuestArrivalState,
         guest_survey_types::{GuestSurvey, GuestSurveyNeedCadence},
     },
-    locomotion::locomotion_types::NavigationRequestSequence,
 };
 
 use super::{
@@ -77,6 +75,9 @@ pub(super) fn validate_runtime_continuation_identity_high_water_marks(
 #[query_data(mutable)]
 struct RuntimeRootComponents {
     allocator: Option<&'static mut PersistentIdAllocator>,
+    service: Option<&'static mut ServiceRequestSequence>,
+    general_economy: Option<&'static mut GeneralEconomyLedger>,
+    guest_survey: Option<&'static mut GuestSurvey>,
     arrivals: Option<&'static mut GuestArrivalState>,
     survey: Option<&'static mut GuestSurveyNeedCadence>,
     counters: Option<&'static mut EntityNameTagCounters>,
@@ -92,11 +93,6 @@ pub(super) struct RuntimeContinuationApplication<'w, 's> {
     roots: Query<'w, 's, RuntimeRootComponents>,
     identities: Option<Res<'w, PersistentIdIndex>>,
     eggs: Query<'w, 's, Option<&'static mut EggIncubation>, With<WorldMember>>,
-    navigation: Option<ResMut<'w, NavigationRequestSequence>>,
-    behavior: Option<ResMut<'w, BehaviorTaskExecutionSequence>>,
-    service: Option<ResMut<'w, ServiceRequestSequence>>,
-    general_economy: Option<ResMut<'w, GeneralEconomyLedger>>,
-    survey: Option<ResMut<'w, GuestSurvey>>,
 }
 
 impl RuntimeContinuationApplication<'_, '_> {
@@ -109,8 +105,12 @@ impl RuntimeContinuationApplication<'_, '_> {
         use super::restored_component_values::restore_optional_component;
 
         let Some(record) = record else {
-            if self.general_economy.is_some() {
-                commands.remove_resource::<GeneralEconomyLedger>();
+            if self
+                .roots
+                .get(world_root)
+                .is_ok_and(|root| root.general_economy.is_some())
+            {
+                commands.entity(world_root).remove::<GeneralEconomyLedger>();
             }
             return Ok(());
         };
@@ -152,6 +152,26 @@ impl RuntimeContinuationApplication<'_, '_> {
             &mut root,
             live.trend,
             record.guest_favourite_animal_trend,
+            true,
+        );
+        restore_optional_component(
+            &mut root,
+            live.service,
+            record
+                .service_request_sequence
+                .map(ServiceRequestSequence::from_snapshot),
+            false,
+        );
+        restore_optional_component(
+            &mut root,
+            live.general_economy,
+            record.general_economy,
+            true,
+        );
+        restore_optional_component(
+            &mut root,
+            live.guest_survey,
+            record.guest_survey.map(|(_, survey)| survey),
             true,
         );
         let disease = domain.map_or_else(Default::default, |domain| domain.disease);
@@ -199,51 +219,7 @@ impl RuntimeContinuationApplication<'_, '_> {
                 false,
             );
         }
-        restore_resource(
-            commands,
-            self.navigation.as_deref_mut(),
-            Some(NavigationRequestSequence::from_snapshot(
-                record.navigation_sequence,
-            )),
-        );
-        restore_resource(
-            commands,
-            self.behavior.as_deref_mut(),
-            Some(BehaviorTaskExecutionSequence::from_snapshot(
-                record.behavior_execution_sequence,
-            )),
-        );
-        restore_resource(
-            commands,
-            self.service.as_deref_mut(),
-            record
-                .service_request_sequence
-                .map(ServiceRequestSequence::from_snapshot),
-        );
-        restore_resource(
-            commands,
-            self.general_economy.as_deref_mut(),
-            record.general_economy,
-        );
-        restore_resource(
-            commands,
-            self.survey.as_deref_mut(),
-            record.guest_survey.map(|(_, survey)| survey),
-        );
         Ok(())
-    }
-}
-
-fn restore_resource<T: Resource>(
-    commands: &mut Commands,
-    live: Option<&mut T>,
-    restored: Option<T>,
-) {
-    match (live, restored) {
-        (Some(live), Some(restored)) => *live = restored,
-        (None, Some(restored)) => commands.insert_resource(restored),
-        (Some(_), None) => commands.remove_resource::<T>(),
-        (None, None) => {}
     }
 }
 
@@ -460,7 +436,10 @@ mod tests {
             capture.capture(root).unwrap()
         };
         let mut saved_bytes = Vec::new();
-        append_runtime_continuation_snapshot(&mut saved_bytes, &saved).unwrap();
+        let mut expected = saved.clone();
+        expected.navigation_sequence = 0;
+        expected.behavior_execution_sequence = 0;
+        append_runtime_continuation_snapshot(&mut saved_bytes, &expected).unwrap();
         let mut recaptured_bytes = Vec::new();
         append_runtime_continuation_snapshot(&mut recaptured_bytes, &recaptured).unwrap();
         assert_eq!(recaptured_bytes, saved_bytes);
@@ -473,15 +452,10 @@ mod tests {
             PersistentId(800)
         );
         assert_eq!(
-            world.resource_mut::<NavigationRequestSequence>().next(),
-            901
-        );
-        assert_eq!(
-            world.resource_mut::<BehaviorTaskExecutionSequence>().next(),
-            1001
-        );
-        assert_eq!(
-            world.resource_mut::<ServiceRequestSequence>().allocate(),
+            world
+                .get_mut::<ServiceRequestSequence>(root)
+                .unwrap()
+                .allocate(),
             Some(700)
         );
         assert_eq!(
@@ -498,14 +472,16 @@ mod tests {
         absent.guest_survey = None;
         absent.guest_favourite_animal_trend = None;
         apply_test_continuation(&mut world, root, &absent, high_water_marks(&[])).unwrap();
-        assert!(!world.contains_resource::<ServiceRequestSequence>());
-        assert!(world.get::<GuestArrivalState>(root).is_none());
-        assert!(!world.contains_resource::<GuestSurvey>());
-        assert!(world.get::<GuestFavouriteAnimalTrend>(root).is_none());
         assert_eq!(
-            world.resource::<NavigationRequestSequence>().last_issued(),
-            900
+            world
+                .get::<ServiceRequestSequence>(root)
+                .unwrap()
+                .next_sequence(),
+            701
         );
+        assert!(world.get::<GuestArrivalState>(root).is_none());
+        assert!(world.get::<GuestSurvey>(root).is_none());
+        assert!(world.get::<GuestFavouriteAnimalTrend>(root).is_none());
     }
 
     #[test]
@@ -594,7 +570,12 @@ mod tests {
         };
         let mut recaptured_bytes = Vec::new();
         append_runtime_continuation_snapshot(&mut recaptured_bytes, &recaptured).unwrap();
-        assert_eq!(recaptured_bytes, bytes);
+        let mut expected = saved;
+        expected.navigation_sequence = 0;
+        expected.behavior_execution_sequence = 0;
+        let mut expected_bytes = Vec::new();
+        append_runtime_continuation_snapshot(&mut expected_bytes, &expected).unwrap();
+        assert_eq!(recaptured_bytes, expected_bytes);
         decoded.general_economy = None;
         decoded.world_audio_preset = None;
         decoded.entity_name_counters = None;
@@ -603,7 +584,9 @@ mod tests {
         assert!(world
             .get::<openzt2_zoo_state::audio::audio_environment_types::WorldAudioPreset>(root)
             .is_none());
-        assert!(!world.contains_resource::<openzt2_zoo_state::economy::general_economy_types::GeneralEconomyLedger>());
+        assert!(world
+            .get::<openzt2_zoo_state::economy::general_economy_types::GeneralEconomyLedger>(root)
+            .is_none());
         assert!(world.get::<EntityNameTagCounters>(root).is_none());
         assert!(world.get::<EntityNameRegistered>(fresh).is_some());
         assert!(world.get::<EntityNameRegistered>(other).is_none());
@@ -645,28 +628,11 @@ mod tests {
             Err(PersistentIdError::Exhausted)
         );
         assert_eq!(
-            world.resource_mut::<ServiceRequestSequence>().allocate(),
-            None
-        );
-        assert_eq!(
-            world.resource::<NavigationRequestSequence>().last_issued(),
-            u64::MAX
-        );
-        assert_eq!(
             world
-                .resource::<BehaviorTaskExecutionSequence>()
-                .last_issued(),
-            u64::MAX
-        );
-        let mut navigation = NavigationRequestSequence::from_snapshot(u64::MAX - 1);
-        let mut behavior = BehaviorTaskExecutionSequence::from_snapshot(u64::MAX - 1);
-        assert_eq!(navigation.next(), u64::MAX);
-        assert_eq!(behavior.next(), u64::MAX);
-        assert!(
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| navigation.next())).is_err()
-        );
-        assert!(
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| behavior.next())).is_err()
+                .get_mut::<ServiceRequestSequence>(root)
+                .unwrap()
+                .allocate(),
+            None
         );
     }
 
@@ -687,10 +653,15 @@ mod tests {
             };
             let mut world = World::new();
             let root = world.spawn_empty().id();
-            world.insert_resource(NavigationRequestSequence::from_snapshot(55));
+            world
+                .entity_mut(root)
+                .insert(ServiceRequestSequence::from_snapshot(55));
             assert!(apply_test_continuation(&mut world, root, &saved, invalid).is_err());
             assert_eq!(
-                world.resource::<NavigationRequestSequence>().last_issued(),
+                world
+                    .get::<ServiceRequestSequence>(root)
+                    .unwrap()
+                    .next_sequence(),
                 55
             );
             assert!(world.get::<PersistentIdAllocator>(root).is_none());

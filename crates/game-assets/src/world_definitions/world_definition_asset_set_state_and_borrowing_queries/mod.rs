@@ -3,13 +3,14 @@
 use std::{
     collections::BTreeMap,
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     },
 };
 
 use bevy::{gltf::Gltf, prelude::*};
 use openzt2_game_data::{
+    AssetId,
     world_definitions::{
         animal_health::*,
         animal_shows_and_training::*,
@@ -42,7 +43,6 @@ use openzt2_game_data::{
         transportation_and_tours::*,
         world_objects::*,
     },
-    AssetId,
 };
 
 use crate::{effect::ParticleEffectDocumentAsset, scene_prefab::ScenePrefabAsset};
@@ -99,7 +99,6 @@ pub(super) enum DefinitionKind {
     CloningCenter,
     ImmersiveModePolicy,
     Camera,
-    PersonNames,
     Weather,
     Ambient,
     Environment,
@@ -151,6 +150,13 @@ pub(super) enum SingletonKind {
     StaffManager,
 }
 
+#[derive(Clone)]
+pub(super) struct DefinitionRow {
+    pub(super) handle: Handle<WorldDefinitionAsset>,
+    pub(super) first: usize,
+    pub(super) end: usize,
+}
+
 #[derive(Resource, Default)]
 pub struct WorldDefinitions {
     pub(super) server: Option<AssetServer>,
@@ -160,14 +166,17 @@ pub struct WorldDefinitions {
     pub(super) failed: std::collections::BTreeSet<bevy::asset::AssetId<WorldDefinitionAsset>>,
     pub(super) handles: Vec<Handle<WorldDefinitionAsset>>,
     pub(super) source_ids: std::collections::BTreeSet<bevy::asset::AssetId<WorldDefinitionAsset>>,
-    pub(super) reload_queue: BTreeMap<bevy::asset::AssetId<WorldDefinitionAsset>, bevy::asset::AssetPath<'static>>,
-    pub(super) reloading: std::collections::BTreeSet<bevy::asset::AssetId<WorldDefinitionAsset>>,
+    pub(super) active_load: Option<Handle<super::world_definition_load_queue::WorldDefinitionLoadCompletion>>,
+    pub(super) next_load_paths: Option<Vec<std::path::PathBuf>>,
+    pub(super) routed_sources: BTreeMap<std::path::PathBuf, std::path::PathBuf>,
+    pub(super) source_generation: u64,
     pub(super) fame_documents: Vec<Handle<WorldDefinitionAsset>>,
-    pub(super) loading_task: Option<bevy::tasks::Task<Vec<Handle<WorldDefinitionAsset>>>>,
     pub(super) complete: bool,
     pub(super) completed_loads: Arc<AtomicUsize>,
     pub(super) total_loads: usize,
-    pub(super) records: BTreeMap<(DefinitionKind, AssetId), Handle<WorldDefinitionAsset>>,
+    pub(super) records: BTreeMap<(DefinitionKind, AssetId), DefinitionRow>,
+    pub(super) show_stages_by_object: BTreeMap<AssetId, DefinitionRow>,
+    pub(super) vehicle_seats_by_index: BTreeMap<(AssetId, u16), DefinitionRow>,
     pub(super) singletons: BTreeMap<SingletonKind, Handle<WorldDefinitionAsset>>,
     pub(super) ground_path_surface_images: BTreeMap<AssetId, Handle<GroundPathSurfaceImage>>,
     pub(super) unlock_definition_identifiers_by_target: BTreeMap<AssetId, Vec<AssetId>>,
@@ -220,6 +229,24 @@ impl WorldDefinitions {
             &mut self.records,
             &mut self.singletons,
         );
+        let mut indexed = document.show_stages.iter().collect::<Vec<_>>();
+        indexed.sort_by_key(|stage| stage.id);
+        for stage in indexed {
+            if let Some(row) = self.records.get(&(DefinitionKind::ShowStage, stage.id)) {
+                self.show_stages_by_object
+                    .entry(stage.object)
+                    .or_insert_with(|| row.clone());
+            }
+        }
+        let mut indexed = document.vehicle_seats.iter().collect::<Vec<_>>();
+        indexed.sort_by_key(|seat| seat.id);
+        for seat in indexed {
+            if let Some(row) = self.records.get(&(DefinitionKind::VehicleSeat, seat.id)) {
+                self.vehicle_seats_by_index
+                    .entry((seat.vehicle, seat.index))
+                    .or_insert_with(|| row.clone());
+            }
+        }
         self.catalogue_by_definition.take();
         self.research_by_definition.take();
         document.unlocks.iter().for_each(|record| {
@@ -257,6 +284,7 @@ impl WorldDefinitions {
             self.fame_documents.push(handle.clone());
         }
         self.handles.push(handle);
+        self.complete = true;
     }
 
     /// Lets fixtures demand-load the scenes added with
@@ -269,8 +297,14 @@ impl WorldDefinitions {
         asset: &WorldDefinitionAsset,
     ) {
         for scene in &asset.scenes {
-            self.records
-                .insert((DefinitionKind::SceneDependency, scene.id), handle.clone());
+            self.records.insert(
+                (DefinitionKind::SceneDependency, scene.id),
+                DefinitionRow {
+                    handle: handle.clone(),
+                    first: 0,
+                    end: 1,
+                },
+            );
         }
         self.server = Some(server);
     }
@@ -279,10 +313,7 @@ impl WorldDefinitions {
         &'a self,
         assets: &'a Assets<WorldDefinitionAsset>,
     ) -> Option<WorldDefinitionsView<'a>> {
-        let ready = self.loading_task.is_none()
-            && self.pending.is_empty()
-            && self.reload_queue.is_empty()
-            && self.reloading.is_empty()
+        let ready = self.complete
             && !self.handles.is_empty()
             && self
                 .singletons
@@ -291,6 +322,8 @@ impl WorldDefinitions {
             server: self.server.as_ref(),
             fame_documents: &self.fame_documents,
             records: &self.records,
+            show_stages_by_object: &self.show_stages_by_object,
+            vehicle_seats_by_index: &self.vehicle_seats_by_index,
             singletons: &self.singletons,
             unlock_definition_identifiers_by_target: &self.unlock_definition_identifiers_by_target,
             catalogue_authored_purchase_order: &self.catalogue_authored_purchase_order,
@@ -308,7 +341,9 @@ impl WorldDefinitions {
 pub struct WorldDefinitionsView<'a> {
     server: Option<&'a AssetServer>,
     fame_documents: &'a [Handle<WorldDefinitionAsset>],
-    records: &'a BTreeMap<(DefinitionKind, AssetId), Handle<WorldDefinitionAsset>>,
+    records: &'a BTreeMap<(DefinitionKind, AssetId), DefinitionRow>,
+    show_stages_by_object: &'a BTreeMap<AssetId, DefinitionRow>,
+    vehicle_seats_by_index: &'a BTreeMap<(AssetId, u16), DefinitionRow>,
     singletons: &'a BTreeMap<SingletonKind, Handle<WorldDefinitionAsset>>,
     unlock_definition_identifiers_by_target: &'a BTreeMap<AssetId, Vec<AssetId>>,
     catalogue_authored_purchase_order: &'a [(usize, AssetId)],
@@ -323,12 +358,8 @@ pub struct WorldDefinitionsView<'a> {
 macro_rules! finder {
     ($name:ident, $kind:ident, $field:ident, $record:ty) => {
         pub fn $name(self, id: AssetId) -> Option<&'a $record> {
-            self.assets
-                .get(self.records.get(&(DefinitionKind::$kind, id))?)?
-                .document
-                .$field
-                .iter()
-                .find(|record| record.id == id)
+            let row = self.records.get(&(DefinitionKind::$kind, id))?;
+            self.assets.get(&row.handle)?.document.$field.get(row.first)
         }
     };
 }
@@ -346,30 +377,39 @@ macro_rules! singleton {
 }
 
 impl<'a> WorldDefinitionsView<'a> {
+    pub fn authored_timekeeper_policy(self) -> Option<super::timing::AuthoredTimekeeperPolicy> {
+        self.assets
+            .get(self.singletons.get(&SingletonKind::SimulationTiming)?)?
+            .timekeeper
+    }
+
     pub fn handle_for_path(self, id: AssetId) -> Option<&'a Handle<WorldDefinitionAsset>> {
-        self.records.get(&(DefinitionKind::Path, id))
+        self.records
+            .get(&(DefinitionKind::Path, id))
+            .map(|row| &row.handle)
     }
 
     pub fn handle_for_fence(self, id: AssetId) -> Option<&'a Handle<WorldDefinitionAsset>> {
-        self.records.get(&(DefinitionKind::Fence, id))
+        self.records
+            .get(&(DefinitionKind::Fence, id))
+            .map(|row| &row.handle)
     }
 
     pub fn staff_request_rows(
         self,
         definition: AssetId,
     ) -> Option<&'a [StaffRequestControllerDefinition]> {
-        let Some(handle) = self
+        let Some(row) = self
             .records
             .get(&(DefinitionKind::StaffRequest, definition))
         else {
             return (!self.has_pending_assets()).then_some(&[]);
         };
-        let rows = &self.assets.get(handle)?.document.staff_requests;
-        // Lowering keeps each definition's controllers contiguous, preserving
-        // authored order within that definition. Borrow the canonical rows.
-        let start = rows.partition_point(|row| row.id < definition);
-        let end = rows.partition_point(|row| row.id <= definition);
-        Some(&rows[start..end])
+        self.assets
+            .get(&row.handle)?
+            .document
+            .staff_requests
+            .get(row.first..row.end)
     }
 
     pub fn has_object_record(self, id: AssetId) -> bool {
@@ -378,7 +418,7 @@ impl<'a> WorldDefinitionsView<'a> {
 
     /// The authored binder type spelling of an object, e.g. `Poop_Medium`.
     pub fn object_binder_type(self, id: AssetId) -> Option<&'a str> {
-        let handle = self.records.get(&(DefinitionKind::Object, id))?;
+        let handle = &self.records.get(&(DefinitionKind::Object, id))?.handle;
         self.assets
             .get(handle)?
             .document
@@ -399,7 +439,7 @@ impl<'a> WorldDefinitionsView<'a> {
     }
 
     pub fn path_stomp_policy(self, id: AssetId) -> Option<&'a PlacementStompPolicy> {
-        let owner = self.records.get(&(DefinitionKind::Path, id))?;
+        let owner = &self.records.get(&(DefinitionKind::Path, id))?.handle;
         self.assets
             .get(owner)?
             .document
@@ -408,7 +448,7 @@ impl<'a> WorldDefinitionsView<'a> {
     }
 
     pub fn placement_target_facts(self, id: AssetId) -> Option<&'a PlacementTargetFacts> {
-        let owner = self.records.get(&(DefinitionKind::Object, id))?;
+        let owner = &self.records.get(&(DefinitionKind::Object, id))?.handle;
         self.assets
             .get(owner)?
             .document
@@ -433,15 +473,9 @@ impl<'a> WorldDefinitionsView<'a> {
         staff_role: AssetId,
         drawn_model_animation_set: Option<AssetId>,
     ) -> Option<Handle<T>> {
-        let asset = self
-            .assets
-            .get(self.records.get(&(DefinitionKind::Staff, staff_role))?)?;
-        let model_animation_set = asset
-            .document
-            .staff
-            .iter()
-            .find(|record| record.id == staff_role)?
-            .model_animation_set;
+        let row = self.records.get(&(DefinitionKind::Staff, staff_role))?;
+        let asset = self.assets.get(&row.handle)?;
+        let model_animation_set = asset.document.staff.get(row.first)?.model_animation_set;
         asset.animation_set(
             self.server?,
             drawn_model_animation_set.unwrap_or(model_animation_set),
@@ -473,31 +507,26 @@ impl<'a> WorldDefinitionsView<'a> {
     ) -> impl Iterator<Item = &'a AnimalAdoptionSpeciesEligibility> {
         self.records
             .range(kind_range(DefinitionKind::AnimalAdoptionSpeciesEligibility))
-            .filter_map(move |((_, id), _)| self.find_animal_adoption_species_eligibility(*id))
+            .filter_map(move |(_, row)| {
+                self.assets
+                    .get(&row.handle)?
+                    .document
+                    .animal_adoption_species_eligibility
+                    .get(row.first)
+            })
     }
     /// The guest body's actor manifest, from the asset that declares the guest.
     pub fn load_guest_model_animation_set<T: Asset>(self, guest: AssetId) -> Option<Handle<T>> {
-        let asset = self
-            .assets
-            .get(self.records.get(&(DefinitionKind::Guest, guest))?)?;
-        let model_animation_set = asset
-            .document
-            .guests
-            .iter()
-            .find(|record| record.id == guest)?
-            .model_animation_set?;
+        let row = self.records.get(&(DefinitionKind::Guest, guest))?;
+        let asset = self.assets.get(&row.handle)?;
+        let model_animation_set = asset.document.guests.get(row.first)?.model_animation_set?;
         asset.animation_set(self.server?, model_animation_set)
     }
     pub fn guest_definitions(self) -> impl Iterator<Item = &'a GuestDefinition> {
         self.records
             .range(kind_range(DefinitionKind::Guest))
-            .filter_map(move |((_, id), handle)| {
-                self.assets
-                    .get(handle)?
-                    .document
-                    .guests
-                    .iter()
-                    .find(|definition| definition.id == *id)
+            .filter_map(move |(_, row)| {
+                self.assets.get(&row.handle)?.document.guests.get(row.first)
             })
     }
     finder!(
@@ -509,7 +538,7 @@ impl<'a> WorldDefinitionsView<'a> {
     finder!(find_fence, Fence, fences, FenceDefinition);
     pub fn object_record_key(self, id: AssetId) -> Option<&'a str> {
         self.assets
-            .get(self.records.get(&(DefinitionKind::Object, id))?)?
+            .get(&self.records.get(&(DefinitionKind::Object, id))?.handle)?
             .document
             .object_record_keys
             .iter()
@@ -531,14 +560,12 @@ impl<'a> WorldDefinitionsView<'a> {
     /// Loads the actor manifest holding a gate fence's open and close clips.
     pub fn load_fence_gate_animation_set<T: Asset>(self, fence: AssetId) -> Option<Handle<T>> {
         let fence = self.find_gate_fence(fence)?.id;
-        let asset = self
-            .assets
-            .get(self.records.get(&(DefinitionKind::Fence, fence))?)?;
+        let row = self.records.get(&(DefinitionKind::Fence, fence))?;
+        let asset = self.assets.get(&row.handle)?;
         let animation_set = asset
             .document
             .fences
-            .iter()
-            .find(|record| record.id == fence)?
+            .get(row.first)?
             .gate_policy
             .animation_set;
         asset.animation_set(self.server?, animation_set)
@@ -562,15 +589,15 @@ impl<'a> WorldDefinitionsView<'a> {
     finder!(find_unlock, Unlock, unlocks, UnlockDefinition);
     finder!(find_rating, Rating, rating_definitions, RatingDefinition);
     pub fn find_fame_threshold(self, level: u16) -> Option<&'a FameThreshold> {
+        let row = self.records.get(&(
+            DefinitionKind::FameThreshold,
+            AssetId::from_key(&format!("fame-threshold:{level}")),
+        ))?;
         self.assets
-            .get(self.records.get(&(
-                DefinitionKind::FameThreshold,
-                AssetId::from_key(&format!("fame-threshold:{level}")),
-            ))?)?
+            .get(&row.handle)?
             .document
             .fame_thresholds
-            .iter()
-            .find(|record| record.level == level)
+            .get(row.first)
     }
     finder!(find_award, Award, awards, AwardDefinition);
     finder!(find_tank, Tank, tanks, TankDefinition);
@@ -579,11 +606,12 @@ impl<'a> WorldDefinitionsView<'a> {
         self,
         world_object_definition: AssetId,
     ) -> Option<&'a ShowStageDefinition> {
-        self.records
-            .keys()
-            .filter(|(kind, _)| *kind == DefinitionKind::ShowStage)
-            .filter_map(|(_, show_stage_definition)| self.find_show_stage(*show_stage_definition))
-            .find(|show_stage| show_stage.object == world_object_definition)
+        let row = self.show_stages_by_object.get(&world_object_definition)?;
+        self.assets
+            .get(&row.handle)?
+            .document
+            .show_stages
+            .get(row.first)
     }
     finder!(
         find_show_audio_cue,
@@ -651,12 +679,6 @@ impl<'a> WorldDefinitionsView<'a> {
         ImmersiveModePolicy
     );
     finder!(find_camera, Camera, cameras, CameraTuningDefinition);
-    finder!(
-        find_person_name_pool,
-        PersonNames,
-        person_name_pools,
-        PersonNamePool
-    );
     finder!(find_weather, Weather, weather, WeatherDefinition);
     finder!(
         find_ambient_spawn,
@@ -674,19 +696,31 @@ impl<'a> WorldDefinitionsView<'a> {
     pub fn objects(self) -> impl Iterator<Item = &'a WorldObjectDefinition> {
         self.records
             .range(kind_range(DefinitionKind::Object))
-            .filter_map(move |((_, id), _)| self.find_object(*id))
+            .filter_map(move |(_, row)| {
+                self.assets
+                    .get(&row.handle)?
+                    .document
+                    .objects
+                    .get(row.first)
+            })
     }
 
     pub fn placeables(self) -> impl Iterator<Item = &'a PlaceableDefinition> {
         self.records
             .range(kind_range(DefinitionKind::Placeable))
-            .filter_map(move |((_, id), _)| self.find_placeable(*id))
+            .filter_map(move |(_, row)| {
+                self.assets
+                    .get(&row.handle)?
+                    .document
+                    .placeables
+                    .get(row.first)
+            })
     }
 
     pub fn paths(self) -> impl Iterator<Item = &'a GuestPathDefinition> {
         self.records
             .range(kind_range(DefinitionKind::Path))
-            .filter_map(move |((_, id), _)| self.find_path(*id))
+            .filter_map(move |(_, row)| self.assets.get(&row.handle)?.document.paths.get(row.first))
     }
 
     pub fn is_automatic_ground_path_curb(self, definition: AssetId) -> bool {
@@ -699,20 +733,33 @@ impl<'a> WorldDefinitionsView<'a> {
     pub fn fences(self) -> impl Iterator<Item = &'a FenceDefinition> {
         self.records
             .range(kind_range(DefinitionKind::Fence))
-            .filter_map(move |((_, id), _)| self.find_fence(*id))
+            .filter_map(move |(_, row)| {
+                self.assets.get(&row.handle)?.document.fences.get(row.first)
+            })
     }
 
     pub fn scene(self, id: AssetId) -> Option<Handle<ScenePrefabAsset>> {
         let server = self.server?;
         self.assets
-            .get(self.records.get(&(DefinitionKind::SceneDependency, id))?)?
+            .get(
+                &self
+                    .records
+                    .get(&(DefinitionKind::SceneDependency, id))?
+                    .handle,
+            )?
             .scene(server, id)
     }
 
     pub fn catalogue(self) -> impl Iterator<Item = &'a CatalogueEntry> {
         self.records
             .range(kind_range(DefinitionKind::Catalogue))
-            .filter_map(move |((_, id), _)| self.find_catalogue_entry(*id))
+            .filter_map(move |(_, row)| {
+                self.assets
+                    .get(&row.handle)?
+                    .document
+                    .catalogue
+                    .get(row.first)
+            })
     }
 
     pub fn catalogue_entry_for_definition(
@@ -758,13 +805,25 @@ impl<'a> WorldDefinitionsView<'a> {
     pub fn zoopedia(self) -> impl Iterator<Item = &'a ZoopediaEntry> {
         self.records
             .range(kind_range(DefinitionKind::Zoopedia))
-            .filter_map(move |((_, id), _)| self.find_zoopedia_entry(*id))
+            .filter_map(move |(_, row)| {
+                self.assets
+                    .get(&row.handle)?
+                    .document
+                    .zoopedia
+                    .get(row.first)
+            })
     }
 
     pub fn unlocks(self) -> impl Iterator<Item = &'a UnlockDefinition> {
         self.records
             .range(kind_range(DefinitionKind::Unlock))
-            .filter_map(move |((_, id), _)| self.find_unlock(*id))
+            .filter_map(move |(_, row)| {
+                self.assets
+                    .get(&row.handle)?
+                    .document
+                    .unlocks
+                    .get(row.first)
+            })
     }
 
     pub fn unlock_definitions_targeting_catalogue_definition(
@@ -781,91 +840,169 @@ impl<'a> WorldDefinitionsView<'a> {
     pub fn tranquilizers(self) -> impl Iterator<Item = &'a TranquilizerDefinition> {
         self.records
             .range(kind_range(DefinitionKind::Tranquilizer))
-            .filter_map(move |((_, id), _)| self.find_tranquilizer(*id))
+            .filter_map(move |(_, row)| {
+                self.assets
+                    .get(&row.handle)?
+                    .document
+                    .tranquilizers
+                    .get(row.first)
+            })
     }
 
     pub fn diseases(self) -> impl Iterator<Item = &'a DiseaseDefinition> {
         self.records
             .range(kind_range(DefinitionKind::Disease))
-            .filter_map(move |((_, id), _)| self.find_disease(*id))
+            .filter_map(move |(_, row)| {
+                self.assets
+                    .get(&row.handle)?
+                    .document
+                    .diseases
+                    .get(row.first)
+            })
     }
 
     pub fn rampage_rules(self) -> impl Iterator<Item = &'a RampageRule> {
         self.records
             .range(kind_range(DefinitionKind::Rampage))
-            .filter_map(move |((_, id), _)| self.find_rampage_rule(*id))
+            .filter_map(move |(_, row)| {
+                self.assets
+                    .get(&row.handle)?
+                    .document
+                    .rampage_rules
+                    .get(row.first)
+            })
     }
 
     pub fn staff_jobs(self) -> impl Iterator<Item = &'a StaffJobDefinition> {
         self.records
             .range(kind_range(DefinitionKind::StaffJob))
-            .filter_map(move |((_, id), _)| self.find_staff_job(*id))
+            .filter_map(move |(_, row)| {
+                self.assets
+                    .get(&row.handle)?
+                    .document
+                    .staff_jobs
+                    .get(row.first)
+            })
     }
 
     pub fn biomes(self) -> impl Iterator<Item = &'a BiomeDefinition> {
         self.records
             .range(kind_range(DefinitionKind::Biome))
-            .filter_map(move |((_, id), _)| self.find_biome(*id))
+            .filter_map(move |(_, row)| {
+                self.assets.get(&row.handle)?.document.biomes.get(row.first)
+            })
     }
 
     pub fn brushes(self) -> impl Iterator<Item = &'a TerrainEditingBrushDefinition> {
         self.records
             .range(kind_range(DefinitionKind::Brush))
-            .filter_map(move |((_, id), _)| self.find_brush(*id))
+            .filter_map(move |(_, row)| {
+                self.assets
+                    .get(&row.handle)?
+                    .document
+                    .brushes
+                    .get(row.first)
+            })
     }
 
     pub fn tricks(self) -> impl Iterator<Item = &'a TrickDefinition> {
         self.records
             .range(kind_range(DefinitionKind::Trick))
-            .filter_map(move |((_, id), _)| self.find_trick(*id))
+            .filter_map(move |(_, row)| {
+                self.assets.get(&row.handle)?.document.tricks.get(row.first)
+            })
     }
 
     pub fn stations(self) -> impl Iterator<Item = &'a TransportationStationDefinition> {
         self.records
             .range(kind_range(DefinitionKind::Station))
-            .filter_map(move |((_, id), _)| self.find_station(*id))
+            .filter_map(move |(_, row)| {
+                self.assets
+                    .get(&row.handle)?
+                    .document
+                    .stations
+                    .get(row.first)
+            })
     }
 
     pub fn tracks(self) -> impl Iterator<Item = &'a TransportationTrackDefinition> {
         self.records
             .range(kind_range(DefinitionKind::Track))
-            .filter_map(move |((_, id), _)| self.find_track(*id))
+            .filter_map(move |(_, row)| {
+                self.assets.get(&row.handle)?.document.tracks.get(row.first)
+            })
     }
 
     pub fn vehicles(self) -> impl Iterator<Item = &'a TransportationVehicleDefinition> {
         self.records
             .range(kind_range(DefinitionKind::Vehicle))
-            .filter_map(move |((_, id), _)| self.find_vehicle(*id))
+            .filter_map(move |(_, row)| {
+                self.assets
+                    .get(&row.handle)?
+                    .document
+                    .vehicles
+                    .get(row.first)
+            })
     }
 
     pub fn tour_views(self) -> impl Iterator<Item = &'a TourViewDefinition> {
         self.records
             .range(kind_range(DefinitionKind::TourView))
-            .filter_map(move |((_, id), _)| self.find_tour_view(*id))
+            .filter_map(move |(_, row)| {
+                self.assets
+                    .get(&row.handle)?
+                    .document
+                    .tour_views
+                    .get(row.first)
+            })
     }
 
     pub fn fossil_slots(self) -> impl Iterator<Item = &'a FossilSlotDefinition> {
         self.records
             .range(kind_range(DefinitionKind::FossilSlot))
-            .filter_map(move |((_, id), _)| self.find_fossil_slot(*id))
+            .filter_map(move |(_, row)| {
+                self.assets
+                    .get(&row.handle)?
+                    .document
+                    .fossil_slots
+                    .get(row.first)
+            })
     }
 
     pub fn cloning_centers(self) -> impl Iterator<Item = &'a CloningCenterDefinition> {
         self.records
             .range(kind_range(DefinitionKind::CloningCenter))
-            .filter_map(move |((_, id), _)| self.find_cloning_center(*id))
+            .filter_map(move |(_, row)| {
+                self.assets
+                    .get(&row.handle)?
+                    .document
+                    .cloning_centers
+                    .get(row.first)
+            })
     }
 
     pub fn research(self) -> impl Iterator<Item = &'a ResearchDefinition> {
         self.records
             .range(kind_range(DefinitionKind::Research))
-            .filter_map(move |((_, id), _)| self.find_research(*id))
+            .filter_map(move |(_, row)| {
+                self.assets
+                    .get(&row.handle)?
+                    .document
+                    .research
+                    .get(row.first)
+            })
     }
 
     pub fn rating_definitions(self) -> impl Iterator<Item = &'a RatingDefinition> {
         self.records
             .range(kind_range(DefinitionKind::Rating))
-            .filter_map(move |((_, id), _)| self.find_rating(*id))
+            .filter_map(move |(_, row)| {
+                self.assets
+                    .get(&row.handle)?
+                    .document
+                    .rating_definitions
+                    .get(row.first)
+            })
     }
 
     pub fn starting_fame(self, mode: AssetId) -> Option<&'a StartingFamePolicy> {
@@ -882,67 +1019,81 @@ impl<'a> WorldDefinitionsView<'a> {
     pub fn awards(self) -> impl Iterator<Item = &'a AwardDefinition> {
         self.records
             .range(kind_range(DefinitionKind::Award))
-            .filter_map(move |((_, id), _)| self.find_award(*id))
+            .filter_map(move |(_, row)| {
+                self.assets.get(&row.handle)?.document.awards.get(row.first)
+            })
     }
 
     pub fn show_audio_cues(self) -> impl Iterator<Item = &'a ShowAudioCue> {
         self.records
             .range(kind_range(DefinitionKind::ShowAudioCue))
-            .filter_map(move |((_, id), _)| self.find_show_audio_cue(*id))
+            .filter_map(move |(_, row)| {
+                self.assets
+                    .get(&row.handle)?
+                    .document
+                    .show_audio_cues
+                    .get(row.first)
+            })
     }
 
     pub fn fossil_pieces(self) -> impl Iterator<Item = &'a FossilPieceDefinition> {
         self.records
             .range(kind_range(DefinitionKind::FossilPiece))
-            .filter_map(move |((_, id), _)| self.find_fossil_piece(*id))
+            .filter_map(move |(_, row)| {
+                self.assets
+                    .get(&row.handle)?
+                    .document
+                    .fossil_pieces
+                    .get(row.first)
+            })
     }
 
     pub fn immersive_mode_policies(self) -> impl Iterator<Item = &'a ImmersiveModePolicy> {
         self.records
             .range(kind_range(DefinitionKind::ImmersiveModePolicy))
-            .filter_map(move |((_, id), _)| self.find_immersive_mode_policy(*id))
+            .filter_map(move |(_, row)| {
+                self.assets
+                    .get(&row.handle)?
+                    .document
+                    .immersive_mode_policies
+                    .get(row.first)
+            })
     }
 
     pub fn find_aquatic_requirement(self, species: AssetId) -> Option<&'a AquaticRequirement> {
+        let row = self.records.get(&(DefinitionKind::Aquatic, species))?;
         self.assets
-            .get(self.records.get(&(DefinitionKind::Aquatic, species))?)?
+            .get(&row.handle)?
             .document
             .aquatic_requirements
-            .iter()
-            .find(|record| record.species == species)
+            .get(row.first)
     }
 
     pub fn find_maintenance_by_object(self, object: AssetId) -> Option<&'a MaintenanceDefinition> {
+        let row = self
+            .records
+            .get(&(DefinitionKind::MaintenanceByObject, object))?;
         self.assets
-            .get(
-                self.records
-                    .get(&(DefinitionKind::MaintenanceByObject, object))?,
-            )?
+            .get(&row.handle)?
             .document
             .maintenance_definitions
-            .iter()
-            .find(|record| record.object == object)
+            .get(row.first)
     }
 
     pub fn find_facility_by_object(self, object: AssetId) -> Option<&'a FacilityDefinition> {
+        let row = self
+            .records
+            .get(&(DefinitionKind::FacilityByObject, object))?;
         self.assets
-            .get(
-                self.records
-                    .get(&(DefinitionKind::FacilityByObject, object))?,
-            )?
+            .get(&row.handle)?
             .document
             .facilities
-            .iter()
-            .find(|record| record.object == object)
+            .get(row.first)
     }
 
     pub fn find_staff_by_object(self, object: AssetId) -> Option<&'a StaffRoleDefinition> {
-        self.assets
-            .get(self.records.get(&(DefinitionKind::StaffByObject, object))?)?
-            .document
-            .staff
-            .iter()
-            .find(|record| record.object == object)
+        let row = self.records.get(&(DefinitionKind::StaffByObject, object))?;
+        self.assets.get(&row.handle)?.document.staff.get(row.first)
     }
 
     pub fn find_vehicle_seat_by_index(
@@ -950,10 +1101,12 @@ impl<'a> WorldDefinitionsView<'a> {
         vehicle: AssetId,
         index: u16,
     ) -> Option<&'a TransportationVehicleSeatDefinition> {
-        self.records
-            .range(kind_range(DefinitionKind::VehicleSeat))
-            .filter_map(move |((_, id), _)| self.find_vehicle_seat(*id))
-            .find(|seat| seat.vehicle == vehicle && seat.index == index)
+        let row = self.vehicle_seats_by_index.get(&(vehicle, index))?;
+        self.assets
+            .get(&row.handle)?
+            .document
+            .vehicle_seats
+            .get(row.first)
     }
 
     singleton!(
@@ -1114,27 +1267,47 @@ impl<'a> WorldDefinitionsView<'a> {
     pub fn texture_image(self, id: AssetId) -> Option<Handle<Image>> {
         let server = self.server?;
         self.assets
-            .get(self.records.get(&(DefinitionKind::TextureDependency, id))?)?
+            .get(
+                &self
+                    .records
+                    .get(&(DefinitionKind::TextureDependency, id))?
+                    .handle,
+            )?
             .texture(server, id)
     }
 
     pub(super) fn texture_path(self, id: AssetId) -> Option<&'a str> {
         self.assets
-            .get(self.records.get(&(DefinitionKind::TextureDependency, id))?)?
+            .get(
+                &self
+                    .records
+                    .get(&(DefinitionKind::TextureDependency, id))?
+                    .handle,
+            )?
             .texture_path(id)
     }
 
     pub fn model(self, id: AssetId) -> Option<Handle<Gltf>> {
         let server = self.server?;
         self.assets
-            .get(self.records.get(&(DefinitionKind::ModelDependency, id))?)?
+            .get(
+                &self
+                    .records
+                    .get(&(DefinitionKind::ModelDependency, id))?
+                    .handle,
+            )?
             .model(server, id)
     }
 
     pub fn effect(self, id: AssetId) -> Option<Handle<ParticleEffectDocumentAsset>> {
         let server = self.server?;
         self.assets
-            .get(self.records.get(&(DefinitionKind::EffectDependency, id))?)?
+            .get(
+                &self
+                    .records
+                    .get(&(DefinitionKind::EffectDependency, id))?
+                    .handle,
+            )?
             .effect(server, id)
     }
 }

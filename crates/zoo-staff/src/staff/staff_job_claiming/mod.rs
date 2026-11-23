@@ -41,7 +41,7 @@ pub(crate) fn claim_highest_ranked_compatible_jobs_for_available_staff(
     behavior_document_assets: Res<Assets<BehaviorDocumentAsset>>,
     loaded_behavior_documents: Res<LoadedBehaviorDocumentCollection>,
     token_tasks: Res<StaffTasksByRequestToken>,
-    spatial_grid: Res<SpatialGrid>,
+    grids: Query<&SpatialGrid>,
     spatial_membership: SpatialGridMembership,
     terrain_surfaces: DrySurfaceEligibility,
     staff: Query<
@@ -155,6 +155,9 @@ pub(crate) fn claim_highest_ranked_compatible_jobs_for_available_staff(
                     })
                 })
         });
+        let Ok(spatial_grid) = grids.get(job_world.root) else {
+            return;
+        };
         let Some(target_cell) = spatial_grid.cell_of(target_position.xz()) else {
             return;
         };
@@ -164,7 +167,7 @@ pub(crate) fn claim_highest_ranked_compatible_jobs_for_available_staff(
         let target_parent = parent.map(ChildOf::parent);
         let target_area = habitat.map(|habitat| habitat.habitat_entity);
         let target_rampaging = target_rampaging.is_some();
-        let target_on_land = terrain_surfaces.on_land_at_position(target_position);
+        let target_on_land = terrain_surfaces.on_land_at_position(job_world.root, target_position);
         let candidate_facts = StaffCandidateEligibilityFacts {
             target_definition: target_definition.map(|definition| definition.0),
             target_food_level_q16: food
@@ -202,7 +205,7 @@ pub(crate) fn claim_highest_ranked_compatible_jobs_for_available_staff(
                 let bottom = center_y.saturating_add(ring).min(spatial_grid.height - 1);
                 let mut visit_cell = |x, y| {
                     let cell = y * spatial_grid.width + x;
-                    for candidate_entity in spatial_membership.members(cell) {
+                    for candidate_entity in spatial_membership.members(job_world.root, cell) {
                         let Ok((
                             staff_entity,
                             staff_role,

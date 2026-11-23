@@ -8,13 +8,14 @@ use super::zoo_rating_input_types::{GuestRatingFacts, LivingAnimalPopulation};
 use bevy::{ecs::{entity_disabling::Disabled, query::Allow}, prelude::*};
 use mlua::{Function, Lua, MultiValue, Scope, Table, Value};
 use openzt2_game_assets::lua_script::{
-    lua_script_archive_path_index::LuaScriptArchivePathIndex,
     lua_script_asset_loading::LuaScriptAsset,
     lua_script_module_execution::{
         execute_lua_script_module_once_per_virtual_machine,
         install_lua_script_dependency_loading_functions,
     },
+    lua_script_sources::LuaScriptSources,
 };
+use openzt2_game_assets::asset_source::ArchiveOverlayChanged;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
 use openzt2_game_data::AssetId;
 use openzt2_world_state::world_spawn::world_membership_types::{
@@ -33,13 +34,15 @@ pub(super) struct AuthoredFameScript {
     handle: Handle<LuaScriptAsset>,
     path: String,
     lua: Option<Lua>,
-    modules: BTreeSet<bevy::asset::AssetId<LuaScriptAsset>>,
+    modules: BTreeSet<AssetId>,
 }
 
 pub(super) fn resolve_winning_fame_script(
     mut commands: Commands,
-    index: Res<LuaScriptArchivePathIndex>,
+    sources: Res<LuaScriptSources>,
+    server: Res<AssetServer>,
     mut asset_events: MessageReader<AssetEvent<LuaScriptAsset>>,
+    mut overlay: MessageReader<ArchiveOverlayChanged>,
     mut roots: Query<(Entity, Option<&mut AuthoredFameScript>), With<WorldRoot>>,
 ) {
     let changed = asset_events
@@ -51,16 +54,31 @@ pub(super) fn resolve_winning_fame_script(
             _ => None,
         })
         .collect::<BTreeSet<_>>();
-    let winner = index.resolve("", FAME_SCRIPT_PATH);
+    let changed_paths = changed
+        .iter()
+        .filter_map(|&id| server.get_path(id))
+        .map(|path| AssetId::from_virtual_path(&path.path().to_string_lossy()))
+        .chain(
+            overlay
+                .read()
+                .flat_map(|event| &event.changes)
+                .map(|entry| {
+                    AssetId::from_virtual_path(&entry.normalized_asset_path.to_string_lossy())
+                }),
+        )
+        .collect::<BTreeSet<_>>();
+    let winner = sources.load("", FAME_SCRIPT_PATH);
     for (root, existing) in &mut roots {
-        match (winner, existing) {
+        match (winner.as_ref(), existing) {
             (Some((path, handle)), Some(mut current)) => {
                 if current.handle != *handle || current.path != path {
-                    current.path = path.to_owned();
+                    current.path.clone_from(path);
                     current.handle = handle.clone();
                     current.lua = None;
                     current.modules.clear();
-                } else if changed.contains(&handle.id()) || !changed.is_disjoint(&current.modules) {
+                } else if changed.contains(&handle.id())
+                    || !changed_paths.is_disjoint(&current.modules)
+                {
                     current.lua = None;
                     current.modules.clear();
                 }
@@ -98,7 +116,7 @@ pub(super) enum FameScriptEffect {
 impl AuthoredFameScript {
     pub(super) fn evaluate(
         &mut self,
-        index: &LuaScriptArchivePathIndex,
+        sources: &LuaScriptSources,
         assets: &Assets<LuaScriptAsset>,
         animals: &LivingAnimalPopulation,
         guests: &GuestRatingFacts,
@@ -119,7 +137,7 @@ impl AuthoredFameScript {
         let maximum = Cell::new(old.maximum_percent_reached);
         let result = lua.scope(|scope| {
             install_lua_script_dependency_loading_functions(
-                lua, scope, assets, index, &modules, &stack,
+                lua, scope, assets, sources, &modules, &stack,
             )?;
             install_fame_logging(lua)?;
             execute_lua_script_module_once_per_virtual_machine(

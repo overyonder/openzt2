@@ -8,7 +8,7 @@ use openzt2_interface_state::input::input_chord_queries::either_keyboard_modifie
 use openzt2_interface_state::input::input_chord_queries::input_chord_was_just_pressed_by_keyboard_or_mouse;
 
 use openzt2_interface_state::camera::camera_runtime_state_types::{CameraMode, ZooCamera};
-use openzt2_interface_state::input::input_types::GameAction;
+use openzt2_interface_state::input::input_types::{ActionRequest, ActionSource, GameAction};
 
 use super::input_types::GameActionInputBinding;
 use super::input_types::GameActionInputBindings;
@@ -17,14 +17,20 @@ use crate::input::input_execution_types::DeviceControlAxes;
 
 const MOUSE_LOOK_PIXELS_FOR_FULL_SCALE: f32 = 32.0;
 
-#[derive(Resource, Default)]
-pub(super) struct KeyboardMouseSample {
+#[derive(Component, Default, PartialEq)]
+pub(super) struct KeyboardMouseControlSample {
     pub(super) axes: DeviceControlAxes,
-    pub(super) actions: Vec<GameAction>,
     pub(super) meaningful: bool,
 }
 
-pub(super) fn sample_keyboard_and_mouse(
+#[derive(Message)]
+pub(super) struct KeyboardMouseAction(GameAction);
+
+pub(super) fn spawn_keyboard_mouse_device(mut commands: Commands) {
+    commands.spawn(KeyboardMouseControlSample::default());
+}
+
+pub(super) fn translate_keyboard_mouse_input(
     keyboard_keys: Res<ButtonInput<KeyCode>>,
     mouse_buttons: Res<ButtonInput<MouseButton>>,
     focus: Res<InputFocus>,
@@ -33,29 +39,37 @@ pub(super) fn sample_keyboard_and_mouse(
     accumulated_mouse_scroll: Res<AccumulatedMouseScroll>,
     bindings: Res<GameActionInputBindings>,
     cameras: Query<&CameraMode, With<ZooCamera>>,
-    mut sample: ResMut<KeyboardMouseSample>,
+    mut samples: Query<&mut KeyboardMouseControlSample>,
+    mut actions: MessageWriter<KeyboardMouseAction>,
 ) {
-    sample.actions.clear();
+    let Ok(mut sample) = samples.single_mut() else {
+        return;
+    };
     let editing_text = focus.get().is_some_and(|node| text_edits.contains(node));
     let empty_keyboard = ButtonInput::<KeyCode>::default();
     let keyboard = if editing_text {
         &empty_keyboard
     } else {
-        &*keyboard_keys
+        &keyboard_keys
+    };
+    let mut sent_action = false;
+    let mut publish = |action| {
+        actions.write(KeyboardMouseAction(action));
+        sent_action = true;
     };
     if editing_text {
         if keyboard_keys.just_pressed(KeyCode::Enter)
             || keyboard_keys.just_pressed(KeyCode::NumpadEnter)
         {
-            sample.actions.push(GameAction::Confirm);
+            publish(GameAction::Confirm);
         }
         if keyboard_keys.just_pressed(KeyCode::Escape) {
-            sample.actions.push(GameAction::Cancel);
+            publish(GameAction::Cancel);
         }
     }
     let first_person = cameras
         .single()
-        .is_ok_and(|mode| matches!(mode, CameraMode::FirstPerson(_)));
+        .is_ok_and(|mode| *mode == CameraMode::FirstPerson);
     let mut magnitude = [None; 6];
     for binding in bindings.entries.iter() {
         let axis = match binding.action {
@@ -68,15 +82,14 @@ pub(super) fn sample_keyboard_and_mouse(
             _ => None,
         };
         if let Some(axis) = axis.filter(|axis| magnitude[*axis].is_none()) {
-            magnitude[axis] = Some(f32::from(
-                input_chord_is_pressed_by_keyboard_or_mouse(
-                    binding.primary,
-                    keyboard,
-                    &mouse_buttons,
-                ) || binding.alternate.is_some_and(|chord| {
-                    input_chord_is_pressed_by_keyboard_or_mouse(chord, keyboard, &mouse_buttons)
-                }),
-            ));
+            let pressed = input_chord_is_pressed_by_keyboard_or_mouse(
+                binding.primary,
+                keyboard,
+                &mouse_buttons,
+            ) || binding.alternate.is_some_and(|chord| {
+                input_chord_is_pressed_by_keyboard_or_mouse(chord, keyboard, &mouse_buttons)
+            });
+            magnitude[axis] = Some(f32::from(pressed));
         }
         if (first_person || binding.action != GameAction::UseObject)
             && game_action_binding_was_just_pressed_by_keyboard_or_mouse(
@@ -85,12 +98,11 @@ pub(super) fn sample_keyboard_and_mouse(
                 &mouse_buttons,
             )
         {
-            sample.actions.push(binding.action);
+            publish(binding.action);
         }
     }
     let [forward, back, right, left, zoom_in, zoom_out] = magnitude.map(Option::unwrap_or_default);
     let pan_directions = [forward, back, right, left];
-    let pan = Vec2::new(right - left, forward - back);
     let look = if mouse_buttons.pressed(MouseButton::Right) {
         (accumulated_mouse_motion.delta / MOUSE_LOOK_PIXELS_FOR_FULL_SCALE)
             .clamp(Vec2::splat(-1.0), Vec2::ONE)
@@ -98,18 +110,30 @@ pub(super) fn sample_keyboard_and_mouse(
         Vec2::ZERO
     };
     let zoom = (zoom_in - zoom_out).clamp(-1.0, 1.0);
-    sample.axes = DeviceControlAxes {
-        pan,
-        pan_directions,
-        look,
-        zoom,
-    };
-    sample.meaningful = pan_directions.iter().any(|value| *value > 0.0)
-        || accumulated_mouse_motion.delta != Vec2::ZERO
-        || accumulated_mouse_scroll.delta.y != 0.0
-        || mouse_buttons.just_pressed(MouseButton::Left)
-        || zoom != 0.0
-        || !sample.actions.is_empty();
+    sample.set_if_neq(KeyboardMouseControlSample {
+        axes: DeviceControlAxes {
+            pan: Vec2::new(right - left, forward - back),
+            pan_directions,
+            look,
+            zoom,
+        },
+        meaningful: pan_directions.iter().any(|value| *value > 0.0)
+            || accumulated_mouse_motion.delta != Vec2::ZERO
+            || accumulated_mouse_scroll.delta.y != 0.0
+            || mouse_buttons.just_pressed(MouseButton::Left)
+            || zoom != 0.0
+            || sent_action,
+    });
+}
+
+pub(super) fn publish_keyboard_mouse_actions(
+    mut input: MessageReader<KeyboardMouseAction>,
+    mut actions: MessageWriter<ActionRequest>,
+) {
+    let _ = actions.write_batch(input.read().map(|action| ActionRequest {
+        action: action.0,
+        source: ActionSource::KeyboardMouse,
+    }));
 }
 
 pub(super) fn game_action_binding_was_just_pressed_by_keyboard_or_mouse(

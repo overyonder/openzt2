@@ -53,9 +53,8 @@ struct SkyVertexColorMesh {
 
 #[derive(Component)]
 pub(super) struct InterpolatedSkyMesh {
-    mesh: Handle<Mesh>,
-    base_mesh: Handle<Mesh>,
-    sampled_fraction: f32,
+    projected: Handle<Mesh>,
+    base: Handle<Mesh>,
 }
 
 fn changed_asset_ids<A: Asset>(events: &mut MessageReader<AssetEvent<A>>) -> HashSet<AssetId<A>> {
@@ -305,13 +304,28 @@ pub(super) fn unlink_removed_sky_vertex_color_mesh(
     }
 }
 
-#[allow(clippy::too_many_arguments, clippy::type_complexity)]
-pub(super) fn interpolate_sky_model_vertex_colors(
+pub(super) fn restore_unlinked_sky_base_mesh(
+    removed: On<Remove<SkyVertexColorPrimitiveOf>>,
+    mut primitives: Query<(&mut Mesh3d, &InterpolatedSkyMesh)>,
     mut commands: Commands,
-    environments: Query<&Daylight>,
+) {
+    if let Ok((mut primitive, replacement)) = primitives.get_mut(removed.entity) {
+        if primitive.0 == replacement.projected {
+            primitive.0 = replacement.base.clone();
+        }
+        commands
+            .entity(removed.entity)
+            .try_remove::<InterpolatedSkyMesh>();
+    }
+}
+
+#[allow(clippy::type_complexity)]
+pub(super) fn project_changed_sky_vertex_colors(
+    mut commands: Commands,
+    environments: Query<Ref<Daylight>>,
     visuals: Query<(
-        &SkyVertexColorPrimitives,
-        &EnvironmentVisualOwner,
+        Ref<SkyVertexColorPrimitives>,
+        Ref<EnvironmentVisualOwner>,
         Ref<SkyVertexColorSources>,
         Ref<SkyVertexColorMeshes>,
     )>,
@@ -320,25 +334,29 @@ pub(super) fn interpolate_sky_model_vertex_colors(
     mut mesh_events: MessageReader<AssetEvent<Mesh>>,
 ) {
     let changed_meshes = changed_asset_ids(&mut mesh_events);
-    for (primitives_of_visual, owner, sources, resolved) in &visuals {
+    for (linked, owner, sources, resolved) in &visuals {
         let Ok(daylight) = environments.get(owner.0) else {
             continue;
         };
-        let Some(entity) = primitives_of_visual.iter().next() else {
+        let Some(entity) = linked.iter().next() else {
             continue;
         };
-        let Ok((mut primitive, mut projected)) = primitives.get_mut(entity) else {
+        let Ok((mut primitive, mut replacement)) = primitives.get_mut(entity) else {
             continue;
         };
-        let fraction_already_sampled = projected.as_ref().is_some_and(|projected| {
-            projected.mesh == primitive.0
-                && (projected.sampled_fraction - daylight.fraction).abs() <= 0.001
-        });
-        if fraction_already_sampled
-            && !sources.is_changed()
-            && !resolved.is_changed()
-            && changed_meshes.is_empty()
-        {
+        let current = replacement
+            .as_deref()
+            .filter(|current| current.projected == primitive.0);
+        let base = current.map_or(&primitive.0, |current| &current.base);
+        let base_changed = changed_meshes.contains(&base.id());
+        let inputs_changed = daylight.is_changed()
+            || linked.is_changed()
+            || owner.is_changed()
+            || sources.is_changed()
+            || resolved.is_changed()
+            || primitive.is_changed()
+            || base_changed;
+        if !inputs_changed && changed_meshes.is_empty() {
             continue;
         }
         let Some(curve) =
@@ -348,88 +366,73 @@ pub(super) fn interpolate_sky_model_vertex_colors(
         else {
             continue;
         };
-        let source_mesh = |index: usize| {
-            let handle = resolved.0.get(index)?.mesh.as_ref()?;
-            Some((meshes.get(handle)?, handle.id()))
-        };
-        let base_mesh = projected
-            .as_ref()
-            .filter(|projected| projected.mesh == primitive.0)
-            .map_or_else(
-                || primitive.0.clone(),
-                |projected| projected.base_mesh.clone(),
-            );
-        let base_changed = changed_meshes.contains(&base_mesh.id());
-        let colors = source_mesh(curve.left_keyframe_index)
-            .zip(source_mesh(curve.right_keyframe_index))
-            .and_then(|((left, left_id), (right, right_id))| {
-                if fraction_already_sampled
-                    && !sources.is_changed()
-                    && !resolved.is_changed()
-                    && !base_changed
-                    && !changed_meshes.contains(&left_id)
-                    && !changed_meshes.contains(&right_id)
-                {
-                    return None;
-                }
-                let (
-                    Some(VertexAttributeValues::Float32x4(left)),
-                    Some(VertexAttributeValues::Float32x4(right)),
-                ) = (
-                    left.attribute(Mesh::ATTRIBUTE_COLOR),
-                    right.attribute(Mesh::ATTRIBUTE_COLOR),
-                )
-                else {
-                    return None;
-                };
-                (left.len() == right.len()).then(|| {
-                    left.iter()
-                        .zip(right)
-                        .map(|(left, right)| {
-                            std::array::from_fn::<_, 4, _>(|channel| {
-                                ((left[channel]
-                                    + (right[channel] - left[channel])
-                                        * curve.interpolation_fraction)
-                                    * 255.0)
-                                    .clamp(0.0, 255.0)
-                                    .trunc()
-                                    / 255.0
-                            })
-                        })
-                        .collect::<Vec<_>>()
-                })
-            });
-        let Some(colors) = colors else { continue };
-        let Some(mesh) = meshes.get(&base_mesh) else {
+        let source_handle = |index: usize| resolved.0.get(index)?.mesh.as_ref();
+        let Some((left, right)) =
+            source_handle(curve.left_keyframe_index).zip(source_handle(curve.right_keyframe_index))
+        else {
             continue;
         };
-        if mesh.count_vertices() != colors.len() {
+        if !inputs_changed
+            && !changed_meshes.contains(&left.id())
+            && !changed_meshes.contains(&right.id())
+        {
             continue;
         }
-        let output = if let Some(projected) = projected
-            .as_mut()
-            .filter(|projected| projected.mesh == primitive.0 && !base_changed)
-        {
-            projected.sampled_fraction = daylight.fraction;
-            primitive.0.clone()
-        } else {
-            let mesh = mesh.clone();
-            let output = meshes.add(mesh);
-            primitive.0 = output.clone();
-            let next = InterpolatedSkyMesh {
-                mesh: output.clone(),
-                base_mesh,
-                sampled_fraction: daylight.fraction,
+        let source_colors =
+            |handle: &Handle<Mesh>| match meshes.get(handle)?.attribute(Mesh::ATTRIBUTE_COLOR)? {
+                VertexAttributeValues::Float32x4(colors) => Some(colors),
+                _ => None,
             };
-            if let Some(mut current) = projected {
-                *current = next;
+        let Some((left_colors, right_colors)) = source_colors(left).zip(source_colors(right))
+        else {
+            continue;
+        };
+        let Some(base_mesh) = meshes.get(base) else {
+            continue;
+        };
+        if left_colors.len() != right_colors.len()
+            || base_mesh.count_vertices() != left_colors.len()
+        {
+            continue;
+        }
+        let colors: Vec<[f32; 4]> = left_colors
+            .iter()
+            .zip(right_colors)
+            .map(|(left, right)| {
+                std::array::from_fn(|channel| {
+                    ((left[channel]
+                        + (right[channel] - left[channel]) * curve.interpolation_fraction)
+                        * 255.0)
+                        .clamp(0.0, 255.0)
+                        .trunc()
+                        / 255.0
+                })
+            })
+            .collect();
+
+        if let Some(current) = current {
+            if base_changed {
+                let mut updated = base_mesh.clone();
+                updated.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
+                let _ = meshes.insert(current.projected.id(), updated);
+            } else if let Some(mut mesh) = meshes.get_mut(&current.projected) {
+                if !matches!(mesh.attribute(Mesh::ATTRIBUTE_COLOR), Some(VertexAttributeValues::Float32x4(existing)) if *existing == colors)
+                {
+                    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
+                }
+            }
+        } else {
+            let base = base.clone();
+            let mut mesh = base_mesh.clone();
+            mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
+            let projected = meshes.add(mesh);
+            primitive.set_if_neq(Mesh3d(projected.clone()));
+            let next = InterpolatedSkyMesh { projected, base };
+            if let Some(ref mut replacement) = replacement {
+                **replacement = next;
             } else {
                 commands.entity(entity).insert(next);
             }
-            output
-        };
-        if let Some(mut mesh) = meshes.get_mut(&output) {
-            mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
         }
     }
 }

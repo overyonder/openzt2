@@ -54,7 +54,7 @@ pub(in super::super) struct NetImmerseNiBillboardNode {
 pub(in super::super) struct NetImmerseNiSwitchNode {
     pub(in super::super) node: NetImmerseNiNode,
     pub(in super::super) switch_flags: Option<u16>,
-    pub(in super::super) active_child_index: u32,
+    pub(in super::super) active_child_index: i32,
 }
 #[derive(Debug, Clone, PartialEq)]
 pub(in super::super) struct NetImmerseNiLodNode {

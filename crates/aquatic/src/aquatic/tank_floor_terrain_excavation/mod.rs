@@ -1,29 +1,25 @@
 //! Keeps the terrain inside each tank's walls at the tank floor, so the floor
 //! is the ground seen through the glass and under the water.
-use openzt2_zoo_state::topology::{
-    habitat_boundary_queries::HabitatBoundaryQueries, topology_graph_types::FenceSegment,
-};
-
 use bevy::ecs::entity::EntityHashSet;
 use bevy::prelude::*;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
-use openzt2_zoo_state::aquatic::tank_wall_ground_sampling::TankWallGroundSampling;
 use openzt2_zoo_state::construction::construction_transaction_types::EditApplication;
-use openzt2_zoo_state::habitat::habitat_types::HabitatRegion;
 use openzt2_zoo_state::terrain::terrain_chunk_identity_type::TerrainChunkId;
 use openzt2_zoo_state::terrain::terrain_chunk_types::{
     EditedTerrainSamples, TerrainChunk, TerrainIndex,
 };
 use openzt2_zoo_state::terrain::terrain_edit_data_types::TerrainEditDelta;
 use openzt2_zoo_state::terrain::terrain_edit_types::{
-    CommitTerrainEdit, TerrainChanged, TerrainEdit, TerrainEditAcknowledged,
+    CommitTerrainEdit, TerrainEdit, TerrainEditAcknowledged,
 };
 use openzt2_zoo_state::terrain::terrain_sample_grid_queries::read_materialized_terrain_sample;
-use openzt2_zoo_state::topology::topology_graph_types::{TopologyGrid, TopologyNode};
 
-use super::aquatic_simulation_types::{Tank, TankGeometry};
+use super::aquatic_simulation_types::Tank;
+use super::tank_geometry_projection::{
+    TankExcavationBoundary, TankFloorLevelCm, TankFloorTerrainDisturbed,
+};
 use super::tank_presentation::inside_walls;
 
 /// A terrain edit that moves tank insides to their floors. It stays out of
@@ -31,30 +27,21 @@ use super::tank_presentation::inside_walls;
 #[derive(Component)]
 pub(super) struct TankFloorExcavation;
 
-/// The excavation's footprint and fill height survive demolition of its walls.
-#[derive(Component, Default, PartialEq)]
-pub(super) struct TankFloorTerrainFootprint {
-    walls: Vec<[Vec2; 2]>,
-    bounds: Rect,
-    floor_height_cm: i16,
-    fill_height_cm: i16,
-}
-
 #[derive(Message)]
-pub(super) struct RestoreTankFloorTerrain(TankFloorTerrainFootprint);
+pub(super) struct RestoreTankFloorTerrain(TankExcavationBoundary);
 
 pub(super) fn queue_terrain_restoration_after_tank_removal(
     removal: On<Remove<Tank>>,
     mut commands: Commands,
-    mut footprints: Query<&mut TankFloorTerrainFootprint>,
+    mut boundaries: Query<&mut TankExcavationBoundary>,
     mut restorations: MessageWriter<RestoreTankFloorTerrain>,
 ) {
-    if let Ok(mut footprint) = footprints.get_mut(removal.entity) {
-        restorations.write(RestoreTankFloorTerrain(std::mem::take(&mut *footprint)));
-        commands
-            .entity(removal.entity)
-            .try_remove::<TankFloorTerrainFootprint>();
+    if let Ok(mut boundary) = boundaries.get_mut(removal.entity) {
+        restorations.write(RestoreTankFloorTerrain(std::mem::take(&mut *boundary)));
     }
+    commands
+        .entity(removal.entity)
+        .try_remove::<(TankExcavationBoundary, TankFloorLevelCm)>();
 }
 
 /// Whether `point` lies inside the walls and more than `margin` from each.
@@ -76,89 +63,44 @@ pub(super) fn inside_walls_beyond(point: Vec2, walls: &[[Vec2; 2]], margin: f32)
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub(super) fn excavate_changed_tank_floors(
     mut commands: Commands,
-    terrain: Single<(Entity, Ref<TopologyGrid>, &TerrainIndex)>,
-    tanks: Query<(Entity, &WorldMember, &TankGeometry, Ref<HabitatRegion>), With<Tank>>,
+    terrain: Single<(Entity, &TerrainIndex)>,
+    tanks: Query<(&WorldMember, &TankExcavationBoundary, &TankFloorLevelCm), With<Tank>>,
+    changed: Query<
+        Entity,
+        (
+            With<Tank>,
+            Or<(Changed<TankExcavationBoundary>, Changed<TankFloorLevelCm>)>,
+        ),
+    >,
     mut restorations: MessageReader<RestoreTankFloorTerrain>,
-    mut changes: MessageReader<TerrainChanged>,
-    (ground, boundaries): (TankWallGroundSampling, HabitatBoundaryQueries),
-    fences: Query<FenceSegment>,
-    nodes: Query<&TopologyNode>,
+    mut disturbed: MessageReader<TankFloorTerrainDisturbed>,
     chunks: Query<(
         &TerrainChunk,
         Option<&EditedTerrainSamples>,
         &TerrainChunkId,
     )>,
     assets: Res<Assets<TerrainAsset>>,
-    mut footprints: Query<&mut TankFloorTerrainFootprint>,
 ) {
-    let (root, grid, terrain_index) = terrain.into_inner();
+    let (root, terrain_index) = terrain.into_inner();
     let restorations = restorations.read().collect::<Vec<_>>();
-    let height_edits: Vec<_> = changes
-        .read()
-        .filter(|event| event.ground_height_changed)
-        .filter_map(|event| {
-            let (chunk, ..) = chunks.get(event.chunk).ok()?;
-            let min = chunk.origin + event.min.as_vec2() * chunk.spacing_m;
-            let max = chunk.origin + event.max.as_vec2() * chunk.spacing_m;
-            Some(Rect::from_corners(min, max).inflate(chunk.spacing_m))
+    let affected: EntityHashSet = changed
+        .iter()
+        .chain(disturbed.read().map(|event| event.0))
+        .collect();
+    let excavations: Vec<_> = tanks
+        .iter_many(affected)
+        .flatten()
+        .filter_map(|(member, boundary, floor)| {
+            (member.root == root).then_some((boundary, floor.0))
         })
         .collect();
-    let excavations = tanks
-        .iter()
-        .filter_map(|(tank, member, geometry, region)| {
-            if member.root != root {
-                return None;
-            }
-            let floor_height_cm = (geometry.floor_height * 100.0).round() as i16;
-            if !region.is_changed()
-                && !grid.is_changed()
-                && footprints.get(tank).is_ok_and(|footprint| {
-                    footprint.floor_height_cm == floor_height_cm
-                        && !height_edits
-                            .iter()
-                            .any(|edit| !edit.intersect(footprint.bounds).is_empty())
-                })
-            {
-                return None;
-            }
-            let mut wall_ground_sum = 0.0;
-            let walls = boundaries
-                .fences(tank)
-                .map(|fence| {
-                    let edge = fences.get(fence).ok()?;
-                    let a = nodes.get(edge.a()).ok()?.cell;
-                    let b = nodes.get(edge.b()).ok()?.cell;
-                    wall_ground_sum += ground.ground_height_at_topology_cell(root, a)?;
-                    Some([a, b].map(|cell| grid.cell_translation(cell).xz()))
-                })
-                .collect::<Option<Vec<_>>>()?;
-            let mean_ground = wall_ground_sum / walls.len().max(1) as f32;
-            let bounds = walls
-                .iter()
-                .flatten()
-                .copied()
-                .map(|point| Rect::from_corners(point, point))
-                .reduce(|bounds, point| bounds.union(point))?;
-            let footprint = TankFloorTerrainFootprint {
-                walls,
-                bounds,
-                floor_height_cm,
-                fill_height_cm: (mean_ground * 100.0).round() as i16,
-            };
-            Some((tank, footprint))
-        })
-        .collect::<Vec<_>>();
     if restorations.is_empty() && excavations.is_empty() {
         return;
     }
     let floors = restorations
         .iter()
         .map(|restoration| (&restoration.0, restoration.0.fill_height_cm))
-        .chain(
-            excavations
-                .iter()
-                .map(|(_, footprint)| (footprint, footprint.floor_height_cm)),
-        );
+        .chain(excavations.iter().copied());
     let mut affected_chunks = EntityHashSet::default();
     if terrain_index.chunk_span_m.is_finite() && terrain_index.chunk_span_m > 0.0 {
         for (footprint, _) in floors.clone() {
@@ -258,13 +200,6 @@ pub(super) fn excavate_changed_tank_floors(
                 before: before.into_boxed_slice(),
                 after: after.into_boxed_slice(),
             });
-        }
-    }
-    for (tank, footprint) in excavations {
-        if let Ok(mut current) = footprints.get_mut(tank) {
-            current.set_if_neq(footprint);
-        } else {
-            commands.entity(tank).try_insert(footprint);
         }
     }
     if !deltas.is_empty() {

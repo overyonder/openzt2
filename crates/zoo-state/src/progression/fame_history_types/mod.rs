@@ -8,7 +8,7 @@ pub struct FameHistorySample {
 }
 
 /// Progression-owned fame history indexed by the original zero-based zoo month.
-#[derive(Resource, Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Component, Debug, Clone, Default, PartialEq, Eq)]
 pub struct FameHistory {
     samples: Vec<FameHistorySample>,
 }
@@ -23,10 +23,6 @@ impl FameHistory {
             .binary_search_by_key(&month_index, |sample| sample.month_index)
             .ok()
             .map(|index| self.samples[index].half_stars)
-    }
-
-    pub fn clear(&mut self) {
-        self.samples.clear();
     }
 
     /// Replaces the canonical series after persistence has decoded a saved section.

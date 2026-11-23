@@ -35,6 +35,10 @@ pub(super) fn lower_presentation_command(
     input: &AuthoredUiDocument,
     scope: Option<&str>,
 ) -> io::Result<Option<UiActionRecord>> {
+    let property_receiver = event
+        .target_child
+        .as_deref()
+        .map_or(current, |name| UiDocumentRole::node_id(role, name));
     let result = match event.message.as_str() {
         "UI_COPY_TEXT" if event.string.as_deref() == Some("zooname") => Ok(UiActionRecord::Information(UiInformationActionRecord {
             trigger,
@@ -202,7 +206,7 @@ pub(super) fn lower_presentation_command(
         "UI_SET_LOCID" => Ok(UiActionRecord::Presentation(UiPresentationActionRecord {
             trigger,
             action: UiPresentationAction::SetTargetNodeTextFromLocalizationKey {
-                target_node: target_node(event, role, current),
+                target_node: property_receiver,
                 localization_key: canonical_source_value_resolution::lower_optional_authored_semantic_key_to_asset_id(event.string.as_deref()),
             },
         })),
@@ -252,7 +256,7 @@ pub(super) fn lower_presentation_command(
         "UI_SET_IMAGE" => Ok(UiActionRecord::Presentation(UiPresentationActionRecord {
             trigger,
             action: UiPresentationAction::SetTargetNodeImageOverride {
-                target_node: target_node(event, role, current),
+                target_node: property_receiver,
                 image_asset: event
                     .string
                     .as_deref()
@@ -273,7 +277,7 @@ pub(super) fn lower_presentation_command(
         "UI_SET_LTT" | "UI_SET_STT" => Ok(UiActionRecord::Presentation(UiPresentationActionRecord {
             trigger,
             action: UiPresentationAction::SetTargetNodeTooltip {
-                target_node: target_node(event, role, current),
+                target_node: property_receiver,
                 localization_key: canonical_source_value_resolution::lower_optional_authored_semantic_key_to_asset_id(event.string.as_deref()),
                 long_tooltip: event.message == "UI_SET_LTT",
             },
@@ -281,14 +285,14 @@ pub(super) fn lower_presentation_command(
         "UI_SETCURSOR" => Ok(UiActionRecord::Presentation(UiPresentationActionRecord {
             trigger,
             action: UiPresentationAction::SetTargetNodeCursor {
-                target_node: target_node(event, role, current),
+                target_node: property_receiver,
                 cursor_asset: cursor_texture_dependency(event.string.clone(), output, input)?,
             },
         })),
         "UI_SET_TEXT" => Ok(UiActionRecord::Presentation(UiPresentationActionRecord {
             trigger,
             action: UiPresentationAction::SetTargetNodeTextLiteral {
-                target_node: target_node(event, role, current),
+                target_node: property_receiver,
                 text: (event.string.as_deref().unwrap_or_default()).to_owned(),
             },
         })),

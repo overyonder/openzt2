@@ -23,7 +23,7 @@ use openzt2_game_assets::world_scenario::world_scenario_asset_set_state_and_borr
 use openzt2_zoo_state::economy::guest_admission_types::AdmissionPrice;
 use openzt2_zoo_state::economy::guest_admission_types::ZooAdmissionsOpen;
 use openzt2_zoo_state::economy::money_types::Money;
-use openzt2_zoo_state::economy::zoo_cash_types::ZooCash;
+use openzt2_zoo_state::economy::zoo_cash_types::{UnlimitedZooCash, ZooCash};
 use openzt2_zoo_state::economy::general_economy_types::GeneralEconomyLedger;
 use openzt2_zoo_state::progression::fame_types::Fame;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator;
@@ -197,6 +197,31 @@ pub fn accept_queued_world_load_after_required_assets_resolve(
         mode: request.mode,
         profile: request.profile,
     };
+    let default_starting_cash = match request.mode {
+        openzt2_world_state::game_session_types::WorldSessionMode::Challenge => 3_000_000,
+        _ => cash_cents,
+    };
+    let starting_cash = ZooCash(Money(
+        request.starting_cash_cents.unwrap_or(default_starting_cash),
+    ));
+    let general_accounts = start_record.general_cash_cents.map(|cash| {
+        GeneralEconomyLedger::from_starting_balance(
+            u32::from(start_record.calendar[0]) * 12
+                + u32::from(start_record.calendar[1].saturating_sub(1)),
+            Money(cash),
+        )
+    });
+    let starting_admission = admission_cents
+        .map(|cents| AdmissionPrice::from_adult(Money(cents)))
+        .or_else(|| {
+            definitions.guest_generation().map(|policy| {
+                let [adult, child] = policy
+                    .normal_admission_cents
+                    .map(|cents| Money(i64::from(cents)));
+                AdmissionPrice { adult, child }
+            })
+        })
+        .unwrap_or_default();
     let root = commands
         .spawn((
             WorldRoot {
@@ -209,8 +234,15 @@ pub fn accept_queued_world_load_after_required_assets_resolve(
                 start: start_asset.clone(),
             },
             SelectedWorldTerrainAssetHandle(terrain_handle),
+            starting_cash,
+            starting_admission,
+            ZooAdmissionsOpen(start_record.admissions_open),
+            UnlimitedZooCash(request.mode == openzt2_world_state::game_session_types::WorldSessionMode::Freeform),
         ))
         .id();
+    if let Some(general_accounts) = general_accounts {
+        commands.entity(root).insert(general_accounts);
+    }
     if let Some(operation) = request.operation {
         commands
             .entity(root)
@@ -223,32 +255,6 @@ pub fn accept_queued_world_load_after_required_assets_resolve(
     };
     commands.entity(root).insert(allocator);
     info!(?root, scenario = ?request.scenario, "accepted world load and installed its persistent-id allocator");
-    let default_starting_cash = match request.mode {
-        openzt2_world_state::game_session_types::WorldSessionMode::Challenge => 3_000_000,
-        _ => cash_cents,
-    };
-    commands.insert_resource(ZooCash(Money(
-        request.starting_cash_cents.unwrap_or(default_starting_cash),
-    )));
-    commands.insert_resource(start_record.general_cash_cents.map_or_else(
-        GeneralEconomyLedger::default,
-        |cash| {
-            GeneralEconomyLedger::from_starting_balance(
-                u32::from(start_record.calendar[0]) * 12
-                    + u32::from(start_record.calendar[1].saturating_sub(1)),
-                Money(cash),
-            )
-        },
-    ));
-    let admission_cents = admission_cents
-        .or_else(|| {
-            definitions
-                .guest_generation()
-                .map(|policy| i64::from(policy.normal_admission_cents[0]))
-        })
-        .unwrap_or_default();
-    commands.insert_resource(AdmissionPrice(Money(admission_cents)));
-    commands.insert_resource(ZooAdmissionsOpen(start_record.admissions_open));
     let mode_path = match request.mode {
         openzt2_world_state::game_session_types::WorldSessionMode::Freeform => {
             "config/freeform_mode.xml"

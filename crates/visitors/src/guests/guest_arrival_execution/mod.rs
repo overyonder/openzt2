@@ -30,7 +30,7 @@ use openzt2_zoo_state::locomotion::locomotion_types::{EntranceNavigationConnecti
 use openzt2_zoo_state::locomotion::locomotion_types::SpatialGrid;
 use openzt2_zoo_state::locomotion::locomotion_types::NavFlags;
 use openzt2_zoo_state::locomotion::locomotion_types::NavigateTo;
-use openzt2_zoo_state::locomotion::locomotion_types::NavigationRequestSequence;
+use openzt2_zoo_state::locomotion::locomotion_types::NavigationRequestGeneration;
 use openzt2_zoo_state::person_name_selection_and_resolution::choose_generated_person_name_rows_from_authored_pool;
 use openzt2_zoo_state::progression::fame_types::Fame;
 use openzt2_world_state::simulation_time::deterministic_random_stream::DeterministicRng;
@@ -75,7 +75,7 @@ use openzt2_zoo_state::guests::guest_favourite_animal_trend_types::GuestFavourit
 pub(super) fn initialize_guest_arrivals(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
-    seed: Res<ZooSeed>,
+    seed: Single<&ZooSeed>,
     roots: Query<(Entity, &WorldRoot), (With<WorldLoadCompleted>, Without<GuestArrivalState>)>,
     mut commands: Commands,
     mut failed: MessageWriter<GuestArrivalFailed>,
@@ -96,7 +96,7 @@ pub(super) fn initialize_guest_arrivals(
         let stable = u64::from_le_bytes(world.scenario.0[..8].try_into().unwrap()).max(1);
         commands.entity(root).insert(GuestArrivalState {
             next_tick: 0,
-            rng: DeterministicRng::from_entity(*seed, PersistentId(stable), RngDomain::Guest),
+            rng: DeterministicRng::from_entity(**seed, PersistentId(stable), RngDomain::Guest),
         });
     }
 }
@@ -114,7 +114,7 @@ pub(super) fn report_changed_guest_arrival_failures(
 }
 
 pub(super) fn guest_arrivals_are_due(
-    clock: Res<ZooClock>,
+    clock: Single<&ZooClock>,
     roots: Query<
         &GuestArrivalState,
         (
@@ -133,9 +133,9 @@ pub(super) fn guest_arrivals_are_due(
 
 #[derive(SystemParam)]
 pub(crate) struct GuestArrivalParams<'w, 's> {
-    clock: Res<'w, ZooClock>,
-    admission: Res<'w, AdmissionPrice>,
-    admissions_open: Res<'w, ZooAdmissionsOpen>,
+    clock: Single<'w, 's, &'static ZooClock>,
+    admission: Single<'w, 's, &'static AdmissionPrice>,
+    admissions_open: Single<'w, 's, &'static ZooAdmissionsOpen>,
     definitions: Res<'w, Assets<WorldDefinitionAsset>>,
     active_definitions: Res<'w, WorldDefinitions>,
     ids: Query<'w, 's, &'static mut PersistentIdAllocator>,
@@ -160,7 +160,7 @@ pub(crate) struct GuestArrivalParams<'w, 's> {
             &'static GlobalTransform,
         ),
     >,
-    grid: Res<'w, SpatialGrid>,
+    grid: Single<'w, 's, &'static SpatialGrid>,
     guests: Query<'w, 's, &'static WorldMember, With<Guest>>,
     animals: Query<
         'w,
@@ -196,7 +196,6 @@ pub(crate) struct GuestArrivalParams<'w, 's> {
     seen_species: Local<'s, ArrayVec<AssetId, 512>>,
     commands: Commands<'w, 's>,
     navigate: MessageWriter<'w, NavigateTo>,
-    navigation_request_sequence: ResMut<'w, NavigationRequestSequence>,
     failed: MessageWriter<'w, GuestArrivalFailed>,
     requested_arrivals: MessageReader<'w, 's, RequestGuestArrivals>,
 }
@@ -220,7 +219,6 @@ pub(crate) fn spawn_arriving_guests(params: GuestArrivalParams) {
         mut seen_species,
         mut commands,
         mut navigate,
-        mut navigation_request_sequence,
         mut failed,
         mut requested_arrivals,
     } = params;
@@ -295,7 +293,7 @@ pub(crate) fn spawn_arriving_guests(params: GuestArrivalParams) {
         let probability = guest_spawn_probability(
             policy,
             fame.half_stars,
-            admission.0 .0,
+            admission.adult.0,
             seen_species.len() as u32,
         );
         random_unit(&mut state.rng) < probability
@@ -399,11 +397,13 @@ pub(crate) fn spawn_arriving_guests(params: GuestArrivalParams) {
         debug!(tick = clock.tick, guest = ?guest_id, ?position, entrance = ?entrance.inside,
             distance_m = position.xz().distance(entrance.inside.xz()),
             "guest spawned for arrival at its displaced entrance point");
-        let request_id = navigation_request_sequence.next();
+        let mut generation = NavigationRequestGeneration::default();
+        let request_id = generation.advance();
         let entity = commands
             .spawn((
                 Guest,
                 GuestNavigationRequest(Some(request_id)),
+                generation,
                 GuestArchetype(guest_id),
                 DefinitionId(definition.object),
                 GuestFavouriteAnimal(favourite),
@@ -445,7 +445,7 @@ pub(crate) fn spawn_arriving_guests(params: GuestArrivalParams) {
 #[allow(clippy::type_complexity)]
 
 pub(crate) fn initialize_spawned_guests(
-    seed: Res<ZooSeed>,
+    seed: Single<&ZooSeed>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     fresh: Query<(Entity, &PersistentId, &GuestArchetype), (With<Guest>, Without<GuestRng>)>,
@@ -466,7 +466,7 @@ pub(crate) fn initialize_spawned_guests(
             AssetId(definition.name_pool.0),
             id.0,
         );
-        let mut guest_rng = DeterministicRng::from_entity(*seed, *id, RngDomain::Guest);
+        let mut guest_rng = DeterministicRng::from_entity(**seed, *id, RngDomain::Guest);
         let mut initial_need_value = |need: &GuestNeedDefinition| {
             inclusive_u32(
                 u32::from(need.initial_permille[0]),

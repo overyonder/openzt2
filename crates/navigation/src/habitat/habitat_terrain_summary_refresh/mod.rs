@@ -28,11 +28,12 @@ use openzt2_zoo_state::habitat::habitat_types::RefreshTerrainDerivedHabitatSumma
 pub(super) fn request_habitat_summary_refreshes_after_terrain_changes(
     mut terrain_changes: MessageReader<TerrainChanged>,
     terrain_chunks: Query<&TerrainChunk>,
-    topology_grid: Res<TopologyGrid>,
+    topology_grid: Single<&TopologyGrid>,
     mut habitat_summary_refreshes: MessageWriter<
         RefreshTerrainDerivedHabitatSummariesWithinTopologyBounds,
     >,
 ) {
+    let topology_grid = topology_grid.into_inner();
     for terrain_change in terrain_changes.read() {
         let Ok(terrain_chunk) = terrain_chunks.get(terrain_change.chunk) else {
             continue;
@@ -55,8 +56,8 @@ pub(super) fn request_habitat_summary_refreshes_after_terrain_changes(
 pub(super) fn refresh_terrain_derived_habitat_summaries(
     mut commands: Commands,
     mut refresh_requests: MessageReader<RefreshTerrainDerivedHabitatSummariesWithinTopologyBounds>,
-    terrain_index: Res<TerrainIndex>,
-    topology_grid: Res<TopologyGrid>,
+    terrain_index: Single<&TerrainIndex>,
+    topology_grid: Single<&TopologyGrid>,
     terrain_assets: Res<Assets<TerrainAsset>>,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,
@@ -69,6 +70,8 @@ pub(super) fn refresh_terrain_derived_habitat_summaries(
     )>,
     mut habitat_changes: MessageWriter<HabitatChanged>,
 ) {
+    let terrain_index = terrain_index.into_inner();
+    let topology_grid = topology_grid.into_inner();
     let Some(topology_bounds) =
         merge_requested_habitat_summary_refresh_bounds(&mut refresh_requests)
     else {

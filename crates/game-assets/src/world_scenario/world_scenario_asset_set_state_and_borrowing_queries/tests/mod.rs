@@ -99,6 +99,7 @@ fn retained_scenarios_and_campaign_aliases_resolve_without_catalogue_replacement
     let mut catalogue = WorldScenarios::default();
     catalogue.index_test_document(original_handle.clone(), &original);
     catalogue.scenarios.insert(
+        (usize::MAX, 0),
         campaign_alias,
         ScenarioDocumentHandle {
             record: stock_id,

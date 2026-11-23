@@ -189,6 +189,7 @@ pub(super) fn route_construction_ui_actions(
         Without<openzt2_zoo_state::animal_lifecycle::types::CratingRestricted>,
     >,
     relocating: Query<Entity, With<RelocatingPlacedObject>>,
+    mut pending_rotations: Query<&mut PlacementRotationRequest>,
     mut previews: Query<(Entity, Option<&mut TerrainBrushPreview>), With<ConstructionPreview>>,
     mut commands: Commands,
 ) {
@@ -305,9 +306,16 @@ pub(super) fn route_construction_ui_actions(
                                     .remove::<(RelocatingPlacedObject, PlacementRotationRequest)>();
                             }
                         }
-                        commands
-                            .entity(entity)
-                            .insert((RelocatingPlacedObject, PlacementRotationRequest(*steps)));
+                        if !relocating.contains(entity) {
+                            commands.entity(entity).insert(RelocatingPlacedObject);
+                        }
+                        if let Ok(mut rotation) = pending_rotations.get_mut(entity) {
+                            rotation.set_if_neq(PlacementRotationRequest(*steps));
+                        } else {
+                            commands
+                                .entity(entity)
+                                .insert(PlacementRotationRequest(*steps));
+                        }
                         intents
                             .tools
                             .write(SelectConstructionTool(ConstructionTool::Place(

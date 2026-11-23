@@ -11,4 +11,6 @@ pub struct AnimalBorn {
 pub struct ReleaseAnimal(pub Entity);
 
 #[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct AnimalReleased;
+pub struct AnimalReleased {
+    pub root: Entity,
+}

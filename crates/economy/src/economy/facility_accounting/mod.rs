@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 
@@ -10,13 +11,16 @@ use super::{
 
 pub(super) fn initialize_new_service_facilities_with_operating_age_and_profit(
     mut commands: Commands,
-    clock: Res<ZooClock>,
+    clocks: Query<&ZooClock>,
     facilities: Query<
-        (Entity, Option<&FacilityProfit>),
+        (Entity, &WorldMember, Option<&FacilityProfit>),
         (With<ServiceFacility>, Without<OperatingSinceDay>),
     >,
 ) {
-    for (facility, profit) in &facilities {
+    for (facility, member, profit) in &facilities {
+        let Ok(clock) = clocks.get(member.root) else {
+            continue;
+        };
         let mut entity = commands.entity(facility);
         entity.insert(OperatingSinceDay(clock.absolute_day));
         if profit.is_none() {

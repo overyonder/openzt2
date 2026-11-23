@@ -26,7 +26,7 @@ pub(crate) fn project_selected_facility_status_to_visible_information_panels(
         With<InfoPanel>,
     >,
     selections: Query<Ref<SelectedSubject>>,
-    zoo_clock: Res<ZooClock>,
+    zoo_clock: Single<&ZooClock>,
     facility_subjects: Query<(
         Option<&Price>,
         Option<&ServiceFacility>,
@@ -42,6 +42,7 @@ pub(crate) fn project_selected_facility_status_to_visible_information_panels(
         FacilityField,
     >,
 ) {
+    let zoo_clock = zoo_clock.into_inner();
     for (parent, inherited_visibility, fields) in &information_panels {
         let Ok(selection) = selections.get(parent.parent()) else {
             continue;
@@ -140,13 +141,13 @@ mod tests {
     #[test]
     fn facility_values_render_text_without_dirtying_settled_text() {
         let mut app = App::new();
-        app.insert_resource(ZooClock {
+        app.world_mut().spawn(ZooClock {
             fractional_tick: Default::default(),
             tick: 0,
             absolute_day: 0,
             tick_in_day: 0,
-        })
-        .add_systems(
+        });
+        app.add_systems(
             Update,
             (
                 super::super::panel_binding_families::bind_information_panel_fields,

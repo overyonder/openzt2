@@ -16,6 +16,7 @@ use openzt2_zoo_state::economy::money_types::Money;
 use openzt2_zoo_state::habitat::habitat_types::HabitatIndex;
 use openzt2_zoo_state::habitat::habitat_types::HabitatRegion;
 use openzt2_zoo_state::habitat::habitat_types::HabitatSummary;
+use openzt2_zoo_state::topology::habitat_boundary_queries::HabitatBoundaryQueries;
 
 use super::{
     aquatic_simulation_types::{tank_habitat_seed_cell, Tank, TankGeometry, TankWallTopHeight},
@@ -26,6 +27,69 @@ use super::{
     tank_geometry_rules::{tank_geometry_edit_reaches, tank_geometry_limits},
     tank_height_bounds::TankHeightBoundsQueries,
 };
+
+#[derive(Component, Clone, Copy)]
+pub(super) struct LiveAppliedTankGeometry(pub(super) Entity);
+
+pub(super) fn restore_uncommitted_tank_geometry(
+    discarded: On<Discard<TankGeometryEdit>>,
+    edits: Query<(&TankGeometryEdit, &LiveAppliedTankGeometry)>,
+    mut tanks: Query<&mut TankGeometry>,
+    boundaries: HabitatBoundaryQueries,
+    mut walls: Query<(&PersistentId, &mut TankWallTopHeight)>,
+) {
+    let Ok((edit, live)) = edits.get(discarded.entity) else {
+        return;
+    };
+    if let Ok(mut geometry) = tanks.get_mut(live.0) {
+        if *geometry == edit.after {
+            geometry.set_if_neq(edit.before);
+        }
+    }
+    for fence in boundaries.fences(live.0) {
+        let Ok((id, mut current)) = walls.get_mut(fence) else {
+            continue;
+        };
+        if let Ok(index) = edit
+            .wall_heights
+            .binary_search_by_key(&id.0, |wall| wall.id.0)
+        {
+            let wall = edit.wall_heights[index];
+            if current.0 == wall.after {
+                current.set_if_neq(TankWallTopHeight(wall.before));
+            }
+        }
+    }
+}
+
+pub(super) fn write_tank_wall_height_images(
+    fences: &[Entity],
+    edit: &TankGeometryEdit,
+    forward: bool,
+    walls: &mut Query<(&PersistentId, &mut TankWallTopHeight)>,
+) -> bool {
+    let Some(updates) = edit
+        .wall_heights
+        .iter()
+        .filter(|wall| wall.before != wall.after)
+        .map(|wall| {
+            let entity = fences
+                .iter()
+                .copied()
+                .find(|entity| walls.get(*entity).is_ok_and(|(id, _)| *id == wall.id))?;
+            let height = if forward { wall.after } else { wall.before };
+            Some((entity, TankWallTopHeight(height)))
+        })
+        .collect::<Option<Vec<_>>>()
+    else {
+        return false;
+    };
+    for (entity, height) in updates {
+        let (_, mut current) = walls.get_mut(entity).expect("validated tank wall");
+        current.set_if_neq(height);
+    }
+    true
+}
 
 /// The live tank an edit addresses: the habitat at its seed cell, still a
 /// tank of the edited definition in the same world, still unbreached, and
@@ -112,7 +176,12 @@ fn edit_after_is_reachable(
 pub(super) fn prepare_tank_geometry_construction_edits(
     mut commands: Commands,
     mut requests: MessageReader<PrepareConstruction>,
-    previews: Query<(&TankGeometryEdit, &TankGeometryGesture, &WorldMember)>,
+    previews: Query<(
+        &TankGeometryEdit,
+        &TankGeometryGesture,
+        &WorldMember,
+        Option<&LiveAppliedTankGeometry>,
+    )>,
     transactions: Query<&WorldMember>,
     habitat_indexes: Query<&HabitatIndex>,
     tanks: Query<(
@@ -131,7 +200,7 @@ pub(super) fn prepare_tank_geometry_construction_edits(
     ),
 ) {
     for request in requests.read() {
-        let Ok((edit, gesture, preview_member)) = previews.get(request.preview) else {
+        let Ok((edit, gesture, preview_member, live)) = previews.get(request.preview) else {
             continue;
         };
         let tank = transactions
@@ -142,7 +211,8 @@ pub(super) fn prepare_tank_geometry_construction_edits(
                 let habitat_index = habitat_indexes.get(member.root).ok()?;
                 resolve_edited_tank(edit, member.root, habitat_index, |habitat| {
                     let (tank, geometry, region, summary, member) = tanks.get(habitat).ok()?;
-                    (*geometry == edit.before && region.area_square_metres == geometry.area).then(
+                    let expected = live.map_or(edit.before, |_| edit.after);
+                    (*geometry == expected && region.area_square_metres == geometry.area).then(
                         || {
                             (
                                 habitat,
@@ -154,6 +224,7 @@ pub(super) fn prepare_tank_geometry_construction_edits(
                 })
             });
         let valid = edit.before != edit.after
+            && live.is_none_or(|live| tank == Some(live.0))
             && tank
                 .and_then(|tank| tanks.get(tank).ok().map(|facts| (tank, facts)))
                 .is_some_and(|(tank, (_, _, region, ..))| {
@@ -163,7 +234,7 @@ pub(super) fn prepare_tank_geometry_construction_edits(
                         active_definitions.get(&definitions),
                         region,
                         &bounds,
-                        true,
+                        live.is_none(),
                         |walls, limits| {
                             bounds.include_adjacent_tank_water_in_wall_minima(
                                 walls,
@@ -182,6 +253,12 @@ pub(super) fn prepare_tank_geometry_construction_edits(
                 });
         if valid {
             commands.entity(request.transaction).insert(edit.clone());
+            if let Some(live) = live {
+                commands.entity(request.transaction).insert(*live);
+                commands
+                    .entity(request.preview)
+                    .remove::<LiveAppliedTankGeometry>();
+            }
             prepared.write(TankGeometryEditPrepared {
                 transaction: request.transaction,
                 cost: Money(0),
@@ -199,8 +276,14 @@ pub(super) fn prepare_tank_geometry_construction_edits(
 /// Applies the requested image and the affected segments' individual wall tops.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(super) fn apply_tank_geometry_construction_edits(
+    mut commands: Commands,
     mut requests: MessageReader<CommitTankGeometryEdit>,
-    transactions: Query<(&TankGeometryEdit, &WorldMember, Option<&RollbackContext>)>,
+    transactions: Query<(
+        &TankGeometryEdit,
+        &WorldMember,
+        Option<&RollbackContext>,
+        Option<&LiveAppliedTankGeometry>,
+    )>,
     habitat_indexes: Query<&HabitatIndex>,
     mut tanks: Query<(
         &Tank,
@@ -218,7 +301,7 @@ pub(super) fn apply_tank_geometry_construction_edits(
     mut acknowledged: MessageWriter<TankGeometryEditAcknowledged>,
 ) {
     for request in requests.read() {
-        let Ok((edit, member, rollback)) = transactions.get(request.transaction) else {
+        let Ok((edit, member, rollback, live)) = transactions.get(request.transaction) else {
             continue;
         };
         let forward = match request.application {
@@ -231,8 +314,17 @@ pub(super) fn apply_tank_geometry_construction_edits(
                 rollback.failed_application == EditApplication::Undo
             }
         };
+        let already_applied =
+            request.application == EditApplication::InitialCommit && live.is_some();
         let (expected, replacement) = if forward {
-            (edit.before, edit.after)
+            (
+                if already_applied {
+                    edit.after
+                } else {
+                    edit.before
+                },
+                edit.after,
+            )
         } else {
             (edit.after, edit.before)
         };
@@ -253,6 +345,7 @@ pub(super) fn apply_tank_geometry_construction_edits(
                     )
                 })
             })
+            .filter(|tank| !already_applied || live.is_some_and(|live| live.0 == *tank))
             .filter(|tank| {
                 let bounds = wall_access.p0();
                 tanks.get(*tank).is_ok_and(|(_, _, region, ..)| {
@@ -262,7 +355,7 @@ pub(super) fn apply_tank_geometry_construction_edits(
                         active_definitions.get(&definitions),
                         region,
                         &bounds,
-                        forward,
+                        forward && !already_applied,
                         |walls, limits| {
                             bounds.include_adjacent_tank_water_in_wall_minima(
                                 walls,
@@ -281,31 +374,20 @@ pub(super) fn apply_tank_geometry_construction_edits(
                 })
             });
         let accepted = tank.is_some_and(|tank| {
+            if already_applied {
+                commands
+                    .entity(request.transaction)
+                    .remove::<LiveAppliedTankGeometry>();
+                return true;
+            }
             let Ok((_, mut geometry, ..)) = tanks.get_mut(tank) else {
                 return false;
             };
             let fences = wall_access.p0().boundary_fences(tank).collect::<Vec<_>>();
-            let mut walls = wall_access.p1();
-            let mut updates = Vec::new();
-            for wall in edit.wall_heights.iter() {
-                if wall.before == wall.after {
-                    continue;
-                }
-                let Some(entity) = fences
-                    .iter()
-                    .copied()
-                    .find(|entity| walls.get(*entity).is_ok_and(|(id, _)| *id == wall.id))
-                else {
-                    return false;
-                };
-                let height = if forward { wall.after } else { wall.before };
-                updates.push((entity, TankWallTopHeight(height)));
+            if !write_tank_wall_height_images(&fences, edit, forward, &mut wall_access.p1()) {
+                return false;
             }
             geometry.set_if_neq(replacement);
-            for (entity, height) in updates {
-                let (_, mut top) = walls.get_mut(entity).expect("validated tank wall");
-                top.set_if_neq(height);
-            }
             true
         });
         acknowledged.write(TankGeometryEditAcknowledged {

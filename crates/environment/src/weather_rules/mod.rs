@@ -3,18 +3,6 @@ use openzt2_zoo_state::environment::environment_state_types::Wind;
 
 use openzt2_world_state::simulation_time::deterministic_random_stream::DeterministicRng;
 
-use super::weather_types::WeatherTransition;
-
-pub(super) fn weather_transition_has_reached_completion_tick(
-    current_tick: u64,
-    transition: WeatherTransition,
-) -> bool {
-    current_tick
-        >= transition
-            .start_tick
-            .saturating_add(u64::from(transition.duration_ticks))
-}
-
 pub(super) fn generate_deterministic_wind_from_speed_range(
     speed_range_meters_per_second: [f32; 2],
     random: &mut DeterministicRng,

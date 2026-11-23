@@ -1,5 +1,8 @@
 use avian3d::prelude::RigidBody;
-use bevy::{asset::LoadState, prelude::*};
+use bevy::{
+    asset::{AssetLoadFailedEvent, LoadState},
+    prelude::*,
+};
 use openzt2_game_assets::{
     scene_prefab::ScenePrefabAsset,
     species::species_asset_types::{SpeciesAsset, SpeciesAssets},
@@ -31,11 +34,11 @@ use openzt2_zoo_state::{
     animal_health::types::{AnimalDied, Dead, DeathCause},
     animal_lifecycle::{animal_birth_and_release_contracts::AnimalBorn, types::Animal},
     behavior_task_execution_types::{
+        BehaviorTaskExecutionState, PendingBehaviorTaskFailure,
         running_actions::{
             BehaviorInstructionId, RunBehaviorMorphEntity, RunBehaviorTermination,
             RunningBehaviorInstruction,
         },
-        BehaviorTaskExecutionState, PendingBehaviorTaskFailure,
     },
     habitat::habitat_types::HabitatMember,
 };
@@ -50,6 +53,7 @@ pub(super) struct PendingAuthoredMorph {
     step: BehaviorInstructionId,
     recipient: Entity,
     prefab: Option<Handle<ScenePrefabAsset>>,
+    prefab_settled: bool,
 }
 
 #[derive(Component)]
@@ -63,6 +67,10 @@ pub(super) fn morph_authored_entities(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     (species, species_assets): (Res<SpeciesAssets>, Res<Assets<SpeciesAsset>>),
     (server, prefabs): (Res<AssetServer>, Res<Assets<ScenePrefabAsset>>),
+    (mut loaded, mut failed): (
+        MessageReader<AssetEvent<ScenePrefabAsset>>,
+        MessageReader<AssetLoadFailedEvent<ScenePrefabAsset>>,
+    ),
     mut allocators: Query<&mut PersistentIdAllocator>,
     fences: Query<(), With<openzt2_zoo_state::topology::topology_graph_types::FenceEdge>>,
     seed: Option<Single<&ZooSeed>>,
@@ -93,12 +101,20 @@ pub(super) fn morph_authored_entities(
     mut births: MessageWriter<AnimalBorn>,
     mut visibility: Query<&mut Visibility>,
 ) {
+    let settlements = loaded
+        .read()
+        .filter_map(|event| match *event {
+            AssetEvent::Added { id } | AssetEvent::LoadedWithDependencies { id } => Some(id),
+            _ => None,
+        })
+        .chain(failed.read().map(|event| event.id))
+        .collect::<bevy::platform::collections::HashSet<_>>();
     let (Some(catalogue_view), Some(species)) =
         (catalogue.get(&definitions), species.get(&species_assets))
     else {
         return;
     };
-    for (actor, mut task, step, action, random, pending) in
+    for (actor, mut task, step, action, random, mut pending) in
         behavior_action_actors(&mut actions, activation.0)
     {
         if activation.0.is_none() && !step.can_update_after_activation(clock.tick) {
@@ -106,6 +122,16 @@ pub(super) fn morph_authored_entities(
         }
         if task.next_action_tick > clock.tick || !step.is_current(&task) {
             continue;
+        }
+        if let Some(waiting) = pending.as_deref_mut() {
+            if let Some(prefab) = waiting.prefab.as_ref() {
+                if waiting.step == step.id() && !waiting.prefab_settled {
+                    if !settlements.contains(&prefab.id()) {
+                        continue;
+                    }
+                    waiting.prefab_settled = true;
+                }
+            }
         }
         let recipient = match action.recipient {
             BehaviorMorphRecipient::Subject => Some(actor),
@@ -169,6 +195,7 @@ pub(super) fn morph_authored_entities(
                 step: step.id(),
                 recipient,
                 prefab: None,
+                prefab_settled: false,
             });
             if action.fade {
                 commands
@@ -266,12 +293,15 @@ pub(super) fn morph_authored_entities(
                 ) {
                     mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
                 } else if let Some(pending) = pending.as_deref_mut() {
-                    pending.prefab = Some(handle);
+                    if pending.prefab.is_none() {
+                        pending.prefab = Some(handle);
+                    }
                 } else {
                     commands.entity(actor).insert(PendingAuthoredMorph {
                         step: step.id(),
                         recipient,
                         prefab: Some(handle),
+                        prefab_settled: false,
                     });
                 }
                 continue;

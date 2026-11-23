@@ -11,6 +11,7 @@ use openzt2_game_assets::{
     },
 };
 use openzt2_game_data::AssetId;
+use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_world_state::{
     animation_graph::animation_presentation_relationship_types::AnimationPresentationOwner,
     world_spawn::world_membership_types::DefinitionId,
@@ -40,15 +41,27 @@ pub(super) struct AuthoredAnimationSoundResolution<'w, 's> {
         ),
     >,
     parents: Query<'w, 's, &'static ChildOf>,
-    terrain_index: Option<Res<'w, TerrainIndex>>,
+    members: Query<'w, 's, &'static WorldMember>,
+    pub(super) terrain_indexes: Query<'w, 's, &'static TerrainIndex>,
     terrain_assets: Option<Res<'w, Assets<TerrainAsset>>>,
     chunks: Query<'w, 's, (&'static TerrainChunk, Option<&'static EditedTerrainSamples>)>,
-    topology_index: Option<Res<'w, TopologyIndex>>,
-    topology_grid: Option<Res<'w, TopologyGrid>>,
+    topology: Query<'w, 's, (&'static TopologyIndex, &'static TopologyGrid)>,
     paths: Query<'w, 's, &'static PathTile>,
 }
 
 impl AuthoredAnimationSoundResolution<'_, '_> {
+    pub(super) fn world_root(&self, target: Entity) -> Option<Entity> {
+        std::iter::once(target)
+            .chain(self.parents.iter_ancestors(target))
+            .find_map(|entity| {
+                self.members.get(entity).ok().or_else(|| {
+                    let (_, owner, _) = self.identities.get(entity).ok()?;
+                    self.members.get(owner?.gameplay_entity).ok()
+                })
+            })
+            .map(|member| member.root)
+    }
+
     pub(super) fn resolve(
         &self,
         target: Entity,
@@ -93,11 +106,10 @@ impl AuthoredAnimationSoundResolution<'_, '_> {
         }
         let mut suffixes = vec![String::new()];
         if terrain_sound {
-            let surface = self.terrain_surface(position);
-            let path = self
-                .topology_index
-                .as_ref()
-                .zip(self.topology_grid.as_ref())
+            let root = self.world_root(target);
+            let surface = root.and_then(|root| self.terrain_surface(root, position));
+            let path = root
+                .and_then(|root| self.topology.get(root).ok())
                 .and_then(|(index, grid)| index.paths.get(&grid.position_cell(position)))
                 .and_then(|entity| self.paths.get(*entity).ok())
                 .and_then(|tile| definitions?.find_object(tile.definition))
@@ -135,8 +147,8 @@ impl AuthoredAnimationSoundResolution<'_, '_> {
         None
     }
 
-    fn terrain_surface(&self, position: Vec3) -> Option<(&str, bool, Option<&str>)> {
-        let entity = terrain_chunk_at(self.terrain_index.as_ref()?, position.xz())?;
+    fn terrain_surface(&self, root: Entity, position: Vec3) -> Option<(&str, bool, Option<&str>)> {
+        let entity = terrain_chunk_at(self.terrain_indexes.get(root).ok()?, position.xz())?;
         let (chunk, edited) = self.chunks.get(entity).ok()?;
         let asset = self.terrain_assets.as_ref()?.get(&chunk.asset)?;
         let surface = sample_terrain(chunk, asset, edited, position.xz())?;

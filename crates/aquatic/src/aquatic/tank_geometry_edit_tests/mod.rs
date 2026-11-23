@@ -71,7 +71,7 @@ use openzt2_zoo_state::transport_tours::transport_track_construction_types::Tran
 
 use super::{
     aquatic_simulation_types::{ShowTankEligible, Tank, TankGeometry},
-    show_tank_eligibility_projection::project_changed_tank_depth_into_show_eligibility,
+    show_tank_eligibility_projection::reconcile_authored_show_tank_eligibility,
     tank_geometry_edit_execution::{
         apply_tank_geometry_construction_edits, prepare_tank_geometry_construction_edits,
     },
@@ -124,9 +124,7 @@ fn tank_geometry_construction_fixture(kind: TankEditKind) -> (App, Entity, Entit
         .add_message::<TransportTrackConstructionEditPreparationRejected>()
         .add_message::<TransportTrackConstructionEditApplicationAcknowledged>()
         .add_plugins(ConstructionPlugin)
-        .init_resource::<super::tank_height_bounds::TankPathClearance>()
-        .add_observer(super::tank_height_bounds::record_path_clearance)
-        .add_observer(super::tank_height_bounds::discard_path_clearance)
+        .add_observer(super::tank_geometry_edit_execution::restore_uncommitted_tank_geometry)
         .insert_resource(ConstructionTool::TankEdit)
         .insert_resource(ConstructionPlacementPolicy {
             tank_edit: kind,
@@ -136,10 +134,7 @@ fn tank_geometry_construction_fixture(kind: TankEditKind) -> (App, Entity, Entit
             TankPointerStep,
             (PointerInput::receive, update_tank_geometry_gesture).chain(),
         )
-        .add_systems(
-            TankProjectionStep,
-            project_changed_tank_depth_into_show_eligibility,
-        )
+        .add_systems(TankProjectionStep, reconcile_authored_show_tank_eligibility)
         .add_systems(
             FixedUpdate,
             prepare_tank_geometry_construction_edits
@@ -385,7 +380,8 @@ fn floor_release_commits_once_and_history_reverses_canonical_geometry_and_show_e
         0.0,
     );
     pointer_step(&mut app, None, 1.0);
-    assert_eq!(*app.world().get::<TankGeometry>(tank).unwrap(), before);
+    let held = *app.world().get::<TankGeometry>(tank).unwrap();
+    assert_eq!(held.floor_height, -1.0);
     pointer_step(
         &mut app,
         Some(PointerAction::Release(PointerButton::Primary)),
@@ -394,6 +390,7 @@ fn floor_release_commits_once_and_history_reverses_canonical_geometry_and_show_e
     app.world_mut().run_schedule(FixedUpdate);
     app.world_mut().run_schedule(TankProjectionStep);
     let after = *app.world().get::<TankGeometry>(tank).unwrap();
+    assert_eq!(after, held);
     assert_eq!(
         after,
         TankGeometry {

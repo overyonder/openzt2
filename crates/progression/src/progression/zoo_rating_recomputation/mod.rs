@@ -301,7 +301,7 @@ pub(super) fn recompute_scenery_rating(
 }
 
 pub(super) fn recompute_finance_rating(
-    cash: Option<Res<ZooCash>>,
+    cash: Option<Single<Ref<ZooCash>>>,
     active_world: Query<Entity, (With<WorldRoot>, With<WorldLoadCompleted>)>,
     assets: Res<Assets<WorldDefinitionAsset>>,
     definitions: Res<WorldDefinitions>,
@@ -309,6 +309,7 @@ pub(super) fn recompute_finance_rating(
     completed_roots: Query<(), Added<WorldLoadCompleted>>,
     mut worlds: Query<(Entity, &mut ZooFinanceRating), With<WorldRoot>>,
 ) {
+    let cash = cash.map(Single::into_inner);
     if !cash.as_ref().is_some_and(|cash| cash.is_changed())
         && completed_roots.is_empty()
         && !assets.is_changed()

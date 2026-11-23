@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_zoo_state::animal_behavior::behavior_target_placement_types::{
-    travel_target, BehaviorPlacementTravelSite,
+    BehaviorPlacementTravelTargets,
 };
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::WhenBehaviorAction;
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
@@ -35,7 +35,7 @@ fn face_current_behavior_targets(
         Without<PendingBehaviorTaskFailure>,
     >,
     targets: Query<&GlobalTransform>,
-    travel_sites: Query<&BehaviorPlacementTravelSite>,
+    travel_sites: BehaviorPlacementTravelTargets,
 ) {
     for (actor, (task, instruction, running_action), mut transform) in
         std::iter::once(actors.get_mut(activation.entity)).flatten()
@@ -47,7 +47,7 @@ fn face_current_behavior_targets(
             continue;
         }
         let action = running_action.0;
-        if let Some(toward) = travel_target(task, travel_sites.get(actor).ok())
+        if let Some(toward) = travel_sites.for_actor(actor, task)
             .and_then(|target| targets.get(target).ok())
             .and_then(|target| {
                 (target.translation() - transform.translation)

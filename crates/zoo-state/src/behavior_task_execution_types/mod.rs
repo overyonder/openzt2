@@ -14,12 +14,12 @@ pub const MAXIMUM_BEHAVIOR_TASK_RETURN_FRAME_COUNT: usize = 16;
 #[derive(Component)]
 pub struct SamplingBehaviorDockPose;
 
-/// Bevy-owned identity for one root task execution, including nested sets.
-#[derive(Resource, Default)]
-pub struct BehaviorTaskExecutionSequence(u64);
+/// The last root task execution issued for this actor.
+#[derive(Component, Default)]
+pub struct BehaviorTaskGeneration(u64);
 
-impl BehaviorTaskExecutionSequence {
-    pub const fn from_snapshot(last_issued: u64) -> Self {
+impl BehaviorTaskGeneration {
+    pub const fn from_restored(last_issued: u64) -> Self {
         Self(last_issued)
     }
 
@@ -31,7 +31,7 @@ impl BehaviorTaskExecutionSequence {
         self.0 = self.0.max(execution_id);
     }
 
-    pub fn next(&mut self) -> u64 {
+    fn advance(&mut self) -> u64 {
         self.0 = self
             .0
             .checked_add(1)
@@ -40,7 +40,23 @@ impl BehaviorTaskExecutionSequence {
     }
 }
 
+pub fn allocate_behavior_execution_id(
+    actor: Entity,
+    generation: Option<Mut<BehaviorTaskGeneration>>,
+    commands: &mut Commands,
+) -> u64 {
+    if let Some(mut generation) = generation {
+        generation.advance()
+    } else {
+        let mut generation = BehaviorTaskGeneration::default();
+        let id = generation.advance();
+        commands.entity(actor).insert(generation);
+        id
+    }
+}
+
 #[derive(Component, Clone, Debug)]
+#[require(BehaviorTaskGeneration)]
 #[component(
     on_insert = running_actions::initialize_running_behavior_instruction,
     on_discard = running_actions::discard_running_behavior_instruction

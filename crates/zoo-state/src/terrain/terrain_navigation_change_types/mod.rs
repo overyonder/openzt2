@@ -15,3 +15,17 @@ pub struct TerrainNavigationRestored {
     pub min: UVec2,
     pub max: UVec2,
 }
+
+/// All terrain samples for this snapshot have been applied.
+#[derive(Message, Clone, Copy)]
+pub struct SnapshotTerrainNavigationPending {
+    pub root: Entity,
+    pub operation: Entity,
+}
+
+/// Navigation has incorporated a snapshot's terrain changes.
+#[derive(Message, Clone, Copy)]
+pub struct SnapshotTerrainNavigationReady {
+    pub root: Entity,
+    pub operation: Entity,
+}

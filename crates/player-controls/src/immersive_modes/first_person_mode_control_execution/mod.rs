@@ -7,6 +7,7 @@ use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and
 use openzt2_interface_state::input::input_types::ActionRequest;
 use openzt2_interface_state::camera::camera_runtime_state_types::CameraMode;
 use openzt2_interface_state::camera::camera_runtime_state_types::CameraMouseLook;
+use openzt2_interface_state::camera::camera_runtime_state_types::StandaloneCameraSubject;
 use crate::camera::camera_execution_types::CameraTuning;
 use openzt2_interface_state::camera::camera_runtime_state_types::ZooCamera;
 use openzt2_zoo_state::locomotion::locomotion_types::DirectLocomotion;
@@ -146,7 +147,10 @@ pub(super) fn update_subject_relative_first_person_camera_transform(
             With<openzt2_zoo_state::transport_tours::transport_vehicle_types::TransportVehicle>,
         )>,
     >,
-    mut zoo_cameras: Query<(&mut Transform, &CameraMode), With<ZooCamera>>,
+    mut zoo_cameras: Query<
+        (&mut Transform, &CameraMode),
+        (With<ZooCamera>, Without<StandaloneCameraSubject>),
+    >,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,
 ) {
@@ -167,19 +171,12 @@ pub(super) fn update_subject_relative_first_person_camera_transform(
     let Some(world_definitions) = active_world_definitions.get(&world_definition_assets) else {
         return;
     };
-    let (
-        Ok(subject_transform),
-        Ok((mut camera_transform, CameraMode::FirstPerson(camera_subject_entity))),
-    ) = (
+    let (Ok(subject_transform), Ok((mut camera_transform, CameraMode::FirstPerson))) = (
         controlled_subjects.get(subject_entity),
         zoo_cameras.get_mut(camera.0),
-    )
-    else {
+    ) else {
         return;
     };
-    if *camera_subject_entity != subject_entity {
-        return;
-    }
     let Some(camera_policy) =
         find_authored_immersive_mode_policy(world_definitions, active_mode.mode)
     else {
@@ -200,5 +197,5 @@ pub(super) fn update_subject_relative_first_person_camera_transform(
                 Quat::from_rotation_y(view_angles.yaw) * Quat::from_rotation_x(view_angles.pitch);
         }
     }
-    *camera_transform = next_camera_transform;
+    camera_transform.set_if_neq(next_camera_transform);
 }

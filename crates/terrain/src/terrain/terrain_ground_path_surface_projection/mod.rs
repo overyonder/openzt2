@@ -134,10 +134,11 @@ pub(super) fn mark_terrain_chunks_requiring_ground_path_surface_recomposition(
     mut discarded_paths: MessageReader<DiscardedGroundPathCell>,
     mut image_events: MessageReader<AssetEvent<GroundPathSurfaceImage>>,
     active_definitions: Res<WorldDefinitions>,
-    grid: Res<TopologyGrid>,
+    grid: Single<&TopologyGrid>,
     paths: Query<&PathTile>,
     chunks: Query<(Entity, &TerrainChunk), With<TerrainRenderChunk>>,
 ) {
+    let grid = grid.into_inner();
     let dependency_image_changed = image_events.read().any(|event| match *event {
         AssetEvent::Added { id }
         | AssetEvent::Modified { id }
@@ -531,12 +532,12 @@ pub(super) fn prepare_terrain_chunk_surface_images(
     terrain_assets: Res<Assets<TerrainAsset>>,
     active_definitions: Res<WorldDefinitions>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
-    grid: Res<TopologyGrid>,
-    topology: Res<TopologyIndex>,
+    grid: Single<&TopologyGrid>,
+    topology: Single<&TopologyIndex>,
     paths: Query<(Entity, &PathTile)>,
     paints: Query<(Entity, &TerrainPaintedTexture)>,
     chunks: Query<GroundPathSurfaceChunk, With<TerrainRenderChunk>>,
-    terrain_index: Res<TerrainIndex>,
+    terrain_index: Single<&TerrainIndex>,
     pending_chunks: Query<
         Entity,
         (
@@ -554,6 +555,9 @@ pub(super) fn prepare_terrain_chunk_surface_images(
     mut overlays: Query<&mut TerrainChunkOverlays>,
     paint_links: TerrainPaintLinks,
 ) {
+    let grid = grid.into_inner();
+    let topology = topology.into_inner();
+    let terrain_index = terrain_index.into_inner();
     if pending_chunks.is_empty() {
         return;
     }

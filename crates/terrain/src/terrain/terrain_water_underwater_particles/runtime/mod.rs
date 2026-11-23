@@ -277,7 +277,9 @@ pub(in crate::terrain) fn synchronize_region_underwater_particle_effects(
 }
 
 pub(in crate::terrain) fn update_underwater_particle_visibility(
-    view: Res<openzt2_zoo_state::terrain::terrain_water_view_state::TerrainWaterViewState>,
+    camera_contacts: Query<
+        &openzt2_zoo_state::terrain::terrain_water_view_state::TerrainWaterCameraContact,
+    >,
     terrains: Res<Assets<TerrainAsset>>,
     regions: TerrainWaterRegionQuery,
     roots: Query<&ChildOf, With<TerrainWaterParticleEffects>>,
@@ -293,20 +295,28 @@ pub(in crate::terrain) fn update_underwater_particle_visibility(
         )>,
     >,
 ) {
+    let contact = camera_contacts.single().ok();
     for (parent, mut visibility, suspension) in &mut emitters {
         let enabled = (|| {
+            let contact = contact?;
             let owner = roots.get(parent.parent()).ok()?.parent();
             let source = regions.get(owner)?;
             let terrain = terrains.get(source.terrain())?;
-            let below = view.camera_position()?.y <= source.surface_height(terrain)?;
-            Some(below && (!suspension || view.camera_region() == Some(owner)))
+            let below = contact.position?.y <= source.surface_height(terrain)?;
+            Some(
+                below
+                    && (!suspension
+                        || contact
+                            .wet_region
+                            .is_some_and(|(region, _)| region == owner)),
+            )
         })()
         .unwrap_or(false);
-        *visibility = if enabled {
+        visibility.set_if_neq(if enabled {
             Visibility::Inherited
         } else {
             Visibility::Hidden
-        };
+        });
     }
 }
 

@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
 use openzt2_zoo_state::animal_lifecycle::animal_birth_and_release_contracts::{
     AnimalBorn, AnimalReleased,
@@ -12,22 +13,27 @@ use super::profile_challenge_types::{
 
 pub(super) fn record_endangered_animal_births_for_profile_challenges(
     mut animal_births: MessageReader<AnimalBorn>,
-    endangered_animals: Query<(), With<EndangeredSpecies>>,
-    mut total_endangered_animal_births: ResMut<TotalEndangeredAnimalBirthCount>,
+    endangered_animals: Query<&WorldMember, With<EndangeredSpecies>>,
+    mut counters: Query<&mut TotalEndangeredAnimalBirthCount>,
 ) {
     for animal_birth in animal_births.read() {
-        if endangered_animals.contains(animal_birth.child) {
-            total_endangered_animal_births.0 = total_endangered_animal_births.0.saturating_add(1);
+        let Ok(member) = endangered_animals.get(animal_birth.child) else {
+            continue;
+        };
+        if let Ok(mut count) = counters.get_mut(member.root) {
+            count.0 = count.0.saturating_add(1);
         }
     }
 }
 
 pub(super) fn record_released_animals_for_zoo_fame(
     mut animal_releases: MessageReader<AnimalReleased>,
-    mut total_animals_released: ResMut<TotalAnimalsReleasedCount>,
+    mut counters: Query<&mut TotalAnimalsReleasedCount>,
 ) {
-    for _ in animal_releases.read() {
-        total_animals_released.0 = total_animals_released.0.saturating_add(1);
+    for release in animal_releases.read() {
+        if let Ok(mut count) = counters.get_mut(release.root) {
+            count.0 = count.0.saturating_add(1);
+        }
     }
 }
 

@@ -48,7 +48,7 @@ impl PhysicalChildPlayback {
 
 pub(in crate::world_spawn) fn advance_authored_child_lifetimes(
     mut commands: Commands,
-    clock: Res<ZooClock>,
+    clock: Single<&ZooClock>,
     definitions: Res<WorldDefinitions>,
     assets: Res<Assets<WorldDefinitionAsset>>,
     controllers: Query<(
@@ -66,6 +66,7 @@ pub(in crate::world_spawn) fn advance_authored_child_lifetimes(
     settings: Res<openzt2_game_assets::graphics_settings_types::GraphicsSettings>,
     mut notifications: MessageWriter<PhysicalPresentationRequest>,
 ) {
+    let clock = clock.into_inner();
     let Some(definitions) = definitions.get(&assets) else {
         return;
     };

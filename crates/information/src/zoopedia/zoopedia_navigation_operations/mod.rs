@@ -23,7 +23,7 @@ pub(crate) fn apply_authored_zoopedia_navigation_action(
                 context.source_document_role,
                 UiDocumentRole::PurchaseCatalogue
             )
-            .then_some(context.selected_catalogue_entry.0)
+            .then(|| context.selected_catalogue_entry.and_then(|entry| entry.0))
             .flatten();
             let selected_definition = context
                 .selected_world_entity

@@ -43,20 +43,25 @@ struct GroundPathConnectedCurbBoundarySegment {
     second_cell: IVec3,
 }
 
-/// Rendering state for the curb hierarchy projected from the current path
-/// neighborhood. Connectivity remains owned by PathTile and TopologyIndex.
 #[derive(Component)]
-pub struct PathCurbsHydrated {
-    root: Option<Entity>,
-}
+pub(super) struct PathCurbRoot;
 
-impl PathCurbsHydrated {
-    pub const fn presentation_root(&self) -> Option<Entity> {
-        self.root
-    }
+#[derive(Component)]
+pub(super) struct PathCurbSegmentPresentation;
 
-    pub const fn has_projected_segments(&self) -> bool {
-        self.root.is_some()
+#[derive(Component)]
+pub(super) struct EmptyPathCurbPresentation;
+
+#[derive(Message)]
+pub(super) struct DiscardedPathCurbSegment(Entity);
+
+pub(super) fn notify_discarded_path_curb_segment(
+    discarded: On<Discard<PathCurbSegmentPresentation>>,
+    parents: Query<&ChildOf>,
+    mut discarded_segments: MessageWriter<DiscardedPathCurbSegment>,
+) {
+    if let Ok(parent) = parents.get(discarded.entity) {
+        discarded_segments.write(DiscardedPathCurbSegment(parent.parent()));
     }
 }
 
@@ -64,17 +69,24 @@ impl PathCurbsHydrated {
 ///
 /// Include paths affected by neighbouring triangles, reciprocal curves and
 /// the terrain sampled beneath each segment.
-pub(crate) fn invalidate_path_curb_presentations_after_topology_or_terrain_changes(
+pub(super) fn invalidate_path_curb_presentations_after_topology_or_terrain_changes(
     mut commands: Commands,
     mut changed: MessageReader<PathConnectivityChanged>,
     mut terrain_changed: MessageReader<TerrainChanged>,
     terrain_chunks: Query<&TerrainChunk>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
-    paths: Query<&PathCurbsHydrated>,
+    paths: Query<Option<&Children>, With<PathTile>>,
+    curb_roots: Query<(), With<PathCurbRoot>>,
+    mut discarded_segments: MessageReader<DiscardedPathCurbSegment>,
     index: Single<&TopologyIndex>,
     grid: Single<&TopologyGrid>,
 ) {
+    for segment in discarded_segments.read() {
+        if curb_roots.contains(segment.0) {
+            commands.entity(segment.0).try_despawn();
+        }
+    }
     let index = index.into_inner();
     let grid = grid.into_inner();
     let Some(definitions) = active_definitions.get(&definitions) else {
@@ -95,11 +107,15 @@ pub(crate) fn invalidate_path_curb_presentations_after_topology_or_terrain_chang
         affected.extend(index.paths_within(min, max));
     }
     for entity in affected {
-        if let Ok(presentation) = paths.get(entity) {
-            if let Some(root) = presentation.root {
-                commands.entity(root).try_despawn();
+        if let Ok(children) = paths.get(entity) {
+            for child in children.into_iter().flat_map(|children| children.iter()) {
+                if curb_roots.contains(child) {
+                    commands.entity(child).try_despawn();
+                }
             }
-            commands.entity(entity).remove::<PathCurbsHydrated>();
+            commands
+                .entity(entity)
+                .remove::<EmptyPathCurbPresentation>();
         }
     }
 }
@@ -109,7 +125,7 @@ pub(crate) fn invalidate_path_curb_presentations_after_topology_or_terrain_chang
 /// canonical fence-prefab selector to choose cardinal, diagonal, 90-degree,
 /// and 135-degree authored families from each ordered endpoint pair.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn hydrate_authored_path_curb_prefab_presentations(
+pub(super) fn hydrate_authored_path_curb_prefab_presentations(
     mut commands: Commands,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
@@ -119,12 +135,23 @@ pub(crate) fn hydrate_authored_path_curb_prefab_presentations(
     terrain_index: Single<&TerrainIndex>,
     index: Single<&TopologyIndex>,
     paths: Query<&PathTile>,
-    dirty_paths: Query<(Entity, &PathTile, &Transform), Without<PathCurbsHydrated>>,
+    candidates: Query<
+        (Entity, &PathTile, &Transform, Option<&Children>),
+        Without<EmptyPathCurbPresentation>,
+    >,
+    curb_roots: Query<(), With<PathCurbRoot>>,
 ) {
     let grid = grid.into_inner();
     let terrain_index = terrain_index.into_inner();
     let index = index.into_inner();
-    if dirty_paths.is_empty() {
+    let mut dirty_paths = candidates
+        .iter()
+        .filter(|(_, _, _, children)| {
+            !children
+                .is_some_and(|children| children.iter().any(|child| curb_roots.contains(child)))
+        })
+        .peekable();
+    if dirty_paths.peek().is_none() {
         return;
     }
     let Some(definitions) = active_definitions.get(&definitions) else {
@@ -149,13 +176,11 @@ pub(crate) fn hydrate_authored_path_curb_prefab_presentations(
             width_cells,
         })
     };
-    for (entity, tile, transform) in &dirty_paths {
+    for (entity, tile, transform, _) in dirty_paths {
         let Some(path) = path_row((entity, tile)).filter(|path| {
             path.curb != AssetId::default() && index.paths.get(&path.cell) == Some(&entity)
         }) else {
-            commands
-                .entity(entity)
-                .insert(PathCurbsHydrated { root: None });
+            commands.entity(entity).insert(EmptyPathCurbPresentation);
             continue;
         };
         let Some(curb_definition) = definitions.find_fence(path.curb) else {
@@ -239,6 +264,7 @@ pub(crate) fn hydrate_authored_path_curb_prefab_presentations(
                         Transform::IDENTITY,
                         Visibility::Inherited,
                         ChildOf(entity),
+                        PathCurbRoot,
                     ))
                     .id()
             });
@@ -267,10 +293,13 @@ pub(crate) fn hydrate_authored_path_curb_prefab_presentations(
                 )),
                 Visibility::Inherited,
                 ChildOf(root),
+                PathCurbSegmentPresentation,
                 PrefabPresentation::new(prefab),
             ));
         }
-        commands.entity(entity).insert(PathCurbsHydrated { root });
+        if root.is_none() {
+            commands.entity(entity).insert(EmptyPathCurbPresentation);
+        }
     }
 }
 

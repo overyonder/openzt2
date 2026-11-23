@@ -13,7 +13,7 @@ use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
     sync::Arc,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use bevy::{
@@ -137,9 +137,12 @@ fn toggle_modder_tools(
 }
 
 #[derive(Component)]
-struct BlenderButton {
-    pause: Entity,
-}
+#[relationship(relationship_target = BlenderButtons)]
+struct BlenderButton(Entity);
+
+#[derive(Component)]
+#[relationship_target(relationship = BlenderButton, linked_spawn)]
+struct BlenderButtons(Vec<Entity>);
 
 fn attach_blender_button(
     mut commands: Commands,
@@ -176,7 +179,7 @@ fn attach_blender_button(
         }
         commands.spawn((
             Name::new("Blender link"),
-            BlenderButton { pause },
+            BlenderButton(pause),
             ChildOf(parent.parent()),
             ZIndex(z.0 + 1),
             bevy::ui_widgets::Button,
@@ -195,38 +198,63 @@ fn attach_blender_button(
 }
 
 fn present_blender_button(
-    mut commands: Commands,
     settings: Res<ModderToolsSettings>,
-    link: Query<&BlenderLink>,
-    pause_controls: Query<(&Node, &Visibility), Without<BlenderButton>>,
+    link: Query<Ref<BlenderLink>>,
+    mut stopped_links: RemovedComponents<BlenderLink>,
+    mut released: RemovedComponents<Pressed>,
+    pause_controls: Query<(Ref<Node>, Ref<Visibility>, Ref<ZIndex>), Without<BlenderButton>>,
     mut buttons: Query<(
         Entity,
-        &BlenderButton,
-        &DirectlyHovered,
-        Has<Pressed>,
+        Ref<BlenderButton>,
+        Ref<DirectlyHovered>,
+        Option<Ref<Pressed>>,
         &mut Node,
         &mut Visibility,
         &mut ImageNode,
         &mut UiInteractionEnabled,
+        &mut ZIndex,
     )>,
 ) {
-    for (entity, button, hovered, pressed, mut node, mut visibility, mut image, mut interactive) in
-        &mut buttons
+    let link_changed = stopped_links.read().count() != 0 || link.iter().any(|link| link.is_added());
+    let released: bevy::ecs::entity::EntityHashSet = released.read().collect();
+    for (
+        entity,
+        button,
+        hovered,
+        pressed,
+        mut node,
+        mut visibility,
+        mut image,
+        mut interactive,
+        mut stack,
+    ) in &mut buttons
     {
-        let Ok((pause_layout, pause_visibility)) = pause_controls.get(button.pause) else {
-            commands.entity(entity).despawn();
+        let Ok((pause_layout, pause_visibility, z)) = pause_controls.get(button.0) else {
             continue;
         };
-        if *node != *pause_layout {
-            *node = pause_layout.clone();
+        if (button.is_changed() || pause_layout.is_changed()) && *node != *pause_layout {
+            (*node).clone_from(&pause_layout);
         }
-        visibility.set_if_neq(if settings.enabled {
-            *pause_visibility
-        } else {
-            Visibility::Hidden
-        });
-        interactive.set_if_neq(UiInteractionEnabled(settings.enabled));
-        let x = match (!link.is_empty(), hovered.get(), pressed) {
+        if button.is_changed() || z.is_changed() {
+            stack.set_if_neq(ZIndex(z.0 + 1));
+        }
+        if button.is_changed() || settings.is_changed() || pause_visibility.is_changed() {
+            visibility.set_if_neq(if settings.enabled {
+                *pause_visibility
+            } else {
+                Visibility::Hidden
+            });
+            interactive.set_if_neq(UiInteractionEnabled(settings.enabled));
+        }
+        if !(button.is_changed()
+            || link_changed
+            || hovered.is_changed()
+            || pressed.as_ref().is_some_and(DetectChanges::is_added)
+            || released.contains(&entity))
+        {
+            continue;
+        }
+        let x = match (!link.is_empty(), hovered.get(), pressed.is_some()) {
             (_, _, true) => 192.0,
             (_, true, false) => 128.0,
             (true, false, false) => 64.0,
@@ -376,7 +404,7 @@ struct BlenderObjectMaterialLoad {
     object: String,
     parts: Vec<ObjectPart>,
     materials: Vec<(String, Handle<MaterialAsset>)>,
-    deadline: Instant,
+    timeout: Timer,
 }
 
 #[derive(Component)]
@@ -478,7 +506,7 @@ fn receive_blender_link_requests(
                             object,
                             parts,
                             materials,
-                            deadline: Instant::now() + MATERIAL_LOAD_TIMEOUT,
+                            timeout: Timer::new(MATERIAL_LOAD_TIMEOUT, TimerMode::Once),
                         },
                     ));
                     break;
@@ -526,23 +554,40 @@ fn export_blender_objects_with_ready_materials(
     mut waiting: Query<(Entity, &mut BlenderObjectMaterialLoad)>,
     mut material_events: MessageReader<AssetEvent<MaterialAsset>>,
     mut material_failures: MessageReader<AssetLoadFailedEvent<MaterialAsset>>,
+    time: Res<Time<Real>>,
     materials: Res<Assets<MaterialAsset>>,
     server: Res<AssetServer>,
     archives: Res<AssetArchives>,
     paths: Option<Res<PersistenceFilesystemPaths>>,
 ) {
-    let materials_changed = !material_events.is_empty() || !material_failures.is_empty();
-    material_events.clear();
-    material_failures.clear();
-    let now = Instant::now();
+    let settled: std::collections::HashSet<_> = material_events
+        .read()
+        .filter_map(|event| match event {
+            AssetEvent::Added { id }
+            | AssetEvent::Modified { id }
+            | AssetEvent::LoadedWithDependencies { id } => Some(*id),
+            _ => None,
+        })
+        .chain(material_failures.read().map(|failure| failure.id))
+        .collect();
     for (entity, mut load) in &mut waiting {
-        if now < load.deadline
-            && ((!load.is_added() && !materials_changed)
+        let added = load.is_added();
+        if !added {
+            load.timeout.tick(time.delta());
+        }
+        if !load.timeout.is_finished() {
+            let affected = added
+                || load
+                    .materials
+                    .iter()
+                    .any(|(_, material)| settled.contains(&material.id()));
+            if !affected
                 || !load.materials.iter().all(|(_, material)| {
                     materials.contains(material) || server.load_state(material).is_failed()
-                }))
-        {
-            continue;
+                })
+            {
+                continue;
+            }
         }
         let Some(paths) = &paths else {
             commands

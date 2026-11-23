@@ -56,7 +56,7 @@ pub(crate) struct ShowEventWindow {
 
 pub(super) fn schedule_authored_animal_show_events(
     mut commands: Commands,
-    clock: Res<ZooClock>,
+    clock: Single<&ZooClock>,
     definitions: Res<WorldDefinitions>,
     assets: Res<Assets<WorldDefinitionAsset>>,
     events: Query<(Entity, &AuthoredAnimalShowEvent), Without<ShowEventWindow>>,
@@ -162,7 +162,7 @@ pub(super) fn schedule_authored_animal_show_events(
 
 pub(super) fn dispatch_released_animal_show_events(
     mut commands: Commands,
-    clock: Res<ZooClock>,
+    clock: Single<&ZooClock>,
     definitions: Res<WorldDefinitions>,
     assets: Res<Assets<WorldDefinitionAsset>>,
     behavior_documents: Res<Assets<BehaviorDocumentAsset>>,

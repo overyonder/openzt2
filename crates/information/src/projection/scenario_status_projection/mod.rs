@@ -30,7 +30,7 @@ pub(crate) fn project_active_scenario_status_to_authored_information_bindings(
     world_scenarios: Res<WorldScenarios>,
     active_localization: Res<LocalizationPrecedenceIndex>,
     localization_assets: Res<Assets<LocalizationAsset>>,
-    zoo_clock: Res<ZooClock>,
+    zoo_clock: Single<&ZooClock>,
     active_scenario_sessions: Query<
         (&ActiveScenarioSession, &ScenarioDocument),
         With<openzt2_world_state::world_spawn::world_membership_types::WorldRoot>,
@@ -46,6 +46,7 @@ pub(crate) fn project_active_scenario_status_to_authored_information_bindings(
     mut authored_boolean_visibility: Query<(&UiVisibleBinding, &mut Visibility)>,
     mut formatted_text: Local<String>,
 ) {
+    let zoo_clock = zoo_clock.into_inner();
     let world_scenarios = world_scenarios.get(&scenario_documents);
     // Challenge maps have no selected campaign document, but their accepted
     // challenges' objective text still projects into the goal list.

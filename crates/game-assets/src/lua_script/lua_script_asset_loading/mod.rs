@@ -1,11 +1,11 @@
-use std::{io, sync::Arc};
+use std::{io, path::Path, sync::Arc};
 
 use bevy::{
-    asset::{io::Reader, AssetApp, AssetLoader, LoadContext},
+    asset::{AssetApp, AssetLoader, LoadContext, io::Reader},
     prelude::*,
 };
 
-#[derive(Asset, TypePath, Debug)]
+#[derive(Asset, TypePath, Clone, Debug)]
 pub struct LuaScriptAsset {
     normalized_source_or_bytecode_bytes: Arc<[u8]>,
 }
@@ -13,6 +13,25 @@ pub struct LuaScriptAsset {
 impl LuaScriptAsset {
     pub fn normalized_source_or_bytecode_bytes(&self) -> &[u8] {
         &self.normalized_source_or_bytecode_bytes
+    }
+
+    pub(super) fn from_source_bytes(path: &Path, bytes: Vec<u8>) -> io::Result<Self> {
+        let source_is_compiled_bytecode = path.extension().is_some_and(|extension| {
+            extension.eq_ignore_ascii_case("bin") || extension.eq_ignore_ascii_case("luac")
+        });
+        let bytes = if source_is_compiled_bytecode {
+            lunify::unify(
+                &bytes,
+                &lunify::Format::default(),
+                &lunify::Settings::default(),
+            )
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, format!("{error:?}")))?
+        } else {
+            bytes
+        };
+        Ok(Self {
+            normalized_source_or_bytecode_bytes: bytes.into(),
+        })
     }
 }
 
@@ -32,27 +51,7 @@ impl AssetLoader for LuaScriptAssetLoader {
     ) -> Result<Self::Asset, Self::Error> {
         let mut bytes = Vec::new();
         reader.read_to_end(&mut bytes).await?;
-        let source_is_compiled_bytecode =
-            load_context
-                .path()
-                .path()
-                .extension()
-                .is_some_and(|extension| {
-                    extension.eq_ignore_ascii_case("bin") || extension.eq_ignore_ascii_case("luac")
-                });
-        let bytes = if source_is_compiled_bytecode {
-            lunify::unify(
-                &bytes,
-                &lunify::Format::default(),
-                &lunify::Settings::default(),
-            )
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, format!("{error:?}")))?
-        } else {
-            bytes
-        };
-        Ok(LuaScriptAsset {
-            normalized_source_or_bytecode_bytes: bytes.into(),
-        })
+        LuaScriptAsset::from_source_bytes(load_context.path().path(), bytes)
     }
 
     fn extensions(&self) -> &[&str] {
@@ -69,8 +68,8 @@ pub(super) fn register_lua_script_asset_and_loader(application: &mut App) {
 #[cfg(test)]
 mod stripped_bytecode_tests {
     #[test]
-    fn stripped_lua50_instructions_execute_without_debug_lines(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn stripped_lua50_instructions_execute_without_debug_lines()
+    -> Result<(), Box<dyn std::error::Error>> {
         // Lua 5.0, little endian, 32-bit int/size_t/instructions, double numbers.
         let mut bytes = b"\x1bLua\x50\x01\x04\x04\x04\x06\x08\x09\x09\x08".to_vec();
         bytes.extend_from_slice(&0x417d_f5e7_6893_09b6_u64.to_le_bytes());
@@ -94,8 +93,8 @@ mod stripped_bytecode_tests {
     }
 
     #[test]
-    fn stripped_closure_upvalues_survive_format_conversion(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn stripped_closure_upvalues_survive_format_conversion()
+    -> Result<(), Box<dyn std::error::Error>> {
         let lua = mlua::Lua::new();
         let source = lua
             .load("local value = 42; return function() return value end")

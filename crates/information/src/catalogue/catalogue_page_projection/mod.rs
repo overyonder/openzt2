@@ -89,10 +89,14 @@ pub(crate) fn project_catalogue_page(
     active_definitions: Res<WorldDefinitions>,
     active_localization: Res<LocalizationPrecedenceIndex>,
     localizations: Res<Assets<LocalizationAsset>>,
-    cash: Res<ZooCash>,
-    unlimited_cash: Option<Res<UnlimitedZooCash>>,
-    mut previously_unlimited: Local<bool>,
-    unlocks: Res<UnlockedCatalogueDefinitionSet>,
+    economy: Single<
+        (
+            Ref<ZooCash>,
+            Ref<UnlimitedZooCash>,
+            Ref<UnlockedCatalogueDefinitionSet>,
+        ),
+        With<WorldRoot>,
+    >,
     worlds: Query<
         (
             Ref<SelectedWorldIdentity>,
@@ -123,8 +127,9 @@ pub(crate) fn project_catalogue_page(
         &mut Pickable,
     )>,
 ) {
-    let is_unlimited = unlimited_cash.is_some();
-    let cash_policy_changed = is_unlimited != *previously_unlimited;
+    let (cash, unlimited_cash, unlocks) = economy.into_inner();
+    let is_unlimited = unlimited_cash.0;
+    let cash_policy_changed = unlimited_cash.is_changed();
     let definitions_changed = definitions.is_changed();
     let localizations_changed = localizations.is_changed() || active_localization.is_changed();
     let Some(definitions) = active_definitions.get(&definitions) else {
@@ -332,7 +337,6 @@ pub(crate) fn project_catalogue_page(
             };
         }
     }
-    *previously_unlimited = is_unlimited;
 }
 
 fn catalogue_row<'a>(

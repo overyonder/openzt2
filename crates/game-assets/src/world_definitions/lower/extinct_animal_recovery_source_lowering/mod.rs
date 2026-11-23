@@ -8,11 +8,11 @@ use crate::source_document::resolved_source_record_index::{BindError, RecordView
 use crate::source_document::source_document_semantic_name::{
     canonicalize_source_document_record_key, source_document_names_are_semantically_equal,
 };
+use openzt2_game_data::AssetId;
 use openzt2_game_data::world_definitions::extinct_animal_recovery::{
     CloningCenterDefinition, CloningDifficultyLevel, CloningFailureOutcome, FossilPieceDefinition,
     FossilSetDefinition, FossilSlotDefinition,
 };
-use openzt2_game_data::AssetId;
 
 pub(super) fn bind_fossil_set(
     record: &RecordView<'_, '_>,
@@ -77,13 +77,6 @@ pub(super) fn bind_fossil_puzzle(
                 span: piece.span,
                 message: "ZTPuzzlePiece is missing its target node".to_owned(),
             })?;
-        let texture = piece
-            .attribute_named_any(&["texture"])
-            .ok_or_else(|| BindError {
-                virtual_path: record.source_path(),
-                span: piece.span,
-                message: "ZTPuzzlePiece is missing its texture".to_owned(),
-            })?;
         let scale = piece
             .attribute_named_any(&["entityScale"])
             .unwrap_or("1")
@@ -100,7 +93,7 @@ pub(super) fn bind_fossil_puzzle(
         output.document.fossil_pieces.push(FossilPieceDefinition {
             id: piece_id,
             set,
-            model: AssetId::from_virtual_path(&format!("puzzles/{animal}/{texture}")),
+            model: AssetId::default(),
             slot: AssetId::from_virtual_path(&format!("fossil-slots/{animal}/{node}")),
             discovery_weight: 1,
             scale_permille: (scale * 1000.0).round().clamp(1.0, u16::MAX as f32) as u16,

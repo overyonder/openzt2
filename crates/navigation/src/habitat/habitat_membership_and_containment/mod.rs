@@ -16,11 +16,20 @@ use openzt2_zoo_state::habitat::{
 };
 use openzt2_zoo_state::topology::topology_graph_types::TopologyGrid;
 
-#[derive(Resource, Default)]
+#[derive(Component, Default)]
 pub(super) struct HabitatLocationCells(HashMap<IVec2, Entity>);
 
 #[derive(Component)]
-pub(super) struct HabitatLocationCell(IVec2);
+pub(super) struct HabitatLocationCell {
+    root: Entity,
+    coordinate: IVec2,
+}
+
+#[derive(Message)]
+pub(super) struct HabitatCellOwnershipChanged {
+    pub(super) root: Entity,
+    pub(super) cells: Vec<IVec2>,
+}
 
 #[derive(Component)]
 #[relationship(relationship_target = HabitatCellOccupants)]
@@ -49,11 +58,13 @@ pub(super) fn retire_empty_habitat_location_cell(
 pub(super) fn discard_habitat_location_cell(
     discarded: On<Discard<HabitatLocationCell>>,
     cells: Query<&HabitatLocationCell, Allow<Disabled>>,
-    mut locations: ResMut<HabitatLocationCells>,
+    mut locations: Query<&mut HabitatLocationCells>,
 ) {
     if let Ok(cell) = cells.get(discarded.entity) {
-        if locations.0.get(&cell.0) == Some(&discarded.entity) {
-            locations.0.remove(&cell.0);
+        if let Ok(mut locations) = locations.get_mut(cell.root) {
+            if locations.0.get(&cell.coordinate) == Some(&discarded.entity) {
+                locations.0.remove(&cell.coordinate);
+            }
         }
     }
 }
@@ -76,14 +87,20 @@ pub(super) fn release_members_of_retired_habitat(
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(super) fn resolve_changed_habitat_membership_and_containment(
     mut commands: Commands,
-    habitat_index: Res<HabitatIndex>,
-    grid: Res<TopologyGrid>,
-    roots: Query<Entity, With<WorldRoot>>,
-    mut locations: ResMut<HabitatLocationCells>,
+    roots: Single<
+        (
+            Entity,
+            &HabitatIndex,
+            Ref<TopologyGrid>,
+            &mut HabitatLocationCells,
+        ),
+        With<WorldRoot>,
+    >,
     cell_occupants: Query<&HabitatCellOccupants>,
     habitat_members: Query<&HabitatMembers>,
     habitat_summaries: Query<&HabitatSummary>,
     mut habitat_changes: MessageReader<HabitatChanged>,
+    mut cell_changes: MessageReader<HabitatCellOwnershipChanged>,
     mut lost: MessageReader<LostHabitatMembership>,
     changed_locatables: Query<
         Entity,
@@ -108,6 +125,7 @@ pub(super) fn resolve_changed_habitat_membership_and_containment(
     >,
     mut notifications: MessageWriter<ContainmentChanged>,
 ) {
+    let (root, habitat_index, grid, mut locations) = roots.into_inner();
     let mut affected: EntityHashSet = changed_locatables.iter().collect();
     let lost: EntityHashSet = lost.read().map(|lost| lost.0).collect();
     affected.extend(lost.iter().copied());
@@ -115,27 +133,21 @@ pub(super) fn resolve_changed_habitat_membership_and_containment(
         affected.extend(locatables.iter().map(|(entity, ..)| entity));
     }
     let mut changed_habitats = EntityHashSet::default();
-    let bounds = habitat_changes
-        .read()
-        .map(|change| {
-            if changed_habitats.insert(change.habitat_entity) {
-                if let Ok(members) = habitat_members.get(change.habitat_entity) {
-                    affected.extend(members.iter());
-                }
+    for change in habitat_changes.read() {
+        if changed_habitats.insert(change.habitat_entity) {
+            if let Ok(members) = habitat_members.get(change.habitat_entity) {
+                affected.extend(members.iter());
             }
-            change.changed_topology_bounds
-        })
-        .reduce(|current, next| current.union(next));
-    if let Some(bounds) = bounds {
-        for y in bounds.min.y..=bounds.max.y {
-            for x in bounds.min.x..=bounds.max.x {
-                if let Some(occupants) = locations
-                    .0
-                    .get(&IVec2::new(x, y))
-                    .and_then(|&cell| cell_occupants.get(cell).ok())
-                {
-                    affected.extend(occupants.iter());
-                }
+        }
+    }
+    for change in cell_changes.read().filter(|change| change.root == root) {
+        for coordinate in &change.cells {
+            if let Some(occupants) = locations
+                .0
+                .get(coordinate)
+                .and_then(|&cell| cell_occupants.get(cell).ok())
+            {
+                affected.extend(occupants.iter());
             }
         }
     }
@@ -153,11 +165,9 @@ pub(super) fn resolve_changed_habitat_membership_and_containment(
         );
         let location = cell.map(|coordinate| {
             *locations.0.entry(coordinate).or_insert_with(|| {
-                let mut cell = commands.spawn(HabitatLocationCell(coordinate));
-                if let Ok(root) = roots.single() {
-                    cell.insert(ChildOf(root));
-                }
-                cell.id()
+                commands
+                    .spawn((HabitatLocationCell { root, coordinate }, ChildOf(root)))
+                    .id()
             })
         });
         if old_location.map(|location| location.0) != location {

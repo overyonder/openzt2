@@ -3,7 +3,7 @@ use openzt2_zoo_state::behavior_task_execution_types::running_actions::WhenBehav
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
     RunBehaviorFactModifications, RunningBehaviorInstruction,
 };
-use openzt2_zoo_state::locomotion::locomotion_types::CaffeineMode;
+use openzt2_zoo_state::locomotion::locomotion_types::CaffeineFlags;
 mod consumable_compatibility;
 use openzt2_game_data::behavior::action::modification::{
     BehaviorFact, BehaviorFactModification, BehaviorFactModificationOperation,
@@ -12,7 +12,7 @@ use openzt2_game_data::behavior::action::modification::{
 use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_zoo_state::animal_behavior::animal_lineage::{AnimalMate, PregnancyFather};
-use openzt2_zoo_state::animal_health::types::FreezeAnimal;
+use openzt2_zoo_state::animal_health::types::{Escaped, FreezeAnimal, Rampaging};
 use openzt2_zoo_state::animal_health::types::ThawAnimal;
 use openzt2_zoo_state::animal_lifecycle::types::Animal;
 use openzt2_zoo_state::animal_lifecycle::types::Pregnancy;
@@ -146,7 +146,7 @@ pub(super) fn apply_supported_current_behavior_fact_modifications(
     animals: Query<(), With<Animal>>,
     pregnancies: Query<(), With<Pregnancy>>,
     mates: Query<&AnimalMate>,
-    caffeine_modes: Query<&CaffeineMode>,
+    mut caffeine_flags: Query<&mut CaffeineFlags>,
     mut maintenance: MaintenanceFacts,
     price_effect: openzt2_zoo_state::economy::price_effect::BehaviorPriceEffectContext,
     compatibility: consumable_compatibility::AnimalConsumableCompatibility,
@@ -203,10 +203,6 @@ pub(super) fn apply_supported_current_behavior_fact_modifications(
                     openzt2_game_data::behavior::scalar::BehaviorScalarQ16::PriceEffectQ16(_)
                 );
             }
-            // An animal's escape follows from where it stands.
-            if animals.contains(affected_entity) && modification.modified_fact == BehaviorFact::Escaped {
-                return true;
-            }
             behavior_fact_modification_has_runtime_owner(
                 modification,
                 affected_entity,
@@ -218,6 +214,7 @@ pub(super) fn apply_supported_current_behavior_fact_modifications(
             mark_behavior_task_for_failure_and_stop_navigation(entity, &mut commands);
             continue;
         }
+        let mut new_caffeine_flags = bevy::ecs::entity::EntityHashMap::<CaffeineFlags>::default();
         for modification in modifications {
             let animal = resolve_behavior_entity_role_to_live_entity(
                 modification.affected_entity_role,
@@ -405,19 +402,19 @@ pub(super) fn apply_supported_current_behavior_fact_modifications(
                     }
                 }
                 BehaviorFact::CaffeineMode | BehaviorFact::DeCaffeineMode => {
-                    let mode = if modification.modified_fact == BehaviorFact::CaffeineMode {
-                        CaffeineMode::Caffeinated
+                    let active = modification.modification_operation
+                        != BehaviorFactModificationOperation::Clear && value_q16 != 0;
+                    let flag: fn(&mut CaffeineFlags) -> &mut bool =
+                        if modification.modified_fact == BehaviorFact::CaffeineMode {
+                            |flags| &mut flags.caffeinated
+                        } else {
+                            |flags| &mut flags.decaffeinated
+                        };
+                    if let Ok(current) = caffeine_flags.get_mut(animal) {
+                        current.map_unchanged(flag).set_if_neq(active);
                     } else {
-                        CaffeineMode::Decaffeinated
-                    };
-                    CaffeineMode::write_authored(
-                        &mut commands.entity(animal),
-                        caffeine_modes.get(animal).ok(),
-                        mode,
-                        modification.modification_operation
-                            != BehaviorFactModificationOperation::Clear
-                            && value_q16 != 0,
-                    );
+                        *flag(new_caffeine_flags.entry(animal).or_default()) = active;
+                    }
                 }
                 BehaviorFact::DeparturePoints => {
                     if let Ok(mut departure_points) = guests.get_mut(animal) {
@@ -443,11 +440,35 @@ pub(super) fn apply_supported_current_behavior_fact_modifications(
                         commands.entity(animal).insert(GuestAttacked);
                     }
                 }
-                BehaviorFact::Escaped => {}
+                BehaviorFact::Escaped | BehaviorFact::Rampage => {
+                    let active = modification.modification_operation
+                        != BehaviorFactModificationOperation::Clear && value_q16 != 0;
+                    let mut affected = commands.entity(animal);
+                    match (modification.modified_fact, active) {
+                        (BehaviorFact::Escaped, true) => {
+                            affected.insert_if_new(Escaped { since_tick: clock.tick });
+                        }
+                        (BehaviorFact::Escaped, false) => {
+                            affected.remove::<Escaped>();
+                        }
+                        (BehaviorFact::Rampage, true) => {
+                            affected.insert_if_new(Rampaging { elapsed_ticks: 0 });
+                        }
+                        (BehaviorFact::Rampage, false) => {
+                            affected.remove::<Rampaging>();
+                        }
+                        _ => unreachable!(),
+                    }
+                }
                 _ => {
                     unreachable!("unsupported fact modifications were rejected before application")
                 }
             };
+        }
+        for (animal, flags) in new_caffeine_flags {
+            if flags != CaffeineFlags::default() {
+                commands.entity(animal).try_insert(flags);
+            }
         }
         instruction.complete(entity, clock.tick, &mut commands);
     }
@@ -497,6 +518,8 @@ fn behavior_fact_modification_has_runtime_owner(
             | BehaviorFact::Health
             | BehaviorFact::Hygiene
             | BehaviorFact::Frozen
+            | BehaviorFact::Escaped
+            | BehaviorFact::Rampage
     )
 }
 

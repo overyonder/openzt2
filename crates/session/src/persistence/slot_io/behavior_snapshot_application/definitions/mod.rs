@@ -85,6 +85,8 @@ pub(super) fn actor_references(
         .chain(record.synchronized.iter().map(|owner| &owner.target))
         .chain(record.navigation.iter().flat_map(|nav| {
             nav.pursuit_target.iter()
+                .chain(nav.follow.iter().map(|pending| &pending.target))
+                .chain(nav.spline.iter().map(|pending| &pending.target))
                 .chain(nav.docking.iter().map(|dock| &dock.target))
                 .chain(nav.docking_completion.iter().filter_map(|pending| pending.target.as_ref()))
                 .chain(nav.pending_results.iter().filter_map(|result| match result {
@@ -236,6 +238,20 @@ pub(super) fn prepare_behavior_snapshot_documents(
             return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection);
         }
         if let Some(nav) = &record.navigation {
+            use openzt2_game_data::behavior::action_record::BehaviorAction;
+            if nav.follow.is_some()
+                && !matches!(
+                    resolve_behavior_frame_action(&record.task.current, documents, &handles)?,
+                    BehaviorAction::FollowEntity(_)
+                )
+                || nav.spline.is_some()
+                    && !matches!(
+                        resolve_behavior_frame_action(&record.task.current, documents, &handles)?,
+                        BehaviorAction::DockSpline(_)
+                    )
+            {
+                return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection);
+            }
             if let Some(completion) = &nav.move_completion {
                 if !matches!(
                     resolve_behavior_frame_action(&completion.origin, documents, &handles)?,
@@ -249,6 +265,11 @@ pub(super) fn prepare_behavior_snapshot_documents(
                     resolve_behavior_frame_action(&completion.origin, documents, &handles)?,
                     openzt2_game_data::behavior::action_record::BehaviorAction::Dock(_)
                         | openzt2_game_data::behavior::action_record::BehaviorAction::DockQueue(_)
+                        | openzt2_game_data::behavior::action_record::BehaviorAction::DockSpline(_)
+                        | openzt2_game_data::behavior::action_record::BehaviorAction::DockTankWall(
+                            _
+                        )
+                        | openzt2_game_data::behavior::action_record::BehaviorAction::UsePortal(_)
                 ) {
                     return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection);
                 }

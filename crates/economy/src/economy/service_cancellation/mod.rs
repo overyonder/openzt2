@@ -10,15 +10,13 @@ use openzt2_zoo_state::guests::guest_simulation_types::{Guest, GuestDeparted};
 
 use super::{
     facility_economy_types::{Inventory, ServiceFacility},
-    service_types::{
-        FacilityReservations, ReservationFacility, ServiceOperation, ServicePhase,
-        ServiceReservation,
-    },
+    service_reservation::TimedFacilityService,
+    service_types::{FacilityReservations, ReservationFacility, ServiceReservation},
 };
 
 pub(super) fn release_removed_service_reservation(
-    removed: On<Despawn<ServiceOperation>>,
-    services: Query<(&ServiceOperation, &ReservationFacility)>,
+    removed: On<Despawn<TimedFacilityService>>,
+    services: Query<(&TimedFacilityService, &ReservationFacility)>,
     mut inventories: Query<&mut Inventory>,
 ) {
     let Ok((operation, facility)) = services.get(removed.entity) else {
@@ -28,7 +26,7 @@ pub(super) fn release_removed_service_reservation(
         return;
     }
     if let Ok(mut inventory) = inventories.get_mut(facility.0) {
-        if operation.phase == ServicePhase::Completed {
+        if operation.completed {
             inventory.consume_reserved(operation.inventory_units);
         } else {
             inventory.return_reserved(operation.inventory_units);

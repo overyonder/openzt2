@@ -1,6 +1,6 @@
 use super::super::world_definition_document_asset_and_demand_loaded_dependency_paths::{
-    DemandLoadedDependencyPath, WorldDefinitionAsset,
-    AUTHORED_GROUND_PATH_SURFACE_MASK_SOURCE_PATHS,
+    AUTHORED_GROUND_PATH_SURFACE_MASK_SOURCE_PATHS, DemandLoadedDependencyPath,
+    WorldDefinitionAsset,
 };
 use super::unresolved_reference;
 use crate::asset_source::AssetArchives;
@@ -16,7 +16,7 @@ use crate::source_document::{
 };
 use crate::texture::source_image_asset_path_selection::select_bevy_image_asset_path_for_blue_fang_source_image;
 use bevy::asset::LoadContext;
-use openzt2_game_data::{world_definitions::document::WorldDefinitionDocument, AssetId};
+use openzt2_game_data::{AssetId, world_definitions::document::WorldDefinitionDocument};
 use std::{collections::BTreeMap, io, path::Path};
 
 pub(super) async fn resolve_world_definition_presentation_models(
@@ -194,6 +194,7 @@ pub(super) fn register_world_definition_presentation_dependencies(
     sort_paths(&mut animation_sets);
     Ok(WorldDefinitionAsset {
         document,
+        timekeeper: None,
         authored_binder_sources: None,
         textures: textures.into_boxed_slice(),
         models: models.into_boxed_slice(),

@@ -14,17 +14,17 @@ use openzt2_game_data::{
 
 #[derive(SystemParam)]
 pub struct BehaviorTargetBiome<'w, 's> {
-    terrain: Res<'w, TerrainIndex>,
+    terrain: Query<'w, 's, &'static TerrainIndex>,
     assets: Res<'w, Assets<TerrainAsset>>,
     chunks: Query<'w, 's, (&'static TerrainChunk, Option<&'static EditedTerrainSamples>)>,
 }
 
 impl BehaviorTargetBiome<'_, '_> {
-    pub fn at(&self, position: Vec3) -> Option<AssetId> {
+    pub fn at(&self, root: Entity, position: Vec3) -> Option<AssetId> {
         let point = position.xz();
         let (chunk, edits) = self
             .chunks
-            .get(terrain_chunk_at(&self.terrain, point)?)
+            .get(terrain_chunk_at(self.terrain.get(root).ok()?, point)?)
             .ok()?;
         let asset = self.assets.get(&chunk.asset)?;
         sample_authored_terrain(chunk, asset, edits, point)?

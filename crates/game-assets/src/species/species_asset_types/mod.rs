@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 
 use bevy::prelude::*;
 use openzt2_game_data::{
-    species::{LifeStage, Sex, SpeciesDocument},
     AssetId,
+    species::{LifeStage, Sex, SpeciesDocument},
 };
 
 pub mod species_animation_set_loading;
@@ -34,6 +34,8 @@ impl SpeciesAsset {
 #[derive(Resource, Default)]
 pub struct SpeciesAssets {
     pub(super) discovered: bool,
+    pub(super) binder_sources: Option<std::sync::Arc<crate::world_definitions::world_definition_asset_loading::authored_binder_reference_resolution::AuthoredBinderSources>>,
+    pub(super) source_generation: u64,
     pub(super) source_set_changed: bool,
     pub(super) pending_paths: std::collections::VecDeque<std::path::PathBuf>,
     pub(super) pending: std::collections::BTreeSet<bevy::asset::AssetId<SpeciesAsset>>,
@@ -135,6 +137,9 @@ impl SpeciesAssets {
         for location in self.by_variant.values() {
             let binding = &documents[location.row.document].1.variants[location.row.index];
             let variant = &binding.variant;
+            if variant.probability == 0 {
+                continue;
+            }
             if variant.life_stage == LifeStage::Adult && variant.sex != Sex::Any {
                 species_with_concrete_adults.insert(binding.species);
             }

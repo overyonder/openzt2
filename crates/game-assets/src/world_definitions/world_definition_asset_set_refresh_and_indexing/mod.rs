@@ -10,25 +10,25 @@ use bevy::{
     asset::{AssetLoadFailedEvent, LoadState},
     prelude::*,
 };
-use openzt2_game_data::{world_definitions::document::WorldDefinitionDocument, AssetId};
+use openzt2_game_data::{AssetId, world_definitions::document::WorldDefinitionDocument};
 
 use crate::asset_source::{
-    archive_entry_asset_path::{archive_entry_asset_path, archive_entry_asset_source_path},
     ArchiveOverlayChanged, AssetArchives,
+    archive_entry_asset_path::{
+        archive_entry_asset_path, archive_entry_asset_source_path,
+        definition_archive_entry_asset_path,
+    },
 };
 
 use super::{
     ground_path_surface_images::GROUND_PATH_SURFACE_IMAGE_EXTENSION,
     world_definition_asset_set_state_and_borrowing_queries::{
-        kind_range, DefinitionKind, SingletonKind, WorldDefinitions,
+        DefinitionKind, DefinitionRow, SingletonKind, WorldDefinitions, kind_range,
     },
     world_definition_document_asset_and_demand_loaded_dependency_paths::{
-        WorldDefinitionAsset, AUTHORED_GROUND_PATH_SURFACE_MASK_SOURCE_PATHS,
+        AUTHORED_GROUND_PATH_SURFACE_MASK_SOURCE_PATHS, WorldDefinitionAsset,
     },
-    world_definition_load_queue::{
-        request_world_definition_handles_without_per_asset_frame_waits,
-        MAXIMUM_ACTIVE_DEFINITION_LOADS,
-    },
+    world_definition_load_queue::{WorldDefinitionLoadCompletion, request_world_definition_loads},
 };
 
 pub(crate) fn world_definition_source_path(
@@ -120,6 +120,13 @@ pub(crate) fn world_definition_source_path(
     )
 }
 
+pub(crate) fn is_fossil_puzzle_source(path: &Path, root: &Path) -> bool {
+    path.starts_with(root)
+        && path
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("xml"))
+}
+
 pub(super) fn discover_world_definition_catalogue_sources(
     archives: Res<AssetArchives>,
     server: Res<AssetServer>,
@@ -127,9 +134,6 @@ pub(super) fn discover_world_definition_catalogue_sources(
     mut definitions: ResMut<WorldDefinitions>,
     mut overlay_changes: MessageReader<ArchiveOverlayChanged>,
 ) {
-    if definitions.binder_sources.is_some() && overlay_changes.is_empty() {
-        return;
-    }
     let (binder_sources, sources) = archives.world_definition_sources();
     let mut sources_changed = definitions.binder_sources.is_none();
     let mut binder_inputs_changed = false;
@@ -137,9 +141,15 @@ pub(super) fn discover_world_definition_catalogue_sources(
     let mut adoption_changed = false;
     let mut biome_changed = false;
     let mut show_timer_changed = false;
+    let mut puzzle_manager_changed = false;
+    let puzzle_root = archives.fossil_puzzle_root();
     for change in overlay_changes.read().flat_map(|change| &change.changes) {
         let path = &change.normalized_asset_path;
-        sources_changed |= world_definition_source_path(path, binder_sources.directories());
+        sources_changed |= world_definition_source_path(path, binder_sources.directories())
+            || puzzle_root
+                .as_deref()
+                .is_some_and(|root| is_fossil_puzzle_source(path, root));
+        puzzle_manager_changed |= path == Path::new("config/puzzlemgr.xml");
         binder_inputs_changed |= path == Path::new("config/gamectxt.xml")
             || binder_sources.contains_path(path)
             || definitions
@@ -203,162 +213,141 @@ pub(super) fn discover_world_definition_catalogue_sources(
             2
         }
     });
-    let routed_paths = sources
+    definitions.source_generation += 1;
+    let generation = definitions.source_generation;
+    let base_sources = sources
         .iter()
-        .map(|source| {
-            (
-                &source.normalized_asset_path,
-                archive_entry_asset_path(source),
-            )
-        })
+        .map(|source| (&source.normalized_asset_path, source))
         .collect::<BTreeMap<_, _>>();
-    let paths = paths
+    let mut routed_sources = BTreeMap::new();
+    let mut paths = paths
         .into_iter()
-        .filter_map(|path| routed_paths.get(path).cloned())
+        .filter_map(|path| {
+            let source = *base_sources.get(path)?;
+            let base_path = archive_entry_asset_path(source);
+            let supplements_changed = (zoopedia_changed && path.starts_with("ui/zoopedia/entries"))
+                || (adoption_changed && path == Path::new("config/adoption.xml"))
+                || (biome_changed && path.parent() == Some(Path::new("biomes")))
+                || (show_timer_changed
+                    && matches!(path.to_str(), Some("ai/ztai.xml" | "ai/staffmgr.xml")))
+                || (puzzle_manager_changed
+                    && puzzle_root
+                        .as_deref()
+                        .is_some_and(|root| is_fossil_puzzle_source(path, root)));
+            let previous = definitions.routed_sources.get(&base_path);
+            let binder_dependency_changed = binder_inputs_changed
+                && previous.is_some_and(|path| {
+                    server
+                        .get_handle::<WorldDefinitionAsset>(path.clone())
+                        .and_then(|handle| assets.get(&handle))
+                        .is_none_or(|asset| asset.authored_binder_sources.is_some())
+                });
+            let routed_path = if binder_dependency_changed || supplements_changed {
+                definition_archive_entry_asset_path(source, generation)
+            } else {
+                previous.cloned().unwrap_or_else(|| base_path.clone())
+            };
+            routed_sources.insert(base_path, routed_path.clone());
+            Some(routed_path)
+        })
         .collect::<Vec<_>>();
-    let wanted = paths.iter().map(PathBuf::as_path).collect::<BTreeSet<_>>();
-    let mut reload_queue = std::mem::take(&mut definitions.reload_queue);
-    reload_queue.retain(|_, path| wanted.contains(path.path()));
-    for handle in &definitions.handles {
-        let id = handle.id();
-        let Some(path) = handle.path().filter(|path| wanted.contains(path.path())) else {
-            continue;
-        };
-        let Some((source, _, _)) = archive_entry_asset_source_path(path.path()) else {
-            continue;
-        };
-        let binder_changed = binder_inputs_changed
-            && (assets
-                .get(id)
-                .is_some_and(|asset| asset.authored_binder_sources.is_some())
-                || definitions.failed.contains(&id));
-        let supplements_changed = (zoopedia_changed && source.starts_with("ui/zoopedia/entries"))
-            || (adoption_changed && source == Path::new("config/adoption.xml"))
-            || (biome_changed && source.parent() == Some(Path::new("biomes")))
-            || (show_timer_changed
-                && matches!(source.to_str(), Some("ai/ztai.xml" | "ai/staffmgr.xml")));
-        if binder_changed || supplements_changed {
-            reload_queue.insert(id, path.clone());
-        }
+    if let Some(root) = puzzle_root {
+        paths.extend(
+            archives
+                .source_paths_under(&root)
+                .into_iter()
+                .filter(|path| {
+                    is_fossil_puzzle_source(path, &root) && !base_sources.contains_key(path)
+                }),
+        );
     }
-    definitions.reload_queue = reload_queue;
-    definitions.complete = false;
-    definitions.total_loads = paths.len();
-    definitions.completed_loads = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    definitions.loading_task = Some(
-        request_world_definition_handles_without_per_asset_frame_waits(
-            server.clone(),
-            paths,
-            std::sync::Arc::clone(&definitions.completed_loads),
-        ),
-    );
+    definitions.routed_sources = routed_sources;
     definitions.binder_sources = Some(binder_sources);
+    definitions.complete = false;
+    definitions.next_load_paths = Some(paths);
+    start_waiting_definition_operation(&server, &mut definitions);
+}
+
+fn start_waiting_definition_operation(server: &AssetServer, definitions: &mut WorldDefinitions) {
+    if definitions.active_load.is_some() {
+        return;
+    }
+    let Some(paths) = definitions.next_load_paths.take() else {
+        return;
+    };
+    definitions.total_loads = paths.len();
+    definitions.completed_loads = Default::default();
+    definitions.active_load = Some(request_world_definition_loads(
+        server,
+        paths,
+        std::sync::Arc::clone(&definitions.completed_loads),
+    ));
 }
 
 pub(super) fn index_loaded_world_definition_assets_by_identifier_and_singleton_kind(
     archives: Res<AssetArchives>,
     server: Res<AssetServer>,
     assets: Res<Assets<WorldDefinitionAsset>>,
+    completions: Res<Assets<WorldDefinitionLoadCompletion>>,
+    mut completed: MessageReader<AssetEvent<WorldDefinitionLoadCompletion>>,
     mut load_failures: MessageReader<AssetLoadFailedEvent<WorldDefinitionAsset>>,
     mut events: MessageReader<AssetEvent<WorldDefinitionAsset>>,
     mut definitions: ResMut<WorldDefinitions>,
 ) {
-    let mut discovery_finished = false;
-    if let Some(task) = definitions.bypass_change_detection().loading_task.as_mut() {
-        if let Some(handles) = bevy::tasks::block_on(futures_lite::future::poll_once(task)) {
-            let definitions = definitions.bypass_change_detection();
-            definitions.handles = handles;
-            definitions.loading_task = None;
-            let sources = definitions
-                .handles
-                .iter()
-                .map(Handle::id)
-                .collect::<BTreeSet<_>>();
-            definitions.failed.retain(|id| sources.contains(id));
-            definitions.pending.retain(|id| sources.contains(id));
-            definitions.reloading.retain(|id| sources.contains(id));
-            for &id in &sources {
-                if definitions.reloading.contains(&id) {
-                    continue;
-                }
-                match server.get_load_state(id) {
-                    Some(LoadState::Failed(_)) if !definitions.pending.contains(&id) => {
-                        definitions.failed.insert(id);
-                    }
-                    Some(LoadState::Loaded) if assets.contains(id) => {}
-                    _ => {
-                        definitions.pending.insert(id);
-                    }
-                }
-            }
-            definitions.source_ids = sources;
-            discovery_finished = true;
-        }
-    }
-    let mut settled = BTreeSet::new();
-    for event in events.read() {
-        let id = match *event {
+    let operation = definitions.active_load.as_ref().map(Handle::id);
+    let published = completed
+        .read()
+        .filter_map(|event| match *event {
+            AssetEvent::Added { id } if Some(id) == operation => completions.get(id),
+            _ => None,
+        })
+        .last();
+    let mut settled = events
+        .read()
+        .filter_map(|event| match *event {
             AssetEvent::Added { id } | AssetEvent::Modified { id } | AssetEvent::Removed { id } => {
-                id
+                Some(id)
             }
-            AssetEvent::Unused { .. } | AssetEvent::LoadedWithDependencies { .. } => continue,
-        };
-        if definitions.source_ids.contains(&id) {
-            let current = assets
-                .get(id)
-                .and_then(|asset| asset.authored_binder_sources.as_ref())
-                .zip(definitions.binder_sources.as_ref())
-                .is_none_or(|(loaded, expected)| std::sync::Arc::ptr_eq(loaded, expected));
-            if current {
-                settled.insert(id);
-            }
-        }
-    }
-    let mut failed = BTreeSet::new();
-    for failure in load_failures.read() {
-        if definitions.source_ids.contains(&failure.id) {
-            failed.insert(failure.id);
-        }
-    }
-    let changed = discovery_finished || !settled.is_empty() || !failed.is_empty();
-    if !changed {
-        return;
-    }
-    {
-        let loading = definitions.bypass_change_detection();
-        for id in settled {
-            loading.pending.remove(&id);
-            loading.reloading.remove(&id);
-            loading.failed.remove(&id);
-        }
-        for id in failed {
-            loading.pending.remove(&id);
-            loading.reloading.remove(&id);
-            loading.failed.insert(id);
-        }
-    }
-    if definitions.loading_task.is_some() || !definitions.pending.is_empty() {
-        return;
-    }
-
-    {
-        let loading = definitions.bypass_change_detection();
-        while loading.reloading.len() < MAXIMUM_ACTIVE_DEFINITION_LOADS {
-            let Some((id, path)) = loading.reload_queue.pop_first() else {
-                break;
-            };
-            if loading.reloading.contains(&id) {
-                loading.reload_queue.insert(id, path);
-                break;
-            }
-            if loading.source_ids.contains(&id) {
-                loading.reloading.insert(id);
-                server.reload(path);
-            }
-        }
-        if !loading.reloading.is_empty() {
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
+    settled.extend(load_failures.read().map(|failure| failure.id));
+    if let Some(completion) = published {
+        definitions.active_load = None;
+        if definitions.next_load_paths.is_some() {
+            start_waiting_definition_operation(&server, &mut definitions);
             return;
         }
+        definitions.handles.clone_from(&completion.handles);
+        definitions.source_ids = completion.handles.iter().map(Handle::id).collect();
+        definitions.pending.clear();
+        definitions.failed.clear();
+        settled.extend(definitions.source_ids.iter().copied());
+    } else if definitions.active_load.is_some() {
+        return;
+    }
+    settled.retain(|id| definitions.source_ids.contains(id));
+    if published.is_none() && settled.is_empty() {
+        return;
+    }
+    for id in settled {
+        definitions.pending.remove(&id);
+        definitions.failed.remove(&id);
+        match server.get_load_state(id) {
+            Some(LoadState::Failed(_)) => {
+                definitions.failed.insert(id);
+            }
+            Some(LoadState::Loading) if !assets.contains(id) => {
+                definitions.pending.insert(id);
+            }
+            _ if !assets.contains(id) => {
+                definitions.failed.insert(id);
+            }
+            _ => {}
+        }
+    }
+    if !definitions.pending.is_empty() {
+        return;
     }
 
     let mut records = BTreeMap::new();
@@ -379,8 +368,8 @@ pub(super) fn index_loaded_world_definition_assets_by_identifier_and_singleton_k
     }
     let retained = records
         .values()
-        .chain(singletons.values())
-        .map(Handle::id)
+        .map(|row| row.handle.id())
+        .chain(singletons.values().map(Handle::id))
         .collect::<std::collections::BTreeSet<_>>();
     // Dependency winners come only from retained documents, as the views'
     // lookups never see a document that owns no record or singleton.
@@ -399,28 +388,50 @@ pub(super) fn index_loaded_world_definition_assets_by_identifier_and_singleton_k
             (DefinitionKind::SceneDependency, &asset.scenes),
         ] {
             for dependency in dependencies {
-                records.insert((kind, dependency.id), handle.clone());
+                records.insert(
+                    (kind, dependency.id),
+                    DefinitionRow {
+                        handle: handle.clone(),
+                        first: 0,
+                        end: 1,
+                    },
+                );
             }
         }
     }
     let mut unlock_definition_identifiers_by_target = BTreeMap::<AssetId, Vec<AssetId>>::new();
-    for ((kind, identifier), handle) in &records {
-        if *kind != DefinitionKind::Unlock {
-            continue;
+    for ((_, identifier), row) in records.range(kind_range(DefinitionKind::Unlock)) {
+        if let Some(unlock) = assets
+            .get(&row.handle)
+            .and_then(|asset| asset.document.unlocks.get(row.first))
+        {
+            unlock_definition_identifiers_by_target
+                .entry(unlock.target)
+                .or_default()
+                .push(*identifier);
         }
-        let Some(unlock) = assets.get(handle).and_then(|asset| {
-            asset
-                .document
-                .unlocks
-                .iter()
-                .find(|unlock| unlock.id == *identifier)
-        }) else {
-            continue;
-        };
-        unlock_definition_identifiers_by_target
-            .entry(unlock.target)
-            .or_default()
-            .push(*identifier);
+    }
+    let mut show_stages_by_object = BTreeMap::new();
+    for (_, row) in records.range(kind_range(DefinitionKind::ShowStage)) {
+        if let Some(stage) = assets
+            .get(&row.handle)
+            .and_then(|asset| asset.document.show_stages.get(row.first))
+        {
+            show_stages_by_object
+                .entry(stage.object)
+                .or_insert_with(|| row.clone());
+        }
+    }
+    let mut vehicle_seats_by_index = BTreeMap::new();
+    for (_, row) in records.range(kind_range(DefinitionKind::VehicleSeat)) {
+        if let Some(seat) = assets
+            .get(&row.handle)
+            .and_then(|asset| asset.document.vehicle_seats.get(row.first))
+        {
+            vehicle_seats_by_index
+                .entry((seat.vehicle, seat.index))
+                .or_insert_with(|| row.clone());
+        }
     }
     let current_source_order = definitions
         .handles
@@ -436,31 +447,26 @@ pub(super) fn index_loaded_world_definition_assets_by_identifier_and_singleton_k
     let mut catalogue_authored_purchase_order = records
         .range(kind_range(DefinitionKind::Catalogue))
         .enumerate()
-        .filter_map(|(index, ((_, id), handle))| {
-            assets.get(handle).and_then(|asset| {
-                asset
-                    .document
-                    .catalogue
-                    .iter()
-                    .find(|entry| entry.id == *id)
-                    .map(|entry| {
-                        (
-                            index,
-                            *id,
-                            entry.authored_purchase_sort_key.as_str(),
-                            entry.authored_purchase_sort_fallback_type_name.as_str(),
-                            current_source_order.get(&handle.id()).map_or(
-                                entry.authored_type_registry_source_order,
-                                |[archive, ordinal]| {
-                                    [
-                                        *archive,
-                                        *ordinal,
-                                        entry.authored_type_registry_source_order[2],
-                                    ]
-                                },
-                            ),
-                        )
-                    })
+        .filter_map(|(index, ((_, id), row))| {
+            assets.get(&row.handle).and_then(|asset| {
+                asset.document.catalogue.get(row.first).map(|entry| {
+                    (
+                        index,
+                        *id,
+                        entry.authored_purchase_sort_key.as_str(),
+                        entry.authored_purchase_sort_fallback_type_name.as_str(),
+                        current_source_order.get(&row.handle.id()).map_or(
+                            entry.authored_type_registry_source_order,
+                            |[archive, ordinal]| {
+                                [
+                                    *archive,
+                                    *ordinal,
+                                    entry.authored_type_registry_source_order[2],
+                                ]
+                            },
+                        ),
+                    )
+                })
             })
         })
         .collect::<Vec<_>>();
@@ -487,14 +493,7 @@ pub(super) fn index_loaded_world_definition_assets_by_identifier_and_singleton_k
         .unwrap_or_default();
     let maximum_ground_path_width_cm = records
         .range(kind_range(DefinitionKind::Path))
-        .filter_map(|((_, id), handle)| {
-            assets
-                .get(handle)?
-                .document
-                .paths
-                .iter()
-                .find(|path| path.id == *id)
-        })
+        .filter_map(|(_, row)| assets.get(&row.handle)?.document.paths.get(row.first))
         .filter(|path| !path.elevated)
         .map(|path| path.width_cm)
         .max()
@@ -511,6 +510,8 @@ pub(super) fn index_loaded_world_definition_assets_by_identifier_and_singleton_k
         .cloned()
         .collect();
     definitions.records = records;
+    definitions.show_stages_by_object = show_stages_by_object;
+    definitions.vehicle_seats_by_index = vehicle_seats_by_index;
     definitions.catalogue_by_definition.take();
     definitions.research_by_definition.take();
     definitions.singletons = singletons;
@@ -551,14 +552,34 @@ fn refresh_ground_path_surface_image_dependencies(
 pub(super) fn index_world_definition_document_records_and_singletons(
     document: &WorldDefinitionDocument,
     handle: &Handle<WorldDefinitionAsset>,
-    records: &mut BTreeMap<(DefinitionKind, AssetId), Handle<WorldDefinitionAsset>>,
+    records: &mut BTreeMap<(DefinitionKind, AssetId), DefinitionRow>,
     singletons: &mut BTreeMap<SingletonKind, Handle<WorldDefinitionAsset>>,
 ) {
+    macro_rules! index_rows {
+        ($kind:ident, $field:ident, $record:ident => $key:expr) => {
+            for (index, $record) in document.$field.iter().enumerate() {
+                let row = records
+                    .entry((DefinitionKind::$kind, $key))
+                    .or_insert_with(|| DefinitionRow {
+                        handle: handle.clone(),
+                        first: index,
+                        end: index + 1,
+                    });
+                if row.handle.id() != handle.id() {
+                    *row = DefinitionRow {
+                        handle: handle.clone(),
+                        first: index,
+                        end: index + 1,
+                    };
+                } else if row.end == index {
+                    row.end += 1;
+                }
+            }
+        };
+    }
     macro_rules! index {
         ($kind:ident, $field:ident) => {
-            document.$field.iter().for_each(|record| {
-                records.insert((DefinitionKind::$kind, record.id), handle.clone());
-            });
+            index_rows!($kind, $field, record => record.id);
         };
     }
     index!(Object, objects);
@@ -590,20 +611,10 @@ pub(super) fn index_world_definition_document_records_and_singletons(
     index!(Research, research);
     index!(Unlock, unlocks);
     index!(Rating, rating_definitions);
-    document.fame_thresholds.iter().for_each(|record| {
-        records.insert(
-            (
-                DefinitionKind::FameThreshold,
-                AssetId::from_key(&format!("fame-threshold:{}", record.level)),
-            ),
-            handle.clone(),
-        );
-    });
+    index_rows!(FameThreshold, fame_thresholds, record => AssetId::from_key(&format!("fame-threshold:{}", record.level)));
     index!(Award, awards);
     index!(Tank, tanks);
-    document.aquatic_requirements.iter().for_each(|record| {
-        records.insert((DefinitionKind::Aquatic, record.species), handle.clone());
-    });
+    index_rows!(Aquatic, aquatic_requirements, record => record.species);
     index!(ShowStage, show_stages);
     index!(Trick, tricks);
     index!(TrickOutcome, trick_outcome_tokens);
@@ -621,22 +632,12 @@ pub(super) fn index_world_definition_document_records_and_singletons(
     index!(CloningCenter, cloning_centers);
     index!(ImmersiveModePolicy, immersive_mode_policies);
     index!(Camera, cameras);
-    index!(PersonNames, person_name_pools);
     index!(Weather, weather);
     index!(Ambient, ambient_spawns);
     index!(Environment, environments);
-    // Keyed by the record's object; a lookup takes the winning document's
-    // first record for that object.
-    macro_rules! index_by_object {
-        ($kind:ident, $field:ident) => {
-            document.$field.iter().for_each(|record| {
-                records.insert((DefinitionKind::$kind, record.object), handle.clone());
-            });
-        };
-    }
-    index_by_object!(MaintenanceByObject, maintenance_definitions);
-    index_by_object!(FacilityByObject, facilities);
-    index_by_object!(StaffByObject, staff);
+    index_rows!(MaintenanceByObject, maintenance_definitions, record => record.object);
+    index_rows!(FacilityByObject, facilities, record => record.object);
+    index_rows!(StaffByObject, staff, record => record.object);
 
     macro_rules! singleton {
         ($kind:ident, $field:ident) => {

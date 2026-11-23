@@ -8,6 +8,7 @@ use openzt2_world_state::simulation_time::deterministic_random_stream::ZooSeed;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 
+use crate::fossil_site_types::FossilSiteKind;
 use openzt2_zoo_state::extinct_animals::{
     fossil_collection_and_assembly_types::{
         FossilAssemblyTable, FossilPlacementScope, FossilPlacementSurface,
@@ -20,13 +21,11 @@ pub(super) fn hydrate_extinct_animal_world_state_from_loaded_definitions(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     mut definition_events: MessageReader<AssetEvent<WorldDefinitionAsset>>,
-    seed: Res<ZooSeed>,
+    seed: Single<&ZooSeed>,
+    restored_sites: Query<Entity, With<FossilRecoverySite>>,
     sites: Query<
         (Entity, &PersistentId),
-        (
-            With<FossilRecoverySite>,
-            Without<FossilDiscoveryRandomStream>,
-        ),
+        (With<FossilSiteKind>, Without<FossilDiscoveryRandomStream>),
     >,
     mut tables: Query<(
         Entity,
@@ -38,6 +37,13 @@ pub(super) fn hydrate_extinct_animal_world_state_from_loaded_definitions(
     mut roots: Query<(Entity, Option<&mut FossilPlacementScope>), With<WorldRoot>>,
     new_roots: Query<Entity, Added<WorldRoot>>,
 ) {
+    let seed = seed.into_inner();
+    for site in &restored_sites {
+        commands
+            .entity(site)
+            .remove::<FossilRecoverySite>()
+            .insert(FossilSiteKind::Puzzle);
+    }
     for (entity, persistent_identifier) in &sites {
         commands
             .entity(entity)

@@ -30,11 +30,12 @@ use super::album_operations::{
     select_photo_in_album_display_slot,
 };
 use super::photo_album_types::{
-    ActivePhotoAlbum, DeletePhotoRequest, EnlargedAlbumPhoto, PhotoAlbumCapacityPages,
-    PhotoAlbumChoiceRow, PhotoAlbumPage, PhotoCameraRoll, PhotoCameraRollRow, PhotoHelpShown,
-    PhotoMove, PhotoMoveTarget, PhotoPointerDrag, SelectedAlbumPhoto, INITIAL_PHOTO_ALBUM_SPREADS,
-    PHOTO_ALBUM_PAGE_SIZE,
+    ActivePhotoAlbum, DeletePhotoRequest, EnlargedAlbumPhoto, INITIAL_PHOTO_ALBUM_SPREADS,
+    MAX_PHOTO_ALBUM_SPREADS, PHOTO_ALBUM_PAGE_SIZE, PhotoAlbumCapacityPages, PhotoAlbumChoiceRow,
+    PhotoAlbumPage, PhotoCameraRoll, PhotoCameraRollRow, PhotoHelpShown, PhotoMove,
+    PhotoMoveTarget, PhotoPointerDrag, SelectedAlbumPhoto,
 };
+use super::photo_configuration::{PhotoConfiguration, PhotoConfigurationSource};
 use openzt2_interface_state::ui::authored_ui_action_projection_components::UiPhotoActions;
 use openzt2_interface_state::ui::authored_ui_activation_contracts::UiNodeActivated;
 
@@ -124,7 +125,12 @@ pub(super) fn route_photo_ui_actions(
     names: Query<&Name, With<PhotoAlbum>>,
     active_albums: Query<Entity, (With<PhotoAlbum>, With<ActivePhotoAlbum>)>,
     mut capacities: Query<&mut PhotoAlbumCapacityPages, With<PhotoAlbum>>,
-    (members, mut orders): (Query<&AlbumPhotos>, Query<&mut PhotoAlbumOrder>),
+    (members, mut orders, configuration, configurations): (
+        Query<&AlbumPhotos>,
+        Query<&mut PhotoAlbumOrder>,
+        Res<PhotoConfigurationSource>,
+        Res<Assets<PhotoConfiguration>>,
+    ),
     mut allocators: Query<&mut PersistentIdAllocator>,
     mut deletions: MessageWriter<DeletePhotoRequest>,
     mut captures: MessageWriter<CapturePhotoRequest>,
@@ -133,6 +139,11 @@ pub(super) fn route_photo_ui_actions(
     active_photo_modes: Query<(Entity, &ImmersiveCamera), With<PhotoControl>>,
     mut commands: Commands,
 ) {
+    let default_album_spreads = configurations
+        .get(&configuration.0)
+        .map_or(INITIAL_PHOTO_ALBUM_SPREADS, |configuration| {
+            configuration.album_spreads
+        });
     for activation in activations.read() {
         let Ok((range, owner)) = action_nodes.get(activation.node) else {
             continue;
@@ -242,7 +253,7 @@ pub(super) fn route_photo_ui_actions(
                                 }
                                 commands
                                     .entity(album)
-                                    .insert(PhotoAlbumCapacityPages(INITIAL_PHOTO_ALBUM_SPREADS));
+                                    .insert(PhotoAlbumCapacityPages(default_album_spreads));
                             }
                         }
                     }
@@ -349,12 +360,14 @@ pub(super) fn route_photo_ui_actions(
                 UiPhotoAction::AddOnePageToActivePhotoAlbumCapacity => {
                     if let Some(album) = active {
                         if let Ok(mut capacity) = capacities.get_mut(album) {
-                            let pages = capacity.0.saturating_add(1);
+                            let pages = capacity.0.saturating_add(1).min(MAX_PHOTO_ALBUM_SPREADS);
                             capacity.set_if_neq(PhotoAlbumCapacityPages(pages));
                         } else {
-                            commands
-                                .entity(album)
-                                .insert(PhotoAlbumCapacityPages(INITIAL_PHOTO_ALBUM_SPREADS));
+                            commands.entity(album).insert(PhotoAlbumCapacityPages(
+                                default_album_spreads
+                                    .saturating_add(1)
+                                    .min(MAX_PHOTO_ALBUM_SPREADS),
+                            ));
                         }
                     }
                 }

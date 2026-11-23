@@ -3,6 +3,7 @@ use openzt2_game_data::{ui_document::document::UiDocumentRole, AssetId};
 
 use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 
+use crate::information::catalogue_types::{SelectedCareAnimal, SelectedCatalogueEntry};
 use crate::input::input_types::ActionSource;
 
 #[derive(Message, Debug, Clone)]
@@ -46,6 +47,7 @@ pub struct HideUiDocument {
 
 /// Owner of the running game's view. Its documents live as long as the game.
 #[derive(Component)]
+#[require(SelectedCareAnimal, SelectedCatalogueEntry)]
 pub struct InGameUiOwner;
 
 /// Menus and dialogs opened during a game belong with the game view, as when

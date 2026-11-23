@@ -1,7 +1,7 @@
 use bevy::prelude::*;
+use openzt2_game_data::AssetId;
 use openzt2_game_data::ui_document::action::UiTrigger;
 use openzt2_game_data::ui_document::widget_live_collection::UiWidgetLiveCollectionSource;
-use openzt2_game_data::AssetId;
 use openzt2_interface_state::ui::authored_ui_activation_contracts::UiNodeActivated;
 use std::collections::HashSet;
 
@@ -21,10 +21,10 @@ use openzt2_interface_state::ui::authored_ui_selection_state::UiSelected;
 
 use super::{
     zoopedia_hierarchy_operations::{
-        collect_visible_zoopedia_entries, find_root_zoopedia_entry, resolve_zoopedia_entry_subject,
+        collect_visible_zoopedia_entries, resolve_zoopedia_entry_subject,
         zoopedia_entry_has_children,
     },
-    zoopedia_navigation_types::ZoopediaPage,
+    zoopedia_navigation_types::{ZoopediaPage, ZoopediaRootEntry},
     zoopedia_table_of_contents_types::{
         VisibleZoopediaEntries, VisibleZoopediaEntry, ZoopediaTableOfContentsRow,
         ZoopediaTableOfContentsState,
@@ -32,20 +32,10 @@ use super::{
 };
 
 pub(crate) fn project_zoopedia_table_of_contents_for_hydrated_pages(
-    definitions: Res<Assets<WorldDefinitionAsset>>,
-    active_definitions: Res<WorldDefinitions>,
     lists: Query<(Entity, &UiListPolicy, &UiDocumentOwner), Without<ZoopediaTableOfContentsState>>,
     pages: Query<(), With<ZoopediaPage>>,
     mut commands: Commands,
 ) {
-    let Some(definitions) = active_definitions.get(&definitions) else {
-        return;
-    };
-    let catalog = definitions;
-    let Some(root) = find_root_zoopedia_entry(catalog) else {
-        return;
-    };
-
     for (list, policy, owner) in &lists {
         if policy.source != UiWidgetLiveCollectionSource::ZoopediaTableOfContents
             || pages.get(owner.0).is_err()
@@ -54,7 +44,7 @@ pub(crate) fn project_zoopedia_table_of_contents_for_hydrated_pages(
         }
         commands.entity(list).insert((
             ZoopediaTableOfContentsState {
-                expanded_subjects: HashSet::from([resolve_zoopedia_entry_subject(root)]),
+                expanded_subjects: HashSet::new(),
             },
             VisibleZoopediaEntries::default(),
         ));
@@ -94,8 +84,10 @@ pub(crate) fn apply_authored_zoopedia_table_of_contents_expansion_changes(
 pub(crate) fn reconcile_visible_zoopedia_entries(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
+    roots: Query<Ref<ZoopediaRootEntry>>,
     mut lists: Query<(
-        Ref<ZoopediaTableOfContentsState>,
+        &UiDocumentOwner,
+        &mut ZoopediaTableOfContentsState,
         &mut VisibleZoopediaEntries,
         &mut RequestedUiListRowCount,
     )>,
@@ -104,12 +96,28 @@ pub(crate) fn reconcile_visible_zoopedia_entries(
     let Some(catalog) = active_definitions.get(&definitions) else {
         return;
     };
-    let Some(root) = find_root_zoopedia_entry(catalog) else {
-        return;
-    };
-    for (state, mut entries, mut count) in &mut lists {
-        if !hierarchy_changed && !state.is_changed() && count.0.is_some() {
+    for (owner, mut state, mut entries, mut count) in &mut lists {
+        let Ok(root_entry) = roots.get(owner.0) else {
+            entries.set_if_neq(VisibleZoopediaEntries::default());
+            count.set_if_neq(RequestedUiListRowCount(Some(0)));
             continue;
+        };
+        if !hierarchy_changed
+            && !root_entry.is_changed()
+            && !state.is_changed()
+            && count.0.is_some()
+        {
+            continue;
+        }
+        let Some(root) = catalog.find_zoopedia_entry(root_entry.0) else {
+            entries.set_if_neq(VisibleZoopediaEntries::default());
+            count.set_if_neq(RequestedUiListRowCount(Some(0)));
+            continue;
+        };
+        if root_entry.is_changed() || state.is_added() || count.0.is_none() {
+            state
+                .expanded_subjects
+                .insert(resolve_zoopedia_entry_subject(root));
         }
         let visible = collect_visible_zoopedia_entries(catalog, root, &state.expanded_subjects)
             .into_iter()

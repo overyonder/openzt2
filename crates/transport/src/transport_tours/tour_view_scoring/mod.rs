@@ -5,6 +5,7 @@ use bevy::prelude::*;
 use openzt2_game_data::world_definitions::guest_simulation_definitions::GuestMemoryKind;
 use openzt2_game_data::world_definitions::transportation_and_tours::TourViewDefinition;
 use openzt2_game_data::AssetId;
+use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
@@ -100,6 +101,7 @@ fn first_tour_view_occluder(
 }
 
 fn gather_tour_view_candidates<'a>(
+    root: Entity,
     grid: &SpatialGrid,
     membership: &SpatialGridMembership,
     center: UVec2,
@@ -115,7 +117,7 @@ fn gather_tour_view_candidates<'a>(
         .min(UVec2::new(grid.width - 1, grid.height - 1));
     for y in minimum.y..=maximum.y {
         for x in minimum.x..=maximum.x {
-            for entity in membership.members(y * grid.width + x) {
+            for entity in membership.members(root, y * grid.width + x) {
                 let Ok((viewable, transform, is_animal)) = viewables.get(entity) else {
                     continue;
                 };
@@ -168,7 +170,7 @@ pub(super) fn calculate_tour_rating_from_authored_score_ranges(
 }
 
 pub(super) fn observe_visible_tour_subjects_and_accumulate_rider_scores(
-    grid: Res<SpatialGrid>,
+    grids: Query<&SpatialGrid>,
     membership: SpatialGridMembership,
     spatial_query: SpatialQuery,
     definitions: Res<Assets<WorldDefinitionAsset>>,
@@ -184,7 +186,13 @@ pub(super) fn observe_visible_tour_subjects_and_accumulate_rider_scores(
         ),
         With<Guest>,
     >,
-    vehicles: Query<(Entity, &TransportVehicle, &GlobalTransform, &VehicleRiders)>,
+    vehicles: Query<(
+        Entity,
+        &TransportVehicle,
+        &GlobalTransform,
+        &VehicleRiders,
+        &WorldMember,
+    )>,
     seats: Query<&TransportSeat>,
     viewables: Query<(&TourViewable, &GlobalTransform, Has<Animal>)>,
     parents: Query<&ChildOf>,
@@ -202,10 +210,13 @@ pub(super) fn observe_visible_tour_subjects_and_accumulate_rider_scores(
         .tour_views()
         .map(|definition| definition.radius_cm as f32 * 0.01)
         .fold(0.0f32, f32::max);
-    let cell_radius = (maximum_radius_m / grid.cell_size_m).ceil() as u32;
     let memory_limit = policy.map_or(u16::MAX, |policy| policy.view_target_memory);
     let mut candidates_by_vehicle = EntityHashMap::default();
-    for (vehicle, configuration, transform, passengers) in &vehicles {
+    for (vehicle, configuration, transform, passengers, member) in &vehicles {
+        let Ok(grid) = grids.get(member.root) else {
+            continue;
+        };
+        let cell_radius = (maximum_radius_m / grid.cell_size_m).ceil() as u32;
         let origin = transform.translation();
         let Some(center) = grid
             .cell_of(origin.xz())
@@ -227,7 +238,8 @@ pub(super) fn observe_visible_tour_subjects_and_accumulate_rider_scores(
             continue;
         }
         let mut candidates = gather_tour_view_candidates(
-            &grid,
+            member.root,
+            grid,
             &membership,
             center,
             cell_radius,

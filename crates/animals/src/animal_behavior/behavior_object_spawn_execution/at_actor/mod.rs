@@ -67,7 +67,7 @@ pub(super) fn spawn_behavior_objects_at_actor(
             None
         } else {
             let Some(handle) = pending
-                .filter(|pending| pending.object == object.id)
+                .filter(|pending| pending.instruction == instruction.id())
                 .map(|pending| pending.prefab.clone())
                 .or_else(|| view.scene(object.prefab))
             else {
@@ -86,9 +86,9 @@ pub(super) fn spawn_behavior_objects_at_actor(
             // Wait for the model rather than spawning an invisible object,
             // holding its handle so the load isn't cancelled meanwhile.
             let Some(prefab) = prefabs.get(&handle) else {
-                if pending.is_none_or(|pending| pending.object != object.id) {
+                if pending.is_none_or(|pending| pending.instruction != instruction.id()) {
                     commands.entity(actor).insert(PendingAtActorSpawnPrefab {
-                        object: object.id,
+                        instruction: instruction.id(),
                         prefab: handle,
                     });
                 }

@@ -8,6 +8,7 @@ mod habitat_terrain_summary_calculation;
 mod habitat_terrain_summary_refresh;
 
 use bevy::prelude::*;
+use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 
 use openzt2_game_assets::application_lifecycle::GamePhase;
 use openzt2_world_state::application_schedule::FixedGameSet;
@@ -24,12 +25,15 @@ pub struct HabitatPlugin;
 impl Plugin for HabitatPlugin {
     fn build(&self, application: &mut App) {
         application
-            .init_resource::<HabitatIndex>()
-            .init_resource::<habitat_fence_inputs::HabitatFenceLattice>()
+            .register_required_components::<WorldRoot, HabitatIndex>()
+            .register_required_components::<WorldRoot, habitat_fence_inputs::HabitatFenceLattice>()
+            .add_observer(habitat_fence_inputs::retire_empty_raster_point)
+            .add_observer(habitat_fence_inputs::discard_habitat_fence_lattice_point)
             .add_message::<habitat_fence_inputs::HabitatFenceInputDiscarded>()
             .add_observer(habitat_fence_inputs::discard_habitat_fence_node)
             .add_observer(habitat_fence_inputs::discard_habitat_fence_raster)
-            .init_resource::<habitat_membership_and_containment::HabitatLocationCells>()
+            .register_required_components::<WorldRoot, habitat_membership_and_containment::HabitatLocationCells>()
+            .add_message::<habitat_membership_and_containment::HabitatCellOwnershipChanged>()
             .add_message::<habitat_membership_and_containment::LostHabitatMembership>()
             .add_observer(habitat_membership_and_containment::retire_empty_habitat_location_cell)
             .add_observer(habitat_membership_and_containment::discard_habitat_location_cell)
@@ -44,9 +48,11 @@ impl Plugin for HabitatPlugin {
                     habitat_region_rebuilding::request_habitat_region_rebuild_for_added_topology_nodes,
                     habitat_region_rebuilding::request_habitat_region_rebuilds_after_topology_changes,
                     habitat_fence_inputs::project_changed_habitat_fence_inputs,
-                    habitat_region_rebuilding::rebuild_changed_habitat_regions_from_fence_topology_and_terrain,
+                    habitat_region_rebuilding::rebuild_changed_habitat_regions_from_fence_topology_and_terrain
+                        .after_ignore_deferred(habitat_region_rebuilding::request_habitat_region_rebuild_for_added_topology_nodes)
+                        .after_ignore_deferred(habitat_region_rebuilding::request_habitat_region_rebuilds_after_topology_changes)
+                        .after(habitat_fence_inputs::project_changed_habitat_fence_inputs),
                 )
-                    .chain()
                     .in_set(GameSet::Intent)
                     .run_if(in_state(GamePhase::Loading)),
             )
@@ -56,10 +62,13 @@ impl Plugin for HabitatPlugin {
                     crate::habitat::habitat_region_rebuilding::request_habitat_region_rebuild_for_added_topology_nodes,
                     crate::habitat::habitat_region_rebuilding::request_habitat_region_rebuilds_after_topology_changes,
                     habitat_fence_inputs::project_changed_habitat_fence_inputs,
-                    crate::habitat::habitat_region_rebuilding::rebuild_changed_habitat_regions_from_fence_topology_and_terrain,
-                    habitat_membership_and_containment::resolve_changed_habitat_membership_and_containment,
+                    habitat_region_rebuilding::rebuild_changed_habitat_regions_from_fence_topology_and_terrain
+                        .after_ignore_deferred(habitat_region_rebuilding::request_habitat_region_rebuild_for_added_topology_nodes)
+                        .after_ignore_deferred(habitat_region_rebuilding::request_habitat_region_rebuilds_after_topology_changes)
+                        .after(habitat_fence_inputs::project_changed_habitat_fence_inputs),
+                    habitat_membership_and_containment::resolve_changed_habitat_membership_and_containment
+                        .after(habitat_region_rebuilding::rebuild_changed_habitat_regions_from_fence_topology_and_terrain),
                 )
-                    .chain()
                     .in_set(FixedGameSet::Cleanup)
                     .in_set(HabitatTopologyPublication),
             )
@@ -78,16 +87,14 @@ impl Plugin for HabitatPlugin {
                 (
                     crate::habitat::habitat_region_rebuilding::request_initial_habitat_region_rebuild_from_loaded_topology,
                     habitat_fence_inputs::project_changed_habitat_fence_inputs,
-                    crate::habitat::habitat_region_rebuilding::rebuild_changed_habitat_regions_from_fence_topology_and_terrain,
-                    habitat_membership_and_containment::resolve_changed_habitat_membership_and_containment,
-                ).chain(),
-            )
-            .add_systems(OnExit(GamePhase::InGame), clear_habitat_index_after_leaving_game);
+                    habitat_region_rebuilding::rebuild_changed_habitat_regions_from_fence_topology_and_terrain
+                        .after_ignore_deferred(habitat_region_rebuilding::request_initial_habitat_region_rebuild_from_loaded_topology)
+                        .after(habitat_fence_inputs::project_changed_habitat_fence_inputs),
+                    habitat_membership_and_containment::resolve_changed_habitat_membership_and_containment
+                        .after(habitat_region_rebuilding::rebuild_changed_habitat_regions_from_fence_topology_and_terrain),
+                ),
+            );
     }
-}
-
-fn clear_habitat_index_after_leaving_game(mut habitat_index: ResMut<HabitatIndex>) {
-    *habitat_index = default();
 }
 
 #[cfg(test)]

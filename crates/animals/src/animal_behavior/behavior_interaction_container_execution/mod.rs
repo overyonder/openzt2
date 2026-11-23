@@ -1,6 +1,7 @@
 //! Execution of authored entity-container entry and behavior-set selection.
 
 use super::behavior_container_admission::BehaviorAdmissionInstruction;
+use super::behavior_named_nodes::NamedNodeTransforms;
 use bevy::prelude::*;
 use openzt2_zoo_state::animal_behavior::interaction_container_membership::requests::{
     InteractionContainerAdmissionOutcome, InteractionContainerAdmissionRequest,
@@ -47,8 +48,7 @@ pub(super) fn enter_authored_interaction_containers_and_play_selected_behavior_s
     target_definitions: Query<&DefinitionId>,
     memberships: InteractionContainerMemberships,
     transforms: Query<&GlobalTransform>,
-    children: Query<&Children>,
-    attachment_transforms: super::behavior_docking_execution::NamedNodeTransforms,
+    attachment_transforms: NamedNodeTransforms,
     mut actors: Query<
         (
             Entity,
@@ -168,9 +168,7 @@ pub(super) fn enter_authored_interaction_containers_and_play_selected_behavior_s
                         let position = if name.is_empty() {
                             transforms.get(target).ok()?.translation()
                         } else {
-                            super::behavior_docking_execution::find_named_descendant_global_transform(
-                                target, name, &children, &attachment_transforms,
-                            )?.translation()
+                            attachment_transforms.pose(target, name)?.translation()
                         };
                         Some((position - actor_position).xz())
                     },

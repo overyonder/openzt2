@@ -26,16 +26,25 @@ fn transaction_record() -> BehaviorActorSnapshot {
 #[test]
 fn named_transaction_continuation_survives_section_round_trip() {
     let record = transaction_record();
-    let bytes = encode_behavior_actor_snapshots(&[record]).unwrap();
+    let mut another_actor = transaction_record();
+    let BehaviorActorSnapshot::Task(other) = &mut another_actor else {
+        panic!("expected task record");
+    };
+    other.persistent_identifier = 3;
+    let bytes = encode_behavior_actor_snapshots(&[record, another_actor]).unwrap();
     let records = decode_behavior_actor_snapshots(
         &bytes,
         WorldSnapshotSectionDirectoryEntry {
-            encoded_record_count: 1,
+            encoded_record_count: 2,
             payload_start_byte_offset: 0,
             payload_byte_count: bytes.len() as u64,
         },
     )
     .unwrap();
+    assert_eq!(
+        records[0].task_record().unwrap().task.execution_id,
+        records[1].task_record().unwrap().task.execution_id,
+    );
     let pending = records[0]
         .task_record()
         .unwrap()
@@ -70,4 +79,78 @@ fn earlier_behavior_records_without_transaction_remain_readable() {
     let record: BehaviorActorSnapshot = serde_json::from_value(value).unwrap();
     assert!(record.task_record().unwrap().transaction.is_none());
     validate_behavior_actor_snapshots(&[record]).unwrap();
+}
+
+#[test]
+fn actor_owned_navigation_ids_round_trip_for_two_actors() {
+    use super::super::behavior_snapshot_types::BehaviorOwnedNavigationSnapshot;
+    use openzt2_zoo_state::locomotion::locomotion_types::{
+        Destination, NavAgent, NavFlags, Route, Velocity,
+    };
+
+    let mut records = [transaction_record(), transaction_record()];
+    for (index, record) in records.iter_mut().enumerate() {
+        let BehaviorActorSnapshot::Task(record) = record else {
+            panic!("expected task record");
+        };
+        record.persistent_identifier = 1 + index as u64 * 2;
+        record.transaction = None;
+        record.navigation = Some(BehaviorOwnedNavigationSnapshot {
+            agent: NavAgent {
+                radius_m: 0.4,
+                max_speed_mps: 1.0,
+                acceleration_mps2: 2.0,
+                capabilities: NavFlags::ANIMAL,
+            },
+            mode: Default::default(),
+            swim_layer: None,
+            water_contact: None,
+            velocity: Velocity::default(),
+            contact_steering: None,
+            progress: None,
+            destination: Some(Destination {
+                request_id: 1,
+                world: bevy::prelude::Vec3::X,
+                arrival_radius_m: 0.4,
+            }),
+            route: Route::with_capacity(0),
+            pursuit_target: None,
+            docking: None,
+            move_completion: None,
+            docking_completion: None,
+            pursuit: None,
+            follow: Some(
+                super::super::behavior_snapshot_types::BehaviorFollowSnapshot {
+                    target: BehaviorSnapshotEntityReference::Persistent(2),
+                    until_tick: 22,
+                    request_id: 1,
+                },
+            ),
+            spline: None,
+            pending_results: Vec::new(),
+        });
+    }
+    let bytes = encode_behavior_actor_snapshots(&records).unwrap();
+    let records = decode_behavior_actor_snapshots(
+        &bytes,
+        WorldSnapshotSectionDirectoryEntry {
+            encoded_record_count: 2,
+            payload_start_byte_offset: 0,
+            payload_byte_count: bytes.len() as u64,
+        },
+    )
+    .unwrap();
+    for record in &records {
+        let follow = record
+            .task_record()
+            .unwrap()
+            .navigation
+            .as_ref()
+            .unwrap()
+            .follow
+            .as_ref()
+            .unwrap();
+        assert_eq!(follow.request_id, 1);
+        assert_eq!(follow.until_tick, 22);
+    }
 }

@@ -1,14 +1,16 @@
 use bevy::prelude::*;
+use openzt2_game_data::ui_document::action::UiTrigger;
 use openzt2_game_data::AssetId;
 
+use openzt2_interface_state::ui::authored_ui_activation_contracts::UiNodeActivated;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentRoot;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiNodeId;
 use openzt2_interface_state::ui::ui_document_lifecycle_contracts::ShowUiDocument;
-use openzt2_ui::animation::UiShowHideAnimation;
 
 use crate::construction::cursor_money_types::CursorMoneyContainer;
 use crate::construction::cursor_money_types::CursorMoneyPreviewFragmentOwner;
 use crate::construction::cursor_money_types::CursorMoneySpendFragmentOwner;
+use crate::construction::cursor_money_types::PendingCursorMoneySpendAnimation;
 use openzt2_zoo_state::construction::construction_interaction_types::ConstructionPreview;
 use openzt2_zoo_state::construction::construction_transaction_types::ConstructionCommitted;
 
@@ -46,27 +48,25 @@ pub(super) fn reconcile_cursor_money_fragments(
         return;
     };
 
+    let mut reusable_preview = preview_fragment_owners.single().ok();
     for committed_transaction in committed_construction_transactions.read() {
         if committed_transaction.cost.0 == 0 {
             continue;
         }
-        if let Ok(preview_fragment_owner) = preview_fragment_owners.single() {
+        let spend = CursorMoneySpendFragmentOwner {
+            cost: committed_transaction.cost,
+            screen_position: committed_transaction.screen_position,
+        };
+        if let Some(preview_fragment_owner) = reusable_preview.take() {
             commands
                 .entity(preview_fragment_owner)
                 .remove::<CursorMoneyPreviewFragmentOwner>()
-                .insert(CursorMoneySpendFragmentOwner {
-                    cost: committed_transaction.cost,
-                    screen_position: committed_transaction.screen_position,
-                    animation_started: false,
-                });
+                .insert((spend, PendingCursorMoneySpendAnimation));
         } else {
             let spend_fragment_owner = commands
                 .spawn((
-                    CursorMoneySpendFragmentOwner {
-                        cost: committed_transaction.cost,
-                        screen_position: committed_transaction.screen_position,
-                        animation_started: false,
-                    },
+                    spend,
+                    PendingCursorMoneySpendAnimation,
                     ChildOf(cursor_money_container),
                 ))
                 .id();
@@ -78,10 +78,10 @@ pub(super) fn reconcile_cursor_money_fragments(
     }
 
     if previews.is_empty() {
-        for preview_fragment_owner in &preview_fragment_owners {
+        if let Some(preview_fragment_owner) = reusable_preview {
             commands.entity(preview_fragment_owner).despawn();
         }
-    } else if preview_fragment_owners.is_empty() {
+    } else if reusable_preview.is_none() {
         let preview_fragment_owner = commands
             .spawn((
                 CursorMoneyPreviewFragmentOwner,
@@ -99,16 +99,24 @@ pub(super) fn reconcile_cursor_money_fragments(
 /// reaches the start state and emits completion.
 pub(super) fn remove_completed_cursor_money_spend_fragments(
     mut commands: Commands,
-    spend_fragment_owners: Query<Entity, With<CursorMoneySpendFragmentOwner>>,
-    roots: Query<(&ChildOf, &UiShowHideAnimation), With<UiDocumentRoot>>,
+    mut activations: MessageReader<UiNodeActivated>,
+    spend_fragment_owners: Query<
+        (),
+        (
+            With<CursorMoneySpendFragmentOwner>,
+            Without<PendingCursorMoneySpendAnimation>,
+        ),
+    >,
+    roots: Query<&ChildOf, With<UiDocumentRoot>>,
 ) {
-    for (parent, animation) in &roots {
-        if spend_fragment_owners.contains(parent.parent())
-            && !animation.running
-            && !animation.forward
-            && animation.elapsed_ms == 0.0
-        {
-            commands.entity(parent.parent()).despawn();
+    for activation in activations.read() {
+        if activation.trigger != UiTrigger::AnimationCompleted {
+            continue;
+        }
+        if let Ok(parent) = roots.get(activation.node) {
+            if spend_fragment_owners.contains(parent.parent()) {
+                commands.entity(parent.parent()).try_despawn();
+            }
         }
     }
 }

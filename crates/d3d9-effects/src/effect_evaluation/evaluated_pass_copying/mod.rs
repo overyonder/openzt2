@@ -355,8 +355,10 @@ fn convert_mojoshader_effect_state_to_evaluated_d3d9_command(
         22..=29 => effect_state_type + 30,
         73 => 168,
         75 => 171,
+        79 => 175,
         // TWOSIDEDSTENCILMODE and the four CCW stencil states.
         88..=92 => effect_state_type + 97,
+        98 => 195,
         99 => 206,
         100 => 207,
         101 => 208,

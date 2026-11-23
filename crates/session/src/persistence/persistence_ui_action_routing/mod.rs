@@ -52,8 +52,8 @@ pub(super) fn route_authored_save_dialog_opening_requests(
     nodes: Query<(&UiPersistenceActions, &UiDocumentOwner)>,
     roots: Query<(&UiDocumentRoot, &ChildOf)>,
     dialog_owner: GameViewDocumentOwner,
-    control: Option<
-        Res<openzt2_world_state::simulation_time::simulation_control_types::SimulationControl>,
+    controls: Query<
+        &openzt2_world_state::simulation_time::simulation_control_types::SimulationControl,
     >,
     mut roles: MessageWriter<AuthoredUiDocumentOperation>,
 ) {
@@ -75,8 +75,9 @@ pub(super) fn route_authored_save_dialog_opening_requests(
                 role: UiDocumentRole::SaveGame,
                 owner: dialog_owner.owner(lifecycle_owner.parent()),
                 operation: UiDocumentOperation::Open,
-                transfer_pause: control
-                    .as_deref()
+                transfer_pause: controls
+                    .single()
+                    .ok()
                     .is_some_and(|control| control.temporary_ui_pause_is_held()),
             });
         }

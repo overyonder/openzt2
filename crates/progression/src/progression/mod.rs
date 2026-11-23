@@ -20,7 +20,6 @@ mod fame_calculations;
 mod fame_history_recording;
 mod fame_progression;
 mod profile_challenge_fact_recording;
-mod progression_session_reset;
 mod progression_text_projection;
 mod research_execution;
 mod research_progress_calculations;
@@ -44,9 +43,7 @@ use profile_challenge_types::{
     TotalEndangeredAnimalBirthCount,
 };
 use rating_types::ZooRating;
-use research_types::{
-    ResearchProjectCompleted, ResearchProjectCompletionReady, StartResearchProjectRequest,
-};
+use research_types::{ResearchProjectCompleted, StartResearchProjectRequest};
 use unlock_types::{
     ApplyCatalogueDefinitionUnlockRequest, CatalogueDefinitionUnlockApplied,
     CatalogueDefinitionUnlockRejected, UnlockedCatalogueDefinitionSet,
@@ -68,10 +65,10 @@ pub struct ProgressionPlugin;
 
 impl Plugin for ProgressionPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<FameHistory>()
-            .init_resource::<ScenarioAwardPointTotal>()
-            .init_resource::<TotalEndangeredAnimalBirthCount>()
-            .init_resource::<TotalAnimalsReleasedCount>()
+        app.register_required_components::<WorldRoot, FameHistory>()
+            .register_required_components::<WorldRoot, ScenarioAwardPointTotal>()
+            .register_required_components::<WorldRoot, TotalEndangeredAnimalBirthCount>()
+            .register_required_components::<WorldRoot, TotalAnimalsReleasedCount>()
             .register_required_components::<WorldRoot, Fame>()
             .register_required_components::<WorldRoot, ZooMaximumFame>()
             .register_required_components::<WorldRoot, AnimalWelfareRating>()
@@ -82,12 +79,11 @@ impl Plugin for ProgressionPlugin {
             .register_required_components::<WorldRoot, ZooFinanceRating>()
             .register_required_components::<WorldRoot, ZooOverallRatingTarget>()
             .register_required_components::<WorldRoot, ZooRating>()
-            .init_resource::<UnlockedCatalogueDefinitionSet>()
+            .register_required_components::<WorldRoot, UnlockedCatalogueDefinitionSet>()
             .init_resource::<ProfileChallengeCompletionCounts>()
             .add_message::<ProgressionFactChanged>()
             .add_message::<StartResearchProjectRequest>()
             .add_message::<openzt2_zoo_state::progression::research_types::SetResearchDuration>()
-            .add_observer(research_execution::release_retired_research_payment)
             .add_systems(
                 Update,
                 research_execution::apply_research_duration_overrides.after(
@@ -98,7 +94,6 @@ impl Plugin for ProgressionPlugin {
             .add_message::<CatalogueDefinitionUnlockApplied>()
             .add_message::<CatalogueDefinitionUnlockRejected>()
             .add_message::<ResearchProjectCompleted>()
-            .add_message::<ResearchProjectCompletionReady>()
             .add_message::<ProgressionAwardGranted>()
             .add_message::<RecordCompletedChallengeRequest>()
             .add_message::<ProgressionAwardGrantCandidate>()
@@ -117,10 +112,7 @@ impl Plugin for ProgressionPlugin {
                     .in_set(GameSet::Intent)
                     .run_if(in_state(GamePhase::InGame)),
             )
-            .add_systems(
-                OnExit(GamePhase::InGame),
-                progression_session_reset::reset_all_progression_state_when_game_session_ends,
-            )
+
             .add_systems(
                 Update,
                 (
@@ -207,9 +199,11 @@ impl Plugin for ProgressionPlugin {
                             .after(scenario_award_point_adjustment::apply_requested_scenario_award_point_total_adjustments),
                         fame_progression::apply_scenario_maximum_fame_requests,
                         fame_progression::publish_world_maximum_fame,
-                        research_execution::refresh_authored_research_availability,
-                        research_execution::complete_research_projects_and_apply_authored_unlocks,
                     ).chain(),
+                    research_execution::refresh_authored_research_availability
+                        .after_ignore_deferred(fame_progression::publish_world_maximum_fame),
+                    research_execution::complete_research_projects_and_apply_authored_unlocks
+                        .after_ignore_deferred(fame_progression::update_fame_and_apply_authored_fame_unlocks),
                     catalogue_unlock_application::apply_catalogue_definition_unlock_requests
                         .after(research_execution::complete_research_projects_and_apply_authored_unlocks),
                     catalogue_unlock_application::
@@ -246,7 +240,6 @@ fn add_research_purchase_systems(app: &mut App) {
                 research_execution::start_paid_research_projects,
                 research_execution::discard_rejected_research_payment_operations,
             )
-                .chain()
                 .in_set(FixedConstructionSet::CompleteEconomy),
         ),
     );

@@ -13,6 +13,18 @@ pub(crate) fn archive_entry_asset_path(entry: &z2f::ResolvedArchiveEntry) -> Pat
     path.into()
 }
 
+pub(crate) fn definition_archive_entry_asset_path(
+    entry: &z2f::ResolvedArchiveEntry,
+    generation: u64,
+) -> PathBuf {
+    let mut path = entry.normalized_asset_path.as_os_str().to_owned();
+    path.push(format!(
+        ".{}-{generation}.{}.{ARCHIVE_ENTRY_ASSET_EXTENSION}",
+        entry.archive_priority_index, entry.zip_entry_ordinal
+    ));
+    path.into()
+}
+
 pub(crate) fn archive_entry_asset_source_path(path: &Path) -> Option<(PathBuf, usize, usize)> {
     if path.extension()?.to_str()? != ARCHIVE_ENTRY_ASSET_EXTENSION {
         return None;
@@ -20,6 +32,8 @@ pub(crate) fn archive_entry_asset_source_path(path: &Path) -> Option<(PathBuf, u
     let stem = Path::new(path.file_stem()?);
     let ordinal = stem.extension()?.to_str()?.parse().ok()?;
     let stem = Path::new(stem.file_stem()?);
-    let archive = stem.extension()?.to_str()?.parse().ok()?;
+    let archive = stem.extension()?.to_str()?;
+    let archive = archive.split_once('-').map_or(archive, |(index, _)| index);
+    let archive = archive.parse().ok()?;
     Some((path.with_file_name(stem.file_stem()?), archive, ordinal))
 }

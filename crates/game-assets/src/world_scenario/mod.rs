@@ -1,8 +1,10 @@
 //! World-scenario asset loading, precedence indexing and public borrowing queries.
 
 pub mod authored;
+pub mod authored_world_scenario_state;
 pub mod saved_world_catalogue_metadata;
 pub mod saved_world_map_metadata;
+pub mod saved_world_scenario_asset_construction;
 pub mod starting_zoo;
 mod world_map_row_lowering;
 pub mod world_scenario_asset_set_refresh_and_indexing;
@@ -16,7 +18,8 @@ use bevy::{asset::AssetApp, prelude::*};
 
 use self::{
     world_scenario_asset_set_refresh_and_indexing::{
-        index_loaded_world_scenario_assets_by_identifier, refresh_world_scenario_catalogue_sources,
+        ScenarioCatalogueSources, index_loaded_world_scenario_assets_by_identifier,
+        refresh_world_scenario_catalogue_sources,
     },
     world_scenario_document_loading::WorldScenarioDocumentLoader,
 };
@@ -31,13 +34,27 @@ impl Plugin for WorldScenarioDocumentAssetPlugin {
     fn build(&self, app: &mut App) {
         app.init_asset::<WorldScenarioDocumentAsset>()
             .init_asset_loader::<WorldScenarioDocumentLoader>()
-            .init_asset_loader::<canonical_world_scenario_document_loading::CanonicalWorldScenarioDocumentLoader>()
             .init_resource::<WorldScenarios>()
+            .init_resource::<ScenarioCatalogueSources>()
             .add_systems(
                 PreUpdate,
                 (
-                    refresh_world_scenario_catalogue_sources,
-                    index_loaded_world_scenario_assets_by_identifier,
+                    refresh_world_scenario_catalogue_sources.run_if(
+                        resource_added::<crate::asset_source::AssetArchives>
+                            .or_else(on_message::<crate::asset_source::ArchiveOverlayChanged>),
+                    ),
+                    index_loaded_world_scenario_assets_by_identifier.run_if(
+                        resource_changed::<ScenarioCatalogueSources>.or_else(
+                            on_message::<bevy::asset::AssetEvent<WorldScenarioDocumentAsset>>
+                                .or_else(
+                                    on_message::<
+                                        bevy::asset::AssetLoadFailedEvent<
+                                            WorldScenarioDocumentAsset,
+                                        >,
+                                    >,
+                                ),
+                        ),
+                    ),
                 )
                     .chain()
                     .after(bevy::asset::AssetTrackingSystems),
@@ -47,7 +64,6 @@ impl Plugin for WorldScenarioDocumentAssetPlugin {
 
 pub mod world_scenario_document_source;
 
-mod canonical_world_scenario_document_loading;
 pub mod world_scenario_document_source_encoding;
 mod world_scenario_script_dependency_loading;
 

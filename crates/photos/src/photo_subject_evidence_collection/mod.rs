@@ -16,7 +16,7 @@ use openzt2_interface_state::photos::photo_capture_types::{
 use openzt2_world_state::animation_graph::animation_graph_playback_state_types::AnimationGraphPlaybackState;
 use openzt2_world_state::animation_graph::animation_presentation_relationship_types::AnimationPresentations;
 use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackController;
-use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
+use openzt2_world_state::world_spawn::world_membership_types::{DefinitionId, WorldMember};
 use openzt2_zoo_state::animal_behavior::animal_lineage::AnimalLineage;
 use openzt2_zoo_state::animal_behavior::interaction_container_membership::InteractionContainerMemberships;
 use openzt2_zoo_state::animal_health::types::Disease;
@@ -35,7 +35,6 @@ use openzt2_zoo_state::animal_welfare::types::RestNeed;
 use openzt2_zoo_state::animal_welfare::types::SocialNeed;
 use openzt2_zoo_state::animal_welfare::types::StimulationNeed;
 use openzt2_zoo_state::animal_welfare::types::Thirst;
-use openzt2_zoo_state::aquatic::aquatic_simulation_types::AquaticAnimal;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionPhase;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
 use openzt2_zoo_state::extinct_animals::extinct_animal_observable_fact_types::AuthoredSuperExtinctAnimal;
@@ -44,6 +43,7 @@ use openzt2_zoo_state::guests::guest_simulation_types::GuestArchetype;
 use openzt2_zoo_state::habitat::habitat_types::Containment;
 use openzt2_zoo_state::habitat::habitat_types::HabitatClimate;
 use openzt2_zoo_state::habitat::habitat_types::HabitatMember;
+use openzt2_zoo_state::terrain::dry_surface_eligibility::DrySurfaceEligibility;
 use openzt2_zoo_state::topology::topology_graph_types::{
     PathTile, TileSurface, TopologyGrid, TopologyIndex,
 };
@@ -54,6 +54,7 @@ use super::photo_capture_types::{
     PhotoSubjectTaskEvidence, PhotoSubjectsCollected, PhotographableFossil, PhotographableHealth,
     PhotographableShowTrick,
 };
+use super::photo_configuration::{PhotoConfiguration, PhotoConfigurationSource};
 
 #[derive(SystemParam)]
 pub(super) struct PhotographableSemanticFactQueries<'w, 's> {
@@ -69,7 +70,7 @@ pub(super) struct PhotographableSemanticFactQueries<'w, 's> {
     animation_presentations: Query<'w, 's, &'static AnimationPresentations>,
     habitat_members: Query<'w, 's, &'static HabitatMember>,
     habitats: Query<'w, 's, &'static HabitatClimate>,
-    aquatic: Query<'w, 's, (), With<AquaticAnimal>>,
+    surfaces: DrySurfaceEligibility<'w, 's>,
     show_tricks: Query<'w, 's, &'static PhotographableShowTrick>,
     fossils: Query<'w, 's, (&'static FossilSetAssembly, &'static FossilAssemblySlots)>,
     occupied_fossil_slots: Query<'w, 's, (), With<FossilAssemblySlotOccupant>>,
@@ -97,7 +98,7 @@ pub(super) struct PhotographableSemanticFactQueries<'w, 's> {
         ),
     >,
     authored_super_extinct_animals: Query<'w, 's, (), With<AuthoredSuperExtinctAnimal>>,
-    names: Query<'w, 's, (), With<Name>>,
+    names: Query<'w, 's, &'static Name>,
     containment: Query<'w, 's, &'static Containment>,
     entity_kinds: Query<
         'w,
@@ -127,6 +128,7 @@ pub(super) fn collect_visible_photo_subjects_and_semantic_evidence_for_pending_c
     subjects: Query<
         (
             Entity,
+            &WorldMember,
             Option<&SpeciesHandle>,
             Option<&DefinitionId>,
             &GlobalTransform,
@@ -141,10 +143,17 @@ pub(super) fn collect_visible_photo_subjects_and_semantic_evidence_for_pending_c
     behavior_document_assets: Res<Assets<BehaviorDocumentAsset>>,
     memberships: InteractionContainerMemberships,
     semantic_queries: PhotographableSemanticFactQueries,
-    topology: Option<Res<TopologyIndex>>,
-    grid: Option<Res<TopologyGrid>>,
+    topology: Option<Single<&TopologyIndex>>,
+    grid: Option<Single<&TopologyGrid>>,
     path_tiles: Query<(&PathTile, &TileSurface, &GlobalTransform)>,
+    configuration: Res<PhotoConfigurationSource>,
+    configurations: Res<Assets<PhotoConfiguration>>,
 ) {
+    let Some(policy) = configurations.get(&configuration.0) else {
+        return;
+    };
+    let topology = topology.map(Single::into_inner);
+    let grid = grid.map(Single::into_inner);
     for (capture_entity, owner, mut capture, mut evidence) in &mut captures {
         let Ok((camera, camera_transform, view)) = cameras.get(owner.0) else {
             continue;
@@ -193,9 +202,10 @@ pub(super) fn collect_visible_photo_subjects_and_semantic_evidence_for_pending_c
             vehicle: view.vehicle,
         };
         // Include stationary objects as well as moving animals.
-        for (entity, species, definition, transform, visible, colliders, behavior_task) in &subjects
+        for (entity, member, species, definition, transform, visible, colliders, behavior_task) in
+            &subjects
         {
-            if !visible.get() {
+            if member.root != capture.world || !visible.get() {
                 continue;
             }
             let Some(definition) = species
@@ -214,7 +224,14 @@ pub(super) fn collect_visible_photo_subjects_and_semantic_evidence_for_pending_c
             }) else {
                 continue;
             };
-            if coverage.screen_permille == 0 {
+            let distance_squared = capture
+                .camera_position
+                .distance_squared(coverage.world_center);
+            if distance_squared > policy.maximum_subject_distance_squared
+                || coverage.visible_fraction < policy.minimum_visible_fraction
+                || (distance_squared > policy.close_distance_squared
+                    && coverage.screen_fraction < policy.minimum_screen_fraction)
+            {
                 continue;
             }
             let facts = calculate_photo_subject_visual_facts(
@@ -227,6 +244,9 @@ pub(super) fn collect_visible_photo_subjects_and_semantic_evidence_for_pending_c
                 &spatial_query,
                 behavior_task.is_some(),
             );
+            if !facts.unoccluded {
+                continue;
+            }
             let variant = semantic_queries
                 .animal_variants
                 .get(entity)
@@ -285,7 +305,13 @@ pub(super) fn collect_visible_photo_subjects_and_semantic_evidence_for_pending_c
                     .ok()
                     .and_then(|member| semantic_queries.habitats.get(member.habitat_entity).ok())
                     .map(|climate| climate.biome_identifier),
-                aquatic: semantic_queries.aquatic.contains(entity),
+                in_water: {
+                    let position = transform.translation();
+                    semantic_queries
+                        .surfaces
+                        .water_surface_height(member.root, position.xz())
+                        .is_some_and(|surface| position.y <= surface)
+                },
                 show_trick: semantic_queries
                     .show_tricks
                     .get(entity)
@@ -350,7 +376,11 @@ pub(super) fn collect_visible_photo_subjects_and_semantic_evidence_for_pending_c
                 super_animal: semantic_queries
                     .authored_super_extinct_animals
                     .contains(entity),
-                named: semantic_queries.names.contains(entity),
+                name: semantic_queries
+                    .names
+                    .get(entity)
+                    .ok()
+                    .map(|name| name.as_str().to_owned()),
                 contained: semantic_queries
                     .containment
                     .get(entity)
@@ -560,12 +590,12 @@ fn capture_photo_subject_task_evidence_from_resolved_name<'w, 's>(
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct CollisionScreenCoverage {
-    screen_permille: u16,
-    viewport_visible_permille: u16,
+    screen_fraction: f32,
+    visible_fraction: f32,
     world_center: Vec3,
 }
 
-/// Projects each collider's minimum and maximum corner and clips their union
+/// Projects each collider's bounding corners and clips their union
 /// to the viewport. Screen coverage and the visible fraction of the subject
 /// are separate scoring inputs.
 fn calculate_collision_bounds_screen_coverage_for_photo_camera(
@@ -584,13 +614,18 @@ fn calculate_collision_bounds_screen_coverage_for_photo_camera(
         if !bounds.min.is_finite() || !bounds.max.is_finite() {
             return None;
         }
-        let first = camera.world_to_ndc(camera_transform, bounds.min)?;
-        let second = camera.world_to_ndc(camera_transform, bounds.max)?;
-        if !(0.0..=1.0).contains(&first.z) || !(0.0..=1.0).contains(&second.z) {
-            return None;
+        for x in [bounds.min.x, bounds.max.x] {
+            for y in [bounds.min.y, bounds.max.y] {
+                for z in [bounds.min.z, bounds.max.z] {
+                    let corner = camera.world_to_ndc(camera_transform, Vec3::new(x, y, z))?;
+                    if !(0.0..=1.0).contains(&corner.z) {
+                        return None;
+                    }
+                    ndc_min = ndc_min.min(corner.truncate());
+                    ndc_max = ndc_max.max(corner.truncate());
+                }
+            }
         }
-        ndc_min = ndc_min.min(first.truncate().min(second.truncate()));
-        ndc_max = ndc_max.max(first.truncate().max(second.truncate()));
         world_min = world_min.min(bounds.min);
         world_max = world_max.max(bounds.max);
     }
@@ -606,12 +641,10 @@ fn calculate_collision_bounds_screen_coverage_for_photo_camera(
     let projected_area = projected_extent.element_product();
 
     Some(CollisionScreenCoverage {
-        screen_permille: convert_fraction_to_rounded_permille(screen_area),
-        viewport_visible_permille: convert_fraction_to_rounded_permille(
-            (projected_area > 0.0)
-                .then(|| clipped_extent.element_product() / projected_area)
-                .unwrap_or(0.0),
-        ),
+        screen_fraction: screen_area,
+        visible_fraction: (projected_area > 0.0)
+            .then(|| clipped_extent.element_product() / projected_area)
+            .unwrap_or(0.0),
         world_center: world_min.midpoint(world_max),
     })
 }
@@ -636,8 +669,8 @@ fn calculate_photo_subject_visual_facts(
         (subject_transform.forward().as_vec3().dot(toward_camera) + 1.0) * 0.5,
     );
     PhotoSubjectFacts {
-        screen_permille: coverage.screen_permille,
-        viewport_visible_permille: coverage.viewport_visible_permille,
+        screen_permille: convert_fraction_to_rounded_permille(coverage.screen_fraction),
+        viewport_visible_permille: convert_fraction_to_rounded_permille(coverage.visible_fraction),
         center_permille,
         facing_permille,
         behavior_permille: if has_behavior { 1000 } else { 0 },

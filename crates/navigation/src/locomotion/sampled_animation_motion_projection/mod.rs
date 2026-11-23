@@ -3,7 +3,7 @@ use openzt2_world_state::animation_playback::animation_playback_controller_types
 use openzt2_world_state::animation_playback::locomotion_root_motion::ConsumedLocomotionRootMotion;
 
 /// A presentation controller supplies samples; the actor retains movement authority.
-#[derive(Component, Clone, Copy)]
+#[derive(Component, Clone, Copy, PartialEq)]
 pub(super) struct LocomotionAnimationSource {
     pub controller: Entity,
     pub mean_speed_mps: f32,

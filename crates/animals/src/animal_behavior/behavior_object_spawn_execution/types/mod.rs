@@ -25,6 +25,6 @@ impl PendingBehaviorObjectSpawn {
 /// Keeps the model of an at-actor spawn loading while its actor waits for it.
 #[derive(Component)]
 pub(super) struct PendingAtActorSpawnPrefab {
-    pub(super) object: AssetId,
+    pub(super) instruction: BehaviorInstructionId,
     pub(super) prefab: Handle<ScenePrefabAsset>,
 }

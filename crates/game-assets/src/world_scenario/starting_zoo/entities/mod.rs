@@ -8,12 +8,12 @@ use crate::world_scenario::world_scenario_source_reference_resolution::{
 };
 
 use openzt2_game_data::{
+    AssetId,
     world_scenario::{
         StartingFenceRecord, StartingPathRecord, StartingTopologyNodeRecord,
         StartingZooEntityTransform, StartingZooRecord, StartingZooSpawnEntityFlags,
         StartingZooSpawnEntityRecord,
     },
-    AssetId,
 };
 
 use crate::source_coordinate_conversion::{
@@ -34,6 +34,7 @@ pub(super) fn lower_starting_zoo_entities_paths_and_fences_into_record(
     dependencies: &[SourceReference],
     actor_scene_paths: &BTreeMap<String, String>,
     starting_zoo_record: &mut StartingZooRecord,
+    former_fence_types: &mut BTreeMap<(AssetId, u64), AssetId>,
 ) -> io::Result<()> {
     let roots = document.root.element_children().collect::<Vec<_>>();
     let manager = descendants(&roots)
@@ -396,12 +397,23 @@ pub(super) fn lower_starting_zoo_entities_paths_and_fences_into_record(
                     "starting fence collapses to one topology endpoint",
                 ));
             }
+            let persistent_id = persistent_id(fence, true)?;
+            let former = fence
+                .attribute_named_any(&["formerFenceType"])
+                .map(normalized)
+                .filter(|definition| !definition.is_empty());
+            if let Some(former) = &former {
+                former_fence_types.insert(
+                    (starting_zoo_record.id, persistent_id),
+                    AssetId::from_key(former),
+                );
+            }
             Ok(StartingFenceRecord {
-                persistent_id: persistent_id(fence, true)?,
+                persistent_id,
                 definition: AssetId::from_key(&source_definition),
                 a: endpoints[0],
                 b: endpoints[1],
-                gate: false,
+                gate: former.is_some(),
                 protected: fence.attribute("isProtected") == Some("true"),
             })
         })

@@ -24,6 +24,15 @@ use openzt2_zoo_state::progression::adoption_and_content_availability_types::Ani
 use openzt2_zoo_state::topology::topology_graph_types::TopologyGrid;
 use openzt2_interface_state::ui::pointer_capture_types::UiPointerCapture;
 use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
+use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
+use openzt2_zoo_state::{
+    aquatic::aquatic_simulation_types::TankGeometry,
+    shows::show_stage_types::HabitatShowStages,
+    terrain::{
+        terrain_chunk_types::{EditedTerrainSamples, TerrainChunk, TerrainIndex},
+        terrain_world_sampling::terrain_chunk_at,
+    },
+};
 
 use openzt2_game_data::species::LifeStage;
 use openzt2_world_state::simulation_time::deterministic_random_stream::{
@@ -43,8 +52,58 @@ use super::{
 #[derive(Component, Clone, Copy, PartialEq)]
 pub(super) struct AnimalPlacementSite {
     world: Entity,
-    translation: Vec3,
     habitat: Option<Entity>,
+}
+
+#[derive(Component, Default)]
+pub(super) struct AnimalPlacementSequence(u64);
+
+#[derive(bevy::ecs::system::SystemParam)]
+pub(super) struct RemovedPlacementInputs<'w, 's> {
+    policy: RemovedComponents<'w, 's, AnimalAdoptionAvailabilityPolicy>,
+    cash: RemovedComponents<'w, 's, UnlimitedZooCash>,
+    prefabs: RemovedComponents<'w, 's, ObjectPlacementPreviewPrefabHydrated>,
+    terrain: RemovedComponents<'w, 's, TerrainChunk>,
+    edits: RemovedComponents<'w, 's, EditedTerrainSamples>,
+    tank: RemovedComponents<'w, 's, TankGeometry>,
+    stages: RemovedComponents<'w, 's, HabitatShowStages>,
+}
+
+impl RemovedPlacementInputs<'_, '_> {
+    fn read(&mut self) -> bevy::ecs::entity::EntityHashSet {
+        self.policy
+            .read()
+            .chain(self.cash.read())
+            .chain(self.prefabs.read())
+            .chain(self.terrain.read())
+            .chain(self.edits.read())
+            .chain(self.tank.read())
+            .chain(self.stages.read())
+            .collect()
+    }
+}
+
+#[derive(bevy::ecs::system::SystemParam)]
+pub(super) struct PlacementTerrainInputs<'w, 's> {
+    assets: Res<'w, Assets<TerrainAsset>>,
+    indexes: Query<'w, 's, Ref<'static, TerrainIndex>>,
+    chunks: Query<
+        'w,
+        's,
+        (
+            Ref<'static, TerrainChunk>,
+            Option<Ref<'static, EditedTerrainSamples>>,
+        ),
+    >,
+    tanks: Query<
+        'w,
+        's,
+        (
+            Option<Ref<'static, TankGeometry>>,
+            Option<Ref<'static, HabitatShowStages>>,
+        ),
+    >,
+    removals: RemovedPlacementInputs<'w, 's>,
 }
 
 pub(super) type AnimalPlacementCursor<'w, 's> = Query<
@@ -65,8 +124,7 @@ pub(super) fn begin_selected_species_adoption_placement_on_construction_cursor(
     species_index: Res<SpeciesAssets>,
     definition_assets: Res<Assets<WorldDefinitionAsset>>,
     definitions: Res<WorldDefinitions>,
-    seed: Single<&ZooSeed>,
-    mut placement_sequence: Local<u64>,
+    world: Single<(&ZooSeed, &mut AnimalPlacementSequence), With<WorldRoot>>,
     mut construction_cursors: AnimalPlacementCursor,
     mut construction_tool_requests: MessageWriter<SelectConstructionTool>,
 ) {
@@ -76,6 +134,7 @@ pub(super) fn begin_selected_species_adoption_placement_on_construction_cursor(
     let Some(available_species) = species_index.get(&species_assets) else {
         return;
     };
+    let (seed, mut placement_sequence) = world.into_inner();
     let mut latest = None;
     for request in adoption_placement_requests.read() {
         // Species rows choose the sex from the gender toggle. A variant row
@@ -96,10 +155,10 @@ pub(super) fn begin_selected_species_adoption_placement_on_construction_cursor(
                     "adoption placement requested an unavailable species");
                 continue;
             };
-        *placement_sequence = placement_sequence.wrapping_add(1);
+        placement_sequence.0 = placement_sequence.0.wrapping_add(1);
         let mut random = DeterministicRng::from_entity(
-            **seed,
-            PersistentId(*placement_sequence),
+            *seed,
+            PersistentId(placement_sequence.0),
             RngDomain::Reproduction,
         );
         let Some((variant, sex)) = select_species_spawn_variant(
@@ -215,22 +274,26 @@ fn set_animal_cursor_placement(
 #[allow(clippy::too_many_arguments)]
 pub(super) fn validate_selected_species_adoption_placement_preview(
     mut commands: Commands,
-    zoo_cash: Single<&ZooCash>,
-    unlimited_zoo_cash: Option<Single<&UnlimitedZooCash>>,
+    zoo_cash: Single<Ref<ZooCash>>,
+    unlimited_zoo_cash: Option<Single<Ref<UnlimitedZooCash>>>,
     species_assets: Res<Assets<SpeciesAsset>>,
     species_index: Res<SpeciesAssets>,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,
     construction_cursors: Query<(
-        &ConstructionCursor,
-        &AnimalSpeciesAwaitingHabitatPlacement,
-        &ObjectPlacementPreviewRequest,
+        Ref<ConstructionCursor>,
+        Ref<AnimalSpeciesAwaitingHabitatPlacement>,
+        Ref<ObjectPlacementPreviewRequest>,
     )>,
     habitat_index: Single<Ref<HabitatIndex>>,
     topology_grid: Single<Ref<TopologyGrid>>,
-    adoption_policy: Query<(Entity, Option<&AnimalAdoptionAvailabilityPolicy>), With<WorldRoot>>,
+    adoption_policy: Query<
+        (Entity, Option<Ref<AnimalAdoptionAvailabilityPolicy>>),
+        With<WorldRoot>,
+    >,
     placement_sites: PlacementSiteQueries,
-    hydrated_previews: Query<(), With<ObjectPlacementPreviewPrefabHydrated>>,
+    hydrated_previews: Query<Ref<ObjectPlacementPreviewPrefabHydrated>>,
+    mut terrain: PlacementTerrainInputs,
     mut previews: Query<(
         Entity,
         &mut ConstructionPreview,
@@ -239,6 +302,7 @@ pub(super) fn validate_selected_species_adoption_placement_preview(
 ) {
     let habitat_index = habitat_index.into_inner();
     let topology_grid = topology_grid.into_inner();
+    let species_index_changed = species_index.is_changed();
     let (
         Ok((cursor, animal_placement, requested_prefab)),
         Some(species_index),
@@ -254,7 +318,23 @@ pub(super) fn validate_selected_species_adoption_placement_preview(
     let Ok((world, availability)) = adoption_policy.single() else {
         return;
     };
-    let availability = availability.copied().unwrap_or_default();
+    let removed = terrain.removals.read();
+    let inputs_changed = cursor.is_changed()
+        || animal_placement.is_changed()
+        || requested_prefab.is_changed()
+        || zoo_cash.is_changed()
+        || unlimited_zoo_cash
+            .as_ref()
+            .is_some_and(|cash| cash.is_changed())
+        || availability.as_ref().is_some_and(DetectChanges::is_changed)
+        || removed.contains(&world)
+        || habitat_index.is_changed()
+        || topology_grid.is_changed()
+        || species_assets.is_changed()
+        || species_index_changed
+        || active_world_definitions.is_changed()
+        || world_definition_assets.is_changed();
+    let availability = availability.as_deref().copied().unwrap_or_default();
     let Some(species) = species_index.find(animal_placement.species) else {
         return;
     };
@@ -262,25 +342,49 @@ pub(super) fn validate_selected_species_adoption_placement_preview(
         if preview.definition != requested_prefab.0 {
             continue;
         }
+        let hydrated = hydrated_previews.get(preview_entity).ok();
         let translation = preview.transform.translation;
-        let site = cached_site
-            .as_deref()
-            .copied()
-            .filter(|site| {
-                site.world == world
-                    && site.translation == translation
-                    && !habitat_index.is_changed()
-                    && !topology_grid.is_changed()
-            })
-            .unwrap_or_else(|| AnimalPlacementSite {
+        let site_changed = inputs_changed || preview.is_changed() || cached_site.is_none();
+        let site = if site_changed {
+            AnimalPlacementSite {
                 world,
-                translation,
                 habitat: locate_habitat_at_world_position(
                     &habitat_index,
                     translation.xz(),
                     *topology_grid,
                 ),
+            }
+        } else if let Some(site) = cached_site.as_deref() {
+            *site
+        } else {
+            continue;
+        };
+        let terrain_changed = terrain.assets.is_changed()
+            || terrain.indexes.get(world).is_ok_and(|index| {
+                index.is_changed()
+                    || terrain_chunk_at(&index, translation.xz()).is_some_and(|chunk| {
+                        removed.contains(&chunk)
+                            || terrain.chunks.get(chunk).is_ok_and(|(chunk, edits)| {
+                                chunk.is_changed()
+                                    || edits.as_ref().is_some_and(DetectChanges::is_changed)
+                            })
+                    })
             });
+        let tank_changed = site.habitat.is_some_and(|habitat| {
+            removed.contains(&habitat)
+                || terrain.tanks.get(habitat).is_ok_and(|(tank, stages)| {
+                    tank.as_ref().is_some_and(DetectChanges::is_changed)
+                        || stages.as_ref().is_some_and(DetectChanges::is_changed)
+                })
+        });
+        if !site_changed
+            && !terrain_changed
+            && !tank_changed
+            && !removed.contains(&preview_entity)
+            && !hydrated.as_ref().is_some_and(DetectChanges::is_changed)
+        {
+            continue;
+        }
         if let Some(cached_site) = cached_site.as_mut() {
             cached_site.set_if_neq(site);
         } else {
@@ -288,7 +392,7 @@ pub(super) fn validate_selected_species_adoption_placement_preview(
         }
         let next_validity = if !cursor.over_terrain {
             PlacementValidity::Invalid(PlacementFailure::OutsideMap)
-        } else if hydrated_previews.get(preview_entity).is_err() {
+        } else if hydrated.is_none() {
             PlacementValidity::Pending
         } else if matches!(
             animal_placement.operation,
@@ -326,7 +430,7 @@ pub(super) fn validate_selected_species_adoption_placement_preview(
                 .saturating_mul(i64::from(availability.multiplier_permille))
                 / 1000;
             if unlimited_zoo_cash.as_ref().is_none_or(|policy| !policy.0)
-                && zoo_cash.0 .0 < adoption_cost.0
+                && zoo_cash.0.0 < adoption_cost.0
             {
                 PlacementValidity::Invalid(PlacementFailure::Unaffordable)
             } else {
@@ -386,7 +490,6 @@ pub(super) fn confirm_selected_species_adoption_into_habitat(
     };
     let Some((valid_preview, site)) = previews.iter().find(|(preview, site)| {
         preview.definition == requested_prefab.0
-            && preview.transform.translation == site.translation
             && matches!(preview.validity, PlacementValidity::Valid { .. })
     }) else {
         return;

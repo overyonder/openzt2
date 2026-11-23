@@ -19,7 +19,7 @@ use openzt2_zoo_state::locomotion::locomotion_types::NavFlags;
 use openzt2_zoo_state::locomotion::locomotion_types::NavigateTo;
 use openzt2_zoo_state::locomotion::locomotion_types::NavigationFailed;
 use openzt2_zoo_state::locomotion::locomotion_types::NavigationFailure;
-use openzt2_zoo_state::locomotion::locomotion_types::NavigationRequestSequence;
+use openzt2_zoo_state::locomotion::locomotion_types::NavigationRequestGeneration;
 
 use super::{
     guest_destination_and_viewing_execution::{begin_viewing, cancel_failed_guest_destinations},
@@ -31,7 +31,6 @@ fn only_current_guest_navigation_failure_releases_destination() {
     let mut app = App::new();
     app.add_message::<NavigationFailed>()
         .add_message::<NavigateTo>()
-        .init_resource::<NavigationRequestSequence>()
         .add_systems(Update, cancel_failed_guest_destinations);
     let destination = app.world_mut().spawn_empty().id();
     let guest = app
@@ -74,7 +73,6 @@ fn failed_entrance_route_retries_without_admitting_or_accepting_stale_failures()
     let mut app = App::new();
     app.add_message::<NavigationFailed>()
         .add_message::<NavigateTo>()
-        .init_resource::<NavigationRequestSequence>()
         .add_systems(Update, cancel_failed_guest_destinations);
     let root = app.world_mut().spawn_empty().id();
     let other_root = app.world_mut().spawn_empty().id();
@@ -90,16 +88,15 @@ fn failed_entrance_route_retries_without_admitting_or_accepting_stale_failures()
             },
         ));
     }
-    let initial_request = app
-        .world_mut()
-        .resource_mut::<NavigationRequestSequence>()
-        .next();
+    let mut generation = NavigationRequestGeneration::default();
+    let initial_request = generation.advance();
     let guest = app
         .world_mut()
         .spawn((
             Guest,
             GuestPhase::Arriving,
             GuestNavigationRequest(Some(initial_request)),
+            generation,
             WorldMember { root },
             NavAgent {
                 radius_m: 0.25,
@@ -142,16 +139,11 @@ fn current_arrival_hands_off_service_once_without_rechecking_render_transform() 
     let mut app = App::new();
     app.add_message::<Arrived>()
         .add_message::<NavigationFailed>()
-        .insert_resource(
-            openzt2_world_state::simulation_time::simulation_clock_types::ZooClock {
-                fractional_tick: Default::default(),
-                tick: 0,
-                absolute_day: 0,
-                tick_in_day: 0,
-            },
-        )
-        .init_resource::<ServiceRequestSequence>()
         .add_systems(Update, begin_viewing);
+    let root = app
+        .world_mut()
+        .spawn(ServiceRequestSequence::default())
+        .id();
     let facility = app
         .world_mut()
         .spawn((
@@ -171,6 +163,7 @@ fn current_arrival_hands_off_service_once_without_rechecking_render_transform() 
         .world_mut()
         .spawn((
             Guest,
+            openzt2_world_state::world_spawn::world_membership_types::WorldMember { root },
             GuestPhase::Visiting,
             GuestNavigationRequest(Some(2)),
             GuestDestination {
@@ -197,7 +190,8 @@ fn current_arrival_hands_off_service_once_without_rechecking_render_transform() 
     );
     assert_eq!(
         app.world()
-            .resource::<ServiceRequestSequence>()
+            .get::<ServiceRequestSequence>(root)
+            .unwrap()
             .next_sequence(),
         1
     );

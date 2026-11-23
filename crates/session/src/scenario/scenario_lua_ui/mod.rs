@@ -32,6 +32,7 @@ pub(super) enum ScenarioUiCommand {
     TankWallHeight(f32),
     /// `ZT_DISPLAY_ZOO_MESSAGE`: localized text for the zoo message bar.
     ZooMessage {
+        root: Option<Entity>,
         text: String,
         timeout_seconds: f64,
     },
@@ -97,7 +98,10 @@ pub(super) fn register(app: &mut App) {
         .add_message::<TimedScenarioUiActionCompleted>()
         .add_message::<openzt2_zoo_state::scenario::timed_scenario_ui_actions::ScenarioUiSelectionCompleted>()
         .add_message::<presentation::ScenarioConstructionRequest>()
-        .init_resource::<openzt2_interface_state::information::catalogue_types::ScenarioDisabledCatalogueDefinitions>()
+        .register_required_components::<
+            openzt2_world_state::world_spawn::world_membership_types::WorldRoot,
+            openzt2_interface_state::information::catalogue_types::ScenarioDisabledCatalogueDefinitions,
+        >()
         .add_systems(
             Update,
             (

@@ -21,7 +21,6 @@ use crate::placement::stomped_object_edit_preparation::{
 use openzt2_zoo_state::topology::topology_edit_types::{TopologyChanged, TopologySnapshot};
 use openzt2_zoo_state::topology::topology_graph_types::topology_cell_rectangle;
 use openzt2_zoo_state::topology::topology_grid_geometry::merge_topology_changed_cell_bounds;
-use openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementCellCollectionScratch;
 use openzt2_zoo_state::placement::placement_transaction_types::ObjectPlacementCommitted;
 use openzt2_zoo_state::placement::placed_object_types::PlacedObjectDefinitionReference;
 use openzt2_zoo_state::placement::placed_object_types::PlacedObjectFootprintOccupancy;
@@ -153,7 +152,7 @@ pub(super) struct BehaviorTargetPlacementCreation<'w, 's> {
         ),
     >,
     stomp_targets: Query<'w, 's, StompablePlacedObject>,
-    scratch: ResMut<'w, ObjectPlacementCellCollectionScratch>,
+    scratch: Local<'s, Vec<IVec2>>,
     allocators: Query<'w, 's, &'static mut PersistentIdAllocator>,
     committed: MessageWriter<'w, ObjectPlacementCommitted>,
     payments: MessageWriter<'w, TransactionRequest>,
@@ -338,11 +337,26 @@ pub(super) fn settle_behavior_target_placement_payments(
     mut commands: Commands,
     mut completed: MessageReader<TransactionCompleted>,
     mut rejected: MessageReader<TransactionRejected>,
+    owned: Query<
+        (),
+        Or<(
+            With<BehaviorTargetPlacementPayment>,
+            With<BehaviorTargetPlacementRefund>,
+        )>,
+    >,
 ) {
-    for payment in completed.read().copied() {
+    for payment in completed
+        .read()
+        .copied()
+        .filter(|payment| owned.contains(payment.operation))
+    {
         commands.run_system_cached_with(complete_behavior_target_placement_payment, payment);
     }
-    for payment in rejected.read().copied() {
+    for payment in rejected
+        .read()
+        .copied()
+        .filter(|payment| owned.contains(payment.operation))
+    {
         commands.run_system_cached_with(reject_behavior_target_placement_payment, payment);
     }
 }
@@ -809,7 +823,7 @@ fn create_behavior_target_placement_object(
     let cells = collect_occupied_placement_cells_for_transform(
         geometry,
         &site.transform,
-        &mut creation.scratch.cells,
+        &mut creation.scratch,
     )?
     .to_vec()
     .into_boxed_slice();

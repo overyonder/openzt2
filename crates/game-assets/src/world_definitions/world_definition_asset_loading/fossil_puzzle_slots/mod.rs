@@ -1,14 +1,14 @@
-use std::io;
+use std::{io, path::Path};
 
 use bevy::{
     asset::{AssetPath, LoadContext},
     gltf::Gltf,
 };
 use openzt2_game_data::{
+    AssetId,
     world_definitions::{
         document::WorldDefinitionDocument, extinct_animal_recovery::FossilSlotDefinition,
     },
-    AssetId,
 };
 
 use crate::{
@@ -16,6 +16,8 @@ use crate::{
     model_source::native_model_source_lowering::native_model_scene_labelled_asset_path,
     scene_prefab::ScenePrefabAsset,
     source_document::ordered_source_document_types::OrderedSourceDocument,
+    texture::source_image_asset_path_selection::select_bevy_image_asset_path_for_blue_fang_source_image,
+    world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::DemandLoadedDependencyPath,
 };
 
 use super::{
@@ -31,16 +33,22 @@ pub(super) async fn lower_fossil_puzzle_background_slots(
     path: &str,
     documents: &[OrderedSourceDocument],
     document: &mut WorldDefinitionDocument,
-) -> io::Result<bool> {
+) -> io::Result<Option<Vec<DemandLoadedDependencyPath>>> {
     let Some(puzzle) = documents.iter().find(|document| {
         document.path.key().eq_ignore_ascii_case(path)
             && document.root.name.eq_ignore_ascii_case("ZTPuzzle")
     }) else {
-        return Ok(false);
+        return Ok(None);
     };
     let Some(animal) = puzzle.root.attribute_named_any(&["animal"]) else {
-        return Ok(false);
+        return Ok(None);
     };
+    let manager = read_source_document(context, "config/puzzlemgr.xml").await?;
+    let entity_root = manager
+        .root
+        .attribute_named_any(&["entityRoot"])
+        .ok_or_else(|| unresolved_reference(path, "fossil puzzle entity root", "entityRoot"))?;
+    let mut textures = Vec::new();
     let binder = format!("{animal}Background");
     let source = binders
         .resolve_binder_type_source_path(archives, path, &binder)?
@@ -79,12 +87,33 @@ pub(super) async fn lower_fossil_puzzle_background_slots(
         let pose = background
             .prefab_attachment_transform(AssetId::from_key(&node.to_ascii_lowercase()))
             .ok_or_else(|| unresolved_reference(path, "fossil puzzle slot", node))?;
+        let texture = piece
+            .attribute_named_any(&["texture"])
+            .ok_or_else(|| unresolved_reference(path, "fossil piece texture", node))?;
+        let texture = format!("{entity_root}/{animal}/{texture}");
+        let texture_path = archives
+            .resolve_ui_reference(Path::new(path), &texture)
+            .ok_or_else(|| unresolved_reference(path, "fossil piece texture", &texture))?;
+        let texture_path = texture_path.to_string_lossy().replace('\\', "/");
+        let id = AssetId::from_virtual_path(&texture_path);
+        textures.push(DemandLoadedDependencyPath {
+            id,
+            path: select_bevy_image_asset_path_for_blue_fang_source_image(&texture_path)
+                .into_boxed_str(),
+        });
+        let piece_id = AssetId::from_virtual_path(&format!("fossil-pieces/{animal}/{node}"));
+        let definition = document
+            .fossil_pieces
+            .iter_mut()
+            .find(|piece| piece.id == piece_id)
+            .ok_or_else(|| unresolved_reference(path, "lowered fossil piece", node))?;
+        definition.model = id;
         document.fossil_slots.push(FossilSlotDefinition {
             id: AssetId::from_virtual_path(&format!("fossil-slots/{animal}/{node}")),
             transform: pose.to_cols_array_2d(),
-            tolerance_cm: 0,
+            tolerance_cm: 50,
             tolerance_degrees: 0,
         });
     }
-    Ok(true)
+    Ok(Some(textures))
 }

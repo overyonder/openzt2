@@ -31,7 +31,7 @@ pub struct EditedTerrainSamples {
         Box<[Option<crate::terrain::terrain_edit_data_types::TerrainWaterAffiliation>]>,
 }
 
-#[derive(Resource, Debug, Default)]
+#[derive(Component, Debug, Default)]
 pub struct TerrainIndex {
     pub chunks: HashMap<IVec2, Entity>,
     pub origin: Vec2,

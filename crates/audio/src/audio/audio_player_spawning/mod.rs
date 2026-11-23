@@ -65,6 +65,7 @@ pub(super) struct AudioVoiceAdmission {
     pub(super) lifetime_owner: Option<Entity>,
     pub(super) distance: Option<SpatialCueDistance>,
     pub(super) distance_gain: Option<f32>,
+    pub(super) environment_gain: Option<f32>,
 }
 
 #[derive(Component)]
@@ -111,7 +112,8 @@ pub(super) fn spawn_audio_player_or_deferred_playback(
                 request.usage,
                 request.emitter.is_some(),
                 source_gain,
-            ) * admission.distance_gain.unwrap_or(1.0),
+            ) * admission.distance_gain.unwrap_or(1.0)
+                * admission.environment_gain.unwrap_or(1.0),
         ),
         ..playback_settings
     };

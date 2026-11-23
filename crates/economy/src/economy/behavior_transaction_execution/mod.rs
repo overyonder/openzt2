@@ -1,6 +1,6 @@
 //! Executes named economic actions through the existing account settlement owner.
 
-use openzt2_zoo_state::behavior_task_execution_types::running_actions::{RunBehaviorEconomy, RunningBehaviorInstruction, RunningBehaviorEconomyTransaction};
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::{RunBehaviorEconomy, RunningBehaviorInstruction, RunningBehaviorEconomyTransaction, WhenBehaviorAction, behavior_action_actors};
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::BehaviorEconomyTracker;
 use super::{
     account_transaction_types::{
@@ -16,7 +16,7 @@ use super::{
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_zoo_state::animal_behavior::behavior_random_stream_state::BehaviorRandomStream;
-use openzt2_zoo_state::animal_behavior::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation;
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::mark_behavior_task_for_failure_and_stop_navigation;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
 use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorTaskFailure;
 use openzt2_zoo_state::guests::guest_simulation_types::GuestRng;
@@ -24,73 +24,68 @@ use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_world_state::world_spawn::world_membership_types::{DefinitionId, WorldMember};
 use openzt2_zoo_state::staff::staff_employment_types::Staff;
 use openzt2_zoo_state::staff::staff_job_types::CurrentJob;
-use bevy::prelude::*;
+use bevy::{platform::collections::HashMap, prelude::*};
 use openzt2_game_data::{
     world_definitions::economy_transactions::EconomyTransactionKind,
     AssetId,
 };
 
 pub(super) fn start_authored_behavior_transactions(
+    activation: On<WhenBehaviorAction<RunBehaviorEconomy>>,
     mut commands: Commands,
-    clock: Res<ZooClock>,
     show_donations: Query<
         &openzt2_zoo_state::animal_behavior::behavior_token_types::BehaviorSelfToken,
         With<openzt2_zoo_state::economy::experience_donation::ExperienceDonation>,
     >,
     tasks: Query<
         (
-            Entity,
-            (
-                &BehaviorTaskExecutionState,
-                &RunningBehaviorInstruction,
-                &RunBehaviorEconomy,
-            ),
+            &BehaviorTaskExecutionState,
+            &RunningBehaviorInstruction,
+            &RunBehaviorEconomy,
         ),
-        (
-            Without<RunningBehaviorEconomyTransaction>,
-            Without<PendingBehaviorTaskFailure>,
-        ),
+        Without<PendingBehaviorTaskFailure>,
     >,
 ) {
-    for (actor, (task, instruction, running_action)) in &tasks {
-        if task.next_action_tick > clock.tick {
-            continue;
-        }
-        if !instruction.is_current(task) {
-            continue;
-        }
-        if running_action.transaction == AssetId::from_key("donate")
-            && task
-                .object
-                .and_then(|object| show_donations.get(object).ok())
-                .is_some_and(|token| token.name == AssetId::from_key("t_donationshow"))
-        {
-            continue;
-        }
-        let RunBehaviorEconomy {
-            transaction,
-            cost_override,
-            ..
-        } = running_action;
-        commands
-            .entity(actor)
-            .insert(RunningBehaviorEconomyTransaction {
-                instruction: instruction.id(),
-                facility: task.target.unwrap_or(actor),
-                target: task.target,
-                transaction: *transaction,
-                cost_override: *cost_override,
-                payment: None,
-                next_transaction: None,
-            });
+    let actor = activation.entity;
+    let Ok((task, instruction, running_action)) = tasks.get(actor) else {
+        return;
+    };
+    if instruction.id() != activation.instruction || !instruction.is_current(task) {
+        return;
     }
+    if running_action.transaction == AssetId::from_key("donate")
+        && task
+            .object
+            .and_then(|object| show_donations.get(object).ok())
+            .is_some_and(|token| token.name == AssetId::from_key("t_donationshow"))
+    {
+        return;
+    }
+    commands
+        .entity(actor)
+        .insert(RunningBehaviorEconomyTransaction {
+            instruction: instruction.id(),
+            facility: task.target.unwrap_or(actor),
+            target: task.target,
+            transaction: running_action.transaction,
+            cost_override: running_action.cost_override,
+            payment: None,
+            next_transaction: None,
+        });
+}
+
+pub(super) fn added_behavior_transaction(
+    added: On<Add<RunningBehaviorEconomyTransaction>>,
+) -> Option<Entity> {
+    Some(added.entity)
 }
 
 pub(super) fn execute_authored_behavior_transaction_steps(
+    In(activated_actor): In<Option<Entity>>,
     mut commands: Commands,
     definitions: Res<WorldDefinitions>,
     assets: Res<Assets<WorldDefinitionAsset>>,
-    clock: Res<ZooClock>,
+    clocks: Query<&ZooClock>,
     objects: Query<(&DefinitionId, Option<&FacilityPriceIndex>)>,
     worlds: Query<&WorldMember>,
     tracker_indexes: Query<(
@@ -118,24 +113,33 @@ pub(super) fn execute_authored_behavior_transaction_steps(
     let Some(definitions) = definitions.get(&assets) else {
         return;
     };
-    for (actor, task, instruction, running, mut pending) in &mut tasks {
+    let mut new_usage = HashMap::<Entity, EconomyUsage>::new();
+    for (actor, task, instruction, running, mut pending) in
+        behavior_action_actors(&mut tasks, activated_actor)
+    {
+        let Ok(member) = worlds.get(actor) else {
+            continue;
+        };
+        let Ok(clock) = clocks.get(member.root) else {
+            continue;
+        };
         if !pending.owns(task, instruction) {
             commands
                 .entity(actor)
                 .remove::<RunningBehaviorEconomyTransaction>();
             continue;
         }
-        if pending.payment.is_some() || task.next_action_tick > clock.tick {
+        if pending.payment.is_some()
+            || task.next_action_tick > clock.tick
+            || (activated_actor.is_none() && !instruction.can_update_after_activation(clock.tick))
+        {
             continue;
         }
         let tracker = if running.general || running.tracker.is_some() {
             let key = running
                 .tracker
                 .unwrap_or_else(|| AssetId::from_key("general"));
-            let configuration = worlds
-                .get(actor)
-                .ok()
-                .and_then(|world| tracker_indexes.get(world.root).ok());
+            let configuration = tracker_indexes.get(member.root).ok();
             let entity = configuration.and_then(|(_, index)| index?.0.get(&key).copied());
             let Some((entity, tracker)) = entity
                 .and_then(|entity| trackers.get(entity).ok().map(|tracker| (entity, tracker)))
@@ -294,11 +298,14 @@ pub(super) fn execute_authored_behavior_transaction_steps(
                     continue;
                 }
                 let operation = commands
-                    .spawn(BehaviorTransactionPayment {
-                        actor,
-                        facility: pending.facility,
-                        transaction: transaction.name,
-                    })
+                    .spawn((
+                        *member,
+                        BehaviorTransactionPayment {
+                            actor,
+                            facility: pending.facility,
+                            transaction: transaction.name,
+                        },
+                    ))
                     .id();
                 if let Some(current_job) = keeper_refill {
                     commands.entity(operation).insert(
@@ -358,7 +365,7 @@ pub(super) fn execute_authored_behavior_transaction_steps(
                     count,
                     adding,
                     &mut usage_counters,
-                    &mut commands,
+                    &mut new_usage,
                 );
                 if transaction.track_on_parent && pending.facility != user_tracker {
                     apply_usage_change(
@@ -366,7 +373,7 @@ pub(super) fn execute_authored_behavior_transaction_steps(
                         count,
                         adding,
                         &mut usage_counters,
-                        &mut commands,
+                        &mut new_usage,
                     );
                 }
                 finish_transaction_step(
@@ -407,6 +414,9 @@ pub(super) fn execute_authored_behavior_transaction_steps(
             }
         }
     }
+    for (entity, usage) in new_usage {
+        commands.entity(entity).try_insert(usage);
+    }
 }
 
 fn apply_usage_change(
@@ -414,26 +424,18 @@ fn apply_usage_change(
     count: i32,
     adding: bool,
     usage_counters: &mut Query<&mut EconomyUsage>,
-    commands: &mut Commands,
+    new_usage: &mut HashMap<Entity, EconomyUsage>,
 ) {
-    if let Ok(mut usage) = usage_counters.get_mut(entity) {
-        if count != 0 {
+    if count != 0 {
+        if let Ok(mut usage) = usage_counters.get_mut(entity) {
             usage.apply_user_change(count, adding);
+        } else {
+            new_usage
+                .entry(entity)
+                .or_default()
+                .apply_user_change(count, adding);
         }
-        return;
     }
-    // Earlier changes in this system may have queued the first use of this account.
-    commands.entity(entity).queue_silenced(
-        move |mut entity: bevy::ecs::world::EntityWorldMut<'_>| {
-            if let Some(mut usage) = entity.get_mut::<EconomyUsage>() {
-                usage.apply_user_change(count, adding);
-            } else {
-                let mut usage = EconomyUsage::default();
-                usage.apply_user_change(count, adding);
-                entity.insert(usage);
-            }
-        },
-    );
 }
 
 fn fail_transaction(actor: Entity, transaction: AssetId, reason: &str, commands: &mut Commands) {
@@ -443,10 +445,10 @@ fn fail_transaction(actor: Entity, transaction: AssetId, reason: &str, commands:
         reason,
         "authored economy action failed"
     );
-    mark_behavior_task_for_failure_and_stop_navigation(actor, commands);
     commands
         .entity(actor)
         .remove::<RunningBehaviorEconomyTransaction>();
+    mark_behavior_task_for_failure_and_stop_navigation(actor, commands);
 }
 
 fn finish_transaction_step(
@@ -462,20 +464,21 @@ fn finish_transaction_step(
         pending.payment = None;
         // Native dispatch passes the supplied override to each chained transaction.
     } else {
-        instruction.complete(actor, tick, commands);
         commands
             .entity(actor)
             .remove::<RunningBehaviorEconomyTransaction>();
+        instruction.complete(actor, tick, commands);
     }
 }
 
 pub(super) fn finish_settled_behavior_transactions(
     mut commands: Commands,
-    clock: Res<ZooClock>,
+    clocks: Query<&ZooClock>,
     mut completed: MessageReader<TransactionCompleted>,
     mut rejected: MessageReader<TransactionRejected>,
     operations: Query<(
         &BehaviorTransactionPayment,
+        &WorldMember,
         Has<super::keeper_refill_settlement::StagedBehaviorRefill>,
     )>,
     mut tasks: Query<
@@ -488,13 +491,17 @@ pub(super) fn finish_settled_behavior_transactions(
     >,
 ) {
     for payment in completed.read() {
-        let Ok((owner, refill)) = operations.get(payment.operation) else {
+        let Ok((owner, member, refill)) = operations.get(payment.operation) else {
             continue;
         };
         if let Ok((task, instruction, mut pending)) = tasks.get_mut(owner.actor) {
             if pending.payment == Some(payment.operation) {
                 let next = pending.next_transaction;
-                if !refill && pending.owns(task, instruction) {
+                if let Some(clock) = clocks
+                    .get(member.root)
+                    .ok()
+                    .filter(|_| !refill && pending.owns(task, instruction))
+                {
                     finish_transaction_step(
                         owner.actor,
                         instruction,
@@ -513,7 +520,7 @@ pub(super) fn finish_settled_behavior_transactions(
         commands.entity(payment.operation).despawn();
     }
     for payment in rejected.read() {
-        let Ok((owner, _)) = operations.get(payment.operation) else {
+        let Ok((owner, _, _)) = operations.get(payment.operation) else {
             continue;
         };
         if let Ok((task, instruction, pending)) = tasks.get_mut(owner.actor) {

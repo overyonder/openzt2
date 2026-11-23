@@ -1,28 +1,43 @@
-//! Bounded definition loading driven by Bevy load-task completion, not frames.
+//! Bounded definition loading driven by Bevy load completion.
 
 use std::{
+    io,
     path::PathBuf,
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     },
 };
 
-use bevy::{
-    prelude::*,
-    tasks::{IoTaskPool, Task},
-};
+use bevy::{prelude::*, tasks::IoTaskPool};
 
 use super::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 
 // At most four sources are inflated and translated concurrently.
-pub(super) const MAXIMUM_ACTIVE_DEFINITION_LOADS: usize = 4;
+const MAXIMUM_ACTIVE_DEFINITION_LOADS: usize = 4;
 
-pub(super) fn request_world_definition_handles_without_per_asset_frame_waits(
+#[derive(Asset, TypePath)]
+pub(super) struct WorldDefinitionLoadCompletion {
+    pub(super) handles: Vec<Handle<WorldDefinitionAsset>>,
+}
+
+pub(super) fn request_world_definition_loads(
+    server: &AssetServer,
+    paths: Vec<PathBuf>,
+    completed_loads: Arc<AtomicUsize>,
+) -> Handle<WorldDefinitionLoadCompletion> {
+    let server_for_loads = server.clone();
+    server.add_async(async move {
+        let handles = load_world_definition_sources(server_for_loads, paths, completed_loads).await;
+        Ok::<_, io::Error>(WorldDefinitionLoadCompletion { handles })
+    })
+}
+
+async fn load_world_definition_sources(
     server: AssetServer,
     paths: Vec<PathBuf>,
     completed_loads: Arc<AtomicUsize>,
-) -> Task<Vec<Handle<WorldDefinitionAsset>>> {
+) -> Vec<Handle<WorldDefinitionAsset>> {
     let paths: Arc<[PathBuf]> = paths.into();
     let next_path_index = Arc::new(AtomicUsize::new(0));
     let workers: [_; MAXIMUM_ACTIVE_DEFINITION_LOADS] = std::array::from_fn(|_| {
@@ -42,8 +57,6 @@ pub(super) fn request_world_definition_handles_without_per_asset_frame_waits(
                     .load_builder()
                     .with_guard(load_guard)
                     .load::<WorldDefinitionAsset>(path.clone());
-                // Bevy drops the only sender after its load task completes or
-                // fails. Channel closure wakes this worker without a frame.
                 let _ = completion.recv().await;
                 completed_loads.fetch_add(1, Ordering::Relaxed);
                 handles.push((index, handle));
@@ -51,15 +64,12 @@ pub(super) fn request_world_definition_handles_without_per_asset_frame_waits(
             handles
         })
     });
-    IoTaskPool::get().spawn(async move {
-        let mut handles = Vec::with_capacity(paths.len());
-        for worker in workers {
-            handles.extend(worker.await);
-        }
-        // Completion order must not change definition precedence.
-        handles.sort_unstable_by_key(|(index, _)| *index);
-        handles.into_iter().map(|(_, handle)| handle).collect()
-    })
+    let mut handles = Vec::with_capacity(paths.len());
+    for worker in workers {
+        handles.extend(worker.await);
+    }
+    handles.sort_unstable_by_key(|(index, _)| *index);
+    handles.into_iter().map(|(_, handle)| handle).collect()
 }
 
 #[cfg(test)]
@@ -68,8 +78,8 @@ mod tests {
     use bevy::{
         app::TaskPoolPlugin,
         asset::{
-            io::{memory::MemoryAssetReader, AssetSourceBuilder, AssetSourceId, Reader},
             AssetApp, AssetLoader, AssetPlugin, LoadContext,
+            io::{AssetSourceBuilder, AssetSourceId, Reader, memory::MemoryAssetReader},
         },
     };
     use std::{
@@ -111,8 +121,8 @@ mod tests {
     }
 
     #[test]
-    fn definition_queue_preserves_order_and_advances_after_failures_without_app_frames(
-    ) -> io::Result<()> {
+    fn definition_queue_preserves_order_and_advances_after_failures_without_app_frames()
+    -> io::Result<()> {
         let reader = MemoryAssetReader::default();
         let paths = (0..32)
             .map(|index| PathBuf::from(format!("{index}.queue-test")))
@@ -135,11 +145,11 @@ mod tests {
         });
         app.update();
         let server = app.world().resource::<AssetServer>().clone();
-        let mut task = request_world_definition_handles_without_per_asset_frame_waits(
+        let mut task = IoTaskPool::get().spawn(load_world_definition_sources(
             server.clone(),
             paths.clone(),
             Arc::new(AtomicUsize::new(0)),
-        );
+        ));
         let deadline = Instant::now() + Duration::from_secs(5);
         let handles = loop {
             if let Some(handles) = bevy::tasks::block_on(futures_lite::future::poll_once(&mut task))

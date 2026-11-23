@@ -1,24 +1,40 @@
 use bevy::prelude::*;
+use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_zoo_state::environment::environment_state_types::ZooTickAdvanced;
 
 use super::{
-    simulation_clock_types::{ZooCalendar, ZooClock, ZooDayAdvanced, ZooYearAdvanced},
+    simulation_clock_types::{
+        ZooCalendar, ZooClock, ZooDay, ZooDayAdvanced, ZooMonth, ZooYearAdvanced,
+    },
     zoo_calendar_calculation::calculate_zoo_calendar_for_absolute_day,
 };
 
 pub(crate) fn advance_authoritative_zoo_clock_and_calendar(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
-    mut zoo_clock: ResMut<ZooClock>,
-    mut zoo_calendar: ResMut<ZooCalendar>,
+    mut roots: Query<
+        (
+            Entity,
+            &mut ZooClock,
+            &mut ZooCalendar,
+            &mut ZooDay,
+            &mut ZooMonth,
+        ),
+        With<WorldRoot>,
+    >,
     mut advanced_ticks: MessageWriter<ZooTickAdvanced>,
     mut advanced_days: MessageWriter<ZooDayAdvanced>,
     mut advanced_years: MessageWriter<ZooYearAdvanced>,
 ) {
     let Some(definitions) = active_definitions.get(&definitions) else {
+        return;
+    };
+    let Ok((root, mut zoo_clock, mut zoo_calendar, mut zoo_day, mut zoo_month)) =
+        roots.single_mut()
+    else {
         return;
     };
     let previous_absolute_day = zoo_clock.absolute_day;
@@ -34,13 +50,19 @@ pub(crate) fn advance_authoritative_zoo_clock_and_calendar(
         &definitions.timing().calendar,
         zoo_clock.absolute_day,
     );
+    zoo_day.set_if_neq(ZooDay(zoo_clock.absolute_day));
+    let previous_month = *zoo_month;
+    let month_advanced = zoo_month.set_if_neq(ZooMonth::from(*zoo_calendar));
     advanced_days.write(ZooDayAdvanced {
+        root,
         previous_day: previous_absolute_day,
         current_day: zoo_clock.absolute_day,
+        completed_month: month_advanced.then_some(previous_month),
         calendar: *zoo_calendar,
     });
     if zoo_calendar.year != previous_calendar.year {
         advanced_years.write(ZooYearAdvanced {
+            root,
             previous_year: previous_calendar.year,
             current_year: zoo_calendar.year,
             calendar: *zoo_calendar,

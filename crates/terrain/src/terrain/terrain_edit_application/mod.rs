@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use openzt2_zoo_state::construction::construction_transaction_types::EditApplication;
@@ -51,6 +52,7 @@ pub(super) fn apply_committed_terrain_sample_deltas_and_publish_changed_regions(
     mut commands: Commands,
     edits: Query<(
         &TerrainEdit,
+        &WorldMember,
         Option<&openzt2_zoo_state::construction::construction_transaction_types::RollbackContext>,
         Has<LiveAppliedTerrainEdit>,
     )>,
@@ -59,7 +61,7 @@ pub(super) fn apply_committed_terrain_sample_deltas_and_publish_changed_regions(
         Option<&mut TerrainWaterRegionEdit>,
         Has<TerrainWaterRegionRetired>,
     )>,
-    chunk_ids: Res<TerrainChunkIdLookup>,
+    roots: Query<&TerrainChunkIdLookup>,
     mut chunks: Query<(
         Entity,
         &TerrainChunk,
@@ -74,7 +76,11 @@ pub(super) fn apply_committed_terrain_sample_deltas_and_publish_changed_regions(
     mut acknowledged: MessageWriter<TerrainEditAcknowledged>,
 ) {
     let request = request.0;
-    let Ok((edit, rollback, live_applied)) = edits.get(request.transaction) else {
+    let Some(((edit, _, rollback, live_applied), chunk_ids)) = edits
+        .get(request.transaction)
+        .ok()
+        .and_then(|edit| roots.get(edit.1.root).ok().map(|ids| (edit, ids)))
+    else {
         acknowledged.write(TerrainEditAcknowledged {
             transaction: request.transaction,
             application: request.application,

@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
 use openzt2_zoo_state::locomotion::locomotion_types::ContactSteering;
 use openzt2_zoo_state::locomotion::locomotion_types::Destination;
@@ -14,13 +15,14 @@ use openzt2_zoo_state::locomotion::locomotion_types::{
 };
 
 pub(super) fn calculate_route_following_and_separation_steering(
-    spatial_grid: Res<SpatialGrid>,
+    spatial_grids: Query<&SpatialGrid>,
     spatial_membership: SpatialGridMembership,
     cell_indices: Query<&SpatialCellIndex>,
     mut route_following_navigation_agents: Query<
         (
             Entity,
             &NavAgent,
+            &WorldMember,
             &GlobalTransform,
             Option<&SpatialCell>,
             &Route,
@@ -37,6 +39,7 @@ pub(super) fn calculate_route_following_and_separation_steering(
         |(
             navigation_agent_entity,
             navigation_agent,
+            world,
             global_transform,
             spatial_cell,
             planned_route,
@@ -60,9 +63,12 @@ pub(super) fn calculate_route_following_and_separation_steering(
                 * navigation_agent.max_speed_mps
                 * contact_steering.factor;
             let mut visited_neighbor_count = 0;
-            if let Some(spatial_cell_coordinates) = spatial_cell
+            if let Some((spatial_grid, spatial_cell_coordinates)) = spatial_cell
                 .and_then(|cell| cell_indices.get(cell.0).ok())
-                .and_then(|index| spatial_grid.cell_xy(index.0))
+                .and_then(|index| {
+                    let grid = spatial_grids.get(world.root).ok()?;
+                    Some((grid, grid.cell_xy(index.0)?))
+                })
             {
                 'neighboring_cells: for neighboring_cell_z in
                     spatial_cell_coordinates.y.saturating_sub(1)
@@ -74,7 +80,7 @@ pub(super) fn calculate_route_following_and_separation_steering(
                         let neighboring_cell_index =
                             neighboring_cell_z * spatial_grid.width + neighboring_cell_x;
                         for neighboring_agent_entity in
-                            spatial_membership.members(neighboring_cell_index)
+                            spatial_membership.members(world.root, neighboring_cell_index)
                         {
                             if neighboring_agent_entity == navigation_agent_entity {
                                 continue;

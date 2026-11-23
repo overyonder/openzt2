@@ -5,11 +5,12 @@ use openzt2_game_data::ui_document::action::{
     transportation::UiTransportAction,
 };
 use openzt2_interface_state::{
-    information::entity_selection_types::WorldUiSelection,
+    information::entity_selection_types::SelectedSubject,
     ui::{
         authored_ui_action_projection_components::{UiConstructionActions, UiTransportActions},
         authored_ui_node_projection_components::{UiDocumentOwner, UiDocumentRoot},
         input_frame_capture_types::AuthoredModalInputCapture,
+        ui_document_lifecycle_contracts::InGameUiOwner,
     },
 };
 use openzt2_zoo_state::{
@@ -22,14 +23,11 @@ use openzt2_zoo_state::{
     transport_tours::transport_track_sale::TransportTrackSaleQueries,
 };
 
-#[derive(Component)]
-pub(super) struct CapturedTopologyConfirmation;
-
 pub(super) fn capture_pending_construction_confirmation(
     mut commands: Commands,
     modal: Option<Res<AuthoredModalInputCapture>>,
-    captured: Query<(Entity, Option<&Children>), With<CapturedTopologyConfirmation>>,
     children: Query<&Children>,
+    changed_children: Query<(), Changed<Children>>,
     documents: Res<Assets<UiDocumentAsset>>,
     nodes: Query<(
         Option<&UiConstructionActions>,
@@ -37,29 +35,43 @@ pub(super) fn capture_pending_construction_confirmation(
         &UiDocumentOwner,
     )>,
     roots: Query<&UiDocumentRoot>,
-    operations: Query<(), With<TopologyConfirmation>>,
-    selected: WorldUiSelection,
+    operations: Query<(Entity, &ChildOf), With<TopologyConfirmation>>,
+    selected: Query<Ref<SelectedSubject>, With<InGameUiOwner>>,
     targets: Query<(Has<Tank>, Has<PathTile>)>,
-    previews: Query<Entity, With<ConstructionPreview>>,
-    delete_hover: Query<&DeleteHoverTarget, With<ConstructionCursor>>,
+    previews: Query<(Entity, Ref<ConstructionPreview>)>,
+    delete_hover: Query<Ref<DeleteHoverTarget>, With<ConstructionCursor>>,
     transport: TransportTrackSaleQueries,
 ) {
-    let active = modal.and_then(|modal| modal.0);
-    for (entity, children) in &captured {
-        if active != Some(entity) {
-            for operation in children.into_iter().flat_map(|children| children.iter()) {
-                if operations.contains(operation) {
-                    commands.entity(operation).try_despawn();
-                }
+    let Some(capture) = modal else { return };
+    if capture.is_changed() {
+        for (operation, parent) in &operations {
+            if capture.0 != Some(parent.parent()) {
+                commands.entity(operation).try_despawn();
             }
-            commands
-                .entity(entity)
-                .try_remove::<CapturedTopologyConfirmation>();
         }
     }
-    let Some(modal) = active.filter(|&modal| !captured.contains(modal)) else {
+    let Some(modal) = capture.0 else { return };
+    let modal_children = children.get(modal).ok();
+    if modal_children
+        .as_ref()
+        .is_some_and(|children| children.iter().any(|child| operations.contains(child)))
+    {
         return;
-    };
+    }
+    let selected = selected.single().ok();
+    let preview = previews.single().ok();
+    let hovered = delete_hover.single().ok();
+    if !capture.is_changed()
+        && !documents.is_changed()
+        && !changed_children.contains(modal)
+        && !selected.as_ref().is_some_and(|target| target.is_changed())
+        && !preview
+            .as_ref()
+            .is_some_and(|(_, preview)| preview.is_changed())
+        && !hovered.as_ref().is_some_and(|target| target.is_changed())
+    {
+        return;
+    }
     let kind = std::iter::once(modal)
         .chain(children.iter_descendants(modal))
         .find_map(|node| {
@@ -88,32 +100,30 @@ pub(super) fn capture_pending_construction_confirmation(
                 })
         });
     let Some(kind) = kind else { return };
-    commands.entity(modal).insert(CapturedTopologyConfirmation);
-    let selected = selected.subject();
+    let selected = selected.map(|subject| subject.0);
     let (operand, action) = match kind {
         TopologyConfirmation::Construction(UiConstructionConfirmation::TankDeletion) => (
             selected.filter(|&entity| targets.get(entity).is_ok_and(|(tank, _)| tank)),
             ConfirmedTopologyAction::Delete,
         ),
         TopologyConfirmation::Construction(UiConstructionConfirmation::ZooGatePathDeletion) => (
-            delete_hover
-                .single()
-                .ok()
+            hovered
+                .as_ref()
                 .map(|target| target.0)
                 .or(selected)
                 .filter(|&entity| targets.get(entity).is_ok_and(|(_, path)| path)),
             ConfirmedTopologyAction::Delete,
         ),
-        TopologyConfirmation::Construction(UiConstructionConfirmation::TankSplit) => {
-            (previews.single().ok(), ConfirmedTopologyAction::Commit)
-        }
+        TopologyConfirmation::Construction(UiConstructionConfirmation::TankSplit) => (
+            preview.map(|(entity, _)| entity),
+            ConfirmedTopologyAction::Commit,
+        ),
         TopologyConfirmation::Construction(UiConstructionConfirmation::TankMerge) => {
             (Some(modal), ConfirmedTopologyAction::CancelPreview)
         }
         TopologyConfirmation::TransportDeletion => (
-            delete_hover
-                .single()
-                .ok()
+            hovered
+                .as_ref()
                 .map(|target| target.0)
                 .or(selected)
                 .filter(|&entity| transport.can_sell_track_at(entity)),
@@ -139,7 +149,9 @@ pub(super) fn resolve_topology_confirmation(
         return;
     };
     let action = std::mem::replace(&mut *action, ConfirmedTopologyAction::Consumed);
-    commands.entity(resolved.entity).try_despawn();
+    commands
+        .entity(resolved.entity)
+        .remove::<TopologyConfirmationOperand>();
     if !resolved.accepted {
         return;
     }

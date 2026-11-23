@@ -1,7 +1,13 @@
 //! Typed components for the instruction currently executing on a behavior actor.
 
 use bevy::{
-    ecs::{component::ComponentId, lifecycle::HookContext, world::DeferredWorld},
+    ecs::{
+        component::ComponentId,
+        event::{EntityComponentsTrigger, EventPattern},
+        lifecycle::HookContext,
+        query::{IterQueryData, QueryFilter, QueryItem},
+        world::DeferredWorld,
+    },
     prelude::*,
 };
 use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
@@ -14,8 +20,10 @@ use super::continuations::{BehaviorContinuationFrames, BehaviorContinuations};
 use super::MAXIMUM_BEHAVIOR_TASK_RETURN_FRAME_COUNT;
 use super::{
     advance_behavior_task_to_next_action, BehaviorTaskExecutionPhase, BehaviorTaskExecutionState,
-    BehaviorTaskReturnFrame,
+    BehaviorTaskGeneration, BehaviorTaskReturnFrame, PendingBehaviorTaskFailure,
 };
+use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
+use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
 #[derive(Component, PartialEq, Eq)]
 pub struct BehaviorLocomotionIntent(pub action::wander::BehaviorGroundLocomotionSpeed);
@@ -289,6 +297,35 @@ pub struct RunBehaviorRandomAnimation {
 }
 
 #[derive(Component)]
+pub struct RunBehaviorDockNow(pub action::specialized::BehaviorDockNowAction);
+
+#[derive(Component)]
+pub struct RunBehaviorDockSpline(pub action::specialized::BehaviorDockSplineAction);
+
+#[derive(Component)]
+pub struct RunBehaviorFollowEntity(pub action::specialized::BehaviorFollowEntityAction);
+
+#[derive(Component)]
+pub struct RunBehaviorSplashGuest(pub action::specialized::BehaviorSplashGuestAction);
+
+#[derive(Component)]
+pub struct RunBehaviorUsePortal(pub action::specialized::BehaviorUsePortalAction);
+
+#[derive(Component)]
+pub struct RunBehaviorDockTankWall(pub action::specialized::BehaviorDockTankWallAction);
+
+#[derive(Component)]
+pub struct RunBehaviorStaffTrainAnimal(pub action::specialized::BehaviorStaffTrainAnimalAction);
+
+#[derive(Component)]
+pub struct RunBehaviorAddSubjectAsDiseaseTarget(
+    pub action::specialized::BehaviorAddSubjectAsDiseaseTargetAction,
+);
+
+#[derive(Component)]
+pub struct RunBehaviorInvalidAuthoredAction(pub String);
+
+#[derive(Component)]
 pub struct RunBehaviorPlaceTarget(pub action::place_target::BehaviorPlaceTargetAction);
 
 #[derive(Component)]
@@ -324,13 +361,46 @@ pub struct RunningBehaviorInstruction {
     depth: usize,
     component: ComponentId,
     reservation: Option<AssetId>,
+    activated_at: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BehaviorInstructionId(u64);
 
-#[derive(Resource, Default)]
-struct BehaviorInstructionSequence(u64);
+#[derive(Component)]
+pub struct FollowingEntity {
+    pub instruction: BehaviorInstructionId,
+    pub target: Entity,
+    pub until_tick: u64,
+    pub request_id: u64,
+}
+
+#[derive(Component)]
+pub struct SplineDockMotion {
+    pub instruction: BehaviorInstructionId,
+    pub target: Entity,
+    pub phase: SplineDockPhase,
+    pub owns_disabled_collider: bool,
+}
+
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
+pub enum SplineDockPhase {
+    Approach(u64),
+    Ready,
+    Curve { start: Transform, advanced: f32 },
+}
+
+impl SplineDockPhase {
+    pub const fn request(self) -> Option<u64> {
+        match self {
+            Self::Approach(id) => Some(id),
+            Self::Ready | Self::Curve { .. } => None,
+        }
+    }
+}
+
+#[derive(Component)]
+struct BehaviorInstructionGeneration(u64);
 
 impl RunningBehaviorInstruction {
     #[must_use]
@@ -347,6 +417,11 @@ impl RunningBehaviorInstruction {
         self.execution_id
     }
 
+    pub fn can_update_after_activation(&self, tick: u64) -> bool {
+        self.activated_at
+            .is_some_and(|activated_at| activated_at < tick)
+    }
+
     pub fn is_current(&self, task: &BehaviorTaskExecutionState) -> bool {
         self.execution_id == task.execution_id
             && self.depth == task.depth
@@ -357,22 +432,6 @@ impl RunningBehaviorInstruction {
         complete_behavior_instruction(actor, self.id, tick, commands);
     }
 
-    pub fn resume_at(&self, actor: Entity, tick: u64, commands: &mut Commands) {
-        commands.trigger(BehaviorInstructionCompleted {
-            actor,
-            id: self.id,
-            outcome: InstructionOutcome::ResumeAt(tick),
-        });
-    }
-
-    pub fn repeat_at(&self, actor: Entity, tick: u64, repetitions: u32, commands: &mut Commands) {
-        self.apply(
-            actor,
-            InstructionOutcome::RepeatAt { tick, repetitions },
-            commands,
-        );
-    }
-
     pub fn enter_set(
         &self,
         actor: Entity,
@@ -380,40 +439,6 @@ impl RunningBehaviorInstruction {
         commands: &mut Commands,
     ) {
         self.apply(actor, InstructionOutcome::EnterSet(selection), commands);
-    }
-
-    pub fn bind_interaction_slot(&self, actor: Entity, slot: usize, commands: &mut Commands) {
-        self.apply(
-            actor,
-            InstructionOutcome::BindInteractionSlot(Some(slot)),
-            commands,
-        );
-    }
-
-    pub fn clear_interaction_slot(&self, actor: Entity, commands: &mut Commands) {
-        self.apply(
-            actor,
-            InstructionOutcome::BindInteractionSlot(None),
-            commands,
-        );
-    }
-
-    pub fn complete_with_target(
-        &self,
-        actor: Entity,
-        target: Option<Entity>,
-        tick: u64,
-        commands: &mut Commands,
-    ) {
-        self.apply(
-            actor,
-            InstructionOutcome::CompleteWithTarget { target, tick },
-            commands,
-        );
-    }
-
-    pub fn retarget(&self, actor: Entity, target: Option<Entity>, commands: &mut Commands) {
-        self.apply(actor, InstructionOutcome::Retarget(target), commands);
     }
 
     fn apply(&self, actor: Entity, outcome: InstructionOutcome, commands: &mut Commands) {
@@ -469,27 +494,7 @@ enum InstructionOutcome {
         tick: u64,
         after: BehaviorRefillContinuation,
     },
-    Retarget(Option<Entity>),
-    ResumeAt(u64),
-    RepeatAt {
-        tick: u64,
-        repetitions: u32,
-    },
     EnterSet(SelectedBehaviorSet),
-    BindInteractionSlot(Option<usize>),
-    CompleteWithTarget {
-        target: Option<Entity>,
-        tick: u64,
-    },
-}
-
-#[derive(bevy::ecs::schedule::ScheduleLabel, Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct BehaviorStep;
-
-#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum BehaviorStepSet {
-    Actions,
-    Finish,
 }
 
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -498,56 +503,170 @@ pub enum BehaviorStepFixedSet {
     Act,
 }
 
-#[derive(Resource, Default)]
-pub struct BehaviorStepProgress {
-    advanced: bool,
-    started_at: bevy::ecs::change_detection::Tick,
+#[derive(Component)]
+pub struct BehaviorInstructionAwaitingActivation;
+
+#[derive(EntityEvent)]
+#[entity_event(trigger = EntityComponentsTrigger<'static>)]
+pub struct BehaviorInstructionActivated {
+    pub entity: Entity,
+    pub instruction: BehaviorInstructionId,
 }
 
-impl BehaviorStepProgress {
-    pub fn record_advance(&mut self) {
-        self.advanced = true;
-    }
+pub struct WhenBehaviorAction<A: Bundle>(std::marker::PhantomData<A>);
+
+impl<A: Bundle> EventPattern for WhenBehaviorAction<A> {
+    type Event = BehaviorInstructionActivated;
+    type Components = A;
 }
 
-pub fn drive_behavior_steps(world: &mut World) {
-    loop {
-        let started_at = world.change_tick();
-        let mut progress = world.resource_mut::<BehaviorStepProgress>();
-        progress.started_at = started_at;
-        progress.advanced = false;
-        world.run_schedule(BehaviorStep);
-        if !world.resource::<BehaviorStepProgress>().advanced {
-            break;
-        }
-    }
+pub fn activated_behavior_actor<A: Bundle>(
+    activation: On<WhenBehaviorAction<A>>,
+) -> Option<Entity> {
+    Some(activation.entity)
 }
 
-/// A child that remains active returns control to its parent until the next
-/// simulation update. The next instruction materialized by a completion is
-/// eligible in the following pass of this update.
-pub fn defer_incomplete_behavior_steps(
-    clock: Res<openzt2_world_state::simulation_time::simulation_clock_types::ZooClock>,
-    progress: Res<BehaviorStepProgress>,
-    change: bevy::ecs::system::SystemChangeTick,
-    mut tasks: Query<
-        (
-            Ref<RunningBehaviorInstruction>,
-            &mut BehaviorTaskExecutionState,
-        ),
-        Without<super::PendingBehaviorTaskFailure>,
+pub const fn update_waiting_behavior_actors() -> Option<Entity> {
+    None
+}
+
+pub fn behavior_action_actors<'q, 'w: 'q, 's: 'q, D: IterQueryData + 'q, F: QueryFilter + 'q>(
+    query: &'q mut Query<'w, 's, D, F>,
+    actor: Option<Entity>,
+) -> impl Iterator<Item = QueryItem<'q, 's, D>> + 'q {
+    let (mut all, mut one) = match actor {
+        Some(actor) => (None, query.get_mut(actor).ok()),
+        None => (Some(query.iter_mut()), None),
+    };
+    std::iter::from_fn(move || match &mut all {
+        Some(all) => all.next(),
+        None => one.take(),
+    })
+}
+
+#[derive(EntityEvent)]
+pub struct BehaviorProgramBoundary {
+    pub entity: Entity,
+    pub tick: u64,
+}
+
+pub fn activate_due_behavior_instructions(
+    clocks: Query<&ZooClock>,
+    actors: Query<
+        (Entity, &WorldMember, &BehaviorTaskExecutionState),
+        With<BehaviorInstructionAwaitingActivation>,
     >,
+    mut commands: Commands,
 ) {
-    for (instruction, mut task) in &mut tasks {
-        if task.next_action_tick <= clock.tick
-            && instruction.is_current(&task)
-            && !instruction
-                .last_changed()
-                .is_newer_than(progress.started_at, change.this_run())
-        {
-            task.next_action_tick = clock.tick.saturating_add(1);
+    for (actor, member, task) in &actors {
+        let Ok(clock) = clocks.get(member.root) else {
+            continue;
+        };
+        let tick = clock.tick;
+        if task.next_action_tick <= tick {
+            commands
+                .queue(move |world: &mut World| activate_behavior_instruction(world, actor, tick));
         }
     }
+}
+
+#[track_caller]
+pub fn mark_behavior_task_for_failure_and_stop_navigation(actor: Entity, commands: &mut Commands) {
+    use crate::animal_behavior::behavior_pursuit_types::PendingBehaviorPursuit;
+    use crate::locomotion::locomotion_types::{Destination, Docking};
+
+    debug!(?actor, site = %std::panic::Location::caller(), "behavior task marked for failure");
+    commands
+        .entity(actor)
+        .try_remove::<(
+            Destination,
+            Docking,
+            super::PendingBehaviorDockingCompletion,
+            super::PendingBehaviorMoveCompletion,
+            super::PendingBehaviorAnimationClipCompletion,
+            PendingBehaviorPursuit,
+        )>()
+        .try_insert(PendingBehaviorTaskFailure);
+}
+
+pub fn activate_behavior_failure(
+    failure: On<Add<PendingBehaviorTaskFailure>>,
+    clocks: Query<&ZooClock>,
+    tasks: Query<(&BehaviorTaskExecutionState, Option<&WorldMember>)>,
+    mut commands: Commands,
+) {
+    let Ok((task, member)) = tasks.get(failure.entity) else {
+        return;
+    };
+    commands.trigger(BehaviorProgramBoundary {
+        entity: failure.entity,
+        tick: member
+            .and_then(|member| clocks.get(member.root).ok())
+            .map_or(task.next_action_tick, |clock| clock.tick),
+    });
+}
+
+pub fn continue_behavior_program(actor: Entity, tick: u64, commands: &mut Commands) {
+    commands.queue(move |world: &mut World| {
+        materialize_behavior_instruction(world, actor);
+        activate_behavior_instruction(world, actor, tick);
+    });
+}
+
+fn activate_behavior_instruction(world: &mut World, actor: Entity, tick: u64) {
+    use crate::animal_health::types::{Dead, Frozen, Tranquilized};
+    use openzt2_world_state::world_spawn::world_entity_crating::WorldEntityIsCrated;
+
+    let Some(task) = world.get::<BehaviorTaskExecutionState>(actor) else {
+        return;
+    };
+    if task.next_action_tick > tick
+        || world
+            .get::<BehaviorInstructionAwaitingActivation>(actor)
+            .is_none()
+        || ((world.get::<Frozen>(actor).is_some() || world.get::<Tranquilized>(actor).is_some())
+            && world.get::<RunBehaviorTermination>(actor).is_none())
+        || world.get::<WorldEntityIsCrated>(actor).is_some()
+        || world.get::<Dead>(actor).is_some()
+    {
+        return;
+    }
+    let instruction = world
+        .get::<RunningBehaviorInstruction>(actor)
+        .filter(|instruction| instruction.is_current(task))
+        .map(|instruction| (instruction.id, instruction.component));
+    if instruction.is_none()
+        && world
+            .get_resource::<Assets<BehaviorDocumentAsset>>()
+            .is_none_or(|documents| !documents.contains(&task.document))
+    {
+        return;
+    }
+    world
+        .entity_mut(actor)
+        .remove::<BehaviorInstructionAwaitingActivation>();
+    if world.get::<PendingBehaviorTaskFailure>(actor).is_none() {
+        if let Some((instruction, component)) = instruction {
+            if let Some(mut active) = world.get_mut::<RunningBehaviorInstruction>(actor) {
+                active.activated_at = Some(tick);
+            }
+            world.trigger_with(
+                BehaviorInstructionActivated {
+                    entity: actor,
+                    instruction,
+                },
+                EntityComponentsTrigger {
+                    components: std::slice::from_ref(&component),
+                    ..Default::default()
+                },
+            );
+            return;
+        }
+    }
+    world.trigger(BehaviorProgramBoundary {
+        entity: actor,
+        tick,
+    });
 }
 
 #[derive(EntityEvent)]
@@ -560,12 +679,14 @@ pub struct BehaviorInstructionCompleted {
 
 pub fn apply_behavior_instruction_completion(
     completion: On<BehaviorInstructionCompleted>,
-    mut tasks: Query<(
-        &mut BehaviorTaskExecutionState,
-        &RunningBehaviorInstruction,
-        Option<&BehaviorPlaySetInterrupt>,
-    )>,
-    mut progress: Option<ResMut<BehaviorStepProgress>>,
+    mut tasks: Query<
+        (
+            &mut BehaviorTaskExecutionState,
+            &RunningBehaviorInstruction,
+            Option<&BehaviorPlaySetInterrupt>,
+        ),
+        Without<PendingBehaviorTaskFailure>,
+    >,
     mut commands: Commands,
 ) {
     let Ok((mut task, instruction, interrupt)) = tasks.get_mut(completion.actor) else {
@@ -573,10 +694,6 @@ pub fn apply_behavior_instruction_completion(
     };
     if completion.id == instruction.id && instruction.is_current(&task) {
         match &completion.outcome {
-            InstructionOutcome::Retarget(target) => {
-                task.target = *target;
-                return;
-            }
             InstructionOutcome::Complete(tick) => {
                 advance_behavior_task_to_next_action(&mut task, *tick)
             }
@@ -585,23 +702,6 @@ pub fn apply_behavior_instruction_completion(
                 task.action = after.action_after_refill;
                 task.repetitions = 0;
                 task.next_action_tick = *tick;
-            }
-            InstructionOutcome::CompleteWithTarget { target, tick } => {
-                task.target = *target;
-                advance_behavior_task_to_next_action(&mut task, *tick);
-            }
-            InstructionOutcome::ResumeAt(tick) => {
-                task.next_action_tick = *tick;
-                return;
-            }
-            InstructionOutcome::RepeatAt { tick, repetitions } => {
-                task.next_action_tick = *tick;
-                task.repetitions = *repetitions;
-                return;
-            }
-            InstructionOutcome::BindInteractionSlot(slot) => {
-                task.interaction_slot = *slot;
-                return;
             }
             InstructionOutcome::EnterSet(set) => {
                 let return_action = if set.repeat.is_some() {
@@ -614,7 +714,10 @@ pub fn apply_behavior_instruction_completion(
                     frame.repetitions = repetitions;
                 }
                 if task.depth >= MAXIMUM_BEHAVIOR_TASK_RETURN_FRAME_COUNT {
-                    crate::animal_behavior::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation(completion.actor, &mut commands);
+                    mark_behavior_task_for_failure_and_stop_navigation(
+                        completion.actor,
+                        &mut commands,
+                    );
                     return;
                 }
                 let mut suspended = commands.spawn((
@@ -640,11 +743,7 @@ pub fn apply_behavior_instruction_completion(
                 }
             }
         }
-        if let Some(progress) = progress.as_deref_mut() {
-            progress.record_advance();
-        }
-        let actor = completion.actor;
-        commands.queue(move |world: &mut World| materialize_behavior_instruction(world, actor));
+        continue_behavior_program(completion.actor, task.next_action_tick, &mut commands);
     }
 }
 
@@ -657,14 +756,20 @@ pub struct ResumeSuspendedBehaviorInstruction {
     pub depth: usize,
     pub instruction: BehaviorTaskReturnFrame,
     pub tick: u64,
-    pub advance: bool,
+    pub outcome: BehaviorResumeOutcome,
+}
+
+#[derive(Clone, Copy)]
+pub enum BehaviorResumeOutcome {
+    Retry,
+    Advance,
+    Fail,
 }
 
 pub fn resume_suspended_behavior_instruction(
     resume: On<ResumeSuspendedBehaviorInstruction>,
     mut tasks: Query<&mut BehaviorTaskExecutionState>,
     continuations: BehaviorContinuationFrames,
-    mut progress: Option<ResMut<BehaviorStepProgress>>,
     mut commands: Commands,
 ) {
     let Ok(mut task) = tasks.get_mut(resume.actor) else {
@@ -677,35 +782,17 @@ pub fn resume_suspended_behavior_instruction(
     }
     continuations.truncate(resume.actor, resume.depth, &mut commands);
     task.restore_suspended_instruction(&resume.instruction, resume.depth, resume.tick);
-    if resume.advance {
-        advance_behavior_task_to_next_action(&mut task, resume.tick);
-    }
-    if let Some(progress) = progress.as_deref_mut() {
-        progress.record_advance();
-    }
-    let actor = resume.actor;
-    commands.queue(move |world: &mut World| materialize_behavior_instruction(world, actor));
-}
-
-pub fn refresh_running_behavior_instructions(
-    tasks: Query<
-        (
-            Entity,
-            &BehaviorTaskExecutionState,
-            Option<&RunningBehaviorInstruction>,
-        ),
-        Or<(
-            Changed<BehaviorTaskExecutionState>,
-            Without<RunningBehaviorInstruction>,
-        )>,
-    >,
-    mut commands: Commands,
-) {
-    for (actor, task, instruction) in &tasks {
-        if instruction.is_none_or(|instruction| !instruction.is_current(task)) {
-            commands.queue(move |world: &mut World| materialize_behavior_instruction(world, actor));
+    match resume.outcome {
+        BehaviorResumeOutcome::Retry => {}
+        BehaviorResumeOutcome::Advance => {
+            advance_behavior_task_to_next_action(&mut task, resume.tick);
+        }
+        BehaviorResumeOutcome::Fail => {
+            mark_behavior_task_for_failure_and_stop_navigation(resume.actor, &mut commands);
+            return;
         }
     }
+    continue_behavior_program(resume.actor, resume.tick, &mut commands);
 }
 
 pub(super) fn initialize_running_behavior_instruction(
@@ -713,9 +800,54 @@ pub(super) fn initialize_running_behavior_instruction(
     context: HookContext,
 ) {
     let actor = context.entity;
+    let execution = world
+        .get::<BehaviorTaskExecutionState>(actor)
+        .map(|task| task.execution_id);
+    if let Some(execution) = execution {
+        if let Some(mut generation) = world.get_mut::<BehaviorTaskGeneration>(actor) {
+            generation.reserve_restored(execution);
+        }
+    }
     world
         .commands()
         .queue(move |world: &mut World| materialize_behavior_instruction(world, actor));
+}
+
+#[derive(EntityEvent)]
+pub struct BehaviorTaskReplaced {
+    #[event_target]
+    pub actor: Entity,
+    pub previous_execution: u64,
+    pub previous_object: Option<Entity>,
+    pub execution: u64,
+}
+
+pub fn reset_replaced_behavior_task(replaced: On<BehaviorTaskReplaced>, mut commands: Commands) {
+    let actor = replaced.actor;
+    let execution = replaced.execution;
+    commands.queue(move |world: &mut World| {
+        let Ok(mut entity) = world.get_entity_mut(actor) else {
+            return;
+        };
+        if entity
+            .get::<BehaviorTaskExecutionState>()
+            .is_none_or(|task| task.execution_id != execution)
+        {
+            return;
+        }
+        entity.despawn_related::<crate::animal_behavior::behavior_target_placement_types::BehaviorPlacements>();
+        entity.despawn_related::<BehaviorContinuations>();
+        if let Some(component) = entity.get::<RunningBehaviorInstruction>().map(|step| step.component) {
+            entity.remove_by_id(component).remove::<(
+                RunningBehaviorInstruction,
+                BehaviorLocomotionIntent,
+                TimedBehaviorAnimationEffect,
+                BehaviorAnimationTextKeys,
+                BehaviorPlaySetInterrupt,
+            )>();
+        }
+        materialize_behavior_instruction(world, actor);
+    });
 }
 
 pub(super) fn discard_running_behavior_instruction(mut world: DeferredWorld, context: HookContext) {
@@ -743,7 +875,9 @@ pub fn refresh_behavior_instructions_after_document_changes(
     let changed = events
         .read()
         .filter_map(|event| match *event {
-            AssetEvent::Modified { id } | AssetEvent::Removed { id } => Some(id),
+            AssetEvent::Added { id } | AssetEvent::Modified { id } | AssetEvent::Removed { id } => {
+                Some(id)
+            }
             _ => None,
         })
         .collect::<std::collections::HashSet<_>>();
@@ -821,12 +955,17 @@ fn lower_behavior_instruction(world: &mut World, actor: Entity, force: bool) {
     }
     let speed = match &action {
         Some(BehaviorAction::Wander(action)) => Some(action.locomotion_speed),
+        Some(BehaviorAction::DockSpline(action)) => Some(action.speed),
+        Some(BehaviorAction::FollowEntity(action)) => Some(action.speed),
+        Some(BehaviorAction::UsePortal(action)) => Some(action.speed),
+        Some(BehaviorAction::DockTankWall(action)) => Some(action.speed),
         Some(BehaviorAction::Pursuit(action)) => Some(action.locomotion_speed),
         Some(BehaviorAction::Evasion(action)) => Some(action.locomotion_speed),
         Some(BehaviorAction::Move(action)) => Some(action.locomotion_speed.unwrap_or_default()),
         _ => None,
     };
     let mut entity = world.entity_mut(actor);
+    entity.insert_if_new(BehaviorInstructionAwaitingActivation);
     if let Some(speed) = speed {
         if let Some(mut intent) = entity.get_mut::<BehaviorLocomotionIntent>() {
             intent.set_if_neq(BehaviorLocomotionIntent(speed));
@@ -1071,6 +1210,42 @@ fn lower_behavior_instruction(world: &mut World, actor: Entity, force: bool) {
             instruction,
             RunBehaviorSpawnObjectAtActor { entity, pose },
         ),
+        BehaviorAction::DockNow(action) => {
+            insert_action(world, actor, instruction, RunBehaviorDockNow(action))
+        }
+        BehaviorAction::DockSpline(action) => {
+            insert_action(world, actor, instruction, RunBehaviorDockSpline(action))
+        }
+        BehaviorAction::FollowEntity(action) => {
+            insert_action(world, actor, instruction, RunBehaviorFollowEntity(action))
+        }
+        BehaviorAction::SplashGuest(action) => {
+            insert_action(world, actor, instruction, RunBehaviorSplashGuest(action))
+        }
+        BehaviorAction::UsePortal(action) => {
+            insert_action(world, actor, instruction, RunBehaviorUsePortal(action))
+        }
+        BehaviorAction::DockTankWall(action) => {
+            insert_action(world, actor, instruction, RunBehaviorDockTankWall(action))
+        }
+        BehaviorAction::StaffTrainAnimal(action) => insert_action(
+            world,
+            actor,
+            instruction,
+            RunBehaviorStaffTrainAnimal(action),
+        ),
+        BehaviorAction::AddSubjectAsDiseaseTarget(action) => insert_action(
+            world,
+            actor,
+            instruction,
+            RunBehaviorAddSubjectAsDiseaseTarget(action),
+        ),
+        BehaviorAction::InvalidAuthoredAction(action) => insert_action(
+            world,
+            actor,
+            instruction,
+            RunBehaviorInvalidAuthoredAction(action),
+        ),
         BehaviorAction::Dock(action) => {
             insert_action(world, actor, instruction, RunBehaviorDock(action))
         }
@@ -1276,9 +1451,6 @@ fn resolve_refill_continuation(
         if let Some(next) = declaration.execution.lowered_actions().get(next_index) {
             (BehaviorTaskExecutionPhase::Execution, next_index, next)
         } else {
-            if declaration.execution.has_unsupported_suffix() {
-                return None;
-            }
             (
                 BehaviorTaskExecutionPhase::Completion,
                 0,
@@ -1317,13 +1489,18 @@ fn insert_action<A: Component>(
     action: A,
 ) {
     let component = world.register_component::<A>();
-    let mut sequence = world.get_resource_or_insert_with(BehaviorInstructionSequence::default);
-    sequence.0 = sequence
-        .0
-        .checked_add(1)
-        .expect("behavior instruction identity exhausted");
-    let id = BehaviorInstructionId(sequence.0);
-    world.entity_mut(actor).insert((
+    let mut actor = world.entity_mut(actor);
+    let id = if let Some(mut generation) = actor.get_mut::<BehaviorInstructionGeneration>() {
+        generation.0 = generation
+            .0
+            .checked_add(1)
+            .expect("behavior instruction identity exhausted");
+        BehaviorInstructionId(generation.0)
+    } else {
+        actor.insert(BehaviorInstructionGeneration(1));
+        BehaviorInstructionId(1)
+    };
+    actor.insert((
         RunningBehaviorInstruction {
             id,
             execution_id,
@@ -1331,6 +1508,7 @@ fn insert_action<A: Component>(
             depth,
             component,
             reservation,
+            activated_at: None,
         },
         action,
     ));

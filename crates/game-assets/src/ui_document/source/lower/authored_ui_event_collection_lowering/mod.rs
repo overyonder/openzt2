@@ -395,17 +395,18 @@ pub(super) fn information_graph_series(
     value: Option<&str>,
     input: &AuthoredUiDocument,
 ) -> io::Result<InformationGraphSeries> {
-    closed_information_value(value, input, "graph series", |value| match value {
-        "value Zoo ui/layout/moneygraphlabel.xml" => Some(InformationGraphSeries::ZooValue),
-        "profit Zoo ui/layout/moneygraphlabel.xml" => Some(InformationGraphSeries::ZooProfit),
-        "profit donations_income ui/layout/moneygraphlabel.xml" => {
-            Some(InformationGraphSeries::DonationIncome)
+    closed_information_value(value, input, "graph series", |value| {
+        let mut fields = value.split_ascii_whitespace();
+        let (series, history) = (fields.next()?, fields.next()?);
+        let _layout = fields.next()?;
+        match (series, history) {
+            ("value", "Zoo") => Some(InformationGraphSeries::ZooValue),
+            ("profit", "Zoo") => Some(InformationGraphSeries::ZooProfit),
+            ("profit", "donations_income") => Some(InformationGraphSeries::DonationIncome),
+            ("totalUsers", "admissions") => Some(InformationGraphSeries::AdmissionUsers),
+            ("fame", "fame") => Some(InformationGraphSeries::Fame),
+            ("members", "members") => Some(InformationGraphSeries::Members),
+            _ => None,
         }
-        "totalUsers admissions ui/layout/graphlabel.xml" => {
-            Some(InformationGraphSeries::AdmissionUsers)
-        }
-        "fame fame ui/layout/graphlabel.xml" => Some(InformationGraphSeries::Fame),
-        "members members ui/layout/graphlabel.xml" => Some(InformationGraphSeries::Members),
-        _ => None,
     })
 }

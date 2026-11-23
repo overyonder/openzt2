@@ -23,9 +23,11 @@ mod topology_deletion_transaction_preparation;
 mod topology_edit_application;
 mod topology_edit_outcome_messages;
 mod topology_prefab_presentation;
-pub mod topology_presentation_types;
+mod topology_presentation_types;
 
-use crate::topology::fence_anchor_cursor_presentation::present_fence_anchor_cursor;
+use crate::topology::fence_anchor_cursor_presentation::{
+    fit_fence_anchor_to_terrain, project_fence_anchor_cell,
+};
 use crate::topology::fence_construction_preview_presentation::project_fence_construction_preview_validity_onto_prefab_model_tints;
 use crate::topology::fence_construction_preview_presentation::reconcile_fence_construction_preview_presentation_segments;
 use crate::topology::fence_segment_prefab_refresh::refresh_fence_segment_prefabs_after_topology_index_changes;
@@ -92,11 +94,13 @@ impl Plugin for TopologyPlugin {
             .add_observer(path_support_hydration::remove_supports_when_path_tile_is_removed)
             .add_observer(fence_construction_preview_presentation::remove_fence_segments_on_preview_removal)
             .add_observer(tank_wall_rail_presentation::remove_tank_wall_rails_on_component_removal)
+            .add_observer(path_curb_presentation::notify_discarded_path_curb_segment)
             .add_observer(topology_construction_interaction::drop_prompt_candidates_when_fence_component_is_removed)
             .init_resource::<ElevatedPathSurfacePresentationAssets>()
             .init_resource::<path_placement_highlight_presentation::PathPlacementHighlightAssets>()
             .add_message::<PlaceFence>()
             .add_message::<PlacePath>()
+            .add_message::<path_curb_presentation::DiscardedPathCurbSegment>()
             .add_message::<SetGateState>()
             .add_message::<TopologyChanged>()
             .add_message::<openzt2_zoo_state::topology::topology_edit_types::FenceConnectivityChanged>()
@@ -112,13 +116,17 @@ impl Plugin for TopologyPlugin {
             .add_systems(
                 Update,
                 (
-                    topology_construction_interaction::track_rectangular_enclosure_gate_prompt,
-                    restart_fence_preview_from_committed_endpoint,
-                    restart_path_preview_from_committed_endpoint,
-                    topology_construction_interaction::rotate_closed_fence_placement_heading,
+                    (
+                        topology_construction_interaction::track_rectangular_enclosure_gate_prompt,
+                        restart_fence_preview_from_committed_endpoint,
+                        restart_path_preview_from_committed_endpoint,
+                        topology_construction_interaction::rotate_closed_fence_placement_heading,
+                    ),
                     drive_selected_topology_placement_pointer_sequence,
-                    apply_fence_placement_requests_to_construction_previews,
-                    apply_path_placement_requests_to_construction_previews,
+                    (
+                        apply_fence_placement_requests_to_construction_previews,
+                        apply_path_placement_requests_to_construction_previews,
+                    ),
                     evaluate_topology_construction_preview_validity,
                 )
                     .chain()
@@ -130,7 +138,8 @@ impl Plugin for TopologyPlugin {
                 (
                     hydrate_save_loaded_topology_definition_facts,
                     reconcile_fence_construction_preview_presentation_segments,
-                    present_fence_anchor_cursor,
+                    project_fence_anchor_cell,
+                    fit_fence_anchor_to_terrain.after(project_fence_anchor_cell),
                     invalidate_ground_path_terrain_fitting_after_terrain_changes,
                     fit_ground_path_tiles_to_authored_terrain
                         .after(invalidate_ground_path_terrain_fitting_after_terrain_changes),
@@ -153,7 +162,8 @@ impl Plugin for TopologyPlugin {
                     project_fence_construction_preview_validity_onto_prefab_model_tints
                         .after(hydrate_topology_prefab_presentations),
                     tank_wall_rail_presentation::present_changed_tank_wall_rails
-                        .after(fit_fence_presentations_to_terrain_endpoint_heights),
+                        .after(refresh_fence_segment_prefabs_after_topology_index_changes)
+                        .after(hydrate_save_loaded_topology_definition_facts),
                 )
                     .in_set(GameSet::Presentation),
             )

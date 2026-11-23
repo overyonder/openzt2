@@ -16,7 +16,10 @@ use openzt2_zoo_state::topology::topology_graph_types::TopologyNode;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 
-use super::habitat_fence_inputs::{HabitatBoundaryRaster, HabitatFenceLattice};
+use super::habitat_fence_inputs::{
+    HabitatBoundaryRaster, HabitatFenceIncidences, HabitatFenceLattice,
+};
+use super::habitat_membership_and_containment::HabitatCellOwnershipChanged;
 use crate::habitat::habitat_region_derivation::{
     connected_cardinal_fence_components, derive_enclosed_habitats,
 };
@@ -32,16 +35,13 @@ use openzt2_zoo_state::habitat::habitat_types::HabitatSummary;
 use openzt2_zoo_state::habitat::habitat_types::RebuildHabitatRegionsWithinTopologyBounds;
 use openzt2_zoo_state::habitat::habitat_types::{Habitat, HabitatBoundaryFence};
 
-#[derive(Component)]
-pub(super) struct HabitatTopologyProjected;
-
 /// Seeds the first regional rebuild from topology already hydrated with the map.
 pub(super) fn request_initial_habitat_region_rebuild_from_loaded_topology(
     topology_nodes: Query<&TopologyNode>,
-    published: Query<(), (With<WorldRoot>, With<HabitatTopologyProjected>)>,
+    ready_worlds: Query<(), (With<WorldRoot>, With<TopologyGrid>, With<TerrainIndex>)>,
     mut habitat_rebuild_requests: MessageWriter<RebuildHabitatRegionsWithinTopologyBounds>,
 ) {
-    if !published.is_empty() {
+    if ready_worlds.is_empty() {
         return;
     }
     let Some(topology_bounds) = calculate_topology_cell_bounds(topology_nodes.iter()) else {
@@ -75,16 +75,23 @@ pub(super) fn request_habitat_region_rebuilds_after_topology_changes(
 pub(super) fn rebuild_changed_habitat_regions_from_fence_topology_and_terrain(
     mut commands: Commands,
     mut habitat_rebuild_requests: MessageReader<RebuildHabitatRegionsWithinTopologyBounds>,
-    mut habitat_index: ResMut<HabitatIndex>,
-    terrain_index: Res<TerrainIndex>,
-    topology_grid: Res<TopologyGrid>,
+
     terrain_assets: Res<Assets<TerrainAsset>>,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,
-    fence_lattice: Res<HabitatFenceLattice>,
+    fence_incidences: HabitatFenceIncidences,
     rasters: Query<&HabitatBoundaryRaster>,
     terrain_chunks: Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
-    world_roots: Query<Entity, With<WorldRoot>>,
+    mut world_roots: Query<
+        (
+            Entity,
+            &mut HabitatIndex,
+            &TerrainIndex,
+            &TopologyGrid,
+            &HabitatFenceLattice,
+        ),
+        With<WorldRoot>,
+    >,
     habitat_children: Query<&Children>,
     boundary_links: Query<&HabitatBoundaryFence>,
     mut existing_habitats: Query<
@@ -98,6 +105,7 @@ pub(super) fn rebuild_changed_habitat_regions_from_fence_topology_and_terrain(
         With<Habitat>,
     >,
     mut habitat_changes: MessageWriter<HabitatChanged>,
+    mut cell_changes: MessageWriter<HabitatCellOwnershipChanged>,
 ) {
     let Some(changed_topology_bounds) =
         merge_requested_habitat_region_rebuild_bounds(&mut habitat_rebuild_requests)
@@ -109,7 +117,9 @@ pub(super) fn rebuild_changed_habitat_regions_from_fence_topology_and_terrain(
         roots = world_roots.iter().count(),
         "requested habitat rebuild"
     );
-    let Ok(world_root) = world_roots.single() else {
+    let Ok((world_root, mut habitat_index, terrain_index, topology_grid, fence_lattice)) =
+        world_roots.single_mut()
+    else {
         return;
     };
     let topology_cell_size_metres = topology_grid.spacing_m;
@@ -151,8 +161,8 @@ pub(super) fn rebuild_changed_habitat_regions_from_fence_topology_and_terrain(
         for y in rectangle.min.y..=rectangle.max.y {
             for x in rectangle.min.x..=rectangle.max.x {
                 frontier.extend(
-                    fence_lattice
-                        .at(IVec2::new(x, y))
+                    fence_incidences
+                        .fences_at(fence_lattice, IVec2::new(x, y))
                         .filter(|fence| visited_fences.insert(*fence)),
                 );
             }
@@ -165,8 +175,8 @@ pub(super) fn rebuild_changed_habitat_regions_from_fence_topology_and_terrain(
                 for node in [piece.first_topology_node, piece.second_topology_node] {
                     bounds = bounds.union_point(node);
                     frontier.extend(
-                        fence_lattice
-                            .at(node)
+                        fence_incidences
+                            .fences_at(fence_lattice, node)
                             .filter(|fence| visited_fences.insert(*fence)),
                     );
                 }
@@ -216,19 +226,21 @@ pub(super) fn rebuild_changed_habitat_regions_from_fence_topology_and_terrain(
             Some((entity, region.topology_cells.clone()))
         })
         .collect::<Vec<_>>();
-    commands
-        .entity(world_root)
-        .insert_if_new(HabitatTopologyProjected);
     affected_existing_habitats.sort_unstable_by_key(|(entity, _)| entity.to_bits());
     let mut reused_existing_habitats = vec![false; affected_existing_habitats.len()];
+    let mut previous_cell_owners = bevy::platform::collections::HashMap::<IVec2, Entity>::default();
 
     for (habitat_entity, topology_cells) in &affected_existing_habitats {
         for topology_cell in topology_cells.iter() {
+            if let Some(owner) = habitat_index.habitat_for_topology_cell(*topology_cell) {
+                previous_cell_owners.insert(*topology_cell, owner);
+            }
             habitat_index
                 .remove_habitat_for_topology_cell_if_it_matches(*topology_cell, *habitat_entity);
         }
     }
 
+    let mut changed_cells = Vec::new();
     for derived_region in derived_regions {
         let habitat_entity = find_best_reusable_habitat_region_index(
             &derived_region.topology_cells,
@@ -268,6 +280,9 @@ pub(super) fn rebuild_changed_habitat_regions_from_fence_topology_and_terrain(
             topology_cells: derived_region.topology_cells.into_boxed_slice(),
         };
         for topology_cell in habitat_region.topology_cells.iter().copied() {
+            if previous_cell_owners.remove(&topology_cell) != Some(habitat_entity) {
+                changed_cells.push(topology_cell);
+            }
             habitat_index.record_habitat_for_topology_cell(topology_cell, habitat_entity);
         }
         let habitat_climate = derive_dominant_habitat_climate(&habitat_summary, world_definitions);
@@ -333,6 +348,13 @@ pub(super) fn rebuild_changed_habitat_regions_from_fence_topology_and_terrain(
             });
             commands.entity(*habitat_entity).despawn();
         }
+    }
+    changed_cells.extend(previous_cell_owners.into_keys());
+    if !changed_cells.is_empty() {
+        cell_changes.write(HabitatCellOwnershipChanged {
+            root: world_root,
+            cells: changed_cells,
+        });
     }
 }
 

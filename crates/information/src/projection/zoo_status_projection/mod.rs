@@ -13,19 +13,24 @@ use openzt2_zoo_state::progression::profile_challenge_types::TotalEndangeredAnim
 use openzt2_zoo_state::progression::rating_types::ZooRating;
 
 pub(crate) fn project_live_zoo_status_to_authored_information_bindings(
-    cash: Option<Res<ZooCash>>,
+    cash: Option<Single<Ref<ZooCash>>>,
     worlds: Query<
         (Option<Ref<Fame>>, Option<Ref<ZooRating>>),
         (With<WorldRoot>, With<WorldLoadCompleted>),
     >,
-    endangered_births: Option<Res<TotalEndangeredAnimalBirthCount>>,
+    endangered_births: Option<Single<Ref<TotalEndangeredAnimalBirthCount>>>,
     mut values: Query<(Ref<UiValueBinding>, &mut UiValue, &mut Visibility)>,
-    history: Option<Res<openzt2_zoo_state::economy::monthly_finance_types::MonthlyFinanceHistory>>,
+    history: Option<
+        Single<Ref<openzt2_zoo_state::economy::monthly_finance_types::MonthlyFinanceHistory>>,
+    >,
     mut guest_texts: Query<(
         Ref<openzt2_ui::authored_ui_text_content_binding::UiTextBinding>,
         &mut Text,
     )>,
 ) {
+    let cash = cash.map(Single::into_inner);
+    let endangered_births = endangered_births.map(Single::into_inner);
+    let history = history.map(Single::into_inner);
     let (fame, rating) = worlds.single().unwrap_or_default();
     let guest_count = history
         .as_ref()
@@ -94,7 +99,8 @@ mod tests {
         let mut app = App::new();
         let mut history = MonthlyFinanceHistory::default();
         history.enter_calendar_month(0, Money::ZERO);
-        app.insert_resource(history).add_systems(
+        let root = app.world_mut().spawn(history).id();
+        app.add_systems(
             Update,
             project_live_zoo_status_to_authored_information_bindings,
         );
@@ -110,12 +116,14 @@ mod tests {
         app.update();
         assert_eq!(app.world().get::<Text>(field).unwrap().0, "0");
         app.world_mut()
-            .resource_mut::<MonthlyFinanceHistory>()
+            .get_mut::<MonthlyFinanceHistory>(root)
+            .unwrap()
             .record_guest_arrival();
         app.update();
         assert_eq!(app.world().get::<Text>(field).unwrap().0, "1");
         app.world_mut()
-            .resource_mut::<MonthlyFinanceHistory>()
+            .get_mut::<MonthlyFinanceHistory>(root)
+            .unwrap()
             .record_guest_departure();
         app.update();
         assert_eq!(app.world().get::<Text>(field).unwrap().0, "0");

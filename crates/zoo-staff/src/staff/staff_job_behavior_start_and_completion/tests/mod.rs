@@ -12,7 +12,6 @@ fn claimed_task_waits_for_its_asset_and_does_not_restart_after_terminal_executio
     };
     let mut app = App::new();
     app.init_resource::<Assets<BehaviorDocumentAsset>>()
-        .init_resource::<BehaviorTaskExecutionSequence>()
         .add_message::<CancelStaffJobRequest>()
         .add_systems(
             Update,
@@ -119,7 +118,6 @@ fn removed_source_task_releases_assignment_without_cancelling_live_request() {
     use openzt2_game_data::behavior::document::BehaviorDocument;
     let mut app = App::new();
     app.init_resource::<Assets<BehaviorDocumentAsset>>()
-        .init_resource::<BehaviorTaskExecutionSequence>()
         .add_message::<CancelStaffJobRequest>()
         .add_systems(
             Update,

@@ -1,101 +1,190 @@
 use bevy::prelude::*;
-use openzt2_game_data::{world_definitions::staff_management::StaffRoleKind, AssetId};
+use openzt2_game_data::world_definitions::{
+    economy_transactions::EconomyTransactionKind, staff_management::StaffRoleKind,
+};
 
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 
 use super::{
+    behavior_transaction_state::EconomyUsage,
     facility_economy_types::FacilityProfit,
     facility_economy_types::{
-        Inventory, MonthlyUpkeep, ObjectEconomyFactsResolved, Price, RequiredFacilityStaff,
-        ServiceFacility, ServiceFacilityFactsResolved,
+        Inventory, MonthlyUpkeep, Price, RequiredFacilityStaff, ServiceFacility,
     },
     money_types::Money,
 };
 
 pub(super) fn hydrate_authored_monthly_upkeep_for_new_world_objects(
     mut commands: Commands,
-    world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
-    active_world_definitions: Res<WorldDefinitions>,
-    objects: Query<
-        (Entity, &DefinitionId, Option<&FacilityProfit>),
-        Without<ObjectEconomyFactsResolved>,
-    >,
+    assets: Res<Assets<WorldDefinitionAsset>>,
+    active_definitions: Res<WorldDefinitions>,
+    mut objects: Query<(
+        Entity,
+        &DefinitionId,
+        Has<FacilityProfit>,
+        Has<EconomyUsage>,
+        Option<&mut MonthlyUpkeep>,
+    )>,
+    changed_definitions: Query<Entity, Changed<DefinitionId>>,
+    retired_objects: Query<(), (With<MonthlyUpkeep>, Without<DefinitionId>)>,
+    mut removed_definitions: RemovedComponents<DefinitionId>,
 ) {
-    let Some(world_definitions) = active_world_definitions.get(&world_definition_assets) else {
+    let Some(definitions) = active_definitions.get(&assets) else {
         return;
     };
-    for (entity, definition_id, profit) in &objects {
-        let Some(object_definition) = world_definitions.find_object(definition_id.0) else {
-            commands.entity(entity).insert(ObjectEconomyFactsResolved);
+    for entity in removed_definitions.read() {
+        if retired_objects.contains(entity) {
+            commands.entity(entity).try_remove::<MonthlyUpkeep>();
+        }
+    }
+    let dirty = if active_definitions.is_changed() {
+        objects
+            .iter()
+            .map(|(entity, ..)| entity)
+            .collect::<Vec<_>>()
+    } else {
+        changed_definitions.iter().collect::<Vec<_>>()
+    };
+    let mut objects = objects.iter_many_mut(dirty);
+    while let Some(row) = objects.fetch_next() {
+        let Ok((entity, definition, has_profit, has_usage, upkeep)) = row else {
             continue;
         };
-
-        let monthly_upkeep = i64::from(object_definition.upkeep_cents_per_month);
-        if !object_definition.transactions.is_empty() && profit.is_none() {
-            commands.entity(entity).insert(FacilityProfit::default());
+        let definition = definitions.find_object(definition.0);
+        let monthly = definition
+            .map(|definition| definition.upkeep_cents_per_month)
+            .filter(|&upkeep| upkeep != 0)
+            .map(|upkeep| MonthlyUpkeep(Money(i64::from(upkeep))));
+        match (upkeep, monthly) {
+            (Some(mut upkeep), Some(monthly)) => {
+                upkeep.set_if_neq(monthly);
+            }
+            (None, Some(monthly)) => {
+                commands.entity(entity).insert(monthly);
+            }
+            (Some(_), None) => {
+                commands.entity(entity).try_remove::<MonthlyUpkeep>();
+            }
+            (None, None) => {}
         }
-        if monthly_upkeep != 0 {
-            commands.entity(entity).insert((
-                MonthlyUpkeep(Money(monthly_upkeep)),
-                ObjectEconomyFactsResolved,
-            ));
-        } else {
-            commands.entity(entity).insert(ObjectEconomyFactsResolved);
+        if let Some(definition) = definition {
+            if !has_profit && !definition.transactions.is_empty() {
+                commands
+                    .entity(entity)
+                    .try_insert_if_new(FacilityProfit::default());
+            }
+            if !has_usage
+                && definition.transactions.iter().any(|transaction| {
+                    matches!(
+                        transaction.kind,
+                        EconomyTransactionKind::AddUser | EconomyTransactionKind::RemoveUser
+                    )
+                })
+            {
+                commands
+                    .entity(entity)
+                    .try_insert_if_new(EconomyUsage::default());
+            }
         }
     }
 }
 
-/// Reads one definition's source-compiled price directly from the loaded
-
 pub(super) fn hydrate_authored_service_facility_facts_for_new_world_objects(
     mut commands: Commands,
-    world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
-    active_world_definitions: Res<WorldDefinitions>,
-    facilities: Query<
+    assets: Res<Assets<WorldDefinitionAsset>>,
+    active_definitions: Res<WorldDefinitions>,
+    mut facilities: Query<(
+        Entity,
+        Ref<DefinitionId>,
+        Has<Price>,
+        Option<&mut ServiceFacility>,
+        Has<Inventory>,
+        Option<&mut RequiredFacilityStaff>,
+    )>,
+    changed_definitions: Query<Entity, Changed<DefinitionId>>,
+    retired_facilities: Query<
+        (),
         (
-            Entity,
-            &DefinitionId,
-            Option<&Price>,
-            Option<&ServiceFacility>,
-            Option<&Inventory>,
+            Or<(With<ServiceFacility>, With<RequiredFacilityStaff>)>,
+            Without<DefinitionId>,
         ),
-        Without<ServiceFacilityFactsResolved>,
     >,
+    mut removed_definitions: RemovedComponents<DefinitionId>,
 ) {
-    let Some(world_definitions) = active_world_definitions.get(&world_definition_assets) else {
+    let Some(definitions) = active_definitions.get(&assets) else {
         return;
     };
-    for (entity, definition_id, price, service, inventory) in &facilities {
-        let Some(facility_definition) = world_definitions.find_facility_by_object(definition_id.0)
+    for entity in removed_definitions.read() {
+        if retired_facilities.contains(entity) {
+            commands
+                .entity(entity)
+                .try_remove::<(ServiceFacility, RequiredFacilityStaff)>();
+        }
+    }
+    let dirty = if active_definitions.is_changed() {
+        facilities
+            .iter()
+            .map(|(entity, ..)| entity)
+            .collect::<Vec<_>>()
+    } else {
+        changed_definitions.iter().collect::<Vec<_>>()
+    };
+    let mut facilities = facilities.iter_many_mut(dirty);
+    while let Some(row) = facilities.fetch_next() {
+        let Ok((entity, definition_id, has_price, service, has_inventory, required_staff)) = row
         else {
-            commands.entity(entity).insert(ServiceFacilityFactsResolved);
             continue;
         };
-
-        let mut entity_commands = commands.entity(entity);
-        entity_commands.insert(ServiceFacilityFactsResolved);
-        if price.is_none() {
-            entity_commands.insert(Price(Money(i64::from(facility_definition.price_cents))));
+        let definition = definitions.find_facility_by_object(definition_id.0);
+        let staff = definition
+            .and_then(|definition| {
+                map_authored_staff_kind_to_supported_facility_operator(&definition.staffing)
+            })
+            .map(RequiredFacilityStaff);
+        match (required_staff, staff) {
+            (Some(mut current), Some(staff)) => {
+                current.set_if_neq(staff);
+            }
+            (None, Some(staff)) => {
+                commands.entity(entity).insert(staff);
+            }
+            (Some(_), None) => {
+                commands
+                    .entity(entity)
+                    .try_remove::<RequiredFacilityStaff>();
+            }
+            (None, None) => {}
         }
-        if service.is_none() {
-            entity_commands.insert(ServiceFacility {
-                definition: AssetId(facility_definition.id.0),
-                capacity: facility_definition.capacity,
-                payment_trigger: facility_definition.payment_trigger,
-            });
+        let Some(definition) = definition else {
+            if service.is_some() {
+                commands.entity(entity).try_remove::<ServiceFacility>();
+            }
+            continue;
+        };
+        let next = ServiceFacility {
+            definition: definition.id,
+            capacity: definition.capacity,
+            payment_trigger: definition.payment_trigger,
+        };
+        if let Some(mut service) = service {
+            if !definition_id.is_added() {
+                service.set_if_neq(next);
+            }
+        } else {
+            commands.entity(entity).insert(next);
         }
-        if let Some(required_staff) =
-            map_authored_staff_kind_to_supported_facility_operator(&facility_definition.staffing)
-        {
-            entity_commands.insert(RequiredFacilityStaff(required_staff));
+        if !has_price {
+            commands
+                .entity(entity)
+                .insert(Price(Money(i64::from(definition.price_cents))));
         }
-        if facility_definition.inventory_capacity > 0 && inventory.is_none() {
-            entity_commands.insert(Inventory {
-                available: facility_definition.inventory_capacity,
+        if !has_inventory && definition.inventory_capacity > 0 {
+            commands.entity(entity).insert(Inventory {
+                available: definition.inventory_capacity,
                 reserved: 0,
-                capacity: facility_definition.inventory_capacity,
+                capacity: definition.inventory_capacity,
             });
         }
     }
@@ -119,15 +208,35 @@ fn map_authored_staff_kind_to_supported_facility_operator(
 }
 
 #[cfg(test)]
+pub(super) fn economy_test_simulation_timing()
+-> openzt2_game_data::world_definitions::simulation_time::SimulationTimingDefinition {
+    use openzt2_game_data::world_definitions::simulation_time::{
+        SimulationCalendarLeapPolicy, SimulationCalendarPolicy, SimulationTimingDefinition,
+    };
+    SimulationTimingDefinition {
+        fixed_hz: 20,
+        ticks_per_day: 100,
+        speed_multipliers: Vec::new(),
+        calendar: SimulationCalendarPolicy {
+            epoch_year: 1,
+            epoch_month: 1,
+            epoch_day: 1,
+            month_lengths: [30; 12],
+            leap: SimulationCalendarLeapPolicy::None,
+        },
+    }
+}
+
+#[cfg(test)]
 mod authored_service_facility_hydration_tests {
     use super::*;
+    use openzt2_game_data::AssetId;
     use openzt2_game_data::world_definitions::{
         document::WorldDefinitionDocument,
         facilities_and_maintenance::{
             FacilityDefinition, FacilityPaymentTrigger, FacilityServiceKind,
         },
     };
-    use openzt2_game_data::AssetId;
 
     fn cart_object() -> AssetId {
         AssetId::from_key("snackcart_fruitcup_df")
@@ -148,6 +257,7 @@ mod authored_service_facility_hydration_tests {
                 inventory_units_per_service: 0,
                 inventory_restock_per_zoo_day: 0,
             }],
+            simulation_timing: Some(economy_test_simulation_timing()),
             ..default()
         }
     }
@@ -233,9 +343,5 @@ mod authored_service_facility_hydration_tests {
             Some(&facility)
         );
         assert_eq!(application.world().get::<Inventory>(cart), Some(&stock));
-        assert!(application
-            .world()
-            .get::<ServiceFacilityFactsResolved>(cart)
-            .is_some());
     }
 }

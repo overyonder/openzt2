@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 
@@ -10,17 +11,22 @@ use openzt2_zoo_state::scenario::scenario_objective_types::ScenarioObjectiveStat
 use super::challenge_offer_types::{ScenarioChallengeOffer, ScenarioChallengeOfferState};
 
 pub(super) fn expire_active_objectives(
-    clock: Res<ZooClock>,
+    clocks: Query<&ZooClock>,
     mut objectives: Query<(
         Entity,
         &ScenarioObjectiveDeadline,
+        &WorldMember,
         &mut ScenarioObjectiveStatus,
         &ScenarioObjectiveProgress,
     )>,
     mut changed: MessageWriter<ScenarioObjectiveStatusChanged>,
 ) {
-    for (entity, deadline, mut status, progress) in &mut objectives {
-        if *status == ScenarioObjectiveStatus::Active && clock.tick >= deadline.end_tick {
+    for (entity, deadline, member, mut status, progress) in &mut objectives {
+        if *status == ScenarioObjectiveStatus::Active
+            && clocks
+                .get(member.root)
+                .is_ok_and(|clock| clock.tick >= deadline.end_tick)
+        {
             *status = ScenarioObjectiveStatus::Failed;
             changed.write(ScenarioObjectiveStatusChanged {
                 objective: entity,
@@ -34,11 +40,15 @@ pub(super) fn expire_active_objectives(
 
 pub(super) fn remove_expired_challenge_offers(
     mut commands: Commands,
-    clock: Res<ZooClock>,
-    offers: Query<(Entity, &ScenarioChallengeOffer)>,
+    clocks: Query<&ZooClock>,
+    offers: Query<(Entity, &ScenarioChallengeOffer, &WorldMember)>,
 ) {
-    for (entity, offer) in &offers {
-        if offer.state == ScenarioChallengeOfferState::Offered && clock.tick >= offer.expires_tick {
+    for (entity, offer, member) in &offers {
+        if offer.state == ScenarioChallengeOfferState::Offered
+            && clocks
+                .get(member.root)
+                .is_ok_and(|clock| clock.tick >= offer.expires_tick)
+        {
             commands.entity(entity).despawn();
         }
     }

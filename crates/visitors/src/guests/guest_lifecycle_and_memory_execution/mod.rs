@@ -4,7 +4,7 @@ use openzt2_game_assets::world_definitions::world_definition_document_asset_and_
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_zoo_state::locomotion::locomotion_types::Arrived;
 use openzt2_zoo_state::locomotion::locomotion_types::NavigateTo;
-use openzt2_zoo_state::locomotion::locomotion_types::NavigationRequestSequence;
+use openzt2_zoo_state::locomotion::locomotion_types::NavigationRequestGeneration;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_world_state::world_spawn::zoo_entrance_anchor_synchronization::ZooEntrance;
@@ -30,7 +30,7 @@ use super::guest_simulation_types::GuestThirst;
 use super::guest_simulation_types::GuestViewingTarget;
 use super::guest_simulation_types::Viewing;
 use super::guest_simulation_types::VisitTime;
-use openzt2_zoo_state::animal_behavior::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation;
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::mark_behavior_task_for_failure_and_stop_navigation;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
 use super::guest_definition_queries::find_guest_definition;
 use super::guest_definition_queries::find_reaction;
@@ -64,12 +64,12 @@ pub(crate) fn advance_guest_lifecycle(
         &ZooEntrance,
         &GlobalTransform,
     )>,
-    grid: Res<SpatialGrid>,
+    grid: Single<&SpatialGrid>,
     members: Query<&WorldMember, With<Guest>>,
     mut requests: Query<&mut GuestNavigationRequest, With<Guest>>,
     tasks: Query<(), With<BehaviorTaskExecutionState>>,
     mut commands: Commands,
-    mut navigation_request_sequence: ResMut<NavigationRequestSequence>,
+    mut navigation_generations: Query<&mut NavigationRequestGeneration>,
     mut navigate: MessageWriter<NavigateTo>,
     mut reached_entrance: MessageWriter<GuestReachedEntrance>,
     mut departed: MessageWriter<GuestDeparted>,
@@ -103,7 +103,11 @@ pub(crate) fn advance_guest_lifecycle(
                     .is_some_and(|destination| destination.purpose == GuestVisitPurpose::Exit) =>
             {
                 request.0 = None;
+                let Ok(member) = members.get(guest) else {
+                    continue;
+                };
                 departed.write(GuestDeparted {
+                    root: member.root,
                     guest,
                     satisfaction_permille: satisfaction.0,
                     education_permille: education.0,
@@ -181,7 +185,10 @@ pub(crate) fn advance_guest_lifecycle(
         let exit = asset.guest_generation().map_or(entrance.exit, |policy| {
             displaced_from_entrance_gate(entrance.exit, gate.rotation(), policy.departure_offset_m)
         });
-        let request_id = navigation_request_sequence.next();
+        let Ok(mut generation) = navigation_generations.get_mut(guest) else {
+            continue;
+        };
+        let request_id = generation.advance();
         commands.entity(guest).insert((
             GuestDestination {
                 entity: entrance_entity,

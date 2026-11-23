@@ -75,7 +75,7 @@ fn slot_members(world: &World, slot: Option<Entity>) -> Option<&InteractionConta
     world.get::<InteractionContainerSlotMembers>(slot?)
 }
 
-#[derive(Resource, Default)]
+#[derive(Component, Default)]
 struct InteractionContainerAdmissionSequence(u64);
 
 fn admit_to_container_slot(
@@ -90,15 +90,23 @@ fn admit_to_container_slot(
             .spawn(InteractionContainerSlotOf { container, index })
             .id()
     });
-    let mut sequence =
-        world.get_resource_or_insert_with(InteractionContainerAdmissionSequence::default);
-    sequence.0 = sequence
-        .0
-        .checked_add(1)
-        .expect("interaction admission sequence exhausted");
+    let admission_order = if let Some(mut sequence) =
+        world.get_mut::<InteractionContainerAdmissionSequence>(container)
+    {
+        sequence.0 = sequence
+            .0
+            .checked_add(1)
+            .expect("interaction admission sequence exhausted");
+        sequence.0
+    } else {
+        world
+            .entity_mut(container)
+            .insert(InteractionContainerAdmissionSequence(1));
+        1
+    };
     let membership = InteractionContainerMember {
         slot,
-        admission_order: sequence.0,
+        admission_order,
     };
     let member = if let Some(member) = member {
         world.entity_mut(member).insert(membership);

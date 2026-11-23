@@ -245,6 +245,7 @@ pub struct GuestReachedEntrance {
 
 #[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GuestDeparted {
+    pub root: Entity,
     pub guest: Entity,
     pub satisfaction_permille: u16,
     pub education_permille: u16,

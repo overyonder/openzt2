@@ -14,7 +14,7 @@ use openzt2_game_assets::species::species_asset_types::SpeciesAsset;
 use openzt2_game_assets::species::species_asset_types::SpeciesAssets;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
-use openzt2_world_state::animation_graph::animation_graph_playback_message_types::AnimationClipPlaybackRequest;
+use openzt2_world_state::animation_graph::model_animation_asset_attachment::resolve_animation_clip_or_graph_node_asset_key;
 use openzt2_world_state::animation_graph::animation_presentation_relationship_types::AnimationPresentationOwner;
 use openzt2_world_state::animation_graph::model_animation_asset_binding_types::{
     ModelAnimationAssetLibrary, ModelAnimationAttachmentResolved,
@@ -43,6 +43,9 @@ pub(super) struct AnimalPresentationProjection {
 /// Retains the requested prefab until the dependency is loaded or fails.
 #[derive(Component)]
 pub(super) struct AnimalPresentationPrefabDemand(Handle<ScenePrefabAsset>);
+
+#[derive(Component)]
+pub(super) struct LoopInitialAnimalAnimation;
 
 /// Use the authored prefab projection so binder transforms and materials
 /// remain attached to the animal's presentation.
@@ -260,6 +263,14 @@ pub(super) fn attach_selected_species_variant_models_to_animal_entities(
                             .clone(),
                     },
                 ));
+            if variant.initial_animation_loops && variant.initial_animation_clip_asset_key.is_some()
+            {
+                commands.entity(animal).insert(LoopInitialAnimalAnimation);
+            } else {
+                commands
+                    .entity(animal)
+                    .remove::<LoopInitialAnimalAnimation>();
+            }
         }
         if demand.is_some() {
             commands
@@ -269,40 +280,38 @@ pub(super) fn attach_selected_species_variant_models_to_animal_entities(
     }
 }
 
-pub(super) fn apply_authored_initial_animal_animation_repetition_policy_after_attachment(
-    species_assets: Res<Assets<SpeciesAsset>>,
-    species_index: Res<SpeciesAssets>,
-    newly_resolved_animation_controllers: Query<
-        (Entity, &AnimationPlaybackController),
-        Added<ModelAnimationAttachmentResolved>,
-    >,
-    animals: Query<&AnimalVariant, With<Animal>>,
-    mut animation_clip_playback_requests: MessageWriter<AnimationClipPlaybackRequest>,
+pub(super) fn initialize_authored_animal_animation_repetition(
+    attached: On<Add<ModelAnimationAttachmentResolved>>,
+    animation_sets: Res<Assets<AnimationSetAsset>>,
+    pending: Query<&PendingModelAnimationAssets, With<LoopInitialAnimalAnimation>>,
+    mut controllers: Query<&mut AnimationPlaybackController>,
+    mut commands: Commands,
 ) {
-    let Some(species_index) = species_index.get(&species_assets) else {
+    let Ok(pending) = pending.get(attached.entity) else {
         return;
     };
-    for (animation_controller_entity, _) in &newly_resolved_animation_controllers {
-        let Ok(selected_variant) = animals.get(animation_controller_entity) else {
-            continue;
-        };
-        let Some(variant) = species_index.find_variant(selected_variant.0) else {
-            continue;
-        };
-        let Some(animation_clip_asset_key) = variant.initial_animation_clip_asset_key.as_ref()
-        else {
-            continue;
-        };
-        animation_clip_playback_requests.write(AnimationClipPlaybackRequest {
-            animation_subject_entity: animation_controller_entity,
-            animation_clip_asset_key: animation_clip_asset_key.clone(),
-            blend_duration_milliseconds: 0,
-            playback_speed_permille: 1000,
-            playback_repetition_policy: if variant.initial_animation_loops {
-                AnimationPlaybackRepetitionPolicy::Loop
-            } else {
-                AnimationPlaybackRepetitionPolicy::UseAuthoredClipPolicy
-            },
-        });
+    commands
+        .entity(attached.entity)
+        .remove::<LoopInitialAnimalAnimation>();
+    let (Some(requested), Ok(mut controller)) = (
+        pending
+            .requested_initial_animation_clip_asset_key
+            .as_deref(),
+        controllers.get_mut(attached.entity),
+    ) else {
+        return;
+    };
+    let matches_requested_clip = controller
+        .animation_clip_asset_key
+        .eq_ignore_ascii_case(requested)
+        || animation_sets
+            .get(&controller.animation_set_asset)
+            .and_then(|set| resolve_animation_clip_or_graph_node_asset_key(set, requested))
+            .is_some_and(|clip| clip == controller.animation_clip_asset_key);
+    if matches_requested_clip {
+        controller
+            .reborrow()
+            .map_unchanged(|controller| &mut controller.playback_repetition_policy)
+            .set_if_neq(AnimationPlaybackRepetitionPolicy::Loop);
     }
 }

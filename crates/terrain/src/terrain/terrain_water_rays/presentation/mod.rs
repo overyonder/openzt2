@@ -14,7 +14,7 @@ use openzt2_zoo_state::{
     terrain::{
         terrain_water_presentation_types::TerrainWaterRegionQuery,
         terrain_water_ray_types::TerrainWaterRayAnimation,
-        terrain_water_view_state::{TerrainWaterCameraPose, TerrainWaterViewState},
+        terrain_water_view_state::{TerrainWaterCameraContact, TerrainWaterCameraPose},
     },
 };
 
@@ -22,7 +22,6 @@ use openzt2_zoo_state::{
 pub(in crate::terrain) fn update_terrain_water_ray_presentation(
     mut commands: Commands,
     time: Res<Time>,
-    view: Res<TerrainWaterViewState>,
     lights: Query<&EnvironmentWaterRayLight>,
     mut cameras: Query<
         (
@@ -30,6 +29,7 @@ pub(in crate::terrain) fn update_terrain_water_ray_presentation(
             &Camera,
             &Projection,
             Option<&TerrainWaterCameraPose>,
+            &TerrainWaterCameraContact,
             Option<&mut WaterRayViewOcclusion>,
         ),
         With<ZooCamera>,
@@ -60,7 +60,7 @@ pub(in crate::terrain) fn update_terrain_water_ray_presentation(
         if effects.is_empty() {
             return None;
         }
-        let (Ok(light), Ok((camera_entity, camera, projection, pose, query))) =
+        let (Ok(light), Ok((camera_entity, camera, projection, pose, contact, query))) =
             (lights.single(), cameras.single_mut())
         else {
             return None;
@@ -74,7 +74,7 @@ pub(in crate::terrain) fn update_terrain_water_ray_presentation(
         if !camera.is_active {
             return None;
         }
-        let Some(position) = view.camera_position() else {
+        let Some(position) = contact.position else {
             return None;
         };
         let Projection::Perspective(perspective) = projection else {
@@ -128,7 +128,7 @@ pub(in crate::terrain) fn update_terrain_water_ray_presentation(
                 } else {
                     0.0
                 },
-                &view,
+                contact,
                 &sources,
                 &assets,
                 &mut effects,
@@ -163,7 +163,7 @@ pub(in crate::terrain) fn update_terrain_water_ray_presentation(
             visibility.set_if_neq(Visibility::Hidden);
         }
     }
-    for (entity, _, _, _, request) in &cameras {
+    for (entity, _, _, _, _, request) in &cameras {
         if request.is_some() && Some(entity) != active_camera {
             commands.entity(entity).remove::<WaterRayViewOcclusion>();
         }
@@ -256,7 +256,7 @@ fn apply_ray_contributions(
     camera_right: Vec3,
     visible: f32,
     projected: f32,
-    view: &TerrainWaterViewState,
+    contact: &TerrainWaterCameraContact,
     sources: &TerrainWaterRegionQuery,
     assets: &Assets<TerrainAsset>,
     effects: &mut Query<(
@@ -282,10 +282,10 @@ fn apply_ray_contributions(
     let Some(horizontal) = light.object_light_horizontal_vector() else {
         return false;
     };
-    if sun.y == 0.0 || view.underwater_status() != Some(true) {
+    if sun.y == 0.0 || contact.underwater_status != Some(true) {
         return false;
     }
-    let Some(owner) = view.camera_region() else {
+    let Some((owner, _)) = contact.wet_region else {
         return false;
     };
     let Some(height) = sources.get(owner).and_then(|source| {

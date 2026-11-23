@@ -3,6 +3,7 @@
 //! behavior holds them at.
 
 use bevy::prelude::*;
+use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
@@ -22,6 +23,7 @@ pub(crate) fn project_staff_water_locomotion(
         (
             Entity,
             &StaffRole,
+            &WorldMember,
             &mut Transform,
             Option<&mut LocomotionMode>,
             Option<&mut SwimLayer>,
@@ -36,14 +38,14 @@ pub(crate) fn project_staff_water_locomotion(
     let Some(catalogue) = active_definitions.get(&definitions) else {
         return;
     };
-    for (employee, role, transform, mode, swim_layer, held_depth) in &mut staff {
+    for (employee, role, member, transform, mode, swim_layer, held_depth) in &mut staff {
         let Some(depths) = catalogue.find_staff(role.0).and_then(|role| role.swimming) else {
             continue;
         };
         let position = transform.translation.xz();
-        let surface = surfaces.water_surface_height(position);
+        let surface = surfaces.water_surface_height(member.root, position);
         let water_depth = surface
-            .zip(surfaces.ground_height(position))
+            .zip(surfaces.ground_height(member.root, position))
             .map_or(0.0, |(surface, ground)| surface - ground);
         let swimming = mode.as_deref() == Some(&LocomotionMode::Swim);
         let swims = if swimming {

@@ -24,7 +24,8 @@ fn nested_information_row_uses_its_own_subject_until_unbound() {
     use openzt2_zoo_state::guests::guest_simulation_types::GuestSatisfaction;
 
     let mut app = App::new();
-    app.init_resource::<ZooDay>().add_systems(
+    app.world_mut().spawn(ZooDay::default());
+    app.add_systems(
         Update,
         (
             crate::projection::information_row_field_binding::bind_authored_information_row_fields,

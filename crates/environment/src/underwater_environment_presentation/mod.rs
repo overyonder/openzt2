@@ -1,5 +1,6 @@
 use bevy::pbr::{DistanceFog, FogFalloff};
 use bevy::prelude::*;
+use openzt2_game_assets::graphics_settings_types::ThreeLevelGraphicsDetail;
 use openzt2_game_assets::{
     terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset,
     world_definitions::{
@@ -7,18 +8,21 @@ use openzt2_game_assets::{
         world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
     },
 };
+use openzt2_interface_state::camera::camera_runtime_state_types::ZooCamera;
+use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
-use super::environment_presentation_types::{AboveWaterFog, EnvironmentFog};
-use super::environment_state_types::{EnvironmentDaylightFraction, ObjectAmbientLight};
+use super::environment_presentation_types::{AboveWaterFog, EnvironmentFog, WorldEnvironments};
+use super::environment_state_types::{Daylight, ObjectAmbientLight};
 
 pub(crate) mod current;
 
 pub(crate) fn sample_water_environment_map(
-    daylight_fraction: Res<EnvironmentDaylightFraction>,
     assets: Res<Assets<WorldDefinitionAsset>>,
     images: Res<Assets<Image>>,
     active: Res<WorldDefinitions>,
-    environments: Query<&WorldEnvironment>,
+    environments: Query<(Ref<WorldEnvironment>, Ref<Daylight>)>,
+    worlds: Query<&WorldEnvironments>,
+    cameras: Query<(&Camera, &WorldMember), With<ZooCamera>>,
     mut sample: ResMut<
         openzt2_zoo_state::environment::environment_state_types::WaterEnvironmentMapSample,
     >,
@@ -28,15 +32,20 @@ pub(crate) fn sample_water_environment_map(
         let Some(definitions) = active.get(&assets) else {
             return WaterEnvironmentMapSample::Unresolved;
         };
-        let Ok(environment) = environments.single() else {
+        let Some((environment, daylight)) = cameras
+            .iter()
+            .filter(|(camera, _)| camera.is_active)
+            .find_map(|(_, member)| {
+                let environment = worlds.get(member.root).ok()?.iter().next()?;
+                environments.get(environment).ok()
+            })
+        else {
             return WaterEnvironmentMapSample::Unresolved;
         };
         let Some(definition) = definitions.find_environment(environment.definition) else {
             return WaterEnvironmentMapSample::Unresolved;
         };
-        let Some(time) = daylight_fraction.0 else {
-            return WaterEnvironmentMapSample::Unresolved;
-        };
+        let time = daylight.fraction;
         let maps = definition.map_samples.as_slice();
         if maps.is_empty() {
             return WaterEnvironmentMapSample::Unauthored;
@@ -65,42 +74,50 @@ pub(crate) fn sample_water_environment_map(
     sample.set_if_neq(next);
 }
 
+pub(super) fn fog_quality_for_view_distance(
+    detail: ThreeLevelGraphicsDetail,
+) -> EnvironmentFogQuality {
+    match detail {
+        ThreeLevelGraphicsDetail::Low => EnvironmentFogQuality::Low,
+        ThreeLevelGraphicsDetail::Medium => EnvironmentFogQuality::Medium,
+        ThreeLevelGraphicsDetail::High => EnvironmentFogQuality::High,
+    }
+}
+
 pub(crate) fn project_resolved_camera_distance_fog(
-    daylight_fraction: Res<EnvironmentDaylightFraction>,
     settings: Res<openzt2_game_assets::graphics_settings_types::GraphicsSettings>,
-    view: Res<openzt2_zoo_state::terrain::terrain_water_view_state::TerrainWaterViewState>,
     terrains: Res<Assets<TerrainAsset>>,
     regions: TerrainWaterRegionQuery,
-    daylight: Query<&AboveWaterFog>,
-    mut cameras: Query<(&EnvironmentFog, &Projection, &mut DistanceFog)>,
+    environments: Query<(&AboveWaterFog, &Daylight)>,
+    mut cameras: Query<(
+        &EnvironmentFog,
+        &Projection,
+        Option<&TerrainWaterCameraContact>,
+        &mut DistanceFog,
+    )>,
 ) {
-    use openzt2_game_assets::graphics_settings_types::ThreeLevelGraphicsDetail;
-    let sample = (|| {
-        let source = regions.get(view.camera_region()?)?;
-        let terrain = terrains.get(source.terrain())?;
-        let depth_ratio = source.depth_ratio(terrain)?;
-        let configuration = &source
-            .biome(terrain)?
-            .water_presentation
-            .as_ref()?
-            .surface_material
-            .configuration;
-        let time = daylight_fraction.0?;
-        let quality = match settings.view_distance {
-            ThreeLevelGraphicsDetail::Low => EnvironmentFogQuality::Low,
-            ThreeLevelGraphicsDetail::Medium => EnvironmentFogQuality::Medium,
-            ThreeLevelGraphicsDetail::High => EnvironmentFogQuality::High,
-        };
-        Some(sample_authored_underwater_fog(
-            &configuration.fog,
-            quality,
-            !configuration.light.is_empty() || !configuration.directional_lights.is_empty(),
-            depth_ratio.clamp(0.0, 1.0),
-            time,
-        ))
-    })();
-    for (owner, projection, mut fog) in &mut cameras {
-        let above = daylight.get(owner.0).copied().unwrap_or_default();
+    let quality = fog_quality_for_view_distance(settings.view_distance);
+    for (owner, projection, contact, mut fog) in &mut cameras {
+        let environment = environments.get(owner.0).ok();
+        let above = environment.map_or_else(AboveWaterFog::default, |(fog, _)| *fog);
+        let sample = (|| {
+            let source = regions.get(contact?.wet_region?.0)?;
+            let terrain = terrains.get(source.terrain())?;
+            let depth_ratio = source.depth_ratio(terrain)?;
+            let configuration = &source
+                .biome(terrain)?
+                .water_presentation
+                .as_ref()?
+                .surface_material
+                .configuration;
+            Some(sample_authored_underwater_fog(
+                &configuration.fog,
+                quality,
+                !configuration.light.is_empty() || !configuration.directional_lights.is_empty(),
+                depth_ratio.clamp(0.0, 1.0),
+                environment?.1.fraction,
+            ))
+        })();
         let selected = sample
             .filter(|_| {
                 matches!(
@@ -141,6 +158,7 @@ use openzt2_game_data::{
     terrain::{TerrainWaterFogDetail, TerrainWaterFogDirtiness, TerrainWaterFogKeyframe},
     world_definitions::environment::EnvironmentFogQuality,
 };
+use openzt2_zoo_state::terrain::terrain_water_view_state::TerrainWaterCameraContact;
 
 use openzt2_zoo_state::{
     environment::environment_state_types::{EnvironmentWaterRayLight, WorldEnvironment},
@@ -155,7 +173,6 @@ use openzt2_zoo_state::{
 
 pub(crate) fn update_water_ray_environment_light_samples(
     mut commands: Commands,
-    daylight_fraction: Res<EnvironmentDaylightFraction>,
     assets: Res<Assets<WorldDefinitionAsset>>,
     active: Res<WorldDefinitions>,
     mut environments: Query<(
@@ -165,7 +182,7 @@ pub(crate) fn update_water_ray_environment_light_samples(
         Option<&EnvironmentVisuals>,
         Option<&mut EnvironmentWaterRayLight>,
     )>,
-    views: Res<openzt2_zoo_state::terrain::terrain_water_view_state::TerrainWaterViewState>,
+    camera_contacts: Query<&TerrainWaterCameraContact>,
     visuals: Query<
         (Entity, &EnvironmentVisualSampleIndex),
         Without<super::environment_presentation_types::EnvironmentSunPosition>,
@@ -176,9 +193,6 @@ pub(crate) fn update_water_ray_environment_light_samples(
     let Some(definitions) = active.get(&assets) else {
         return;
     };
-    if daylight_fraction.0.is_none() {
-        return;
-    }
     for (entity, environment, ambient, children, current) in &mut environments {
         let Some((definition, ambient)) = definitions
             .find_environment(environment.definition)
@@ -190,25 +204,29 @@ pub(crate) fn update_water_ray_environment_light_samples(
             continue;
         };
         let first_object_light_weighted_rgb = ambient.1;
-        let sun_direction = views.camera_position().and_then(|camera| {
-            visuals
-                .iter_many(children.into_iter().flat_map(RelationshipTarget::iter))
-                .flatten()
-                .find_map(|(visual, index)| {
-                    if !matches!(
-                        definition.visual_samples.get(index.0 as usize)?.kind,
-                        EnvironmentVisualKind::Sun
-                    ) {
-                        return None;
-                    }
-                    (transforms
-                        .compute_global_transform(visual)
-                        .ok()?
-                        .translation()
-                        - camera)
-                        .try_normalize()
-                })
-        });
+        let sun_direction = camera_contacts
+            .single()
+            .ok()
+            .and_then(|contact| contact.position)
+            .and_then(|camera| {
+                visuals
+                    .iter_many(children.into_iter().flat_map(RelationshipTarget::iter))
+                    .flatten()
+                    .find_map(|(visual, index)| {
+                        if !matches!(
+                            definition.visual_samples.get(index.0 as usize)?.kind,
+                            EnvironmentVisualKind::Sun
+                        ) {
+                            return None;
+                        }
+                        (transforms
+                            .compute_global_transform(visual)
+                            .ok()?
+                            .translation()
+                            - camera)
+                            .try_normalize()
+                    })
+            });
         let next = EnvironmentWaterRayLight {
             raw_object_ambient_rgba: ambient.0.extend(1.0),
             first_object_light_weighted_rgb,
@@ -224,9 +242,11 @@ pub(crate) fn update_water_ray_environment_light_samples(
 
 pub(crate) fn update_region_water_light_samples(
     mut commands: Commands,
-    daylight_fraction: Res<EnvironmentDaylightFraction>,
     terrains: Res<Assets<TerrainAsset>>,
-    environments: Query<Ref<EnvironmentLightCurves>>,
+    environments: Query<(Ref<Daylight>, Ref<EnvironmentLightCurves>)>,
+    roots: Query<&WorldEnvironments>,
+    region_parents: Query<&ChildOf>,
+    members: Query<&WorldMember>,
     regions: TerrainWaterRegionQuery,
     mut lights: Query<&mut TerrainWaterRegionLight>,
     changed: Query<
@@ -250,21 +270,33 @@ pub(crate) fn update_region_water_light_samples(
         })
         .collect();
     let restored: bevy::ecs::entity::EntityHashSet = restored.read().collect();
-    let fraction = daylight_fraction.0;
-    let curves = environments.single().ok();
-    let water_ambient = curves.as_ref().zip(fraction).map(|(curves, fraction)| {
-        curves.ambient(
-            openzt2_game_data::world_definitions::environment::EnvironmentLightTarget::Water,
-            fraction,
-        )
-    });
-    let water_direction = curves
-        .as_ref()
-        .zip(fraction)
-        .and_then(|(curves, fraction)| curves.water_direction(fraction));
-    let daylight_changed =
-        daylight_fraction.is_changed() || curves.as_ref().is_none_or(|curves| curves.is_changed());
+    let mut world_lighting = bevy::ecs::entity::EntityHashMap::default();
     for (entity, source) in regions.iter() {
+        let root = members
+            .get(entity)
+            .ok()
+            .map(|member| member.root)
+            .or_else(|| {
+                let parent = region_parents.get(entity).ok()?.parent();
+                Some(members.get(parent).map_or(parent, |member| member.root))
+            });
+        let lighting = root.and_then(|root| {
+            *world_lighting.entry(root).or_insert_with(|| {
+                let environment = roots.get(root).ok()?.iter().next()?;
+                let (daylight, curves) = environments.get(environment).ok()?;
+                let fraction = daylight.fraction;
+                Some((
+                    fraction,
+                    curves.ambient(
+                        openzt2_game_data::world_definitions::environment::EnvironmentLightTarget::Water,
+                        fraction,
+                    ),
+                    curves.water_direction(fraction),
+                    daylight.is_changed() || curves.is_changed(),
+                ))
+            })
+        });
+        let daylight_changed = lighting.is_none_or(|(_, _, _, changed)| changed);
         if !daylight_changed
             && !changed.contains(entity)
             && !restored.contains(&entity)
@@ -274,12 +306,13 @@ pub(crate) fn update_region_water_light_samples(
             continue;
         }
         let sample = terrains.get(source.terrain()).and_then(|terrain| {
+            let (fraction, water_ambient, water_direction, _) = lighting?;
             let water = source.biome(terrain)?.water_presentation.as_ref()?;
             let keys = &water.surface_material.configuration.light;
             let raw = if keys.is_empty() {
-                water_ambient.map(|ambient| ambient.extend(1.0))
+                Some(water_ambient.extend(1.0))
             } else {
-                fraction.and_then(|fraction| sample_water_ambient_keys(keys, fraction))
+                sample_water_ambient_keys(keys, fraction)
             }?;
             let lights = &water.surface_material.configuration.directional_lights;
             let direction = if let Some(first) = lights.first() {
@@ -287,7 +320,7 @@ pub(crate) fn update_region_water_light_samples(
                     lights
                         .iter()
                         .filter(|sample| sample.child_index == first.child_index),
-                    fraction?,
+                    fraction,
                 )?;
                 Vec3::from_array(sampled.left_keyframe.direction)
                     .lerp(

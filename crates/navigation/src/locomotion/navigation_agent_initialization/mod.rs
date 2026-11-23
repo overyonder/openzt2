@@ -1,5 +1,6 @@
 use avian3d::prelude::RigidBody;
 use bevy::prelude::*;
+use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
 use openzt2_zoo_state::locomotion::locomotion_types::ActiveTerrainDerivedNavigationGraph;
 use openzt2_zoo_state::locomotion::locomotion_types::ContactSteering;
@@ -15,25 +16,33 @@ use openzt2_zoo_state::locomotion::locomotion_types::Velocity;
 
 pub(super) fn initialize_navigation_agents_with_bounded_runtime_state(
     mut commands: Commands,
-    active_navigation_graph: Option<Res<ActiveTerrainDerivedNavigationGraph>>,
-    locomotion_capacity: Option<Res<LocomotionCapacity>>,
+    roots: Query<&LocomotionCapacity, With<ActiveTerrainDerivedNavigationGraph>>,
     navigation_agents: Query<
-        (Entity, &NavAgent, &GlobalTransform, Option<&RigidBody>),
+        (
+            Entity,
+            &WorldMember,
+            &NavAgent,
+            &GlobalTransform,
+            Option<&RigidBody>,
+        ),
         Without<Route>,
     >,
     mut navigation_failures: MessageWriter<NavigationFailed>,
 ) {
-    let Some(locomotion_capacity) =
-        locomotion_capacity.filter(|locomotion_capacity| locomotion_capacity.is_valid())
-    else {
-        return;
-    };
-    let Some(_active_navigation_graph) = active_navigation_graph else {
-        return;
-    };
-    for (navigation_agent_entity, navigation_agent, navigation_agent_transform, rigid_body) in
-        &navigation_agents
+    for (
+        navigation_agent_entity,
+        member,
+        navigation_agent,
+        navigation_agent_transform,
+        rigid_body,
+    ) in &navigation_agents
     {
+        if !roots
+            .get(member.root)
+            .is_ok_and(|capacity| capacity.is_valid())
+        {
+            continue;
+        };
         if !navigation_agent.is_valid() {
             navigation_failures.write(NavigationFailed {
                 entity: navigation_agent_entity,
@@ -45,7 +54,7 @@ pub(super) fn initialize_navigation_agents_with_bounded_runtime_state(
         commands.entity(navigation_agent_entity).insert((
             Steering::default(),
             ContactSteering::default(),
-            Route::with_capacity(locomotion_capacity.max_route_points),
+            Route::with_capacity(0),
             MotionProgress {
                 last_position: navigation_agent_transform.translation(),
                 stationary_ticks: 0,

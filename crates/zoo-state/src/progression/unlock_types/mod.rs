@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use openzt2_game_data::AssetId;
 
-#[derive(Resource, Debug, Default, PartialEq, Eq)]
+#[derive(Component, Debug, Default, PartialEq, Eq)]
 pub struct UnlockedCatalogueDefinitionSet {
     pub words: Vec<u64>,
     pub definition_count: u32,
@@ -12,6 +12,7 @@ pub struct CatalogueUnlockStorageInitialized;
 
 #[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ApplyCatalogueDefinitionUnlockRequest {
+    pub root: Entity,
     pub operation: Entity,
     pub definition: AssetId,
 }

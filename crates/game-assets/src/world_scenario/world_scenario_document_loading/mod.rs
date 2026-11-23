@@ -3,7 +3,7 @@
 use std::{io, path::Path};
 
 use bevy::{
-    asset::{io::Reader, AssetLoader, LoadContext},
+    asset::{AssetLoader, LoadContext, io::Reader},
     prelude::*,
 };
 use openzt2_game_data::AssetId;
@@ -17,10 +17,10 @@ use super::{
 
 use crate::{
     asset_source::{
-        archive_entry_asset_path::{
-            archive_entry_asset_source_path, ARCHIVE_ENTRY_ASSET_EXTENSION,
-        },
         AssetArchives,
+        archive_entry_asset_path::{
+            ARCHIVE_ENTRY_ASSET_EXTENSION, archive_entry_asset_source_path,
+        },
     },
     source_document::{
         blue_fang_source_document_parsing::parse_blue_fang_source_document, path::AssetPath,
@@ -136,7 +136,7 @@ impl AssetLoader for WorldScenarioDocumentLoader {
                 });
             }
         }
-        let (document,references) = super::world_source_document_dependency_lowering::lower_world_source_document_and_resolve_dependencies(
+        let (document, authored, references) = super::world_source_document_dependency_lowering::lower_world_source_document_and_resolve_dependencies(
             source,&self.archives,context,
         ).await?;
         let terrains = demand_loaded_asset_paths(&references, SourceReferenceKind::Terrain, |id| {
@@ -163,9 +163,11 @@ impl AssetLoader for WorldScenarioDocumentLoader {
         );
         Ok(WorldScenarioDocumentAsset {
             document,
+            authored,
             starting_zoos,
             campaign_scenarios: campaign_scenarios.into_boxed_slice(),
             terrains: terrains.into_boxed_slice(),
+            restored_terrain: None,
             scenes: scenes.into_boxed_slice(),
             textures: textures.into_boxed_slice(),
             scripts,

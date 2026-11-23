@@ -14,8 +14,8 @@ use bevy::{
         PathStream, Reader, VecReader,
     },
     prelude::{
-        resource_changed, App, DetectChangesMut, First, IntoScheduleConfigs, Message,
-        MessageWriter, Plugin, ResMut, Resource,
+        App, DetectChangesMut, First, IntoScheduleConfigs, Message, MessageWriter, Plugin, ResMut,
+        Resource, resource_changed,
     },
     tasks::futures_lite::stream,
 };
@@ -33,6 +33,25 @@ use crate::world_definitions::{
         world_definition_source_path,
     },
 };
+
+fn load_fossil_puzzle_root(archives: &AssetArchives) -> std::io::Result<PathBuf> {
+    use crate::source_document::{
+        blue_fang_source_document_parsing::parse_blue_fang_source_document, path::AssetPath,
+    };
+    use std::io;
+    const MANAGER_PATH: &str = "config/puzzlemgr.xml";
+    let bytes = archives.read_source(Path::new(MANAGER_PATH))?;
+    let config = parse_blue_fang_source_document(AssetPath::new(MANAGER_PATH), &bytes)
+        .map_err(io::Error::other)?;
+    let root = config
+        .root
+        .attribute_named_any(&["puzzleRoot"])
+        .filter(|root| !root.trim().is_empty())
+        .ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidData, "ZTPuzzleMgr lacks puzzleRoot")
+        })?;
+    Ok(z2f::paths::normalize_asset_path_for_case_insensitive_archive_lookup(Path::new(root)))
+}
 
 pub fn create_bevy_asset_source_for_enabled_z2f_archives(
     enabled_archive_paths: Vec<PathBuf>,
@@ -116,17 +135,13 @@ impl SharedSourceByteCache {
 pub(crate) enum ArchiveCatalogue {
     Audio,
     Scenarios,
-    Species,
-    Scripts,
     WorldDefinitionSupplements,
 }
 
 impl ArchiveCatalogue {
-    const ALL: [Self; 5] = [
+    const ALL: [Self; 3] = [
         Self::Audio,
         Self::Scenarios,
-        Self::Species,
-        Self::Scripts,
         Self::WorldDefinitionSupplements,
     ];
 
@@ -134,8 +149,6 @@ impl ArchiveCatalogue {
         match self {
             Self::Audio => crate::audio::audio_asset_index_refresh::is_audio_catalogue_source(path),
             Self::Scenarios => crate::world_scenario::world_scenario_asset_set_refresh_and_indexing::scenario_catalogue_path(path),
-            Self::Species => crate::species::species_asset_set_refresh_and_indexing::is_species_catalogue_source(path),
-            Self::Scripts => crate::lua_script::lua_script_archive_path_index::path_has_lua_script_asset_extension(path),
             Self::WorldDefinitionSupplements => {
                 path.extension().is_some_and(|extension| extension == "xml")
                     && (matches!(path.parent(), Some(parent) if parent == Path::new("xpinfo"))
@@ -153,6 +166,7 @@ struct ResolvedArchiveDiscovery {
     entries_by_path: BTreeMap<PathBuf, z2f::ResolvedArchiveEntry>,
     catalogues: [Arc<[z2f::ResolvedArchiveEntry]>; ArchiveCatalogue::ALL.len()],
     binder_sources: Arc<AuthoredBinderSources>,
+    puzzle_root: Option<PathBuf>,
     world_definition_entries: Arc<[z2f::ResolvedArchiveEntry]>,
 }
 
@@ -293,6 +307,14 @@ impl AssetArchives {
         )
     }
 
+    pub(crate) fn fossil_puzzle_root(&self) -> Option<PathBuf> {
+        self.resolved
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .puzzle_root
+            .clone()
+    }
+
     pub(crate) fn authored_binder_sources(&self) -> Arc<AuthoredBinderSources> {
         Arc::clone(
             &self
@@ -386,9 +408,26 @@ impl AssetArchives {
         if discovery.ordered_entries.as_ref() != entries.as_slice() {
             discovery.ordered_entries = Arc::from(entries.clone());
         }
+        let puzzle_manager_changed = relevant(&|path| path == Path::new("config/puzzlemgr.xml"));
+        if puzzle_manager_changed {
+            discovery.puzzle_root = match load_fossil_puzzle_root(self) {
+                Ok(root) => Some(root),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+                Err(error) => {
+                    bevy::log::warn!(%error, "could not read fossil puzzle directory");
+                    None
+                }
+            };
+        }
+        let is_puzzle = |path: &Path| {
+            discovery.puzzle_root.as_deref()
+                .is_some_and(|root| crate::world_definitions::world_definition_asset_set_refresh_and_indexing::is_fossil_puzzle_source(path, root))
+        };
         if binder_sources_changed
+            || puzzle_manager_changed
             || relevant(&|path| {
                 world_definition_source_path(path, discovery.binder_sources.directories())
+                    || is_puzzle(path)
             })
         {
             discovery.world_definition_entries = entries
@@ -397,7 +436,7 @@ impl AssetArchives {
                     world_definition_source_path(
                         &entry.normalized_asset_path,
                         discovery.binder_sources.directories(),
-                    )
+                    ) || is_puzzle(&entry.normalized_asset_path)
                 })
                 .collect::<Vec<_>>()
                 .into();
@@ -515,16 +554,35 @@ impl AssetArchives {
     pub fn resolve_script_reference(&self, from: &Path, reference: &str) -> Option<PathBuf> {
         self.files
             .resolve_script_reference(from, reference)
-            .or_else(|| self.resolve_loose_reference(from, reference))
+            .or_else(|| {
+                let reference = Path::new(reference.trim());
+                let stem = reference.with_extension("");
+                std::iter::once(reference.to_owned())
+                    .chain(
+                        ["lua", "bin", "luac"]
+                            .into_iter()
+                            .map(|extension| stem.with_extension(extension)),
+                    )
+                    .filter_map(|candidate| {
+                        if !candidate.extension().is_some_and(|extension| {
+                            ["lua", "bin", "luac"]
+                                .iter()
+                                .any(|candidate| extension.eq_ignore_ascii_case(candidate))
+                        }) {
+                            return None;
+                        }
+                        self.resolve_loose_reference(from, candidate.to_str()?)
+                    })
+                    .next()
+            })
     }
 
     fn resolve_loose_reference(&self, from: &Path, reference: &str) -> Option<PathBuf> {
         let reference = z2f::paths::normalize_asset_path_for_case_insensitive_archive_lookup(
             Path::new(reference.trim()),
         );
-        let parent = z2f::paths::normalize_asset_path_for_case_insensitive_archive_lookup(from)
-            .parent()?
-            .to_owned();
+        let from = z2f::paths::normalize_asset_path_for_case_insensitive_archive_lookup(from);
+        let parent = from.parent().unwrap_or_else(|| Path::new(""));
         [reference.clone(), parent.join(reference)]
             .into_iter()
             .find(|candidate| {
@@ -900,15 +958,15 @@ pub(crate) mod tests {
     use bevy::{
         app::TaskPoolPlugin,
         asset::{
-            io::{AssetReader, AssetSourceId, Reader},
             Asset, AssetApp, AssetLoader, AssetPlugin, AssetServer, Assets, Handle, LoadContext,
+            io::{AssetReader, AssetSourceId, Reader},
         },
         prelude::{App, TypePath},
     };
-    use zip::{write::SimpleFileOptions, ZipWriter};
+    use zip::{ZipWriter, write::SimpleFileOptions};
 
     use super::{
-        archive_entry_asset_path, create_bevy_asset_source_for_enabled_z2f_archives, Z2fAssetReader,
+        Z2fAssetReader, archive_entry_asset_path, create_bevy_asset_source_for_enabled_z2f_archives,
     };
 
     static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
@@ -1055,8 +1113,8 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn ui_references_prefer_exact_loose_paths_before_archive_basename_fallbacks(
-    ) -> std::io::Result<()> {
+    fn ui_references_prefer_exact_loose_paths_before_archive_basename_fallbacks()
+    -> std::io::Result<()> {
         let directory = TestDirectory::new()?;
         let base = directory.archive(
             "x300_000.z2f",
@@ -1134,8 +1192,8 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn archive_toggle_reloads_compatible_image_handle_when_physical_dds_winner_changes(
-    ) -> std::io::Result<()> {
+    fn archive_toggle_reloads_compatible_image_handle_when_physical_dds_winner_changes()
+    -> std::io::Result<()> {
         let directory = TestDirectory::new()?;
         let base = directory.archive("x300_000.z2f", &[("image.dds", b"base")])?;
         let modification = directory.archive("mod.z2f", &[("image.dds", b"mod")])?;

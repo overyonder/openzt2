@@ -1,10 +1,17 @@
 use super::camera_definition_hydration::camera_runtime_components_from_authored_definition;
-use bevy::{ecs::system::SystemParam, prelude::*};
+use bevy::{
+    ecs::{relationship::RelationshipTarget, system::SystemParam},
+    prelude::*,
+};
 use openzt2_game_assets::graphics_settings_types::GraphicsSettings;
 use openzt2_game_data::AssetId;
+use openzt2_interface_state::immersive_modes::immersive_mode_state_types::{
+    ActiveImmersiveMode, ImmersiveCameraSessions, ImmersiveSubject,
+};
 use openzt2_world_state::world_spawn::{
     world_membership_types::WorldMember, world_terrain_hydration::WorldTerrainHorizontalBounds,
 };
+use std::time::Duration;
 
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
@@ -18,11 +25,11 @@ use super::super::camera_runtime_state_types::CameraDefinition;
 use super::super::camera_runtime_state_types::CameraMode;
 use super::super::camera_runtime_state_types::CameraMouseLook;
 use super::super::camera_runtime_state_types::OverheadRig;
+use super::super::camera_runtime_state_types::StandaloneCameraSubject;
 use super::super::camera_runtime_state_types::ZooCamera;
-use super::super::math::{advance_transition, clamp_rig, overhead_pose};
+use super::super::math::{clamp_rig, overhead_pose};
 use super::camera_pose_comparison::camera_pose_materially_changed;
 use crate::camera::camera_execution_types::CameraBounds;
-use crate::camera::camera_execution_types::CameraEasing;
 use crate::camera::camera_execution_types::CameraIntent;
 use crate::camera::camera_execution_types::CameraReturnState;
 use crate::camera::camera_execution_types::CameraTransition;
@@ -73,10 +80,19 @@ pub(crate) fn begin_camera_transition(
             Option<&CameraReturnState>,
             Option<&mut Projection>,
             Option<&WorldMember>,
+            Option<&mut CameraTransition>,
         ),
         With<ZooCamera>,
     >,
     subjects: Query<&GlobalTransform, Without<ZooCamera>>,
+    links: Query<
+        (
+            Option<&StandaloneCameraSubject>,
+            Option<&ImmersiveCameraSessions>,
+        ),
+        With<ZooCamera>,
+    >,
+    immersive_subjects: Query<&ImmersiveSubject, With<ActiveImmersiveMode>>,
 ) {
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
@@ -84,6 +100,16 @@ pub(crate) fn begin_camera_transition(
     let initial_definition = camera.3 .0;
     let mut has_return_state = camera.7.is_some();
     let mut entered_overhead = false;
+    let mut new_transition = None;
+    let (standalone, sessions) = links.get(camera.0).unwrap_or_default();
+    let immersive_subject = sessions
+        .and_then(|sessions| {
+            sessions
+                .iter()
+                .find_map(|session| immersive_subjects.get(session).ok())
+        })
+        .map(|subject| subject.0);
+    let mut next_standalone = standalone.copied();
     for request in modes.read() {
         if !requested_duration_is_valid(request.transition_seconds) {
             continue;
@@ -96,7 +122,8 @@ pub(crate) fn begin_camera_transition(
             f32::from(definition.offset_m[1]) + camera.6.parenting_offset_m,
             f32::from(definition.offset_m[2]),
         );
-        let Some(to) = mode_target(request.mode, &camera.1, &subjects, offset) else {
+        let target = request.subject.or(immersive_subject);
+        let Some(to) = mode_target(request.mode, target, &camera.1, &subjects, offset) else {
             continue;
         };
         if *camera.2 == CameraMode::Overhead && request.mode.is_immersive() && !has_return_state {
@@ -109,22 +136,33 @@ pub(crate) fn begin_camera_transition(
             has_return_state = true;
         }
         entered_overhead = request.mode == CameraMode::Overhead;
-        *camera.2 = request.mode;
-        camera.3 .0 = request.definition;
+        camera.2.set_if_neq(request.mode);
+        camera.3.set_if_neq(CameraDefinition(request.definition));
+        next_standalone = if matches!(request.mode, CameraMode::Follow | CameraMode::FirstPerson) {
+            request.subject.map(StandaloneCameraSubject)
+        } else {
+            None
+        };
         commands
             .entity(camera.0)
             .remove::<RemoveReturnStateOnComplete>();
-        let entity = camera.0;
-        apply_requested_transition(
-            &mut commands,
-            entity,
+        new_transition = Some(prepare_camera_motion(
             &mut camera.1,
             to,
             request.transition_seconds,
-        );
+        ));
     }
     if entered_overhead && has_return_state {
         commands.entity(camera.0).remove::<CameraReturnState>();
+    }
+    if standalone.copied() != next_standalone {
+        if let Some(target) = next_standalone {
+            commands.entity(camera.0).insert(target);
+        } else {
+            commands
+                .entity(camera.0)
+                .remove::<StandaloneCameraSubject>();
+        }
     }
 
     for request in focus_requests.read() {
@@ -140,19 +178,20 @@ pub(crate) fn begin_camera_transition(
         let mut to = *camera.1;
         to.translation += Vec3::new(delta.x, 0.0, delta.y);
         let entity = camera.0;
-        apply_requested_transition(
-            &mut commands,
-            entity,
+        new_transition = Some(prepare_camera_motion(
             &mut camera.1,
             to,
             request.transition_seconds,
-        );
+        ));
         if request.transition_seconds.is_none() && has_return_state {
             commands
                 .entity(entity)
                 .remove::<CameraReturnState>()
                 .remove::<RemoveReturnStateOnComplete>();
         }
+    }
+    if let Some(next) = new_transition {
+        apply_camera_motion(&mut commands, camera.0, camera.10.take(), next);
     }
     if initial_definition != camera.3 .0 {
         if let Some((projection, tuning, _, bounds)) = settings.prepare(camera.3 .0, camera.9) {
@@ -224,14 +263,18 @@ pub(crate) fn apply_camera_return(
             Option<&mut Projection>,
             Option<&mut CameraTuning>,
             Option<&mut CameraBounds>,
+            Option<&mut CameraTransition>,
         ),
         With<ZooCamera>,
     >,
 ) {
-    let mut requests = messages
+    let Some(request) = messages
         .read()
-        .filter(|request| requested_duration_is_valid(request.transition_seconds));
-    let Some(first) = requests.next() else { return };
+        .filter(|request| requested_duration_is_valid(request.transition_seconds))
+        .last()
+    else {
+        return;
+    };
     let entity = camera.0;
     if let Some(intent) = camera.5.as_deref_mut() {
         *intent = CameraIntent::default();
@@ -242,9 +285,8 @@ pub(crate) fn apply_camera_return(
 
     let (duration, mode, definition, transform, mut rig, prepared, restore_snapshot) =
         if let Some(snapshot) = camera.7 {
-            let last = requests.last().unwrap_or(first);
             (
-                last.transition_seconds,
+                request.transition_seconds,
                 snapshot.mode,
                 snapshot.definition,
                 snapshot.transform,
@@ -268,7 +310,7 @@ pub(crate) fn apply_camera_return(
             clamp_rig(&mut rig, &tuning, &bounds);
             let transform = overhead_pose(&rig);
             (
-                first.transition_seconds,
+                request.transition_seconds,
                 CameraMode::Overhead,
                 authored.0,
                 transform,
@@ -292,11 +334,13 @@ pub(crate) fn apply_camera_return(
         }
     }
     camera.2.set_if_neq(mode);
+    commands.entity(entity).remove::<StandaloneCameraSubject>();
     if camera.3 .0 != definition {
         camera.3 .0 = definition;
     }
     *camera.4 = rig;
-    apply_requested_transition(&mut commands, entity, &mut camera.1, transform, duration);
+    let next = prepare_camera_motion(&mut camera.1, transform, duration);
+    apply_camera_motion(&mut commands, entity, camera.13.take(), next);
     let mut commands = commands.entity(entity);
     if restore_snapshot && duration.is_some() {
         commands.insert(RemoveReturnStateOnComplete);
@@ -319,7 +363,9 @@ pub(crate) fn advance_camera_transition(
     >,
 ) {
     for (entity, mut transform, mut transition, remove_return) in &mut cameras {
-        if advance_transition(&mut transition, &mut transform, time.delta_secs()) {
+        let (pose, complete) = advance_camera_transition_pose(&mut transition, time.delta());
+        transform.set_if_neq(pose);
+        if complete {
             let mut entity_commands = commands.entity(entity);
             entity_commands.remove::<CameraTransition>();
             if remove_return.is_some() {
@@ -331,34 +377,78 @@ pub(crate) fn advance_camera_transition(
     }
 }
 
-pub(crate) fn request_return_when_camera_target_disappears(
-    camera: Single<&CameraMode, With<ZooCamera>>,
-    subjects: Query<(), Without<ZooCamera>>,
-    mut returns: MessageWriter<RestoreCameraMode>,
+pub(in crate::camera) fn advance_camera_transition_pose(
+    transition: &mut CameraTransition,
+    elapsed: Duration,
+) -> (Transform, bool) {
+    transition.timer.tick(elapsed);
+    if transition.timer.is_finished() {
+        return (transition.to, true);
+    }
+    let linear = transition.timer.fraction();
+    let progress = linear * linear * (3.0 - 2.0 * linear);
+    let from = transition.from;
+    let to = transition.to;
+    (
+        Transform {
+            translation: from.translation.lerp(to.translation, progress),
+            rotation: from.rotation.slerp(to.rotation, progress),
+            scale: from.scale.lerp(to.scale, progress),
+        },
+        false,
+    )
+}
+
+fn prepare_camera_motion(
+    displayed: &mut Mut<Transform>,
+    to: Transform,
+    seconds: Option<f32>,
+) -> Option<CameraTransition> {
+    if let Some(seconds) = seconds {
+        let duration = Duration::try_from_secs_f32(seconds).unwrap_or(Duration::MAX);
+        Some(CameraTransition {
+            from: **displayed,
+            to,
+            timer: Timer::new(duration, TimerMode::Once),
+        })
+    } else {
+        displayed.set_if_neq(to);
+        None
+    }
+}
+
+fn apply_camera_motion(
+    commands: &mut Commands,
+    entity: Entity,
+    current: Option<Mut<CameraTransition>>,
+    next: Option<CameraTransition>,
 ) {
-    if camera
-        .subject()
-        .is_some_and(|subject| !subjects.contains(subject))
-    {
-        returns.write(RestoreCameraMode {
-            transition_seconds: None,
-        });
+    match (current, next) {
+        (Some(mut current), Some(next)) => *current = next,
+        (None, Some(next)) => {
+            commands.entity(entity).insert(next);
+        }
+        (Some(_), None) => {
+            commands.entity(entity).remove::<CameraTransition>();
+        }
+        (None, None) => {}
     }
 }
 
 pub(super) fn mode_target(
     mode: CameraMode,
+    subject: Option<Entity>,
     current: &Transform,
     subjects: &Query<&GlobalTransform, Without<ZooCamera>>,
     local_offset: Vec3,
 ) -> Option<Transform> {
     match mode {
         CameraMode::Overhead | CameraMode::Free => Some(*current),
-        CameraMode::Follow(entity) => subjects
-            .get(entity)
+        CameraMode::Follow => subjects
+            .get(subject?)
             .ok()
             .map(|subject| (*current).looking_at(subject.transform_point(local_offset), Vec3::Y)),
-        CameraMode::FirstPerson(entity) => subjects.get(entity).ok().map(|subject| {
+        CameraMode::FirstPerson => subjects.get(subject?).ok().map(|subject| {
             let mut transform = subject.compute_transform();
             transform.translation = subject.transform_point(local_offset);
             transform
@@ -366,28 +456,30 @@ pub(super) fn mode_target(
     }
 }
 
-pub(super) fn apply_requested_transition(
-    commands: &mut Commands,
-    entity: Entity,
-    from: &mut Transform,
-    to: Transform,
-    duration: Option<f32>,
+pub(in crate::camera) fn restore_camera_on_standalone_subject_loss(
+    removal: On<Remove, StandaloneCameraSubject>,
+    cameras: Query<
+        (
+            &StandaloneCameraSubject,
+            &CameraMode,
+            Has<ImmersiveCameraSessions>,
+        ),
+        With<ZooCamera>,
+    >,
+    subjects: Query<Entity, Without<ZooCamera>>,
+    mut restore: MessageWriter<RestoreCameraMode>,
 ) {
-    match valid_duration(duration) {
-        Some(duration) => {
-            commands.entity(entity).insert(CameraTransition {
-                from: *from,
-                to,
-                elapsed: 0.0,
-                duration,
-                easing: CameraEasing::SmoothStep,
-            });
-        }
-        None if duration.is_none() => {
-            *from = to;
-            commands.entity(entity).remove::<CameraTransition>();
-        }
-        None => {}
+    if cameras
+        .get(removal.entity)
+        .is_ok_and(|(subject, mode, session)| {
+            !session
+                && matches!(mode, CameraMode::Follow | CameraMode::FirstPerson)
+                && !subjects.contains(subject.0)
+        })
+    {
+        restore.write(RestoreCameraMode {
+            transition_seconds: None,
+        });
     }
 }
 

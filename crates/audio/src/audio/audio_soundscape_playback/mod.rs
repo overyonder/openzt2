@@ -1,4 +1,5 @@
 use super::audio_request_lanes::{ProducedAudioRequest, SOUNDSCAPE_SETUP, SOUNDSCAPE_TIMER};
+use super::world_audio_soundscape_membership::SoundscapeInputChanges;
 use bevy::prelude::*;
 
 use openzt2_game_assets::audio::audio_asset_types::{AudioAsset, AudioAssets};
@@ -10,9 +11,6 @@ use super::{
     audio_playback_message_types::{PlayAudioCue, StopAudioCue},
     deterministic_audio_sampling::sample_deterministic_f32_range,
 };
-
-#[derive(Component, PartialEq, Eq)]
-pub(super) struct AppliedSoundscapePreset(Option<bevy::asset::AssetId<AudioAsset>>);
 
 #[derive(Component, Debug)]
 pub(super) struct SoundscapeCueSchedule {
@@ -49,12 +47,12 @@ pub(super) fn project_changed_audio_soundscapes_into_playback_and_schedules(
     audio_asset_index: Res<AudioAssets>,
     mut soundscapes: Query<(
         Entity,
-        Ref<AudioSoundscape>,
+        &AudioSoundscape,
         &WorldMember,
-        Option<&mut AppliedSoundscapePreset>,
         Option<&mut SoundscapeCueSchedule>,
     )>,
-    presets: Query<Ref<WorldAudioPreset>>,
+    presets: Query<&WorldAudioPreset>,
+    mut changes: SoundscapeInputChanges,
     mut requests: MessageWriter<ProducedAudioRequest<SOUNDSCAPE_SETUP>>,
 ) {
     let audio_assets_changed = audio_asset_index.is_changed();
@@ -62,30 +60,18 @@ pub(super) fn project_changed_audio_soundscapes_into_playback_and_schedules(
     let delay_range = audio_asset_view
         .and_then(|view| view.ambient())
         .map_or([4.0, 6.0], |policy| policy.delay_seconds);
-    for (soundscape_owner, selected_soundscape, member, applied, schedule) in &mut soundscapes {
+    let mut candidates = changes.affected_soundscapes();
+    if audio_assets_changed {
+        candidates.extend(soundscapes.iter().map(|(entity, ..)| entity));
+    }
+    let mut pending = soundscapes.iter_many_mut(candidates).matched();
+    while let Some((soundscape_owner, selected_soundscape, member, schedule)) = pending.fetch_next()
+    {
         let preset = presets.get(member.root).ok();
-        let preset_id = preset.as_ref().map(|preset| preset.0.id());
-        if !audio_assets_changed
-            && !selected_soundscape.is_added()
-            && !selected_soundscape.is_changed()
-            && !preset.as_ref().is_some_and(|preset| preset.is_changed())
-            && applied
-                .as_deref()
-                .is_some_and(|applied| applied.0 == preset_id)
-        {
-            continue;
-        }
         requests.write(ProducedAudioRequest::Stop(StopAudioCue {
             emitter: Some(soundscape_owner),
             selection: selected_soundscape.selection,
         }));
-        if let Some(mut applied) = applied {
-            applied.set_if_neq(AppliedSoundscapePreset(preset_id));
-        } else {
-            commands
-                .entity(soundscape_owner)
-                .insert(AppliedSoundscapePreset(preset_id));
-        }
         let soundscape = match preset {
             Some(preset) => audio_assets
                 .get(&preset.0)
@@ -217,11 +203,13 @@ mod tests {
         app.init_resource::<Assets<AudioAsset>>()
             .init_resource::<AudioAssets>()
             .init_resource::<Time>()
+            .add_message::<AssetEvent<AudioAsset>>()
             .add_message::<ProducedAudioRequest<SOUNDSCAPE_SETUP>>()
             .add_message::<ProducedAudioRequest<SOUNDSCAPE_TIMER>>()
             .add_systems(
                 Update,
                 (
+                    super::super::world_audio_soundscape_membership::bind_world_soundscape_membership,
                     project_changed_audio_soundscapes_into_playback_and_schedules,
                     advance_audio_soundscape_cue_schedules,
                 )

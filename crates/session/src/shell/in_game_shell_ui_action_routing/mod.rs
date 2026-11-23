@@ -28,7 +28,12 @@ use openzt2_interface_state::ui::authored_ui_activation_contracts::UiNodeActivat
 #[derive(SystemParam)]
 pub(super) struct OverheadInformationDismissalTargets<'w, 's> {
     selected_entity: WorldUiSelection<'w, 's>,
-    selected_catalogue_entry: ResMut<'w, SelectedCatalogueEntry>,
+    selected_catalogue_entry: Query<
+        'w,
+        's,
+        &'static mut SelectedCatalogueEntry,
+        With<openzt2_interface_state::ui::ui_document_lifecycle_contracts::InGameUiOwner>,
+    >,
     selection_requests: MessageWriter<'w, SelectionRequest>,
 }
 
@@ -107,8 +112,9 @@ pub(super) fn route_authored_in_game_shell_ui_actions(
                             });
                             continue;
                         }
-                        if information.selected_catalogue_entry.0.is_some() {
-                            information.selected_catalogue_entry.0 = None;
+                        if let Ok(mut selection) = information.selected_catalogue_entry.single_mut()
+                        {
+                            selection.set_if_neq(SelectedCatalogueEntry(None));
                             continue;
                         }
                     }

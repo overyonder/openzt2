@@ -1,16 +1,16 @@
 use std::{io, path::Path};
 
 use bevy::{
-    asset::{io::Reader, AssetLoader, LoadContext},
+    asset::{AssetLoader, LoadContext, io::Reader},
     prelude::*,
 };
 
 use crate::{
     asset_source::{
-        archive_entry_asset_path::{
-            archive_entry_asset_source_path, ARCHIVE_ENTRY_ASSET_EXTENSION,
-        },
         AssetArchives,
+        archive_entry_asset_path::{
+            ARCHIVE_ENTRY_ASSET_EXTENSION, archive_entry_asset_source_path,
+        },
     },
     {
         source_document::{
@@ -68,6 +68,7 @@ impl AssetLoader for SpeciesAssetLoader {
         let primary = parse_blue_fang_source_document(AssetPath::new(&path), &bytes)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
         let primary_path = primary.path.key();
+        let binders = self.archives.authored_binder_sources();
         let mut type_references = collect_authored_species_type_source_references(&primary)
             .into_iter()
             .map(|reference| (primary.path.key(), reference))
@@ -75,13 +76,14 @@ impl AssetLoader for SpeciesAssetLoader {
         documents.push(primary);
         let mut loaded = std::collections::BTreeSet::from([primary_path.clone()]);
         while let Some((from, reference)) = type_references.pop_first() {
-            let Some(dependency) = self
-                .archives
-                .resolve_source_reference(Path::new(&from), &reference)
-            else {
-                // Type vocabulary also contains ordinary symbolic bases such
-                // as `entity`; only values that resolve to authored source
-                // documents form loader dependencies.
+            let dependency =
+                if Path::new(&reference).extension().is_some() || reference.contains(['/', '\\']) {
+                    self.archives
+                        .resolve_source_reference(Path::new(&from), &reference)
+                } else {
+                    binders.resolve_binder_type_source_path(&self.archives, &from, &reference)?
+                };
+            let Some(dependency) = dependency else {
                 continue;
             };
             let dependency_path = dependency.to_string_lossy().replace('\\', "/");

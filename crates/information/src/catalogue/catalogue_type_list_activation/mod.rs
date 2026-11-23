@@ -51,7 +51,7 @@ pub(crate) fn choose_catalogue_entry_from_activated_type_list_row(
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,
     research_availability: CatalogueResearchAccess,
-    unlocked_catalogue_definitions: Res<UnlockedCatalogueDefinitionSet>,
+    unlocked_catalogue_definitions: Single<&UnlockedCatalogueDefinitionSet>,
     selected_worlds: Query<
         (
             Ref<SelectedWorldIdentity>,
@@ -59,9 +59,11 @@ pub(crate) fn choose_catalogue_entry_from_activated_type_list_row(
         ),
         With<WorldRoot>,
     >,
-    scenario_disabled: Option<Res<ScenarioDisabledCatalogueDefinitions>>,
+    scenario_disabled: Option<Single<&ScenarioDisabledCatalogueDefinitions>>,
     mut placements: CataloguePlacementMessages,
 ) {
+    let unlocked_catalogue_definitions = unlocked_catalogue_definitions.into_inner();
+    let scenario_disabled = scenario_disabled.map(Single::into_inner);
     let world_definitions = active_world_definitions.get(&world_definition_assets);
     let (world_session_mode, scenario_availability) =
         resolve_catalogue_world_session_mode_and_scenario_availability(&selected_worlds);
@@ -157,13 +159,14 @@ mod tests {
         let mut app = App::new();
         app.init_resource::<Assets<WorldDefinitionAsset>>()
             .init_resource::<WorldDefinitions>()
-            .init_resource::<UnlockedCatalogueDefinitionSet>()
             .add_message::<UiNodeActivated>()
             .add_message::<PurchaseChoice>()
             .add_message::<BeginAnimalAdoptionPlacement>()
             .add_message::<BeginStaffHirePlacement>()
             .add_systems(Update, choose_catalogue_entry_from_activated_type_list);
 
+        app.world_mut()
+            .spawn(UnlockedCatalogueDefinitionSet::default());
         let document = WorldDefinitionDocument {
             catalogue: definitions
                 .iter()
@@ -347,7 +350,7 @@ pub(crate) fn choose_catalogue_entry_from_activated_type_list(
     parent_entities: Query<&ChildOf>,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,
-    unlocked_catalogue_definitions: Res<UnlockedCatalogueDefinitionSet>,
+    unlocked_catalogue_definitions: Single<&UnlockedCatalogueDefinitionSet>,
     selected_worlds: Query<
         (
             Ref<SelectedWorldIdentity>,
@@ -356,11 +359,13 @@ pub(crate) fn choose_catalogue_entry_from_activated_type_list(
         With<WorldRoot>,
     >,
     visibilities: Query<&Visibility>,
-    scenario_disabled: Option<Res<ScenarioDisabledCatalogueDefinitions>>,
+    scenario_disabled: Option<Single<&ScenarioDisabledCatalogueDefinitions>>,
     document_owners: Query<&UiDocumentOwner>,
     selected_genders: Query<&AnimalCatalogueGender>,
     mut placements: CataloguePlacementMessages,
 ) {
+    let unlocked_catalogue_definitions = unlocked_catalogue_definitions.into_inner();
+    let scenario_disabled = scenario_disabled.map(Single::into_inner);
     // Consume the row stream completely before making the precedence decision.
     // Otherwise a short-circuiting reader could leave a later row event behind.
     let mut explicit_catalogue_row_press = false;

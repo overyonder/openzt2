@@ -3,15 +3,13 @@ use bevy::ecs::system::SystemParam;
 use bevy::picking::mesh_picking::ray_cast::{RayCastBackfaces, SimplifiedMesh};
 use bevy::prelude::*;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
-use openzt2_zoo_state::topology::topology_graph_types::FenceSegment;
 use openzt2_zoo_state::transport_tours::transport_pick_bounds::TransportPickBounds;
 
 use openzt2_game_data::world_definitions::transportation_and_tours::TransportationTrackKind;
-use openzt2_interface_state::camera::world_pointer_ray_types::WorldPointerRay;
+
+use super::construction_cursor_terrain_surface_tracking::EffectiveConstructionRay;
 use openzt2_zoo_state::placement::placed_object_types::PlacedObjectDefinitionReference;
-use openzt2_zoo_state::topology::topology_graph_types::{
-    TopologyGrid, TopologyIndex, TopologyNode,
-};
+use openzt2_zoo_state::topology::topology_graph_types::{TopologyGrid, TopologyIndex};
 use openzt2_zoo_state::transport_tours::transport_circuit_types::{
     CircuitMember, TransportCircuit,
 };
@@ -34,13 +32,9 @@ const FENCE_DELETE_PICK_RADIUS_M: f32 = 1.0;
 /// drawn as a terrain decal, has no mesh the pointer ray can select.
 const TRACK_DELETE_PICK_RADIUS_M: f32 = 1.5;
 
-#[derive(Component, Default)]
-pub(super) struct DeleteHoverProbe(Option<Ray3d>);
-
 #[derive(SystemParam)]
 pub(super) struct DeleteTargetChanges<'w, 's> {
     topology: Query<'w, 's, Ref<'static, TopologyIndex>>,
-    mesh_assets: Res<'w, Assets<Mesh>>,
     meshes: Query<
         'w,
         's,
@@ -78,40 +72,47 @@ pub(super) struct DeleteTargetChanges<'w, 's> {
         )>,
     >,
     placeables: Query<'w, 's, (), Changed<PlacedObjectDefinitionReference>>,
-    removed_places: RemovedComponents<'w, 's, PlacedObjectDefinitionReference>,
-    removed_parents: RemovedComponents<'w, 's, ChildOf>,
-    removed_meshes: RemovedComponents<'w, 's, Mesh3d>,
-    removed_flat_meshes: RemovedComponents<'w, 's, Mesh2d>,
-    removed_simplified_meshes: RemovedComponents<'w, 's, SimplifiedMesh>,
-    removed_bounds: RemovedComponents<'w, 's, Aabb>,
-    removed_backfaces: RemovedComponents<'w, 's, RayCastBackfaces>,
-    removed_route_pieces: RemovedComponents<'w, 's, TransportTrackConstructionPiece>,
-    removed_routes: RemovedComponents<'w, 's, TrackSegment>,
-    removed_towers: RemovedComponents<'w, 's, TransportTrackJunction>,
-    removed_stations: RemovedComponents<'w, 's, TransportStation>,
-    removed_circuits: RemovedComponents<'w, 's, TransportCircuit>,
-    removed_members: RemovedComponents<'w, 's, CircuitMember>,
+    discarded: MessageReader<'w, 's, ConstructionPickableDiscarded>,
 }
 
-impl DeleteTargetChanges<'_, '_> {
-    fn clear_removals(&mut self) -> bool {
-        let counts = [
-            self.removed_places.read().count(),
-            self.removed_parents.read().count(),
-            self.removed_meshes.read().count(),
-            self.removed_flat_meshes.read().count(),
-            self.removed_simplified_meshes.read().count(),
-            self.removed_bounds.read().count(),
-            self.removed_backfaces.read().count(),
-            self.removed_route_pieces.read().count(),
-            self.removed_routes.read().count(),
-            self.removed_towers.read().count(),
-            self.removed_stations.read().count(),
-            self.removed_circuits.read().count(),
-            self.removed_members.read().count(),
-        ];
-        counts.into_iter().any(|count| count != 0)
+#[derive(Message)]
+pub(super) struct ConstructionPickableDiscarded;
+
+pub(super) fn notify_discarded_placeable_pick_mesh(
+    discarded: On<
+        Discard<(
+            ChildOf,
+            Mesh3d,
+            Mesh2d,
+            SimplifiedMesh,
+            Aabb,
+            RayCastBackfaces,
+        )>,
+    >,
+    parents: Query<&ChildOf>,
+    placeables: Query<(), With<PlacedObjectDefinitionReference>>,
+    mut changed: MessageWriter<ConstructionPickableDiscarded>,
+) {
+    if placeable_ancestor(discarded.entity, &parents, &placeables).is_some() {
+        changed.write(ConstructionPickableDiscarded);
     }
+}
+
+pub(super) fn notify_discarded_construction_pickable(
+    _: On<
+        Discard<(
+            PlacedObjectDefinitionReference,
+            TransportTrackConstructionPiece,
+            TrackSegment,
+            TransportTrackJunction,
+            TransportStation,
+            TransportCircuit,
+            CircuitMember,
+        )>,
+    >,
+    mut changed: MessageWriter<ConstructionPickableDiscarded>,
+) {
+    changed.write(ConstructionPickableDiscarded);
 }
 
 /// Walks from the hovered collider to its owning placeable entity, or else
@@ -121,7 +122,6 @@ impl DeleteTargetChanges<'_, '_> {
 pub(super) fn update_delete_hover_target(
     mut commands: Commands,
     tool: Res<ConstructionTool>,
-    ray: Res<WorldPointerRay>,
     mut mesh_ray_cast: MeshRayCast,
     parents: Query<&ChildOf>,
     placeables: Query<(), With<PlacedObjectDefinitionReference>>,
@@ -129,11 +129,9 @@ pub(super) fn update_delete_hover_target(
         Entity,
         Ref<ConstructionCursor>,
         &WorldMember,
-        &mut DeleteHoverProbe,
+        Ref<EffectiveConstructionRay>,
         Option<&mut DeleteHoverTarget>,
     )>,
-    fences: Query<(Entity, FenceSegment)>,
-    nodes: Query<&TopologyNode>,
     grids: Query<Ref<TopologyGrid>>,
     track_pieces: Query<(Entity, &TransportTrackConstructionPiece)>,
     routes: Query<&TrackSegment>,
@@ -148,22 +146,18 @@ pub(super) fn update_delete_hover_target(
     ),
     mut changes: DeleteTargetChanges,
 ) {
-    let removed = changes.clear_removals();
-    let Ok((cursor_entity, cursor, member, mut previous_probe, previous)) = cursors.single_mut()
-    else {
+    let removed = !changes.discarded.is_empty();
+    changes.discarded.clear();
+    let Ok((cursor_entity, cursor, member, ray, previous)) = cursors.single_mut() else {
         return;
     };
     let Ok(grid) = grids.get(member.root) else {
         return;
     };
-    let delete_ray = if *tool == ConstructionTool::Delete {
-        ray.0
-    } else {
-        None
-    };
     if !tool.is_changed()
-        && delete_ray == previous_probe.0
+        && !ray.is_changed()
         && (*tool != ConstructionTool::Delete
+            || (ray.0.is_none() && !cursor.is_changed())
             || (!cursor.is_changed()
                 && !grid.is_changed()
                 && !removed
@@ -171,7 +165,6 @@ pub(super) fn update_delete_hover_target(
                     .topology
                     .get(member.root)
                     .is_ok_and(|index| index.is_changed())
-                && !changes.mesh_assets.is_changed()
                 && changes.routes.is_empty()
                 && changes.towers.is_empty()
                 && changes.placeables.is_empty()
@@ -182,7 +175,6 @@ pub(super) fn update_delete_hover_target(
     {
         return;
     }
-    previous_probe.0 = delete_ray;
     let target = (*tool == ConstructionTool::Delete)
         .then_some(ray.0)
         .flatten()
@@ -197,7 +189,10 @@ pub(super) fn update_delete_hover_target(
         .and_then(|hit| placeable_ancestor(hit, &parents, &placeables))
         .or_else(|| {
             (*tool == ConstructionTool::Delete && cursor.over_terrain)
-                .then(|| nearest_fence(cursor.world.xz(), &fences, &nodes, *grid))
+                .then(|| {
+                    let topology = changes.topology.get(member.root).ok()?;
+                    nearest_fence(cursor.world.xz(), &topology, *grid)
+                })
                 .flatten()
         })
         .or_else(|| {
@@ -222,9 +217,7 @@ pub(super) fn update_delete_hover_target(
         });
     match (previous, target) {
         (Some(mut previous), Some(target)) => {
-            if previous.0 != target {
-                previous.0 = target;
-            }
+            previous.set_if_neq(DeleteHoverTarget(target));
         }
         (None, Some(target)) => {
             commands
@@ -238,27 +231,28 @@ pub(super) fn update_delete_hover_target(
     }
 }
 
-fn nearest_fence(
-    point: Vec2,
-    fences: &Query<(Entity, FenceSegment)>,
-    nodes: &Query<&TopologyNode>,
-    grid: TopologyGrid,
-) -> Option<Entity> {
-    fences
-        .iter()
-        .filter_map(|(entity, fence)| {
-            let [a, b] = [fence.a(), fence.b()].map(|node| {
-                nodes
-                    .get(node)
-                    .ok()
-                    .map(|node| grid.cell_translation(node.cell).xz())
-            });
-            let (a, b) = (a?, b?);
+fn nearest_fence(point: Vec2, topology: &TopologyIndex, grid: TopologyGrid) -> Option<Entity> {
+    if !point.is_finite() || !grid.spacing_m.is_finite() || grid.spacing_m <= 0.0 {
+        return None;
+    }
+    let relative = point - grid.origin;
+    let radius = Vec2::splat(FENCE_DELETE_PICK_RADIUS_M);
+    let min = ((relative - radius) / grid.spacing_m).floor().as_ivec2();
+    let max = ((relative + radius) / grid.spacing_m).ceil().as_ivec2();
+    topology
+        .fences_within(min, max)
+        .filter_map(|entity| {
+            let edge = topology.fence_key(entity)?;
+            let a = grid.cell_translation(edge.lo).xz();
+            let b = grid.cell_translation(edge.hi).xz();
             let along = (point - a).dot(b - a) / (b - a).length_squared().max(f32::EPSILON);
             let distance = point.distance(a + (b - a) * along.clamp(0.0, 1.0));
             (distance <= FENCE_DELETE_PICK_RADIUS_M).then_some((entity, distance))
         })
-        .min_by(|(_, left), (_, right)| left.total_cmp(right))
+        .min_by(|(left_entity, left), (right_entity, right)| {
+            left.total_cmp(right)
+                .then_with(|| left_entity.cmp(right_entity))
+        })
         .map(|(entity, _)| entity)
 }
 

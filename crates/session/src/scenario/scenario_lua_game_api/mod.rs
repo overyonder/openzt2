@@ -99,7 +99,7 @@ pub(super) fn install_scenario_game_query_and_command_functions<'scope, 'env: 's
     )?;
     globals.set(
         "getAdmissionPrice",
-        scope.create_function(move |_, ()| Ok(queries.guest_admission_price.0 .0 / 100))?,
+        scope.create_function(move |_, ()| Ok(queries.guest_admission_price.adult.0 / 100))?,
     )?;
     globals.set(
         "getHalfStars",
@@ -265,7 +265,7 @@ pub(super) fn install_scenario_game_query_and_command_functions<'scope, 'env: 's
     status.set(
         "ZT_GET_ADMISSION_PRICE",
         scope.create_function(move |_, _: MultiValue| {
-            Ok(queries.guest_admission_price.0 .0 / 100)
+            Ok(queries.guest_admission_price.adult.0 / 100)
         })?,
     )?;
     // The shipped `getIsTankInWorld` asks this; the first Marine Mania
@@ -374,6 +374,7 @@ pub(super) fn install_scenario_game_query_and_command_functions<'scope, 'env: 's
             let timeout_seconds = message.get::<Option<f64>>("timeout")?.unwrap_or(0.0);
             ui.borrow_mut()
                 .push(super::scenario_lua_ui::ScenarioUiCommand::ZooMessage {
+                    root: None,
                     text,
                     timeout_seconds,
                 });
@@ -521,7 +522,9 @@ fn finance_value(queries: ScenarioLuaQueryFacts<'_>, request: &Table) -> mlua::R
     let period = request.get::<String>("period")?;
     let category = request.get::<String>("category")?;
     let metric = request.get::<String>("type")?;
-    let history = queries.finance_history;
+    let Some(history) = queries.finance_history else {
+        return Ok(0.0);
+    };
     let value = match period.as_str() {
         "monthly" => {
             let month = request.get::<Option<u32>>("month")?;

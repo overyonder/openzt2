@@ -35,7 +35,7 @@ use openzt2_interface_state::ui::authored_ui_node_projection_components::UiValue
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiValueBinding;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiVisibleBinding;
 use openzt2_ui::authored_ui_text_content_binding::UiTextBinding;
-use openzt2_interface_state::ui::ui_document_lifecycle_contracts::ShowUiRole;
+use openzt2_interface_state::ui::ui_document_lifecycle_contracts::{InGameUiOwner, ShowUiRole};
 
 use openzt2_interface_state::information::catalogue_types::CatalogueDetails;
 use openzt2_interface_state::information::catalogue_types::PurchaseChoice;
@@ -55,7 +55,7 @@ pub(crate) fn dismiss_purchase_information_on_inspection_request(
     mut tool_requests: MessageReader<SelectConstructionTool>,
     selected_entity: WorldUiSelection,
     view_classes: Query<&InformationViewClass>,
-    mut selected_catalogue_entry: ResMut<SelectedCatalogueEntry>,
+    mut selections: Query<&mut SelectedCatalogueEntry, With<InGameUiOwner>>,
 ) {
     // The authored purchase-panel close button returns to mode_selection.
     // Placement cancellation alone leaves the information subject selected.
@@ -65,17 +65,20 @@ pub(crate) fn dismiss_purchase_information_on_inspection_request(
         .is_some_and(|request| request.0 == ConstructionTool::Inspect)
         || selected_entity_uses_building_information_slot(selected_entity.subject(), &view_classes)
     {
-        if selected_catalogue_entry.0.is_some() {
-            selected_catalogue_entry.0 = None;
+        if let Ok(mut selection) = selections.single_mut() {
+            selection.set_if_neq(SelectedCatalogueEntry(None));
         }
     }
 }
 
 pub(crate) fn project_purchase_information_document_visibility_from_selected_subject(
-    selected: Res<SelectedCatalogueEntry>,
+    selections: Query<Ref<SelectedCatalogueEntry>, With<InGameUiOwner>>,
     documents: Res<Assets<UiDocumentAsset>>,
     mut roots: Query<(&UiDocumentRoot, &mut Visibility)>,
 ) {
+    let Ok(selected) = selections.single() else {
+        return;
+    };
     for (root, mut visibility) in &mut roots {
         if documents.get(&root.document).is_some_and(|document| {
             document.canonical_ui_document().role == UiDocumentRole::PurchaseCatalogue
@@ -98,7 +101,7 @@ pub(crate) fn project_purchase_information_document_visibility_from_selected_sub
 pub(crate) fn select_catalogue_entry_and_open_purchase_information_document(
     mut purchase_choices: MessageReader<PurchaseChoice>,
     mut adoption_placement_requests: MessageReader<BeginAnimalAdoptionPlacement>,
-    mut selected_catalogue_entry: ResMut<SelectedCatalogueEntry>,
+    mut selections: Query<&mut SelectedCatalogueEntry, With<InGameUiOwner>>,
     selected_entity: WorldUiSelection,
     view_classes: Query<&InformationViewClass>,
     mut selection_requests: MessageWriter<SelectionRequest>,
@@ -128,7 +131,10 @@ pub(crate) fn select_catalogue_entry_and_open_purchase_information_document(
     let Some(selected_definition) = selected_definition else {
         return;
     };
-    selected_catalogue_entry.0 = Some(selected_definition);
+    let Ok(mut selection) = selections.single_mut() else {
+        return;
+    };
+    selection.set_if_neq(SelectedCatalogueEntry(Some(selected_definition)));
     if selected_entity_uses_building_information_slot(selected_entity.subject(), &view_classes) {
         // Purchase and building inspection use the same authored right slot.
         selection_requests.write(SelectionRequest {
@@ -180,7 +186,7 @@ pub(crate) fn project_selected_catalogue_entry_to_purchase_information_document(
     active_species: Res<SpeciesAssets>,
     ui_document_assets: Res<Assets<UiDocumentAsset>>,
     ui_document_roots: Query<&UiDocumentRoot>,
-    selected_catalogue_entry: Res<SelectedCatalogueEntry>,
+    selections: Query<Ref<SelectedCatalogueEntry>, With<InGameUiOwner>>,
     mut catalogue_detail_panels: Query<(&UiDocumentOwner, &mut Visibility, Ref<CatalogueDetails>)>,
     mut visibility_nodes: Query<
         (&UiDocumentOwner, &UiVisibleBinding, &mut Visibility),
@@ -201,6 +207,9 @@ pub(crate) fn project_selected_catalogue_entry_to_purchase_information_document(
         &mut UiValue,
     )>,
 ) {
+    let Ok(selected_catalogue_entry) = selections.single() else {
+        return;
+    };
     let Some(selected_definition) = selected_catalogue_entry.0 else {
         for (_, mut visibility, _) in &mut catalogue_detail_panels {
             if *visibility != Visibility::Hidden {

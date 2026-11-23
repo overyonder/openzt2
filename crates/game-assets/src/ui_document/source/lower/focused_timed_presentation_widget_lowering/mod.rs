@@ -21,6 +21,7 @@ fn authored_presentation_delay(seconds: f32, input: &AuthoredUiDocument) -> io::
 
 pub(super) fn lower_source_ui_timed_events_to_canonical_focused_presentation_widget_record(
     name: Option<&str>,
+    node_index: u32,
     current: AssetId,
     events: &[SourceUiTimedEvent],
     role: UiDocumentRole,
@@ -70,7 +71,7 @@ pub(super) fn lower_source_ui_timed_events_to_canonical_focused_presentation_wid
             continue;
         }
         let first_action = output.actions.len();
-        super::authored_ui_event_collection_lowering::flatten_event(
+        let receiver = super::authored_ui_event_collection_lowering::flatten_event(
             UiTrigger::Press,
             event,
             role,
@@ -90,6 +91,12 @@ pub(super) fn lower_source_ui_timed_events_to_canonical_focused_presentation_wid
                     action: UiTimedEventAction::ScenarioScript(script.to_owned()),
                 });
             }
+        }
+        if (receiver.from_root || !receiver.nodes.is_empty()) && output.actions.len() > first_action
+        {
+            output
+                .timed_action_receivers
+                .insert((node_index, actions.len()), receiver);
         }
         for action in output.actions.drain(first_action..) {
             actions.push(UiTimedEventRecord {

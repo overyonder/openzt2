@@ -6,11 +6,10 @@ use bevy::prelude::Query;
 use bevy::prelude::Res;
 use bevy::prelude::With;
 use bevy::prelude::Without;
+use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_world_state::world_spawn::selected_world_document_handles::SelectedWorldDocumentHandles;
 use openzt2_world_state::world_spawn::selected_world_identity::SelectedWorldIdentity;
-use openzt2_world_state::world_spawn::world_load_completion_marker::{
-    ImportedPersistentIdsReserved, WorldClockInitialized,
-};
+use openzt2_world_state::world_spawn::world_load_completion_marker::ImportedPersistentIdsReserved;
 
 use openzt2_game_assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset;
 
@@ -31,7 +30,7 @@ pub fn reserve_all_imported_world_persistent_ids(
         ),
         (
             With<WorldHydration>,
-            With<WorldClockInitialized>,
+            With<ZooClock>,
             Without<ImportedPersistentIdsReserved>,
             Without<WorldLoadFailure>,
         ),

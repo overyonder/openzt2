@@ -24,6 +24,7 @@ fn path_belongs_to_audio_document_family(path: &Path) -> bool {
         .replace('\\', "/")
         .to_ascii_lowercase();
     path.starts_with("config/sound")
+        || path == "config/worldsndmgrconfig.xml"
         || path.starts_with("entities/sound/")
         || path.starts_with("ui/sound/")
         || path.starts_with("world/sound/")

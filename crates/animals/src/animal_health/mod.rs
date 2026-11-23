@@ -1,7 +1,6 @@
 mod animal_activity_immobilization_execution;
 mod animal_escape_state_execution;
 mod animal_health_staff_job_request_generation;
-mod animal_health_state_initialization;
 mod animal_rampage_execution;
 mod animal_tranquilization_and_capture_execution;
 mod disease_hint_ui_action_routing;
@@ -20,10 +19,11 @@ use bevy::{ecs::schedule::common_conditions::on_message, prelude::*};
 use openzt2_game_assets::application_lifecycle::GamePhase;
 use openzt2_world_state::application_schedule::FixedGameSet;
 use openzt2_world_state::application_schedule::GameSet;
+use openzt2_zoo_state::animal_lifecycle::types::Animal;
 
 use types::{
     AnimalCaptured, AnimalDied, CaptureAnimalRequest, FreezeAnimal, ThawAnimal, TranquilizeRequest,
-    TranquilizerFired, TreatmentRequest,
+    TranquilizerFired, TreatmentRequest, Vitality,
 };
 
 pub struct AnimalHealthPlugin;
@@ -32,8 +32,11 @@ impl Plugin for AnimalHealthPlugin {
     fn build(&self, app: &mut App) {
         rampage_policy::register_rampage_policy(app);
         animal_rampage_execution::register_rampage_timers(app);
+        app.register_required_components_with::<Animal, Vitality>(|| Vitality(1.0));
         app.add_observer(animal_activity_immobilization_execution::stop_activity_when_frozen)
             .add_observer(animal_activity_immobilization_execution::cancel_tasks_started_for_inactive_animals)
+            .add_observer(animal_tranquilization_and_capture_execution::discard_tranquilizer_dose_timer)
+            .add_observer(animal_tranquilization_and_capture_execution::discard_tranquilizer_recovery_timer)
             .add_message::<TreatmentRequest>()
             .add_message::<TranquilizeRequest>()
             .add_message::<CaptureAnimalRequest>()
@@ -42,6 +45,10 @@ impl Plugin for AnimalHealthPlugin {
             .add_message::<ThawAnimal>()
             .add_message::<AnimalDied>()
             .add_message::<AnimalCaptured>()
+            .add_systems(
+                Startup,
+                tranquilizer_heads_up_display_projection::load_tranquilizer_charge_bar_images,
+            )
             .add_systems(
                 Update,
                 disease_hint_ui_action_routing::
@@ -61,12 +68,6 @@ impl Plugin for AnimalHealthPlugin {
             )
             .add_systems(
                 FixedUpdate,
-                animal_health_state_initialization::
-                        initialize_new_animals_with_full_vitality
-                    .in_set(FixedGameSet::Think),
-            )
-            .add_systems(
-                FixedUpdate,
                 (
                     animal_activity_immobilization_execution::
                         apply_animal_freeze_and_thaw_requests,
@@ -77,9 +78,12 @@ impl Plugin for AnimalHealthPlugin {
                         disease_progression_execution::
                             advance_active_animal_diseases_and_apply_vitality_loss,
                         veterinary_treatment_execution::
-                            advance_active_veterinary_treatments_and_apply_completed_results,
-                    )
-                        .chain(),
+                            advance_active_veterinary_treatments_and_apply_completed_results
+                            .after(veterinary_treatment_execution::
+                                validate_veterinary_treatment_requests_and_begin_treatment)
+                            .after(disease_progression_execution::
+                                advance_active_animal_diseases_and_apply_vitality_loss),
+                    ),
                     (
                         animal_tranquilization_and_capture_execution::
                             validate_tranquilizer_requests_and_apply_timed_tranquilization
@@ -88,12 +92,8 @@ impl Plugin for AnimalHealthPlugin {
                             validate_staff_capture_requests_and_clear_animal_emergency_state,
                         animal_tranquilization_and_capture_execution::
                             advance_animal_tranquilization_and_begin_recovery_period,
-                        (
-                            animal_tranquilization_and_capture_execution::
-                                advance_and_complete_animal_tranquilizer_recovery_periods,
-                            animal_rampage_execution::
-                                advance_elapsed_ticks_for_active_untranquilized_animal_rampages,
-                        ),
+                        animal_tranquilization_and_capture_execution::
+                            advance_and_complete_animal_tranquilizer_recovery_periods,
                     )
                         .chain(),
                 )
@@ -106,15 +106,22 @@ impl Plugin for AnimalHealthPlugin {
                     animal_escape_state_execution::
                         clear_animal_escape_state_after_player_relocation,
                     animal_escape_state_execution::
-                        detect_animal_containment_breaches_and_mark_newly_escaped_animals,
+                        detect_animal_containment_breaches_and_mark_newly_escaped_animals
+                        .after(animal_escape_state_execution::clear_animal_escape_state_after_crating)
+                        .after(animal_escape_state_execution::clear_animal_escape_state_after_player_relocation),
                     animal_health_staff_job_request_generation::
                         request_tranquilization_for_rampaging_animals,
                     animal_escape_state_execution::
-                        clear_escape_and_rampage_after_tranquilized_animal_reaches_containment,
+                        clear_escape_and_rampage_after_tranquilized_animal_reaches_containment
+                        .after(animal_escape_state_execution::
+                            detect_animal_containment_breaches_and_mark_newly_escaped_animals)
+                        .after(animal_health_staff_job_request_generation::
+                            request_tranquilization_for_rampaging_animals),
                     disease_mortality_execution::
-                        finalize_disease_deaths_after_vitality_reaches_zero,
+                        finalize_disease_deaths_after_vitality_reaches_zero
+                        .after(animal_escape_state_execution::
+                            clear_escape_and_rampage_after_tranquilized_animal_reaches_containment),
                 )
-                    .chain()
                     .in_set(FixedGameSet::Cleanup),
             );
     }

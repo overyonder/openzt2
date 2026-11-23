@@ -6,7 +6,7 @@ use openzt2_interface_state::photos::photo_album_types::{AlbumMember, AlbumPhoto
 use openzt2_interface_state::photos::photo_capture_types::Photo;
 
 use openzt2_game_data::ui_document::{
-    action::{photography::UiPhotoAction, presentation::UiPresentationAction, UiActionRecord},
+    action::{UiActionRecord, photography::UiPhotoAction, presentation::UiPresentationAction},
     node::*,
     node_property_binding::*,
     widget_live_collection::UiWidgetLiveCollectionSource,
@@ -17,29 +17,29 @@ use bevy::{ecs::relationship::RelationshipTarget, prelude::*};
 use openzt2_game_assets::localization::localization_asset_types::LocalizationAsset;
 use openzt2_game_assets::localization::localization_precedence_index::LocalizationPrecedenceIndex;
 use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
-use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::RequestedUiListRowCount;
 use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::UiListPolicy;
 use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::UiListRow;
-use openzt2_ui::authored_ui_image_content_binding::UiImageBinding;
 use openzt2_interface_state::ui::authored_ui_interaction_enabled_state::UiInteractionEnabled;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentRoot;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiNodeId;
 use openzt2_interface_state::ui::authored_ui_selection_state::UiSelected;
+use openzt2_ui::authored_ui_image_content_binding::UiImageBinding;
 use openzt2_ui::authored_ui_text_content_binding::UiTextBinding;
-use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
+use openzt2_world_state::world_spawn::{
+    world_load_completion_marker::WorldLoadCompleted,
+    world_membership_types::{WorldMember, WorldRoot},
+};
 
 use super::album_operations::{
     find_photo_camera_roll_album, ordered_photo_album_entities, photo_rank_for_album_display_slot,
 };
 use super::photo_album_types::{
-    ActivePhotoAlbum, EnlargedAlbumPhoto, PhotoAlbumCapacityPages, PhotoAlbumChoiceRow,
-    PhotoAlbumPage, PhotoCameraRoll, PhotoCameraRollRow, PhotoMove, PhotoMoveTarget,
-    SelectedAlbumPhoto, INITIAL_PHOTO_ALBUM_SPREADS, PHOTO_CAMERA_ROLL_CAPACITY,
+    ActivePhotoAlbum, EnlargedAlbumPhoto, INITIAL_PHOTO_ALBUM_SPREADS, PHOTO_CAMERA_ROLL_CAPACITY,
+    PhotoAlbumCapacityPages, PhotoAlbumChoiceRow, PhotoAlbumPage, PhotoCameraRoll,
+    PhotoCameraRollRow, PhotoMove, PhotoMoveTarget, SelectedAlbumPhoto,
 };
-use super::photo_capture_types::PhotoCaptionSubject;
 use openzt2_interface_state::ui::authored_ui_action_projection_components::UiPhotoActions;
 use openzt2_interface_state::ui::authored_ui_action_projection_components::UiPresentationActions;
 
@@ -313,7 +313,7 @@ fn present_photo_storage_row_descendants(
     }
 }
 
-#[derive(Default, PartialEq, Eq)]
+#[derive(Component, Default, PartialEq, Eq)]
 pub(super) struct AlbumControlAvailability {
     active_has_photos: bool,
     roll_has_photos: bool,
@@ -323,25 +323,94 @@ pub(super) struct AlbumControlAvailability {
     next_page: bool,
 }
 
+pub(super) fn update_album_control_availability_from_album_changes(
+    mut worlds: Query<
+        (Entity, &mut AlbumControlAvailability),
+        (With<WorldRoot>, With<WorldLoadCompleted>),
+    >,
+    albums: Query<
+        (
+            &WorldMember,
+            Option<Ref<ActivePhotoAlbum>>,
+            Option<Ref<PhotoCameraRoll>>,
+            Option<Ref<PhotoAlbumPage>>,
+            Option<Ref<PhotoAlbumCapacityPages>>,
+            Option<Ref<SelectedAlbumPhoto>>,
+            Option<Ref<AlbumPhotos>>,
+        ),
+        (
+            With<PhotoAlbum>,
+            Or<(With<ActivePhotoAlbum>, With<PhotoCameraRoll>)>,
+        ),
+    >,
+    mut removed: (
+        RemovedComponents<ActivePhotoAlbum>,
+        RemovedComponents<PhotoCameraRoll>,
+        RemovedComponents<PhotoAlbumPage>,
+        RemovedComponents<PhotoAlbumCapacityPages>,
+        RemovedComponents<SelectedAlbumPhoto>,
+        RemovedComponents<AlbumPhotos>,
+    ),
+) {
+    let inputs_removed = !removed.0.is_empty()
+        || !removed.1.is_empty()
+        || !removed.2.is_empty()
+        || !removed.3.is_empty()
+        || !removed.4.is_empty()
+        || !removed.5.is_empty();
+    removed.0.clear();
+    removed.1.clear();
+    removed.2.clear();
+    removed.3.clear();
+    removed.4.clear();
+    removed.5.clear();
+
+    for (world, mut current) in &mut worlds {
+        let mut next = AlbumControlAvailability::default();
+        let mut changed = inputs_removed || current.is_added();
+        for (member, active, roll, page, capacity, selection, photos) in &albums {
+            if member.root != world {
+                continue;
+            }
+            changed |= active.as_ref().is_some_and(Ref::is_changed)
+                || roll.as_ref().is_some_and(Ref::is_changed)
+                || page.as_ref().is_some_and(Ref::is_changed)
+                || capacity.as_ref().is_some_and(Ref::is_changed)
+                || selection.as_ref().is_some_and(Ref::is_changed)
+                || photos.as_ref().is_some_and(Ref::is_changed);
+            let has_photos = photos.as_ref().is_some_and(|photos| !photos.is_empty());
+            let has_selection = selection.is_some_and(|selection| {
+                photos
+                    .as_ref()
+                    .is_some_and(|photos| photos.collection().contains(&selection.0))
+            });
+            if active.is_some() {
+                let page = page.map_or(0, |page| page.0);
+                let capacity = capacity.map_or(INITIAL_PHOTO_ALBUM_SPREADS, |capacity| capacity.0);
+                next.active_has_photos = has_photos;
+                next.active_selected = has_selection;
+                next.previous_page = page != 0;
+                next.next_page = page.saturating_add(1) < capacity;
+            }
+            if roll.is_some() {
+                next.roll_has_photos = has_photos;
+                next.roll_selected = has_selection;
+            }
+        }
+        if changed {
+            current.set_if_neq(next);
+        }
+    }
+}
+
 /// Enables photo controls when the selected album supports their action.
 pub(super) fn set_photo_album_control_interaction_availability_from_album_state(
     documents: Res<Assets<UiDocumentAsset>>,
     roots: Query<Ref<UiDocumentRoot>>,
-    mut previous: Local<Option<AlbumControlAvailability>>,
+    availability: Query<Ref<AlbumControlAvailability>, (With<WorldRoot>, With<WorldLoadCompleted>)>,
+    mut retired_worlds: RemovedComponents<WorldLoadCompleted>,
     mut removed_photo_actions: RemovedComponents<UiPhotoActions>,
     mut removed_presentation_actions: RemovedComponents<UiPresentationActions>,
-    albums: Query<
-        (
-            Entity,
-            Option<&PhotoAlbumPage>,
-            Option<&SelectedAlbumPhoto>,
-            Option<&PhotoAlbumCapacityPages>,
-            Has<ActivePhotoAlbum>,
-            Has<PhotoCameraRoll>,
-        ),
-        With<PhotoAlbum>,
-    >,
-    members: Query<&AlbumPhotos>,
     mut nodes: Query<
         (
             Option<Ref<UiPhotoActions>>,
@@ -353,36 +422,17 @@ pub(super) fn set_photo_album_control_interaction_availability_from_album_state(
         Or<(With<UiPhotoActions>, With<UiPresentationActions>)>,
     >,
 ) {
-    let active = albums.iter().find(|row| row.4);
-    let camera = albums.iter().find(|row| row.5);
-    let photo_count = |album: Option<Entity>| {
-        album
-            .and_then(|album| members.get(album).ok())
-            .map_or(0, RelationshipTarget::len)
-    };
-    let active_count = photo_count(active.map(|row| row.0));
-    let camera_count = photo_count(camera.map(|row| row.0));
-    let active_selected = active.and_then(|row| row.2).is_some();
-    let camera_selected = camera.and_then(|row| row.2).is_some();
-
-    let availability = AlbumControlAvailability {
-        active_has_photos: active_count != 0,
-        roll_has_photos: camera_count != 0,
-        active_selected,
-        roll_selected: camera_selected,
-        previous_page: active.and_then(|row| row.1).is_some_and(|page| page.0 != 0),
-        next_page: active.is_some_and(|row| {
-            let page = row.1.map_or(0, |page| page.0);
-            let capacity = row.3.map_or(INITIAL_PHOTO_ALBUM_SPREADS, |pages| pages.0);
-            page.saturating_add(1) < capacity
-        }),
-    };
-    let refresh_all = previous.as_ref() != Some(&availability)
+    let availability = availability.single().ok();
+    let refresh_all = availability.as_ref().is_some_and(Ref::is_changed)
         || documents.is_changed()
+        || !retired_worlds.is_empty()
         || !removed_photo_actions.is_empty()
         || !removed_presentation_actions.is_empty();
     removed_photo_actions.clear();
     removed_presentation_actions.clear();
+    retired_worlds.clear();
+    let default = AlbumControlAvailability::default();
+    let availability = availability.as_deref().unwrap_or(&default);
     for (photo_range, presentation_range, owner, mut enabled, selected) in &mut nodes {
         let Ok(root) = roots.get(owner.0) else {
             continue;
@@ -445,16 +495,20 @@ pub(super) fn set_photo_album_control_interaction_availability_from_album_state(
         let next = direct_actions
             .chain(revealed_actions)
             .find_map(|record| match &record.action {
-                UiPhotoAction::DeleteAllPhotosFromCameraRoll => Some(camera_count != 0),
+                UiPhotoAction::DeleteAllPhotosFromCameraRoll => Some(availability.roll_has_photos),
                 UiPhotoAction::DeleteSelectedPhotoFromAnyAlbum => {
-                    Some(active_selected || camera_selected)
+                    Some(availability.active_selected || availability.roll_selected)
                 }
-                UiPhotoAction::DeleteSelectedPhotoFromActiveAlbum => Some(active_selected),
-                UiPhotoAction::DeleteSelectedPhotoFromCameraRoll => Some(camera_selected),
+                UiPhotoAction::DeleteSelectedPhotoFromActiveAlbum => {
+                    Some(availability.active_selected)
+                }
+                UiPhotoAction::DeleteSelectedPhotoFromCameraRoll => {
+                    Some(availability.roll_selected)
+                }
                 UiPhotoAction::StartMovingSelectedPhotoToActiveAlbum => {
-                    Some(active_selected || camera_selected)
+                    Some(availability.active_selected || availability.roll_selected)
                 }
-                UiPhotoAction::ExportActivePhotoAlbumAsHtml => Some(active_count != 0),
+                UiPhotoAction::ExportActivePhotoAlbumAsHtml => Some(availability.active_has_photos),
                 UiPhotoAction::ShowPreviousActivePhotoAlbumPage => Some(availability.previous_page),
                 UiPhotoAction::ShowNextActivePhotoAlbumPage => Some(availability.next_page),
                 _ => None,
@@ -471,7 +525,6 @@ pub(super) fn set_photo_album_control_interaction_availability_from_album_state(
             }
         }
     }
-    *previous = Some(availability);
 }
 
 /// Photo slots share the image handle stored on each photo.
@@ -715,8 +768,7 @@ pub(super) fn present_photo_album_and_photo_mode_camera_roll_text(
     }
 }
 
-/// Uses the most prominent subject's localized name as the default caption.
-pub(super) fn present_default_photo_captions_from_canonical_subjects(
+pub(super) fn present_stored_photo_captions(
     active_albums: Query<(Entity, Ref<PhotoAlbumPage>), (With<PhotoAlbum>, With<ActivePhotoAlbum>)>,
     albums: Query<(
         Entity,
@@ -727,25 +779,14 @@ pub(super) fn present_default_photo_captions_from_canonical_subjects(
         Option<&PhotoMove>,
         Option<&PhotoCameraRoll>,
     )>,
-    photos: Query<(
-        Entity,
-        &Photo,
-        &AlbumMember,
-        Option<&PhotoAlbumOrder>,
-        Option<&PhotoCaptionSubject>,
-    )>,
+    photos: Query<Option<Ref<super::photo_caption::PhotoCaption>>, With<Photo>>,
     album_members: Query<Ref<AlbumPhotos>>,
     active_changes: Query<(), Added<ActivePhotoAlbum>>,
     mut removed_memberships: RemovedComponents<AlbumPhotos>,
-    world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
-    active_world_definitions: Res<WorldDefinitions>,
     localization_assets: Res<Assets<LocalizationAsset>>,
     active_localization: Res<LocalizationPrecedenceIndex>,
     mut caption_nodes: Query<(Ref<UiTextBinding>, &mut Text)>,
 ) {
-    let Some(world_definitions) = active_world_definitions.get(&world_definition_assets) else {
-        return;
-    };
     let Some(localization) =
         active_localization.borrow_loaded_localization_view(&localization_assets)
     else {
@@ -770,29 +811,32 @@ pub(super) fn present_default_photo_captions_from_canonical_subjects(
         let UiTextPropertyBindingSource::PhotoAlbumCaption { slot } = &binding.0 else {
             continue;
         };
-        if !binding.is_added()
-            && !page_changed
-            && !world_definition_assets.is_changed()
-            && !localization_assets.is_changed()
-            && !active_localization.is_changed()
-            && !album_changed
-        {
-            continue;
-        }
-        let caption = active_album_entity
+        let photo = active_album_entity
             .and_then(|album| albums.get(album).ok())
             .and_then(|album| {
                 photo_rank_for_album_display_slot(i32::from(*slot), album.6.is_some(), album.3)
             })
             .and_then(|rank| ordered_photos.get(rank).copied())
-            .and_then(|photo_entity| photos.get(photo_entity).ok())
-            .and_then(|photo| photo.4)
-            .and_then(|subject| world_definitions.find_object(subject.0))
-            .and_then(|definition| {
-                localization
-                    .find_plain_localized_text(openzt2_game_data::AssetId(definition.name_key.0))
-            })
-            .unwrap_or("");
+            .and_then(|photo_entity| photos.get(photo_entity).ok());
+        if !binding.is_changed()
+            && !page_changed
+            && !album_changed
+            && !localization_assets.is_changed()
+            && !active_localization.is_changed()
+            && !photo
+                .as_ref()
+                .and_then(Option::as_ref)
+                .is_some_and(Ref::is_changed)
+        {
+            continue;
+        }
+        let caption = match photo.as_ref() {
+            Some(Some(caption)) => caption.0.as_str(),
+            Some(None) => localization
+                .find_plain_localized_text(super::photo_caption::default_photo_caption_key())
+                .unwrap_or_default(),
+            None => "",
+        };
         if caption_text.0 != caption {
             caption_text.0.clear();
             caption_text.0.push_str(caption);

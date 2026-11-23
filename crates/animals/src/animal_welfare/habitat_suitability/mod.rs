@@ -1,6 +1,6 @@
 use bevy::{ecs::relationship::RelationshipTarget, platform::collections::HashMap, prelude::*};
-use openzt2_game_data::species::{NeedKind, SpeciesHabitatSpace, SpeciesNeed};
 use openzt2_game_data::AssetId;
+use openzt2_game_data::species::{NeedKind, SpeciesHabitatSpace, SpeciesNeed};
 
 use openzt2_game_assets::species::species_asset_types::{SpeciesAsset, SpeciesAssets};
 use openzt2_world_state::world_spawn::world_entity_crating::WorldEntityIsCrated;
@@ -14,8 +14,11 @@ use openzt2_zoo_state::habitat::habitat_types::HabitatRegion;
 use openzt2_zoo_state::habitat::habitat_types::HabitatSummary;
 
 use super::calculations::clamp_animal_need_q16_after_delta;
-use super::need_updates::{observe_need_write, NeedLatch, NeedThresholdCrossing};
 use super::types::{EnvironmentHabitatAssessed, EnvironmentNeed, HabitatSuitability, Q16_ONE};
+use super::{
+    need_latch_types::NeedLatch,
+    need_updates::{NeedThresholdCrossing, observe_need_write},
+};
 
 #[derive(Component)]
 pub(super) struct HabitatSuitabilityDirty;
@@ -181,7 +184,7 @@ pub(super) fn project_changed_habitat_suitability(
                 environment
                     .map_unchanged(|need| &mut need.0)
                     .set_if_neq(value);
-                observe_need_write(
+                if let Some(crossing) = observe_need_write(
                     animal,
                     NeedKind::Environment,
                     old,
@@ -189,8 +192,9 @@ pub(super) fn project_changed_habitat_suitability(
                     row.trigger_wellness_threshold,
                     row.cessation_wellness_threshold,
                     latch,
-                    &mut changed,
-                );
+                ) {
+                    changed.write(NeedThresholdCrossing(crossing));
+                }
             }
         }
         if let Some(mut current) = suitability {

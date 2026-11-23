@@ -48,22 +48,24 @@ fn fixture() -> (App, Entity) {
         .init_resource::<Assets<BehaviorDocumentAsset>>()
         .init_resource::<Assets<WorldDefinitionAsset>>()
         .init_resource::<WorldDefinitions>()
-        .insert_resource(ZooClock {
-            fractional_tick: Default::default(),
-            tick: 90,
-            absolute_day: 0,
-            tick_in_day: 90,
-        })
         .add_message::<StaffJobRequest>()
         .add_message::<StaffJobCompleted>()
         .add_message::<CancelStaffJobRequest>()
         .add_message::<BehaviorTaskFinished>()
         .add_message::<BehaviorTaskFailed>();
     add_animal_waste_cleanup_test_systems(&mut app);
-    let root = app.world_mut().spawn_empty().id();
-    app.world_mut()
-        .entity_mut(root)
-        .insert(PersistentIdAllocator::default());
+    let root = app
+        .world_mut()
+        .spawn((
+            PersistentIdAllocator::default(),
+            ZooClock {
+                fractional_tick: Default::default(),
+                tick: 90,
+                absolute_day: 0,
+                tick_in_day: 90,
+            },
+        ))
+        .id();
     (app, root)
 }
 

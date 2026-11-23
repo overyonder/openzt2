@@ -223,6 +223,8 @@ pub struct EffectPassPipelineSpecializationKey {
     pub(super) polygon_mode: PolygonMode,
     pub(super) depth_write_enabled: bool,
     pub(super) depth_compare: CompareFunction,
+    pub(super) depth_bias_bits: u32,
+    pub(super) slope_scale_depth_bias_bits: u32,
     pub(super) stencil: StencilState,
     pub(super) stencil_reference: Option<u32>,
     pub(super) independent_opaque: bool,

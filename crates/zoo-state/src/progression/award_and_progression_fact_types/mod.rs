@@ -1,11 +1,12 @@
 use bevy::prelude::*;
 use openzt2_game_data::AssetId;
 
-#[derive(Resource, Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ScenarioAwardPointTotal(pub u32);
 
 #[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AdjustScenarioAwardPointTotalRequest {
+    pub root: Entity,
     pub delta: i32,
 }
 

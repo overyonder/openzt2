@@ -29,7 +29,7 @@ use super::{
         },
         progression_snapshot_types::ProgressionSnapshotRecords,
         simulation_time_snapshot_section::{
-            SimulationTimeSnapshotRecord, SimulationTimeSnapshotSaveResources,
+            SimulationTimeSnapshotCapture, SimulationTimeSnapshotRecord,
         },
         snapshot_container_encoding_and_validation::initialize_empty_world_snapshot_container,
         snapshot_container_types::ReusableWorldSnapshotByteBuffer,
@@ -298,15 +298,18 @@ fn capture_animals(
 fn capture_simulation_time(
     mut commands: Commands,
     request: CapturingSnapshot,
-    time: SimulationTimeSnapshotSaveResources,
+    time: SimulationTimeSnapshotCapture,
+    roots: Query<Entity, With<WorldRoot>>,
     assets: Res<Assets<WorldDefinitionAsset>>,
     definitions: Res<WorldDefinitions>,
 ) {
     let Ok(operation) = request.single() else {
         return;
     };
-    let capture = time
-        .capture_validated_simulation_time_snapshot_record()
+    let capture = roots
+        .single()
+        .map_err(|_| Failure::BrokenPersistentEntityReference)
+        .and_then(|root| time.capture_validated_simulation_time_snapshot_record(root))
         .and_then(|record| {
             let definitions = definitions
                 .get(&assets)
@@ -439,13 +442,17 @@ fn capture_economy(
     mut commands: Commands,
     request: CapturingSnapshot,
     economy: EconomyCaptureQueries,
+    roots: Query<Entity, With<WorldRoot>>,
 ) {
     let Ok(operation) = request.single() else {
         return;
     };
-    commands.entity(operation).insert(Captured::new(Ok(
-        capture_economy_snapshot_records_from_live_world(&economy),
-    )));
+    commands.entity(operation).insert(Captured::new(
+        roots
+            .single()
+            .map_err(|_| Failure::BrokenPersistentEntityReference)
+            .and_then(|root| capture_economy_snapshot_records_from_live_world(&economy, root)),
+    ));
 }
 
 fn capture_photos(
@@ -465,12 +472,18 @@ fn capture_progression(
     mut commands: Commands,
     request: CapturingSnapshot,
     progression: ProgressionSnapshotCaptureQueries,
+    roots: Query<Entity, With<WorldRoot>>,
 ) {
     let Ok(operation) = request.single() else {
         return;
     };
     commands.entity(operation).insert(Captured::new(
-        capture_progression_snapshot_records_from_live_world(&progression),
+        roots
+            .single()
+            .map_err(|_| Failure::BrokenPersistentEntityReference)
+            .and_then(|root| {
+                capture_progression_snapshot_records_from_live_world(&progression, root)
+            }),
     ));
 }
 

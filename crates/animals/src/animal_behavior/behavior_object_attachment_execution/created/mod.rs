@@ -12,6 +12,7 @@ use openzt2_game_data::world_definitions::world_objects::WorldObjectDetachDestin
 #[derive(Component, Default)]
 pub(super) struct PendingDetachCreatedObject {
     prefab: Option<Handle<ScenePrefabAsset>>,
+    settled: bool,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -33,7 +34,7 @@ pub(super) fn reserve_detach_created_objects(
                 let motion = if destination == WorldObjectDetachDestination::Drop {
                     BehaviorWorldReleaseMotion::Drop
                 } else {
-                    BehaviorWorldReleaseMotion::Fall
+                    BehaviorWorldReleaseMotion::Fall { speed_mps: 0.0 }
                 };
                 commands.queue(move |state: &mut World| {
                     let Some(mut ids) = state.get_mut::<openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator>(world.root) else { return; };
@@ -84,6 +85,7 @@ pub(super) fn reserve_detach_created_objects(
 pub(super) fn hydrate_detach_created_objects(
     mut commands: Commands,
     assets: AttachmentAssets,
+    mut prefab_events: AttachmentPrefabEvents,
     memberships: InteractionContainerMemberships,
     mut pending: Query<
         (
@@ -93,25 +95,34 @@ pub(super) fn hydrate_detach_created_objects(
             &WorldMember,
             &PersistentId,
             &GlobalTransform,
-            Option<&ContainedObject>,
+            Option<&mut ContainedObject>,
             Option<&BehaviorWorldReleaseMotion>,
         ),
         With<PendingDetachCreatedObject>,
     >,
     holders: Query<&GlobalTransform>,
 ) {
+    let settled = prefab_events.settled();
     let Some(definitions) = assets.definitions.get(&assets.definition_assets) else {
         return;
     };
     for (pending_entity, mut loading, definition, world, id, transform, contained, motion) in
         &mut pending
     {
+        if let Some(prefab) = loading.prefab.as_ref() {
+            if !loading.settled {
+                if !settled.contains(&prefab.id()) {
+                    continue;
+                }
+                loading.settled = true;
+            }
+        }
         let membership = memberships.container_for_member(pending_entity);
         if contained.is_some() && membership.is_none() {
             continue;
         }
         let instance_transform =
-            if let (Some((holder, _)), Some(contained)) = (membership, contained) {
+            if let (Some((holder, _)), Some(contained)) = (membership, contained.as_deref()) {
                 let Ok(holder_transform) = holders.get(holder) else {
                     // Holder cleanup removes owned items or releases unowned ones.
                     continue;
@@ -157,6 +168,7 @@ pub(super) fn hydrate_detach_created_objects(
         };
         let policy = if let Some((_, slot)) = membership {
             let Some(policy) = contained
+                .as_deref()
                 .and_then(|contained| {
                     super::holder::AttachmentHolder::find(&definitions, contained.holder_definition)
                 })
@@ -197,24 +209,26 @@ pub(super) fn hydrate_detach_created_objects(
         if policy.is_some_and(|policy| policy.hides_contents) {
             commands.entity(pending_entity).insert(Visibility::Hidden);
         }
-        if let Some(contained) = contained {
-            commands.entity(pending_entity).insert(ContainedObject {
-                holder_definition: contained.holder_definition,
-                detach_rule: contained.detach_rule,
-                joint: None,
-                attachment_request: contained.attachment_request,
-                relative_transform: contained
-                    .relative_transform
-                    .mul_transform(scale)
-                    .mul_transform(presentation.as_ref().map_or(
-                        Transform::IDENTITY,
-                        |(_, prefab)| {
+        if let Some(mut contained) = contained {
+            let transform = contained
+                .relative_transform
+                .mul_transform(scale)
+                .mul_transform(
+                    presentation
+                        .as_ref()
+                        .map_or(Transform::IDENTITY, |(_, prefab)| {
                             transform_from_authored(
                                 &prefab.canonical_scene_prefab_document().entities[0].transform,
                             )
-                        },
-                    )),
-            });
+                        }),
+                );
+            contained
+                .reborrow()
+                .map_unchanged(|attachment| &mut attachment.joint)
+                .set_if_neq(None);
+            contained
+                .map_unchanged(|attachment| &mut attachment.relative_transform)
+                .set_if_neq(transform);
         }
         if let Some(motion) = motion {
             commands.trigger(BehaviorWorldObjectReleased {

@@ -10,7 +10,13 @@ use openzt2_world_state::{
 };
 use openzt2_zoo_state::{animal_lifecycle::types::Animal, staff::staff_employment_types::Staff};
 
-const CELL_SIZE_M: f32 = 8.0;
+use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
+use openzt2_zoo_state::{
+    locomotion::locomotion_types::{NavAgent, SpatialCell, SpatialCellMembers, SpatialGrid},
+    topology::topology_graph_types::FenceEdge,
+};
+
+const OVERFLOW_CELL_SIZE_M: f32 = 8.0;
 
 #[derive(Component)]
 #[component(storage = "SparseSet")]
@@ -21,29 +27,54 @@ struct BehaviorSpatialCell(Entity);
 #[relationship_target(relationship = BehaviorSpatialCell)]
 struct BehaviorSpatialMembers(Vec<Entity>);
 
-#[derive(Resource, Default)]
-struct BehaviorSpatialCells(HashMap<IVec2, Entity>);
+#[derive(Component, Default)]
+struct BehaviorSpatialOverflow(HashMap<IVec2, Entity>);
 
 type SpatialRecipient = Or<(
     With<Animal>,
     With<Staff>,
-    (With<WorldMember>, With<DefinitionId>),
+    With<DefinitionId>,
+    With<FenceEdge>,
 )>;
 type SpatialFacts = (
     Entity,
     &'static GlobalTransform,
+    &'static WorldMember,
     Option<&'static BehaviorSpatialCell>,
+    Option<&'static SpatialCell>,
+    Has<NavAgent>,
 );
 
 pub(super) fn register_behavior_spatial_candidates(app: &mut App) {
-    app.init_resource::<BehaviorSpatialCells>()
+    app.register_required_components::<WorldRoot, BehaviorSpatialOverflow>()
+        .add_observer(remove_missing_spatial_inputs)
         .add_systems(
             FixedUpdate,
             project_spatial_candidates
                 .in_set(FixedGameSet::Clock)
                 .run_if(in_state(GamePhase::InGame)),
-        )
-        .add_systems(OnExit(GamePhase::InGame), retire_spatial_cells);
+        );
+}
+
+fn remove_missing_spatial_inputs(
+    removed: On<
+        Remove<(
+            GlobalTransform,
+            Animal,
+            Staff,
+            WorldMember,
+            DefinitionId,
+            FenceEdge,
+        )>,
+    >,
+    projected: Query<(), With<BehaviorSpatialCell>>,
+    mut commands: Commands,
+) {
+    if projected.contains(removed.entity) {
+        commands
+            .entity(removed.entity)
+            .try_remove::<BehaviorSpatialCell>();
+    }
 }
 
 fn project_spatial_candidates(
@@ -53,84 +84,128 @@ fn project_spatial_candidates(
             SpatialRecipient,
             Or<(
                 Changed<GlobalTransform>,
+                Changed<WorldMember>,
+                Changed<SpatialCell>,
                 Added<Animal>,
                 Added<Staff>,
-                Added<WorldMember>,
                 Added<DefinitionId>,
+                Added<FenceEdge>,
+                Added<NavAgent>,
+                (Without<BehaviorSpatialCell>, Without<SpatialCell>),
             )>,
         ),
     >,
     all: Query<SpatialFacts, SpatialRecipient>,
-    live: Query<(), (With<GlobalTransform>, SpatialRecipient)>,
-    mut removed_transforms: RemovedComponents<GlobalTransform>,
-    mut removed_animals: RemovedComponents<Animal>,
-    mut removed_staff: RemovedComponents<Staff>,
-    mut removed_members: RemovedComponents<WorldMember>,
-    mut removed_ids: RemovedComponents<DefinitionId>,
-    mut cells: ResMut<BehaviorSpatialCells>,
+    mut worlds: Query<(Option<Ref<SpatialGrid>>, &mut BehaviorSpatialOverflow), With<WorldRoot>>,
     mut commands: Commands,
 ) {
-    let removed = removed_transforms
-        .read()
-        .chain(removed_animals.read())
-        .chain(removed_staff.read())
-        .chain(removed_members.read())
-        .chain(removed_ids.read());
-    for entity in removed.filter(|&entity| !live.contains(entity)) {
-        commands.entity(entity).try_remove::<BehaviorSpatialCell>();
-    }
-    let initialize = cells.0.is_empty();
-    let mut project =
-        |(entity, transform, current): (Entity, &GlobalTransform, Option<&BehaviorSpatialCell>)| {
-            let point = transform.translation().xz();
-            if !point.is_finite() {
-                if current.is_some() {
-                    commands.entity(entity).remove::<BehaviorSpatialCell>();
-                }
-                return;
-            }
-            let coordinate = cell_of(point);
-            let cell = match cells.0.get(&coordinate) {
-                Some(&cell) => cell,
-                None => {
-                    let cell = commands.spawn_empty().id();
-                    cells.0.insert(coordinate, cell);
-                    cell
-                }
-            };
-            if current.is_none_or(|current| current.0 != cell) {
-                commands.entity(entity).insert(BehaviorSpatialCell(cell));
-            }
+    let refresh = worlds
+        .iter()
+        .any(|(grid, _)| grid.is_some_and(|grid| grid.is_changed()));
+    let rows = refresh
+        .then(|| all.iter())
+        .into_iter()
+        .flatten()
+        .chain((!refresh).then(|| moved.iter()).into_iter().flatten());
+    for (entity, transform, member, current, navigation_cell, navigation_agent) in rows {
+        let Ok((grid, mut overflow)) = worlds.get_mut(member.root) else {
+            continue;
         };
-    if initialize {
-        all.iter().for_each(&mut project);
-    } else {
-        moved.iter().for_each(&mut project);
+        let point = transform.translation().xz();
+        let next = if point.is_finite() {
+            let in_grid = grid.as_ref().and_then(|grid| {
+                grid.cell_of(point)
+                    .and_then(|index| grid.cells.get(index as usize).copied())
+            });
+            if let Some(cell) = in_grid {
+                if navigation_agent && navigation_cell.is_some_and(|active| active.0 == cell) {
+                    None
+                } else {
+                    Some(cell)
+                }
+            } else {
+                let coordinate = overflow_cell(point);
+                let cell = if let Some(&cell) = overflow.0.get(&coordinate) {
+                    cell
+                } else {
+                    let cell = commands.spawn(ChildOf(member.root)).id();
+                    overflow.0.insert(coordinate, cell);
+                    cell
+                };
+                Some(cell)
+            }
+        } else {
+            None
+        };
+        if current.map(|current| current.0) != next {
+            if let Some(cell) = next {
+                commands.entity(entity).insert(BehaviorSpatialCell(cell));
+            } else {
+                commands.entity(entity).remove::<BehaviorSpatialCell>();
+            }
+        }
     }
 }
 
-fn retire_spatial_cells(mut cells: ResMut<BehaviorSpatialCells>, mut commands: Commands) {
-    for (_, cell) in cells.0.drain() {
-        commands.entity(cell).try_despawn();
-    }
-}
-
-fn cell_of(point: Vec2) -> IVec2 {
-    (point / CELL_SIZE_M).floor().as_ivec2()
+fn overflow_cell(point: Vec2) -> IVec2 {
+    (point / OVERFLOW_CELL_SIZE_M).floor().as_ivec2()
 }
 
 #[derive(SystemParam)]
 pub(super) struct BehaviorSpatialCandidates<'w, 's> {
-    cells: Res<'w, BehaviorSpatialCells>,
+    worlds: Query<
+        'w,
+        's,
+        (
+            Option<&'static SpatialGrid>,
+            &'static BehaviorSpatialOverflow,
+        ),
+    >,
     members: Query<'w, 's, &'static BehaviorSpatialMembers>,
+    navigation_members: Query<'w, 's, &'static SpatialCellMembers>,
     locations: Query<'w, 's, EntityLocation>,
+    eligible: Query<'w, 's, &'static WorldMember, SpatialRecipient>,
 }
 
 impl BehaviorSpatialCandidates<'_, '_> {
-    pub(super) fn in_bounds(&self, min: Vec2, max: Vec2, candidates: &mut Vec<Entity>) {
+    pub(super) fn in_bounds(
+        &self,
+        root: Entity,
+        min: Vec2,
+        max: Vec2,
+        candidates: &mut Vec<Entity>,
+    ) {
         candidates.clear();
-        let min = cell_of(min);
-        let max = cell_of(max);
+        let Ok((grid, overflow)) = self.worlds.get(root) else {
+            return;
+        };
+        if let Some(grid) = grid.filter(|grid| grid.width != 0 && grid.height != 0) {
+            let min = ((min - grid.origin) / grid.cell_size_m)
+                .floor()
+                .as_ivec2()
+                .max(IVec2::ZERO);
+            let max = ((max - grid.origin) / grid.cell_size_m)
+                .floor()
+                .as_ivec2()
+                .min(IVec2::new(grid.width as i32 - 1, grid.height as i32 - 1));
+            for y in min.y..=max.y {
+                for x in min.x..=max.x {
+                    let cell = grid.cells[(y as u32 * grid.width + x as u32) as usize];
+                    if let Ok(members) = self.members.get(cell) {
+                        candidates.extend(members.iter());
+                    }
+                    if let Ok(members) = self.navigation_members.get(cell) {
+                        candidates.extend(members.iter().filter(|&entity| {
+                            self.eligible
+                                .get(entity)
+                                .is_ok_and(|member| member.root == root)
+                        }));
+                    }
+                }
+            }
+        }
+        let min = overflow_cell(min);
+        let max = overflow_cell(max);
         let width = (i64::from(max.x) - i64::from(min.x) + 1).max(0);
         let height = (i64::from(max.y) - i64::from(min.y) + 1).max(0);
         let mut append = |cell: Entity| {
@@ -138,8 +213,8 @@ impl BehaviorSpatialCandidates<'_, '_> {
                 candidates.extend(members.iter());
             }
         };
-        if width.saturating_mul(height) as u64 > self.cells.0.len() as u64 {
-            for (&coordinate, &cell) in &self.cells.0 {
+        if width.saturating_mul(height) as u64 > overflow.0.len() as u64 {
+            for (&coordinate, &cell) in &overflow.0 {
                 if coordinate.cmpge(min).all() && coordinate.cmple(max).all() {
                     append(cell);
                 }
@@ -147,12 +222,14 @@ impl BehaviorSpatialCandidates<'_, '_> {
         } else {
             for z in min.y..=max.y {
                 for x in min.x..=max.x {
-                    if let Some(&cell) = self.cells.0.get(&IVec2::new(x, z)) {
+                    if let Some(&cell) = overflow.0.get(&IVec2::new(x, z)) {
                         append(cell);
                     }
                 }
             }
         }
+        candidates.sort_unstable();
+        candidates.dedup();
     }
 
     pub(super) fn preserve_query_order(&self, candidates: &mut [Entity]) {

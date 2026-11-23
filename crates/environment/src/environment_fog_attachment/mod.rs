@@ -1,26 +1,30 @@
 use bevy::{
+    ecs::relationship::RelationshipTarget,
     pbr::{DistanceFog, FogFalloff},
     prelude::*,
 };
-use openzt2_zoo_state::environment::environment_state_types::WorldEnvironment;
-
 use openzt2_interface_state::camera::camera_runtime_state_types::ZooCamera;
+use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
-use super::environment_presentation_types::{AboveWaterFog, EnvironmentFog};
+use super::environment_presentation_types::{AboveWaterFog, EnvironmentFog, WorldEnvironments};
 
 pub(super) fn attach_neutral_environment_fog_to_new_zoo_cameras(
     mut commands: Commands,
-    environments: Query<Entity, With<WorldEnvironment>>,
+    environments: Query<&WorldEnvironments>,
     mut cameras: Query<
-        (Entity, Option<&mut DistanceFog>),
+        (Entity, &WorldMember, Option<&mut DistanceFog>),
         (With<ZooCamera>, Without<EnvironmentFog>),
     >,
 ) {
-    let Ok(environment) = environments.single() else {
-        return;
-    };
     let neutral = AboveWaterFog::default();
-    for (camera, fog) in &mut cameras {
+    for (camera, member, fog) in &mut cameras {
+        let Some(environment) = environments
+            .get(member.root)
+            .ok()
+            .and_then(|environments| environments.iter().next())
+        else {
+            continue;
+        };
         let sample = DistanceFog {
             falloff: FogFalloff::Linear {
                 start: neutral.start,

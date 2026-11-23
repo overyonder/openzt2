@@ -1,3 +1,6 @@
+use std::collections::VecDeque;
+
+use bevy::ecs::entity::{EntityHashMap, EntityHashSet};
 use bevy::{ecs::system::SystemParam, prelude::*};
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_zoo_state::construction::{
@@ -68,16 +71,6 @@ impl ConstructionHistory<'_, '_> {
 pub(super) fn retain_accepted_edits(
     mut commands: Commands,
     mut records: MessageReader<RecordAppliedConstructionTransaction>,
-) {
-    for request in records.read() {
-        // Each retained edit must see earlier inserts and evictions from this tick.
-        commands.run_system_cached_with(retain_world_edit, request.0);
-    }
-}
-
-fn retain_world_edit(
-    In(entity): In<Entity>,
-    mut commands: Commands,
     worlds: Query<(
         &WorldConstructionHistory,
         Option<&ConstructionHistoryEntries>,
@@ -85,38 +78,44 @@ fn retain_world_edit(
     edits: Query<(&EditTransaction, &WorldMember), Without<HistoryOf>>,
     retained: Query<&EditTransaction, With<HistoryOf>>,
 ) {
-    let Ok((edit, member)) = edits.get(entity) else {
-        return;
-    };
-    if edit.state != TransactionState::Applied {
-        return;
-    }
-    let Ok((history, entries)) = worlds.get(member.root) else {
-        return;
-    };
-    if let Some(entries) = entries {
-        let mut applied = Vec::new();
-        for retained_entity in entries.iter() {
-            match retained.get(retained_entity) {
-                Ok(edit) if edit.state == TransactionState::Undone => {
-                    commands.entity(retained_entity).try_despawn();
-                }
-                Ok(_) => applied.push(retained_entity),
-                Err(_) => {}
+    let mut batches = EntityHashMap::<VecDeque<Entity>>::default();
+    let mut seen = EntityHashSet::default();
+    for request in records.read() {
+        let entity = request.0;
+        let Ok((edit, member)) = edits.get(entity) else {
+            continue;
+        };
+        if edit.state != TransactionState::Applied || !seen.insert(entity) {
+            continue;
+        }
+        let Ok((history, entries)) = worlds.get(member.root) else {
+            continue;
+        };
+        let batch = batches.entry(member.root).or_insert_with(|| {
+            entries
+                .into_iter()
+                .flat_map(|entries| entries.iter())
+                .filter_map(|old| {
+                    let edit = retained.get(old).ok()?;
+                    if edit.state == TransactionState::Undone {
+                        commands.entity(old).try_despawn();
+                        return None;
+                    }
+                    Some(old)
+                })
+                .collect()
+        });
+        while batch.len() > history.limit.saturating_sub(1) {
+            if let Some(old) = batch.pop_front() {
+                commands.entity(old).try_despawn();
             }
         }
-        let overflow = applied
-            .len()
-            .saturating_add(1)
-            .saturating_sub(history.limit);
-        for old in applied.into_iter().take(overflow) {
-            commands.entity(old).try_despawn();
+        if history.limit == 0 {
+            commands.entity(entity).try_despawn();
+        } else {
+            commands.entity(entity).insert(HistoryOf(member.root));
+            batch.push_back(entity);
         }
-    }
-    if history.limit == 0 {
-        commands.entity(entity).try_despawn();
-    } else {
-        commands.entity(entity).insert(HistoryOf(member.root));
     }
 }
 

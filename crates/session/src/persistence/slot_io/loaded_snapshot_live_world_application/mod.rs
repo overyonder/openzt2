@@ -328,6 +328,7 @@ pub(super) fn restore_snapshot_sections(
         .collect::<Vec<_>>();
     let imported_behavior_identifiers = planned_identifiers.iter().copied();
     if !super::behavior_snapshot_application::prepare_behavior_snapshot_before_world_replacement(
+        world_root_entity,
         behavior_snapshot_records,
         &behavior,
         behavior_documents,

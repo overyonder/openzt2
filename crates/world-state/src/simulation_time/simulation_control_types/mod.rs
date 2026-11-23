@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 
-#[derive(Resource, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SimulationControl {
     pub speed_tier: u8,
     pub paused: bool,

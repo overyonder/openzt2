@@ -1,5 +1,8 @@
 use bevy::{
-    ecs::{entity::EntityHashSet, relationship::RelationshipTarget},
+    ecs::{
+        entity::EntityHashSet, entity_disabling::Disabled, relationship::RelationshipTarget,
+        system::SystemParam, world::EntityWorldMut,
+    },
     platform::collections::HashMap,
     prelude::*,
 };
@@ -24,29 +27,77 @@ use super::habitat_region_derivation::{
 };
 
 #[derive(Component)]
-pub(super) struct HabitatBoundaryRaster(pub(super) Vec<HabitatFenceSegment>);
+pub(super) struct HabitatBoundaryRaster(pub(super) Vec<HabitatFenceSegment>, Entity);
 
-#[derive(Resource, Default)]
-pub(super) struct HabitatFenceLattice(HashMap<IVec2, EntityHashSet>);
+#[derive(Component, Default)]
+pub(super) struct HabitatFenceLattice(HashMap<IVec2, Entity>);
 
-impl HabitatFenceLattice {
-    pub(super) fn at(&self, node: IVec2) -> impl Iterator<Item = Entity> + '_ {
-        self.0.get(&node).into_iter().flatten().copied()
+#[derive(Component)]
+pub(super) struct HabitatFenceLatticePoint {
+    root: Entity,
+    coordinate: IVec2,
+}
+
+#[derive(Component)]
+#[relationship(relationship_target = IncidencesAtRasterPoint)]
+struct AtRasterPoint(Entity);
+
+#[derive(Component)]
+#[relationship_target(relationship = AtRasterPoint, linked_spawn)]
+pub(super) struct IncidencesAtRasterPoint(Vec<Entity>);
+
+#[derive(Component)]
+#[relationship(relationship_target = FenceRasterIncidences)]
+struct RasterIncidenceOfFence(Entity);
+
+#[derive(Component)]
+#[relationship_target(relationship = RasterIncidenceOfFence, linked_spawn)]
+pub(super) struct FenceRasterIncidences(Vec<Entity>);
+
+#[derive(SystemParam)]
+pub(super) struct HabitatFenceIncidences<'w, 's> {
+    points: Query<'w, 's, &'static IncidencesAtRasterPoint>,
+    links: Query<'w, 's, &'static RasterIncidenceOfFence>,
+}
+
+impl HabitatFenceIncidences<'_, '_> {
+    pub(super) fn fences_at(
+        &self,
+        lattice: &HabitatFenceLattice,
+        point: IVec2,
+    ) -> impl Iterator<Item = Entity> + '_ {
+        lattice
+            .0
+            .get(&point)
+            .and_then(|&entity| self.points.get(entity).ok())
+            .into_iter()
+            .flat_map(RelationshipTarget::iter)
+            .filter_map(move |link| self.links.get(link).ok().map(|fence| fence.0))
     }
+}
 
-    fn record(&mut self, fence: Entity, raster: &HabitatBoundaryRaster) {
-        for node in raster_nodes(raster) {
-            self.0.entry(node).or_default().insert(fence);
-        }
-    }
+pub(super) fn retire_empty_raster_point(
+    removed: On<Remove<IncidencesAtRasterPoint>>,
+    mut commands: Commands,
+) {
+    commands
+        .entity(removed.entity)
+        .queue_silenced(|entity: EntityWorldMut| {
+            if !entity.contains::<IncidencesAtRasterPoint>() {
+                entity.despawn();
+            }
+        });
+}
 
-    fn discard(&mut self, fence: Entity, raster: &HabitatBoundaryRaster) {
-        for node in raster_nodes(raster) {
-            if let Some(edges) = self.0.get_mut(&node) {
-                edges.remove(&fence);
-                if edges.is_empty() {
-                    self.0.remove(&node);
-                }
+pub(super) fn discard_habitat_fence_lattice_point(
+    discarded: On<Discard<HabitatFenceLatticePoint>>,
+    points: Query<&HabitatFenceLatticePoint, Allow<Disabled>>,
+    mut roots: Query<&mut HabitatFenceLattice, Allow<Disabled>>,
+) {
+    if let Ok(point) = points.get(discarded.entity) {
+        if let Ok(mut root) = roots.get_mut(point.root) {
+            if root.0.get(&point.coordinate) == Some(&discarded.entity) {
+                root.0.remove(&point.coordinate);
             }
         }
     }
@@ -81,11 +132,16 @@ pub(super) fn discard_habitat_fence_node(
 pub(super) fn discard_habitat_fence_raster(
     discarded: On<Discard<HabitatBoundaryRaster>>,
     rasters: Query<&HabitatBoundaryRaster>,
-    mut lattice: ResMut<HabitatFenceLattice>,
+    incidences: Query<&FenceRasterIncidences>,
+    mut commands: Commands,
     mut rebuild: MessageWriter<RebuildHabitatRegionsWithinTopologyBounds>,
 ) {
     if let Ok(raster) = rasters.get(discarded.entity) {
-        lattice.discard(discarded.entity, raster);
+        if let Ok(links) = incidences.get(discarded.entity) {
+            for link in links.iter() {
+                commands.entity(link).try_despawn();
+            }
+        }
         if let Some(bounds) = raster_bounds(raster) {
             rebuild.write(RebuildHabitatRegionsWithinTopologyBounds(bounds));
         }
@@ -107,13 +163,15 @@ pub(super) fn project_changed_habitat_fence_inputs(
     mut commands: Commands,
     catalogue: Res<WorldDefinitions>,
     assets: Res<Assets<WorldDefinitionAsset>>,
-    mut lattice: ResMut<HabitatFenceLattice>,
+    mut roots: Query<(Entity, &mut HabitatFenceLattice), With<WorldRoot>>,
     mut fences: Query<(
         Entity,
         FenceSegment,
         Option<&Gate>,
         Option<&mut HabitatBoundaryRaster>,
+        Option<&WorldMember>,
     )>,
+    incidences: Query<&FenceRasterIncidences>,
     changed_fences: Query<
         Entity,
         (
@@ -123,6 +181,7 @@ pub(super) fn project_changed_habitat_fence_inputs(
                 Changed<FenceStart>,
                 Changed<FenceEnd>,
                 Changed<Gate>,
+                Changed<WorldMember>,
             )>,
         ),
     >,
@@ -163,7 +222,14 @@ pub(super) fn project_changed_habitat_fence_inputs(
         }
     }
     for entity in affected {
-        let Ok((_, edge, gate, old)) = fences.get_mut(entity) else {
+        let Ok((_, edge, gate, old, member)) = fences.get_mut(entity) else {
+            continue;
+        };
+        let world = match member {
+            Some(member) => roots.get_mut(member.root).ok(),
+            None => roots.single_mut().ok(),
+        };
+        let Some((root, mut lattice)) = world else {
             continue;
         };
         let (Ok(a), Ok(b)) = (nodes.get(edge.a()), nodes.get(edge.b())) else {
@@ -204,20 +270,36 @@ pub(super) fn project_changed_habitat_fence_inputs(
                     boundary_is_breached: !blocks || gate_open,
                 },
             ]),
+            root,
         );
+        if old
+            .as_deref()
+            .is_some_and(|old| old.0 == next.0 && old.1 == root)
+        {
+            continue;
+        }
+        // Install new links first so a shared lattice point stays occupied.
+        let old_links = incidences.get(entity).ok();
+        let mut linked = bevy::platform::collections::HashSet::new();
+        for coordinate in raster_nodes(&next).filter(|coordinate| linked.insert(*coordinate)) {
+            let point = *lattice.0.entry(coordinate).or_insert_with(|| {
+                commands
+                    .spawn((HabitatFenceLatticePoint { root, coordinate }, ChildOf(root)))
+                    .id()
+            });
+            commands.spawn((AtRasterPoint(point), RasterIncidenceOfFence(entity)));
+        }
+        for link in old_links.into_iter().flat_map(RelationshipTarget::iter) {
+            commands.entity(link).try_despawn();
+        }
+
         let mut bounds = raster_bounds(&next);
         if let Some(mut old) = old {
-            if old.0 == next.0 {
-                continue;
-            }
-            lattice.discard(entity, &old);
             if let Some(before) = raster_bounds(&old) {
                 bounds = Some(bounds.map_or(before, |bounds| bounds.union(before)));
             }
-            lattice.record(entity, &next);
             *old = next;
         } else {
-            lattice.record(entity, &next);
             commands.entity(entity).insert(next);
         }
         if let Some(bounds) = bounds {

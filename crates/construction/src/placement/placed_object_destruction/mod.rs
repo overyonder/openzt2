@@ -1,6 +1,8 @@
 //! A building a rampaging animal smashes is removed, and its authored ruin
 //! (`entityRuinBinderName`) is put down where it stood.
 
+use std::time::Duration;
+
 use bevy::asset::{AssetLoadFailedEvent, LoadState};
 use bevy::ecs::{entity::EntityHashSet, system::SystemParam};
 use bevy::gltf::Gltf;
@@ -24,7 +26,6 @@ use openzt2_zoo_state::placement::placed_object_types::{
     PlacedObjectDefinitionReference, PlacedObjectFootprintOccupancy,
 };
 use openzt2_zoo_state::placement::placement_occupancy_index::PlacedObjectFootprintQueries;
-use openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementCellCollectionScratch;
 use openzt2_zoo_state::placement::placement_transaction_types::{
     DestroyPlacedObject, ObjectPlacementCommitted, PreparedObjectPlacementEditMutationKind,
     PreparedObjectPlacementMutation,
@@ -277,7 +278,7 @@ fn ruin_destroyed_placed_object(
     members: Query<&WorldMember>,
     (placement, mut scratch, mut allocator): (
         PlacedObjectFootprintQueries,
-        ResMut<ObjectPlacementCellCollectionScratch>,
+        Local<Vec<IVec2>>,
         Query<&mut PersistentIdAllocator>,
     ),
     placed: PlacedObjects,
@@ -367,7 +368,7 @@ fn ruin_destroyed_placed_object(
     let Some(cells) = collect_occupied_placement_cells_for_transform(
         footprints.resolve(ruin_placeable, Some(&handle)),
         &transform,
-        &mut scratch.cells,
+        &mut scratch,
     )
     .map(|cells| cells.to_vec().into_boxed_slice()) else {
         warn!(
@@ -433,8 +434,7 @@ pub(super) struct FlyingRubbleFragment {
     velocity: Vec3,
     spin: Vec3,
     ground: f32,
-    landed_for: f32,
-    remove_after: f32,
+    cleanup: Timer,
 }
 
 // The fragments fly on their own, without the physics engine or
@@ -471,8 +471,10 @@ fn throw_fragments(
                     velocity,
                     spin: Vec3::new(next(), next(), next()) * 8.0,
                     ground: transform.translation.y,
-                    landed_for: 0.0,
-                    remove_after: destruction.delay_ns as f32 / 1e9,
+                    cleanup: Timer::new(
+                        Duration::from_nanos(destruction.delay_ns),
+                        TimerMode::Once,
+                    ),
                 },
                 Transform::from_translation(start),
                 Visibility::Inherited,
@@ -499,8 +501,7 @@ pub(super) fn fly_rubble_fragments(
             continue;
         }
         transform.translation.y = fragment.ground;
-        fragment.landed_for += delta;
-        if fragment.landed_for >= fragment.remove_after {
+        if fragment.cleanup.tick(time.delta()).is_finished() {
             commands.entity(entity).despawn();
         }
     }

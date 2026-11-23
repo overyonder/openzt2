@@ -27,6 +27,7 @@ pub mod script_action_lowering;
 pub mod show_event_action_lowering;
 pub mod source_value_reading;
 pub mod spawn_object_action_lowering;
+mod specialized_action_lowering;
 pub mod subject_trigger_action_lowering;
 pub mod synchronized_set_action_lowering;
 pub mod target_test_action_lowering;
@@ -41,6 +42,11 @@ pub mod watch_show_action_lowering;
 pub(super) fn lower_one_behavior_action_source_node(
     behavior_action_source_node: &DataNode,
 ) -> io::Result<BehaviorAction> {
+    if let Some(action) =
+        specialized_action_lowering::lower_specialized_action(behavior_action_source_node)?
+    {
+        return Ok(action);
+    }
     if let Some(action) = lower_traversal_or_morph(behavior_action_source_node)? {
         return Ok(action);
     }

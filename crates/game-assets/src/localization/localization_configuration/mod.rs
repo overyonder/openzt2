@@ -4,7 +4,7 @@ use std::{
 };
 
 use bevy::{
-    asset::{io::Reader, AssetLoader, LoadContext},
+    asset::{AssetLoader, LoadContext, io::Reader},
     prelude::*,
 };
 use openzt2_game_data::AssetId;
@@ -36,7 +36,7 @@ pub(super) struct LocalizationConfiguration {
     locale_id: String,
     string_table_root: PathBuf,
     pub(super) currency_symbol: AssetId,
-    pub(super) month_year: AssetId,
+    pub(super) date_time_formats: [AssetId; 4],
     pub(super) months: [AssetId; 12],
 }
 
@@ -46,7 +46,13 @@ impl Default for LocalizationConfiguration {
             locale_id: "1033".into(),
             string_table_root: "lang".into(),
             currency_symbol: AssetId::from_key("locale:currency_symbol"),
-            month_year: AssetId::from_key("locale:month_year"),
+            date_time_formats: [
+                "locale:month_year",
+                "locale:day_date",
+                "locale:month_day_year",
+                "locale:minutes_seconds",
+            ]
+            .map(AssetId::from_key),
             months: MONTH_NAMES
                 .map(|month| AssetId::from_key(&format!("locale:{}", month.to_ascii_lowercase()))),
         }
@@ -54,6 +60,16 @@ impl Default for LocalizationConfiguration {
 }
 
 impl LocalizationConfiguration {
+    pub(super) fn locale_conventions(
+        &self,
+    ) -> &'static super::windows_locale_conventions::WindowsLocaleConventions {
+        super::windows_locale_conventions::windows_locale_conventions(&self.locale_id)
+    }
+
+    pub(super) fn string_table_root(&self) -> &Path {
+        &self.string_table_root
+    }
+
     pub(super) fn selects_string_table(&self, path: &Path) -> bool {
         if !path.extension().is_some_and(|extension| extension == "xml") {
             return false;
@@ -113,8 +129,15 @@ impl AssetLoader for LocalizationConfigurationLoader {
                     configuration.currency_symbol = AssetId::from_key(symbol);
                 }
             } else if node.name.eq_ignore_ascii_case("DateFormats") {
-                if let Some(format) = node.attribute_named_any(&["MonthYear"]) {
-                    configuration.month_year = AssetId::from_key(format);
+                for (id, field) in configuration.date_time_formats.iter_mut().zip([
+                    "MonthYear",
+                    "DayDate",
+                    "MonthDayYear",
+                    "MinutesSeconds",
+                ]) {
+                    if let Some(key) = node.attribute_named_any(&[field]) {
+                        *id = AssetId::from_key(key);
+                    }
                 }
             } else if node.name.eq_ignore_ascii_case("MonthAbbreviations") {
                 for (month, name) in configuration.months.iter_mut().zip(MONTH_NAMES) {

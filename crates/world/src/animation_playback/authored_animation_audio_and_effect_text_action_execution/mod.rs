@@ -135,12 +135,18 @@ impl AuthoredAnimationAudioAndEffectTextActionExecutionContext<'_, '_> {
         };
         let position = target.translation();
         if !disable_distance_culling
-            && !openzt2_zoo_state::terrain::terrain_world_sampling::terrain_chunk_at(
-                &self.terrain_index,
-                position.xz(),
-            )
-            .and_then(|chunk| self.terrain_chunks.get(chunk).ok())
-            .is_some_and(|visibility| visibility.get())
+            && !self
+                .sound_resolution
+                .world_root(effect_target_entity)
+                .and_then(|root| self.sound_resolution.terrain_indexes.get(root).ok())
+                .and_then(|index| {
+                    openzt2_zoo_state::terrain::terrain_world_sampling::terrain_chunk_at(
+                        index,
+                        position.xz(),
+                    )
+                })
+                .and_then(|chunk| self.terrain_chunks.get(chunk).ok())
+                .is_some_and(|visibility| visibility.get())
         {
             return;
         }

@@ -20,7 +20,7 @@ pub struct BehaviorQueueWaitAction {
 pub struct BehaviorDockQueueAction {
     /// The actor stops this far from the queue's docking node.
     pub hit_radius_m: f32,
-    /// The authored reach of the waiting line. Line formation is not modelled.
+    /// Maximum approach distance for forming up behind the queue predecessor.
     pub queue_radius_m: f32,
     pub locomotion_speed: Option<super::docking::BehaviorDockLocomotionSpeed>,
 }

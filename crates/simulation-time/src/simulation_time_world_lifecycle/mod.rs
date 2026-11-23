@@ -9,12 +9,12 @@ use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and
 use openzt2_game_assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset;
 use openzt2_world_state::world_spawn::selected_world_identity::SelectedWorldIdentity;
 use openzt2_world_state::world_spawn::world_hydration_types::WorldHydration;
-use openzt2_world_state::world_spawn::world_load_completion_marker::WorldClockInitialized;
+use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 use openzt2_world_state::world_spawn::world_load_failure::WorldLoadFailure;
 
 use super::{
     deterministic_random_stream::{derive_zoo_seed_from_scenario_and_profile, ZooSeed},
-    simulation_clock_types::{ZooCalendar, ZooClock},
+    simulation_clock_types::{ZooCalendar, ZooClock, ZooDay, ZooMonth},
     simulation_control_types::SimulationControl,
     zoo_calendar_calculation::calculate_zoo_calendar_for_absolute_day,
 };
@@ -32,7 +32,8 @@ pub fn initialize_simulation_time_from_selected_world(
         ),
         (
             With<WorldHydration>,
-            Without<WorldClockInitialized>,
+            With<WorldRoot>,
+            Without<ZooClock>,
             Without<WorldLoadFailure>,
         ),
     >,
@@ -87,14 +88,17 @@ pub fn initialize_simulation_time_from_selected_world(
     );
     fixed_time.set_timestep_hz(f64::from(timing.fixed_hz));
     virtual_time.set_max_delta(MAXIMUM_FRAME_CATCH_UP);
-    commands.insert_resource(ZooClock {
-        fractional_tick: Default::default(),
-        tick,
-        absolute_day,
-        tick_in_day,
-    });
-    commands.insert_resource(calculated_calendar);
-    commands.insert_resource(SimulationControl::new(0, false));
-    commands.insert_resource(zoo_seed);
-    commands.entity(root).insert(WorldClockInitialized);
+    commands.entity(root).insert((
+        ZooClock {
+            fractional_tick: Default::default(),
+            tick,
+            absolute_day,
+            tick_in_day,
+        },
+        calculated_calendar,
+        ZooDay(absolute_day),
+        ZooMonth::from(calculated_calendar),
+        SimulationControl::new(0, false),
+        zoo_seed,
+    ));
 }

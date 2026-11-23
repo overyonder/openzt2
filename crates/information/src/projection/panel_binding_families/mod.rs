@@ -13,6 +13,7 @@ use openzt2_interface_state::{
 };
 use openzt2_ui::{
     authored_ui_image_content_binding::UiImageBinding,
+    authored_ui_interaction_enabled_binding::UiEnabledBinding,
     authored_ui_selection_binding::UiSelectedBinding,
     authored_ui_text_content_binding::UiTextBinding,
 };
@@ -31,6 +32,7 @@ macro_rules! binding_family {
 
 binding_family!(AnimalNeedFieldOf, AnimalNeedFields);
 binding_family!(AnimalHealthValueFieldOf, AnimalHealthValueFields);
+binding_family!(AnimalHandlingFieldOf, AnimalHandlingFields);
 binding_family!(FacilityFieldOf, FacilityFields);
 binding_family!(GuestFieldOf, GuestFields);
 binding_family!(HabitatFieldOf, HabitatFields);
@@ -194,6 +196,7 @@ pub(crate) fn bind_information_panel_fields(
         Option<&UiSelectedBinding>,
         Option<&UiTextBinding>,
         Option<&UiImageBinding>,
+        Option<&UiEnabledBinding>,
     )>,
     changed: Query<
         Entity,
@@ -204,6 +207,7 @@ pub(crate) fn bind_information_panel_fields(
             Changed<UiSelectedBinding>,
             Changed<UiTextBinding>,
             Changed<UiImageBinding>,
+            Changed<UiEnabledBinding>,
         )>,
     >,
     mut removed: (
@@ -213,6 +217,7 @@ pub(crate) fn bind_information_panel_fields(
         RemovedComponents<UiSelectedBinding>,
         RemovedComponents<UiTextBinding>,
         RemovedComponents<UiImageBinding>,
+        RemovedComponents<UiEnabledBinding>,
     ),
 ) {
     let mut work = bevy::ecs::entity::EntityHashSet::default();
@@ -224,7 +229,8 @@ pub(crate) fn bind_information_panel_fields(
             .chain(removed.2.read())
             .chain(removed.3.read())
             .chain(removed.4.read())
-            .chain(removed.5.read()),
+            .chain(removed.5.read())
+            .chain(removed.6.read()),
     );
     work.extend(new_panels.iter().flat_map(RelationshipTarget::iter));
     for node in work {
@@ -256,9 +262,34 @@ pub(crate) fn bind_information_panel_fields(
         )>();
         entity.remove::<(StaffDutyFieldOf,)>();
         entity.remove::<(IdentityTextFieldOf, IdentityIconFieldOf)>();
-        let Some((owner, value, visible, selected, text, image)) = fields else {
+        entity.remove::<AnimalHandlingFieldOf>();
+        let Some((owner, value, visible, selected, text, image, enabled)) = fields else {
             continue;
         };
+        if value.is_some_and(|value| matches!(value.0, Integer::AnimalConservationStatus))
+            || text.is_some_and(|text| {
+                matches!(
+                    text.0,
+                    UiTextPropertyBindingSource::AnimalConservationStatus
+                )
+            })
+            || visible.is_some_and(|visible| {
+                matches!(
+                    visible.0,
+                    Boolean::AnimalPickupVisible
+                        | Boolean::AnimalReleaseVisible
+                        | Boolean::SelectedEntityCrated
+                )
+            })
+            || enabled.is_some_and(|enabled| {
+                matches!(
+                    enabled.0,
+                    Boolean::AnimalPickupEnabled | Boolean::SelectedEntityCrated
+                )
+            })
+        {
+            entity.insert(AnimalHandlingFieldOf(owner.0));
+        }
         if text.is_some_and(|text| {
             matches!(
                 &text.0,

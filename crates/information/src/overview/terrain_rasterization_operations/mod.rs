@@ -4,7 +4,6 @@ use openzt2_game_data::ui_document::overview_map_presentation::UiOverviewCanvas;
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use openzt2_interface_state::information::overview::overview_types::OverviewMapCanvas;
 use openzt2_world_state::world_spawn::world_terrain_hydration::WorldTerrainHorizontalBounds;
 use openzt2_zoo_state::terrain::{
     terrain_chunk_types::{EditedTerrainSamples, TerrainChunk},
@@ -12,19 +11,16 @@ use openzt2_zoo_state::terrain::{
 };
 
 use super::{
+    canvas_hydration_operations::OverviewCanvasPolicy,
     map_rasterization_operations::{
-        blank_overview_map_pixels, OverviewTerrainWaterRaster, PendingOverviewMapPixels,
+        OverviewTerrainWaterRaster, PendingOverviewMapPixels, blank_overview_map_pixels,
     },
     overview_map_pixel_operations::rasterize_world_sample_area_into_overview_map_pixels,
 };
 
 pub(crate) fn rasterize_dirty_overview_terrain_and_water_canvases(
     mut canvases: Query<
-        (
-            Entity,
-            &mut OverviewMapCanvas,
-            &mut PendingOverviewMapPixels,
-        ),
+        (Entity, &OverviewCanvasPolicy, &mut PendingOverviewMapPixels),
         With<OverviewTerrainWaterRaster>,
     >,
     bounds: Query<&WorldTerrainHorizontalBounds>,
@@ -35,8 +31,8 @@ pub(crate) fn rasterize_dirty_overview_terrain_and_water_canvases(
 ) {
     let dirty = canvases
         .iter()
-        .filter_map(|(id, canvas, _)| {
-            (!canvas.painted).then_some((id, canvas.source, canvas.palette))
+        .filter_map(|(id, canvas, paint)| {
+            (!paint.painted).then_some((id, canvas.source, canvas.palette))
         })
         .collect::<Vec<_>>();
     if dirty.is_empty() {
@@ -96,9 +92,9 @@ pub(crate) fn rasterize_dirty_overview_terrain_and_water_canvases(
         }
     }
     for (id, _, _, pixels) in outputs {
-        if let Ok((_, mut canvas, mut output)) = canvases.get_mut(id) {
-            output.0 = Some(pixels);
-            canvas.painted = true;
+        if let Ok((_, _, mut output)) = canvases.get_mut(id) {
+            output.pixels = Some(pixels);
+            output.painted = true;
         }
     }
 }

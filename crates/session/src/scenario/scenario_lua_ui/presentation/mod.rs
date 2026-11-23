@@ -134,11 +134,7 @@ pub(super) fn fit_animation_heights_to_text(
     }
 }
 
-pub(super) fn clear_scenario_ui(
-    mut requests: MessageReader<ScenarioUiCommand>,
-    mut disabled_catalogue: ResMut<ScenarioDisabledCatalogueDefinitions>,
-) {
-    disabled_catalogue.0.clear();
+pub(super) fn clear_scenario_ui(mut requests: MessageReader<ScenarioUiCommand>) {
     requests.clear();
 }
 
@@ -228,7 +224,7 @@ pub(super) fn apply_scenario_ui_commands(
     ),
     (mut sounds, mut disabled_catalogue, mut research_durations, mut unlocks): (
         MessageWriter<PlayAudioCue>,
-        ResMut<ScenarioDisabledCatalogueDefinitions>,
+        Query<&mut ScenarioDisabledCatalogueDefinitions, With<WorldRoot>>,
         MessageWriter<openzt2_zoo_state::progression::research_types::SetResearchDuration>,
         MessageWriter<
             openzt2_zoo_state::progression::unlock_types::ApplyCatalogueDefinitionUnlockRequest,
@@ -389,6 +385,7 @@ pub(super) fn apply_scenario_ui_commands(
                 let operation = commands.spawn_empty().id();
                 unlocks.write(openzt2_zoo_state::progression::unlock_types::ApplyCatalogueDefinitionUnlockRequest {
                     operation,
+                    root: owner,
                     definition: *definition,
                 });
                 commands.entity(operation).despawn();
@@ -491,12 +488,15 @@ pub(super) fn apply_scenario_ui_commands(
     }
     // Scripts also address buy-panel rows, by the name of what each one sells.
     if !changed_enabled.is_empty() || state_added {
-        disabled_catalogue.0 = pending
-            .enabled
-            .iter()
-            .filter(|(_, enabled)| !**enabled)
-            .map(|(name, _)| AssetId::from_key(name))
-            .collect();
+        if let Ok(mut disabled) = disabled_catalogue.get_mut(owner) {
+            let definitions = pending
+                .enabled
+                .iter()
+                .filter(|(_, enabled)| !**enabled)
+                .map(|(name, _)| AssetId::from_key(name))
+                .collect();
+            disabled.set_if_neq(ScenarioDisabledCatalogueDefinitions(definitions));
+        }
     }
     let count = pending.nodes.len();
     for _ in 0..count {
@@ -869,14 +869,18 @@ pub(super) fn apply_scenario_tank_requests(
 pub(super) fn apply_scenario_zoo_messages(
     mut requests: MessageReader<ScenarioUiCommand>,
     time: Res<Time<Real>>,
-    mut messages: ResMut<ZooMessages>,
+    mut messages: Query<&mut ZooMessages, With<WorldRoot>>,
 ) {
     for request in requests.read() {
         if let ScenarioUiCommand::ZooMessage {
+            root: Some(root),
             text,
             timeout_seconds,
         } = request
         {
+            let Ok(mut messages) = messages.get_mut(*root) else {
+                continue;
+            };
             messages.messages.push(ZooMessage {
                 text: text.clone(),
                 expires_at_seconds: time.elapsed_secs_f64() + timeout_seconds,

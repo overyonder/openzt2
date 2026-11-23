@@ -285,16 +285,19 @@ impl EnvironmentLightCurves {
             })
     }
 
-    pub(super) fn fog(&self, fraction: f32) -> Option<SampledEnvironmentFog<'_>> {
-        self.fog.iter().rev().find_map(|rows| {
-            let sample = select_cyclic_daylight_curve_sample(fraction, rows.len(), |index| {
-                encode_daylight_fraction_as_u16(rows[index].day_fraction)
-            })?;
-            Some(SampledEnvironmentFog {
-                left_keyframe: &rows[sample.left_keyframe_index],
-                right_keyframe: &rows[sample.right_keyframe_index],
-                interpolation_fraction: sample.interpolation_fraction,
-            })
+    pub(super) fn fog_for_quality(
+        &self,
+        quality: EnvironmentFogQuality,
+        fraction: f32,
+    ) -> Option<SampledEnvironmentFog<'_>> {
+        let rows = &self.fog[usize::from(environment_fog_quality_rank(&quality))];
+        let sample = select_cyclic_daylight_curve_sample(fraction, rows.len(), |index| {
+            encode_daylight_fraction_as_u16(rows[index].day_fraction)
+        })?;
+        Some(SampledEnvironmentFog {
+            left_keyframe: &rows[sample.left_keyframe_index],
+            right_keyframe: &rows[sample.right_keyframe_index],
+            interpolation_fraction: sample.interpolation_fraction,
         })
     }
 }
@@ -421,7 +424,6 @@ pub(super) fn calculate_weather_light_and_fog_multipliers(
     catalogue: WorldDefinitionsView<'_>,
     weather: &Weather,
     transition: Option<&WeatherTransition>,
-    tick: u64,
 ) -> (f32, f32) {
     let authored_weather_multipliers = |weather_definition_identifier| {
         catalogue
@@ -440,9 +442,7 @@ pub(super) fn calculate_weather_light_and_fog_multipliers(
     let Some(target) = authored_weather_multipliers(transition.to) else {
         return current;
     };
-    let elapsed = tick.saturating_sub(transition.start_tick) as f32;
-    let duration = transition.duration_ticks.max(1) as f32;
-    let t = (elapsed / duration).clamp(0.0, 1.0);
+    let t = transition.timer.fraction();
     (
         current.0 + (target.0 - current.0) * t,
         current.1 + (target.1 - current.1) * t,

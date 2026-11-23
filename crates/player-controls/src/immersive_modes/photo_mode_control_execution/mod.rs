@@ -1,6 +1,8 @@
 use bevy::prelude::*;
 
-use openzt2_interface_state::camera::camera_runtime_state_types::{CameraMode, ZooCamera};
+use openzt2_interface_state::camera::camera_runtime_state_types::{
+    StandaloneCameraSubject, ZooCamera,
+};
 use openzt2_interface_state::input::input_types::ActionRequest;
 use openzt2_interface_state::input::input_types::ActionSource;
 use openzt2_interface_state::input::input_types::GameAction;
@@ -8,7 +10,7 @@ use openzt2_interface_state::photos::photo_capture_types::CapturePhotoRequest;
 use openzt2_interface_state::photos::photo_capture_types::PhotoMode;
 use openzt2_interface_state::photos::photo_capture_types::PhotoView;
 use openzt2_zoo_state::{
-    terrain::terrain_water_view_state::TerrainWaterViewState,
+    terrain::terrain_water_view_state::TerrainWaterCameraContact,
     transport_tours::transport_vehicle_types::TransportVehicle,
 };
 
@@ -57,7 +59,7 @@ pub(super) fn capture_or_cancel_active_photo_mode(
             continue;
         }
         match action_request.action {
-            GameAction::Confirm => {
+            GameAction::Confirm | GameAction::UseObject => {
                 photo_capture_requests.write(CapturePhotoRequest {
                     camera: camera_entity,
                 });
@@ -71,17 +73,22 @@ pub(super) fn capture_or_cancel_active_photo_mode(
 }
 
 pub(super) fn project_live_photo_camera_view(
-    mut cameras: Query<(&CameraMode, &mut PhotoView), (With<ZooCamera>, With<PhotoMode>)>,
+    mut cameras: Query<
+        (Option<&StandaloneCameraSubject>, &mut PhotoView),
+        (With<ZooCamera>, With<PhotoMode>),
+    >,
     vehicles: Query<(), With<TransportVehicle>>,
-    water: Option<Res<TerrainWaterViewState>>,
+    water: Query<&TerrainWaterCameraContact>,
 ) {
-    let Ok((mode, mut view)) = cameras.single_mut() else {
+    let Ok((subject, mut view)) = cameras.single_mut() else {
         return;
     };
-    let underwater = water.as_ref().and_then(|view| view.underwater_status()) == Some(true);
-    let vehicle = mode
-        .subject()
-        .is_some_and(|subject| vehicles.contains(subject));
+    let underwater = water
+        .single()
+        .ok()
+        .and_then(|contact| contact.underwater_status)
+        == Some(true);
+    let vehicle = subject.is_some_and(|subject| vehicles.contains(subject.0));
     // Exposure collection samples elevation from the camera's world pose.
     if view.underwater != underwater || view.vehicle != vehicle {
         view.underwater = underwater;

@@ -1,16 +1,18 @@
 //! Borrowed animal facts for the supported autonomous task boundary.
 
+use crate::animal_welfare::need_latch_types::AnimalNeedLatches;
 use bevy::{ecs::query::QueryData, prelude::*};
 use openzt2_game_data::{
+    AssetId,
     behavior::eligibility::*,
     species::{LifeStage, Sex},
-    AssetId,
 };
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_zoo_state::animal_behavior::animal_lineage::AnimalMate;
 use openzt2_zoo_state::animal_health::types::Disease;
 use openzt2_zoo_state::animal_health::types::Frozen;
 use openzt2_zoo_state::animal_health::types::Rampaging;
+use openzt2_zoo_state::animal_lifecycle::types::Age;
 use openzt2_zoo_state::animal_lifecycle::types::AnimalLifeStage;
 use openzt2_zoo_state::animal_lifecycle::types::AnimalSex;
 use openzt2_zoo_state::animal_lifecycle::types::AnimalVariant;
@@ -22,15 +24,14 @@ use openzt2_zoo_state::animal_welfare::types::ExerciseNeed;
 use openzt2_zoo_state::animal_welfare::types::HealthNeed;
 use openzt2_zoo_state::animal_welfare::types::Hunger;
 use openzt2_zoo_state::animal_welfare::types::HygieneNeed;
-use openzt2_zoo_state::animal_welfare::types::NeedTriggerState;
+use openzt2_zoo_state::animal_welfare::types::MAX_NEED_Q16;
 use openzt2_zoo_state::animal_welfare::types::PrivacyNeed;
+use openzt2_zoo_state::animal_welfare::types::Q16_ONE;
 use openzt2_zoo_state::animal_welfare::types::RestNeed;
 use openzt2_zoo_state::animal_welfare::types::SocialNeed;
 use openzt2_zoo_state::animal_welfare::types::StimulationNeed;
 use openzt2_zoo_state::animal_welfare::types::Thirst;
-use openzt2_zoo_state::animal_welfare::types::MAX_NEED_Q16;
-use openzt2_zoo_state::animal_welfare::types::Q16_ONE;
-use openzt2_zoo_state::animal_welfare::types::{ReproductionNeed, REPRODUCTION_TRIGGER_INDEX};
+use openzt2_zoo_state::animal_welfare::types::{REPRODUCTION_TRIGGER_INDEX, ReproductionNeed};
 use openzt2_zoo_state::habitat::habitat_types::HabitatMember;
 use openzt2_zoo_state::locomotion::locomotion_types::LocomotionMode;
 use openzt2_zoo_state::locomotion::locomotion_types::Velocity;
@@ -100,6 +101,7 @@ pub(crate) struct AnimalCandidateFacts {
     pub(crate) species: &'static SpeciesHandle,
     variant: &'static AnimalVariant,
     life_stage: &'static AnimalLifeStage,
+    age: Option<&'static Age>,
     sex: &'static AnimalSex,
     hunger: &'static Hunger,
     thirst: &'static Thirst,
@@ -115,17 +117,17 @@ pub(crate) struct AnimalCandidateFacts {
     pub(crate) transform: &'static GlobalTransform,
     pub(crate) world: &'static WorldMember,
     mode: Option<&'static LocomotionMode>,
+    swim_layer: Option<&'static openzt2_zoo_state::locomotion::locomotion_types::SwimLayer>,
     water_contact:
         Option<&'static openzt2_zoo_state::locomotion::locomotion_types::AnimalTerrainWaterContact>,
-    triggers: &'static NeedTriggerState,
-    need_latches: Option<crate::animal_welfare::need_updates::AnimalNeedLatches>,
+    need_latches: AnimalNeedLatches,
     pregnant: Has<Pregnancy>,
     diseased: Has<Disease>,
     rampaging: Has<Rampaging>,
     frozen: Has<Frozen>,
     velocity: Option<&'static Velocity>,
     habitat: Option<&'static HabitatMember>,
-    mate: Has<AnimalMate>,
+    pub(super) mate: Option<&'static AnimalMate>,
     reproduction: Option<&'static ReproductionNeed>,
     pub(super) escaped: Has<openzt2_zoo_state::animal_health::types::Escaped>,
     need_points: Option<&'static openzt2_zoo_state::animal_welfare::types::NeedPoints>,
@@ -178,17 +180,13 @@ impl AnimalCandidateFactsItem<'_, '_> {
             BehaviorEntityStateEligibilityFact::Moving => self.velocity?.0.length_squared() > 0.0,
             BehaviorEntityStateEligibilityFact::Swimming => *self.mode? == LocomotionMode::Swim,
             BehaviorEntityStateEligibilityFact::InHabitat => self.habitat.is_some(),
-            BehaviorEntityStateEligibilityFact::HasMate => self.mate,
+            BehaviorEntityStateEligibilityFact::HasMate => self.mate.is_some(),
             _ => return None,
         })
     }
 
     /// Canonical wellness uses 0..1000; authored BFAI values are deprivation 0..100.
     pub(super) fn source_need(&self, name: AssetId) -> Option<(i32, bool)> {
-        let trigger_mask = self
-            .need_latches
-            .as_ref()
-            .map_or(self.triggers.0, |latches| latches.mask());
         let needs = [
             self.hunger.0,
             self.thirst.0,
@@ -207,23 +205,56 @@ impl AnimalCandidateFactsItem<'_, '_> {
             return self.reproduction.map(|need| {
                 (
                     deprivation(need.0),
-                    trigger_mask & (1 << REPRODUCTION_TRIGGER_INDEX) != 0,
+                    self.need_latches.triggered(REPRODUCTION_TRIGGER_INDEX),
                 )
             });
         }
         NEED_NAMES.iter().enumerate().find_map(|(index, key)| {
-            (*key == name).then_some((deprivation(needs[index]), trigger_mask & (1 << index) != 0))
+            (*key == name).then(|| {
+                (
+                    deprivation(needs[index]),
+                    self.need_latches.triggered(index),
+                )
+            })
         })
     }
 
-    pub(super) fn satisfies(&self, fact: &BehaviorCandidateEligibilityFact) -> bool {
+    pub(super) fn satisfies(
+        &self,
+        fact: &BehaviorCandidateEligibilityFact,
+        tick: u64,
+        ticks_per_day: u32,
+    ) -> bool {
+        use openzt2_zoo_state::locomotion::locomotion_types::SwimLayer;
         let BehaviorEligibilityFactValue::Q16(expected) = fact.expected_value else {
             return false;
         };
         let actual = match fact.fact_input {
             BehaviorEligibilityFactInput::Spatial(
                 BehaviorSpatialEligibilityFact::SupportedSurface,
-            ) => i32::from(self.water_contact.is_some()) * Q16_ONE,
+            ) => Q16_ONE,
+            BehaviorEligibilityFactInput::Spatial(
+                BehaviorSpatialEligibilityFact::SwimmingSurface,
+            ) => {
+                i32::from(
+                    self.mode == Some(&LocomotionMode::Swim)
+                        && self.swim_layer == Some(&SwimLayer::Surface),
+                ) * Q16_ONE
+            }
+            BehaviorEligibilityFactInput::Spatial(
+                BehaviorSpatialEligibilityFact::SwimmingUnderwater,
+            ) => {
+                i32::from(
+                    self.mode == Some(&LocomotionMode::Swim)
+                        && self.swim_layer == Some(&SwimLayer::Submerged),
+                ) * Q16_ONE
+            }
+            BehaviorEligibilityFactInput::Spatial(BehaviorSpatialEligibilityFact::WaterDepth) => {
+                let Some(depth) = self.water_contact.and_then(|contact| contact.depth_m) else {
+                    return false;
+                };
+                (depth * Q16_ONE as f32).round() as i32
+            }
             BehaviorEligibilityFactInput::Spatial(BehaviorSpatialEligibilityFact::InWater) => {
                 let Some(contact) = self.water_contact else {
                     return false;
@@ -248,11 +279,20 @@ impl AnimalCandidateFactsItem<'_, '_> {
                 let Some(value) = self.boolean_state(state) else {
                     return false;
                 };
-                if value {
-                    Q16_ONE
-                } else {
-                    0
-                }
+                if value { Q16_ONE } else { 0 }
+            }
+            BehaviorEligibilityFactInput::Condition(
+                BehaviorConditionEligibilityFact::NeedPointsGood,
+            ) => (self.need_points().0 * Q16_ONE as f32).round() as i32,
+            BehaviorEligibilityFactInput::Condition(
+                BehaviorConditionEligibilityFact::NeedPointsBad,
+            ) => (self.need_points().1 * Q16_ONE as f32).round() as i32,
+            BehaviorEligibilityFactInput::Welfare(BehaviorWelfareEligibilityFact::Lifespan) => {
+                let Some(age) = self.age.filter(|_| ticks_per_day != 0) else {
+                    return false;
+                };
+                (age.ticks_at(tick) as f64 * f64::from(Q16_ONE) / f64::from(ticks_per_day)).round()
+                    as i32
             }
             BehaviorEligibilityFactInput::Welfare(need) => {
                 let wellness = match need {

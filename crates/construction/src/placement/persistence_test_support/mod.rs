@@ -15,14 +15,12 @@ use openzt2_zoo_state::{
         placement_occupancy_index::{
             PlacedObjectFootprintOccupancyIndex, PlacedObjectFootprintQueries,
         },
-        placement_preview_types::ObjectPlacementCellCollectionScratch,
         placement_transaction_types::{ObjectPlacementCommitted, PreparedObjectPlacementMutation},
     },
 };
 
 pub fn add_placement_persistence_test_systems(app: &mut App) {
     app.register_required_components::<openzt2_world_state::world_spawn::world_membership_types::WorldRoot, PlacedObjectFootprintOccupancyIndex>()
-        .init_resource::<ObjectPlacementCellCollectionScratch>()
         .init_resource::<ConstructionTool>()
         .add_message::<ObjectPlacementCommitted>()
         .init_resource::<openzt2_zoo_state::placement::object_placement_geometry::ScenePlacementFootprints>()
@@ -47,7 +45,7 @@ pub fn apply_settled_placement_purchase_for_test(
         Res<WorldDefinitions>,
         Res<Assets<WorldDefinitionAsset>>,
         PlacedObjectFootprintQueries,
-        ResMut<ObjectPlacementCellCollectionScratch>,
+        Local<Vec<IVec2>>,
         Res<Assets<ScenePrefabAsset>>,
         Res<Assets<bevy::gltf::Gltf>>,
         Query<(

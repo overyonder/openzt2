@@ -1,17 +1,18 @@
 use bevy::{ecs::system::SystemParam, prelude::*};
-use openzt2_game_data::{world_definitions::staff_management::StaffJobKind, AssetId};
+use openzt2_game_data::{AssetId, world_definitions::staff_management::StaffJobKind};
 use openzt2_world_state::world_spawn::world_membership_types::{DefinitionId, WorldMember};
 use openzt2_zoo_state::behavior_task_execution_types::{
-    running_actions::BehaviorRefillContinuation, BehaviorTaskExecutionState,
+    BehaviorTaskExecutionState, running_actions::BehaviorRefillContinuation,
 };
-use openzt2_zoo_state::feeding::container_quantity::apply_authored_container_quantity_write;
 use openzt2_zoo_state::feeding::container_quantity::DrinkContainer;
 use openzt2_zoo_state::feeding::container_quantity::FoodContainer;
+use openzt2_zoo_state::feeding::container_quantity::apply_authored_container_quantity_write;
 use openzt2_zoo_state::staff::staff_employment_types::Staff;
 use openzt2_zoo_state::staff::staff_job_types::CurrentJob;
 use openzt2_zoo_state::staff::staff_job_types::JobClaim;
 use openzt2_zoo_state::staff::staff_job_types::StaffJob;
 use openzt2_zoo_state::staff::staff_job_types::StaffJobBehaviorTask;
+use openzt2_zoo_state::staff::staff_job_types::StaffJobCancellationPending;
 use openzt2_zoo_state::staff::staff_lifecycle_messages::CancelStaffJobRequest;
 
 #[derive(Component)]
@@ -23,7 +24,6 @@ pub(super) struct StagedBehaviorRefill {
 
 #[derive(SystemParam)]
 pub(super) struct KeeperRefillSettlement<'w, 's> {
-    cancellations: Option<Res<'w, Messages<CancelStaffJobRequest>>>,
     staff: Query<'w, 's, &'static CurrentJob, With<Staff>>,
     jobs: Query<
         'w,
@@ -33,6 +33,7 @@ pub(super) struct KeeperRefillSettlement<'w, 's> {
             &'static JobClaim,
             &'static StaffJobBehaviorTask,
         ),
+        Without<StaffJobCancellationPending>,
     >,
     containers: Query<
         'w,
@@ -44,6 +45,26 @@ pub(super) struct KeeperRefillSettlement<'w, 's> {
         ),
         With<WorldMember>,
     >,
+}
+
+pub(super) fn mark_staff_refill_cancellations_before_account_settlement(
+    requests: Option<MessageReader<CancelStaffJobRequest>>,
+    jobs: Query<&StaffJob, Without<StaffJobCancellationPending>>,
+    mut commands: Commands,
+) {
+    let Some(mut requests) = requests else {
+        return;
+    };
+    for request in requests.read() {
+        if jobs
+            .get(request.job)
+            .is_ok_and(|job| job.kind == Some(StaffJobKind::Feed))
+        {
+            commands
+                .entity(request.job)
+                .try_insert_if_new(StaffJobCancellationPending);
+        }
+    }
 }
 
 impl KeeperRefillSettlement<'_, '_> {
@@ -62,12 +83,6 @@ impl KeeperRefillSettlement<'_, '_> {
             || job.kind != Some(StaffJobKind::Feed)
             || job.token != Some(AssetId::from_key("t_fillfoodcontainer"))
             || task.target != Some(job.target)
-            || self.cancellations.as_ref().is_some_and(|messages| {
-                messages
-                    .get_cursor()
-                    .read(messages)
-                    .any(|request| request.job == payment.job)
-            })
         {
             return None;
         }

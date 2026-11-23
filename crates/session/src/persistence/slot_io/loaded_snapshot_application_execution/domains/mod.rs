@@ -33,7 +33,7 @@ use crate::persistence::{
     },
     progression_snapshot_types::ProgressionSnapshotRecords,
     simulation_time_snapshot_section::{
-        SimulationTimeSnapshotLoadResources, SimulationTimeSnapshotRecord,
+        SimulationTimeSnapshotRecord, SimulationTimeSnapshotRestore,
     },
 };
 
@@ -60,16 +60,14 @@ fn fail_section(commands: &mut Commands, operation: Entity, root: Entity, reason
 pub(super) fn restore_snapshot_clock(
     mut commands: Commands,
     mut operations: PendingSection<SimulationTimeSnapshotRecord>,
-    mut time: SimulationTimeSnapshotLoadResources,
+    mut time: SimulationTimeSnapshotRestore,
 ) {
     let Ok((operation, stage, mut saved)) = operations.single_mut() else {
         return;
     };
     let root = stage.actors.root;
     if let Some(record) = saved.0.take() {
-        if let Err(reason) =
-            record.apply_simulation_time_snapshot_record_to_live_resources(&mut time)
-        {
+        if let Err(reason) = record.restore_simulation_time_snapshot(root, &mut time) {
             fail_section(&mut commands, operation, root, reason);
         }
     }

@@ -8,10 +8,16 @@ fn missing_registry_does_not_retain_a_cleared_or_replaced_preview() {
         .init_resource::<Assets<StandardMaterial>>()
         .init_resource::<Assets<WorldDefinitionAsset>>()
         .init_resource::<WorldDefinitions>()
-        .init_resource::<SelectedCatalogueEntry>()
         .add_systems(Update, project_selected_catalogue_entry_into_preview_scene);
+    let owner = app
+        .world_mut()
+        .spawn(openzt2_interface_state::ui::ui_document_lifecycle_contracts::InGameUiOwner)
+        .id();
     for selection in [None, Some(AssetId([2; 16]))] {
-        app.world_mut().resource_mut::<SelectedCatalogueEntry>().0 = selection;
+        app.world_mut()
+            .get_mut::<SelectedCatalogueEntry>(owner)
+            .unwrap()
+            .0 = selection;
         let image = app
             .world_mut()
             .resource_mut::<Assets<Image>>()

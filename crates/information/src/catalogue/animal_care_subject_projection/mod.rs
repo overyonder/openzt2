@@ -14,6 +14,7 @@ use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocum
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentRoot;
 use openzt2_ui::authored_ui_text_content_binding::UiTextBinding;
 use bevy::prelude::*;
+use openzt2_interface_state::ui::ui_document_lifecycle_contracts::InGameUiOwner;
 use openzt2_game_data::{
     localization::LocalizationFormatArgument,
     ui_document::{
@@ -23,15 +24,11 @@ use openzt2_game_data::{
     AssetId,
 };
 
-pub(crate) fn clear_care_animal(mut selected: ResMut<SelectedCareAnimal>) {
-    selected.set_if_neq(SelectedCareAnimal(None));
-}
-
 pub(crate) fn retain_selected_animal_for_care_catalogue(
     mut selections: MessageReader<SelectionChanged>,
     mut adoptions: MessageReader<BeginAnimalAdoptionPlacement>,
     animals: Query<&SpeciesHandle>,
-    mut selected: ResMut<SelectedCareAnimal>,
+    mut owners: Query<&mut SelectedCareAnimal, With<InGameUiOwner>>,
 ) {
     let animal = selections
         .read()
@@ -43,14 +40,14 @@ pub(crate) fn retain_selected_animal_for_care_catalogue(
         })
         .chain(adoptions.read().map(|adoption| adoption.species))
         .last();
-    if let Some(animal) = animal {
+    if let (Some(animal), Ok(mut selected)) = (animal, owners.single_mut()) {
         selected.set_if_neq(SelectedCareAnimal(Some(animal)));
     }
 }
 
 pub(crate) fn project_care_animal_name_and_icon(
     mut commands: Commands,
-    selected: Res<SelectedCareAnimal>,
+    owners: Query<Ref<SelectedCareAnimal>, With<InGameUiOwner>>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     localization_assets: Res<Assets<LocalizationAsset>>,
@@ -65,6 +62,9 @@ pub(crate) fn project_care_animal_name_and_icon(
         Option<&mut ImageNode>,
     )>,
 ) {
+    let Ok(selected) = owners.single() else {
+        return;
+    };
     let Some(definition) = selected.0 else {
         return;
     };

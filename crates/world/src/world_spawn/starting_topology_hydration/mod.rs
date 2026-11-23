@@ -40,12 +40,12 @@ pub(super) fn hydrate_all_starting_fence_nodes_and_edges_into_topology_once(
     scenarios: Res<Assets<WorldScenarioDocumentAsset>>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
-    grid: Res<TopologyGrid>,
     pending: Query<
         (
             Entity,
             &SelectedWorldIdentity,
             &SelectedWorldDocumentHandles,
+            &TopologyGrid,
         ),
         (
             With<WorldHydration>,
@@ -56,7 +56,7 @@ pub(super) fn hydrate_all_starting_fence_nodes_and_edges_into_topology_once(
         ),
     >,
 ) {
-    let Ok((root, selected_world, documents)) = pending.single() else {
+    let Ok((root, selected_world, documents, grid)) = pending.single() else {
         return;
     };
     let Some(asset) = scenarios.get(&documents.start) else {

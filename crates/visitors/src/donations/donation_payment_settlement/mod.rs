@@ -41,7 +41,7 @@ pub(super) fn settle_completed_donation_transactions_and_update_acceptor_totals(
     mut donation_category_totals: Query<&mut DonationCategoryTotals>,
     mut completed_donations: MessageWriter<DonationCompleted>,
     mut rejected_donations: MessageWriter<DonationRejected>,
-    clock: Option<Res<openzt2_world_state::simulation_time::simulation_clock_types::ZooClock>>,
+    clock: Option<Single<&openzt2_world_state::simulation_time::simulation_clock_types::ZooClock>>,
     definitions: Option<Res<openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions>>,
     definition_assets: Option<Res<Assets<openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset>>>,
 ) {

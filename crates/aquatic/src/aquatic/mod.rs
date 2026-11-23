@@ -33,30 +33,26 @@ use tank_geometry_edit_types::{
     TankGeometryEditPrepared,
 };
 
-use aquatic_animal_requirement_hydration::hydrate_live_animals_from_authored_aquatic_requirements;
 use aquatic_suitability_projection::project_changed_tank_facts_into_live_aquatic_animal_suitability;
-use show_tank_eligibility_projection::project_changed_tank_depth_into_show_eligibility;
 use tank_geometry_projection::project_changed_habitat_and_terrain_geometry_into_tanks;
 use tank_normalized_fact_clamping::clamp_changed_normalized_tank_facts_to_permille_range;
 use water_filter_operation::{
     add_animal_dirt_to_home_tank_water, clean_tank_water_through_filters,
-    hydrate_water_filters_from_object_definitions,
+    reconcile_authored_water_filter_policy, resolve_water_filter_targets,
 };
 
 pub struct AquaticPlugin;
 
 impl Plugin for AquaticPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<tank_height_bounds::TankPathClearance>()
-            .add_observer(tank_height_bounds::record_path_clearance)
-            .add_observer(tank_height_bounds::discard_path_clearance)
-            .add_message::<aquatic_simulation_types::AddAquaticWaterDirt>()
+        app.add_message::<aquatic_simulation_types::AddAquaticWaterDirt>()
             .add_message::<CommitTankGeometryEdit>()
             .add_message::<TankGeometryEditAcknowledged>()
             .add_message::<TankGeometryEditPrepared>()
             .add_message::<TankGeometryEditPreparationRejected>()
             .add_message::<tank_geometry_edit_types::SetTankWallHeights>()
             .add_message::<tank_floor_terrain_excavation::RestoreTankFloorTerrain>()
+            .add_message::<tank_geometry_projection::TankFloorTerrainDisturbed>()
             .add_message::<tank_capacity_accounting::TankResidentRequirementsDiscarded>()
             .add_observer(tank_capacity_accounting::invalidate_discarded_tank_resident_requirements)
             .add_observer(tank_capacity_accounting::invalidate_disabled_tank_resident)
@@ -64,6 +60,8 @@ impl Plugin for AquaticPlugin {
             .add_observer(aquatic_home_invalidation::notify_residents_of_tank_demotion)
             .add_observer(tank_floor_terrain_excavation::queue_terrain_restoration_after_tank_removal)
             .add_observer(tank_presentation::retire_tank_presentation_on_demotion)
+            .add_observer(tank_geometry_edit_execution::restore_uncommitted_tank_geometry)
+            .add_observer(water_filter_operation::remove_water_filter_timing_and_target)
             .add_systems(
                 Update,
                 tank_scripted_wall_height::apply_scripted_tank_wall_heights
@@ -99,7 +97,8 @@ impl Plugin for AquaticPlugin {
             )
             .add_systems(
                 FixedUpdate,
-                hydrate_live_animals_from_authored_aquatic_requirements.in_set(FixedGameSet::Act),
+                aquatic_animal_requirement_hydration::reconcile_authored_aquatic_animal_requirements
+                    .in_set(FixedGameSet::Act),
             )
             .add_systems(
                 FixedUpdate,
@@ -107,15 +106,16 @@ impl Plugin for AquaticPlugin {
                     tank_fact_hydration::initialize_legacy_tank_water_limits,
                     tank_capacity_accounting::recompute_changed_tank_capacity,
                     clamp_changed_normalized_tank_facts_to_permille_range,
-                    hydrate_water_filters_from_object_definitions,
+                    reconcile_authored_water_filter_policy,
+                    resolve_water_filter_targets.after(reconcile_authored_water_filter_policy),
                     (
                         add_animal_dirt_to_home_tank_water
-                            .after(clamp_changed_normalized_tank_facts_to_permille_range)
-                            .after(tank_capacity_accounting::recompute_changed_tank_capacity),
+                            .after(clamp_changed_normalized_tank_facts_to_permille_range),
                         clean_tank_water_through_filters
-                            .after(hydrate_water_filters_from_object_definitions),
+                            .after(resolve_water_filter_targets),
                         project_changed_tank_facts_into_live_aquatic_animal_suitability
-                            .after(tank_fact_hydration::initialize_legacy_tank_water_limits),
+                            .after(tank_fact_hydration::initialize_legacy_tank_water_limits)
+                            .after(tank_capacity_accounting::recompute_changed_tank_capacity),
                     ).chain(),
                 )
                     .in_set(FixedGameSet::Think),
@@ -123,20 +123,19 @@ impl Plugin for AquaticPlugin {
             .add_systems(
                 FixedUpdate,
                 (
-                    tank_wall_enclosure_promotion::promote_or_restore_habitats_enclosed_by_tank_walls,
-                    project_changed_habitat_and_terrain_geometry_into_tanks,
-                    tank_floor_terrain_excavation::excavate_changed_tank_floors,
-                    aquatic_home_invalidation::notify_terminal_aquatic_animal_departures,
+                    (
+                        tank_wall_enclosure_promotion::promote_or_restore_habitats_enclosed_by_tank_walls,
+                        project_changed_habitat_and_terrain_geometry_into_tanks,
+                        tank_geometry_projection::sample_changed_tank_floor_levels,
+                        tank_floor_terrain_excavation::excavate_changed_tank_floors,
+                    ).chain(),
+                    aquatic_home_invalidation::notify_terminal_aquatic_animal_departures
+                        .after(tank_wall_enclosure_promotion::promote_or_restore_habitats_enclosed_by_tank_walls),
+                    show_tank_eligibility_projection::reconcile_authored_show_tank_eligibility
+                        .after(project_changed_habitat_and_terrain_geometry_into_tanks),
                 )
-                    .chain()
                     .in_set(FixedGameSet::Cleanup)
                     .after(openzt2_zoo_state::habitat::habitat_types::HabitatTopologyPublication),
-            )
-            .add_systems(
-                FixedUpdate,
-                project_changed_tank_depth_into_show_eligibility
-                    .after(project_changed_habitat_and_terrain_geometry_into_tanks)
-                    .in_set(FixedGameSet::Cleanup),
             )
             .add_systems(
                 Update,

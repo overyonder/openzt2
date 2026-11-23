@@ -7,6 +7,7 @@ pub(super) const PHOTO_ALBUM_PAGE_SIZE: u32 = 8;
 pub(super) const PHOTO_CAMERA_ROLL_CAPACITY: u32 = 24;
 
 pub(super) const INITIAL_PHOTO_ALBUM_SPREADS: u32 = 5;
+pub(super) const MAX_PHOTO_ALBUM_SPREADS: u32 = 100;
 
 #[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct DeletePhotoRequest {

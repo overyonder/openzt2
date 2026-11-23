@@ -14,6 +14,7 @@ use super::super::{
         block_payload::NetImmerseNifBlockPayload, document_source_types::NetImmerseNifDocument,
         scene_object_source_types::NetImmerseNiGeometry,
     },
+    nif_embedded_texture_lowering::embedded_nif_texture_label,
 };
 use super::validated_vertex_topology_assembly::native_geometry_lowering_error;
 
@@ -50,15 +51,7 @@ pub(super) fn lower_netimmerse_native_material(
     // Missing optional textures leave their stages unbound.
     let mut lower_texture_slot = |slot: Option<&super::super::netimmerse_nif_source::render_property_and_texture_source_types::NetImmerseTextureSlot>| {
         slot.and_then(|slot| {
-            document
-                .block(slot.source_ref)
-                .and_then(|block| match &block.payload {
-                    NetImmerseNifBlockPayload::NiSourceTexture(value) => {
-                        value.file_name.as_deref()
-                    }
-                    _ => None,
-                })
-                .and_then(&mut *resolve_texture)
+            resolve_netimmerse_texture_asset_path(document, slot.source_ref, resolve_texture)
                 .map(|path| NativeTextureSource {
                     asset_path: path.replace('\\', "/"),
                     uv_set: slot.uv_set,
@@ -221,16 +214,11 @@ fn lower_inherited_texture_effect(
                     "multiple inherited sphere environment effects are not supported".to_owned(),
                 ));
             }
-            let texture = document
-                .block(effect.source_texture_ref)
-                .and_then(|source| match &source.payload {
-                    NetImmerseNifBlockPayload::NiSourceTexture(source) => {
-                        source.file_name.as_deref()
-                    }
-                    _ => None,
-                })
-                .and_then(&mut *resolve_texture);
-            let Some(texture) = texture else {
+            let Some(texture) = resolve_netimmerse_texture_asset_path(
+                document,
+                effect.source_texture_ref,
+                resolve_texture,
+            ) else {
                 continue;
             };
             let native_from_bevy = Mat3::from_cols(Vec3::X, -Vec3::Z, Vec3::Y).transpose();
@@ -247,6 +235,26 @@ fn lower_inherited_texture_effect(
         current = ancestor.index as i32;
     }
     Ok(selected)
+}
+
+fn resolve_netimmerse_texture_asset_path(
+    document: &NetImmerseNifDocument,
+    reference: i32,
+    resolve_external: &mut impl FnMut(&str) -> Option<String>,
+) -> Option<String> {
+    let NetImmerseNifBlockPayload::NiSourceTexture(texture) = &document.block(reference)?.payload
+    else {
+        return None;
+    };
+    if texture.use_external != 0 {
+        return texture.file_name.as_deref().and_then(resolve_external);
+    }
+    let data_ref = texture.pixel_data_ref.filter(|reference| *reference >= 0)?;
+    Some(format!(
+        "{}#{}",
+        document.source_path,
+        embedded_nif_texture_label(data_ref)
+    ))
 }
 
 pub(in super::super) fn inherited_netimmerse_property_references(

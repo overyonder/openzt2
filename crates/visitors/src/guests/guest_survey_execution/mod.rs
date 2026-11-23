@@ -5,8 +5,11 @@ use openzt2_game_assets::world_definitions::{
 };
 use openzt2_game_data::AssetId;
 use openzt2_world_state::{
-    simulation_time::simulation_clock_types::ZooCalendar,
-    world_spawn::world_load_completion_marker::WorldLoadCompleted,
+    simulation_time::simulation_clock_types::{ZooCalendar, ZooDayAdvanced},
+    world_spawn::{
+        world_load_completion_marker::WorldLoadCompleted,
+        world_membership_types::{WorldMember, WorldRoot},
+    },
 };
 use openzt2_zoo_state::{
     animal_behavior::behavior_trigger_types::BehaviorSubjectTrigger,
@@ -20,40 +23,51 @@ use openzt2_zoo_state::{
 };
 
 pub(super) fn initialize_guest_survey(
-    roots: Query<(Entity, Has<GuestSurveyNeedCadence>), With<WorldLoadCompleted>>,
-    survey: Option<Res<GuestSurvey>>,
+    roots: Query<
+        (
+            Entity,
+            &ZooCalendar,
+            Has<GuestSurvey>,
+            Has<GuestSurveyNeedCadence>,
+        ),
+        (
+            With<WorldRoot>,
+            With<WorldLoadCompleted>,
+            Or<(Without<GuestSurvey>, Without<GuestSurveyNeedCadence>)>,
+        ),
+    >,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active: Res<WorldDefinitions>,
     mut commands: Commands,
 ) {
-    let Ok((root, has_cadence)) = roots.single() else {
-        return;
-    };
-    if survey.is_some() && has_cadence {
-        return;
-    }
     let Some(policy) = active
         .get(&definitions)
-        .and_then(|definitions| definitions.guest_generation())
+        .and_then(|view| view.guest_generation())
     else {
         return;
     };
-    if survey.is_none() {
-        commands.init_resource::<GuestSurvey>();
-    }
-    if !has_cadence {
-        commands.entity(root).insert(GuestSurveyNeedCadence(
-            policy.need_survey.check_interval_ns as f32 * 1e-9,
-        ));
+    for (root, calendar, has_survey, has_cadence) in &roots {
+        if !has_survey {
+            let mut survey = GuestSurvey::default();
+            survey.advance_day_of_month(calendar.day);
+            commands.entity(root).insert(survey);
+        }
+        if !has_cadence {
+            commands.entity(root).insert(GuestSurveyNeedCadence(
+                policy.need_survey.check_interval_ns as f32 * 1e-9,
+            ));
+        }
     }
 }
 
 pub(super) fn advance_guest_survey_day(
-    calendar: Res<ZooCalendar>,
-    survey: Option<ResMut<GuestSurvey>>,
+    mut days: MessageReader<ZooDayAdvanced>,
+    mut surveys: Query<&mut GuestSurvey, With<WorldRoot>>,
 ) {
-    if let Some(mut survey) = survey {
-        survey.advance_day_of_month(calendar.day);
+    for day in days.read() {
+        if let Ok(mut survey) = surveys.get_mut(day.root) {
+            survey.advance_day_of_month(day.calendar.day);
+        }
     }
 }
 
@@ -73,17 +87,15 @@ pub(crate) fn adjust_guest_survey_data(
     mut requests: MessageReader<AdjustGuestSurveyData>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active: Res<WorldDefinitions>,
-    survey: Option<ResMut<GuestSurvey>>,
+    mut surveys: Query<&mut GuestSurvey>,
     guests: Query<(
+        &WorldMember,
         &GuestArchetype,
         &GuestCriticalNeedObservations,
         &GuestSurveyExperience,
         Option<&GuestFoodPurchaseCounts>,
     )>,
 ) {
-    let Some(mut survey) = survey else {
-        return;
-    };
     let Some(definitions) = active.get(&definitions) else {
         return;
     };
@@ -94,12 +106,15 @@ pub(crate) fn adjust_guest_survey_data(
         return;
     };
     for request in requests.read() {
-        let Ok((archetype, counters, experience, food)) = guests.get(request.guest) else {
+        let Ok((member, archetype, counters, experience, food)) = guests.get(request.guest) else {
             continue;
         };
         if definitions.find_guest(archetype.0).is_none() {
             continue;
         }
+        let Ok(mut survey) = surveys.get_mut(member.root) else {
+            continue;
+        };
         let ratings = super::guest_survey_scoring::score_guest_survey(
             counters,
             *experience,
@@ -135,11 +150,6 @@ mod tests {
     fn authored_survey_trigger_records_each_channel_once_before_the_next_action() {
         let mut app = App::new();
         app.init_resource::<Assets<WorldDefinitionAsset>>()
-            .insert_resource(GuestSurvey {
-                previous_day_of_month: 9,
-                current_day_of_month: 1,
-                ..Default::default()
-            })
             .add_message::<BehaviorSubjectTrigger>()
             .add_message::<AdjustGuestSurveyData>()
             .add_systems(
@@ -154,9 +164,18 @@ mod tests {
         let mut active = WorldDefinitions::default();
         active.index_test_document(handle, &document);
         app.insert_resource(active);
+        let root = app
+            .world_mut()
+            .spawn(GuestSurvey {
+                previous_day_of_month: 9,
+                current_day_of_month: 1,
+                ..Default::default()
+            })
+            .id();
         let guest = app
             .world_mut()
             .spawn((
+                WorldMember { root },
                 GuestArchetype(AssetId::from_key("viewing-test")),
                 GuestCriticalNeedObservations::default(),
                 GuestSurveyExperience {
@@ -175,7 +194,7 @@ mod tests {
             trigger: AssetId::from_key("adjust_surveydata"),
         });
         app.update();
-        let survey = app.world().resource::<GuestSurvey>();
+        let survey = app.world().get::<GuestSurvey>(root).unwrap();
         assert!(survey
             .ratings
             .iter()
@@ -192,7 +211,8 @@ mod tests {
         app.update();
         assert!(app
             .world()
-            .resource::<GuestSurvey>()
+            .get::<GuestSurvey>(root)
+            .unwrap()
             .ratings
             .iter()
             .all(|history| history.daily_counts[0] == 1));

@@ -1,34 +1,32 @@
 use bevy::prelude::*;
-
-use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 
 use super::aquatic_simulation_types::{ShowTankEligible, Tank, TankGeometry};
 
-pub(super) fn project_changed_tank_depth_into_show_eligibility(
-    definitions: Res<Assets<WorldDefinitionAsset>>,
-    active_definitions: Res<WorldDefinitions>,
-    tanks: Query<
-        (Entity, &TankGeometry, Has<ShowTankEligible>),
-        (With<Tank>, Or<(Added<Tank>, Changed<TankGeometry>)>),
-    >,
+pub(super) fn reconcile_authored_show_tank_eligibility(
     mut commands: Commands,
+    assets: Res<Assets<WorldDefinitionAsset>>,
+    definitions: Res<WorldDefinitions>,
+    tanks: Query<(Entity, Ref<Tank>, Ref<TankGeometry>, Has<ShowTankEligible>)>,
 ) {
-    let Some(definitions) = active_definitions.get(&definitions) else {
-        return;
-    };
+    let catalogue_changed = definitions.is_changed() || assets.is_changed();
     let Some(minimum_depth) = definitions
-        .tank_depth_policy()
+        .get(&assets)
+        .and_then(|definitions| definitions.tank_depth_policy())
         .map(|policy| policy.minimum_show_tank_depth_cm as f32 / 100.0)
     else {
         return;
     };
-    for (tank_entity, geometry, currently_eligible) in &tanks {
-        let should_be_eligible = geometry.is_valid() && geometry.depth() >= minimum_depth;
-        if should_be_eligible && !currently_eligible {
-            commands.entity(tank_entity).insert(ShowTankEligible);
-        } else if !should_be_eligible && currently_eligible {
-            commands.entity(tank_entity).remove::<ShowTankEligible>();
+    for (entity, tank, geometry, is_eligible) in &tanks {
+        if !catalogue_changed && !tank.is_added() && !geometry.is_changed() {
+            continue;
+        }
+        let eligible = geometry.is_valid() && geometry.depth() >= minimum_depth;
+        if eligible && !is_eligible {
+            commands.entity(entity).insert(ShowTankEligible);
+        } else if !eligible && is_eligible {
+            commands.entity(entity).remove::<ShowTankEligible>();
         }
     }
 }

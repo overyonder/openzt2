@@ -1,4 +1,7 @@
-use bevy::{platform::collections::HashMap, prelude::*};
+use bevy::{
+    platform::collections::{HashMap, HashSet},
+    prelude::*,
+};
 
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
@@ -12,6 +15,7 @@ pub(super) struct FossilDefinitionIndex {
     piece_indices: HashMap<AssetId, usize>,
     pub(super) pieces: Vec<FossilPieceDefinition>,
     pub(super) slots: Vec<FossilSlotDefinition>,
+    pub(super) sets: Vec<AssetId>,
 }
 
 impl FossilDefinitionIndex {
@@ -42,6 +46,13 @@ pub(super) fn index_winning_fossil_definitions(
     };
     index.pieces = definitions.fossil_pieces().copied().collect();
     index.slots = definitions.fossil_slots().copied().collect();
+    let mut seen = HashSet::default();
+    index.sets = index
+        .pieces
+        .iter()
+        .map(|piece| piece.set)
+        .filter(|set| seen.insert(*set))
+        .collect::<Vec<_>>();
     index.piece_indices = index
         .pieces
         .iter()

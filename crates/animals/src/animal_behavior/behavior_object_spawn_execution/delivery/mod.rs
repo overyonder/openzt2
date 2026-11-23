@@ -1,4 +1,5 @@
 use super::*;
+use crate::animal_behavior::behavior_named_nodes::NamedNodeTransforms;
 use openzt2_world_state::animation_playback::animation_joint_target_types::AnimationRigJoints;
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
     RunBehaviorSpawnObject, RunningBehaviorInstruction,
@@ -17,8 +18,7 @@ pub(super) fn deliver_behavior_object_spawns(
     owners: Query<(&AnimationPresentationOwner, &AnimationPlaybackController)>,
     rigs: Query<&AnimationRigJoints>,
     joints: Query<(&AnimationJointTarget, &GlobalTransform)>,
-    children: Query<&Children>,
-    named_nodes: super::super::behavior_docking_execution::NamedNodeTransforms,
+    named_nodes: NamedNodeTransforms,
     pose_validation: super::spawn_pose::SpawnPoseValidation,
     mut actors: Query<
         (
@@ -88,15 +88,7 @@ pub(super) fn deliver_behavior_object_spawns(
                 .into_iter().flat_map(|rig| joints.iter_many(rig.joints()).matched())
                 .find(|(joint, _)| joint.authored_joint_id == subject_joint)
                 .map(|(_, transform)| transform.compute_transform())
-                .or_else(|| {
-                    super::super::behavior_docking_execution::find_named_descendant_global_transform(
-                        actor,
-                        subject_node,
-                        &children,
-                        &named_nodes,
-                    )
-                    .map(GlobalTransform::compute_transform)
-                })?;
+                .or_else(|| named_nodes.pose(actor, subject_node).map(GlobalTransform::compute_transform))?;
             let presentation = if object.prefab == AssetId::default() {
                 None
             } else {

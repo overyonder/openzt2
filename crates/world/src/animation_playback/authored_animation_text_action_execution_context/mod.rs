@@ -31,8 +31,6 @@ pub(super) struct AuthoredAnimationTextActionExecutionContext<'w, 's, const REAL
 #[derive(SystemParam)]
 pub(super) struct AuthoredAnimationAudioAndEffectTextActionExecutionContext<'w, 's> {
     pub(super) commands: Commands<'w, 's>,
-    pub(super) terrain_index:
-        Res<'w, openzt2_zoo_state::terrain::terrain_chunk_types::TerrainIndex>,
     pub(super) terrain_chunks: Query<
         'w,
         's,

@@ -11,7 +11,9 @@ use openzt2_world_state::world_spawn::{
 use openzt2_zoo_state::terrain::{
     terrain_chunk_types::{EditedTerrainSamples, TerrainChunk},
     terrain_edit_types::{TerrainChanged, TerrainPresentationRestored, TerrainWaterChanged},
-    terrain_navigation_change_types::TerrainNavigationRestored,
+    terrain_navigation_change_types::{
+        SnapshotTerrainNavigationPending, TerrainNavigationRestored,
+    },
     terrain_water_presentation_types::{
         TerrainWaterRegionEdit, TerrainWaterRegionRetired, TerrainWaterRegionSource,
     },
@@ -19,12 +21,13 @@ use openzt2_zoo_state::terrain::{
 
 #[derive(SystemParam)]
 pub(in crate::persistence) struct TerrainSnapshotApplicationParameters<'w, 's> {
-    graph: Option<
-        Res<
-            'w,
-            openzt2_zoo_state::locomotion::locomotion_types::ActiveTerrainDerivedNavigationGraph,
-        >,
+    graphs: Query<
+        'w,
+        's,
+        (),
+        With<openzt2_zoo_state::locomotion::locomotion_types::ActiveTerrainDerivedNavigationGraph>,
     >,
+    pending: Option<ResMut<'w, Messages<SnapshotTerrainNavigationPending>>>,
     roots: Query<'w, 's, &'static SelectedWorldTerrainAssetHandle>,
     chunks: Query<
         'w,
@@ -62,7 +65,7 @@ impl TerrainSnapshotApplicationParameters<'_, '_> {
         transaction: Entity,
         commands: &mut Commands,
     ) -> Result<(), Failure> {
-        if self.graph.is_none() {
+        if !self.graphs.contains(root) {
             return Err(Failure::SnapshotTransactionInFlight);
         }
         let terrain = self
@@ -102,6 +105,10 @@ impl TerrainSnapshotApplicationParameters<'_, '_> {
             .presentation
             .as_deref_mut()
             .ok_or(Failure::SnapshotTransactionInFlight)?;
+        let pending = self
+            .pending
+            .as_deref_mut()
+            .ok_or(Failure::SnapshotTransactionInFlight)?;
         let result = apply_terrain_snapshot_record(
             record,
             &terrain.0,
@@ -133,6 +140,10 @@ impl TerrainSnapshotApplicationParameters<'_, '_> {
             });
             water.write(bounds);
         }
+        pending.write(SnapshotTerrainNavigationPending {
+            root,
+            operation: transaction,
+        });
         Ok(())
     }
 }

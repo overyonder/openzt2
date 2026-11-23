@@ -2,15 +2,26 @@ use bevy::prelude::*;
 
 use super::money_types::Money;
 
-#[derive(Resource, Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct AdmissionPrice(pub Money);
+#[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AdmissionPrice {
+    pub adult: Money,
+    pub child: Money,
+}
+
+impl AdmissionPrice {
+    /// A changed admission band sets the child fee to half the adult fee.
+    pub const fn from_adult(adult: Money) -> Self {
+        let child = Money(adult.0 / 2 + adult.0 % 2);
+        Self { adult, child }
+    }
+}
 
 /// Whether ordinary gate admissions are currently open.
 ///
 /// This is authoritative zoo policy shared by the management UI and the guest
 /// arrival producer. Scenario-authored forced arrivals remain separate typed
 /// requests and do not rewrite this policy.
-#[derive(Resource, Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ZooAdmissionsOpen(pub bool);
 
 /// Correlates one gate arrival with its authoritative admission transfer.

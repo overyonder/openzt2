@@ -1,9 +1,16 @@
 //! Private Bevy runtime state for loading and running particle-effect instances.
 
-use bevy::prelude::*;
-use openzt2_game_data::AssetId;
+use std::sync::Arc;
 
-use super::ParticleEffectDocumentAsset;
+use bevy::{prelude::*, time::Stopwatch};
+use openzt2_game_data::{
+    particle::authored_particle_system::{
+        AuthoredParticleCurvePoint, ParticleEffectSimulationClock,
+    },
+    AssetId,
+};
+
+use super::{prepared_effect_emitters::ParticleEmissionWindow, ParticleEffectDocumentAsset};
 
 #[derive(Component, Clone)]
 pub(super) struct PendingEffectInstance {
@@ -16,13 +23,17 @@ pub(super) struct PendingEffectInstance {
 #[derive(Component)]
 pub(super) struct ParticleEffectDocumentInstance(pub(super) Handle<ParticleEffectDocumentAsset>);
 
-#[derive(Component, Default, PartialEq)]
+#[derive(Component, PartialEq)]
 #[require(bevy_hanabi::ParticleAliveCount)]
 pub(super) enum EffectRetirementReadback {
-    #[default]
-    WaitingForParticles,
+    WaitingForParticles(u32),
     WaitingForChildren,
     Drained,
+}
+
+#[derive(EntityEvent)]
+pub(super) struct ParticleChildrenMayHaveDrained {
+    pub(super) entity: Entity,
 }
 
 #[derive(Component)]
@@ -30,9 +41,18 @@ pub(super) struct ParticleEffectGraphReady;
 
 #[derive(Component, Clone, Debug)]
 pub(super) struct ControlledEffectEmissionState {
-    pub(super) elapsed_seconds: f32,
+    pub(super) elapsed: Stopwatch,
     pub(super) fractional_particle_remainder: f32,
     pub(super) manual_particle_count: u32,
+}
+
+#[derive(Component, Clone, Debug, PartialEq)]
+pub(super) struct ControlledEffectEmissionSettings {
+    pub(super) clock: ParticleEffectSimulationClock,
+    pub(super) retires_when_empty: bool,
+    pub(super) emission_window: Option<ParticleEmissionWindow>,
+    pub(super) birth_rate_curve: Option<(Arc<[AuthoredParticleCurvePoint]>, bool)>,
+    pub(super) manually_driven: bool,
 }
 
 /// Attached emitters whose orientation stays aligned with the world axes.

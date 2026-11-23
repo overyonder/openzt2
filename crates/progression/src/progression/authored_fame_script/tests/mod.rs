@@ -87,9 +87,9 @@ fn authored_fame_changes_as_the_zoo_grows() -> io::Result<()> {
     .add_plugins(LuaScriptAssetLoadingPlugin)
     .init_asset::<WorldDefinitionAsset>()
     .init_resource::<WorldDefinitions>()
-    .init_resource::<ScenarioAwardPointTotal>()
-    .init_resource::<TotalAnimalsReleasedCount>()
-    .init_resource::<UnlockedCatalogueDefinitionSet>()
+    .register_required_components::<WorldRoot, ScenarioAwardPointTotal>()
+    .register_required_components::<WorldRoot, TotalAnimalsReleasedCount>()
+    .register_required_components::<WorldRoot, UnlockedCatalogueDefinitionSet>()
     .add_message::<FameGateAppearanceRequested>()
     .add_message::<ProgressionFactChanged>();
     let document =

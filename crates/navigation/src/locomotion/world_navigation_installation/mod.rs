@@ -2,7 +2,7 @@ use bevy::prelude::*;
 
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use openzt2_world_state::world_spawn::selected_world_terrain_asset_handle::SelectedWorldTerrainAssetHandle;
-use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
+use openzt2_world_state::world_spawn::world_membership_types::{WorldMember, WorldRoot};
 use openzt2_world_state::world_spawn::world_terrain_hydration::WorldTerrainHorizontalBounds;
 use openzt2_zoo_state::terrain::terrain_chunk_types::EditedTerrainSamples;
 use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainChunk;
@@ -16,11 +16,8 @@ use openzt2_zoo_state::locomotion::locomotion_types::Route;
 use openzt2_zoo_state::locomotion::locomotion_types::{SpatialCellIndex, SpatialGrid};
 use openzt2_zoo_state::locomotion::terrain_derived_navigation_graph_types::TerrainDerivedNavigationGraph;
 
-#[derive(Component, Debug, Clone, Copy)]
-pub(super) struct TerrainDerivedNavigationGraphInstalled;
-
 #[derive(Message)]
-pub(super) struct NavigationGraphReplaced;
+pub(super) struct NavigationGraphReplaced(pub(super) Entity);
 
 /// Derives the pathfinding index from the selected terrain after the terrain
 /// asset and authored world bounds are available.
@@ -31,31 +28,33 @@ pub(super) fn install_terrain_derived_navigation_graph_for_loaded_world(
     mut terrain_asset_events: MessageReader<AssetEvent<TerrainAsset>>,
     mut installations: MessageWriter<NavigationGraphReplaced>,
     terrain_assets: Res<Assets<TerrainAsset>>,
-    previous_grid: Res<SpatialGrid>,
     mut loaded_world_terrain_sources: Query<
         (
             Entity,
-            &SelectedWorldTerrainAssetHandle,
-            &WorldTerrainHorizontalBounds,
-            Has<TerrainDerivedNavigationGraphInstalled>,
+            Ref<SelectedWorldTerrainAssetHandle>,
+            Ref<WorldTerrainHorizontalBounds>,
+            Option<&mut ActiveTerrainDerivedNavigationGraph>,
+            Option<&mut LocomotionCapacity>,
+            Option<&mut SpatialGrid>,
             Option<&mut TankNavigationWater>,
         ),
         With<WorldRoot>,
     >,
-    terrain_chunks: Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
-    mut active_routes: Query<(&mut Route, &mut Destination)>,
+    terrain_chunks: Query<(&TerrainChunk, Option<&EditedTerrainSamples>, &WorldMember)>,
+    mut active_routes: Query<(&mut Route, &mut Destination, &WorldMember)>,
 ) {
-    let Ok((world_root_entity, world_terrain, world_bounds, navigation_graph_installed, water)) =
+    let Ok((world_root_entity, world_terrain, world_bounds, graph, capacity, grid, water)) =
         loaded_world_terrain_sources.single_mut()
     else {
-        for _ in terrain_asset_events.read() {}
+        terrain_asset_events.clear();
         return;
     };
-    let terrain_asset_reloaded = terrain_asset_events
-        .read()
-        .any(|event| event.is_modified(world_terrain.0.id()));
-    for _ in terrain_asset_events.read() {}
-    if navigation_graph_installed && !terrain_asset_reloaded {
+    let id = world_terrain.0.id();
+    let terrain_reloaded = terrain_asset_events.read().fold(false, |changed, event| {
+        changed || event.is_added(id) || event.is_modified(id)
+    });
+    let replacing = graph.is_some();
+    if replacing && !world_terrain.is_changed() && !world_bounds.is_changed() && !terrain_reloaded {
         return;
     }
     let Some(terrain_asset) = terrain_assets.get(&world_terrain.0) else {
@@ -68,8 +67,11 @@ pub(super) fn install_terrain_derived_navigation_graph_for_loaded_world(
     else {
         return;
     };
-    for (terrain_chunk, edited_terrain_samples) in &terrain_chunks {
-        if terrain_chunk.asset.id() != world_terrain.0.id() || edited_terrain_samples.is_none() {
+    for (terrain_chunk, edited_terrain_samples, member) in &terrain_chunks {
+        if member.root != world_root_entity
+            || terrain_chunk.asset.id() != world_terrain.0.id()
+            || edited_terrain_samples.is_none()
+        {
             continue;
         }
         let maximum_changed_sample = UVec2::splat(u32::from(terrain_chunk.side.saturating_sub(1)));
@@ -102,8 +104,10 @@ pub(super) fn install_terrain_derived_navigation_graph_for_loaded_world(
     let Some(cell_count) = width.checked_mul(height).filter(|&count| count != 0) else {
         return;
     };
-    for &cell in &previous_grid.cells {
-        commands.entity(cell).try_despawn();
+    if let Some(grid) = grid.as_deref() {
+        for &cell in &grid.cells {
+            commands.entity(cell).try_despawn();
+        }
     }
     let navigation_spatial_grid = SpatialGrid {
         origin: world_bounds.min,
@@ -118,8 +122,11 @@ pub(super) fn install_terrain_derived_navigation_graph_for_loaded_world(
             })
             .collect::<Vec<_>>(),
     };
-    if navigation_graph_installed {
-        for (mut route, mut destination) in &mut active_routes {
+    if replacing {
+        for (mut route, mut destination, member) in &mut active_routes {
+            if member.root != world_root_entity {
+                continue;
+            }
             route.clear();
             destination.set_changed();
         }
@@ -131,13 +138,22 @@ pub(super) fn install_terrain_derived_navigation_graph_for_loaded_world(
     } else {
         commands.entity(world_root_entity).insert(next_water);
     }
-    commands.insert_resource(ActiveTerrainDerivedNavigationGraph::new(
-        terrain_derived_navigation_graph,
-    ));
-    installations.write(NavigationGraphReplaced);
-    commands.insert_resource(locomotion_capacity);
-    commands.insert_resource(navigation_spatial_grid);
-    commands
-        .entity(world_root_entity)
-        .insert(TerrainDerivedNavigationGraphInstalled);
+    let next_graph = ActiveTerrainDerivedNavigationGraph::new(terrain_derived_navigation_graph);
+    let mut root = commands.entity(world_root_entity);
+    if let Some(mut graph) = graph {
+        *graph = next_graph;
+    } else {
+        root.insert(next_graph);
+    }
+    if let Some(mut capacity) = capacity {
+        capacity.set_if_neq(locomotion_capacity);
+    } else {
+        root.insert(locomotion_capacity);
+    }
+    if let Some(mut grid) = grid {
+        *grid = navigation_spatial_grid;
+    } else {
+        root.insert(navigation_spatial_grid);
+    }
+    installations.write(NavigationGraphReplaced(world_root_entity));
 }

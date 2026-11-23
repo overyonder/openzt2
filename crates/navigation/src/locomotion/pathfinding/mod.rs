@@ -242,9 +242,6 @@ pub(super) fn advance_route(
     }
 
     route.clear();
-    if route.points.capacity() < scratch.reverse_path.len().saturating_add(1) {
-        return Err(NavigationFailure::NoRoute);
-    }
     // Retain the searched start cell for every actor. Snapped endpoints must
     // not create an unchecked shortcut through a fence or closed gate.
     for node in scratch.reverse_path.iter().rev() {

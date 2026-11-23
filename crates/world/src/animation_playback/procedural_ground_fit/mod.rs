@@ -9,6 +9,7 @@ use openzt2_game_data::{
     },
     AssetId,
 };
+use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_world_state::{
     animation_graph::{
         animation_graph_playback_message_types::ActiveAnimationClipOptions,
@@ -90,6 +91,7 @@ pub(super) fn apply_procedural_ground_fit_pose(
     assets: GroundFitAssets,
     terrain: DrySurfaceEligibility,
     locomotion: Query<(&LocomotionMode, Option<&SwimLayer>)>,
+    members: Query<&WorldMember>,
     joints: Query<(&AnimationJointTarget, Option<&ChildOf>)>,
     mut transforms: ParamSet<(TransformHelper, Query<&mut Transform>)>,
 ) {
@@ -174,7 +176,11 @@ pub(super) fn apply_procedural_ground_fit_pose(
                 (Some(quadruped), _) => Some(quadruped),
                 (None, biped) => biped,
             };
-            if let Some((ground, root)) = selected.zip(root).filter(|_| enabled) {
+            if let Some(((ground, root), member)) = selected
+                .zip(root)
+                .zip(members.get(gameplay).ok())
+                .filter(|_| enabled)
+            {
                 let rotate = active_policy
                     .and_then(|policy| policy.ground_fit_rotation_is_enabled)
                     .unwrap_or(true);
@@ -183,6 +189,7 @@ pub(super) fn apply_procedural_ground_fit_pose(
                     root,
                     actor,
                     &terrain,
+                    member.root,
                     &position,
                     lookup,
                     rotate,
@@ -257,6 +264,7 @@ fn fit_ground_support(
     root: Entity,
     actor: GlobalTransform,
     terrain: &DrySurfaceEligibility,
+    world_root: Entity,
     position: &impl Fn(Entity) -> Option<Vec3>,
     joint: impl Fn(AssetId) -> Option<Entity>,
     rotate: bool,
@@ -275,12 +283,12 @@ fn fit_ground_support(
     let right = (actor.rotation() * Vec3::X).with_y(0.0).normalize_or_zero();
     let sample = |point: Vec3| {
         terrain
-            .ground_height(point.xz())
+            .ground_height(world_root, point.xz())
             .map(|height| point.with_y(height))
     };
     let sample_water = |point: Vec3| {
         terrain
-            .water_surface_height(point.xz())
+            .water_surface_height(world_root, point.xz())
             .map(|height| point.with_y(height))
     };
     let at = |name: Option<AssetId>| name.and_then(&joint).and_then(position);

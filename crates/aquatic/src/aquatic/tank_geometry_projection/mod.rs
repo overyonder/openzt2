@@ -5,24 +5,62 @@ use openzt2_zoo_state::topology::habitat_boundary_queries::HabitatBoundaryQuerie
 
 use openzt2_zoo_state::aquatic::tank_wall_ground_sampling::TankWallGroundSampling;
 use openzt2_zoo_state::habitat::habitat_types::HabitatChanged;
+use openzt2_zoo_state::habitat::habitat_types::HabitatIndex;
 use openzt2_zoo_state::habitat::habitat_types::HabitatRegion;
 use openzt2_zoo_state::habitat::habitat_types::HabitatSummary;
 use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainChunk;
 use openzt2_zoo_state::terrain::terrain_edit_types::TerrainChanged;
-use openzt2_zoo_state::topology::topology_graph_types::{FenceSegment, TopologyNode};
+use openzt2_zoo_state::topology::topology_graph_types::{FenceSegment, TopologyGrid, TopologyNode};
 
 use super::aquatic_simulation_types::{Tank, TankEnvironment, TankGeometry, TankWallTopHeight};
+use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use openzt2_game_assets::world_definitions::{
     world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions,
     world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
 };
 
-#[allow(clippy::type_complexity)]
+#[derive(Component, Default, PartialEq)]
+pub(super) struct TankExcavationBoundary {
+    pub(super) walls: Box<[[Vec2; 2]]>,
+    pub(super) bounds: Rect,
+    pub(super) fill_height_cm: i16,
+}
+
+#[derive(Message)]
+pub(super) struct TankFloorTerrainDisturbed(pub(super) Entity);
+
+#[derive(Component, PartialEq)]
+pub(super) struct TankFloorLevelCm(pub(super) i16);
+
+pub(super) fn sample_changed_tank_floor_levels(
+    mut commands: Commands,
+    mut tanks: Query<
+        (Entity, &TankGeometry, Option<&mut TankFloorLevelCm>),
+        (With<Tank>, Or<(Added<Tank>, Changed<TankGeometry>)>),
+    >,
+) {
+    for (tank, geometry, current) in &mut tanks {
+        let next = TankFloorLevelCm((geometry.floor_height * 100.0).round() as i16);
+        if let Some(mut current) = current {
+            current.set_if_neq(next);
+        } else {
+            commands.entity(tank).try_insert(next);
+        }
+    }
+}
+
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub(super) fn project_changed_habitat_and_terrain_geometry_into_tanks(
+    mut commands: Commands,
     mut habitat_changes: MessageReader<HabitatChanged>,
     mut terrain_changes: MessageReader<TerrainChanged>,
     chunks: Query<(&TerrainChunk, &WorldMember)>,
-    added_tanks: Query<Entity, Added<Tank>>,
+    changed_tanks: Query<Entity, (With<Tank>, Or<(Added<Tank>, Changed<HabitatRegion>)>)>,
+    grids: Query<&TopologyGrid>,
+    changed_grids: Query<(), Changed<TopologyGrid>>,
+    habitats: Query<&HabitatIndex>,
+    terrain_assets: Res<Assets<TerrainAsset>>,
+    mut disturbed_floors: MessageWriter<TankFloorTerrainDisturbed>,
     mut tanks: Query<
         (
             Entity,
@@ -31,6 +69,7 @@ pub(super) fn project_changed_habitat_and_terrain_geometry_into_tanks(
             &HabitatSummary,
             &mut TankGeometry,
             &mut TankEnvironment,
+            Option<&mut TankExcavationBoundary>,
         ),
         With<Tank>,
     >,
@@ -45,51 +84,73 @@ pub(super) fn project_changed_habitat_and_terrain_geometry_into_tanks(
     let surface = active_definitions
         .get(&definitions)
         .and_then(|view| view.tank_surface_policy());
-    let changed_walls = changed_wall_tops.iter().collect::<EntityHashSet>();
-    let changed_habitats = habitat_changes
+    let mut habitat_changes: EntityHashSet = habitat_changes
         .read()
         .map(|change| change.habitat_entity)
-        .chain(added_tanks.iter())
-        .collect::<EntityHashSet>();
-    let changed_terrain: Vec<_> = terrain_changes
-        .read()
-        .filter_map(|event| {
-            let (chunk, member) = chunks.get(event.chunk).ok()?;
-            let origin = chunk.coord * i32::from(chunk.side.saturating_sub(1));
-            Some((
-                origin + event.min.as_ivec2() - IVec2::ONE,
-                origin + event.max.as_ivec2(),
-                event.ground_height_changed,
-                member.root,
-            ))
-        })
+        .chain(changed_tanks.iter())
         .collect();
-    if changed_walls.is_empty() && changed_habitats.is_empty() && changed_terrain.is_empty() {
-        return;
+    if terrain_assets.is_changed() || !changed_grids.is_empty() {
+        habitat_changes.extend(tanks.iter().filter_map(|(tank, _, member, ..)| {
+            (terrain_assets.is_changed() || changed_grids.contains(member.root)).then_some(tank)
+        }));
     }
-    for (tank, region, member, summary, mut geometry, mut environment) in &mut tanks {
-        let changed_habitat = changed_habitats.contains(&tank);
-        let mut terrain_changed = false;
-        let mut ground_changed = false;
-        for (minimum, maximum, height_changed, root) in &changed_terrain {
-            if *root != member.root {
-                continue;
-            }
-            if region
-                .topology_cells
-                .iter()
-                .any(|cell| cell.cmpge(*minimum).all() && cell.cmple(*maximum).all())
-            {
-                terrain_changed = true;
-                ground_changed |= *height_changed;
+    let mut terrain_affected = EntityHashSet::default();
+    let mut ground_affected = EntityHashSet::default();
+    for change in terrain_changes.read() {
+        let Ok((chunk, member)) = chunks.get(change.chunk) else {
+            continue;
+        };
+        let (Ok(grid), Ok(habitats)) = (grids.get(member.root), habitats.get(member.root)) else {
+            continue;
+        };
+        if !grid.spacing_m.is_finite() || grid.spacing_m <= 0.0 {
+            continue;
+        }
+        let min = chunk.origin + change.min.as_vec2() * chunk.spacing_m;
+        let max = chunk.origin + change.max.as_vec2() * chunk.spacing_m;
+        let min = ((min - Vec2::splat(chunk.spacing_m) - grid.origin) / grid.spacing_m)
+            .floor()
+            .as_ivec2();
+        let max = ((max + Vec2::splat(chunk.spacing_m) - grid.origin) / grid.spacing_m)
+            .floor()
+            .as_ivec2();
+        for y in min.y..=max.y {
+            for x in min.x..=max.x {
+                if let Some(tank) = habitats.habitat_for_topology_cell(IVec2::new(x, y)) {
+                    terrain_affected.insert(tank);
+                    if change.ground_height_changed {
+                        ground_affected.insert(tank);
+                    }
+                }
             }
         }
-        let wall_top_changed = surface.is_some()
-            && boundaries
-                .fences(tank)
-                .any(|wall| changed_walls.contains(&wall));
-        if !changed_habitat && !terrain_changed && !wall_top_changed {
+    }
+    let wall_affected: EntityHashSet = if surface.is_some() {
+        changed_wall_tops
+            .iter()
+            .flat_map(|wall| boundaries.habitats(wall))
+            .collect()
+    } else {
+        EntityHashSet::default()
+    };
+    let affected: EntityHashSet = habitat_changes
+        .iter()
+        .chain(&terrain_affected)
+        .chain(&wall_affected)
+        .copied()
+        .collect();
+    for tank in affected {
+        let Ok((_, region, member, summary, mut geometry, mut environment, excavation)) =
+            tanks.get_mut(tank)
+        else {
             continue;
+        };
+        let changed_habitat = habitat_changes.contains(&tank);
+        let terrain_changed = terrain_affected.contains(&tank);
+        let wall_top_changed = wall_affected.contains(&tank);
+        let ground_changed = ground_affected.contains(&tank);
+        if ground_changed {
+            disturbed_floors.write(TankFloorTerrainDisturbed(tank));
         }
         let mut next_geometry = *geometry;
         let mut next_environment = *environment;
@@ -107,14 +168,23 @@ pub(super) fn project_changed_habitat_and_terrain_geometry_into_tanks(
             }
         }
         if changed_habitat || terrain_changed {
-            let lowest_ground = if changed_habitat || ground_changed {
-                lowest_ground_under_boundary(
-                    member.root,
-                    boundaries.fences(tank),
-                    &fences,
-                    &nodes,
-                    &ground,
-                )
+            let lowest_ground = if changed_habitat || ground_changed || excavation.is_none() {
+                grids.get(member.root).ok().and_then(|grid| {
+                    let (lowest, next) = sample_tank_excavation_boundary(
+                        member.root,
+                        *grid,
+                        boundaries.fences(tank),
+                        &fences,
+                        &nodes,
+                        &ground,
+                    )?;
+                    if let Some(mut excavation) = excavation {
+                        excavation.set_if_neq(next);
+                    } else {
+                        commands.entity(tank).try_insert(next);
+                    }
+                    Some(lowest)
+                })
             } else {
                 None
             };
@@ -131,22 +201,44 @@ pub(super) fn project_changed_habitat_and_terrain_geometry_into_tanks(
     }
 }
 
-fn lowest_ground_under_boundary(
+fn sample_tank_excavation_boundary(
     root: Entity,
+    grid: TopologyGrid,
     boundary: impl Iterator<Item = Entity>,
     fences: &Query<(FenceSegment, Option<&TankWallTopHeight>)>,
     nodes: &Query<&TopologyNode>,
     ground: &TankWallGroundSampling,
-) -> Option<f32> {
-    let mut lowest = None::<f32>;
-    for fence in boundary {
-        let (edge, _) = fences.get(fence).ok()?;
-        for node in [edge.a(), edge.b()] {
-            let height = ground.ground_height_at_topology_cell(root, nodes.get(node).ok()?.cell)?;
-            lowest = Some(lowest.map_or(height, |lowest| lowest.min(height)));
-        }
+) -> Option<(f32, TankExcavationBoundary)> {
+    let mut lowest = f32::INFINITY;
+    let mut height_sum = 0.0;
+    let mut min = Vec2::splat(f32::INFINITY);
+    let mut max = Vec2::splat(f32::NEG_INFINITY);
+    let walls = boundary
+        .map(|fence| {
+            let (edge, _) = fences.get(fence).ok()?;
+            let a = nodes.get(edge.a()).ok()?.cell;
+            let b = nodes.get(edge.b()).ok()?.cell;
+            let a_height = ground.ground_height_at_topology_cell(root, a)?;
+            let b_height = ground.ground_height_at_topology_cell(root, b)?;
+            lowest = lowest.min(a_height).min(b_height);
+            height_sum += a_height;
+            let positions = [a, b].map(|cell| grid.cell_translation(cell).xz());
+            min = min.min(positions[0]).min(positions[1]);
+            max = max.max(positions[0]).max(positions[1]);
+            Some(positions)
+        })
+        .collect::<Option<Box<[_]>>>()?;
+    if walls.is_empty() {
+        return None;
     }
-    lowest
+    Some((
+        lowest,
+        TankExcavationBoundary {
+            fill_height_cm: (height_sum / walls.len() as f32 * 100.0).round() as i16,
+            walls,
+            bounds: Rect::from_corners(min, max),
+        },
+    ))
 }
 
 fn project_habitat_region_into_tank_geometry(

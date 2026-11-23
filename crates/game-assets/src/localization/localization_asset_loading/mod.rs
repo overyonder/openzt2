@@ -1,5 +1,5 @@
 use bevy::{
-    asset::{io::Reader, AssetApp, AssetLoader, LoadContext},
+    asset::{AssetApp, AssetLoader, LoadContext, io::Reader},
     prelude::*,
 };
 
@@ -12,7 +12,7 @@ use super::{
 };
 use crate::{
     asset_source::archive_entry_asset_path::{
-        archive_entry_asset_source_path, ARCHIVE_ENTRY_ASSET_EXTENSION,
+        ARCHIVE_ENTRY_ASSET_EXTENSION, archive_entry_asset_source_path,
     },
     source_document::{
         blue_fang_source_document_parsing::parse_blue_fang_source_document, path::AssetPath,
@@ -42,20 +42,26 @@ impl AssetLoader for LocalizationAssetLoader {
             parse_blue_fang_source_document(AssetPath::new(&source_path.to_string_lossy()), &bytes)
                 .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
 
+        let locale_identifier = source_path
+            .parent()
+            .and_then(std::path::Path::file_name)
+            .map_or_else(String::new, |locale| locale.to_string_lossy().into_owned());
         let mut entries = std::collections::BTreeMap::new();
-        for entry in lower_blue_fang_localization_entries(&source_document)? {
-            entries.insert(entry.localization_entry_identifier, entry);
-        }
-        Ok(LocalizationAsset::from_localization_catalog(
-            LocalizationCatalog {
-                locale_identifier: source_path
-                    .parent()
-                    .and_then(std::path::Path::file_name)
-                    .map_or_else(String::new, |locale| locale.to_string_lossy().into_owned()),
+        let mut person_name_pools = std::collections::BTreeMap::new();
+        lower_blue_fang_localization_entries(
+            &source_document,
+            &locale_identifier,
+            &mut entries,
+            &mut person_name_pools,
+        )?;
+        Ok(LocalizationAsset {
+            localization_catalog: LocalizationCatalog {
+                locale_identifier,
                 localization_entries: entries.into_values().collect(),
                 localized_month_and_year_format_tokens: Vec::new(),
             },
-        ))
+            person_name_pools,
+        })
     }
 
     fn extensions(&self) -> &[&str] {

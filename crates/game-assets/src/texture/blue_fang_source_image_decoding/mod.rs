@@ -95,7 +95,47 @@ pub(super) fn decode_blue_fang_dds_source_to_rgba_surface(
     let cubemap_flags =
         image_dds::ddsfile::Caps2::CUBEMAP | image_dds::ddsfile::Caps2::CUBEMAP_ALLFACES;
     let is_complete_cubemap = dds.header.caps2.contains(cubemap_flags);
-    if dds.get_d3d_format() != Some(image_dds::ddsfile::D3DFormat::L8) && dds.get_depth() <= 1 {
+    if dds.get_d3d_format() == Some(image_dds::ddsfile::D3DFormat::L8) && dds.get_depth() <= 1 {
+        let width = dds.get_width();
+        let height = dds.get_height();
+        let mip_level_count = dds.get_num_mipmap_levels();
+        let array_layer_count = dds.get_num_array_layers();
+        let maximum_mip_levels = u32::BITS - width.max(height).leading_zeros();
+        if width == 0 || height == 0 || !(1..=maximum_mip_levels).contains(&mip_level_count) {
+            return Err(io::Error::other("invalid DDS L8 dimensions or mip count"));
+        }
+        let mut source = dds.data.as_slice();
+        let mut rgba_data = Vec::new();
+        for _ in 0..array_layer_count {
+            for level in 0..mip_level_count {
+                let level_width = (width >> level).max(1);
+                let level_height = (height >> level).max(1);
+                // Only the main surface has a pitch field. Lower levels
+                // store one luminance byte per texel of the reduced image.
+                let pitch = if level == 0 {
+                    dds.header.pitch.unwrap_or(level_width)
+                } else {
+                    level_width
+                };
+                source = append_luminance_rows(
+                    source,
+                    level_width,
+                    level_height,
+                    pitch,
+                    &mut rgba_data,
+                )?;
+            }
+        }
+        return Ok(DecodedBlueFangDdsRgbaSurface {
+            width,
+            height,
+            array_layer_count,
+            mip_level_count,
+            is_complete_cubemap,
+            rgba_data,
+        });
+    }
+    if dds.get_depth() <= 1 {
         if let Ok(surface) = image_dds::SurfaceRgba8::decode_dds(&dds) {
             return Ok(DecodedBlueFangDdsRgbaSurface {
                 width: surface.width,
@@ -126,39 +166,45 @@ pub(crate) fn decode_blue_fang_dds_source_to_rgba(
 
 fn decode_blue_fang_dds_to_rgba(dds: &image_dds::ddsfile::Dds) -> io::Result<image::RgbaImage> {
     if dds.get_d3d_format() == Some(image_dds::ddsfile::D3DFormat::L8) {
-        let width = usize::try_from(dds.get_width())
-            .map_err(|_| io::Error::other("DDS L8 width exceeds usize"))?;
-        let height = usize::try_from(dds.get_height())
-            .map_err(|_| io::Error::other("DDS L8 height exceeds usize"))?;
-        let pitch = dds
-            .header
-            .pitch
-            .map(usize::try_from)
-            .transpose()
-            .map_err(|_| io::Error::other("DDS L8 pitch exceeds usize"))?
-            .unwrap_or(width);
-        if pitch < width {
-            return Err(io::Error::other("DDS L8 pitch is narrower than its width"));
-        }
-        let required_source_bytes = pitch
-            .checked_mul(height)
-            .ok_or_else(|| io::Error::other("DDS L8 dimensions overflow"))?;
-        let source_surface = dds
-            .data
-            .get(..required_source_bytes)
-            .ok_or_else(|| io::Error::other("DDS L8 surface is truncated"))?;
-        let rgba_pixels = source_surface
-            .chunks_exact(pitch)
-            .flat_map(|row| {
-                row[..width]
-                    .iter()
-                    .flat_map(|value| [*value, *value, *value, 255])
-            })
-            .collect();
-        return image::RgbaImage::from_raw(dds.get_width(), dds.get_height(), rgba_pixels)
+        let width = dds.get_width();
+        let height = dds.get_height();
+        let mut rgba = Vec::new();
+        append_luminance_rows(
+            &dds.data,
+            width,
+            height,
+            dds.header.pitch.unwrap_or(width),
+            &mut rgba,
+        )?;
+        return image::RgbaImage::from_raw(width, height, rgba)
             .ok_or_else(|| io::Error::other("invalid DDS L8 surface"));
     }
     image_dds::image_from_dds(&dds, 0).map_err(io::Error::other)
+}
+
+fn append_luminance_rows<'a>(
+    source: &'a [u8],
+    width: u32,
+    height: u32,
+    pitch: u32,
+    rgba: &mut Vec<u8>,
+) -> io::Result<&'a [u8]> {
+    if width == 0 || height == 0 || pitch < width {
+        return Err(io::Error::other("invalid DDS L8 dimensions or pitch"));
+    }
+    let byte_count = usize::try_from(u64::from(pitch) * u64::from(height))
+        .map_err(|_| io::Error::other("DDS L8 dimensions overflow"))?;
+    let (surface, remaining) = source
+        .split_at_checked(byte_count)
+        .ok_or_else(|| io::Error::other("DDS L8 surface is truncated"))?;
+    for row in surface.chunks_exact(pitch as usize) {
+        rgba.extend(
+            row[..width as usize]
+                .iter()
+                .flat_map(|&value| [value, value, value, 255]),
+        );
+    }
+    Ok(remaining)
 }
 
 pub(super) fn decode_blue_fang_cursor_source(

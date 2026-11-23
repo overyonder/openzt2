@@ -1,6 +1,8 @@
 mod calculations;
 mod habitat_suitability;
-pub(crate) mod need_updates;
+pub mod need_latch_types;
+pub mod need_timing_types;
+mod need_updates;
 pub(crate) mod systems;
 use openzt2_zoo_state::animal_welfare::types;
 

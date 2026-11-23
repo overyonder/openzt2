@@ -263,6 +263,7 @@ fn execute_current_wander_actions(
             };
             let margin = Vec2::splat(avoidance.radius_m.abs());
             nearby.in_bounds(
+                member.root,
                 start.min(end) - margin,
                 start.max(end) + margin,
                 &mut candidates,
@@ -570,6 +571,7 @@ fn execute_current_evasion_actions(
         let mut entity_near = false;
         let margin = Vec2::splat(action.radius_m.abs());
         nearby.in_bounds(
+            member.root,
             position.xz() - margin,
             position.xz() + margin,
             &mut candidates,

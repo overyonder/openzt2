@@ -23,6 +23,7 @@ use super::{
 };
 
 const MAX_MODIFIERS: usize = 64;
+const NETIMMERSE_CONTROLLER_ACTIVE_FLAG: u16 = 1 << 3;
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 #[error("NIF particle source {path}: {kind:?}")]
@@ -124,7 +125,11 @@ fn lower(
         source_block: block,
         capacity,
         particle_radius,
-        emit_rate: controller.emit_rate,
+        emit_rate: if controller.controller.flags & NETIMMERSE_CONTROLLER_ACTIVE_FLAG != 0 {
+            controller.emit_rate
+        } else {
+            0.0
+        },
         emit_start_seconds: controller.emit_start_time,
         emit_stop_seconds: controller.emit_stop_time,
         lifetime_seconds: [

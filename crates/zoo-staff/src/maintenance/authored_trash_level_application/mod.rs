@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::WhenBehaviorAction;
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
     RunBehaviorFactModifications, RunningBehaviorInstruction,
 };
@@ -8,8 +9,9 @@ use openzt2_zoo_state::maintenance::maintenance_types::{
 };
 
 pub(super) fn request_authored_trash_level_changes(
+    activation: On<WhenBehaviorAction<RunBehaviorFactModifications>>,
     mut commands: Commands,
-    clock: Res<openzt2_world_state::simulation_time::simulation_clock_types::ZooClock>,
+    clock: Single<&openzt2_world_state::simulation_time::simulation_clock_types::ZooClock>,
     price_effect: openzt2_zoo_state::economy::price_effect::BehaviorPriceEffectContext,
     containers: Query<&FacilityContainedWaste>,
     mut actors: Query<(
@@ -29,7 +31,9 @@ pub(super) fn request_authored_trash_level_changes(
         BehaviorFact, BehaviorFactModificationOperation,
     };
     use openzt2_zoo_state::animal_behavior::behavior_entity_role_resolution::resolve_behavior_entity_role_to_live_entity;
-    for (actor, (task, instruction, running_action), mut random, mut guest_random) in &mut actors {
+    for (actor, (task, instruction, running_action), mut random, mut guest_random) in
+        std::iter::once(actors.get_mut(activation.entity)).flatten()
+    {
         if task.next_action_tick > clock.tick {
             continue;
         }
@@ -56,7 +60,7 @@ pub(super) fn request_authored_trash_level_changes(
                         .sample(modification.modification_value, task.target, |_| 0)
                         .is_some())
         }) {
-            openzt2_zoo_state::animal_behavior::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
+            openzt2_zoo_state::behavior_task_execution_types::running_actions::mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
             continue;
         }
         for modification in modifications {

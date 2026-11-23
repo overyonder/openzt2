@@ -1,4 +1,6 @@
 use bevy::asset::UntypedAssetId;
+use bevy::ecs::entity::EntityHashMap;
+use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
 use bevy::camera::visibility::RenderLayers;
 use bevy::gltf::Gltf;
@@ -42,17 +44,16 @@ pub(super) fn validate_index_and_project_loaded_terrain_chunks(
     graphics_settings: Res<GraphicsSettings>,
     mut effect_pass_materials: ResMut<Assets<EffectPassMaterial>>,
     mut effect_uniform_buffers: ResMut<Assets<ShaderBuffer>>,
-    terrain_index: Res<TerrainIndex>,
-    ids: Res<TerrainChunkIdLookup>,
+    indexes: Query<(&TerrainIndex, &TerrainChunkIdLookup)>,
     chunks: Query<
-        (Entity, &TerrainChunk, Option<&TerrainChunkId>),
+        (Entity, &TerrainChunk, Option<&TerrainChunkId>, &WorldMember),
         (Without<TerrainRenderChunk>, Without<TerrainChunkRejected>),
     >,
 ) {
     // Validation keeps query order; only the independent surface compositions
     // run on the compute pool, and their results apply in that same order.
     let mut projectable = Vec::new();
-    for (entity, chunk, id) in &chunks {
+    for (entity, chunk, id, member) in &chunks {
         let Some(id) = id else {
             commands.entity(entity).insert(TerrainChunkRejected);
             continue;
@@ -119,36 +120,49 @@ pub(super) fn validate_index_and_project_loaded_terrain_chunks(
             commands.entity(entity).insert(TerrainChunkRejected);
             continue;
         };
-        projectable.push((entity, chunk, id, asset, terrain_effect_passes, mesh));
+        projectable.push((
+            entity,
+            chunk,
+            id,
+            member.root,
+            asset,
+            terrain_effect_passes,
+            mesh,
+        ));
     }
     let surfaces = {
         let images = &*images;
         ComputeTaskPool::get().scope(|scope| {
-            for (_, chunk, _, asset, _, _) in &projectable {
+            for (_, chunk, _, _, asset, _, _) in &projectable {
                 scope
                     .spawn(async move { compose_terrain_surface_image(chunk, asset, &[], images) });
             }
         })
     };
-    let mut span = terrain_index.chunk_span_m;
-    let mut origin = terrain_index.origin;
+    let mut projected_grids = EntityHashMap::new();
     let mut projected_coordinates = HashSet::new();
     let mut projected_ids = HashSet::new();
-    for ((entity, chunk, id, asset, terrain_effect_passes, mesh), surface) in
+    for ((entity, chunk, id, root, asset, terrain_effect_passes, mesh), surface) in
         projectable.into_iter().zip(surfaces)
     {
         let Some(surface) = surface else {
             continue;
         };
+        let Ok((terrain_index, ids)) = indexes.get(root) else {
+            continue;
+        };
+        let (span, origin) = projected_grids
+            .entry(root)
+            .or_insert((terrain_index.chunk_span_m, terrain_index.origin));
         let chunk_span = f32::from(chunk.side - 1) * chunk.spacing_m;
-        if (span > 0.0
-            && ((span - chunk_span).abs() > f32::EPSILON
-                || (chunk.origin - (origin + chunk.coord.as_vec2() * span)).length_squared()
+        if (*span > 0.0
+            && ((*span - chunk_span).abs() > f32::EPSILON
+                || (chunk.origin - (*origin + chunk.coord.as_vec2() * *span)).length_squared()
                     > f32::EPSILON))
             || terrain_index.chunks.contains_key(&chunk.coord)
             || ids.0.contains_key(id)
-            || projected_coordinates.contains(&chunk.coord)
-            || projected_ids.contains(id)
+            || projected_coordinates.contains(&(root, chunk.coord))
+            || projected_ids.contains(&(root, *id))
         {
             commands.entity(entity).insert(TerrainChunkRejected);
             continue;
@@ -189,12 +203,12 @@ pub(super) fn validate_index_and_project_loaded_terrain_chunks(
             commands.entity(entity).insert(TerrainChunkRejected);
             continue;
         };
-        if span == 0.0 {
-            span = chunk_span;
-            origin = chunk.origin - chunk.coord.as_vec2() * span;
+        if *span == 0.0 {
+            *span = chunk_span;
+            *origin = chunk.origin - chunk.coord.as_vec2() * *span;
         }
-        projected_coordinates.insert(chunk.coord);
-        projected_ids.insert(*id);
+        projected_coordinates.insert((root, chunk.coord));
+        projected_ids.insert((root, *id));
         commands.entity(entity).insert((
             TerrainRenderChunk,
             Mesh3d(mesh.clone()),
@@ -341,13 +355,15 @@ mod tests {
             .init_asset::<EffectPassMaterial>()
             .init_asset::<ShaderBuffer>()
             .init_resource::<GraphicsSettings>()
-            .init_resource::<TerrainIndex>()
-            .init_resource::<TerrainChunkIdLookup>()
             .add_systems(Update, validate_index_and_project_loaded_terrain_chunks);
         let asset = app
             .world()
             .resource::<AssetServer>()
             .load::<TerrainAsset>("missing.no-terrain-loader");
+        let root = app
+            .world_mut()
+            .spawn((TerrainIndex::default(), TerrainChunkIdLookup::default()))
+            .id();
         let chunk = app
             .world_mut()
             .spawn((
@@ -360,6 +376,7 @@ mod tests {
                     side: 2,
                 },
                 TerrainChunkId(0),
+                WorldMember { root },
             ))
             .id();
         for _ in 0..100 {

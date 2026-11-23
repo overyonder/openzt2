@@ -36,7 +36,7 @@ use super::{
         lower_netimmerse_object_transform_motion, NetImmerseObjectTransformMotion,
     },
     scene_prefab_document_assembly::ScenePrefabDocumentAssembler,
-    scene_transform_and_collider_math::netimmerse_point_light_range,
+    scene_transform_and_collider_math::{identity_prefab_transform, netimmerse_point_light_range},
 };
 
 type Result<T> = std::result::Result<T, NativeSceneLoweringError>;
@@ -46,13 +46,20 @@ pub(in super::super) fn lower_netimmerse_scene_prefab(
     bone_lod: &NetImmerseBoneLod,
     source: &str,
     animation_manifest: Option<&str>,
-    footprint_collision_hull: Option<Vec<[f32; 3]>>,
 ) -> Result<ScenePrefabDocument> {
     let model_path = source.to_owned();
     let mut builder = ScenePrefabDocumentAssembler::new(&model_path);
     let mut visiting = BTreeSet::new();
     for root in &document.footer.root_block_references {
-        visit_netimmerse_scene_block(document, bone_lod, *root, None, &mut visiting, &mut builder)?;
+        visit_netimmerse_scene_block(
+            document,
+            bone_lod,
+            *root,
+            None,
+            false,
+            &mut visiting,
+            &mut builder,
+        )?;
     }
     if builder.is_empty() {
         for block in document.blocks() {
@@ -62,6 +69,7 @@ pub(in super::super) fn lower_netimmerse_scene_prefab(
                     bone_lod,
                     block.index as i32,
                     None,
+                    false,
                     &mut visiting,
                     &mut builder,
                 )?;
@@ -75,7 +83,6 @@ pub(in super::super) fn lower_netimmerse_scene_prefab(
             ScenePrefabAssetDependencyKind::Animation,
         );
     }
-    builder.replace_colliders_with_footprint_collision_hull(footprint_collision_hull)?;
     builder.finish()
 }
 
@@ -84,6 +91,7 @@ fn visit_netimmerse_scene_block(
     bone_lod: &NetImmerseBoneLod,
     block_ref: i32,
     parent: Option<u32>,
+    within_footprint: bool,
     visiting: &mut BTreeSet<i32>,
     builder: &mut ScenePrefabDocumentAssembler,
 ) -> Result<()> {
@@ -106,6 +114,7 @@ fn visit_netimmerse_scene_block(
         visiting.remove(&block_ref);
         return Ok(());
     };
+    let within_footprint = within_footprint || object.object.name.eq_ignore_ascii_case("footprint");
     let (mut translation_m, mut rotation_xyzw, mut scale) =
         convert_source_transform_to_bevy_components(
             object.translation,
@@ -255,7 +264,8 @@ fn visit_netimmerse_scene_block(
                     center_m,
                     range.map_or(0.0, |range| range.near_extent),
                     range.map_or(0.0, |range| range.far_extent),
-                    range.is_none() && node.switch_node.active_child_index as usize == ordinal,
+                    range.is_none()
+                        && usize::try_from(node.switch_node.active_child_index) == Ok(ordinal),
                 );
             }
         }
@@ -315,7 +325,7 @@ fn visit_netimmerse_scene_block(
     for animation in transform_motion.animations {
         builder.transform_animation(entity, animation);
     }
-    if object.collision_object_ref >= 0 {
+    if !within_footprint && object.collision_object_ref >= 0 {
         if let Some(NetImmerseNifBlockPayload::NiCollisionData(collision)) = document
             .block(object.collision_object_ref)
             .map(|block| &block.payload)
@@ -331,8 +341,38 @@ fn visit_netimmerse_scene_block(
         }
     }
     let (children, effects) = block.payload.child_and_effect_refs();
-    for child in children.iter().chain(effects) {
-        visit_netimmerse_scene_block(document, bone_lod, *child, Some(entity), visiting, builder)?;
+    let switch = match &block.payload {
+        NetImmerseNifBlockPayload::NiSwitchNode(node) => {
+            Some(usize::try_from(node.active_child_index).ok())
+        }
+        _ => None,
+    };
+    for (index, &child) in children.iter().chain(effects).enumerate() {
+        if child < 0 {
+            continue;
+        }
+        let child_parent =
+            if index < children.len() && switch.is_some_and(|active| active != Some(index)) {
+                let parent_key = builder.entity_key(entity).to_owned();
+                // The branch remains hidden even if its own LOD changes.
+                builder.entity(
+                    &format!("{parent_key}/switch_child/{index}"),
+                    Some(&parent_key),
+                    identity_prefab_transform(),
+                    false,
+                )?
+            } else {
+                entity
+            };
+        visit_netimmerse_scene_block(
+            document,
+            bone_lod,
+            child,
+            Some(child_parent),
+            within_footprint,
+            visiting,
+            builder,
+        )?;
     }
     visiting.remove(&block_ref);
     Ok(())

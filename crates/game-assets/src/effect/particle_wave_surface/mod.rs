@@ -1,11 +1,11 @@
 use std::borrow::Cow;
 
-use bevy::prelude::*;
+use bevy::{pbr::DistanceFog, prelude::*};
 use bevy_hanabi::prelude::{
     Attribute, BoxedModifier, ExprError, Modifier, ModifierContext, Module, RenderContext,
     RenderModifier, ShaderWriter,
 };
-use bevy_hanabi::EffectProperties;
+use bevy_hanabi::{EffectProperties, ParticleViewFog};
 
 #[derive(Reflect, Clone, Debug)]
 pub(super) struct WaveSurfaceRenderModifier {
@@ -40,6 +40,7 @@ impl RenderModifier for WaveSurfaceRenderModifier {
     fn apply_render(&self, _: &mut Module, context: &mut RenderContext) -> Result<(), ExprError> {
         context.set_needs_uv();
         context.set_needs_particle_fragment();
+        context.set_needs_view_fog();
         let fog_varying = context.add_vec4_varying();
         context.vertex_code += r#"
 let wave = properties[properties_array_index];
@@ -63,7 +64,7 @@ position = vec3<f32>(vertex_position.x + dot(cosines, dir_x * wave.wave_k) * ver
 size = vec3<f32>(0.0);
 "#;
         context.vertex_code += &format!(
-            "out.{fog_varying} = vec4<f32>(wave.wave_fog_colour.rgb, clamp((wave.wave_fog_range.z - (dot(position, wave.wave_fog_plane.xyz) - wave.wave_fog_plane.w)) * wave.wave_fog_range.y, 0.0, 1.0));\n"
+            "out.{fog_varying} = vec4<f32>(particle_view_fog.colour.rgb, clamp((particle_view_fog.depth_range.z - (dot(position, particle_view_fog.depth_plane.xyz) - particle_view_fog.depth_plane.w)) * particle_view_fog.depth_range.y, 0.0, 1.0));\n"
         );
         context.fragment_code += &format!(
             r#"
@@ -91,38 +92,6 @@ color = vec4<f32>(mix(in.{fog_varying}.rgb, color.rgb, in.{fog_varying}.a), colo
 
 #[derive(Component, Default)]
 pub struct ParticleWaveFogCamera;
-
-#[derive(Resource, Default, PartialEq)]
-pub(super) struct ParticleWaveCameraFog(Option<ParticleEffectWaveSurfaceFog>);
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct ParticleEffectWaveSurfaceFog {
-    registers: [Vec4; 2],
-    colour: Vec4,
-}
-
-impl ParticleEffectWaveSurfaceFog {
-    fn from_camera(
-        transform: &GlobalTransform,
-        projection: &Projection,
-        fog: &bevy::pbr::DistanceFog,
-    ) -> Option<Self> {
-        let view = crate::material::runtime::resolved_effect_transform_bindings::EffectRenderViewTransforms::from_camera(transform, projection);
-        let registers = view.fog_shader_registers(fog, projection)?;
-        let colour = fog.color.to_srgba();
-        Some(Self {
-            registers,
-            colour: Vec4::new(colour.red, colour.green, colour.blue, colour.alpha),
-        })
-    }
-    fn uniforms(self) -> [(&'static str, Vec4); 3] {
-        [
-            ("wave_fog_range", self.registers[0]),
-            ("wave_fog_plane", self.registers[1]),
-            ("wave_fog_colour", self.colour),
-        ]
-    }
-}
 
 /// Live wave uniforms for an absolute terrain mesh rendered by a particle.
 /// Mesh positions are `(source_x, displacement_weight, -source_y)`;
@@ -159,67 +128,85 @@ impl ParticleEffectWaveSurface {
     }
 }
 
-pub(super) fn publish_particle_wave_camera_fog(
-    cameras: Query<
+pub(super) fn project_particle_view_fog(
+    mut commands: Commands,
+    mut views: Query<
         (
+            Entity,
             &Camera,
             &GlobalTransform,
             &Projection,
-            &bevy::pbr::DistanceFog,
+            &DistanceFog,
+            Option<&mut ParticleViewFog>,
         ),
-        With<ParticleWaveFogCamera>,
+        (
+            With<ParticleWaveFogCamera>,
+            Or<(
+                Added<ParticleWaveFogCamera>,
+                Changed<Camera>,
+                Changed<GlobalTransform>,
+                Changed<Projection>,
+                Changed<DistanceFog>,
+            )>,
+        ),
     >,
-    mut fog: ResMut<ParticleWaveCameraFog>,
-) {
-    let sample = cameras
-        .iter()
-        .find(|(camera, ..)| camera.is_active)
-        .and_then(|(_, transform, projection, fog)| {
-            ParticleEffectWaveSurfaceFog::from_camera(transform, projection, fog)
-        });
-    fog.set_if_neq(ParticleWaveCameraFog(sample));
-}
-
-pub(super) fn upload_particle_wave_surface_uniforms(
-    fog: Res<ParticleWaveCameraFog>,
-    changed: Query<
+    invalidated: Query<
         Entity,
         (
-            With<ParticleEffectWaveSurface>,
-            Or<(Changed<ParticleEffectWaveSurface>, Added<EffectProperties>)>,
+            With<ParticleViewFog>,
+            Or<(
+                Without<ParticleWaveFogCamera>,
+                Without<Camera>,
+                Without<GlobalTransform>,
+                Without<Projection>,
+                Without<DistanceFog>,
+            )>,
         ),
     >,
-    mut emitters: Query<(
-        &ParticleEffectWaveSurface,
-        &mut Visibility,
-        &mut EffectProperties,
-    )>,
 ) {
-    if fog.is_changed() {
-        for (wave, visibility, properties) in &mut emitters {
-            write_wave_surface_uniforms(*wave, fog.0, visibility, properties);
-        }
-    } else {
-        for entity in &changed {
-            if let Ok((wave, visibility, properties)) = emitters.get_mut(entity) {
-                write_wave_surface_uniforms(*wave, fog.0, visibility, properties);
+    use crate::material::runtime::resolved_effect_transform_bindings::EffectRenderViewTransforms;
+
+    for (entity, camera, transform, projection, fog, current) in &mut views {
+        let sample = if camera.is_active {
+            EffectRenderViewTransforms::from_camera(transform, projection)
+                .fog_shader_registers(fog, projection)
+        } else {
+            None
+        };
+        match (sample, current) {
+            (Some([depth_range, depth_plane]), current) => {
+                let colour = fog.color.to_srgba();
+                let next = ParticleViewFog {
+                    depth_range,
+                    depth_plane,
+                    colour: Vec4::new(colour.red, colour.green, colour.blue, colour.alpha),
+                };
+                if let Some(mut current) = current {
+                    current.set_if_neq(next);
+                } else {
+                    commands.entity(entity).insert(next);
+                }
             }
+            (None, Some(_)) => {
+                commands.entity(entity).remove::<ParticleViewFog>();
+            }
+            _ => {}
         }
+    }
+    for entity in &invalidated {
+        commands.entity(entity).remove::<ParticleViewFog>();
     }
 }
 
-fn write_wave_surface_uniforms(
-    wave: ParticleEffectWaveSurface,
-    fog: Option<ParticleEffectWaveSurfaceFog>,
-    mut visibility: Mut<Visibility>,
-    mut properties: Mut<EffectProperties>,
+pub(super) fn write_particle_wave_surface_uniforms(
+    mut emitters: Query<
+        (&ParticleEffectWaveSurface, &mut EffectProperties),
+        Or<(Changed<ParticleEffectWaveSurface>, Added<EffectProperties>)>,
+    >,
 ) {
-    let Some(fog) = fog else {
-        visibility.set_if_neq(Visibility::Hidden);
-        return;
-    };
-    visibility.set_if_neq(Visibility::Inherited);
-    for (name, value) in wave.uniforms().into_iter().chain(fog.uniforms()) {
-        properties = EffectProperties::set_if_changed(properties, name, value.into());
+    for (wave, mut properties) in &mut emitters {
+        for (name, value) in wave.uniforms() {
+            properties = EffectProperties::set_if_changed(properties, name, value.into());
+        }
     }
 }

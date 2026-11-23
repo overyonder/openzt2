@@ -119,7 +119,7 @@ pub(super) fn install_definitions(
         HealthNeed::default(),
         HygieneNeed::default(),
         BathroomNeed::default(),
-        NeedTriggerState::default(),
+        crate::animal_welfare::need_latch_types::AnimalNeedLatchBundle::from_saved_mask(0),
     ));
     app.world_mut()
         .entity_mut(target)

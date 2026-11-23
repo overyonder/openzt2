@@ -46,7 +46,7 @@ pub(super) struct ScheduledTrickToken {
 pub(super) fn start_scheduled_tricks_with_authored_outcome_tokens(
     mut commands: Commands,
     mut requests: MessageReader<BeginScheduledShowTrick>,
-    clock: Res<ZooClock>,
+    clock: Single<&ZooClock>,
     rewards_source: Res<AuthoredShowRewardsSource>,
     rewards: Res<Assets<AuthoredShowRewards>>,
     definitions: Res<WorldDefinitions>,

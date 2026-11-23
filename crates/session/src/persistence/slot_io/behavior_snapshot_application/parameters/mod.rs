@@ -3,8 +3,8 @@ use bevy::{ecs::system::SystemParam, prelude::*};
 use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
 use openzt2_zoo_state::{
     animal_behavior::interaction_container_membership::InteractionContainerMemberships,
-    behavior_task_execution_types::{BehaviorTaskExecutionSequence, BehaviorTaskReturnFrame},
-    locomotion::locomotion_types::{LocomotionCapacity, NavigationRequestSequence},
+    behavior_task_execution_types::{BehaviorTaskGeneration, BehaviorTaskReturnFrame},
+    locomotion::locomotion_types::{LocomotionCapacity, NavigationRequestGeneration},
 };
 
 #[derive(SystemParam)]
@@ -12,9 +12,9 @@ pub(in crate::persistence) struct BehaviorSnapshotApplication<'w, 's> {
     pub(super) entities: BehaviorSnapshotEntities<'w, 's>,
     pub(super) documents: Res<'w, Assets<BehaviorDocumentAsset>>,
     pub(super) server: Res<'w, AssetServer>,
-    pub(super) executions: ResMut<'w, BehaviorTaskExecutionSequence>,
-    pub(super) requests: ResMut<'w, NavigationRequestSequence>,
-    pub(super) capacity: Option<Res<'w, LocomotionCapacity>>,
+    pub(super) executions: Query<'w, 's, &'static mut BehaviorTaskGeneration>,
+    pub(super) requests: Query<'w, 's, &'static mut NavigationRequestGeneration>,
+    pub(super) capacity: Query<'w, 's, &'static LocomotionCapacity>,
     pub(super) memberships: InteractionContainerMemberships<'w, 's>,
     pub(super) definitions: Res<'w, openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions>,
     pub(super) definition_assets: Res<'w, Assets<openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset>>,

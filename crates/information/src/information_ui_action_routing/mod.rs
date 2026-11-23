@@ -41,7 +41,12 @@ pub(super) struct InformationActionParams<'w, 's> {
     ui_nodes: Query<'w, 's, (Entity, &'static UiDocumentOwner, &'static UiNodeId)>,
     document_members: Query<'w, 's, &'static UiDocumentMembers>,
     type_list_filters: Query<'w, 's, (&'static UiNodeId, &'static mut TypeListFilter)>,
-    selected_catalogue: Res<'w, SelectedCatalogueEntry>,
+    selected_catalogue: Query<
+        'w,
+        's,
+        &'static SelectedCatalogueEntry,
+        With<openzt2_interface_state::ui::ui_document_lifecycle_contracts::InGameUiOwner>,
+    >,
     inspectables: Query<'w, 's, &'static Inspectable>,
     zoopedia_pages: Query<'w, 's, (&'static mut ZoopediaPage, &'static mut ZoopediaHistory)>,
     document_children: Query<'w, 's, &'static Children>,
@@ -151,7 +156,7 @@ pub(super) fn route_authored_information_actions_from_activated_ui_nodes(
                             source_document_entity: owner.0,
                             source_lifecycle_owner_entity: lifecycle_owner.parent(),
                             selected_world_entity: selection.selected_entity.subject(),
-                            selected_catalogue_entry: &selected_catalogue,
+                            selected_catalogue_entry: selected_catalogue.get(lifecycle_owner.parent()).ok(),
                             world_definitions: active_world_definitions
                                 .get(&world_definition_assets),
                             inspectable_world_entities: &inspectables,

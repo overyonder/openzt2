@@ -23,20 +23,20 @@ use super::catalogue_entry_availability::{
     catalogue_entry_can_be_researched, catalogue_entry_is_available,
 };
 use super::research_types::{
-    ResearchProject, ResearchProjectAvailability, ResearchPurchaseState, WorldResearchItems,
+    ResearchItemPayments, ResearchProject, ResearchProjectAvailability, WorldResearchItems,
 };
 use super::unlock_types::UnlockedCatalogueDefinitionSet;
 
 pub(super) fn project_selected_catalogue_research_panels(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
-    selected: Res<SelectedCatalogueEntry>,
+    selected: Single<&SelectedCatalogueEntry>,
     research: Query<(
         &ResearchProjectAvailability,
-        &ResearchPurchaseState,
+        Has<ResearchItemPayments>,
         Has<ResearchProject>,
     )>,
-    unlocks: Res<UnlockedCatalogueDefinitionSet>,
+    unlocks: Single<&UnlockedCatalogueDefinitionSet>,
     active_world: Query<Entity, (With<WorldRoot>, With<WorldLoadCompleted>)>,
     roots: Query<
         (
@@ -50,6 +50,8 @@ pub(super) fn project_selected_catalogue_research_panels(
     mut buttons: Query<(&mut UiSelected, &mut UiInteractionEnabled), With<UiResearchActions>>,
     mut panels: Query<(&UiVisibleBinding, &mut Visibility)>,
 ) {
+    let selected = selected.into_inner();
+    let unlocks = unlocks.into_inner();
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };
@@ -88,7 +90,7 @@ pub(super) fn project_selected_catalogue_research_panels(
         .and_then(|id| definitions.research_for_definition(id))
         .and_then(|id| items?.definitions.get(&id))
         .and_then(|&entity| research.get(entity).ok())
-        .is_some_and(|(_, purchase, active)| active || *purchase != ResearchPurchaseState::Idle);
+        .is_some_and(|(_, pending, active)| active || pending);
     for (mut selected, mut enabled) in &mut buttons {
         // Rejected payments and catalogue changes must release the sticky toggle.
         selected.set_if_neq(UiSelected(started));
@@ -111,7 +113,7 @@ pub(super) fn project_selected_catalogue_research_panels(
 }
 
 pub(super) fn project_selected_catalogue_research_progress(
-    selected: Res<SelectedCatalogueEntry>,
+    selected: Single<&SelectedCatalogueEntry>,
     world_items: Query<(Entity, &WorldResearchItems)>,
     active_world: Query<Entity, (With<WorldRoot>, With<WorldLoadCompleted>)>,
     projects: Query<&ResearchProject>,
@@ -123,6 +125,7 @@ pub(super) fn project_selected_catalogue_research_progress(
         Option<&mut UiInteractionEnabled>,
     )>,
 ) {
+    let selected = selected.into_inner();
     let project = selected.0.and_then(|selected| {
         let (_, items) = world_items.get(active_world.single().ok()?).ok()?;
         items

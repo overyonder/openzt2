@@ -7,9 +7,6 @@ pub(super) struct EntityEditorDataRootSurface;
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct InformationViewClass(pub(super) InformationViewCategory);
 
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct InformationViewClassResolved;
-
 /// Visibility policy for the ten authored world-view categories.
 #[derive(Resource, Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct InformationViewFilters([bool; 10]);

@@ -87,6 +87,9 @@ impl BehaviorSnapshotCapture<'_, '_> {
                                 .navigation_request_ids()
                                 .contains(&Some(request))
                         })
+                        || nav
+                            .action_navigation_requests()
+                            .any(|candidate| candidate == request)
                 };
                 let mut pending_results = Vec::new();
                 for arrival in arrivals
@@ -410,7 +413,7 @@ fn capture_owned_navigation(
         .filter(|pending| {
             actor
                 .instruction
-                .is_some_and(|instruction| pending.owns(task, instruction, task.target))
+                .is_some_and(|instruction| pending.owns(task, instruction, Some(pending.target)))
         })
         .map(|pending| -> Result<_, WorldSnapshotPersistenceFailure> {
             Ok(BehaviorNavigationCompletionSnapshot {
@@ -444,6 +447,36 @@ fn capture_owned_navigation(
             })
         })
         .transpose()?;
+    let follow = actor
+        .following
+        .filter(|state| {
+            actor
+                .instruction
+                .is_some_and(|step| step.is_current(task) && state.instruction == step.id())
+        })
+        .map(|state| -> Result<_, WorldSnapshotPersistenceFailure> {
+            Ok(super::behavior_snapshot_types::BehaviorFollowSnapshot {
+                target: reference(state.target)?,
+                until_tick: state.until_tick,
+                request_id: state.request_id,
+            })
+        })
+        .transpose()?;
+    let spline = actor
+        .spline
+        .filter(|state| {
+            actor
+                .instruction
+                .is_some_and(|step| step.is_current(task) && state.instruction == step.id())
+        })
+        .map(|state| -> Result<_, WorldSnapshotPersistenceFailure> {
+            Ok(super::behavior_snapshot_types::BehaviorSplineDockSnapshot {
+                target: reference(state.target)?,
+                phase: state.phase,
+                owns_disabled_collider: state.owns_disabled_collider,
+            })
+        })
+        .transpose()?;
     let owns = |request| {
         move_completion
             .as_ref()
@@ -457,6 +490,12 @@ fn capture_owned_navigation(
                     .navigation_request_ids()
                     .contains(&Some(request))
             })
+            || follow
+                .as_ref()
+                .is_some_and(|pending| pending.request_id == request)
+            || spline
+                .as_ref()
+                .is_some_and(|pending| pending.phase.request() == Some(request))
     };
     let destination = actor
         .destination
@@ -509,6 +548,8 @@ fn capture_owned_navigation(
         move_completion,
         docking_completion,
         pursuit,
+        follow,
+        spline,
         pending_results: Vec::new(),
     }))
 }

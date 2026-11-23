@@ -33,18 +33,18 @@ pub(super) fn instantiate_selected_scenario_and_authored_objectives(
     mut commands: Commands,
     assets: Res<Assets<WorldScenarioDocumentAsset>>,
     scenarios: Res<WorldScenarios>,
-    clock: Res<ZooClock>,
     mut roots: Query<
         (
             Entity,
             &WorldRoot,
+            &ZooClock,
             Option<&SelectedWorldDocumentHandles>,
             &mut PersistentIdAllocator,
         ),
         (With<WorldLoadCompleted>, Without<ActiveScenarioSession>),
     >,
 ) {
-    for (root, world, saved_handles, mut allocator) in &mut roots {
+    for (root, world, clock, saved_handles, mut allocator) in &mut roots {
         let Some(view) = scenarios.get(&assets).and_then(|view| {
             saved_handles.map_or(Some(view), |handles| view.with_document(&handles.start))
         }) else {
@@ -80,16 +80,15 @@ pub(super) fn instantiate_selected_scenario_and_authored_objectives(
 
 pub(super) fn initialize_scenario_challenge_random_number_generator(
     mut commands: Commands,
-    seed: Res<ZooSeed>,
     roots: Query<
-        Entity,
+        (Entity, &ZooSeed),
         (
             With<WorldLoadCompleted>,
             Without<ScenarioChallengeSelectionRandomNumberGenerator>,
         ),
     >,
 ) {
-    for root in &roots {
+    for (root, seed) in &roots {
         commands
             .entity(root)
             .insert(ScenarioChallengeSelectionRandomNumberGenerator::create_from_zoo_seed(*seed));

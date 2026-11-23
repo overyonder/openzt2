@@ -18,7 +18,9 @@ use openzt2_zoo_state::construction::construction_interaction_types::PlacementFa
 use openzt2_zoo_state::construction::construction_interaction_types::PlacementValidity;
 use openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::ConstructionTool;
 use openzt2_world_state::animation_graph::animation_graph_playback_message_types::AnimationClipPlaybackRequest;
+use openzt2_world_state::animation_graph::animation_graph_playback_state_types::AnimationGraphPlaybackState;
 use openzt2_world_state::animation_graph::animation_presentation_relationship_types::AnimationPresentationOwner;
+use openzt2_world_state::animation_graph::model_animation_asset_binding_types::ModelAnimationAssetLibrary;
 use openzt2_world_state::animation_graph::model_animation_asset_binding_types::ModelAnimationAttachmentResolved;
 use openzt2_world_state::animation_graph::model_animation_asset_binding_types::PendingModelAnimationAssets;
 use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackController;
@@ -51,7 +53,11 @@ pub(super) fn create_active_object_placement_preview(
     cursors: Query<(&ConstructionCursor, Option<&ObjectPlacementPreviewRequest>)>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
-    previews: Query<(Entity, &ConstructionPreview)>,
+    mut previews: Query<(
+        Entity,
+        &mut ConstructionPreview,
+        Option<&PlacedObjectRelocationSource>,
+    )>,
     roots: Query<Entity, With<WorldRoot>>,
     relocating: Query<
         (
@@ -74,14 +80,28 @@ pub(super) fn create_active_object_placement_preview(
         }
         _ => return,
     };
-    if previews
+    let relocation = relocating
         .iter()
-        .any(|(_, preview)| preview.definition == definition)
-    {
+        .find(|(_, placeable, _, _)| placeable.definition == definition);
+    let relocation_source = relocation.map(|(entity, ..)| entity);
+    if let Some((_, mut preview, _)) = previews.iter_mut().find(|(_, preview, source)| {
+        preview.definition == definition && source.map(|source| source.0) == relocation_source
+    }) {
+        if let Some((source, _, _, Some(rotation))) = relocation {
+            if let Some(placeable) = active_definitions
+                .get(&definitions)
+                .and_then(|catalogue| resolve_object_placeable_definition(catalogue, definition))
+            {
+                super::object_placement_preview_rotation::rotate_object_placement_transform_by_authored_steps(
+                    &mut preview.transform, placeable, i32::from(rotation.0),
+                );
+                commands.entity(source).remove::<PlacementRotationRequest>();
+            }
+        }
         return;
     }
     let mut retired_stale_preview = false;
-    for (entity, _) in &previews {
+    for (entity, ..) in &previews {
         commands.entity(entity).despawn();
         retired_stale_preview = true;
     }
@@ -102,15 +122,16 @@ pub(super) fn create_active_object_placement_preview(
     let Some(prefab) = preview_scene.and_then(|scene| catalogue.scene(scene)) else {
         return;
     };
-    let relocation = relocating
-        .iter()
-        .find(|(_, placeable, _, _)| placeable.definition == definition);
     let mut transform =
         Transform::from_translation(cursor.world + Vec3::Y * object.terrain_fit_height_offset_m);
     if let Some((_, _, source, rotation)) = relocation {
         transform.rotation = source.rotation;
-        if let Some(rotation) = rotation {
-            transform.rotate_y(f32::from(rotation.0) * core::f32::consts::FRAC_PI_4);
+        if let (Some(rotation), Some(placeable)) = (rotation, placeable) {
+            super::object_placement_preview_rotation::rotate_object_placement_transform_by_authored_steps(
+                &mut transform,
+                placeable,
+                i32::from(rotation.0),
+            );
         }
     }
     let Some(transform) = placeable
@@ -155,26 +176,24 @@ pub(super) fn create_active_object_placement_preview(
         Visibility::Inherited,
         ChildOf(preview),
     ));
-    if let Some((source, ..)) = relocation {
+    if let Some((source, _, _, rotation)) = relocation {
         commands
             .entity(preview)
             .insert(PlacedObjectRelocationSource(source));
+        if rotation.is_some() {
+            commands.entity(source).remove::<PlacementRotationRequest>();
+        }
     }
 }
+
+#[derive(Component)]
+pub(super) struct PendingAnimalPreviewAnimation;
 
 pub(super) fn hydrate_object_placement_preview_prefab_render_tree(
     mut commands: Commands,
     prefabs: Res<Assets<ScenePrefabAsset>>,
-    asset_server: Res<AssetServer>,
-    species_assets: Option<Res<Assets<SpeciesAsset>>>,
-    species_index: Option<Res<SpeciesAssets>>,
     previews: Query<
-        (
-            Entity,
-            &ConstructionPreview,
-            &ObjectPlacementPrefabSource,
-            &Children,
-        ),
+        (Entity, &ObjectPlacementPrefabSource, &Children),
         (
             With<ConstructionPreview>,
             Without<ObjectPlacementPreviewPrefabHydrated>,
@@ -182,11 +201,7 @@ pub(super) fn hydrate_object_placement_preview_prefab_render_tree(
     >,
     presentations: Query<(), With<ObjectPlacementPreviewModelPresentation>>,
 ) {
-    let species = species_index
-        .as_ref()
-        .zip(species_assets.as_ref())
-        .and_then(|(index, assets)| index.get(assets));
-    for (entity, preview, source, children) in &previews {
+    for (entity, source, children) in &previews {
         let Some(prefab) = prefabs.get(&source.0) else {
             continue;
         };
@@ -196,61 +211,91 @@ pub(super) fn hydrate_object_placement_preview_prefab_render_tree(
         };
         let (_, renderables, _) =
             spawn_prefab_render_tree(&mut commands, prefab, presentation, false);
-        for (renderable, authored) in renderables.into_iter().zip(
-            prefab
-                .canonical_scene_prefab_document()
-                .entities
-                .iter()
-                .flat_map(|row| &row.renderables),
-        ) {
+        for renderable in renderables {
             commands.entity(renderable).insert((
                 ObjectPlacementPreviewRenderable,
                 PrefabModelTint(Color::WHITE),
+                PendingAnimalPreviewAnimation,
             ));
-            // Native model scenes do not embed the animal's BFM. Attach its
-            // canonical initial pose before the animationless glTF can settle.
-            let matched_variant = species.and_then(|species| {
-                species_variant_for_placement_preview_model(
-                    species,
-                    preview.definition,
-                    authored.model,
-                )
-            });
-            let requested_animation =
-                species.zip(matched_variant).and_then(|(species, variant)| {
-                    species.load_variant_animation_set(&asset_server, variant)
-                });
-            // This attempt is not retried after the render tree is hydrated.
-            info!(target: "openzt2_verification", preview = ?entity,
-                definition = ?preview.definition, authored_model = ?authored.model,
-                model_path = ?prefab.model_asset_path(authored.model),
-                species_available = species.is_some(),
-                canonical_definition = species.is_some_and(|species| species.find(preview.definition).is_some() || species.find_variant(preview.definition).is_some()),
-                matched_variant = ?matched_variant.map(|variant| variant.id),
-                canonical_model = ?matched_variant.map(|variant| AssetId::from_virtual_path(&variant.model)),
-                initial_clip = ?matched_variant.and_then(|variant| variant.initial_animation_clip_asset_key.as_deref()),
-                requested_bfm = ?requested_animation.as_ref().and_then(|handle| asset_server.get_path(handle.id())),
-                "placement preview hydration animation attempt");
-            if let Some((variant, animation)) = matched_variant.zip(requested_animation) {
-                commands
-                    .entity(presentation)
-                    .insert(AnimationPresentationOwner {
-                        gameplay_entity: entity,
-                    });
-                commands
-                    .entity(renderable)
-                    .insert(PendingModelAnimationAssets {
-                        pending_model_animation_set_asset_handles: vec![animation]
-                            .into_boxed_slice(),
-                        requested_initial_animation_clip_asset_key: variant
-                            .initial_animation_clip_asset_key
-                            .clone(),
-                    });
-            }
         }
         commands
             .entity(entity)
             .insert(ObjectPlacementPreviewPrefabHydrated);
+    }
+}
+
+pub(super) fn attach_pending_animal_placement_preview_animations(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    species_assets: Option<Res<Assets<SpeciesAsset>>>,
+    species_index: Option<Res<SpeciesAssets>>,
+    parents: Query<&ChildOf>,
+    presentations: Query<&ChildOf, With<ObjectPlacementPreviewModelPresentation>>,
+    previews: Query<&ConstructionPreview>,
+    mut renderables: Query<(
+        Entity,
+        &PrefabModel,
+        Ref<PendingAnimalPreviewAnimation>,
+        Option<&mut PendingModelAnimationAssets>,
+    )>,
+) {
+    let (Some(species_index), Some(species_assets)) = (species_index, species_assets) else {
+        return;
+    };
+    let Some(species) = species_index.get(&species_assets) else {
+        return;
+    };
+    let catalogue_changed = species_index.is_changed() || species_assets.is_changed();
+    for (entity, model, pending, attachment) in &mut renderables {
+        if !pending.is_added() && !catalogue_changed {
+            continue;
+        }
+        let Some((presentation, owner)) =
+            parents
+                .iter_ancestors::<ChildOf>(entity)
+                .find_map(|ancestor| {
+                    presentations
+                        .get(ancestor)
+                        .ok()
+                        .map(|parent| (ancestor, parent.parent()))
+                })
+        else {
+            continue;
+        };
+        let Ok(preview) = previews.get(owner) else {
+            continue;
+        };
+        let Some(variant) =
+            species_variant_for_placement_preview_model(species, preview.definition, model.model)
+        else {
+            continue;
+        };
+        let Some(animation) = species.load_variant_animation_set(&asset_server, variant) else {
+            continue;
+        };
+        let assets = PendingModelAnimationAssets {
+            pending_model_animation_set_asset_handles: vec![animation].into_boxed_slice(),
+            requested_initial_animation_clip_asset_key: variant
+                .initial_animation_clip_asset_key
+                .clone(),
+        };
+        if let Some(mut attachment) = attachment {
+            *attachment = assets;
+        } else {
+            commands.entity(entity).insert(assets);
+        }
+        commands
+            .entity(presentation)
+            .insert_if_new(AnimationPresentationOwner {
+                gameplay_entity: owner,
+            });
+        commands.entity(entity).remove::<(
+            PendingAnimalPreviewAnimation,
+            ModelAnimationAttachmentResolved,
+            AnimationPlaybackController,
+            AnimationGraphPlaybackState,
+            ModelAnimationAssetLibrary,
+        )>();
     }
 }
 

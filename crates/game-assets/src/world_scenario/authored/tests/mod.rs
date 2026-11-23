@@ -9,7 +9,7 @@ fn manager_interval_and_always_run_action_keep_separate_owner() {
         AssetPath::new("scenario/goals/freeform.xml"),
         br#"<ZTScenarioMgr interval="4"><alwaysrunaction><BFScenarioScriptAction script="scripts/alwaysrun.lua" entry="exec"/></alwaysrunaction><children><BFScenarioRule name="monitor"><evaluate><BFScenarioScriptAction script="scenario/scripts/freeform.lua" entry="monitor"/></evaluate></BFScenarioRule></children></ZTScenarioMgr>"#,
     ).unwrap();
-    let document = lower_documents(&[&source], &[], &BTreeMap::new(), None).unwrap();
+    let (document, _) = lower_documents(&[&source], &[], &BTreeMap::new(), None).unwrap();
     let scenario = &document.scenarios[0];
     assert_eq!(scenario.evaluation_interval_seconds, 4.0);
     let always_run = document
@@ -34,7 +34,7 @@ fn nested_group_completion_keeps_both_parallel_rules_and_its_callback() {
         </children></BFScenarioGroup></children></ZTScenarioMgr>"#,
     )
     .expect("valid scenario source");
-    let document = lower_documents(&[&source], &[], &BTreeMap::new(), None).unwrap();
+    let (document, _) = lower_documents(&[&source], &[], &BTreeMap::new(), None).unwrap();
     let scenario = &document.scenarios[0];
     let animals = &scenario.objective_groups[0];
     assert_eq!(
@@ -67,7 +67,7 @@ fn scenario_briefing_and_objectives_use_canonical_localization_keys() {
         </children></ZTScenarioMgr>"#,
     )
     .expect("valid scenario source");
-    let document =
+    let (document, _) =
         lower_documents(&[&source], &[], &BTreeMap::new(), None).expect("valid scenario");
     let scenario = &document.scenarios[0];
     assert_eq!(
@@ -99,7 +99,7 @@ fn scenario_overview_uses_group_instructions_before_manager_title() {
         </children></ZTScenarioMgr>"#,
     )
     .expect("valid scenario source");
-    let document =
+    let (document, _) =
         lower_documents(&[&source], &[], &BTreeMap::new(), None).expect("valid scenario");
     assert_eq!(
         document.scenarios[0].description_key,
@@ -120,14 +120,16 @@ fn named_hidden_rules_keep_their_script_identity_and_chain() {
         </children></BFScenarioGroup></children></ZTScenarioMgr>"#,
     )
     .expect("valid scenario source");
-    let document =
+    let (document, authored) =
         lower_documents(&[&source], &[], &BTreeMap::new(), None).expect("valid scenario");
     let rules = &document.scenarios[0].objectives;
     assert_eq!(rules[0].name, Some(AssetId::from_key("offer")));
     assert_eq!(rules[1].name, Some(AssetId::from_key("photogoal")));
     assert_eq!(rules[2].name, None);
     assert!(rules[0].hidden && rules[1].hidden);
-    assert_eq!(rules[1].prerequisite_objectives, vec![rules[0].id]);
+    let group = &document.scenarios[0].objective_groups[0];
+    assert!(authored.scenario_nodes[&group.id].chain);
+    assert_eq!(group.members, [rules[0].id, rules[1].id, rules[2].id]);
     assert_eq!(document.scenario_script_bindings[0].objective, rules[0].id);
     assert_ne!(rules[0].id, rules[0].name.expect("named rule"));
 }
@@ -152,16 +154,14 @@ fn children_wrapper_preserves_manager_sequencing_between_groups() {
             source.as_bytes(),
         )
         .expect("valid scenario source");
-        let document =
+        let (document, authored) =
             lower_documents(&[&source], &[], &BTreeMap::new(), None).expect("valid scenario");
         let rules = &document.scenarios[0].objectives;
-        assert!(rules[0].prerequisite_objectives.is_empty());
-        assert_eq!(rules[1].prerequisite_objectives, [rules[0].id]);
-        assert_eq!(
-            rules[2].prerequisite_objectives,
-            if chain { vec![rules[1].id] } else { vec![] }
-        );
-        assert_eq!(rules[3].prerequisite_objectives, [rules[2].id]);
+        let groups = &document.scenarios[0].objective_groups;
+        assert_eq!(groups[0].members, [rules[0].id, rules[1].id]);
+        assert_eq!(groups[1].members, [rules[2].id, rules[3].id]);
+        assert_eq!(groups[2].members, [groups[0].id, groups[1].id]);
+        assert_eq!(authored.scenario_nodes[&groups[2].id].chain, chain);
         assert_eq!(rules[1].name, rules[3].name);
         assert_ne!(rules[1].id, rules[3].id);
     }

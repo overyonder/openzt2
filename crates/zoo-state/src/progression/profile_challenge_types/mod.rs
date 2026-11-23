@@ -1,11 +1,11 @@
 use bevy::prelude::*;
 
 /// Zoo-local cumulative births carrying the canonical endangered marker.
-#[derive(Resource, Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct TotalEndangeredAnimalBirthCount(pub u32);
 
 /// Cumulative count of animals released to the wild in the current zoo.
-#[derive(Resource, Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct TotalAnimalsReleasedCount(pub u32);
 
 /// Persistent profile-scoped challenge completion totals.

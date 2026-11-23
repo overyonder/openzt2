@@ -85,27 +85,3 @@ pub(super) fn route_authored_immersive_mode_entry_actions_from_activated_ui_node
         }
     }
 }
-
-pub(super) fn retire_inactive_first_person_training(
-    mut commands: Commands,
-    activities: Query<(Entity, &FirstPersonTraining, Option<&ActiveImmersiveMode>)>,
-    animals: Query<
-        (),
-        (
-            With<openzt2_zoo_state::animal_lifecycle::types::Animal>,
-            Without<openzt2_zoo_state::animal_health::types::Dead>,
-        ),
-    >,
-) {
-    for (entity, activity, mode) in &activities {
-        if mode.is_none_or(|mode| {
-            !matches!(
-                mode.mode,
-                ImmersiveMode::FirstPerson | ImmersiveMode::SuperStaff
-            )
-        }) || !animals.contains(activity.subject)
-        {
-            commands.entity(entity).remove::<FirstPersonTraining>();
-        }
-    }
-}

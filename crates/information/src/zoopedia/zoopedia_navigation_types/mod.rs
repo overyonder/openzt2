@@ -1,6 +1,6 @@
 use bevy::prelude::*;
-use openzt2_game_data::ui_document::document::UiDocumentRole;
 use openzt2_game_data::AssetId;
+use openzt2_game_data::ui_document::document::UiDocumentRole;
 
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
 use openzt2_interface_state::ui::ui_document_lifecycle_contracts::ShowUiRole;
@@ -11,12 +11,15 @@ use openzt2_interface_state::information::entity_selection_types::Inspectable;
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct PendingZoopediaEntry(pub(crate) AssetId);
 
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ZoopediaRootEntry(pub(super) AssetId);
+
 pub(crate) struct ZoopediaNavigationActionContext<'a, 'world, 'state> {
     pub(crate) source_document_role: &'a UiDocumentRole,
     pub(crate) source_document_entity: Entity,
     pub(crate) source_lifecycle_owner_entity: Entity,
     pub(crate) selected_world_entity: Option<Entity>,
-    pub(crate) selected_catalogue_entry: &'a SelectedCatalogueEntry,
+    pub(crate) selected_catalogue_entry: Option<&'a SelectedCatalogueEntry>,
     pub(crate) world_definitions: Option<WorldDefinitionsView<'a>>,
     pub(crate) inspectable_world_entities: &'a Query<'world, 'state, &'static Inspectable>,
     pub(crate) document_children: &'a Query<'world, 'state, &'static Children>,

@@ -1,12 +1,18 @@
 //! One canonical world-scenario document and its demand-loaded dependencies.
 
-use bevy::prelude::*;
+use bevy::{
+    asset::{UntypedAssetId, VisitAssetDependencies},
+    prelude::*,
+};
 use openzt2_game_data::{
-    world_scenario::{PhotoChallengeScriptBinding, ScenarioScriptBinding, WorldScenarioDocument},
     AssetId,
+    world_scenario::{PhotoChallengeScriptBinding, ScenarioScriptBinding, WorldScenarioDocument},
 };
 
-use crate::{lua_script::lua_script_asset_loading::LuaScriptAsset, scene_prefab::ScenePrefabAsset};
+use crate::{
+    lua_script::lua_script_asset_loading::LuaScriptAsset, scene_prefab::ScenePrefabAsset,
+    terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset,
+};
 
 #[derive(Debug)]
 pub(super) struct DemandLoadedAssetHandle<T: Asset> {
@@ -20,16 +26,40 @@ pub struct DemandLoadedAssetPath {
     pub path: Box<str>,
 }
 
-#[derive(Asset, TypePath, Debug)]
+#[derive(TypePath, Debug)]
 pub struct WorldScenarioDocumentAsset {
+    pub authored: super::authored_world_scenario_state::AuthoredWorldScenarioState,
     pub document: WorldScenarioDocument,
     pub(super) starting_zoos: Box<[DemandLoadedAssetPath]>,
     pub(super) campaign_scenarios: Box<[DemandLoadedAssetHandle<WorldScenarioDocumentAsset>]>,
     pub(super) terrains: Box<[DemandLoadedAssetPath]>,
+    pub(super) restored_terrain: Option<DemandLoadedAssetHandle<TerrainAsset>>,
     pub(super) scenes: Box<[DemandLoadedAssetHandle<ScenePrefabAsset>]>,
     pub(super) textures: Box<[DemandLoadedAssetHandle<Image>]>,
     pub(super) scripts: Box<[(ScenarioScriptBinding, String, Handle<LuaScriptAsset>)]>,
     pub(super) photo_scripts: Box<[(PhotoChallengeScriptBinding, String, Handle<LuaScriptAsset>)]>,
+}
+
+impl Asset for WorldScenarioDocumentAsset {}
+
+impl VisitAssetDependencies for WorldScenarioDocumentAsset {
+    fn visit_dependencies(&self, visit: &mut impl FnMut(UntypedAssetId)) {
+        if let Some(terrain) = &self.restored_terrain {
+            visit(terrain.handle.id().untyped());
+        }
+        for dependency in &self.scenes {
+            visit(dependency.handle.id().untyped());
+        }
+        for dependency in &self.textures {
+            visit(dependency.handle.id().untyped());
+        }
+        for (_, _, script) in &self.scripts {
+            visit(script.id().untyped());
+        }
+        for (_, _, script) in &self.photo_scripts {
+            visit(script.id().untyped());
+        }
+    }
 }
 
 impl WorldScenarioDocumentAsset {
@@ -37,9 +67,11 @@ impl WorldScenarioDocumentAsset {
     pub fn from_test_document(document: WorldScenarioDocument) -> Self {
         Self {
             document,
+            authored: Default::default(),
             starting_zoos: Box::new([]),
             campaign_scenarios: Box::new([]),
             terrains: Box::new([]),
+            restored_terrain: None,
             scenes: Box::new([]),
             textures: Box::new([]),
             scripts: Box::new([]),
@@ -73,6 +105,13 @@ impl WorldScenarioDocumentAsset {
             .binary_search_by_key(&id, |candidate| candidate.id)
             .ok()
             .map(|index| self.terrains[index].path.as_ref())
+    }
+
+    pub fn restored_terrain(&self, id: AssetId) -> Option<&Handle<TerrainAsset>> {
+        self.restored_terrain
+            .as_ref()
+            .filter(|terrain| terrain.id == id)
+            .map(|terrain| &terrain.handle)
     }
 
     pub fn scene(&self, id: AssetId) -> Option<&Handle<ScenePrefabAsset>> {

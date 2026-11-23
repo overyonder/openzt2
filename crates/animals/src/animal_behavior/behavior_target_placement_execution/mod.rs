@@ -33,7 +33,7 @@ use openzt2_zoo_state::{
 use super::behavior_target_placement_types::{
     BehaviorPlacementDelivering, BehaviorPlacementOf, BehaviorPlacementPutDown,
     BehaviorPlacementRecipient, BehaviorPlacementResult, BehaviorPlacementSiting,
-    BehaviorPlacementTravelSite, BehaviorPlacements, BehaviorTargetPlacement,
+    BehaviorPlacements, BehaviorTargetPlacement, BehaviorTravelPointOf,
     BehaviorTargetPlacementSite,
 };
 
@@ -187,9 +187,6 @@ pub(super) fn prepare_and_finish_behavior_target_placements(
             }
             commands.entity(operation).try_despawn();
         } else if delivering.contains(operation) {
-            commands
-                .entity(actor)
-                .remove::<BehaviorPlacementTravelSite>();
             task.interaction_slot = None;
             commands
                 .entity(operation)
@@ -217,16 +214,13 @@ pub(super) fn prepare_and_finish_behavior_target_placements(
                 commands.entity(operation).try_despawn();
                 continue;
             };
-            let point = commands
-                .spawn((
-                    site.transform,
-                    GlobalTransform::from(site.transform),
-                    ChildOf(operation),
-                ))
-                .id();
-            commands
-                .entity(actor)
-                .insert(BehaviorPlacementTravelSite { operation, point });
+            commands.spawn((
+                site.transform,
+                GlobalTransform::from(site.transform),
+                ChildOf(operation),
+                BehaviorTravelPointOf(operation),
+            ));
+            commands.entity(operation).insert(BehaviorPlacementDelivering);
             task.interaction_slot = None;
             instruction.enter_set(
                 actor,
@@ -240,9 +234,6 @@ pub(super) fn prepare_and_finish_behavior_target_placements(
                 },
                 &mut commands,
             );
-            commands
-                .entity(operation)
-                .insert(BehaviorPlacementDelivering);
         }
     }
 

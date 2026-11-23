@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use crate::source_document::{
     ordered_source_document_types::OrderedSourceDocumentSpan,
     ui::{
-        model::{SourceUiEvent, SourceUiNode, SourceUiWidgetData},
+        model::{SourceUiEvent, SourceUiNode, SourceUiTimedEvent, SourceUiWidgetData},
         parser::SourceUiDocument,
     },
 };
@@ -47,11 +47,11 @@ pub(super) fn resolve_application_root_cursor_and_named_event_semantics(
     }
 
     for source in sources.values_mut() {
+        expand_named_events_in_ui_source_node(&mut source.root, &named_events, &mut Vec::new())
+            .map_err(|message| application_root_gap(span, message))?;
         if let Some(directory) = cursor_directory.as_deref() {
             resolve_relative_cursor_paths_in_ui_source_node(&mut source.root, directory);
         }
-        expand_named_events_in_ui_source_node(&mut source.root, &named_events, &mut Vec::new())
-            .map_err(|message| application_root_gap(span, message))?;
         source.cursor_directory = None;
         source.named_event_lists.clear();
     }
@@ -93,6 +93,14 @@ fn resolve_relative_cursor_paths_in_ui_source_node(node: &mut SourceUiNode, dire
     for event in node.events.iter_mut().flat_map(|block| &mut block.events) {
         resolve_relative_cursor_path_in_ui_source_event(event, directory);
     }
+    for hotkey in &mut node.hotkeys {
+        resolve_relative_cursor_path_in_ui_source_event(&mut hotkey.event, directory);
+    }
+    if let SourceUiWidgetData::TimedEvents(events) = &mut node.widget {
+        for timed in events {
+            resolve_relative_cursor_path_in_ui_source_event(&mut timed.event, directory);
+        }
+    }
     node.children.iter_mut().for_each(|child| {
         resolve_relative_cursor_paths_in_ui_source_node(child, directory);
     });
@@ -125,6 +133,28 @@ fn expand_named_events_in_ui_source_node(
             .into_iter()
             .flatten()
             .collect();
+    }
+    let hotkeys = std::mem::take(&mut node.hotkeys);
+    for hotkey in hotkeys {
+        let events = expand_named_ui_source_event(hotkey.event.clone(), registry, stack)?;
+        for event in events {
+            let mut binding = hotkey.clone();
+            binding.event = event;
+            node.hotkeys.push(binding);
+        }
+    }
+    if let SourceUiWidgetData::TimedEvents(records) = &mut node.widget {
+        for timed in std::mem::take(records) {
+            let events = expand_named_ui_source_event(timed.event, registry, stack)?;
+            let mut delay_seconds = timed.delay_seconds;
+            for event in events {
+                records.push(SourceUiTimedEvent {
+                    delay_seconds,
+                    event,
+                });
+                delay_seconds = 0.0;
+            }
+        }
     }
     node.children
         .iter_mut()
@@ -159,16 +189,18 @@ fn expand_named_ui_source_event(
         stack.pop();
         return Ok(expanded);
     }
-    if let Some(child) = event.child.take() {
-        let mut expanded = expand_named_ui_source_event(*child, registry, stack)?;
-        if expanded.len() != 1 {
-            return Err("a nested named UI event expanded to more than one child event".to_owned());
-        }
-        if let Some(child) = expanded.pop() {
-            event.set_child(child);
-        }
-    }
-    Ok(vec![event])
+    let Some(child) = event.child.take() else {
+        return Ok(vec![event]);
+    };
+    let expanded = expand_named_ui_source_event(*child, registry, stack)?;
+    Ok(expanded
+        .into_iter()
+        .map(|child| {
+            let mut receiver = event.clone();
+            receiver.set_child(child);
+            receiver
+        })
+        .collect())
 }
 
 fn application_root_gap(span: OrderedSourceDocumentSpan, message: String) -> UiSourceDocumentGap {

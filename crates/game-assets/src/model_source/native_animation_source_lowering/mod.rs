@@ -15,31 +15,53 @@ use openzt2_game_data::animation::{
 use super::{
     animation::lower_blue_fang_clip, conversion_error::ConversionError,
     kf_animation::lower_netimmerse_kf_clip,
-    netimmerse_nif_source::document_source_types::NetImmerseNifDocument,
+    netimmerse_nif_source::{
+        block_payload::NetImmerseNifBlockPayload, document_source_types::NetImmerseNifDocument,
+    },
 };
+
+pub(crate) fn kf_sequence_label(sequence_index: usize) -> String {
+    format!("Sequence/{sequence_index}")
+}
 
 #[cfg_attr(feature = "tracing", tracing::instrument(skip_all))]
 pub(crate) fn lower_native_animation_source(
     path: &str,
     bytes: &[u8],
     text_keys: &[AuthoredAnimationTextKey],
-) -> anyhow::Result<(AnimationClip, AuthoredAnimationClipMetadata)> {
+) -> anyhow::Result<Vec<(usize, AnimationClip, AuthoredAnimationClipMetadata)>> {
     let extension = Path::new(path)
         .extension()
         .and_then(|extension| extension.to_str());
-    let (clip, metadata) = match extension {
+    let clips = match extension {
         Some(extension) if extension.eq_ignore_ascii_case("bf") => {
-            lower_blue_fang_clip(path, bytes, text_keys)?
+            let (clip, metadata) = lower_blue_fang_clip(path, bytes, text_keys)?;
+            vec![(0, clip, metadata)]
         }
         Some(extension) if extension.eq_ignore_ascii_case("kf") => {
             let document = NetImmerseNifDocument::parse(path.to_owned(), bytes)?;
-            lower_netimmerse_kf_clip(path, &document, text_keys)?
+            let mut clips = Vec::new();
+            for (index, &reference) in document.footer.root_block_references.iter().enumerate() {
+                if let Some(NetImmerseNifBlockPayload::NiControllerSequence(sequence)) =
+                    document.block(reference).map(|block| &block.payload)
+                {
+                    let (clip, metadata) =
+                        lower_netimmerse_kf_clip(path, &document, sequence, text_keys)?;
+                    clips.push((index, clip, metadata));
+                }
+            }
+            if clips.is_empty() {
+                return Err(
+                    ConversionError::InvalidSource("KF has no controller sequence root").into(),
+                );
+            }
+            clips
         }
         _ => return Err(ConversionError::InvalidSource("unsupported animation source").into()),
     };
-    if metadata
-        .authored_animation_text_keys
+    if clips
         .iter()
+        .flat_map(|(_, _, metadata)| &metadata.authored_animation_text_keys)
         .flat_map(|key| &key.animation_text_commands)
         .any(|command| {
             matches!(
@@ -53,7 +75,7 @@ pub(crate) fn lower_native_animation_source(
         )
         .into());
     }
-    Ok((clip, metadata))
+    Ok(clips)
 }
 
 pub(super) fn sample_root_motion(

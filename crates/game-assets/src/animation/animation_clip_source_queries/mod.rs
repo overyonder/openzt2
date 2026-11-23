@@ -30,12 +30,11 @@ impl AnimationClipSources<'_> {
         set: &AnimationSetAsset,
         key: &str,
     ) -> Option<Handle<AnimationClipSourceAsset>> {
-        if let Some(preloaded) = set.preloaded_clip_sources.get(key) {
-            return Some(preloaded.clone());
-        }
-        let reference = set.find_animation_clip_source_reference_by_asset_key(key)?;
-        self.server
-            .get_handle(AssetPath::parse(&reference.animation_clip_asset_path))
+        set.preloaded_clip_sources.get(key).cloned().or_else(|| {
+            let reference = set.find_animation_clip_source_reference_by_asset_key(key)?;
+            self.server
+                .get_handle(AssetPath::parse(&reference.animation_clip_asset_path))
+        })
     }
 
     pub fn request(
@@ -43,21 +42,16 @@ impl AnimationClipSources<'_> {
         set: &AnimationSetAsset,
         key: &str,
     ) -> Option<Handle<AnimationClipSourceAsset>> {
-        self.retained_handle(set, key).or_else(|| {
-            let reference = set.find_animation_clip_source_reference_by_asset_key(key)?;
-            Some(
-                self.server
-                    .load(reference.animation_clip_asset_path.clone()),
-            )
-        })
-    }
-
-    pub fn failed(&self, handle: &Handle<AnimationClipSourceAsset>) -> bool {
-        matches!(self.server.load_state(handle.id()), LoadState::Failed(_))
-    }
-
-    pub fn resolved(&self, handle: &Handle<AnimationClipSourceAsset>) -> bool {
-        self.sources.contains(handle.id())
+        if let Some(preloaded) = set.preloaded_clip_sources.get(key) {
+            return Some(preloaded.clone());
+        }
+        let reference = set.find_animation_clip_source_reference_by_asset_key(key)?;
+        let path = AssetPath::parse(&reference.animation_clip_asset_path);
+        Some(
+            self.server
+                .get_handle(path.clone())
+                .unwrap_or_else(|| self.server.load(path.into_owned())),
+        )
     }
 
     pub fn get<'a>(
@@ -71,17 +65,16 @@ impl AnimationClipSources<'_> {
                 duration_milliseconds: record.duration_milliseconds,
                 metadata: None,
                 policy: None,
-                graph: set.embedded_animation_graph.as_ref().and_then(|graph| {
-                    let index = set
-                        .animation_clips
-                        .iter()
-                        .position(|clip| clip.animation_clip_asset_key == key)?;
-                    Some((graph, AnimationNodeIndex::new(index + 1)))
-                }),
+                graph: set.embedded_animation_graph.as_ref().zip(record.graph_node),
             });
         }
         let reference = set.find_animation_clip_source_reference_by_asset_key(key)?;
-        let handle = self.retained_handle(set, key)?;
+        let handle = set.preloaded_clip_sources.get(key).cloned().or_else(|| {
+            self.server
+                .get_handle::<AnimationClipSourceAsset>(AssetPath::parse(
+                    &reference.animation_clip_asset_path,
+                ))
+        })?;
         let source = self.sources.get(handle.id())?;
         Some(LoadedAnimationClip {
             clip: &source.animation_clip_handle,
@@ -93,6 +86,14 @@ impl AnimationClipSources<'_> {
             policy: Some(&reference.playback_policy),
             graph: Some((&source.animation_graph, source.animation_node)),
         })
+    }
+
+    pub fn failed(&self, handle: &Handle<AnimationClipSourceAsset>) -> bool {
+        matches!(self.server.load_state(handle.id()), LoadState::Failed(_))
+    }
+
+    pub fn resolved(&self, handle: &Handle<AnimationClipSourceAsset>) -> bool {
+        self.sources.contains(handle.id())
     }
 }
 

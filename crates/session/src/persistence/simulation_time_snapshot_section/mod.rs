@@ -2,7 +2,7 @@ pub(super) mod original_saved_game_conversion;
 use bevy::{ecs::system::SystemParam, prelude::*};
 
 use openzt2_world_state::simulation_time::deterministic_random_stream::ZooSeed;
-use openzt2_world_state::simulation_time::simulation_clock_types::ZooCalendar;
+use openzt2_world_state::simulation_time::simulation_clock_types::{ZooCalendar, ZooDay, ZooMonth};
 use openzt2_world_state::simulation_time::simulation_clock_types::{ZooClock, ZooClockFraction};
 use openzt2_world_state::simulation_time::simulation_control_types::SimulationControl;
 
@@ -12,27 +12,38 @@ pub(super) const SIMULATION_TIME_SNAPSHOT_RECORD_BYTE_COUNT: u64 = 46;
 const LEGACY_SIMULATION_TIME_SNAPSHOT_RECORD_BYTE_COUNT: usize = 30;
 
 #[derive(SystemParam)]
-pub(super) struct SimulationTimeSnapshotSaveResources<'w> {
-    clock: Res<'w, ZooClock>,
-    calendar: Res<'w, ZooCalendar>,
-    control: Res<'w, SimulationControl>,
-    seed: Res<'w, ZooSeed>,
+pub(super) struct SimulationTimeSnapshotCapture<'w, 's> {
+    roots: Query<
+        'w,
+        's,
+        (
+            &'static ZooClock,
+            &'static ZooCalendar,
+            &'static SimulationControl,
+            &'static ZooSeed,
+        ),
+    >,
 }
 
 #[derive(SystemParam)]
-pub(super) struct SimulationTimeSnapshotLoadResources<'w> {
-    clock: Option<ResMut<'w, ZooClock>>,
-    calendar: Option<ResMut<'w, ZooCalendar>>,
-    control: Option<ResMut<'w, SimulationControl>>,
-    seed: Option<ResMut<'w, ZooSeed>>,
+pub(super) struct SimulationTimeSnapshotRestore<'w, 's> {
+    roots: Query<
+        'w,
+        's,
+        (
+            &'static mut ZooClock,
+            &'static mut ZooCalendar,
+            &'static mut SimulationControl,
+            &'static mut ZooSeed,
+            &'static mut ZooDay,
+            &'static mut ZooMonth,
+        ),
+    >,
 }
 
-impl SimulationTimeSnapshotLoadResources<'_> {
-    pub(super) fn is_initialized(&self) -> bool {
-        self.clock.is_some()
-            && self.calendar.is_some()
-            && self.control.is_some()
-            && self.seed.is_some()
+impl SimulationTimeSnapshotRestore<'_, '_> {
+    pub(super) fn is_initialized(&self, root: Entity) -> bool {
+        self.roots.contains(root)
     }
 }
 
@@ -44,15 +55,20 @@ pub(super) struct SimulationTimeSnapshotRecord {
     seed: ZooSeed,
 }
 
-impl SimulationTimeSnapshotSaveResources<'_> {
+impl SimulationTimeSnapshotCapture<'_, '_> {
     pub(super) fn capture_validated_simulation_time_snapshot_record(
         &self,
+        root: Entity,
     ) -> Result<SimulationTimeSnapshotRecord, WorldSnapshotPersistenceFailure> {
+        let (clock, calendar, control, seed) = self
+            .roots
+            .get(root)
+            .map_err(|_| WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference)?;
         SimulationTimeSnapshotRecord {
-            clock: *self.clock,
-            calendar: *self.calendar,
-            control: *self.control,
-            seed: *self.seed,
+            clock: *clock,
+            calendar: *calendar,
+            control: *control,
+            seed: *seed,
         }
         .validate_simulation_time_snapshot_record()
     }
@@ -88,22 +104,21 @@ impl SimulationTimeSnapshotRecord {
         bytes.extend_from_slice(&self.clock.fractional_tick.denominator().to_le_bytes());
     }
 
-    pub(super) fn apply_simulation_time_snapshot_record_to_live_resources(
+    pub(super) fn restore_simulation_time_snapshot(
         self,
-        resources: &mut SimulationTimeSnapshotLoadResources,
+        root: Entity,
+        time: &mut SimulationTimeSnapshotRestore,
     ) -> Result<(), WorldSnapshotPersistenceFailure> {
-        let (Some(clock), Some(calendar), Some(control), Some(seed)) = (
-            resources.clock.as_mut(),
-            resources.calendar.as_mut(),
-            resources.control.as_mut(),
-            resources.seed.as_mut(),
-        ) else {
-            return Err(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference);
-        };
-        **clock = self.clock;
-        **calendar = self.calendar;
-        **control = self.control;
-        **seed = self.seed;
+        let (mut clock, mut calendar, mut control, mut seed, mut day, mut month) = time
+            .roots
+            .get_mut(root)
+            .map_err(|_| WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference)?;
+        clock.set_if_neq(self.clock);
+        calendar.set_if_neq(self.calendar);
+        control.set_if_neq(self.control);
+        seed.set_if_neq(self.seed);
+        day.set_if_neq(ZooDay(self.clock.absolute_day));
+        month.set_if_neq(ZooMonth::from(self.calendar));
         Ok(())
     }
 
@@ -229,25 +244,37 @@ mod tests {
         inconsistent.calendar.day = 2;
         assert!(inconsistent.validate_against_timing(&timing).is_err());
         let mut world = World::new();
-        world.insert_resource(legacy_time_clock());
-        world.insert_resource(saved.calendar);
-        world.insert_resource(SimulationControl::new(0, false));
-        world.insert_resource(ZooSeed(0));
+        let root = world
+            .spawn((
+                legacy_time_clock(),
+                saved.calendar,
+                SimulationControl::new(0, false),
+                ZooSeed(0),
+                ZooDay(0),
+                ZooMonth(0),
+            ))
+            .id();
         let mut load =
-            bevy::ecs::system::SystemState::<SimulationTimeSnapshotLoadResources>::new(&mut world);
+            bevy::ecs::system::SystemState::<SimulationTimeSnapshotRestore>::new(&mut world);
         decode_simulation_time_snapshot_record(&bytes)
             .unwrap()
-            .apply_simulation_time_snapshot_record_to_live_resources(
-                &mut load.get_mut(&mut world).unwrap(),
-            )
+            .restore_simulation_time_snapshot(root, &mut load.get_mut(&mut world).unwrap())
             .unwrap();
+        assert_eq!(
+            world.get::<ZooDay>(root),
+            Some(&ZooDay(saved.clock.absolute_day))
+        );
+        assert_eq!(
+            world.get::<ZooMonth>(root),
+            Some(&ZooMonth::from(saved.calendar))
+        );
         let mut capture =
-            bevy::ecs::system::SystemState::<SimulationTimeSnapshotSaveResources>::new(&mut world);
+            bevy::ecs::system::SystemState::<SimulationTimeSnapshotCapture>::new(&mut world);
         assert_eq!(
             capture
                 .get(&world)
                 .unwrap()
-                .capture_validated_simulation_time_snapshot_record(),
+                .capture_validated_simulation_time_snapshot_record(root),
             Ok(saved)
         );
         let legacy = decode_simulation_time_snapshot_record(&bytes[..30]).unwrap();

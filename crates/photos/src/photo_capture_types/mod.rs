@@ -1,7 +1,7 @@
 //! Data used by photo capture, screenshot capture, and captured evidence.
 
 use bevy::prelude::*;
-use openzt2_game_data::{species::LifeStage, AssetId as DomainAssetId};
+use openzt2_game_data::{AssetId as DomainAssetId, species::LifeStage};
 
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdError;
 
@@ -74,10 +74,6 @@ pub(crate) struct PhotographableHealth {
     pub endangered: bool,
 }
 
-/// Definition used to look up the localized default caption.
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct PhotoCaptionSubject(pub DomainAssetId);
-
 #[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ScreenshotCaptureFailed {
     pub camera: Entity,
@@ -107,6 +103,8 @@ pub(crate) enum PhotoFailure {
 
 #[derive(Component, Debug, Clone, PartialEq)]
 pub(crate) struct PendingPhotoCapture {
+    pub world: Entity,
+    pub camera_roll: Entity,
     pub captured_tick: u64,
     pub camera_position: Vec3,
     pub camera_rotation: Quat,
@@ -152,7 +150,7 @@ pub(crate) struct PhotoSemanticEvidence {
     pub rarity_percent: Option<u16>,
     pub object_use: Option<DomainAssetId>,
     pub habitat: Option<DomainAssetId>,
-    pub aquatic: bool,
+    pub in_water: bool,
     pub show_trick: Option<DomainAssetId>,
     pub fossil: Option<PhotographableFossil>,
     pub fossil_bone_level: Option<u16>,
@@ -163,7 +161,7 @@ pub(crate) struct PhotoSemanticEvidence {
     /// Animal need values in `NeedKind` order.
     pub needs_q16: [Option<i32>; 10],
     pub super_animal: bool,
-    pub named: bool,
+    pub name: Option<String>,
     /// Habitat enclosure fact; unrelated to `contained_entities` below.
     pub contained: bool,
     /// Authored behavior-task name and target definition at shutter time.

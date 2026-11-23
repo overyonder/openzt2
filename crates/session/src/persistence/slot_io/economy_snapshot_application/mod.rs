@@ -8,7 +8,7 @@ use openzt2_zoo_state::economy::guest_admission_types::AdmissionPrice;
 use openzt2_zoo_state::economy::guest_admission_types::ZooAdmissionsOpen;
 use openzt2_zoo_state::economy::money_types::Money;
 use openzt2_zoo_state::economy::monthly_finance_types::MonthlyFinanceHistory;
-use openzt2_zoo_state::economy::zoo_cash_types::ZooCash;
+use openzt2_zoo_state::economy::zoo_cash_types::{UnlimitedZooCash, ZooCash};
 
 use super::{
     super::persistence_failure_types::WorldSnapshotPersistenceFailure,
@@ -30,18 +30,29 @@ pub(super) struct RestoredFacilityEconomy {
     usage: Option<&'static mut EconomyUsage>,
 }
 
-pub(super) fn apply_economy_snapshot_records_to_live_economy_resources_and_facilities(
+#[derive(QueryData)]
+#[query_data(mutable)]
+pub(super) struct RestoredZooEconomy {
+    cash: &'static mut ZooCash,
+    admission_price: &'static mut AdmissionPrice,
+    admissions_open: &'static mut ZooAdmissionsOpen,
+    history: &'static mut MonthlyFinanceHistory,
+    unlimited_cash: Option<&'static mut UnlimitedZooCash>,
+}
+
+pub(super) fn apply_economy_snapshot_records(
     commands: &mut Commands,
     economy_snapshot_records: EconomySnapshotRecords,
     identities: &PersistentIdIndex,
     root: Entity,
     facilities: &mut Query<RestoredFacilityEconomy>,
-    zoo_cash: &mut ZooCash,
-    zoo_admission_price: &mut AdmissionPrice,
-    zoo_admissions_open_state: &mut ZooAdmissionsOpen,
-    monthly_finance_history: &mut MonthlyFinanceHistory,
+    roots: &mut Query<RestoredZooEconomy>,
 ) -> Result<(), WorldSnapshotPersistenceFailure> {
-    if !monthly_finance_history.restore_saved_monthly_finance_history(
+    let mut zoo = roots
+        .get_mut(root)
+        .map_err(|_| WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference)?;
+    let mut history = *zoo.history;
+    if !history.restore_saved_monthly_finance_history(
         &economy_snapshot_records.monthly_finance_records,
         economy_snapshot_records.current_calendar_month,
         economy_snapshot_records.lifetime_income,
@@ -53,16 +64,19 @@ pub(super) fn apply_economy_snapshot_records_to_live_economy_resources_and_facil
         return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection);
     }
 
-    zoo_cash.0 = economy_snapshot_records.zoo_cash;
-    zoo_admission_price.0 = economy_snapshot_records.admission_price;
-    zoo_admissions_open_state.0 = economy_snapshot_records.admissions_open;
-
+    zoo.history.set_if_neq(history);
+    zoo.cash
+        .set_if_neq(ZooCash(economy_snapshot_records.zoo_cash));
+    zoo.admission_price.set_if_neq(AdmissionPrice::from_adult(
+        economy_snapshot_records.admission_price,
+    ));
+    zoo.admissions_open
+        .set_if_neq(ZooAdmissionsOpen(economy_snapshot_records.admissions_open));
     if let Some(unlimited) = economy_snapshot_records.unlimited_cash {
-        if unlimited {
-            commands.insert_resource(openzt2_zoo_state::economy::zoo_cash_types::UnlimitedZooCash);
+        if let Some(mut policy) = zoo.unlimited_cash {
+            policy.set_if_neq(UnlimitedZooCash(unlimited));
         } else {
-            commands
-                .remove_resource::<openzt2_zoo_state::economy::zoo_cash_types::UnlimitedZooCash>();
+            commands.entity(root).insert(UnlimitedZooCash(unlimited));
         }
     }
     for record in economy_snapshot_records.entity_economy_records {

@@ -36,24 +36,33 @@ pub(super) fn apply_allowed_navigation_axes_to_directly_controlled_subject(
     if ownership.controller != controller_entity {
         return;
     }
-    let mut allowed_local_axes = control_axes.pan.clamp_length_max(1.0);
-    if !interaction_action_flags_allow_required_mode_action_flags(
-        allowed_interaction_actions,
-        ImmersiveModeActionFlags::STRAFE_LEFT
-            .with_additional_flags(ImmersiveModeActionFlags::STRAFE_RIGHT),
-    ) {
-        allowed_local_axes.x = 0.0;
-    }
-    if !interaction_action_flags_allow_required_mode_action_flags(
-        allowed_interaction_actions,
-        ImmersiveModeActionFlags::MOVE_FORWARD
-            .with_additional_flags(ImmersiveModeActionFlags::MOVE_BACK),
-    ) {
-        allowed_local_axes.y = 0.0;
-    }
-    // The camera adds view yaw to the subject transform. Apply the same yaw
-    // to movement intent, leaving pitch out of ground navigation.
-    direct_locomotion.local_axes = Mat2::from_angle(view_yaw_radians) * allowed_local_axes;
+    let allowed_axis = |value, negative, positive| {
+        let direction = if value < 0.0 { negative } else { positive };
+        if interaction_action_flags_allow_required_mode_action_flags(
+            allowed_interaction_actions,
+            direction,
+        ) {
+            value
+        } else {
+            0.0
+        }
+    };
+    let allowed_local_axes = Vec2::new(
+        allowed_axis(
+            control_axes.pan.x,
+            ImmersiveModeActionFlags::STRAFE_LEFT,
+            ImmersiveModeActionFlags::STRAFE_RIGHT,
+        ),
+        allowed_axis(
+            control_axes.pan.y,
+            ImmersiveModeActionFlags::MOVE_BACK,
+            ImmersiveModeActionFlags::MOVE_FORWARD,
+        ),
+    )
+    .clamp_length_max(1.0);
+    direct_locomotion
+        .map_unchanged(|locomotion| &mut locomotion.local_axes)
+        .set_if_neq(Mat2::from_angle(view_yaw_radians) * allowed_local_axes);
 }
 
 #[cfg(test)]

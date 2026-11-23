@@ -1,3 +1,4 @@
+use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use bevy::prelude::AssetServer;
 use bevy::prelude::Assets;
 use bevy::prelude::Commands;
@@ -16,7 +17,7 @@ use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainChunk;
 use openzt2_zoo_state::topology::topology_graph_types::TopologyGrid;
 use openzt2_world_state::world_spawn::selected_world_terrain_asset_handle::SelectedWorldTerrainAssetHandle;
 use openzt2_world_state::world_spawn::world_hydration_types::{TerrainProjectionPendingFor, WorldHydration};
-use openzt2_world_state::world_spawn::world_load_completion_marker::{StartingTerrainHydrated, WorldClockInitialized};
+use openzt2_world_state::world_spawn::world_load_completion_marker::StartingTerrainHydrated;
 use openzt2_world_state::world_spawn::world_load_failure::WorldLoadFailure;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_world_state::world_spawn::world_terrain_hydration::WorldTerrainHorizontalBounds;
@@ -34,7 +35,7 @@ pub(super) fn hydrate_selected_terrain_chunks_world_bounds_and_topology_grid(
         (Entity, &SelectedWorldTerrainAssetHandle),
         (
             With<WorldHydration>,
-            With<WorldClockInitialized>,
+            With<ZooClock>,
             Without<StartingTerrainHydrated>,
             Without<WorldLoadFailure>,
         ),
@@ -116,9 +117,9 @@ pub(super) fn hydrate_selected_terrain_chunks_world_bounds_and_topology_grid(
     commands.entity(root).insert((
         WorldTerrainHorizontalBounds { min, max },
         StartingTerrainHydrated,
+        TopologyGrid {
+            origin: min,
+            spacing_m: topology_spacing_m,
+        },
     ));
-    commands.insert_resource(TopologyGrid {
-        origin: min,
-        spacing_m: topology_spacing_m,
-    });
 }

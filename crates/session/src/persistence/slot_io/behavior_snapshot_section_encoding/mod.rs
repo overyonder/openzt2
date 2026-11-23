@@ -8,7 +8,6 @@ use super::{
     },
 };
 use openzt2_zoo_state::behavior_task_execution_types::MAXIMUM_BEHAVIOR_TASK_RETURN_FRAME_COUNT;
-use std::collections::{BTreeMap, BTreeSet};
 
 const MAXIMUM_BEHAVIOR_SNAPSHOT_BYTES: usize = 64 * 1024 * 1024;
 const MAXIMUM_BEHAVIOR_SNAPSHOT_ACTORS: usize = 65_536;
@@ -95,8 +94,6 @@ pub(super) fn validate_behavior_actor_snapshots(
     if records.len() > MAXIMUM_BEHAVIOR_SNAPSHOT_ACTORS {
         return Err(WorldSnapshotPersistenceFailure::CapacityExceeded);
     }
-    let mut executions = BTreeSet::new();
-    let mut request_owners = BTreeMap::new();
     for (index, record) in records.iter().enumerate() {
         let key = record.sort_key();
         if matches!(key.0, 0 | u64::MAX) || index > 0 && records[index - 1].sort_key() >= key {
@@ -126,7 +123,6 @@ pub(super) fn validate_behavior_actor_snapshots(
         };
         let task = &record.task;
         if matches!(task.execution_id, 0 | u64::MAX)
-            || !executions.insert(task.execution_id)
             || !valid_frame(&task.current)
             || task.stack.iter().any(|frame| !valid_frame(frame))
             || task.stack.len() > MAXIMUM_BEHAVIOR_TASK_RETURN_FRAME_COUNT
@@ -279,6 +275,18 @@ pub(super) fn validate_behavior_actor_snapshots(
                 requests.push(request);
             }
         }
+        if nav.follow.as_ref().is_some_and(|pending| {
+            !valid_reference(&pending.target) || task.target.as_ref() != Some(&pending.target)
+        }) || nav.spline.as_ref().is_some_and(|pending| {
+            use openzt2_zoo_state::behavior_task_execution_types::running_actions::SplineDockPhase;
+            !valid_reference(&pending.target) || task.target.as_ref() != Some(&pending.target)
+                || matches!(pending.phase, SplineDockPhase::Curve { start, advanced }
+                    if !start.translation.is_finite() || !start.rotation.is_finite() || !start.scale.is_finite()
+                        || !advanced.is_finite() || advanced < 0.0)
+        }) || nav.action_navigation_requests().any(|request| matches!(request, 0 | u64::MAX)) {
+            return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection);
+        }
+        requests.extend(nav.action_navigation_requests());
         if let Some(destination) = nav.destination {
             if !requests.contains(&destination.request_id)
                 || !destination.world.is_finite()
@@ -289,14 +297,6 @@ pub(super) fn validate_behavior_actor_snapshots(
             }
         } else if nav.pursuit_target.is_some() || !nav.route.points.is_empty() {
             return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection);
-        }
-        for &request in &requests {
-            if request_owners
-                .insert(request, record.persistent_identifier)
-                .is_some_and(|owner| owner != record.persistent_identifier)
-            {
-                return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection);
-            }
         }
         for result in &nav.pending_results {
             if !requests.contains(&result.request_id()) {

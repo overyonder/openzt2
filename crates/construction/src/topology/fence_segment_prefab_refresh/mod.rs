@@ -10,7 +10,9 @@ use openzt2_zoo_state::topology::{
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 
-use crate::topology::topology_presentation_types::TopologyPresentation;
+use crate::topology::topology_presentation_types::{
+    EmptyTopologyPresentation, TopologyPresentationRoot,
+};
 use openzt2_zoo_state::topology::fence_segment_prefab_selection::select_authored_fence_segment_prefab_for_adjacent_topology;
 use openzt2_zoo_state::topology::fence_segment_prefab_selection::select_reciprocal_fence_curve_partners;
 use openzt2_zoo_state::topology::fence_segment_presentation_types::FenceSegmentPrefab;
@@ -39,9 +41,10 @@ pub(super) fn refresh_fence_segment_prefabs_after_topology_index_changes(
         FenceSegment,
         Option<&mut FenceSegmentPrefab>,
         Option<&mut FenceTerrainEndpointPresentationCells>,
-        Option<&TopologyPresentation>,
+        Option<&Children>,
         Has<Gate>,
     )>,
+    presentation_roots: Query<(), With<TopologyPresentationRoot>>,
 ) {
     let topology_index = topology_index.into_inner();
     let grid = grid.into_inner();
@@ -102,7 +105,7 @@ pub(super) fn refresh_fence_segment_prefabs_after_topology_index_changes(
         .map(|((entity, _), pairing)| (entity, pairing))
         .collect::<bevy::ecs::entity::EntityHashMap<_>>();
     for fence_entity in dirty {
-        let Ok((_, edge, current_prefab, endpoint_cells, presentation, gate)) =
+        let Ok((_, edge, current_prefab, endpoint_cells, children, gate)) =
             fences.get_mut(fence_entity)
         else {
             continue;
@@ -147,14 +150,14 @@ pub(super) fn refresh_fence_segment_prefabs_after_topology_index_changes(
         {
             continue;
         }
-        if let Some(presentation) = presentation {
-            if let Some(presentation_root) = presentation.0 {
-                commands.entity(presentation_root).despawn();
+        for child in children.into_iter().flat_map(|children| children.iter()) {
+            if presentation_roots.contains(child) {
+                commands.entity(child).try_despawn();
             }
-            commands
-                .entity(fence_entity)
-                .remove::<TopologyPresentation>();
         }
+        commands
+            .entity(fence_entity)
+            .remove::<EmptyTopologyPresentation>();
         if selected_prefab.asset == openzt2_game_data::AssetId::default() {
             if current_prefab.is_some() {
                 commands.entity(fence_entity).remove::<FenceSegmentPrefab>();

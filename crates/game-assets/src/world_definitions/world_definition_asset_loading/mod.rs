@@ -3,14 +3,14 @@ use super::{
     world_definition_source_document_lowering::lower_resolved_world_definition_source_document_closure_to_canonical_document,
 };
 use crate::asset_source::{
-    archive_entry_asset_path::{archive_entry_asset_source_path, ARCHIVE_ENTRY_ASSET_EXTENSION},
     AssetArchives,
+    archive_entry_asset_path::{ARCHIVE_ENTRY_ASSET_EXTENSION, archive_entry_asset_source_path},
 };
 use crate::source_document::{
     blue_fang_source_document_parsing::parse_blue_fang_source_document, path::AssetPath,
 };
 use bevy::{
-    asset::{io::Reader, AssetLoader, LoadContext},
+    asset::{AssetLoader, LoadContext, io::Reader},
     prelude::*,
 };
 use std::{io, path::Path, sync::Arc};
@@ -78,12 +78,14 @@ impl AssetLoader for WorldDefinitionAssetLoader {
                 &documents,
             )
             .await?;
+        let mut timekeeper = None;
         let mut document =
             lower_resolved_world_definition_source_document_closure_to_canonical_document(
                 &documents,
                 &actor_manifest_resolution_index,
                 &path,
                 authored_type_registry_source_order,
+                &mut timekeeper,
             )?
             .ok_or_else(|| {
                 io::Error::new(
@@ -91,7 +93,7 @@ impl AssetLoader for WorldDefinitionAssetLoader {
                     format!("unsupported world-definition source {path}"),
                 )
             })?;
-        let uses_puzzle_background = fossil_puzzle_slots::lower_fossil_puzzle_background_slots(
+        let puzzle_textures = fossil_puzzle_slots::lower_fossil_puzzle_background_slots(
             &self.archives,
             &binder_sources,
             context,
@@ -109,6 +111,15 @@ impl AssetLoader for WorldDefinitionAssetLoader {
                 &actor_manifest_resolution_index,
                 &resolved_models,
             )?;
+        asset.timekeeper = timekeeper;
+        let uses_puzzle_background = puzzle_textures.is_some();
+        if let Some(puzzle_textures) = puzzle_textures {
+            let mut textures = asset.textures.into_vec();
+            textures.extend(puzzle_textures);
+            textures.sort_unstable_by_key(|texture| texture.id);
+            textures.dedup_by_key(|texture| texture.id);
+            asset.textures = textures.into_boxed_slice();
+        }
         if uses_binder_sources || uses_puzzle_background {
             if !Arc::ptr_eq(&binder_sources, &self.archives.authored_binder_sources()) {
                 return Err(io::Error::other(

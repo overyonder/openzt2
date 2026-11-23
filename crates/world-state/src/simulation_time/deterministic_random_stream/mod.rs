@@ -3,7 +3,7 @@ use openzt2_game_data::AssetId;
 
 use crate::world_spawn::persistent_id_types::PersistentId;
 
-#[derive(Resource, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(transparent)]
 pub struct ZooSeed(pub u64);
 

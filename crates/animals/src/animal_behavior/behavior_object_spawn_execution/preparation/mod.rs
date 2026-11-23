@@ -21,31 +21,11 @@ pub(super) fn prepare_behavior_object_spawns(
                 &RunningBehaviorInstruction,
                 &RunBehaviorSpawnObject,
             ),
-            Option<&PendingBehaviorObjectSpawn>,
+            Option<&mut PendingBehaviorObjectSpawn>,
         ),
         Without<PendingBehaviorTaskFailure>,
     >,
-    obsolete: Query<
-        Entity,
-        (
-            With<PendingBehaviorObjectSpawn>,
-            Or<(
-                Without<RunBehaviorSpawnObject>,
-                With<PendingBehaviorTaskFailure>,
-            )>,
-        ),
-    >,
 ) {
-    let mut all_obsolete = activation.0.is_none().then(|| obsolete.iter());
-    let mut obsolete_actor = activation.0.and_then(|actor| obsolete.get(actor).ok());
-    while let Some(actor) = match &mut all_obsolete {
-        Some(actors) => actors.next(),
-        None => obsolete_actor.take(),
-    } {
-        commands
-            .entity(actor)
-            .remove::<PendingBehaviorObjectSpawn>();
-    }
     let Some(view) = definitions.get(&definition_assets) else {
         return;
     };
@@ -55,14 +35,19 @@ pub(super) fn prepare_behavior_object_spawns(
         if activation.0.is_none() && !instruction.can_update_after_activation(clock.tick) {
             continue;
         }
-        if pending.is_some_and(|pending| !pending.owns(task, instruction)) {
+        if pending
+            .as_ref()
+            .is_some_and(|pending| !pending.owns(task, instruction))
+        {
             commands
                 .entity(actor)
                 .remove::<PendingBehaviorObjectSpawn>();
             continue;
         }
         if task.next_action_tick > clock.tick
-            || pending.is_some_and(|pending| pending.request.is_some())
+            || pending
+                .as_ref()
+                .is_some_and(|pending| pending.request.is_some())
         {
             continue;
         }
@@ -82,6 +67,7 @@ pub(super) fn prepare_behavior_object_spawns(
             None
         } else {
             let Some(handle) = pending
+                .as_ref()
                 .and_then(|pending| pending.prefab.clone())
                 .or_else(|| view.scene(object.prefab))
             else {
@@ -113,12 +99,18 @@ pub(super) fn prepare_behavior_object_spawns(
                 })
                 .id
         });
-        commands.entity(actor).insert(PendingBehaviorObjectSpawn {
-            instruction: instruction.id(),
-            target: task.target,
-            prefab,
-            request,
-            spawned: false,
-        });
+        if let Some(mut pending) = pending {
+            if request.is_some() {
+                pending.request = request;
+            }
+        } else {
+            commands.entity(actor).insert(PendingBehaviorObjectSpawn {
+                instruction: instruction.id(),
+                target: task.target,
+                prefab,
+                request,
+                spawned: false,
+            });
+        }
     }
 }

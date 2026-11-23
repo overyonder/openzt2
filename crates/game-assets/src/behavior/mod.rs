@@ -1,6 +1,9 @@
 //! Bevy registration and public crate API for behavior-document assets.
 
-use bevy::{asset::AssetApp, prelude::*};
+use bevy::{
+    asset::{AssetApp, AssetEventSystems, AssetLoadFailedEvent},
+    prelude::*,
+};
 
 pub mod behavior_asset_loading;
 pub mod behavior_asset_types;
@@ -8,14 +11,10 @@ pub mod behavior_document_indexing;
 pub mod behavior_document_queries;
 pub mod source;
 
-use crate::application_lifecycle::GamePhase;
 use crate::asset_source::ArchiveOverlayChanged;
 use behavior_asset_loading::BehaviorDocumentAssetLoader;
 use behavior_asset_types::{BehaviorDocumentAsset, LoadedBehaviorDocumentCollection};
-use behavior_document_indexing::{
-    rebuild_behavior_declaration_indexes_after_asset_change,
-    refresh_behavior_documents_after_archive_change,
-};
+use behavior_document_indexing::{discover_behavior_documents, update_behavior_declarations};
 
 pub struct BehaviorDocumentAssetPlugin;
 
@@ -28,15 +27,18 @@ impl Plugin for BehaviorDocumentAssetPlugin {
             .add_message::<ArchiveOverlayChanged>()
             .add_systems(
                 PreUpdate,
-                (
-                    refresh_behavior_documents_after_archive_change,
-                    rebuild_behavior_declaration_indexes_after_asset_change,
-                )
-                    .chain()
+                discover_behavior_documents.run_if(
+                    resource_added::<crate::asset_source::AssetArchives>
+                        .or_else(on_message::<ArchiveOverlayChanged>),
+                ),
+            )
+            .add_systems(
+                PostUpdate,
+                update_behavior_declarations
+                    .after(AssetEventSystems)
                     .run_if(
-                        in_state(GamePhase::Loading)
-                            .or_else(in_state(GamePhase::InGame))
-                            .or_else(on_message::<ArchiveOverlayChanged>),
+                        on_message::<AssetEvent<BehaviorDocumentAsset>>
+                            .or_else(on_message::<AssetLoadFailedEvent<BehaviorDocumentAsset>>),
                     ),
             );
     }

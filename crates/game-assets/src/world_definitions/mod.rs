@@ -3,7 +3,6 @@
 pub mod behavior_auxiliary_source_document_lowering;
 pub mod behavior_auxiliary_source_types;
 pub mod ground_path_surface_images;
-pub mod loaded_staff_behavior_capabilities;
 pub mod lower;
 pub mod path_placement_highlight_asset;
 mod path_placement_highlight_loading;
@@ -40,6 +39,7 @@ pub struct WorldDefinitionAssetPlugin;
 impl Plugin for WorldDefinitionAssetPlugin {
     fn build(&self, app: &mut App) {
         app.init_asset::<WorldDefinitionAsset>()
+            .init_asset::<world_definition_load_queue::WorldDefinitionLoadCompletion>()
             .init_asset::<SavedWorldEconomyAsset>()
             .init_asset_loader::<SavedWorldEconomyAssetLoader>()
             .init_asset::<ground_path_surface_images::GroundPathSurfaceImage>()
@@ -48,23 +48,36 @@ impl Plugin for WorldDefinitionAssetPlugin {
             .init_asset_loader::<path_placement_highlight_loading::PathPlacementHighlightLoader>()
             .init_asset_loader::<WorldDefinitionAssetLoader>()
             .init_resource::<WorldDefinitions>()
-            .init_resource::<loaded_staff_behavior_capabilities::LoadedStaffBehaviorCapabilities>()
             .add_message::<ArchiveOverlayChanged>()
-            .add_systems(
-                PostUpdate,
-                loaded_staff_behavior_capabilities::publish_staff_behavior_capabilities,
-            )
             .add_systems(
                 PreUpdate,
                 (
                     discover_world_definition_catalogue_sources.run_if(
-                        in_state(GamePhase::Loading)
-                            .or_else(in_state(GamePhase::InGame))
-                            .or_else(any_with_component::<WorldAssetPreparation>)
-                            .or_else(on_message::<ArchiveOverlayChanged>),
+                        condition_changed_to(
+                            true,
+                            in_state(GamePhase::Loading)
+                                .or_else(in_state(GamePhase::InGame))
+                                .or_else(any_with_component::<WorldAssetPreparation>),
+                        )
+                        .or_else(on_message::<ArchiveOverlayChanged>),
                     ),
                     index_loaded_world_definition_assets_by_identifier_and_singleton_kind
-                        .in_set(WorldDefinitionPublicationSet),
+                        .in_set(WorldDefinitionPublicationSet)
+                        .run_if(
+                            on_message::<
+                                bevy::asset::AssetEvent<
+                                    world_definition_load_queue::WorldDefinitionLoadCompletion,
+                                >,
+                            >
+                                .or_else(
+                                    on_message::<bevy::asset::AssetEvent<WorldDefinitionAsset>>,
+                                )
+                                .or_else(
+                                    on_message::<
+                                        bevy::asset::AssetLoadFailedEvent<WorldDefinitionAsset>,
+                                    >,
+                                ),
+                        ),
                 )
                     .chain()
                     .after(bevy::asset::AssetTrackingSystems),

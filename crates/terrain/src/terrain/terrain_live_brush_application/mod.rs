@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use openzt2_zoo_state::construction::construction_interaction_types::CancelConstruction;
@@ -48,8 +49,7 @@ pub(super) struct TerrainBrushDraft(pub(super) TerrainEdit);
 pub(super) fn apply_held_terrain_brush_dabs_and_accumulate_one_draft_edit(
     stroke: On<ApplyHeldTerrainStroke>,
     mut commands: Commands,
-    index: Res<TerrainIndex>,
-    chunk_ids: Res<TerrainChunkIdLookup>,
+    roots: Query<(&TerrainIndex, &TerrainChunkIdLookup)>,
     assets: Res<Assets<TerrainAsset>>,
     mut region_data: ParamSet<(
         TerrainWaterRegionQuery,
@@ -70,6 +70,7 @@ pub(super) fn apply_held_terrain_brush_dabs_and_accumulate_one_draft_edit(
     mut previews: Query<
         (
             &mut TerrainBrushPreview,
+            &WorldMember,
             Option<&mut TerrainBrushPath>,
             Option<&mut TerrainBrushDraft>,
             Has<ActiveTerrainBrush>,
@@ -81,10 +82,13 @@ pub(super) fn apply_held_terrain_brush_dabs_and_accumulate_one_draft_edit(
     mut navigation_changed: MessageWriter<TerrainNavigationChanged>,
     mut water_changed: MessageWriter<TerrainWaterChanged>,
     mut render_changed: MessageWriter<TerrainRenderInvalidated>,
-    mut missing_membership: Local<Option<(Entity, usize)>>,
 ) {
     let stroke = stroke.0;
-    let Ok((mut current, path, draft, active, pending)) = previews.get_mut(stroke.preview) else {
+    let Ok((mut current, member, path, draft, active, pending)) = previews.get_mut(stroke.preview)
+    else {
+        return;
+    };
+    let Ok((index, chunk_ids)) = roots.get(member.root) else {
         return;
     };
     if !(stroke.center.is_finite()
@@ -186,14 +190,9 @@ pub(super) fn apply_held_terrain_brush_dabs_and_accumulate_one_draft_edit(
             return;
         };
         let Ok(membership) = water_membership.single() else {
-            let count = water_membership.iter().count();
-            if *missing_membership != Some((stroke.preview, count)) {
-                warn!(target: "openzt2_water_brush", preview = ?stroke.preview, membership_indexes = count, "water brush dab rejected: expected one resolved terrain membership index");
-                *missing_membership = Some((stroke.preview, count));
-            }
+            warn!(target: "openzt2_water_brush", preview = ?stroke.preview, "water brush dab rejected: terrain membership unavailable");
             return;
         };
-        *missing_membership = None;
         let samples: Vec<_> = chunks.iter().filter(|(entity, candidate, _, _)| candidate.asset == chunk.asset && candidate_entities.contains(entity)).flat_map(|(_, candidate, edited, _)| {
                 (0..usize::from(candidate.side)).flat_map(move |z| (0..usize::from(candidate.side)).filter_map(move |x| {
                     Some((candidate.origin + Vec2::new(x as f32, z as f32) * candidate.spacing_m, openzt2_zoo_state::terrain::terrain_sample_grid_queries::read_materialized_terrain_sample(candidate, asset, edited, x, z)?))
@@ -320,8 +319,8 @@ pub(super) fn apply_held_terrain_brush_dabs_and_accumulate_one_draft_edit(
 pub(super) fn roll_back_cancelled_live_terrain_brush_edit(
     mut commands: Commands,
     mut cancellations: MessageReader<CancelConstruction>,
-    mut previews: Query<(Entity, &mut TerrainBrushDraft), With<ConstructionPreview>>,
-    chunk_ids: Res<TerrainChunkIdLookup>,
+    mut previews: Query<(Entity, &WorldMember, &mut TerrainBrushDraft), With<ConstructionPreview>>,
+    roots: Query<&TerrainChunkIdLookup>,
     assets: Res<Assets<TerrainAsset>>,
     mut owners: Query<(
         Option<&mut TerrainWaterRegionEdit>,
@@ -341,7 +340,10 @@ pub(super) fn roll_back_cancelled_live_terrain_brush_edit(
     if cancellations.read().next().is_none() {
         return;
     }
-    for (preview_entity, mut draft) in &mut previews {
+    for (preview_entity, member, mut draft) in &mut previews {
+        let Ok(chunk_ids) = roots.get(member.root) else {
+            continue;
+        };
         let edit = std::mem::take(&mut draft.0);
         crate::terrain::terrain_edit_application::apply_water_region_edit_changes(
             &mut commands,

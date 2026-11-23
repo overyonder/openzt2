@@ -97,7 +97,13 @@ impl Plugin for ConstructionPlugin {
             .add_message::<ConstructionCommitFailed>()
             .add_message::<ConstructionCommitted>();
         configure_fixed_construction_sets(app);
-        app.add_observer(construction_confirmation::resolve_topology_confirmation)
+        app.add_message::<construction_cursor_terrain_surface_tracking::ConstructionSurfaceDiscarded>()
+            .add_message::<construction_delete_hover_target_resolution::ConstructionPickableDiscarded>()
+            .add_observer(construction_cursor_terrain_surface_tracking::notify_discarded_construction_terrain)
+            .add_observer(construction_cursor_terrain_surface_tracking::notify_discarded_construction_water)
+            .add_observer(construction_delete_hover_target_resolution::notify_discarded_placeable_pick_mesh)
+            .add_observer(construction_delete_hover_target_resolution::notify_discarded_construction_pickable)
+            .add_observer(construction_confirmation::resolve_topology_confirmation)
             .add_systems(
                 Update,
                 construction_confirmation::capture_pending_construction_confirmation
@@ -113,10 +119,8 @@ impl Plugin for ConstructionPlugin {
                     crate::construction::construction_ui_action_routing::route_authored_construction_tool_activations,
                     crate::construction::catalogue_purchase_construction_tool_routing::route_construction_purchase_choices,
                     crate::construction::construction_tool_and_action_routing::select_construction_tool,
-                    crate::construction::construction_edit_history_input_routing::request_undo_redo.run_if(
-                        crate::construction::construction_edit_history_input_routing::no_pending_edits,
-                    ),
                     crate::construction::construction_cursor_terrain_surface_tracking::ensure_construction_cursor,
+                    crate::construction::construction_cursor_terrain_surface_tracking::project_effective_construction_ray,
                     crate::construction::construction_cursor_terrain_surface_tracking::update_construction_cursor.in_set(openzt2_zoo_state::construction::ConstructionCursorUpdateSet)
                         .run_if(
                             crate::construction::construction_tool_and_action_routing::construction_tool_active,
@@ -127,6 +131,13 @@ impl Plugin for ConstructionPlugin {
                     crate::construction::construction_tool_and_action_routing::route_construction_actions,
                 )
                     .chain()
+                    .in_set(GameSet::Intent),
+            )
+            .add_systems(
+                Update,
+                crate::construction::construction_edit_history_input_routing::request_undo_redo
+                    .after(crate::construction::construction_ui_action_routing::route_construction_ui_actions)
+                    .run_if(crate::construction::construction_edit_history_input_routing::no_pending_edits)
                     .in_set(GameSet::Intent),
             )
             .add_systems(

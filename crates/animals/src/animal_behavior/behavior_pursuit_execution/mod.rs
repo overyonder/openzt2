@@ -8,8 +8,9 @@ use openzt2_game_assets::application_lifecycle::GamePhase;
 use openzt2_world_state::application_schedule::FixedGameSet;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_world_state::world_spawn::world_entity_crating::WorldEntityIsCrated;
-use openzt2_zoo_state::animal_behavior::behavior_pursuit_types::BehaviorPursuitLeg;
-use openzt2_zoo_state::animal_behavior::behavior_pursuit_types::PendingBehaviorPursuit;
+use openzt2_zoo_state::animal_behavior::behavior_pursuit_types::{
+    BehaviorPursuitLeg, BehaviorPursuitPoll, PendingBehaviorPursuit,
+};
 use openzt2_zoo_state::animal_behavior::behavior_task_effective_score_types::BehaviorTaskEffectiveScore;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
 use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorTaskFailure;
@@ -193,6 +194,7 @@ fn advance_current_pursuit_actions(
             &GlobalTransform,
             Has<NavAgent>,
             Option<&mut PendingBehaviorPursuit>,
+            Option<&mut BehaviorPursuitPoll>,
             Option<&Destination>,
         ),
         (
@@ -202,7 +204,7 @@ fn advance_current_pursuit_actions(
     >,
     transforms: Query<&GlobalTransform>,
 ) {
-    for (actor, (task, running), transform, has_agent, pending, destination) in
+    for (actor, (task, running), transform, has_agent, pending, poll, destination) in
         behavior_action_actors(&mut actors, activation.0)
     {
         let running = task
@@ -213,7 +215,7 @@ fn advance_current_pursuit_actions(
             .is_some_and(|((task, (instruction, _)), pending)| pending.owns(task, instruction));
         if let Some(stale) = pending.as_deref().filter(|_| !owned) {
             stop_pursuit_navigation(actor, stale.leg, destination, &mut commands);
-            commands.entity(actor).remove::<PendingBehaviorPursuit>();
+            commands.entity(actor).remove::<(PendingBehaviorPursuit, BehaviorPursuitPoll)>();
         }
         let Some((task, (instruction, running))) = running else {
             continue;
@@ -259,13 +261,12 @@ fn advance_current_pursuit_actions(
         };
         // The first route is held back while a direct request in this same
         // update may still make it unnecessary.
-        let (mut state, mut unsent_first_route) = pending.as_deref().cloned().map_or_else(
+        let (mut state, mut unsent_first_route) = pending.as_deref().copied().map_or_else(
             || {
                 let request_id = request.generation.advance();
                 (
                     PendingBehaviorPursuit {
                         instruction: instruction.id(),
-                        poll_remaining_seconds: 0.0,
                         leg: BehaviorPursuitLeg::Route { request_id },
                     },
                     Some(request_id),
@@ -273,16 +274,15 @@ fn advance_current_pursuit_actions(
             },
             |state| (state, None),
         );
-        if let Some(destination) = destination {
-            state.leg = state.leg.settled_by_destination(destination.request_id);
-        }
-        state.poll_remaining_seconds -= time.delta_secs();
-        if state.poll_remaining_seconds < 0.0 {
+        let mut poll = poll.filter(|_| owned);
+        let mut initial_poll = BehaviorPursuitPoll::from_remaining_seconds(0.0);
+        let current_poll = poll.as_deref_mut().unwrap_or(&mut initial_poll);
+        if current_poll.is_due(time.delta()) {
             if failure_radius_m * failure_radius_m < distance_squared {
                 mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
                 continue;
             }
-            state.poll_remaining_seconds = action.poll_interval_seconds;
+            *current_poll = BehaviorPursuitPoll::from_remaining_seconds(action.poll_interval_seconds);
             match state.leg {
                 BehaviorPursuitLeg::Route { request_id }
                     if distance_squared < pursuit_radius_m * pursuit_radius_m =>
@@ -315,7 +315,7 @@ fn advance_current_pursuit_actions(
                 if within_hit_radius =>
             {
                 stop_pursuit_navigation(actor, state.leg, destination, &mut commands);
-                commands.entity(actor).remove::<PendingBehaviorPursuit>();
+                commands.entity(actor).remove::<(PendingBehaviorPursuit, BehaviorPursuitPoll)>();
                 instruction.complete(actor, clock.tick, &mut commands);
                 continue;
             }
@@ -346,10 +346,13 @@ fn advance_current_pursuit_actions(
         if let Some(request_id) = unsent_first_route {
             request.route(request_id, pursuit_radius_m * 0.5);
         }
-        if let Some(pending) = pending.as_deref_mut() {
-            *pending = state;
+        if let Some(mut pending) = pending.take() {
+            pending.set_if_neq(state);
         } else {
             commands.entity(actor).insert(state);
+        }
+        if poll.is_none() {
+            commands.entity(actor).insert(initial_poll);
         }
     }
 }
@@ -372,7 +375,7 @@ fn settle_pursuits_after_navigation_acceptance(
             &mut PendingBehaviorPursuit,
             &Destination,
         ),
-        Without<PendingBehaviorTaskFailure>,
+        (Changed<Destination>, Without<PendingBehaviorTaskFailure>),
     >,
     transforms: Query<&GlobalTransform>,
 ) {
@@ -386,9 +389,10 @@ fn settle_pursuits_after_navigation_acceptance(
             continue;
         }
         let leg = pending.leg.settled_by_destination(destination.request_id);
-        if leg != pending.leg {
-            pending.leg = leg;
+        if leg == pending.leg {
+            continue;
         }
+        pending.leg = leg;
         let BehaviorPursuitLeg::Direct { request_id, .. } = leg else {
             continue;
         };
@@ -408,7 +412,7 @@ fn settle_pursuits_after_navigation_acceptance(
         {
             commands
                 .entity(actor)
-                .remove::<(PendingBehaviorPursuit, Destination)>();
+                .remove::<(PendingBehaviorPursuit, BehaviorPursuitPoll, Destination)>();
             instruction.complete(actor, clock.tick, &mut commands);
         }
     }
@@ -424,7 +428,7 @@ fn discard_pursuits_without_tasks(
 ) {
     for (actor, pending, destination) in &pursuers {
         stop_pursuit_navigation(actor, pending.leg, destination, &mut commands);
-        commands.entity(actor).remove::<PendingBehaviorPursuit>();
+        commands.entity(actor).remove::<(PendingBehaviorPursuit, BehaviorPursuitPoll)>();
     }
 }
 

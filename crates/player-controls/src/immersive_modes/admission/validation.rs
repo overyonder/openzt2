@@ -47,15 +47,16 @@ fn camera(cameras: &Query<Entity, With<ZooCamera>>) -> Result<Entity, ModeEntryF
 }
 
 pub(in crate::immersive_modes) fn validate_guest(
-    mut request: Query<&mut PendingMode<GuestViewControl>>,
+    requests: Query<(Entity, &PendingMode<GuestViewControl>), With<ModeReservation>>,
     guests: Query<(), With<Guest>>,
     definitions: ModeDefinitions,
     cameras: Query<Entity, With<ZooCamera>>,
+    output: ModeAdmission,
 ) {
-    let Ok(mut request) = request.single_mut() else {
+    let Ok((session, request)) = requests.single() else {
         return;
     };
-    request.result = (|| {
+    let result = (|| {
         let subject = subject(request.subject)?;
         let definitions = definitions.get()?;
         guests
@@ -63,21 +64,30 @@ pub(in crate::immersive_modes) fn validate_guest(
             .map_err(|_| ModeEntryFailure::WrongSubject)?;
         Admission::from_authored(definitions, ImmersiveMode::GuestView, camera(&cameras)?)
     })();
+    commit_admitted_mode::<GuestViewControl>(
+        session,
+        ImmersiveMode::GuestView,
+        request.subject,
+        result,
+        &definitions,
+        output,
+    );
 }
 
 pub(in crate::immersive_modes) fn validate_first_person(
-    mut request: Query<&mut PendingMode<FirstPersonControl>>,
+    requests: Query<(Entity, &PendingMode<FirstPersonControl>), With<ModeReservation>>,
     subjects: Query<
         Has<TransportVehicle>,
         (Or<(With<NavAgent>, With<TransportVehicle>)>, Without<Dead>),
     >,
     definitions: ModeDefinitions,
     cameras: Query<Entity, With<ZooCamera>>,
+    output: ModeAdmission,
 ) {
-    let Ok(mut request) = request.single_mut() else {
+    let Ok((session, request)) = requests.single() else {
         return;
     };
-    request.result = (|| {
+    let result = (|| {
         let subject = subject(request.subject)?;
         let definitions = definitions.get()?;
         let riding = subjects
@@ -88,10 +98,18 @@ pub(in crate::immersive_modes) fn validate_first_person(
         admission.lock_subject &= !riding;
         Ok(admission)
     })();
+    commit_admitted_mode::<FirstPersonControl>(
+        session,
+        ImmersiveMode::FirstPerson,
+        request.subject,
+        result,
+        &definitions,
+        output,
+    );
 }
 
 pub(in crate::immersive_modes) fn validate_search(
-    mut request: Query<&mut PendingMode<FossilSearchControl>>,
+    requests: Query<(Entity, &PendingMode<FossilSearchControl>), With<ModeReservation>>,
     sites: Query<(
         &FossilRecoverySite,
         &openzt2_world_state::world_spawn::world_membership_types::WorldMember,
@@ -99,11 +117,12 @@ pub(in crate::immersive_modes) fn validate_search(
     fossils: FossilCollections,
     definitions: ModeDefinitions,
     cameras: Query<Entity, With<ZooCamera>>,
+    output: ModeAdmission,
 ) {
-    let Ok(mut request) = request.single_mut() else {
+    let Ok((session, request)) = requests.single() else {
         return;
     };
-    request.result = (|| {
+    let result = (|| {
         let definitions = definitions.get()?;
         let viable_site = |site: &FossilRecoverySite, world: &WorldMember| {
             definitions
@@ -127,18 +146,27 @@ pub(in crate::immersive_modes) fn validate_search(
         }
         Admission::from_authored(definitions, ImmersiveMode::FossilSearch, camera(&cameras)?)
     })();
+    commit_admitted_mode::<FossilSearchControl>(
+        session,
+        ImmersiveMode::FossilSearch,
+        request.subject,
+        result,
+        &definitions,
+        output,
+    );
 }
 
 pub(in crate::immersive_modes) fn validate_assembly(
-    mut request: Query<&mut PendingMode<FossilAssemblyControl>>,
+    requests: Query<(Entity, &PendingMode<FossilAssemblyControl>), With<ModeReservation>>,
     assemblies: Query<&FossilPlacementSurface, With<FossilAssemblyTable>>,
     definitions: ModeDefinitions,
     cameras: Query<Entity, With<ZooCamera>>,
+    output: ModeAdmission,
 ) {
-    let Ok(mut request) = request.single_mut() else {
+    let Ok((session, request)) = requests.single() else {
         return;
     };
-    request.result = (|| {
+    let result = (|| {
         if !assemblies
             .get(subject(request.subject)?)
             .is_ok_and(|surface| surface.accepts_fossil_pieces)
@@ -151,18 +179,27 @@ pub(in crate::immersive_modes) fn validate_assembly(
             camera(&cameras)?,
         )
     })();
+    commit_admitted_mode::<FossilAssemblyControl>(
+        session,
+        ImmersiveMode::FossilAssembly,
+        request.subject,
+        result,
+        &definitions,
+        output,
+    );
 }
 
 pub(in crate::immersive_modes) fn validate_photo(
-    mut request: Query<&mut PendingMode<PhotoControl>>,
+    requests: Query<(Entity, &PendingMode<PhotoControl>), With<ModeReservation>>,
     readbacks: Query<&AlbumPhotoReadbacks>,
     definitions: ModeDefinitions,
     cameras: Query<Entity, With<ZooCamera>>,
+    output: ModeAdmission,
 ) {
-    let Ok(mut request) = request.single_mut() else {
+    let Ok((session, request)) = requests.single() else {
         return;
     };
-    request.result = (|| {
+    let result = (|| {
         let camera = camera(&cameras)?;
         if readbacks
             .get(camera)
@@ -172,21 +209,30 @@ pub(in crate::immersive_modes) fn validate_photo(
         }
         Admission::from_authored(definitions.get()?, ImmersiveMode::Photo, camera)
     })();
+    commit_admitted_mode::<PhotoControl>(
+        session,
+        ImmersiveMode::Photo,
+        request.subject,
+        result,
+        &definitions,
+        output,
+    );
 }
 
 pub(in crate::immersive_modes) fn validate_show(
-    mut request: Query<&mut PendingMode<ShowEditControl>>,
+    requests: Query<(Entity, &PendingMode<ShowEditControl>), With<ModeReservation>>,
     stages: Query<&ShowStageRows, With<ShowStage>>,
     performances: Query<(), With<ScheduledShowPerformancePlan>>,
     panels: Query<&InheritedVisibility, With<InfoPanel>>,
     selection: WorldUiSelection,
     definitions: ModeDefinitions,
     cameras: Query<Entity, With<ZooCamera>>,
+    output: ModeAdmission,
 ) {
-    let Ok(mut request) = request.single_mut() else {
+    let Ok((session, request)) = requests.single() else {
         return;
     };
-    request.result = (|| {
+    let result = (|| {
         let subject = subject(request.subject)?;
         if !stages
             .get(subject)
@@ -202,19 +248,28 @@ pub(in crate::immersive_modes) fn validate_show(
             camera(&cameras)?,
         )
     })();
+    commit_admitted_mode::<ShowEditControl>(
+        session,
+        ImmersiveMode::ShowEdit,
+        request.subject,
+        result,
+        &definitions,
+        output,
+    );
 }
 
 pub(in crate::immersive_modes) fn validate_staff(
-    mut request: Query<&mut PendingMode<StaffControl>>,
+    requests: Query<(Entity, &PendingMode<StaffControl>), With<ModeReservation>>,
     definitions: ModeDefinitions,
     cameras: Query<(Entity, &Transform, &WorldMember), With<ZooCamera>>,
     world_bounds: Query<&WorldTerrainHorizontalBounds>,
     start_surface: SuperStaffAvatarStartSurface,
+    output: ModeAdmission,
 ) {
-    let Ok(mut request) = request.single_mut() else {
+    let Ok((session, request)) = requests.single() else {
         return;
     };
-    request.result = (|| {
+    let result = (|| {
         let definitions = definitions.get()?;
         let (camera, overhead, world) = cameras
             .single()
@@ -237,8 +292,12 @@ pub(in crate::immersive_modes) fn validate_staff(
             return Err(ModeEntryFailure::MissingTool);
         }
         let (heading, _, _) = overhead.rotation.to_euler(EulerRot::YXZ);
-        let position =
-            start_surface.find_avatar_start_position(overhead.translation, heading, bounds);
+        let position = start_surface.find_avatar_start_position(
+            world.root,
+            overhead.translation,
+            heading,
+            bounds,
+        );
         admission.avatar = Some(StaffAvatar {
             transform: Transform::from_translation(position)
                 .with_rotation(Quat::from_rotation_y(heading)),
@@ -248,4 +307,12 @@ pub(in crate::immersive_modes) fn validate_staff(
         admission.lock_subject = true;
         Ok(admission)
     })();
+    commit_admitted_mode::<StaffControl>(
+        session,
+        ImmersiveMode::SuperStaff,
+        request.subject,
+        result,
+        &definitions,
+        output,
+    );
 }

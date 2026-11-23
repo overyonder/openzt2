@@ -14,7 +14,7 @@ use super::maintenance_types::{
 
 pub(super) fn initialize_animal_waste_production_schedule(
     mut commands: Commands,
-    zoo_clock: Res<ZooClock>,
+    zoo_clock: Single<&ZooClock>,
     animals_without_waste_production_schedule: Query<
         (Entity, &AnimalWasteCycle),
         (
@@ -48,7 +48,7 @@ pub(super) fn initialize_animal_waste_production_schedule(
 
 pub(super) fn produce_due_animal_habitat_waste(
     mut commands: Commands,
-    zoo_clock: Res<ZooClock>,
+    zoo_clock: Single<&ZooClock>,
     mut persistent_identifiers: Query<&mut PersistentIdAllocator>,
     mut animals_with_waste_production_schedule: Query<
         (

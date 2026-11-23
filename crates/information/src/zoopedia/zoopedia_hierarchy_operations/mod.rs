@@ -1,16 +1,10 @@
 use std::collections::HashSet;
 
 use openzt2_game_data::{
-    world_definitions::catalogue_and_progression::zoopedia_entry_types::ZoopediaEntry, AssetId,
+    AssetId, world_definitions::catalogue_and_progression::zoopedia_entry_types::ZoopediaEntry,
 };
 
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
-
-pub(crate) fn find_root_zoopedia_entry(
-    world_definitions: WorldDefinitionsView<'_>,
-) -> Option<&ZoopediaEntry> {
-    world_definitions.find_zoopedia_entry(AssetId::from_key("zoopedia_home"))
-}
 
 pub(crate) fn resolve_zoopedia_entry_subject(entry: &ZoopediaEntry) -> AssetId {
     let authored_subject = AssetId(entry.subject.0);

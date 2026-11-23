@@ -1,8 +1,6 @@
 //! Visitor lifecycle represented directly by small ECS facts.
 
-use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
-    BehaviorStep, BehaviorStepFixedSet, BehaviorStepSet,
-};
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::BehaviorStepFixedSet;
 use openzt2_zoo_state::guests::GuestDestinationSelection;
 use openzt2_zoo_state::guests::GuestLifecycleAdvance;
 use openzt2_zoo_state::guests::GuestReactionApplication;
@@ -55,12 +53,16 @@ use guest_simulation_types::*;
 use openzt2_game_assets::application_lifecycle::GamePhase;
 use openzt2_world_state::application_schedule::FixedGameSet;
 use openzt2_world_state::application_schedule::GameSet;
-use openzt2_zoo_state::guests::guest_survey_types::GuestSurvey;
 
 pub struct GuestsPlugin;
 
 impl Plugin for GuestsPlugin {
     fn build(&self, app: &mut App) {
+        use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
+            activated_behavior_actor, update_waiting_behavior_actors,
+        };
+        app.add_observer(activated_behavior_actor::<openzt2_zoo_state::behavior_task_execution_types::running_actions::RunBehaviorViewAnimals>.pipe(guest_view_animals_execution::watch_animals_for_current_view_actions));
+
         app.add_message::<view_event_execution::BehaviorViewEventEmitted>()
             .add_message::<GuestReaction>()
             .add_message::<view_event_execution::AppliedAnimalView>()
@@ -72,6 +74,8 @@ impl Plugin for GuestsPlugin {
             .add_message::<GuestDeparted>()
             .add_message::<GuestArrivalFailed>()
             .add_message::<RequestGuestArrivals>()
+            .add_observer(guest_behavior_fact_execution::apply_authored_guest_behavior_fact_modifications)
+            .add_observer(view_event_execution::emit_authored_view_events)
             .add_systems(
                 Update,
                 (
@@ -95,13 +99,10 @@ impl Plugin for GuestsPlugin {
                     .run_if(in_state(GamePhase::InGame)),
             )
             .add_systems(
-                BehaviorStep,
+                FixedUpdate,
                 (
-                    guest_behavior_fact_execution::apply_authored_guest_behavior_fact_modifications
-                        .after(openzt2_zoo_state::maintenance::maintenance_types::FacilityWasteBehaviorModification),
-                    view_event_execution::emit_authored_view_events,
-                    guest_view_animals_execution::watch_animals_for_current_view_actions,
-                ).in_set(BehaviorStepSet::Actions),
+                    update_waiting_behavior_actors.pipe(guest_view_animals_execution::watch_animals_for_current_view_actions),
+                ).in_set(BehaviorStepFixedSet::Think),
             )
             .add_systems(
                 FixedUpdate,
@@ -169,13 +170,8 @@ impl Plugin for GuestsPlugin {
                     )
                     .in_set(FixedGameSet::Cleanup)
                     .run_if(in_state(GamePhase::InGame)),
-            )
-            .add_systems(OnExit(GamePhase::InGame), remove_guest_survey_history);
+            );
     }
-}
-
-fn remove_guest_survey_history(mut commands: Commands) {
-    commands.remove_resource::<GuestSurvey>();
 }
 
 #[cfg(test)]

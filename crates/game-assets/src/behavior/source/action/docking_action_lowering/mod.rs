@@ -1,7 +1,7 @@
 use std::io;
 
 use openzt2_game_data::behavior::{
-    action::docking::{BehaviorDockAction, BehaviorDockLocomotionSpeed},
+    action::docking::{BehaviorDockAction, BehaviorDockApproach, BehaviorDockLocomotionSpeed},
     action_record::BehaviorAction,
 };
 
@@ -47,20 +47,16 @@ pub(super) fn lower_water_docking_action_source_node(
     Ok(None)
 }
 
-const FENCE_DOCK_DISTANCE_M: f32 = 2.0;
-
 pub(super) fn lower_docking_action_source_node(
     docking_action_source_node: &DataNode,
 ) -> io::Result<Option<BehaviorAction>> {
     if let Some(action) = lower_water_docking_action_source_node(docking_action_source_node)? {
         return Ok(Some(action));
     }
-    let radial = match docking_action_source_node.name.as_str() {
-        "BFBehDock" => false,
-        "BFBehDockRadial" => true,
-        // An animal docks its subject node on the fence it bashes, jumps,
-        // climbs or tunnels under, at the segment's middle.
-        "ZTBehDockFence" => true,
+    let (radial, fence) = match docking_action_source_node.name.as_str() {
+        "BFBehDock" => (false, false),
+        "BFBehDockRadial" => (true, false),
+        "ZTBehDockFence" => (false, true),
         _ => return Ok(None),
     };
     // Interpolation and target-node alignment remain unsupported for radial
@@ -98,13 +94,7 @@ pub(super) fn lower_docking_action_source_node(
             docking_action_source_node.name
         )));
     }
-    let fence = docking_action_source_node.name == "ZTBehDockFence";
-    let radial_distance_m = if fence {
-        // The fence line blocks navigation, so the animal stops this
-        // far short of it on its own side; read a per-species reach if one
-        // turns up in the data.
-        Some(FENCE_DOCK_DISTANCE_M)
-    } else if radial {
+    let approach = if radial {
         // Without a radius the actor docks on the target itself, as the
         // guest viewing tasks do on the path they view from.
         let distance = read_optional_float_attribute(docking_action_source_node, "targetRadius")?
@@ -114,9 +104,11 @@ pub(super) fn lower_docking_action_source_node(
                 "BFBehDockRadial has no valid targetRadius",
             ));
         }
-        Some(distance)
+        BehaviorDockApproach::Radial(distance)
+    } else if fence {
+        BehaviorDockApproach::Fence
     } else {
-        None
+        BehaviorDockApproach::Point
     };
     let arrival_radius_m = read_optional_float_attribute(docking_action_source_node, "dockRadius")?;
     if arrival_radius_m.is_some_and(|radius| !radius.is_finite() || radius <= 0.0) {
@@ -143,16 +135,11 @@ pub(super) fn lower_docking_action_source_node(
                 },
             )
             .transpose()?;
-    // A fence dock's subject node (`Node_Front`, `p_FenceJumpNode`)
-    // is often no model node, and a radial dock without it fails; the animal
-    // docks its origin on the fence instead. Align the node once the
-    // position attributes are read.
     Ok(Some(BehaviorAction::Dock(BehaviorDockAction {
         subject_node_name: read_optional_trimmed_string_attribute(
             docking_action_source_node,
             "subjectNode",
-        )
-        .filter(|_| !fence),
+        ),
         target_node_name: read_optional_trimmed_string_attribute(
             docking_action_source_node,
             "targetNode",
@@ -163,7 +150,13 @@ pub(super) fn lower_docking_action_source_node(
         ),
         locomotion_speed,
         redock: read_boolean_attribute_or_false(docking_action_source_node, "redock")?,
-        radial_distance_m,
+        reservation: read_optional_trimmed_string_attribute(
+            docking_action_source_node,
+            "reserveSlotName",
+        )
+        .as_deref()
+        .map(openzt2_game_data::AssetId::from_key),
+        approach,
         arrival_radius_m,
         rotation_tolerance_radians: rotation_tolerance_degrees.to_radians(),
     })))

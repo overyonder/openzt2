@@ -151,6 +151,8 @@ pub(super) fn apply_object_attachment_admissions(
     definition_assets: Res<Assets<WorldDefinitionAsset>>,
     mut playback: MessageWriter<AnimationClipPlaybackRequest>,
     entities: &Entities,
+    mut carried_objects: Query<(Option<&mut ContainedObject>, Option<&mut Visibility>)>,
+    mut food_props: Query<&mut held_food_prop::HeldFoodPropAttachment>,
 ) {
     use InteractionContainerAdmissionOutcome::{Granted, Refused};
     let Ok(mut pending) = pending.get_mut(result.request_entity) else {
@@ -167,6 +169,7 @@ pub(super) fn apply_object_attachment_admissions(
                 outcome,
                 definitions.get(&definition_assets),
                 &mut commands,
+                &mut carried_objects,
             );
         }
         (
@@ -201,7 +204,11 @@ pub(super) fn apply_object_attachment_admissions(
                 if slot_owns_item(definitions.get(&definition_assets), &attachment, slot) {
                     commands.entity(member).try_despawn();
                 } else {
-                    commands.entity(member).try_insert(Visibility::Inherited);
+                    let previous = carried_objects
+                        .get_mut(member)
+                        .ok()
+                        .and_then(|(_, visibility)| visibility);
+                    set_carried_visibility(member, Visibility::Inherited, previous, &mut commands);
                 }
                 return;
             }
@@ -213,7 +220,13 @@ pub(super) fn apply_object_attachment_admissions(
                         item: member,
                     });
             }
-            commands.entity(member).try_insert((attachment, visibility));
+            write_admitted_attachment(
+                member,
+                attachment,
+                visibility,
+                &mut carried_objects,
+                &mut commands,
+            );
             match finish {
                 AttachmentAfterAdmission::Authored { tick, detach } => {
                     if detach {
@@ -238,6 +251,7 @@ pub(super) fn apply_object_attachment_admissions(
                         &mut tasks,
                         &mut playback,
                         &mut commands,
+                        &mut food_props,
                     );
                 }
             }
@@ -258,12 +272,13 @@ fn apply_detach_admission(
     outcome: InteractionContainerAdmissionOutcome,
     definitions: Option<WorldDefinitionsView<'_>>,
     commands: &mut Commands,
+    carried_objects: &mut Query<(Option<&mut ContainedObject>, Option<&mut Visibility>)>,
 ) {
     use InteractionContainerAdmissionOutcome::{Granted, IdentityUnavailable};
 
     match (admission, outcome) {
         (DetachAdmission::Transfer(attachment, visibility), Granted { member, .. }) => {
-            commands.entity(member).try_insert((attachment, visibility));
+            write_admitted_attachment(member, attachment, visibility, carried_objects, commands);
         }
         (DetachAdmission::Create { holder, .. }, IdentityUnavailable) => {
             warn!(
@@ -311,6 +326,37 @@ fn apply_detach_admission(
                 });
         }
         _ => {}
+    }
+}
+
+fn write_admitted_attachment(
+    member: Entity,
+    attachment: ContainedObject,
+    visibility: Visibility,
+    carried_objects: &mut Query<(Option<&mut ContainedObject>, Option<&mut Visibility>)>,
+    commands: &mut Commands,
+) {
+    let Ok((current_attachment, current_visibility)) = carried_objects.get_mut(member) else {
+        return;
+    };
+    if let Some(mut current) = current_attachment {
+        current.set_if_neq(attachment);
+    } else {
+        commands.entity(member).try_insert(attachment);
+    }
+    set_carried_visibility(member, visibility, current_visibility, commands);
+}
+
+fn set_carried_visibility(
+    item: Entity,
+    visibility: Visibility,
+    current: Option<Mut<Visibility>>,
+    commands: &mut Commands,
+) {
+    if let Some(mut current) = current {
+        current.set_if_neq(visibility);
+    } else {
+        commands.entity(item).try_insert(visibility);
     }
 }
 

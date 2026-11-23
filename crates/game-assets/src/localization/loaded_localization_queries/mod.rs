@@ -1,14 +1,17 @@
 use bevy::prelude::*;
+use chrono::{Datelike, NaiveDate, NaiveDateTime, Timelike};
 use openzt2_game_data::{
-    localization::{
-        LocalizationCatalog, LocalizationDateFormatToken, LocalizationFormatArgument,
-        LocalizationFormatError, LocalizationRichContentNode, LocalizationTextPresentation,
-    },
     AssetId,
+    localization::{
+        LocalizationFormatArgument, LocalizationFormatError, LocalizationRichContentNode,
+        LocalizationTextPresentation,
+    },
 };
 
 use super::{
-    fallback_localization_formatting::write_fallback_currency_amount,
+    blue_fang_localization_date_format_tokenization::{
+        LocalizationDateTimeFormat, LocalizationDateTimeToken,
+    },
     localization_asset_types::LocalizationAsset,
     localization_precedence_index::LocalizationPrecedenceIndex,
 };
@@ -28,6 +31,16 @@ impl<'a> LoadedLocalizationView<'a> {
             localization_precedence_index,
             localization_assets,
         }
+    }
+
+    pub fn find_person_name_pool(
+        &self,
+        id: AssetId,
+    ) -> Option<
+        &'a openzt2_game_data::world_definitions::guest_simulation_definitions::PersonNamePool,
+    > {
+        self.localization_precedence_index
+            .find_person_name_pool(self.localization_assets, id)
     }
 
     pub fn find_plain_localized_text(&self, id: AssetId) -> Option<&'a str> {
@@ -74,35 +87,31 @@ impl<'a> LoadedLocalizationView<'a> {
         include_fractional_currency_cents: bool,
         target: &mut impl std::fmt::Write,
     ) -> std::fmt::Result {
-        let symbol_id = self
-            .localization_precedence_index
-            .configuration()
-            .currency_symbol;
-        if let Some(symbol) = self.find_plain_localized_text(symbol_id) {
-            LocalizationCatalog::write_currency_amount_with_symbol_and_comma_grouped_whole_dollars(
-                symbol,
-                currency_amount_cents,
-                include_fractional_currency_cents,
-                target,
-            )
-        } else {
-            write_fallback_currency_amount(
-                currency_amount_cents,
-                include_fractional_currency_cents,
-                target,
-            )
-        }
+        let configuration = self.localization_precedence_index.configuration();
+        let currency = &configuration.locale_conventions().currency;
+        let symbol = self
+            .find_plain_localized_text(configuration.currency_symbol)
+            .unwrap_or(&currency.symbol);
+        currency.write_amount(
+            symbol,
+            currency_amount_cents,
+            include_fractional_currency_cents,
+            target,
+        )
     }
 
     pub fn localized_month_abbreviation(&self, month_number: u8) -> Option<&'a str> {
         let month_index = usize::from(month_number.checked_sub(1)?);
-        self.find_plain_localized_text(
-            *self
-                .localization_precedence_index
-                .configuration()
-                .months
-                .get(month_index)?,
-        )
+        let configuration = self.localization_precedence_index.configuration();
+        self.find_plain_localized_text(*configuration.months.get(month_index)?)
+            .or_else(|| {
+                configuration
+                    .locale_conventions()
+                    .calendar
+                    .abbreviated_month_names
+                    .get(month_index)
+                    .map(String::as_str)
+            })
     }
 
     pub fn write_localized_month_and_year(
@@ -111,18 +120,81 @@ impl<'a> LoadedLocalizationView<'a> {
         year: u16,
         target: &mut impl std::fmt::Write,
     ) -> Result<(), LocalizationFormatError> {
-        let tokens = self.localization_precedence_index.month_year_tokens();
+        let value = NaiveDate::from_ymd_opt(i32::from(year), u32::from(month), 1)
+            .and_then(|date| date.and_hms_opt(0, 0, 0))
+            .ok_or(LocalizationFormatError::MissingKey)?;
+        self.write_localized_date_or_time(LocalizationDateTimeFormat::MonthYear, value, target)
+    }
+
+    pub fn write_localized_date_or_time(
+        &self,
+        format: LocalizationDateTimeFormat,
+        value: NaiveDateTime,
+        target: &mut impl std::fmt::Write,
+    ) -> Result<(), LocalizationFormatError> {
+        use LocalizationDateTimeToken as Token;
+        let tokens = self.localization_precedence_index.date_time_tokens(format);
         if tokens.is_empty() {
             return Err(LocalizationFormatError::MissingKey);
         }
-        let month = self
-            .localized_month_abbreviation(month)
-            .ok_or(LocalizationFormatError::MissingKey)?;
+        let calendar = &self
+            .localization_precedence_index
+            .configuration()
+            .locale_conventions()
+            .calendar;
+        let month_index = value.month0() as usize;
+        let weekday_index = value.weekday().num_days_from_sunday() as usize;
         for token in tokens {
             match token {
-                LocalizationDateFormatToken::Literal(text) => target.write_str(text),
-                LocalizationDateFormatToken::MonthAbbreviation => target.write_str(month),
-                LocalizationDateFormatToken::Year => write!(target, "{year:02}"),
+                Token::Literal(text) => target.write_str(text),
+                Token::Month(1) => write!(target, "{}", value.month()),
+                Token::Month(2) => write!(target, "{:02}", value.month()),
+                Token::Month(3) => target.write_str(
+                    self.localized_month_abbreviation(value.month() as u8)
+                        .ok_or(LocalizationFormatError::MissingKey)?,
+                ),
+                Token::Month(_) => target.write_str(&calendar.month_names[month_index]),
+                Token::Day(1) => write!(target, "{}", value.day()),
+                Token::Day(2) => write!(target, "{:02}", value.day()),
+                Token::Day(3) => {
+                    target.write_str(&calendar.abbreviated_weekday_names[weekday_index])
+                }
+                Token::Day(_) => target.write_str(&calendar.weekday_names[weekday_index]),
+                Token::Year(width) => {
+                    let width = *width;
+                    let year = if width < 3 {
+                        value.year().rem_euclid(100)
+                    } else {
+                        value.year()
+                    };
+                    write!(target, "{year:0width$}")
+                }
+                Token::Hour12(width) => {
+                    write!(target, "{:0width$}", value.hour12().1, width = *width)
+                }
+                Token::Hour24(width) => write!(target, "{:0width$}", value.hour(), width = *width),
+                Token::Minute(width) => {
+                    write!(target, "{:0width$}", value.minute(), width = *width)
+                }
+                Token::Second(width) => {
+                    write!(target, "{:0width$}", value.second(), width = *width)
+                }
+                Token::Era => target.write_str(&calendar.era),
+                Token::Period(width) => {
+                    let designator = if value.hour() < 12 {
+                        &calendar.am_designator
+                    } else {
+                        &calendar.pm_designator
+                    };
+                    if *width == 1 {
+                        designator
+                            .chars()
+                            .next()
+                            .map_or(Ok(()), |initial| target.write_char(initial))
+                    } else {
+                        target.write_str(designator)
+                    }
+                }
             }
             .map_err(LocalizationFormatError::Write)?;
         }

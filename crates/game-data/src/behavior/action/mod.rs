@@ -14,6 +14,7 @@ pub mod play_set;
 pub mod queue;
 pub mod show_event;
 pub mod spawn;
+pub mod specialized;
 pub mod synchronized_sets;
 pub mod target_test;
 pub mod termination;

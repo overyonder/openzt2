@@ -64,18 +64,18 @@ impl AssetLoader for AnimationSetSourceAssetLoader {
                 (reference.animation_clip_asset_key.clone(), source)
             })
             .collect::<std::collections::BTreeMap<_, _>>();
-        Ok(AnimationSetAsset {
-            model_asset_path: animation_set_document.model_asset_path,
-            skeleton_asset_path: animation_set_document.skeleton_asset_path,
-            animation_clips: Vec::new(),
-            embedded_animation_graph: None,
-            animation_graph_nodes: animation_set_document.animation_graph_nodes,
-            animation_graph_order: animation_set_document.animation_graph_order,
-            animation_graph_edges: animation_set_document.animation_graph_edges,
-            animation_graph_metadata: animation_set_document.animation_graph_metadata,
-            animation_clip_source_references: animation_set_document.animation_clips,
-            preloaded_clip_sources,
-        })
+        let mut set = AnimationSetAsset::create_ready_animation_set_asset(
+            animation_set_document.model_asset_path,
+            animation_set_document.skeleton_asset_path,
+            Vec::new(),
+            animation_set_document.animation_graph_nodes,
+            animation_set_document.animation_graph_order,
+            animation_set_document.animation_graph_edges,
+            animation_set_document.animation_graph_metadata,
+        );
+        set.set_animation_clip_source_references(animation_set_document.animation_clips);
+        set.preloaded_clip_sources = preloaded_clip_sources;
+        Ok(set)
     }
 
     fn extensions(&self) -> &[&str] {

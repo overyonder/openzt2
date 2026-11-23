@@ -108,7 +108,6 @@ use self::object_and_placeable_source_lowering::{
     bind_object,
     bind_placeable,
 };
-use self::person_name_pool::bind_person_names;
 use self::progression_definition_source_lowering::{
     bind_award,
     bind_fame,
@@ -251,7 +250,10 @@ struct UnmappedSource {
 struct RecordShard {
     tables: WorldDefinitionLoweringTables,
     unmapped: Option<UnmappedSource>,
-    timing: Option<SimulationTimingDefinition>,
+    timing: Option<(
+        SimulationTimingDefinition,
+        Option<super::timing::AuthoredTimekeeperPolicy>,
+    )>,
     cleanliness: Option<CleanlinessPolicy>,
     admission_price_bands_cents: Option<[i32; 4]>,
     guest_viewing: Option<GuestViewingPolicy>,
@@ -273,7 +275,13 @@ pub(super) fn bind_resolved_world_definition_source_records_to_canonical_documen
     actor_scene_paths: &BTreeMap<String, String>,
     entity_scene_paths: &BTreeMap<String, String>,
     authored_type_registry_source_order: [u64; 2],
-) -> Result<WorldDefinitionDocument, BindError> {
+) -> Result<
+    (
+        WorldDefinitionDocument,
+        Option<super::timing::AuthoredTimekeeperPolicy>,
+    ),
+    BindError,
+> {
     if auxiliary.is_none() {
         if let Some(document) = documents.iter().find(|document| {
             matches!(
@@ -455,6 +463,8 @@ pub(super) fn bind_resolved_world_definition_source_records_to_canonical_documen
         });
     }
     output.sort_tables_and_reject_duplicate_identifiers()?;
+    let (timing, timekeeper) =
+        timing.map_or((None, None), |(timing, policy)| (Some(timing), policy));
     let mut document = output.finish_canonical_world_definition_document(
         timing,
         cleanliness,
@@ -463,7 +473,7 @@ pub(super) fn bind_resolved_world_definition_source_records_to_canonical_documen
     );
     document.admission_price_bands_cents = admission_price_bands_cents;
     document.tranquilizer_mode = tranquilizer_mode;
-    Ok(document)
+    Ok((document, timekeeper))
 }
 
 fn bind_record_shard(
@@ -527,11 +537,6 @@ fn bind_record_shard(
             || record.descendant_named("BFFPSCameraComponent").is_some()
             || record.descendant_named("BFCameraComponent").is_some()))
     .then_some(WorldDefinitionSourceRecordKind::Camera)
-    .or_else(|| {
-        (canonicalize_source_document_record_key(&kind) == "zt2strings"
-            && record.source_path().ends_with("peoplenames.xml"))
-        .then_some(WorldDefinitionSourceRecordKind::PersonNames)
-    })
     .or_else(|| {
         (canonicalize_source_document_record_key(&kind) == "terrdeformationui"
             && record.value(&["tankFloorSpeed"]).is_some())
@@ -747,9 +752,6 @@ fn bind_record_shard(
         Some(WorldDefinitionSourceRecordKind::EnvironmentLights) => {
             bind_environment_lights(record, &mut shard.tables)?
         }
-        Some(WorldDefinitionSourceRecordKind::PersonNames) => {
-            bind_person_names(record, &mut shard.tables)?
-        }
         Some(WorldDefinitionSourceRecordKind::Location) => {
             bind_location(record, &mut shard.tables)?
         }
@@ -850,7 +852,6 @@ pub mod object_detach_action_source_lowering;
 pub mod object_facility_staff_and_guest_source_vocabulary;
 pub mod object_selected_ui_broadcast_source_lowering;
 pub mod object_water_boundary_source_lowering;
-pub mod person_name_pool;
 pub mod progression_definition_source_lowering;
 pub mod show_and_training_source_lowering;
 pub mod show_platform_upgrade_source_lowering;

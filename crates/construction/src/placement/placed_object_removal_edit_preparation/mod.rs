@@ -14,7 +14,6 @@ use openzt2_zoo_state::placement::object_placement_definition_queries::collect_o
 use openzt2_zoo_state::placement::object_placement_definition_queries::resolve_object_placeable_definition;
 use openzt2_zoo_state::placement::placed_object_types::PlacedObjectDefinitionReference;
 use openzt2_zoo_state::placement::placed_object_types::PlacedObjectFootprintOccupancy;
-use openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementCellCollectionScratch;
 use openzt2_zoo_state::placement::placement_transaction_types::ObjectPlacementEditPreparationRejected;
 use openzt2_zoo_state::placement::placement_transaction_types::ObjectPlacementEditPrepared;
 use openzt2_zoo_state::placement::placement_transaction_types::PreparedObjectPlacementEdit;
@@ -35,7 +34,7 @@ pub(super) fn prepare_placed_object_removal_edit(
         &PlacedObjectFootprintOccupancy,
         &PrefabSourceAssetHandle,
     )>,
-    mut scratch: ResMut<ObjectPlacementCellCollectionScratch>,
+    mut scratch: Local<Vec<IVec2>>,
     mut prepared: MessageWriter<ObjectPlacementEditPrepared>,
     mut rejected: MessageWriter<ObjectPlacementEditPreparationRejected>,
     transport_sales: openzt2_zoo_state::transport_tours::transport_track_sale::TransportTrackSaleQueries,
@@ -90,7 +89,7 @@ pub(super) fn prepare_placed_object_removal_edit(
                 .cells(occupancy.eighth_turns),
             occupancy.origin,
             occupancy.eighth_turns / 2,
-            &mut scratch.cells,
+            &mut scratch,
         ) else {
             reject_object_placement_edit_preparation(
                 &mut rejected,

@@ -16,6 +16,7 @@ use openzt2_world_state::{
 };
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::BehaviorEconomyTracker;
 
+use super::behavior_transaction_state::EconomyUsage;
 use openzt2_zoo_state::economy::world_economy_configuration::WorldEconomyConfiguration;
 
 #[derive(Component, Default, PartialEq, Eq)]
@@ -120,6 +121,7 @@ pub(super) fn materialize_selected_world_economy_trackers(
                                 name: definition.name,
                                 transactions: definition.transactions.clone(),
                             },
+                            EconomyUsage::default(),
                             ChildOf(world),
                             WorldMember { root: world },
                         ))

@@ -57,7 +57,7 @@ pub struct Containment {
     pub is_contained: bool,
 }
 
-#[derive(Resource, Debug, Default)]
+#[derive(Component, Debug, Default)]
 pub struct HabitatIndex {
     habitats_by_topology_cell: HashMap<IVec2, Entity>,
 }

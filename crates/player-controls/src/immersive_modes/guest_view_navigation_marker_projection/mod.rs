@@ -22,7 +22,7 @@ const MAXIMUM_GUEST_VIEW_NAVIGATION_MARKER_COUNT: usize = 4;
 pub(super) fn project_nearest_guest_navigation_positions_as_view_markers(
     pointer_ray: Res<WorldPointerRay>,
     spatial_query: SpatialQuery,
-    active_navigation: Option<Res<ActiveTerrainDerivedNavigationGraph>>,
+    active_navigation: Option<Single<Ref<ActiveTerrainDerivedNavigationGraph>>>,
     tank_water: Query<
         Ref<openzt2_zoo_state::aquatic::tank_navigation_water::TankNavigationWater>,
         With<openzt2_world_state::world_spawn::world_membership_types::WorldRoot>,
@@ -37,37 +37,45 @@ pub(super) fn project_nearest_guest_navigation_positions_as_view_markers(
         With<GuestViewControl>,
     >,
     parents: Query<&ChildOf>,
-    transforms: Query<&GlobalTransform>,
+    transforms: Query<Ref<GlobalTransform>>,
     marker_presentations: Query<&GuestViewNavigationMarkerPresentation>,
     markers: Query<&GuestViewNavigationMarkers>,
     mut gizmos: ResMut<Assets<GizmoAsset>>,
     mut commands: Commands,
 ) {
-    let (Ok((controller_entity, mode, subject, mut count)), Some(ray), Some(active_navigation)) =
-        (active.single_mut(), pointer_ray.0, active_navigation)
-    else {
+    let active_navigation = active_navigation.map(Single::into_inner);
+    let Ok((controller_entity, mode, subject, count)) = active.single_mut() else {
         return;
     };
     if mode.mode != ImmersiveMode::GuestView {
         return;
     }
-    let Some(hit) = spatial_query.cast_ray_predicate(
-        ray.origin,
-        ray.direction,
-        f32::MAX,
-        false,
-        &SpatialQueryFilter::DEFAULT,
-        &|entity| {
-            entity != controller_entity
-                && entity != subject.0
-                && !entity_has_ancestor(entity, subject.0, &parents)
-        },
-    ) else {
+    let target = pointer_ray
+        .0
+        .and_then(|ray| {
+            spatial_query.cast_ray_predicate(
+                ray.origin,
+                ray.direction,
+                f32::MAX,
+                false,
+                &SpatialQueryFilter::DEFAULT,
+                &|entity| {
+                    entity != controller_entity
+                        && entity != subject.0
+                        && !entity_has_ancestor(entity, subject.0, &parents)
+                },
+            )
+        })
+        .and_then(|hit| {
+            transforms
+                .get(hit.entity)
+                .ok()
+                .map(|transform| (hit.entity, transform))
+        });
+    let (Some((target, target_transform)), Some(active_navigation)) = (target, active_navigation)
+    else {
         despawn_projected_navigation_markers(markers.get(controller_entity).ok(), &mut commands);
-        count.0 = 0;
-        return;
-    };
-    let Ok(target_transform) = transforms.get(hit.entity) else {
+        count.map_unchanged(|count| &mut count.0).set_if_neq(0);
         return;
     };
     let existing = markers.get(controller_entity).ok();
@@ -78,9 +86,9 @@ pub(super) fn project_nearest_guest_navigation_positions_as_view_markers(
             .into_iter()
             .flat_map(|markers| markers.iter())
             .any(|entity| {
-                marker_presentations
-                    .get(entity)
-                    .is_ok_and(|presentation| presentation.targeted_entity == hit.entity)
+                marker_presentations.get(entity).is_ok_and(|presentation| {
+                    presentation.targeted_entity == target && !target_transform.is_changed()
+                })
             })
     {
         return;
@@ -104,7 +112,9 @@ pub(super) fn project_nearest_guest_navigation_positions_as_view_markers(
         .iter()
         .take_while(|(distance, _)| distance.is_finite())
         .count();
-    count.0 = marker_count as u32;
+    count
+        .map_unchanged(|count| &mut count.0)
+        .set_if_neq(marker_count as u32);
     if marker_count == 0 {
         return;
     }
@@ -132,7 +142,7 @@ pub(super) fn project_nearest_guest_navigation_positions_as_view_markers(
     commands.spawn((
         GuestViewNavigationMarkerOf(controller_entity),
         GuestViewNavigationMarkerPresentation {
-            targeted_entity: hit.entity,
+            targeted_entity: target,
         },
         Transform::IDENTITY,
         Visibility::Visible,

@@ -1,8 +1,8 @@
 use std::io;
 
 use openzt2_game_data::{
-    world_scenario::{WorldMapSupportedGameModeFlags, WorldScenarioDocument},
     AssetId,
+    world_scenario::{WorldMapSupportedGameModeFlags, WorldScenarioDocument},
 };
 
 use super::{
@@ -68,6 +68,7 @@ pub fn lower_saved_world_map_metadata(
         Some(environment),
     )?;
     Ok(WorldScenarioDocumentSource {
+        authored: Default::default(),
         document: WorldScenarioDocument {
             maps: vec![map],
             ..Default::default()

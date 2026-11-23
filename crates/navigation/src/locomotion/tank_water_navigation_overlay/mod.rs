@@ -1,5 +1,6 @@
 use bevy::{platform::collections::HashMap, prelude::*};
 
+use openzt2_game_assets::application_lifecycle::GamePhase;
 use openzt2_world_state::world_spawn::world_membership_types::{WorldMember, WorldRoot};
 use openzt2_zoo_state::aquatic::aquatic_simulation_types::{Tank, TankGeometry};
 use openzt2_zoo_state::aquatic::tank_navigation_water::TankNavigationWater;
@@ -11,20 +12,23 @@ use openzt2_zoo_state::terrain::terrain_navigation_change_types::{
 };
 use openzt2_zoo_state::topology::topology_graph_types::TopologyGrid;
 
-use super::world_navigation_installation::TerrainDerivedNavigationGraphInstalled;
+use super::world_navigation_installation::NavigationGraphReplaced;
 
 #[derive(Component, Default, PartialEq)]
 pub(super) struct TankNavigationCells(Vec<(u32, u16)>);
 
+#[derive(Message)]
+pub(super) struct TankNavigationWaterChanged(pub(super) Entity);
+
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(super) fn project_tank_water_onto_navigation_cells(
     mut commands: Commands,
-    graph: Option<Res<ActiveTerrainDerivedNavigationGraph>>,
-    grid: Res<TopologyGrid>,
+    mut installations: MessageReader<NavigationGraphReplaced>,
     mut world: Query<
         (
             Entity,
-            Ref<TerrainDerivedNavigationGraphInstalled>,
+            &ActiveTerrainDerivedNavigationGraph,
+            Ref<TopologyGrid>,
             &mut TankNavigationWater,
         ),
         With<WorldRoot>,
@@ -50,6 +54,8 @@ pub(super) fn project_tank_water_onto_navigation_cells(
     chunks: Query<&TerrainChunk>,
     mut edits: MessageReader<TerrainNavigationChanged>,
     mut restores: MessageReader<TerrainNavigationRestored>,
+    phase: Res<State<GamePhase>>,
+    mut water_changes: MessageWriter<TankNavigationWaterChanged>,
 ) {
     let changed_bounds: Vec<Rect> = edits
         .read()
@@ -63,8 +69,8 @@ pub(super) fn project_tank_water_onto_navigation_cells(
         })
         .collect();
     let removed = removed.read().count() != 0;
-    let (Some(graph), Ok((world_entity, installation, mut water))) = (graph, world.single_mut())
-    else {
+    let graph_replaced = installations.read().count() != 0;
+    let Ok((world_entity, graph, grid, mut water)) = world.single_mut() else {
         return;
     };
     let navigation = graph.terrain_derived_navigation_graph();
@@ -73,7 +79,7 @@ pub(super) fn project_tank_water_onto_navigation_cells(
         return;
     }
     let count = (grid.spacing_m / cell_size_m).round().max(1.0) as i32;
-    let reset = installation.is_changed() || grid.is_changed();
+    let reset = graph_replaced || grid.is_changed();
     let rebuild = reset || removed || !invalidated_tanks.is_empty();
     for entity in &invalidated_tanks {
         commands.entity(entity).remove::<TankNavigationCells>();
@@ -89,13 +95,14 @@ pub(super) fn project_tank_water_onto_navigation_cells(
             && !reset
             && !geometry.is_changed()
             && !region.is_changed()
-            && !region.topology_cells.iter().any(|cell| {
-                let origin = grid.cell_translation(cell.extend(0)).xz();
-                let far = origin + Vec2::splat(count as f32 * cell_size_m);
-                changed_bounds
-                    .iter()
-                    .any(|bounds| origin.cmple(bounds.max).all() && far.cmpge(bounds.min).all())
-            })
+            && (changed_bounds.is_empty()
+                || !region.topology_cells.iter().any(|cell| {
+                    let origin = grid.cell_translation(cell.extend(0)).xz();
+                    let far = origin + Vec2::splat(count as f32 * cell_size_m);
+                    changed_bounds
+                        .iter()
+                        .any(|bounds| origin.cmple(bounds.max).all() && far.cmpge(bounds.min).all())
+                }))
         {
             continue;
         }
@@ -147,8 +154,9 @@ pub(super) fn project_tank_water_onto_navigation_cells(
             .filter(|(_, _, _, member, _)| member.is_none_or(|member| member.root == world_entity))
             .filter_map(|(entity, _, _, _, cells)| cells.or_else(|| pending_cells.get(&entity)))
     };
-    if rebuild {
+    let changed = if rebuild {
         water.replace_cells(active_tanks().flat_map(|cells| cells.0.iter().copied()));
+        true
     } else if !affected.is_empty() {
         for cells in active_tanks() {
             for (&cell, depth) in &mut affected {
@@ -157,7 +165,17 @@ pub(super) fn project_tank_water_onto_navigation_cells(
                 }
             }
         }
-        water.update_cells(affected);
+        affected.retain(|node, depth| water.depth_centimetres(*node).unwrap_or_default() != *depth);
+        let changed = !affected.is_empty();
+        if changed {
+            water.update_cells(affected);
+        }
+        changed
+    } else {
+        false
+    };
+    if changed && *phase.get() == GamePhase::InGame {
+        water_changes.write(TankNavigationWaterChanged(world_entity));
     }
     for (tank, cells) in pending_cells {
         commands.entity(tank).insert(cells);

@@ -227,6 +227,7 @@ pub(super) fn resume_snapshot_actors(
         }
         restore_behavior_actor_snapshots(
             &mut commands,
+            root,
             &decoded.behavior,
             &mut behavior,
             &mut stage.behavior_documents,

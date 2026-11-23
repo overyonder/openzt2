@@ -9,7 +9,6 @@ pub mod behavior_synchronized_set_types;
 pub mod behavior_target_placement_types;
 pub mod behavior_target_retry_delays;
 pub mod behavior_task_effective_score_types;
-pub mod behavior_task_failure_transition;
 pub mod behavior_token_types;
 pub mod behavior_trigger_types;
 pub mod interaction_container_membership;

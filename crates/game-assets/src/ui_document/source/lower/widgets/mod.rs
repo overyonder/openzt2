@@ -366,6 +366,7 @@ pub(super) fn lower_source_ui_widget_to_canonical_widget_record(
         },
         SourceUiWidgetData::TimedEvents(events) => focused_timed_presentation_widget_lowering::lower_source_ui_timed_events_to_canonical_focused_presentation_widget_record(
             node.name.as_deref(),
+            index,
             node_id_value,
             events,
             input.role,

@@ -7,8 +7,8 @@ use openzt2_game_assets::world_definitions::{
     world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
 };
 use openzt2_game_data::{
-    animation::animation_text_key::AuthoredAnimationTextAction,
-    world_definitions::world_objects::WorldObjectWhapPhysics, AssetId,
+    AssetId, animation::animation_text_key::AuthoredAnimationTextAction,
+    world_definitions::world_objects::WorldObjectWhapPhysics,
 };
 use openzt2_world_state::{
     animation_graph::{
@@ -40,6 +40,8 @@ use openzt2_zoo_state::{
     animal_health::types::{AnimalDied, Dead, DeathCause},
     animal_lifecycle::types::Animal,
     behavior_task_execution_types::{
+        BehaviorTaskExecutionState, PendingBehaviorAnimationClipCompletion,
+        PendingBehaviorTaskFailure,
         continuations::BehaviorContinuationFrames,
         running_actions::{
             BehaviorAnimationEffect, BehaviorAnimationKeyDelivery, BehaviorAnimationTextKeys,
@@ -48,8 +50,6 @@ use openzt2_zoo_state::{
             RunBehaviorAnimationEffect, RunningBehaviorInstruction, SuspendedBehaviorSetInterrupt,
             TimedBehaviorAnimationEffect,
         },
-        BehaviorTaskExecutionState, PendingBehaviorAnimationClipCompletion,
-        PendingBehaviorTaskFailure,
     },
     guests::guest_simulation_types::GuestRng,
     placement::{
@@ -59,7 +59,7 @@ use openzt2_zoo_state::{
     topology::topology_graph_types::TopologyGrid,
 };
 
-use super::behavior_target_morph_execution::{resolve_fence_morph, FenceTopology};
+use super::behavior_target_morph_execution::{FenceTopology, resolve_fence_morph};
 use crate::animal_health::disease_mortality_execution::finalize_animal_death;
 
 #[derive(Component)]
@@ -397,6 +397,7 @@ struct AnimalAnimationEffectTargets<'w, 's> {
             Has<PlacedObjectDefinitionReference>,
         ),
     >,
+    spatial: super::behavior_spatial_candidates::BehaviorSpatialCandidates<'w, 's>,
     physical: Query<'w, 's, (&'static RigidBody, &'static mut LinearVelocity)>,
     poses: Query<'w, 's, &'static mut Transform>,
     clips: MessageWriter<'w, AnimationClipPlaybackRequest>,
@@ -437,6 +438,7 @@ fn apply_behavior_animation_effects(
         return;
     };
     let mut killed = HashSet::<Entity>::default();
+    let mut nearby = Vec::new();
     for (actor, task, step, immediate, timed, crossed, mut animal_random, mut guest_random) in
         behavior_action_actors(&mut actors, activation.0)
     {
@@ -480,18 +482,29 @@ fn apply_behavior_animation_effects(
                             centre + extent,
                         ));
                     }
-                    victims.extend(targets.entities.iter().filter_map(
-                        |(entity, world, definition, position, ..)| {
-                            (world.root == member.root
-                                && position.translation().cmpge(centre - extent).all()
-                                && position.translation().cmple(centre + extent).all()
-                                && (definition.0 == kind
-                                    || view.find_object(definition.0).is_some_and(|object| {
-                                        object.behavior_type_identifiers.contains(&kind)
-                                    })))
-                            .then_some(entity)
-                        },
-                    ));
+                    targets.spatial.in_bounds(
+                        member.root,
+                        (centre - extent).xz(),
+                        (centre + extent).xz(),
+                        &mut nearby,
+                    );
+                    targets.spatial.preserve_query_order(&mut nearby);
+                    victims.extend(
+                        targets
+                            .entities
+                            .iter_many(nearby.iter().copied())
+                            .flatten()
+                            .filter_map(|(entity, world, definition, position, ..)| {
+                                (world.root == member.root
+                                    && position.translation().cmpge(centre - extent).all()
+                                    && position.translation().cmple(centre + extent).all()
+                                    && (definition.0 == kind
+                                        || view.find_object(definition.0).is_some_and(|object| {
+                                            object.behavior_type_identifiers.contains(&kind)
+                                        })))
+                                .then_some(entity)
+                            }),
+                    );
                 }
                 let mut removed = false;
                 for victim in victims {

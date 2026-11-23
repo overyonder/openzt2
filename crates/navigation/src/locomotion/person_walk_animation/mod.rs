@@ -44,7 +44,7 @@ pub(super) struct PersonGaitPlayback {
     row: AssetId,
     node: String,
     rate: i16,
-    reset_seconds_remaining: f32,
+    rate_reset: Timer,
     rates: [f32; 2],
 }
 
@@ -62,7 +62,7 @@ use openzt2_world_state::animation_playback::{
     animation_joint_target_types::{AnimationJointTarget, AnimationRigJoints},
     locomotion_root_motion::{clip_motion_velocity, ConsumedLocomotionRootMotion},
 };
-use openzt2_zoo_state::locomotion::locomotion_types::{CaffeineMode, NavAgent};
+use openzt2_zoo_state::locomotion::locomotion_types::{CaffeineFlags, NavAgent};
 
 pub(super) fn project_person_motion_to_walk_animation(
     mut commands: Commands,
@@ -87,7 +87,7 @@ pub(super) fn project_person_motion_to_walk_animation(
             Has<PendingBehaviorAnimationClipCompletion>,
             Has<BehaviorHeldAnimationClip>,
             Option<&mut NavAgent>,
-            Option<&LocomotionAnimationSource>,
+            Option<&mut LocomotionAnimationSource>,
             Option<&StaffRole>,
             Option<&LocomotionMode>,
             Option<&SwimLayer>,
@@ -99,7 +99,7 @@ pub(super) fn project_person_motion_to_walk_animation(
         Or<(With<Guest>, With<Staff>)>,
     >,
     mut playback_requests: MessageWriter<AnimationClipPlaybackRequest>,
-    caffeine_modes: Query<&CaffeineMode>,
+    caffeine_flags: Query<&CaffeineFlags>,
 ) {
     for (
         controller_entity,
@@ -120,7 +120,7 @@ pub(super) fn project_person_motion_to_walk_animation(
             awaited_clip,
             held_clip,
             mut agent,
-            source,
+            mut source,
             role,
             mode,
             layer,
@@ -138,7 +138,10 @@ pub(super) fn project_person_motion_to_walk_animation(
         let task_animation = awaited_clip || held_clip;
         let moving = navigating || direct;
         if !moving || task_animation || enabled.is_some_and(|enabled| !enabled.0) {
-            if source.is_some_and(|source| source.controller == controller_entity) {
+            if source
+                .as_ref()
+                .is_some_and(|source| source.controller == controller_entity)
+            {
                 commands
                     .entity(person)
                     .remove::<LocomotionAnimationSource>();
@@ -208,12 +211,12 @@ pub(super) fn project_person_motion_to_walk_animation(
                         .is_some()
             });
         if !has_locomotion_node {
-            continue;
-        }
-        if moving && row.is_some() {
-            if let Some(agent) = agent.as_deref_mut() {
-                agent.max_speed_mps = 0.0;
+            if let Some(agent) = agent.filter(|_| moving && row.is_some()) {
+                agent
+                    .map_unchanged(|agent| &mut agent.max_speed_mps)
+                    .set_if_neq(0.0);
             }
+            continue;
         }
         let sampled_rate = if let (Some(table), Some(row)) = (table, row) {
             let mut new_gait = PersonGaitPlayback {
@@ -221,18 +224,25 @@ pub(super) fn project_person_motion_to_walk_animation(
                 row: AssetId::default(),
                 node: String::new(),
                 rate: 1000,
-                reset_seconds_remaining: 0.0,
+                rate_reset: Timer::default(),
                 rates: [1.0; 2],
             };
             let newly_projected = gait.is_none();
             let current = gait.as_deref_mut().unwrap_or(&mut new_gait);
-            current.reset_seconds_remaining -=
-                assets.time.as_ref().map_or(0.0, |time| time.delta_secs());
+            let rate_due = current
+                .rate_reset
+                .tick(
+                    assets
+                        .time
+                        .as_ref()
+                        .map_or_else(std::time::Duration::default, |time| time.delta()),
+                )
+                .is_finished();
             if current.binder != table.binder
                 || current.row != row.key
                 || current.node != row.node
                 || current.rates != row.playback_speed_range
-                || (row.reset_seconds_range[1] > 0.0 && current.reset_seconds_remaining <= 0.0)
+                || (row.reset_seconds_range[1] > 0.0 && rate_due)
             {
                 let sample = random
                     .as_deref_mut()
@@ -243,8 +253,9 @@ pub(super) fn project_person_motion_to_walk_animation(
                 let sample = random
                     .as_deref_mut()
                     .map_or(0.0, |random| random.0.unit_f32());
-                current.reset_seconds_remaining = row.reset_seconds_range[0]
+                let reset_seconds = row.reset_seconds_range[0]
                     + sample * (row.reset_seconds_range[1] - row.reset_seconds_range[0]);
+                current.rate_reset = super::gait_rate_reset_timer(reset_seconds);
                 current.binder = table.binder;
                 current.row = row.key;
                 current.node.clone_from(&row.node);
@@ -280,6 +291,11 @@ pub(super) fn project_person_motion_to_walk_animation(
             ));
         let wanted = stationary_clip.or(selected.as_deref()).unwrap_or(node_key);
         let Some(clip) = assets.sources.get(set, wanted) else {
+            if let Some(agent) = agent.filter(|_| moving && row.is_some()) {
+                agent
+                    .map_unchanged(|agent| &mut agent.max_speed_mps)
+                    .set_if_neq(0.0);
+            }
             continue;
         };
         let binding = moving
@@ -294,35 +310,40 @@ pub(super) fn project_person_motion_to_walk_animation(
                             (binding.authored_joint_id == joint)
                                 .then(|| transforms.get(parent.parent()).ok())
                                 .flatten()
-                        })?;
-                let actor = transforms.get(person).ok()?;
-                let speed = clip_motion_velocity(&clip, parent, 1000)?.length();
-                if speed <= 0.0 {
-                    return None;
-                }
-                // A gait row's rate also sets the agent's speed below, so
-                // scaling it speeds the person up or slows them down.
-                // People without a gait row move at their
-                // NavAgent speed and keep it; scale that too if one appears.
-                let rate = if let Some(rate) = sampled_rate {
-                    (f32::from(rate) * CaffeineMode::speed_factor(caffeine_modes.get(person).ok()))
-                        .round()
-                        .clamp(1.0, f32::from(i16::MAX)) as i16
-                } else {
-                    (agent.as_deref()?.max_speed_mps / speed * 1000.0)
-                        .round()
-                        .clamp(1.0, f32::from(i16::MAX)) as i16
-                };
-                Some((
-                    actor.affine().inverse() * parent.affine(),
-                    rate,
-                    speed * f32::from(rate) / 1000.0,
-                ))
-            })
-            .flatten();
+                        },
+                    )?;
+                    let actor = transforms.get(person).ok()?;
+                    let speed = clip_motion_velocity(&clip, parent, 1000)?.length();
+                    if speed <= 0.0 {
+                        return None;
+                    }
+                    // A gait row's rate also sets the agent's speed below, so
+                    // scaling it speeds the person up or slows them down.
+                    // People without a gait row move at their
+                    // NavAgent speed and keep it; scale that too if one appears.
+                    let rate = if let Some(rate) = sampled_rate {
+                        caffeine_flags
+                            .get(person)
+                            .copied()
+                            .unwrap_or_default()
+                            .apply_to_rate(f32::from(rate), super::DEFAULT_LOCOMOTION_RATE_FACTORS)
+                            .round()
+                            .clamp(1.0, f32::from(i16::MAX)) as i16
+                    } else {
+                        (agent.as_deref()?.max_speed_mps / speed * 1000.0)
+                            .round()
+                            .clamp(1.0, f32::from(i16::MAX)) as i16
+                    };
+                    Some((
+                        actor.affine().inverse() * parent.affine(),
+                        rate,
+                        speed * f32::from(rate) / 1000.0,
+                    ))
+                })
+                .flatten();
         let rate = binding.map_or(1000, |(_, rate, _)| rate);
         if row.is_some() {
-            if let Some(agent) = agent.as_deref_mut() {
+            if let Some(agent) = agent.take() {
                 let active = controller.animation_clip_asset_key == wanted
                     && controller.playback_speed_permille == rate
                     && player.is_some_and(|player| {
@@ -333,11 +354,14 @@ pub(super) fn project_person_motion_to_walk_animation(
                     && consumed
                         .as_ref()
                         .is_some_and(|motion| motion.owns_playback(controller));
-                agent.max_speed_mps = if active {
+                let speed = if active {
                     binding.map_or(0.0, |(_, _, speed)| speed)
                 } else {
                     0.0
                 };
+                agent
+                    .map_unchanged(|agent| &mut agent.max_speed_mps)
+                    .set_if_neq(speed);
             }
         }
         let needs_request = controller.animation_clip_asset_key != wanted
@@ -356,25 +380,34 @@ pub(super) fn project_person_motion_to_walk_animation(
                 playback_repetition_policy: AnimationPlaybackRepetitionPolicy::Loop,
             });
             if let Some((parent, _, mean_speed_mps)) = binding {
-                commands
-                    .entity(controller_entity)
-                    .insert(ConsumedLocomotionRootMotion::new(request.id, parent));
-                commands.entity(person).insert(LocomotionAnimationSource {
+                let motion = ConsumedLocomotionRootMotion::new(request.id, parent);
+                if let Some(mut current) = consumed {
+                    *current = motion;
+                } else {
+                    commands.entity(controller_entity).insert(motion);
+                }
+                let next = LocomotionAnimationSource {
                     controller: controller_entity,
                     mean_speed_mps,
-                });
+                };
+                if let Some(mut current) = source {
+                    current.set_if_neq(next);
+                } else {
+                    commands.entity(person).insert(next);
+                }
             }
         } else if let (Some((parent, _, mean_speed_mps)), Some(motion)) =
             (binding, consumed.as_deref_mut())
         {
             motion.update_root_parent_transform(parent);
-            if source.is_none_or(|source| {
-                source.controller != controller_entity || source.mean_speed_mps != mean_speed_mps
-            }) {
-                commands.entity(person).insert(LocomotionAnimationSource {
-                    controller: controller_entity,
-                    mean_speed_mps,
-                });
+            let next = LocomotionAnimationSource {
+                controller: controller_entity,
+                mean_speed_mps,
+            };
+            if let Some(mut current) = source.take() {
+                current.set_if_neq(next);
+            } else {
+                commands.entity(person).insert(next);
             }
         }
     }

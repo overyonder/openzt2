@@ -93,7 +93,7 @@ pub(super) fn bind_authored_water_impact_bodies(
 /// Emits a wave when a moving body crosses the water surface.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(super) fn project_authored_body_water_surface_crossings_into_impact_waves(
-    terrain_index: Option<Res<TerrainIndex>>,
+    terrain_index: Option<Single<&TerrainIndex>>,
     terrain_assets: Res<Assets<TerrainAsset>>,
     memberships: Query<&TerrainWaterMembershipIndex>,
     regions: TerrainWaterRegionQuery,
@@ -111,6 +111,7 @@ pub(super) fn project_authored_body_water_surface_crossings_into_impact_waves(
     mut spray: MessageWriter<WaterSurfaceSpraySample>,
     mut wakes: MessageWriter<WaterSurfaceWakeSample>,
 ) {
+    let terrain_index = terrain_index.map(Single::into_inner);
     let Some(terrain_index) = terrain_index else {
         return;
     };

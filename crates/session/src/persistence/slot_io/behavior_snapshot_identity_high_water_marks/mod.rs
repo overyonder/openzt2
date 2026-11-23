@@ -1,4 +1,4 @@
-use super::behavior_snapshot_types::BehaviorActorSnapshot;
+use super::behavior_snapshot_types::{BehaviorActorSnapshot, BehaviorOwnedNavigationSnapshot};
 
 pub(super) fn behavior_snapshot_identity_high_water_marks(
     records: &[BehaviorActorSnapshot],
@@ -24,28 +24,40 @@ pub(super) fn behavior_snapshot_identity_high_water_marks(
         let Some(state) = &actor.navigation else {
             continue;
         };
-        if let Some(destination) = &state.destination {
-            navigation = navigation.max(destination.request_id);
-        }
-        if let Some(docking) = &state.docking {
-            navigation = navigation.max(docking.request_id);
-        }
-        for completion in state
-            .move_completion
-            .iter()
-            .chain(state.docking_completion.iter())
-        {
-            navigation = navigation.max(completion.request_id);
-        }
-        for result in &state.pending_results {
-            navigation = navigation.max(result.request_id());
-        }
+        navigation = navigation.max(maximum_owned_navigation_request(state));
         if let Some(pursuit) = &state.pursuit {
             execution = execution.max(pursuit.execution_id);
-            for request in pursuit.leg.navigation_request_ids().into_iter().flatten() {
-                navigation = navigation.max(request);
-            }
         }
     }
     (navigation, execution)
+}
+
+pub(super) fn maximum_owned_navigation_request(state: &BehaviorOwnedNavigationSnapshot) -> u64 {
+    state
+        .destination
+        .iter()
+        .map(|destination| destination.request_id)
+        .chain(state.docking.iter().map(|dock| dock.request_id))
+        .chain(
+            state
+                .move_completion
+                .iter()
+                .chain(&state.docking_completion)
+                .map(|completion| completion.request_id),
+        )
+        .chain(
+            state
+                .pending_results
+                .iter()
+                .map(|result| result.request_id()),
+        )
+        .chain(
+            state
+                .pursuit
+                .iter()
+                .flat_map(|pursuit| pursuit.leg.navigation_request_ids().into_iter().flatten()),
+        )
+        .chain(state.action_navigation_requests())
+        .max()
+        .unwrap_or_default()
 }

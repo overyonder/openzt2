@@ -1,5 +1,6 @@
 use bevy::ecs::{entity::EntityHashSet, system::SystemParam};
 use bevy::prelude::*;
+use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
 use openzt2_zoo_state::topology::topology_edit_types::TopologyChanged;
 use openzt2_zoo_state::topology::topology_graph_types::TopologyGrid;
@@ -19,10 +20,12 @@ use super::fence_navigation_crossing_types::*;
 /// Dirties routes whose remaining polyline intersects a changed topology rectangle.
 pub(super) fn invalidate_routes_after_topology_changes(
     mut topology_changes: MessageReader<TopologyChanged>,
-    active_navigation_graph: Option<Res<ActiveTerrainDerivedNavigationGraph>>,
-    topology_grid: Res<TopologyGrid>,
+    active_navigation_graph: Option<Single<&ActiveTerrainDerivedNavigationGraph>>,
+    topology_grid: Single<&TopologyGrid>,
     mut active_routes: Query<(&GlobalTransform, &Route, &mut Destination)>,
 ) {
+    let active_navigation_graph = active_navigation_graph.map(Single::into_inner);
+    let topology_grid = topology_grid.into_inner();
     let bounds: Vec<_> = topology_changes
         .read()
         .map(|change| calculate_topology_rectangle_world_cell_bounds(change.bounds, *topology_grid))
@@ -47,7 +50,8 @@ pub(super) fn invalidate_routes_after_topology_changes(
 
 #[derive(SystemParam)]
 pub(super) struct FenceNavigationCrossingSources<'w, 's> {
-    fences: Query<'w, 's, (Entity, FenceSegment)>,
+    fences: Query<'w, 's, (FenceSegment, &'static WorldMember)>,
+    world_fences: Query<'w, 's, (Entity, &'static WorldMember), With<FenceEdge>>,
     changed_fences:
         Query<'w, 's, Entity, Or<(Changed<FenceEdge>, Changed<FenceStart>, Changed<FenceEnd>)>>,
     incident: Query<
@@ -68,8 +72,12 @@ pub(super) struct FenceNavigationCrossingSources<'w, 's> {
 
 pub(super) fn synchronize_fence_navigation_crossings(
     mut commands: Commands,
-    active_graph: Option<Res<ActiveTerrainDerivedNavigationGraph>>,
-    grid: Res<TopologyGrid>,
+    roots: Query<(
+        Entity,
+        Option<&ActiveTerrainDerivedNavigationGraph>,
+        Ref<TopologyGrid>,
+        &FenceNavigationCrossingIndex,
+    )>,
     mut sources: FenceNavigationCrossingSources,
     mut installations: MessageReader<super::world_navigation_installation::NavigationGraphReplaced>,
     mut path_changes: MessageReader<
@@ -78,23 +86,26 @@ pub(super) fn synchronize_fence_navigation_crossings(
     mut terrain_changes: MessageReader<
         super::terrain_edit_navigation_refresh::NavigationTerrainGraphChanged,
     >,
-    index: Res<FenceNavigationCrossingIndex>,
+    mut removed_graphs: RemovedComponents<ActiveTerrainDerivedNavigationGraph>,
     mut crossed_edges: Local<Vec<DirectedNavigationEdge>>,
 ) {
-    let refresh_all = (installations.read().count() != 0)
-        | (path_changes.read().filter(|change| change.elevated).count() != 0)
-        | (terrain_changes.read().count() != 0)
-        | grid.is_changed();
-    let Some((graph, cell_size, maximum_cell)) = active_graph.and_then(|active| {
-        let graph = active.into_inner().terrain_derived_navigation_graph();
-        let (cell_size, maximum_cell) = navigation_cell_bounds(graph)?;
-        Some((graph, cell_size, maximum_cell))
-    }) else {
-        for &edge in index.0.values() {
-            commands.entity(edge).try_despawn();
-        }
-        return;
-    };
+    let mut refresh_roots: EntityHashSet = installations
+        .read()
+        .map(|event| event.0)
+        .chain(
+            path_changes
+                .read()
+                .filter(|change| change.elevated)
+                .map(|change| change.root),
+        )
+        .chain(terrain_changes.read().map(|event| event.0))
+        .chain(removed_graphs.read())
+        .collect();
+    refresh_roots.extend(
+        roots
+            .iter()
+            .filter_map(|(root, _, grid, _)| grid.is_changed().then_some(root)),
+    );
     let nodes = sources
         .changed_nodes
         .iter()
@@ -107,14 +118,30 @@ pub(super) fn synchronize_fence_navigation_crossings(
         affected.extend(outgoing.into_iter().flat_map(|edges| edges.iter()));
         affected.extend(incoming.into_iter().flat_map(|edges| edges.iter()));
     }
-    if refresh_all {
-        affected.extend(sources.fences.iter().map(|(entity, _)| entity));
+    if !refresh_roots.is_empty() {
+        affected.extend(
+            sources.world_fences.iter().filter_map(|(fence, member)| {
+                refresh_roots.contains(&member.root).then_some(fence)
+            }),
+        );
     }
     let mut new_edges = bevy::platform::collections::HashMap::new();
     for fence_entity in affected {
+        let Ok((fence, member)) = sources.fences.get(fence_entity) else {
+            continue;
+        };
+        let Ok((_, graph, grid, index)) = roots.get(member.root) else {
+            continue;
+        };
         crossed_edges.clear();
-        if let Ok((_, fence)) = sources.fences.get(fence_entity) {
-            if let (Ok(a), Ok(b)) = (sources.nodes.get(fence.a()), sources.nodes.get(fence.b())) {
+        if let Some(graph) =
+            graph.map(ActiveTerrainDerivedNavigationGraph::terrain_derived_navigation_graph)
+        {
+            if let (Some((cell_size, maximum_cell)), Ok(a), Ok(b)) = (
+                navigation_cell_bounds(graph),
+                sources.nodes.get(fence.a()),
+                sources.nodes.get(fence.b()),
+            ) {
                 collect_crossed_navigation_edges(
                     graph,
                     cell_size,
@@ -144,8 +171,8 @@ pub(super) fn synchronize_fence_navigation_crossings(
         for &key in crossed_edges.iter().filter(|&key| !existing.contains(key)) {
             let edge = index.0.get(&key).copied().unwrap_or_else(|| {
                 *new_edges
-                    .entry(key)
-                    .or_insert_with(|| commands.spawn(NavigationEdgeKey(key)).id())
+                    .entry((member.root, key))
+                    .or_insert_with(|| commands.spawn((*member, NavigationEdgeKey(key))).id())
             });
             commands.spawn((CrossingOfFence(fence_entity), CrossingOfEdge(edge)));
         }

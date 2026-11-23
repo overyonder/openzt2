@@ -30,6 +30,7 @@ use parameters::{BehaviorSnapshotApplication, PreparedBehaviorActor};
 use state_application::apply_prepared_behavior_actor;
 
 pub(super) fn prepare_behavior_snapshot_before_world_replacement(
+    root: Entity,
     records: &[BehaviorActorSnapshot],
     application: &BehaviorSnapshotApplication,
     retained: &mut Vec<Handle<BehaviorDocumentAsset>>,
@@ -64,7 +65,8 @@ pub(super) fn prepare_behavior_snapshot_before_world_replacement(
     }
     let capacity = application
         .capacity
-        .as_deref()
+        .get(root)
+        .ok()
         .filter(|capacity| capacity.is_valid());
     if records.iter().any(|record| record.navigation.is_some()) && capacity.is_none() {
         return Ok(false);
@@ -97,6 +99,7 @@ pub(super) fn prepare_behavior_snapshot_before_world_replacement(
 
 pub(super) fn restore_behavior_actor_snapshots(
     commands: &mut Commands,
+    root: Entity,
     records: &[BehaviorActorSnapshot],
     application: &mut BehaviorSnapshotApplication,
     retained: &mut Vec<Handle<BehaviorDocumentAsset>>,
@@ -130,7 +133,8 @@ pub(super) fn restore_behavior_actor_snapshots(
     validate_behavior_retry_references(&retry_records, &identities)?;
     let capacity = application
         .capacity
-        .as_deref()
+        .get(root)
+        .ok()
         .filter(|capacity| capacity.is_valid());
     if records.iter().any(|record| record.navigation.is_some()) && capacity.is_none() {
         return Ok(false);
@@ -205,33 +209,6 @@ pub(super) fn restore_behavior_actor_snapshots(
         &identities,
         application,
     )?;
-    // Reserve the whole restored identity range before a request can allocate
-    // a replacement leg, including identities belonging to later actor rows.
-    for record in records {
-        application
-            .executions
-            .reserve_restored(record.task.execution_id);
-        if let Some(owner) = &record.synchronized {
-            application
-                .executions
-                .reserve_restored(owner.target_execution_id);
-        }
-        if let Some(nav) = &record.navigation {
-            for request in
-                nav.move_completion
-                    .iter()
-                    .chain(&nav.docking_completion)
-                    .map(|pending| pending.request_id)
-                    .chain(nav.destination.map(|destination| destination.request_id))
-                    .chain(nav.docking.iter().map(|dock| dock.request_id))
-                    .chain(nav.pursuit.iter().flat_map(|pending| {
-                        pending.leg.navigation_request_ids().into_iter().flatten()
-                    }))
-            {
-                application.requests.reserve_restored(request);
-            }
-        }
-    }
     // The complete plan is valid. Auxiliary task objects are created only now.
     for actor in &prepared {
         commands
@@ -323,7 +300,7 @@ pub(super) fn restore_behavior_actor_snapshots(
         }
     }
     for (record, prepared) in records.iter().zip(prepared) {
-        apply_prepared_behavior_actor(commands, record, prepared, &identities, application);
+        apply_prepared_behavior_actor(commands, root, record, prepared, &identities, application);
     }
     Ok(true)
 }

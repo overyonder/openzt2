@@ -1,6 +1,8 @@
 use bevy::prelude::*;
 use openzt2_game_data::ui_document::action::animal_shows::{UiShowAction, UiShowPlatformUpgrade};
 use openzt2_interface_state::information::entity_selection_types::SelectionChanged;
+use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
+use openzt2_zoo_state::economy::zoo_cash_types::{UnlimitedZooCash, ZooCash};
 
 use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
@@ -28,8 +30,8 @@ pub(super) fn project_show_platform_upgrade_selection_and_purchase_availability_
     active_world_definitions: Res<WorldDefinitions>,
     selected_entity: WorldUiSelection,
     mut selection_changes: MessageReader<SelectionChanged>,
-    cash: Res<openzt2_zoo_state::economy::zoo_cash_types::ZooCash>,
-    unlimited_cash: Option<Res<openzt2_zoo_state::economy::zoo_cash_types::UnlimitedZooCash>>,
+    economy: Query<(Ref<ZooCash>, Option<Ref<UnlimitedZooCash>>)>,
+    members: Query<&WorldMember>,
     roots: Query<(Ref<UiDocumentRoot>, Option<Ref<ChildOf>>)>,
     controllers: Query<Ref<SelectedShowPlatformUpgrade>>,
     stages: Query<Ref<ShowStage>>,
@@ -49,16 +51,16 @@ pub(super) fn project_show_platform_upgrade_selection_and_purchase_availability_
     let stage = selected_entity
         .subject()
         .filter(|entity| stages.contains(*entity));
+    let budget = stage.and_then(|stage| economy.get(members.get(stage).ok()?.root).ok());
     let upgrades_removed = removed_upgrades.read().any(|entity| Some(entity) == stage);
     removed_upgrades.clear();
     let projection_inputs_changed = documents.is_changed()
         || world_definition_assets.is_changed()
         || active_world_definitions.is_changed()
         || selection_changed
-        || cash.is_changed()
-        || unlimited_cash
-            .as_ref()
-            .is_some_and(|cash| cash.is_changed())
+        || budget.as_ref().is_some_and(|(cash, unlimited)| {
+            cash.is_changed() || unlimited.as_ref().is_some_and(|policy| policy.is_changed())
+        })
         || roots.iter().any(|(root, parent)| {
             root.is_changed() || parent.is_some_and(|parent| parent.is_changed())
         })
@@ -117,7 +119,10 @@ pub(super) fn project_show_platform_upgrade_selection_and_purchase_availability_
                         already_installed
                             || (stages.contains(stage)
                                 && purchase_cost_cents.is_some_and(|purchase_cost_cents| {
-                                    unlimited_cash.is_some() || cash.0 .0 >= purchase_cost_cents
+                                    budget.as_ref().is_some_and(|(cash, policy)| {
+                                        policy.as_ref().is_some_and(|policy| policy.0)
+                                            || cash.0 .0 >= purchase_cost_cents
+                                    })
                                 }))
                     });
                     if let Some(interaction_enabled) = interaction_enabled.as_deref_mut() {

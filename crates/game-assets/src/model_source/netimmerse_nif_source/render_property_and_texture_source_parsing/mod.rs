@@ -526,6 +526,28 @@ pub(super) fn parse_texture_effect(
     })
 }
 
+pub(super) fn parse_palette(
+    source_bytes: &[u8],
+    cursor: &mut usize,
+    source_path: &str,
+) -> Result<Vec<[u8; 4]>> {
+    let _has_alpha = read_u8(source_bytes, cursor, source_path, "NiPalette alpha flag")?;
+    let entry_count =
+        read_u32_little_endian(source_bytes, cursor, source_path, "NiPalette entry count")?;
+    let stored_entries = if entry_count == 16 { 16 } else { 256 };
+    let entries = read_raw_source_bytes(
+        source_bytes,
+        cursor,
+        source_path,
+        stored_entries * 4,
+        "NiPalette entries",
+    )?;
+    Ok(entries
+        .chunks_exact(4)
+        .map(|rgba| [rgba[0], rgba[1], rgba[2], rgba[3]])
+        .collect())
+}
+
 pub(super) fn parse_pixel_data(
     source_bytes: &[u8],
     cursor: &mut usize,

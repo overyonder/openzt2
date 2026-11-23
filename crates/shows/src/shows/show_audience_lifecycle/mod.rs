@@ -1,4 +1,5 @@
 use bevy::{ecs::relationship::RelationshipTarget, prelude::*};
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::behavior_action_actors;
 
 use super::{
     authored_show_rewards::{AuthoredShowRewards, AuthoredShowRewardsSource},
@@ -57,7 +58,7 @@ pub(super) fn invite_guests_to_starting_shows(
     tokens: Query<&BehaviorSelfToken>,
     definitions: Res<WorldDefinitions>,
     assets: Res<Assets<WorldDefinitionAsset>>,
-    clock: Res<ZooClock>,
+    clock: Single<&ZooClock>,
     mut commands: Commands,
 ) {
     if runs.is_empty() {
@@ -154,9 +155,10 @@ pub(super) fn invite_guests_to_starting_shows(
 }
 
 pub(super) fn bind_ready_show_watch_actions(
+    activation: In<Option<Entity>>,
     mut commands: Commands,
-    clock: Res<ZooClock>,
-    watching: Query<
+    clock: Single<&ZooClock>,
+    mut watching: Query<
         (
             Entity,
             &GuestPhase,
@@ -193,7 +195,12 @@ pub(super) fn bind_ready_show_watch_actions(
     targets: Query<(&WorldMember, Option<&Children>), Without<ShowStage>>,
     viewing_locations: Query<&ShowViewingLocationOf>,
 ) {
-    for (guest, phase, world, task, instruction, has_history) in &watching {
+    for (guest, phase, world, task, instruction, has_history) in
+        behavior_action_actors(&mut watching, activation.0)
+    {
+        if activation.0.is_none() && !instruction.can_update_after_activation(clock.tick) {
+            continue;
+        }
         if *phase != GuestPhase::Visiting
             || task.next_action_tick > clock.tick
             || blocked.contains(guest)
@@ -228,7 +235,7 @@ pub(super) fn bind_ready_show_watch_actions(
                         .is_ok_and(|run| run.phase != ShowPhase::BetweenShows)
             })
         {
-            openzt2_zoo_state::animal_behavior::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation(guest, &mut commands);
+            openzt2_zoo_state::behavior_task_execution_types::running_actions::mark_behavior_task_for_failure_and_stop_navigation(guest, &mut commands);
             continue;
         }
         let Some(location) = children
@@ -240,7 +247,7 @@ pub(super) fn bind_ready_show_watch_actions(
                     .is_ok_and(|owner| owner.0 == stage)
             })
         else {
-            openzt2_zoo_state::animal_behavior::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation(guest, &mut commands);
+            openzt2_zoo_state::behavior_task_execution_types::running_actions::mark_behavior_task_for_failure_and_stop_navigation(guest, &mut commands);
             continue;
         };
         let mut guest_commands = commands.entity(guest);
@@ -323,7 +330,7 @@ pub(super) fn complete_watch_actions_after_show(
         ),
         With<RunBehaviorWatchShow>,
     >,
-    clock: Res<ZooClock>,
+    clock: Single<&ZooClock>,
     definitions: Res<WorldDefinitions>,
     definition_assets: Res<Assets<WorldDefinitionAsset>>,
     rewards_source: Res<AuthoredShowRewardsSource>,

@@ -5,10 +5,13 @@ use super::award_and_progression_fact_types::{
 };
 
 pub(super) fn apply_requested_scenario_award_point_total_adjustments(
-    mut scenario_award_point_total: ResMut<ScenarioAwardPointTotal>,
+    mut totals: Query<&mut ScenarioAwardPointTotal>,
     mut requested_adjustments: MessageReader<AdjustScenarioAwardPointTotalRequest>,
 ) {
     for requested_adjustment in requested_adjustments.read() {
+        let Ok(mut scenario_award_point_total) = totals.get_mut(requested_adjustment.root) else {
+            continue;
+        };
         scenario_award_point_total.0 = if requested_adjustment.delta >= 0 {
             scenario_award_point_total
                 .0

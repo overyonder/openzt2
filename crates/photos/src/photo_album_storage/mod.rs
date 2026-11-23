@@ -1,9 +1,9 @@
 //! Creation of default photo storage and deletion of stored photo entities.
 
+use openzt2_interface_state::photos::photo_album_types::DEFAULT_PHOTO_ALBUM_NAME_KEY;
 use openzt2_interface_state::photos::photo_album_types::DefaultPhotoAlbum;
 use openzt2_interface_state::photos::photo_album_types::DefaultPhotoAlbumStorageInitializedForWorld;
 use openzt2_interface_state::photos::photo_album_types::PhotoAlbum;
-use openzt2_interface_state::photos::photo_album_types::DEFAULT_PHOTO_ALBUM_NAME_KEY;
 use openzt2_interface_state::photos::photo_capture_types::Photo;
 
 use bevy::prelude::*;
@@ -22,14 +22,18 @@ use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 
 use super::{
     photo_album_types::{
-        ActivePhotoAlbum, DeletePhotoRequest, PhotoAlbumCapacityPages, PhotoAlbumPage,
-        PhotoCameraRoll, INITIAL_PHOTO_ALBUM_SPREADS,
+        ActivePhotoAlbum, DeletePhotoRequest, INITIAL_PHOTO_ALBUM_SPREADS, PhotoAlbumCapacityPages,
+        PhotoAlbumPage, PhotoCameraRoll,
     },
     photo_capture_types::{PhotoCaptureFailed, PhotoFailure},
+    photo_configuration::{PhotoConfiguration, PhotoConfigurationSource},
 };
 
 pub(super) fn initialize_default_photo_album_and_camera_roll_for_loaded_worlds(
     profile: Res<ProfileOptions>,
+    configuration: Res<PhotoConfigurationSource>,
+    configurations: Res<Assets<PhotoConfiguration>>,
+    server: Res<AssetServer>,
     mut roots: Query<
         (Entity, &mut PersistentIdAllocator),
         (
@@ -50,6 +54,19 @@ pub(super) fn initialize_default_photo_album_and_camera_roll_for_loaded_worlds(
     mut commands: Commands,
     mut failed: MessageWriter<PhotoCaptureFailed>,
 ) {
+    if roots.is_empty() {
+        return;
+    }
+    let album_spreads = if let Some(configuration) = configurations.get(&configuration.0) {
+        configuration.album_spreads
+    } else if matches!(
+        server.load_state(configuration.0.id()),
+        bevy::asset::LoadState::Failed(_)
+    ) {
+        INITIAL_PHOTO_ALBUM_SPREADS
+    } else {
+        return;
+    };
     // Allocate at the post-import boundary; pending text must not move this ID.
     for (root, mut allocator) in &mut roots {
         let member = WorldMember { root };
@@ -61,7 +78,7 @@ pub(super) fn initialize_default_photo_album_and_camera_roll_for_loaded_worlds(
                 DefaultPhotoAlbum,
                 ActivePhotoAlbum,
                 PhotoAlbumPage::default(),
-                PhotoAlbumCapacityPages(INITIAL_PHOTO_ALBUM_SPREADS),
+                PhotoAlbumCapacityPages(album_spreads),
             ));
         } else {
             let id = match allocator.allocate() {
@@ -82,7 +99,7 @@ pub(super) fn initialize_default_photo_album_and_camera_roll_for_loaded_worlds(
                 ActivePhotoAlbum,
                 DefaultPhotoAlbum,
                 PhotoAlbumPage::default(),
-                PhotoAlbumCapacityPages(INITIAL_PHOTO_ALBUM_SPREADS),
+                PhotoAlbumCapacityPages(album_spreads),
             ));
         }
         if !albums

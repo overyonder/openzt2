@@ -2,7 +2,9 @@ use bevy::prelude::*;
 use openzt2_world_state::world_spawn::world_membership_types::{WorldMember, WorldRoot};
 
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
-use openzt2_zoo_state::habitat::habitat_types::HabitatRegion;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_zoo_state::habitat::habitat_types::{HabitatChanged, HabitatRegion, HabitatSummary};
 use openzt2_zoo_state::terrain::terrain_chunk_identity_type::TerrainChunkId;
 use openzt2_zoo_state::terrain::terrain_chunk_types::{EditedTerrainSamples, TerrainChunk};
 use openzt2_zoo_state::terrain::terrain_edit_rectangle_operations::{
@@ -11,12 +13,16 @@ use openzt2_zoo_state::terrain::terrain_edit_rectangle_operations::{
 use openzt2_zoo_state::terrain::terrain_edit_types::{TerrainChanged, TerrainEdit};
 use openzt2_zoo_state::topology::topology_graph_types::{FenceEdge, TopologyGrid, TopologyNode};
 
-use super::aquatic_simulation_types::{Tank, TankGeometry};
+use super::aquatic_simulation_types::{Tank, TankEnvironment, TankGeometry};
 use super::tank_floor_terrain_excavation::{
     excavate_changed_tank_floors, inside_walls_beyond,
     queue_terrain_restoration_after_tank_removal, RestoreTankFloorTerrain, TankFloorExcavation,
 };
 use super::tank_geometry_edit_tests::install_flat_terrain;
+use super::tank_geometry_projection::{
+    project_changed_habitat_and_terrain_geometry_into_tanks, sample_changed_tank_floor_levels,
+    TankFloorTerrainDisturbed,
+};
 
 #[test]
 fn tank_floor_excavation_keeps_samples_on_and_beside_the_walls() {
@@ -96,10 +102,22 @@ fn a_tank_floor_is_dug_into_the_terrain_and_filled_back_when_the_tank_goes() {
     app.init_resource::<Assets<
         openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset,
     >>()
+    .init_resource::<Assets<WorldDefinitionAsset>>()
+    .init_resource::<WorldDefinitions>()
     .add_message::<TerrainChanged>()
+    .add_message::<HabitatChanged>()
+    .add_message::<TankFloorTerrainDisturbed>()
     .add_message::<RestoreTankFloorTerrain>()
     .add_observer(queue_terrain_restoration_after_tank_removal)
-    .add_systems(Update, excavate_changed_tank_floors);
+    .add_systems(
+        Update,
+        (
+            project_changed_habitat_and_terrain_geometry_into_tanks,
+            sample_changed_tank_floor_levels,
+            excavate_changed_tank_floors,
+        )
+            .chain(),
+    );
     let root = app
         .world_mut()
         .spawn((
@@ -149,6 +167,13 @@ fn a_tank_floor_is_dug_into_the_terrain_and_filled_back_when_the_tank_goes() {
             HabitatRegion {
                 topology_cells: Box::default(),
                 area_square_metres: 25.0,
+            },
+            TankEnvironment::default(),
+            HabitatSummary {
+                land_area_square_metres: 0.0,
+                water_area_square_metres: 25.0,
+                biome_areas_square_metres: Box::default(),
+                boundary_is_breached: false,
             },
         ))
         .id();

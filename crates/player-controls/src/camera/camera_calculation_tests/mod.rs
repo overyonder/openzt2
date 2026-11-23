@@ -4,14 +4,13 @@ use bevy::prelude::*;
 
 use super::camera_runtime_state_types::OverheadRig;
 use super::math::advance_pan_accumulators;
-use super::math::advance_transition;
 use super::math::apply_camera_relative_pan_to_overhead_focus;
 use super::math::apply_overhead_zoom_delta;
 use super::math::consume_wheel_zoom;
 use super::math::overhead_pose;
 use super::math::queue_wheel_zoom;
 use super::math::WheelZoomQueue;
-use crate::camera::camera_execution_types::CameraEasing;
+use super::systems::camera_mode_transitions::advance_camera_transition_pose;
 use crate::camera::camera_execution_types::CameraTransition;
 use crate::camera::camera_execution_types::CameraTuning;
 
@@ -240,15 +239,10 @@ fn transition_writes_the_exact_endpoint() {
     let mut camera_transition = CameraTransition {
         from: transition_start,
         to: transition_end,
-        elapsed: 0.0,
-        duration: 0.75,
-        easing: CameraEasing::SmoothStep,
+        timer: Timer::from_seconds(0.75, TimerMode::Once),
     };
-    let mut actual_camera_transform = transition_start;
-    assert!(advance_transition(
-        &mut camera_transition,
-        &mut actual_camera_transform,
-        2.0
-    ));
+    let (actual_camera_transform, complete) =
+        advance_camera_transition_pose(&mut camera_transition, std::time::Duration::from_secs(2));
+    assert!(complete);
     assert_eq!(actual_camera_transform, transition_end);
 }

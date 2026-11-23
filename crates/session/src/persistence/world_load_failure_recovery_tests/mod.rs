@@ -39,7 +39,7 @@ use openzt2_world_state::world_spawn::world_hydration_types::WorldHydration;
 use openzt2_world_state::world_spawn::world_load_completion_marker::WorldLoadCompletionSet;
 use openzt2_world_state::world_spawn::world_load_completion_marker::{
     ImportedPersistentIdsReserved, StartingFenceTopologyHydrated, StartingPathsHydrated,
-    StartingSpawnValuesApplied, StartingTerrainHydrated, WorldClockInitialized, WorldLoadCompleted,
+    StartingSpawnValuesApplied, StartingTerrainHydrated, WorldLoadCompleted,
 };
 use openzt2_world_state::world_spawn::world_load_failure::WorldLoadFailed;
 use openzt2_world_state::world_spawn::world_load_failure::WorldLoadFailure;
@@ -139,7 +139,7 @@ fn begin_normal_reentry(app: &mut App) -> Entity {
     assert!(app.world().get::<PersistentIdAllocator>(root).is_some());
     assert!(app.world().get::<WorldHydration>(root).is_some());
     assert!(app.world().get::<WorldLoadOperationOwner>(root).is_none());
-    assert!(app.world().contains_resource::<ZooClock>());
+    assert!(app.world().get::<ZooClock>(root).is_some());
     root
 }
 
@@ -163,7 +163,12 @@ fn post_baseline_reference_failure_retires_its_world_and_allows_normal_reentry()
         .remove::<WorldLoadCompleted>()
         .insert((
             WorldHydration::new_pending_world_hydration(0),
-            WorldClockInitialized,
+            ZooClock {
+                tick: 0,
+                fractional_tick: Default::default(),
+                absolute_day: 0,
+                tick_in_day: 0,
+            },
             ImportedPersistentIdsReserved,
             StartingTerrainHydrated,
             StartingFenceTopologyHydrated,
@@ -204,10 +209,22 @@ fn post_baseline_reference_failure_retires_its_world_and_allows_normal_reentry()
     assert!(app.world().get_entity(member).is_err());
     assert!(app.world().get_entity(unrelated).is_ok());
     assert!(app.world().get::<PersistentIdAllocator>(root).is_none());
-    assert!(!app.world().contains_resource::<ZooClock>());
-    assert!(!app.world().contains_resource::<ZooCalendar>());
-    assert!(!app.world().contains_resource::<SimulationControl>());
-    assert!(!app.world().contains_resource::<ZooSeed>());
+    assert!(app
+        .world()
+        .try_query::<&ZooClock>()
+        .is_none_or(|mut state| state.iter(app.world()).next().is_none()));
+    assert!(app
+        .world()
+        .try_query::<&ZooCalendar>()
+        .is_none_or(|mut state| state.iter(app.world()).next().is_none()));
+    assert!(app
+        .world()
+        .try_query::<&SimulationControl>()
+        .is_none_or(|mut state| state.iter(app.world()).next().is_none()));
+    assert!(app
+        .world()
+        .try_query::<&ZooSeed>()
+        .is_none_or(|mut state| state.iter(app.world()).next().is_none()));
     assert!(app.world().get_entity(operation).is_err());
     let replacement = begin_normal_reentry(&mut app);
     assert_ne!(replacement, root);
@@ -305,17 +322,34 @@ fn hydration_failure_retires_simulation_before_the_snapshot_coordinator_observes
         .unwrap();
     app.world_mut().entity_mut(root).insert((
         WorldHydration::new_pending_world_hydration(0),
-        WorldClockInitialized,
+        ZooClock {
+            tick: 0,
+            fractional_tick: Default::default(),
+            absolute_day: 0,
+            tick_in_day: 0,
+        },
         WorldLoadFailure::MissingDependency(AssetId([77; 16])),
     ));
     app.update();
     assert!(app.world().get_entity(root).is_err());
     assert!(app.world().get_entity(operation).is_err());
     assert!(app.world().get::<PersistentIdAllocator>(root).is_none());
-    assert!(!app.world().contains_resource::<ZooClock>());
-    assert!(!app.world().contains_resource::<ZooCalendar>());
-    assert!(!app.world().contains_resource::<SimulationControl>());
-    assert!(!app.world().contains_resource::<ZooSeed>());
+    assert!(app
+        .world()
+        .try_query::<&ZooClock>()
+        .is_none_or(|mut state| state.iter(app.world()).next().is_none()));
+    assert!(app
+        .world()
+        .try_query::<&ZooCalendar>()
+        .is_none_or(|mut state| state.iter(app.world()).next().is_none()));
+    assert!(app
+        .world()
+        .try_query::<&SimulationControl>()
+        .is_none_or(|mut state| state.iter(app.world()).next().is_none()));
+    assert!(app
+        .world()
+        .try_query::<&ZooSeed>()
+        .is_none_or(|mut state| state.iter(app.world()).next().is_none()));
     assert_eq!(
         *app.world().resource::<State<GamePhase>>().get(),
         GamePhase::Loading
@@ -330,7 +364,10 @@ fn hydration_failure_retires_simulation_before_the_snapshot_coordinator_observes
         *app.world().resource::<State<GamePhase>>().get(),
         GamePhase::MapSelection
     );
-    assert!(!app.world().contains_resource::<ZooClock>());
+    assert!(app
+        .world()
+        .try_query::<&ZooClock>()
+        .is_none_or(|mut state| state.iter(app.world()).next().is_none()));
     begin_normal_reentry(&mut app);
 }
 

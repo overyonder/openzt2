@@ -48,12 +48,7 @@ use openzt2_world_state::world_spawn::{
     world_unloading::UnloadWorld,
 };
 use openzt2_zoo_state::{
-    economy::{
-        guest_admission_types::{AdmissionPrice, ZooAdmissionsOpen},
-        monthly_finance_types::MonthlyFinanceHistory,
-        zoo_cash_types::ZooCash,
-    },
-    locomotion::locomotion_types::{ActiveTerrainDerivedNavigationGraph, LocomotionCapacity},
+    locomotion::locomotion_types::LocomotionCapacity,
     progression::research_types::{
         ResearchProject, ResearchProjectPersistentId, WorldResearchItems,
     },
@@ -70,7 +65,7 @@ use super::{
             restore_saved_research_projects, ProgressionSnapshotApplicationParameters,
             SavedResearchProjects,
         },
-        simulation_time_snapshot_section::SimulationTimeSnapshotLoadResources,
+        simulation_time_snapshot_section::SimulationTimeSnapshotRestore,
         snapshot_container_types::ReusableWorldSnapshotByteBuffer,
     },
     behavior_snapshot_application::{
@@ -78,8 +73,7 @@ use super::{
     },
     donation_snapshot_section::{restore_donation_totals, RestoredDonationComponents},
     economy_snapshot_application::{
-        apply_economy_snapshot_records_to_live_economy_resources_and_facilities,
-        RestoredFacilityEconomy,
+        apply_economy_snapshot_records, RestoredFacilityEconomy, RestoredZooEconomy,
     },
     fence_topology_snapshot_section::restore_snapshot_fence_edges,
     loaded_snapshot_live_world_application::restore_snapshot_sections,

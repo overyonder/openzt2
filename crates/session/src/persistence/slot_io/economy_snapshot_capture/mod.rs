@@ -1,3 +1,6 @@
+use super::super::persistence_failure_types::WorldSnapshotPersistenceFailure;
+use bevy::prelude::Entity;
+use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_zoo_state::economy::money_types::Money;
 use openzt2_zoo_state::economy::monthly_finance_types::FinanceMetric;
 use openzt2_zoo_state::economy::monthly_finance_types::FinancePeriod;
@@ -11,15 +14,26 @@ use super::{
 
 pub(super) fn capture_economy_snapshot_records_from_live_world(
     world_snapshot_capture_queries: &EconomyCaptureQueries,
-) -> EconomySnapshotRecords {
+    root: Entity,
+) -> Result<EconomySnapshotRecords, WorldSnapshotPersistenceFailure> {
     use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
     use openzt2_zoo_state::economy::{
         behavior_transaction_state::EconomyUsage, facility_economy_types::*,
     };
+    let (cash, price, admissions, history, policy) = world_snapshot_capture_queries
+        .roots
+        .get(root)
+        .map_err(|_| WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference)?;
     let mut entity_economy_records = world_snapshot_capture_queries
         .entities_with_economy_state
         .iter()
         .filter_map(|entity| {
+            if entity
+                .get::<WorldMember>()
+                .is_none_or(|member| member.root != root)
+            {
+                return None;
+            }
             let profit = entity.get::<FacilityProfit>();
             let opening = entity.get::<OperatingSinceDay>();
             let price_index = entity.get::<FacilityPriceIndex>();
@@ -77,40 +91,25 @@ pub(super) fn capture_economy_snapshot_records_from_live_world(
         .collect::<Vec<_>>();
     entity_economy_records.sort_unstable_by_key(|record| record.persistent_identifier.0);
 
-    EconomySnapshotRecords {
-        zoo_cash: world_snapshot_capture_queries.zoo_cash.0,
-        unlimited_cash: Some(world_snapshot_capture_queries.unlimited_cash.is_some()),
-        admission_price: world_snapshot_capture_queries.zoo_admission_price.0,
-        admissions_open: world_snapshot_capture_queries.zoo_admissions_open_state.0,
-        current_calendar_month: world_snapshot_capture_queries
-            .monthly_finance_history
-            .current_calendar_month_ordinal(),
+    Ok(EconomySnapshotRecords {
+        zoo_cash: cash.0,
+        unlimited_cash: Some(policy.is_some_and(|policy| policy.0)),
+        admission_price: price.adult,
+        admissions_open: admissions.0,
+        current_calendar_month: history.current_calendar_month_ordinal(),
         lifetime_income: Money(
-            world_snapshot_capture_queries
-                .monthly_finance_history
-                .finance_metric_value(FinanceMetric::Income, FinancePeriod::Lifetime),
+            history.finance_metric_value(FinanceMetric::Income, FinancePeriod::Lifetime),
         ),
         lifetime_expenses: Money(
-            world_snapshot_capture_queries
-                .monthly_finance_history
-                .finance_metric_value(FinanceMetric::Expenses, FinancePeriod::Lifetime),
+            history.finance_metric_value(FinanceMetric::Expenses, FinancePeriod::Lifetime),
         ),
         lifetime_donation_income: Money(
-            world_snapshot_capture_queries
-                .monthly_finance_history
-                .finance_metric_value(FinanceMetric::DonationIncome, FinancePeriod::Lifetime),
+            history.finance_metric_value(FinanceMetric::DonationIncome, FinancePeriod::Lifetime),
         ),
-        lifetime_users: world_snapshot_capture_queries
-            .monthly_finance_history
+        lifetime_users: history
             .finance_metric_value(FinanceMetric::TotalUsers, FinancePeriod::Lifetime),
-        monthly_finance_history_initialized: world_snapshot_capture_queries
-            .monthly_finance_history
-            .has_initialized_month(),
-        monthly_finance_records: world_snapshot_capture_queries
-            .monthly_finance_history
-            .retained_month_finance_records()
-            .copied()
-            .collect(),
+        monthly_finance_history_initialized: history.has_initialized_month(),
+        monthly_finance_records: history.retained_month_finance_records().copied().collect(),
         entity_economy_records,
-    }
+    })
 }

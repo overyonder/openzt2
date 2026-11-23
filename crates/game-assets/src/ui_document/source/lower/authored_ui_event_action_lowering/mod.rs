@@ -299,7 +299,7 @@ pub(super) fn lower_authored_ui_event_to_canonical_action(
         | "ZT_KEEPER_ASSIGNMENT_SELECTED"
         | "ZT_TRAINER_ASSIGNMENT_SELECTED"
         | "ZT_UNASSIGN_WORKER" => {
-            staff_command_lowering::lower_staff_command(trigger, event, role, current, input)
+            staff_command_lowering::lower_staff_command(trigger, event, input)
         }
         "UI_SEND_TEXT" => {
             text_submission_command_lowering::lower_text_submission_command(trigger, event, role)

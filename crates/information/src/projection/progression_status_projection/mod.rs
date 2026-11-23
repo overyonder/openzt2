@@ -27,13 +27,14 @@ pub(crate) fn project_progression_status_to_authored_information_bindings(
     active_world_definitions: Res<WorldDefinitions>,
     active_localization: Res<LocalizationPrecedenceIndex>,
     localization_assets: Res<Assets<LocalizationAsset>>,
-    unlocked_catalogue_definitions: Res<UnlockedCatalogueDefinitionSet>,
+    unlocked_catalogue_definitions: Single<&UnlockedCatalogueDefinitionSet>,
     research_projects: Query<&ResearchProject>,
     earned_progression_awards: Query<&EarnedProgressionAward>,
     mut authored_text: Query<(&UiTextBinding, &mut Text)>,
     mut authored_visibility: Query<(&UiVisibleBinding, &mut Visibility)>,
     mut authored_values: Query<(&UiValueBinding, &mut UiValue)>,
 ) {
+    let unlocked_catalogue_definitions = unlocked_catalogue_definitions.into_inner();
     let active_research_project = research_projects.iter().next();
     let latest_earned_award = earned_progression_awards
         .iter()

@@ -15,23 +15,25 @@ pub struct CameraDefinition(pub AssetId);
 pub enum CameraMode {
     #[default]
     Overhead,
-    Follow(Entity),
-    FirstPerson(Entity),
+    Follow,
+    FirstPerson,
     Free,
 }
 
 impl CameraMode {
-    pub fn subject(self) -> Option<Entity> {
-        match self {
-            Self::Follow(entity) | Self::FirstPerson(entity) => Some(entity),
-            Self::Overhead | Self::Free => None,
-        }
-    }
-
     pub fn is_immersive(self) -> bool {
         !matches!(self, Self::Overhead)
     }
 }
+
+/// The target of a camera operating independently of an immersive session.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+#[relationship(relationship_target = StandaloneSubjectCameras)]
+pub struct StandaloneCameraSubject(pub Entity);
+
+#[derive(Component)]
+#[relationship_target(relationship = StandaloneCameraSubject)]
+pub struct StandaloneSubjectCameras(Vec<Entity>);
 
 #[derive(Component, Clone, Debug, PartialEq)]
 pub struct OverheadRig {

@@ -49,7 +49,7 @@ fn docking_events_respect_request_frame_and_failure_precedence() {
                         locomotion_speed: None,
                         redock: false,
                         reservation: None,
-                        radial_distance_m: None,
+                        approach: openzt2_game_data::behavior::action::docking::BehaviorDockApproach::Point,
                         arrival_radius_m: None,
                         rotation_tolerance_radians: 0.0,
                     })],

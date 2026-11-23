@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use openzt2_game_data::world_definitions::staff_management::StaffRoleKind;
 use openzt2_zoo_state::animal_behavior::behavior_target_placement_types::{
-    travel_target, BehaviorPlacementTravelSite,
+    BehaviorPlacementTravelTargets,
 };
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::behavior_action_actors;
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
@@ -85,14 +85,24 @@ pub(super) fn start_current_supported_behavior_move_actions(
         ),
     >,
     entity_global_transforms: Query<&GlobalTransform>,
-    travel_sites: Query<&BehaviorPlacementTravelSite>,
-    children: Query<&Children>,
-    authored_attachment_transforms: super::behavior_docking_execution::NamedNodeTransforms,
+    travel_sites: BehaviorPlacementTravelTargets,
+    authored_attachment_transforms: super::behavior_named_nodes::NamedNodeTransforms,
     mut navigation_requests: MessageWriter<NavigateTo>,
     mut land_approach: KeeperLandApproach,
     animal_actors: Query<(), With<openzt2_zoo_state::animal_lifecycle::types::Animal>>,
     water_targets: Query<&openzt2_zoo_state::animal_behavior::behavior_natural_water_target_types::SelectedNaturalWaterTarget>,
     waters: super::natural_water_targets::NaturalWaterTargets,
+    (
+        programs,
+        guests,
+        entrances,
+        grids,
+    ): (
+        Res<Assets<openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset>>,
+        Query<(), With<openzt2_zoo_state::guests::guest_simulation_types::Guest>>,
+        Query<&openzt2_world_state::world_spawn::zoo_entrance_anchor_synchronization::ZooEntrance>,
+        Query<&openzt2_zoo_state::locomotion::locomotion_types::SpatialGrid>,
+    ),
 ) {
     for (
         actor,
@@ -131,7 +141,7 @@ pub(super) fn start_current_supported_behavior_move_actions(
             mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
             continue;
         }
-        let Some(target) = travel_target(&behavior_task, travel_sites.get(actor).ok()) else {
+        let Some(target) = travel_sites.for_actor(actor, &behavior_task) else {
             mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
             continue;
         };
@@ -143,12 +153,7 @@ pub(super) fn start_current_supported_behavior_move_actions(
             .target_node_name
             .as_deref()
             .map(|target_node_name| {
-                super::behavior_docking_execution::find_named_descendant_global_transform(
-                    target,
-                    target_node_name,
-                    &children,
-                    &authored_attachment_transforms,
-                )
+                authored_attachment_transforms.pose(target, target_node_name)
                 .map(|transform| transform.translation())
             });
         let mut destination = match resolve_behavior_move_destination(
@@ -245,6 +250,30 @@ pub(super) fn start_current_supported_behavior_move_actions(
             continue;
         };
         let request_id = generation.advance();
+        if move_action.target_node_name.is_none() && guests.contains(actor)
+            && programs.get(&behavior_task.document)
+                .and_then(|document| document.behavior_task_at_index(behavior_task.declaration))
+                .is_some_and(|task| {
+                    task.scores.iter().any(|score| matches!(
+                        score, openzt2_game_data::behavior::score::BehaviorScore::LeaveZooPressure
+                    ))
+                })
+        {
+            if let Ok(entrance) = entrances.get(target) {
+                destination = definitions.and_then(|definitions| definitions.guest_generation())
+                    .map_or(entrance.exit, |policy| {
+                        let [x, y] = policy.departure_offset_m;
+                        entrance.exit + target_transform.rotation() * Vec3::new(x, 0.0, -y)
+                    });
+                if grids.get(member.root).is_ok_and(|grid| {
+                    grid.width != 0 && grid.height != 0 && grid.cell_of(destination.xz()).is_none()
+                }) {
+                    commands.entity(actor).insert(
+                        openzt2_zoo_state::locomotion::locomotion_types::EntranceNavigationConnection { request_id, gate: entrance.exit, inbound: false }
+                    );
+                }
+            }
+        }
         navigation_requests.write(NavigateTo {
             entity: actor,
             request_id,

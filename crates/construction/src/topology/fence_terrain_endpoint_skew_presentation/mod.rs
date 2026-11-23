@@ -13,7 +13,7 @@ use openzt2_zoo_state::terrain::terrain_edit_types::TerrainChanged;
 use openzt2_zoo_state::terrain::terrain_world_sampling::sample_terrain;
 use openzt2_zoo_state::terrain::terrain_world_sampling::terrain_chunk_at;
 
-use crate::topology::topology_presentation_types::FenceTerrainEndpointSkewPresentation;
+use crate::topology::topology_presentation_types::{FenceSkewInner, TopologyPresentationRoot};
 use openzt2_zoo_state::topology::fence_segment_presentation_types::FenceTerrainEndpointPresentationCells;
 use openzt2_zoo_state::topology::fence_terrain_fitting_diagnostic_types::FenceEndpointFittingReport;
 use openzt2_zoo_state::topology::fence_terrain_fitting_diagnostic_types::FenceEndpointFittingReports;
@@ -26,7 +26,7 @@ use openzt2_zoo_state::topology::topology_graph_types::TopologyGrid;
 /// `BFSkewComponent axis="0"`, so the owner stays at the first endpoint while
 /// two nested Bevy transforms shear local X toward the second endpoint.
 #[allow(clippy::too_many_arguments)]
-pub fn fit_fence_presentations_to_terrain_endpoint_heights(
+pub(super) fn fit_fence_presentations_to_terrain_endpoint_heights(
     mut terrain_changed: MessageReader<TerrainChanged>,
     terrain_index: Single<&TerrainIndex>,
     terrain_assets: Res<Assets<TerrainAsset>>,
@@ -39,16 +39,21 @@ pub fn fit_fence_presentations_to_terrain_endpoint_heights(
     mut fences: Query<(
         Entity,
         Ref<FenceTerrainEndpointPresentationCells>,
-        Ref<FenceTerrainEndpointSkewPresentation>,
+        Ref<Children>,
         &mut Transform,
     )>,
     changed_fences: Query<
         Entity,
-        Or<(
-            Changed<FenceTerrainEndpointPresentationCells>,
-            Changed<FenceTerrainEndpointSkewPresentation>,
-        )>,
+        (
+            With<FenceTerrainEndpointPresentationCells>,
+            Or<(
+                Changed<FenceTerrainEndpointPresentationCells>,
+                Changed<Children>,
+            )>,
+        ),
     >,
+    presentation_roots: Query<&Children, With<TopologyPresentationRoot>>,
+    inner_skews: Query<(), With<FenceSkewInner>>,
     mut presentation_transforms: Query<
         &mut Transform,
         Without<FenceTerrainEndpointPresentationCells>,
@@ -93,14 +98,23 @@ pub fn fit_fence_presentations_to_terrain_endpoint_heights(
         }));
     }
     for entity in dirty {
-        let Ok((_, endpoint_cells, presentation, mut fence_transform)) = fences.get_mut(entity)
-        else {
+        let Ok((_, endpoint_cells, children, mut fence_transform)) = fences.get_mut(entity) else {
+            continue;
+        };
+        let Some(skew_entities) = children.iter().find_map(|root| {
+            let inner = presentation_roots
+                .get(root)
+                .ok()?
+                .iter()
+                .find(|&child| inner_skews.contains(child))?;
+            Some([root, inner])
+        }) else {
             continue;
         };
         let triggers = [
             terrain_affected.contains(&entity) || (topology.is_none() && terrain_was_changed),
             endpoint_cells.is_changed(),
-            presentation.is_changed(),
+            children.is_changed(),
             grid.is_changed(),
         ];
         let gate_skipped = !triggers.iter().any(|changed| *changed);
@@ -111,9 +125,7 @@ pub fn fit_fence_presentations_to_terrain_endpoint_heights(
         let first_world_xz = grid.cell_translation(endpoint_cells.first).xz();
         let second_world_xz = grid.cell_translation(endpoint_cells.second).xz();
         let skew_before = if observed_owner {
-            presentation
-                .transform_entities()
-                .map(|entity| presentation_transforms.get(entity).ok().copied())
+            skew_entities.map(|entity| presentation_transforms.get(entity).ok().copied())
         } else {
             [None, None]
         };
@@ -121,7 +133,7 @@ pub fn fit_fence_presentations_to_terrain_endpoint_heights(
             fitting_history.begin_owner(
                 entity,
                 endpoint_cells.endpoint_cells(),
-                presentation.transform_entities(),
+                skew_entities,
                 triggers,
                 first_world_xz.distance(second_world_xz),
                 *fence_transform,
@@ -211,15 +223,17 @@ pub fn fit_fence_presentations_to_terrain_endpoint_heights(
             );
             continue;
         }
-        fence_transform.translation.y = first_height_m;
+        fence_transform
+            .reborrow()
+            .map_unchanged(|pose| &mut pose.translation.y)
+            .set_if_neq(first_height_m);
         let height_change_per_horizontal_metre =
             (second_height_m - first_height_m) / horizontal_length_m;
         let (first_transform, second_transform) =
             decompose_local_x_vertical_shear_into_two_bevy_transforms(
                 height_change_per_horizontal_metre,
             );
-        let child_transforms = presentation_transforms
-            .get_many_mut([presentation.first_transform, presentation.second_transform]);
+        let child_transforms = presentation_transforms.get_many_mut(skew_entities);
         if let Some(attempt) = attempt.as_mut() {
             attempt.record_child_query_result(
                 child_transforms
@@ -238,8 +252,8 @@ pub fn fit_fence_presentations_to_terrain_endpoint_heights(
             );
             continue;
         };
-        *first = first_transform;
-        *second = second_transform;
+        first.set_if_neq(first_transform);
+        second.set_if_neq(second_transform);
         fitting_history.finish_owner(
             attempt,
             "production fit completed",

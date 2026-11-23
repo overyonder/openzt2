@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 use openzt2_game_data::ui_document::action::simulation_time::UiSimulationAction;
+use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 
 use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 use openzt2_interface_state::input::input_types::ActionRequest;
@@ -17,10 +18,10 @@ use openzt2_interface_state::ui::authored_ui_activation_contracts::UiNodeActivat
 /// Applies pause input to the simulation controls.
 pub(super) fn route_pause_game_action_to_simulation_control_requests(
     mut requested_game_actions: MessageReader<ActionRequest>,
-    simulation_control: Option<Res<SimulationControl>>,
+    roots: Query<&SimulationControl, With<WorldRoot>>,
     mut requested_pause_changes: MessageWriter<SimulationPauseRequest>,
 ) {
-    if simulation_control.is_none() {
+    if roots.single().is_err() {
         return;
     }
     for requested_game_action in requested_game_actions.read() {
@@ -38,9 +39,10 @@ pub(super) fn route_authored_ui_simulation_actions_to_simulation_control_request
     simulation_action_nodes: Query<(&UiSimulationActions, &UiDocumentOwner)>,
     ui_document_roots: Query<&UiDocumentRoot>,
     mut temporary_holds: Query<&mut AuthoredUiTemporarySimulationPause>,
-    simulation_control: Option<Res<SimulationControl>>,
+    roots: Query<&SimulationControl, With<WorldRoot>>,
     mut requested_pause_changes: MessageWriter<SimulationPauseRequest>,
 ) {
+    let simulation_control = roots.single().ok();
     let keyboard_pause_was_translated = game_actions.read().fold(false, |translated, request| {
         translated
             || (request.action == GameAction::Pause
@@ -67,7 +69,7 @@ pub(super) fn route_authored_ui_simulation_actions_to_simulation_control_request
                     // The pause toggle follows the simulation and reruns these
                     // events. An echo during a temporary hold, such as the Zoopedia's,
                     // would otherwise become the state that hold restores.
-                    if simulation_control.as_ref().map(|control| control.paused) != Some(*paused) {
+                    if simulation_control.map(|control| control.paused) != Some(*paused) {
                         requested_pause_changes.write(SimulationPauseRequest::Set(*paused));
                     }
                 }

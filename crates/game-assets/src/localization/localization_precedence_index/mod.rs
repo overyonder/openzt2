@@ -7,17 +7,20 @@ use bevy::{
     asset::{AssetId as BevyAssetId, AssetLoadFailedEvent, LoadState},
     prelude::*,
 };
-use openzt2_game_data::{localization::LocalizationDateFormatToken, AssetId};
+use openzt2_game_data::AssetId;
 
 use crate::asset_source::{
-    archive_entry_asset_path::archive_entry_asset_path, ArchiveOverlayChanged, AssetArchives,
+    ArchiveOverlayChanged, AssetArchives, archive_entry_asset_path::archive_entry_asset_path,
 };
 
 use super::{
-    blue_fang_localization_date_format_tokenization::tokenize_blue_fang_localization_date_format,
+    blue_fang_localization_date_format_tokenization::{
+        LocalizationDateTimeFormat, LocalizationDateTimeToken,
+        tokenize_blue_fang_localization_date_format,
+    },
     loaded_localization_queries::LoadedLocalizationView,
     localization_asset_types::LocalizationAsset,
-    localization_configuration::{LocalizationConfiguration, LOCALE_CONFIGURATION_PATH},
+    localization_configuration::{LOCALE_CONFIGURATION_PATH, LocalizationConfiguration},
 };
 
 #[derive(Resource, Default)]
@@ -29,8 +32,9 @@ pub struct LocalizationPrecedenceIndex {
     pending: BTreeSet<BevyAssetId<LocalizationAsset>>,
     failed: BTreeSet<BevyAssetId<LocalizationAsset>>,
     localization_asset_handles: Vec<Handle<LocalizationAsset>>,
+    person_name_pool_asset_index: BTreeMap<AssetId, Handle<LocalizationAsset>>,
     localization_entry_asset_index: BTreeMap<AssetId, Handle<LocalizationAsset>>,
-    month_year_tokens: Vec<LocalizationDateFormatToken>,
+    date_time_formats: [Vec<LocalizationDateTimeToken>; 4],
 }
 
 impl LocalizationPrecedenceIndex {
@@ -51,7 +55,7 @@ impl LocalizationPrecedenceIndex {
         self.selected_table_ids.insert(handle.id());
         self.localization_asset_handles.push(handle);
         self.discovered = true;
-        self.update_month_year_format(assets);
+        self.update_date_time_formats(assets);
     }
 
     pub fn has_pending_catalogue_loads(
@@ -78,24 +82,42 @@ impl LocalizationPrecedenceIndex {
         assets.get(self.localization_entry_asset_index.get(&identifier)?)
     }
 
+    pub(super) fn find_person_name_pool<'a>(
+        &self,
+        assets: &'a Assets<LocalizationAsset>,
+        id: AssetId,
+    ) -> Option<
+        &'a openzt2_game_data::world_definitions::guest_simulation_definitions::PersonNamePool,
+    > {
+        assets
+            .get(self.person_name_pool_asset_index.get(&id)?)?
+            .person_name_pools
+            .get(&id)
+    }
+
     pub(super) fn configuration(&self) -> &LocalizationConfiguration {
         &self.configuration
     }
 
-    pub(super) fn month_year_tokens(&self) -> &[LocalizationDateFormatToken] {
-        &self.month_year_tokens
+    pub(super) fn date_time_tokens(
+        &self,
+        format: LocalizationDateTimeFormat,
+    ) -> &[LocalizationDateTimeToken] {
+        &self.date_time_formats[format as usize]
     }
 
-    fn update_month_year_format(&mut self, assets: &Assets<LocalizationAsset>) {
-        let format_id = self.configuration.month_year;
-        self.month_year_tokens = self
-            .find_asset_for_localization_entry(assets, format_id)
-            .and_then(|asset| {
-                asset
-                    .localization_catalog
-                    .find_plain_localized_text(format_id)
-            })
-            .map_or_else(Vec::new, tokenize_blue_fang_localization_date_format);
+    fn update_date_time_formats(&mut self, assets: &Assets<LocalizationAsset>) {
+        self.date_time_formats = std::array::from_fn(|index| {
+            let id = self.configuration.date_time_formats[index];
+            self.find_asset_for_localization_entry(assets, id)
+                .and_then(|asset| asset.localization_catalog.find_plain_localized_text(id))
+                .map_or_else(Vec::new, |format| {
+                    tokenize_blue_fang_localization_date_format(
+                        format,
+                        index == LocalizationDateTimeFormat::MinutesSeconds as usize,
+                    )
+                })
+        });
     }
 }
 
@@ -162,13 +184,18 @@ pub(super) fn index_loaded_localization_entries_after_asset_events(
             Some(id) => configurations.get(id),
         };
         if let Some(configuration) = selected {
-            let handles = archives
-                .resolved_paths()
-                .iter()
+            let mut loose = archives
+                .source_paths_under(configuration.string_table_root())
+                .into_iter()
                 .filter(|path| configuration.selects_string_table(path))
-                .filter_map(|path| archives.resolved_winning_entry(path))
-                .map(|entry| server.load(archive_entry_asset_path(&entry)))
+                .collect::<BTreeSet<_>>();
+            let mut handles = archives
+                .resolved_archive_entries()
+                .iter()
+                .filter(|entry| loose.remove(&entry.normalized_asset_path))
+                .map(|entry| server.load(archive_entry_asset_path(entry)))
                 .collect::<Vec<_>>();
+            handles.extend(loose.into_iter().map(|path| server.load(path)));
             if !index.discovered
                 || index.localization_asset_handles != handles
                 || index.configuration != *configuration
@@ -230,7 +257,19 @@ pub(super) fn index_loaded_localization_entries_after_asset_events(
                 .map(move |entry| (entry.localization_entry_identifier, handle.clone()))
         })
         .collect();
-    index.update_month_year_format(&assets);
+    index.person_name_pool_asset_index = index
+        .localization_asset_handles
+        .iter()
+        .filter(|handle| !index.failed.contains(&handle.id()))
+        .filter_map(|handle| assets.get(handle).map(|asset| (handle, asset)))
+        .flat_map(|(handle, asset)| {
+            asset
+                .person_name_pools
+                .keys()
+                .map(move |id| (*id, handle.clone()))
+        })
+        .collect();
+    index.update_date_time_formats(&assets);
 }
 #[cfg(test)]
 mod tests {
@@ -241,7 +280,7 @@ mod tests {
     };
     use bevy::{
         app::TaskPoolPlugin,
-        asset::{io::AssetSourceId, AssetPlugin},
+        asset::{AssetPlugin, io::AssetSourceId},
     };
     use std::{
         io,

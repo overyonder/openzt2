@@ -232,6 +232,7 @@ pub(in crate::ui_document::source) fn lower_ui_document(
         &mut output.nodes,
         input.role,
         &output.action_receivers,
+        &output.timed_action_receivers,
     );
     super::authored_ui_node_tree_lowering::complete_hover_reveal_leave_actions(&mut output.nodes);
 

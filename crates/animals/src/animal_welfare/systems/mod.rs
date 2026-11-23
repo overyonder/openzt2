@@ -15,6 +15,7 @@ use super::{
         calculate_mean_animal_welfare_with_habitat_limit,
         classify_animal_welfare_against_authored_thresholds,
     },
+    need_latch_types::{AnimalNeedLatchBundle, AnimalNeedLatches},
     types::*,
 };
 
@@ -160,7 +161,7 @@ pub(crate) fn initialize_animal_needs(
         commands.entity(entity).insert((
             HygieneNeed(initial[9]),
             BathroomNeed(initial[10]),
-            trigger_state,
+            AnimalNeedLatchBundle::from_saved_mask(trigger_state.0),
             suitability,
             AnimalWelfare(value),
             CumulativeNeedPoints::default(),
@@ -174,42 +175,50 @@ pub(crate) fn initialize_animal_needs(
 }
 
 #[derive(Component, PartialEq)]
-#[require(ActiveNeedPointBranch)]
+#[require(ActiveNeedPointBranch, NeedPoints)]
 pub(super) struct AuthoredNeedPointPolicy(AnimalNeedPointPolicy);
 
 #[derive(Component, Default)]
 pub(super) struct ActiveNeedPointBranch {
     unmet: Option<bool>,
     factor: f32,
+    cadence: Timer,
 }
 
 pub(super) fn project_need_point_policy(
     assets: Res<Assets<SpeciesAsset>>,
     index: Res<SpeciesAssets>,
-    animals: Query<
-        (
-            Entity,
-            Ref<AnimalVariant>,
-            Option<&mut AuthoredNeedPointPolicy>,
-        ),
-        With<Animal>,
-    >,
+    mut events: MessageReader<AssetEvent<SpeciesAsset>>,
+    mut animals: ParamSet<(
+        Query<(Entity, &AnimalVariant, Option<&mut AuthoredNeedPointPolicy>), With<Animal>>,
+        Query<
+            (Entity, &AnimalVariant, Option<&mut AuthoredNeedPointPolicy>),
+            (With<Animal>, Or<(Added<Animal>, Changed<AnimalVariant>)>),
+        >,
+    )>,
     mut commands: Commands,
 ) {
-    let all = assets.is_changed() || index.is_changed();
+    let all = index.is_changed()
+        || events.read().any(|event| {
+            matches!(
+                event,
+                AssetEvent::Added { .. } | AssetEvent::Modified { .. } | AssetEvent::Removed { .. }
+            )
+        });
+    events.clear();
     let Some(species) = index.get(&assets) else {
         return;
     };
-    let mut animals = animals;
-    for (animal, variant, current) in &mut animals {
-        if !all && !variant.is_changed() {
-            continue;
-        }
+    let mut project = |(animal, variant, current): (
+        Entity,
+        &AnimalVariant,
+        Option<Mut<AuthoredNeedPointPolicy>>,
+    )| {
         let Some(variant) = species.find_variant(variant.0) else {
             if current.is_some() {
                 commands.entity(animal).remove::<AuthoredNeedPointPolicy>();
             }
-            continue;
+            return;
         };
         let policy = AuthoredNeedPointPolicy(variant.need_points);
         if let Some(mut current) = current {
@@ -217,6 +226,11 @@ pub(super) fn project_need_point_policy(
         } else {
             commands.entity(animal).insert(policy);
         }
+    };
+    if all {
+        animals.p0().iter_mut().for_each(&mut project);
+    } else {
+        animals.p1().iter_mut().for_each(project);
     }
 }
 
@@ -253,7 +267,7 @@ pub(super) fn update_need_points(
     mut animals: Query<
         (
             Entity,
-            &NeedTriggerState,
+            AnimalNeedLatches,
             Ref<AuthoredNeedPointPolicy>,
             &mut ActiveNeedPointBranch,
             &mut NeedPoints,
@@ -263,16 +277,18 @@ pub(super) fn update_need_points(
     mut outcomes: MessageWriter<AccumulateNeedPoints>,
 ) {
     for (animal, triggers, policy, mut branch, mut points) in &mut animals {
-        let unmet = triggers.0 != 0;
-        let remaining = points.seconds_until_update - time.delta_secs();
-        if remaining > 0.0 && branch.unmet == Some(unmet) && !policy.is_changed() {
-            points.seconds_until_update = remaining;
+        let unmet = triggers.any_triggered();
+        let due = branch.cadence.tick(time.timestep()).is_finished();
+        if !due && branch.unmet == Some(unmet) && !policy.is_changed() {
             continue;
         }
         if policy.is_changed() {
             branch.unmet = None;
         }
-        points.seconds_until_update = policy.0.interval_seconds;
+        branch.cadence.set_duration(
+            std::time::Duration::try_from_secs_f32(policy.0.interval_seconds).unwrap_or_default(),
+        );
+        branch.cadence.reset();
         let (good, bad) = step_need_points(&mut points, &mut branch, &policy.0, unmet);
         if good != 0.0 || bad != 0.0 {
             outcomes.write(AccumulateNeedPoints { animal, good, bad });

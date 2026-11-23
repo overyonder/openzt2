@@ -1,9 +1,12 @@
 //! Emission timing, clocks, stopping, and GPU-backed retirement for live effects.
 
-use bevy::prelude::*;
+use bevy::{
+    diagnostic::FrameCount, platform::collections::HashSet, prelude::*,
+    transform::helper::TransformHelper,
+};
 use bevy_hanabi::{
-    CompiledParticleEffect, EffectDeltaTime, EffectParent, EffectSpawner, ParticleAliveCount,
-    ParticleSpawnBatch,
+    EffectChildren, EffectDeltaTime, EffectParent, EffectSpawner, ParticleAliveCount,
+    ParticleEffectGpuReady, ParticleSpawnBatch, Random,
 };
 use openzt2_game_data::particle::authored_particle_system::{
     AuthoredParticleCurvePoint, ParticleEffectSimulationClock as EffectClock,
@@ -11,30 +14,78 @@ use openzt2_game_data::particle::authored_particle_system::{
 
 use super::{
     effect_runtime_types::{
-        ControlledEffectEmissionState, EffectRetirementReadback, ParticleEffectDocumentInstance,
-        ParticleEffectGraphReady, PendingEffectInstance,
+        ControlledEffectEmissionSettings, ControlledEffectEmissionState, EffectRetirementReadback,
+        ParticleChildrenMayHaveDrained, ParticleEffectDocumentInstance, ParticleEffectGraphReady,
+        PendingEffectInstance, WorldAlignedParticleEffect,
     },
     explicit_particle_emission::ParticleEffectPointEmitter,
-    LiveParticleEffectInstance, ParticleEffectDocumentAsset, StopParticleEffectsAttachedToEntity,
+    LiveParticleEffectInstance, StopParticleEffectsAttachedToEntity,
 };
 
 pub(super) fn align_attached_particle_effects_to_world_axes(
-    attached: Query<
-        (Entity, &ChildOf),
-        With<super::effect_runtime_types::WorldAlignedParticleEffect>,
-    >,
+    attached: Query<&ChildOf, With<WorldAlignedParticleEffect>>,
+    children: Query<&Children>,
+    mut removed_parents: RemovedComponents<ChildOf>,
     mut transforms: ParamSet<(
-        bevy::transform::helper::TransformHelper,
-        Query<&mut Transform, With<super::effect_runtime_types::WorldAlignedParticleEffect>>,
+        (
+            Query<(Ref<Transform>, Option<Ref<ChildOf>>)>,
+            Query<
+                (),
+                (
+                    With<WorldAlignedParticleEffect>,
+                    Or<(
+                        Added<WorldAlignedParticleEffect>,
+                        Changed<Transform>,
+                        Changed<ChildOf>,
+                    )>,
+                ),
+            >,
+            TransformHelper,
+        ),
+        Query<&mut Transform, With<WorldAlignedParticleEffect>>,
     )>,
 ) {
-    for (entity, parent) in &attached {
-        let Ok(parent_transform) = transforms.p0().compute_global_transform(parent.parent()) else {
+    let orphans: HashSet<_> = removed_parents.read().collect();
+    let mut parents = HashSet::new();
+    for attachment in &attached {
+        let parent = attachment.parent();
+        if !parents.insert(parent) {
+            continue;
+        }
+        let Ok(siblings) = children.get(parent) else {
             continue;
         };
+
+        let rotation = {
+            let (local_transforms, changed_effects, transform_helper) = transforms.p0();
+            let mut ancestor = Some(parent);
+            let mut parent_changed = false;
+            while let Some(entity) = ancestor {
+                let Ok((transform, relationship)) = local_transforms.get(entity) else {
+                    break;
+                };
+                parent_changed = transform.is_changed()
+                    || relationship.as_ref().is_some_and(DetectChanges::is_changed)
+                    || orphans.contains(&entity);
+                if parent_changed {
+                    break;
+                }
+                ancestor = relationship.map(|relationship| relationship.parent());
+            }
+            if !parent_changed && !siblings.iter().any(|child| changed_effects.contains(child)) {
+                continue;
+            }
+            let Ok(parent_transform) = transform_helper.compute_global_transform(parent) else {
+                continue;
+            };
+            parent_transform.compute_transform().rotation.inverse()
+        };
         let mut local_transforms = transforms.p1();
-        if let Ok(mut transform) = local_transforms.get_mut(entity) {
-            transform.rotation = parent_transform.compute_transform().rotation.inverse();
+        let mut siblings = local_transforms.iter_many_mut(siblings.iter()).matched();
+        while let Some(mut local_transform) = siblings.fetch_next() {
+            if local_transform.rotation != rotation {
+                local_transform.rotation = rotation;
+            }
         }
     }
 }
@@ -78,286 +129,313 @@ pub(super) fn stop_requested_particle_effect_children(
     }
 }
 
-pub(super) fn select_effect_simulation_delta_time_from_authored_clock(
-    presentation_time: Res<Time<Real>>,
-    zoo_simulation_time: Res<Time<Virtual>>,
-    mut effect_instances: Query<(
-        &LiveParticleEffectInstance,
-        &mut bevy_hanabi::prelude::EffectDeltaTime,
-    )>,
-) {
-    for (effect_instance, mut effect_delta_time) in &mut effect_instances {
-        let seconds = match effect_instance.simulation_clock {
-            EffectClock::Presentation => presentation_time.delta_secs(),
-            EffectClock::ZooSimulation => zoo_simulation_time.delta_secs(),
-        };
-        effect_delta_time.set_if_neq(EffectDeltaTime(seconds));
-    }
-}
-
 pub(super) fn publish_ready_particle_effect_graphs(
     mut commands: Commands,
-    roots: Query<
+    changed: Query<
         Entity,
         (
             With<LiveParticleEffectInstance>,
-            Without<EffectParent>,
-            Without<ParticleEffectGraphReady>,
+            Or<(
+                Changed<ParticleEffectGpuReady>,
+                Changed<EffectChildren>,
+                Added<LiveParticleEffectInstance>,
+            )>,
         ),
     >,
-    emitters: Query<(&CompiledParticleEffect, Option<&Children>)>,
-    collision_parents: Query<&EffectParent>,
-    mut pending: Local<Vec<Entity>>,
+    mut removed_children: RemovedComponents<EffectChildren>,
+    roots: Query<
+        Has<ParticleEffectGraphReady>,
+        (With<LiveParticleEffectInstance>, Without<EffectParent>),
+    >,
+    parents: Query<&EffectParent>,
+    emitters: Query<(&ParticleEffectGpuReady, Option<&EffectChildren>)>,
 ) {
-    for root in &roots {
+    let mut changed_roots = HashSet::new();
+    for emitter in changed.iter().chain(removed_children.read()) {
+        changed_roots.insert(parents.iter_ancestors(emitter).last().unwrap_or(emitter));
+    }
+    let mut pending = Vec::new();
+    for root in changed_roots {
+        let Ok(published) = roots.get(root) else {
+            continue;
+        };
         pending.clear();
         pending.push(root);
         let mut ready = true;
-        while let Some(entity) = pending.pop() {
-            let Ok((compiled, children)) = emitters.get(entity) else {
+        while let Some(emitter) = pending.pop() {
+            let Ok((status, children)) = emitters.get(emitter) else {
                 ready = false;
                 break;
             };
-            if !compiled.is_ready() {
+            if !status.is_ready() {
                 ready = false;
                 break;
             }
-            pending.extend(
-                children
-                    .into_iter()
-                    .flat_map(|children| children.iter())
-                    .filter(|&child| {
-                        collision_parents
-                            .get(child)
-                            .is_ok_and(|parent| parent.entity == entity)
-                    }),
-            );
+            pending.extend(children.into_iter().flat_map(RelationshipTarget::iter));
         }
-        if ready {
+        if ready && !published {
             commands.entity(root).insert(ParticleEffectGraphReady);
+        } else if !ready && published {
+            commands.entity(root).remove::<ParticleEffectGraphReady>();
         }
     }
 }
 
-pub(super) fn activate_authored_particle_spawners_for_emission_window(
-    documents: Res<Assets<ParticleEffectDocumentAsset>>,
+pub(super) fn tick_authored_particle_emitters(
+    mut commands: Commands,
+    frame: Res<FrameCount>,
+    presentation_time: Res<Time<Real>>,
+    zoo_time: Res<Time<Virtual>>,
+    mut random: ResMut<Random>,
     mut emitters: Query<(
-        &LiveParticleEffectInstance,
-        &ControlledEffectEmissionState,
-        &EffectDeltaTime,
-        &CompiledParticleEffect,
+        Entity,
+        &ControlledEffectEmissionSettings,
+        &mut ControlledEffectEmissionState,
+        &mut EffectDeltaTime,
+        &ParticleEffectGpuReady,
         &InheritedVisibility,
         &mut EffectSpawner,
         Has<EffectParent>,
         Has<ParticleEffectGraphReady>,
+        Has<EffectRetirementReadback>,
         Has<ParticleEffectPointEmitter>,
     )>,
 ) {
-    for (live, timing, delta, compiled, visibility, mut spawner, collision, ready, explicit) in
-        &mut emitters
-    {
-        if !ready || !compiled.is_ready() || (!explicit && !visibility.get()) {
-            if spawner.active {
-                spawner.active = false;
-            }
-            continue;
-        }
-        let Some(prepared) = documents
-            .get(&live.effect_asset)
-            .and_then(|doc| doc.prepared_emitters.get(&live.emitter_id))
-        else {
-            spawner.active = false;
-            continue;
-        };
-        let next_elapsed = timing.elapsed_seconds + delta.0;
-        let active = ready
-            && !collision
-            && !explicit
-            && !prepared.manually_driven
-            && prepared
-                .emission_window
-                .is_none_or(|window| window.contains(next_elapsed));
-        if spawner.active != active {
-            spawner.active = active;
-        }
-    }
-}
-
-pub(super) fn apply_authored_particle_emission_and_close_finished_spawners(
-    mut commands: Commands,
-    documents: Res<Assets<ParticleEffectDocumentAsset>>,
-    mut emitters: Query<
-        (
-            Entity,
-            &LiveParticleEffectInstance,
-            &mut ControlledEffectEmissionState,
-            &EffectDeltaTime,
-            &CompiledParticleEffect,
-            &InheritedVisibility,
-            &mut EffectSpawner,
-            Has<EffectParent>,
-            Has<ParticleEffectGraphReady>,
-            Has<EffectRetirementReadback>,
-        ),
-        Without<ParticleEffectPointEmitter>,
-    >,
-) {
     for (
         entity,
-        live,
+        settings,
         mut timing,
-        delta,
-        compiled,
+        mut effect_delta,
+        status,
         visibility,
         mut spawner,
         collision,
         ready,
         draining,
+        explicit,
     ) in &mut emitters
     {
-        if !ready || !compiled.is_ready() || !visibility.get() || collision || draining {
-            spawner.spawn_count = 0;
+        let delta = match settings.clock {
+            EffectClock::Presentation => presentation_time.delta(),
+            EffectClock::ZooSimulation => zoo_time.delta(),
+        };
+        effect_delta.set_if_neq(EffectDeltaTime(delta.as_secs_f32()));
+        if explicit {
             continue;
         }
-        let Some(document) = documents.get(&live.effect_asset) else {
-            continue;
-        };
-        let Some(prepared) = document.prepared_emitters.get(&live.emitter_id) else {
-            continue;
-        };
-        timing.elapsed_seconds += delta.0;
-        let elapsed = timing.elapsed_seconds;
-        let window_closed = prepared
-            .emission_window
-            .is_some_and(|window| window.has_ended(elapsed));
-        let within_window = prepared
-            .emission_window
-            .is_none_or(|window| window.contains(elapsed));
-        let mut emission_closed = window_closed;
-        if within_window && timing.manual_particle_count > 0 {
-            spawner.spawn_count = std::mem::take(&mut timing.manual_particle_count);
-        } else if let Some((points, looped)) = &prepared.birth_rate_curve {
-            let duration = points.last().map_or(0.0, |point| point.time);
-            let curve_ended = !*looped && elapsed > duration;
-            emission_closed |= curve_ended;
-            if within_window && !curve_ended {
-                let sample = if *looped && duration > 0.0 {
-                    elapsed % duration
-                } else {
-                    elapsed.min(duration)
-                };
-                timing.fractional_particle_remainder +=
-                    sample_birth_rate(points, sample).max(0.0) * delta.0;
-                spawner.spawn_count = timing.fractional_particle_remainder.floor() as u32;
-                timing.fractional_particle_remainder -= spawner.spawn_count as f32;
-            } else {
+        if collision || !ready || !status.is_ready() || !visibility.get() || draining {
+            if spawner.active || spawner.spawn_count != 0 {
+                spawner.active = false;
                 spawner.spawn_count = 0;
             }
-        } else if prepared.manually_driven {
-            emission_closed |= within_window && timing.manual_particle_count == 0;
+            continue;
         }
-        if !prepared.manually_driven {
+
+        let start = timing.elapsed.elapsed_secs();
+        let end = timing.elapsed.tick(delta).elapsed_secs();
+        let (within_window, mut emission_closed) = settings
+            .emission_window
+            .map_or((true, false), |window| window.sample(end));
+        let active = !settings.manually_driven && within_window;
+        if spawner.active != active {
+            spawner.active = active;
+        }
+        let mut spawn_count = if active {
+            spawner.tick(delta.as_secs_f32(), &mut random.0)
+        } else {
+            0
+        };
+        if within_window && timing.manual_particle_count > 0 {
+            spawn_count = std::mem::take(&mut timing.manual_particle_count);
+        } else if let Some((points, looped)) = &settings.birth_rate_curve {
+            let duration = points.last().map_or(0.0, |point| point.time);
+            emission_closed |= !*looped && end > duration;
+            let (start, end) = settings
+                .emission_window
+                .map_or((start, end), |window| window.active_interval(start, end));
+            timing.fractional_particle_remainder +=
+                integrate_birth_rate(points, *looped, start, end);
+            spawn_count = timing.fractional_particle_remainder.floor() as u32;
+            timing.fractional_particle_remainder -= spawn_count as f32;
+        } else if settings.manually_driven {
+            emission_closed |= within_window;
+        }
+        if !settings.manually_driven {
             emission_closed |= spawner.has_completed() && timing.manual_particle_count == 0;
         }
-        if prepared.retires_when_empty && emission_closed {
+        if spawner.spawn_count != spawn_count {
+            spawner.spawn_count = spawn_count;
+        }
+        if settings.retires_when_empty && emission_closed {
             commands
                 .entity(entity)
-                .insert(EffectRetirementReadback::WaitingForParticles);
+                .insert(EffectRetirementReadback::WaitingForParticles(
+                    frame.0.wrapping_add(1),
+                ));
         }
     }
 }
 
-fn sample_birth_rate(points: &[AuthoredParticleCurvePoint], time: f32) -> f32 {
-    points
-        .windows(2)
-        .find(|pair| time >= pair[0].time && time <= pair[1].time)
-        .map_or_else(
-            || points.last().map_or(0.0, |point| point.value[0]),
-            |pair| {
-                let width = pair[1].time - pair[0].time;
-                let fraction = if width > 0.0 {
-                    (time - pair[0].time) / width
-                } else {
-                    1.0
-                };
-                pair[0].value[0] + (pair[1].value[0] - pair[0].value[0]) * fraction
-            },
-        )
+fn integrate_birth_rate(
+    points: &[AuthoredParticleCurvePoint],
+    looped: bool,
+    start: f32,
+    end: f32,
+) -> f32 {
+    let Some(last) = points.last() else {
+        return 0.0;
+    };
+    if end <= start {
+        return 0.0;
+    }
+    let duration = last.time;
+    if duration <= 0.0 {
+        return if looped {
+            last.value[0].max(0.0) * (end - start)
+        } else {
+            0.0
+        };
+    }
+    if !looped {
+        return integrate_birth_rate_segments(points, start, end.min(duration));
+    }
+
+    let first_cycle = (start / duration).floor();
+    let last_cycle = (end / duration).floor();
+    let first_sample = start % duration;
+    let last_sample = end % duration;
+    if first_cycle == last_cycle {
+        integrate_birth_rate_segments(points, first_sample, last_sample)
+    } else {
+        integrate_birth_rate_segments(points, first_sample, duration)
+            + (last_cycle - first_cycle - 1.0)
+                * integrate_birth_rate_segments(points, 0.0, duration)
+            + integrate_birth_rate_segments(points, 0.0, last_sample)
+    }
+}
+
+fn integrate_birth_rate_segments(
+    points: &[AuthoredParticleCurvePoint],
+    start: f32,
+    end: f32,
+) -> f32 {
+    if end <= start {
+        return 0.0;
+    }
+    let first = &points[0];
+    let before_first = (end.min(first.time) - start).max(0.0) * first.value[0].max(0.0);
+    points.windows(2).fold(before_first, |area, keys| {
+        let left = &keys[0];
+        let right = &keys[1];
+        let segment_start = start.max(left.time);
+        let segment_end = end.min(right.time);
+        let width = segment_end - segment_start;
+        if width <= 0.0 {
+            return area;
+        }
+        let slope = (right.value[0] - left.value[0]) / (right.time - left.time);
+        let a = slope.mul_add(segment_start - left.time, left.value[0]);
+        let b = slope.mul_add(segment_end - left.time, left.value[0]);
+        let high = a.max(b);
+        let low = a.min(b);
+        area + if high <= 0.0 {
+            0.0
+        } else if low >= 0.0 {
+            (high + low) * width * 0.5
+        } else {
+            high * width * (high / (high - low)) * 0.5
+        }
+    })
 }
 
 pub(super) fn confirm_particle_readbacks_before_draining_collision_children(
     mut commands: Commands,
-    mut readbacks: Query<(
-        Entity,
-        &ParticleAliveCount,
-        Option<&ParticleSpawnBatch>,
-        Option<&Children>,
-        &mut EffectRetirementReadback,
+    frame: Res<FrameCount>,
+    mut retirements: ParamSet<(
+        Query<
+            (
+                Entity,
+                &ParticleAliveCount,
+                Option<&ParticleSpawnBatch>,
+                &EffectRetirementReadback,
+            ),
+            Or<(
+                Changed<ParticleAliveCount>,
+                Changed<EffectRetirementReadback>,
+            )>,
+        >,
+        Query<&mut EffectRetirementReadback>,
     )>,
-    collision_parents: Query<&EffectParent>,
+    children: Query<&EffectChildren>,
 ) {
-    for (entity, count, batch, children, mut retirement) in &mut readbacks {
-        if *retirement != EffectRetirementReadback::WaitingForParticles
-            || !count.is_drained_after(batch.map_or(0, |batch| batch.submission))
-        {
+    let drained_emitters: Vec<_> = retirements
+        .p0()
+        .iter()
+        .filter_map(|(entity, count, batch, status)| {
+            let EffectRetirementReadback::WaitingForParticles(earliest) = *status else {
+                return None;
+            };
+            count
+                .is_drained_after(batch.map_or(0, |batch| batch.submission), earliest)
+                .then_some(entity)
+        })
+        .collect();
+    let mut states = retirements.p1();
+    for entity in drained_emitters {
+        let Ok(mut retirement) = states.get_mut(entity) else {
             continue;
-        }
-        // Collision events can be consumed on the next GPU step. Request a
-        // fresh readback from each child only after this emitter reaches zero.
-        for child in children.into_iter().flat_map(|children| children.iter()) {
-            if collision_parents
-                .get(child)
-                .is_ok_and(|parent| parent.entity == entity)
-            {
-                commands
-                    .entity(child)
-                    .insert(EffectRetirementReadback::WaitingForParticles);
+        };
+        *retirement = EffectRetirementReadback::WaitingForChildren;
+        for child in children
+            .get(entity)
+            .ok()
+            .into_iter()
+            .flat_map(RelationshipTarget::iter)
+        {
+            let waiting = EffectRetirementReadback::WaitingForParticles(frame.0.wrapping_add(1));
+            if let Ok(mut retirement) = states.get_mut(child) {
+                retirement.set_if_neq(waiting);
+            } else {
+                commands.entity(child).insert(waiting);
             }
         }
-        *retirement = EffectRetirementReadback::WaitingForChildren;
+        commands.trigger(ParticleChildrenMayHaveDrained { entity });
     }
 }
 
-pub(super) fn retire_drained_particle_effect_trees(
+pub(super) fn retire_drained_particle_effect_tree(
+    trigger: On<ParticleChildrenMayHaveDrained>,
     mut commands: Commands,
-    mut retirements: Query<(
-        Entity,
-        &mut EffectRetirementReadback,
-        Option<&Children>,
-        Has<EffectParent>,
-    )>,
-    collision_parents: Query<&EffectParent>,
+    mut retirements: Query<&mut EffectRetirementReadback>,
+    children: Query<&EffectChildren>,
+    parents: Query<&EffectParent>,
 ) {
-    let drained = retirements
-        .iter()
-        .filter_map(|(entity, retirement, children, collision)| {
-            if *retirement != EffectRetirementReadback::WaitingForChildren {
-                return None;
-            }
-            let children_are_drained = children
+    let mut entity = trigger.entity;
+    loop {
+        if !retirements
+            .get(entity)
+            .is_ok_and(|retirement| *retirement == EffectRetirementReadback::WaitingForChildren)
+            || children
+                .get(entity)
+                .ok()
                 .into_iter()
-                .flat_map(|children| children.iter())
-                .filter(|&child| {
-                    collision_parents
+                .flat_map(RelationshipTarget::iter)
+                .any(|child| {
+                    !retirements
                         .get(child)
-                        .is_ok_and(|parent| parent.entity == entity)
+                        .is_ok_and(|retirement| *retirement == EffectRetirementReadback::Drained)
                 })
-                .all(|child| {
-                    retirements.get(child).is_ok_and(|(_, retirement, ..)| {
-                        *retirement == EffectRetirementReadback::Drained
-                    })
-                });
-            children_are_drained.then_some((entity, collision))
-        })
-        .collect::<Vec<_>>();
-    for (entity, collision) in drained {
-        if collision {
-            if let Ok((_, mut retirement, ..)) = retirements.get_mut(entity) {
-                *retirement = EffectRetirementReadback::Drained;
-            }
-        } else {
-            commands.entity(entity).try_despawn();
+        {
+            break;
         }
+        let Ok(parent) = parents.get(entity) else {
+            commands.entity(entity).try_despawn();
+            break;
+        };
+        if let Ok(mut retirement) = retirements.get_mut(entity) {
+            *retirement = EffectRetirementReadback::Drained;
+        }
+        entity = parent.entity;
     }
 }
 
@@ -384,17 +462,15 @@ mod tests {
     #[test]
     fn a_parent_with_no_gpu_readback_leaves_its_collision_children_available() {
         let mut app = App::new();
-        app.add_systems(
-            Update,
-            (
+        app.init_resource::<FrameCount>()
+            .add_observer(retire_drained_particle_effect_tree)
+            .add_systems(
+                Update,
                 confirm_particle_readbacks_before_draining_collision_children,
-                retire_drained_particle_effect_trees,
-            )
-                .chain(),
-        );
+            );
         let parent = app
             .world_mut()
-            .spawn(EffectRetirementReadback::WaitingForParticles)
+            .spawn(EffectRetirementReadback::WaitingForParticles(0))
             .id();
         let child = app
             .world_mut()

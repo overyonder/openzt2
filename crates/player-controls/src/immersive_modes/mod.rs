@@ -1,6 +1,7 @@
 pub(crate) mod admission;
 mod animal_care_control_types;
 mod animal_health_ui_action_routing;
+mod behavior_rider_ejection;
 mod first_person_mode_control_execution;
 mod first_person_mode_control_operations;
 mod first_person_view_angle_integration;
@@ -29,7 +30,10 @@ mod show_edit_mode_control_execution;
 mod super_staff_avatar_start_position_search;
 mod tranquilizer_control_execution;
 
-use bevy::prelude::*;
+use bevy::{
+    ecs::schedule::common_conditions::{any_with_component, on_message},
+    prelude::*,
+};
 
 use immersive_mode_message_types::{
     EnterImmersiveMode, ExitImmersiveMode, ImmersiveModeEntered, ImmersiveModeExited,
@@ -54,32 +58,39 @@ impl Plugin for ImmersiveModesPlugin {
             .add_message::<ImmersiveModeRejected>()
             .add_message::<ImmersiveModeEntered>()
             .add_message::<ImmersiveModeExited>()
+            .add_observer(behavior_rider_ejection::eject_player_from_authored_subject)
             .add_observer(guest_view_navigation_marker_projection::drop_navigation_markers_when_guest_view_ends)
             .add_observer(interaction_cursor_presentation::remove_immersive_cursor_on_policy_removal)
             .add_observer(interaction_prefab_presentation::remove_immersive_prefab_on_policy_removal)
             .add_systems(
                 Update,
                 (
-                    immersive_mode_entry_reservation::reserve_one_pending_immersive_mode_entry_from_valid_controller_request,
+                    immersive_mode_entry_ui_action_routing::route_authored_immersive_mode_entry_actions_from_activated_ui_nodes
+                        .before(crate::camera::CameraUiActionRouting),
+                    immersive_mode_entry_reservation::reserve_one_pending_immersive_mode_entry_from_valid_controller_request
+                        .after(crate::camera::CameraUiActionRouting),
                     (
-                        admission::validate_guest,
-                        admission::validate_first_person,
-                        admission::validate_staff,
-                        admission::validate_search,
-                        admission::validate_assembly,
-                        admission::validate_photo,
-                        admission::validate_show,
-                    ),
-                    admission::admit_validated_mode,
-                    immersive_mode_entry_ui_action_routing::route_authored_immersive_mode_entry_actions_from_activated_ui_nodes,
-                    animal_health_ui_action_routing::route_animal_health_tool_actions_from_activated_ui_nodes,
-                    tranquilizer_control_execution::initialize_tranquilizer_tool,
-                    session_lifecycle::exit_requested_session,
-                    immersive_mode_entry_ui_action_routing::retire_inactive_first_person_training,
+                        admission::validate_guest.run_if(any_with_component::<admission::PendingMode<immersive_control_execution_types::GuestViewControl>>),
+                        admission::validate_first_person.run_if(any_with_component::<admission::PendingMode<immersive_control_execution_types::FirstPersonControl>>),
+                        admission::validate_staff.run_if(any_with_component::<admission::PendingMode<admission::StaffControl>>),
+                        admission::validate_search.run_if(any_with_component::<admission::PendingMode<immersive_control_execution_types::FossilSearchControl>>),
+                        admission::validate_assembly.run_if(any_with_component::<admission::PendingMode<immersive_control_execution_types::FossilAssemblyControl>>),
+                        admission::validate_photo.run_if(any_with_component::<admission::PendingMode<immersive_mode_control_types::PhotoControl>>),
+                        admission::validate_show.run_if(any_with_component::<admission::PendingMode<immersive_control_execution_types::ShowEditControl>>),
+                        session_lifecycle::exit_requested_session.run_if(on_message::<ExitImmersiveMode>),
+                    ).after(immersive_mode_entry_reservation::reserve_one_pending_immersive_mode_entry_from_valid_controller_request),
                 )
-                    .chain()
                     .in_set(ImmersiveModeTransitions)
-                    .after(crate::camera::CameraUiActionRouting)
+                    .in_set(GameSet::Intent)
+                    .run_if(in_state(GamePhase::InGame)),
+            )
+            .add_systems(
+                Update,
+                (
+                    animal_health_ui_action_routing::route_animal_health_tool_actions_from_activated_ui_nodes,
+                    tranquilizer_control_execution::initialize_tranquilizer_tool
+                        .after(animal_health_ui_action_routing::route_animal_health_tool_actions_from_activated_ui_nodes),
+                )
                     .in_set(GameSet::Intent)
                     .run_if(in_state(GamePhase::InGame)),
             )
@@ -128,10 +139,10 @@ impl Plugin for ImmersiveModesPlugin {
                 Update,
                 (
                     interaction_cursor_presentation::project_changed_immersive_mode_cursor_images,
-                    interaction_cursor_presentation::move_immersive_mode_cursor_visual_to_current_pointer_position,
+                    interaction_cursor_presentation::move_immersive_mode_cursor_visual_to_current_pointer_position
+                        .after(interaction_cursor_presentation::project_changed_immersive_mode_cursor_images),
                     interaction_prefab_presentation::create_world_prefab_visual_when_immersive_mode_prefab_is_ready,
                 )
-                    .chain()
                     .in_set(GameSet::Presentation)
                     .run_if(in_state(GamePhase::InGame)),
             );

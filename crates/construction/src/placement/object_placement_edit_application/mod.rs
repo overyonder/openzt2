@@ -30,7 +30,6 @@ use openzt2_zoo_state::placement::object_placement_validation::calculate_object_
 use openzt2_zoo_state::placement::placed_object_types::PlacedObjectDefinitionReference;
 use openzt2_zoo_state::placement::placed_object_types::PlacedObjectFootprintOccupancy;
 use openzt2_zoo_state::placement::placement_occupancy_index::PlacedObjectFootprintQueries;
-use openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementCellCollectionScratch;
 use openzt2_zoo_state::placement::placement_transaction_types::ApplyPreparedObjectPlacementEditRequest;
 use openzt2_zoo_state::placement::placement_transaction_types::ObjectPlacementCommitted;
 use openzt2_zoo_state::placement::placement_transaction_types::ObjectPlacementEditApplicationAcknowledged;
@@ -111,7 +110,7 @@ fn preflight_placement_batch(
         Option<&RollbackContext>,
     )>,
     placement: PlacedObjectFootprintQueries,
-    mut scratch: ResMut<ObjectPlacementCellCollectionScratch>,
+    mut scratch: Local<Vec<IVec2>>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     (prefabs, footprints): (Res<Assets<ScenePrefabAsset>>, Res<ScenePlacementFootprints>),
@@ -151,7 +150,7 @@ fn commit_placement_mutation(
     mut commands: Commands,
     mut edits: Query<(&mut PreparedObjectPlacementEdit, &WorldMember)>,
     placement: PlacedObjectFootprintQueries,
-    mut scratch: ResMut<ObjectPlacementCellCollectionScratch>,
+    mut scratch: Local<Vec<IVec2>>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     (prefabs, footprints): (Res<Assets<ScenePrefabAsset>>, Res<ScenePlacementFootprints>),
@@ -198,7 +197,7 @@ fn preflight_prepared_object_placement_mutations(
     catalogue: openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView<'_>,
     root: Entity,
     placement: &PlacedObjectFootprintQueries,
-    scratch: &mut ObjectPlacementCellCollectionScratch,
+    scratch: &mut Vec<IVec2>,
     footprints: &ScenePlacementFootprints,
     prefabs: &Assets<ScenePrefabAsset>,
     models: &Assets<Gltf>,
@@ -238,7 +237,7 @@ fn preflight_prepared_object_placement_mutations(
             if collect_occupied_placement_cells_for_transform(
                 geometry,
                 &mutation.transform,
-                &mut scratch.cells,
+                scratch,
             )
             .is_none_or(|cells| cells != mutation.cells.as_ref())
                 || calculate_authored_object_placement_eighth_turns(definition, &mutation.transform)
@@ -295,7 +294,7 @@ fn preflight_prepared_object_placement_mutations(
                     let exact_cells = collect_occupied_placement_cells_for_transform(
                         footprints.resolve(definition, Some(&mutation.prefab)),
                         transform,
-                        &mut scratch.cells,
+                        scratch,
                     )
                     .is_some_and(|cells| cells == mutation.cells.as_ref());
                     Some(
@@ -352,7 +351,7 @@ fn apply_prepared_object_placement_mutation(
     catalogue: openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView<'_>,
     root: Entity,
     placement: &PlacedObjectFootprintQueries,
-    scratch: &mut ObjectPlacementCellCollectionScratch,
+    scratch: &mut Vec<IVec2>,
     footprints: &ScenePlacementFootprints,
     prefabs: &Assets<ScenePrefabAsset>,
     models: &Assets<Gltf>,

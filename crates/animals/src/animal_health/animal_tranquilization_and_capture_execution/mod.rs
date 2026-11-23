@@ -1,5 +1,6 @@
 use bevy::{ecs::entity::EntityHashMap, platform::collections::HashSet, prelude::*};
 use openzt2_game_data::world_definitions::staff_management::StaffJobKind;
+use std::time::Duration;
 
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
@@ -25,6 +26,41 @@ use super::{
 #[cfg(test)]
 mod tests;
 
+#[derive(Component)]
+pub(super) struct TranquilizerDoseTimer(Timer);
+
+#[derive(Component)]
+pub(super) struct TranquilizerRecoveryTimer(Timer);
+
+// Each fixed update consumes one authored timer tick.
+const DOSE_TICK: Duration = Duration::from_nanos(1);
+
+fn fixed_tick_timer(ticks: u32) -> Timer {
+    Timer::new(Duration::from_nanos(u64::from(ticks)), TimerMode::Once)
+}
+
+fn remaining_dose_ticks(timer: &Timer) -> u32 {
+    u32::try_from(timer.remaining().as_nanos()).unwrap_or(u32::MAX)
+}
+
+pub(super) fn discard_tranquilizer_dose_timer(
+    removed: On<Remove<Tranquilized>>,
+    mut commands: Commands,
+) {
+    commands
+        .entity(removed.entity)
+        .try_remove::<TranquilizerDoseTimer>();
+}
+
+pub(super) fn discard_tranquilizer_recovery_timer(
+    removed: On<Remove<RecoveringFromTranquilizer>>,
+    mut commands: Commands,
+) {
+    commands
+        .entity(removed.entity)
+        .try_remove::<TranquilizerRecoveryTimer>();
+}
+
 pub(super) fn validate_tranquilizer_requests_and_apply_timed_tranquilization(
     mut commands: Commands,
     mut tranquilizer_requests: MessageReader<TranquilizeRequest>,
@@ -36,6 +72,7 @@ pub(super) fn validate_tranquilizer_requests_and_apply_timed_tranquilization(
             Option<&Escaped>,
             Option<&Rampaging>,
             Option<&mut Tranquilized>,
+            Option<&mut TranquilizerDoseTimer>,
         ),
         (With<Animal>, Without<Dead>),
     >,
@@ -58,7 +95,7 @@ pub(super) fn validate_tranquilizer_requests_and_apply_timed_tranquilization(
         let Ok(source_transform) = tranquilizer_sources.get(request.source) else {
             continue;
         };
-        let Ok((animal_transform, escaped, rampaging, existing_tranquilization)) =
+        let Ok((animal_transform, escaped, rampaging, existing_tranquilization, timer)) =
             animals.get_mut(request.animal)
         else {
             continue;
@@ -86,6 +123,11 @@ pub(super) fn validate_tranquilizer_requests_and_apply_timed_tranquilization(
         if let Some(mut current) = existing_tranquilization {
             let mut next = *current;
             refresh_tranquilization(&mut next, dose);
+            if let Some(mut timer) = timer {
+                if remaining_dose_ticks(&timer.0) < next.remaining_ticks {
+                    timer.0 = fixed_tick_timer(next.remaining_ticks);
+                }
+            }
             current.set_if_neq(next);
         } else {
             let index = *first_dose_indices.entry(request.animal).or_insert_with(|| {
@@ -96,7 +138,10 @@ pub(super) fn validate_tranquilizer_requests_and_apply_timed_tranquilization(
         }
     }
     for (animal, dose) in first_doses {
-        commands.entity(animal).insert(dose);
+        commands.entity(animal).insert((
+            dose,
+            TranquilizerDoseTimer(fixed_tick_timer(dose.remaining_ticks)),
+        ));
     }
 }
 
@@ -155,18 +200,50 @@ pub(super) fn validate_staff_capture_requests_and_clear_animal_emergency_state(
 
 pub(super) fn advance_animal_tranquilization_and_begin_recovery_period(
     mut commands: Commands,
-    mut tranquilized_animals: Query<(Entity, &mut Tranquilized), (With<Animal>, Without<Dead>)>,
+    mut tranquilized_animals: Query<
+        (
+            Entity,
+            &mut Tranquilized,
+            Option<&mut TranquilizerDoseTimer>,
+        ),
+        (With<Animal>, Without<Dead>),
+    >,
+    mut recovery: Query<(
+        &mut RecoveringFromTranquilizer,
+        Option<&mut TranquilizerRecoveryTimer>,
+    )>,
 ) {
-    for (animal, mut tranquilized) in &mut tranquilized_animals {
-        tranquilized.remaining_ticks = tranquilized.remaining_ticks.saturating_sub(1);
-        if tranquilized.remaining_ticks == 0 {
+    for (animal, mut tranquilized, timer) in &mut tranquilized_animals {
+        let remaining = if let Some(mut timer) = timer {
+            remaining_dose_ticks(timer.0.tick(DOSE_TICK))
+        } else {
+            let mut timer = fixed_tick_timer(tranquilized.remaining_ticks);
+            let remaining = remaining_dose_ticks(timer.tick(DOSE_TICK));
+            if remaining != 0 {
+                commands.entity(animal).insert(TranquilizerDoseTimer(timer));
+            }
+            remaining
+        };
+        tranquilized.remaining_ticks = remaining;
+        if remaining == 0 {
             let recovery_ticks = tranquilized.recovery_ticks;
             let mut animal_commands = commands.entity(animal);
             animal_commands.remove::<Tranquilized>();
             if recovery_ticks != 0 {
-                animal_commands.insert(RecoveringFromTranquilizer {
+                let next = RecoveringFromTranquilizer {
                     remaining_ticks: recovery_ticks,
-                });
+                };
+                let timer = TranquilizerRecoveryTimer(fixed_tick_timer(recovery_ticks));
+                if let Ok((mut current, current_timer)) = recovery.get_mut(animal) {
+                    current.set_if_neq(next);
+                    if let Some(mut current_timer) = current_timer {
+                        *current_timer = timer;
+                    } else {
+                        animal_commands.insert(timer);
+                    }
+                } else {
+                    animal_commands.insert((next, timer));
+                }
             }
         }
     }
@@ -175,13 +252,29 @@ pub(super) fn advance_animal_tranquilization_and_begin_recovery_period(
 pub(super) fn advance_and_complete_animal_tranquilizer_recovery_periods(
     mut commands: Commands,
     mut recovering_animals: Query<
-        (Entity, &mut RecoveringFromTranquilizer),
+        (
+            Entity,
+            &mut RecoveringFromTranquilizer,
+            Option<&mut TranquilizerRecoveryTimer>,
+        ),
         (With<Animal>, Without<Dead>),
     >,
 ) {
-    for (animal, mut recovery) in &mut recovering_animals {
-        recovery.remaining_ticks = recovery.remaining_ticks.saturating_sub(1);
-        if recovery.remaining_ticks == 0 {
+    for (animal, mut recovery, timer) in &mut recovering_animals {
+        let remaining = if let Some(mut timer) = timer {
+            remaining_dose_ticks(timer.0.tick(DOSE_TICK))
+        } else {
+            let mut timer = fixed_tick_timer(recovery.remaining_ticks);
+            let remaining = remaining_dose_ticks(timer.tick(DOSE_TICK));
+            if remaining != 0 {
+                commands
+                    .entity(animal)
+                    .insert(TranquilizerRecoveryTimer(timer));
+            }
+            remaining
+        };
+        recovery.remaining_ticks = remaining;
+        if remaining == 0 {
             commands
                 .entity(animal)
                 .remove::<RecoveringFromTranquilizer>();

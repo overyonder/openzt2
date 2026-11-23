@@ -18,7 +18,9 @@ use openzt2_world_state::{
             AnimationClipPlaybackRequest, AnimationClipPlaybackRequestRejected,
             CancelAnimationClipPlaybackRequest,
         },
-        animation_presentation_relationship_types::AnimationPresentations,
+        animation_presentation_relationship_types::{
+            AnimationPresentationOwner, AnimationPresentations,
+        },
     },
     animation_playback::{
         animation_event_message_types::AnimationCompleted,
@@ -44,7 +46,7 @@ use openzt2_zoo_state::{
     },
     locomotion::locomotion_types::{
         ActiveTerrainDerivedNavigationGraph, Arrived, Destination, Docking, LocomotionCapacity,
-        LocomotionMode, NavAgent, NavigationFailed, NavigationFailure, NavigationRequestSequence,
+        LocomotionMode, NavAgent, NavigationFailed, NavigationFailure, NavigationRequestGeneration,
         Route, RouteScratch, Velocity,
     },
     staff::staff_employment_types::{Staff, StaffClimbingTankGate, StaffRole},
@@ -129,20 +131,25 @@ pub(super) fn resume_completed_staff_tank_gate_journeys(
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(super) fn begin_staff_tank_gate_journeys(
     mut commands: Commands,
-    graph: Option<Res<ActiveTerrainDerivedNavigationGraph>>,
-    water: Query<&TankNavigationWater, With<WorldRoot>>,
-    capacity: Option<Res<LocomotionCapacity>>,
+    roots: Query<
+        (
+            &ActiveTerrainDerivedNavigationGraph,
+            Option<&TankNavigationWater>,
+            &LocomotionCapacity,
+            &HabitatIndex,
+            &TopologyGrid,
+            &openzt2_zoo_state::terrain::terrain_chunk_types::TerrainIndex,
+        ),
+        With<WorldRoot>,
+    >,
     fence_crossing_index: FenceNavigationCrossingQueries,
     fences: FenceNavigationPolicy,
     surfaces: DrySurfaceEligibility,
-    habitats: Res<HabitatIndex>,
-    grid: Res<TopologyGrid>,
     gates: Query<(FenceSegment, &Gate)>,
     boundaries: HabitatBoundaryQueries,
-    mut sequence: ResMut<NavigationRequestSequence>,
+    mut navigation_generations: Query<&mut NavigationRequestGeneration>,
     (mut scratch, mut candidate_route): (Local<RouteScratch>, Local<Option<Route>>),
-    (terrain_index, terrain_assets, terrain_chunks, tanks, nodes): (
-        Res<openzt2_zoo_state::terrain::terrain_chunk_types::TerrainIndex>,
+    (terrain_assets, terrain_chunks, tanks, nodes): (
         Res<Assets<openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset>>,
         Query<(&openzt2_zoo_state::terrain::terrain_chunk_types::TerrainChunk,
             Option<&openzt2_zoo_state::terrain::terrain_chunk_types::EditedTerrainSamples>)>,
@@ -170,44 +177,38 @@ pub(super) fn begin_staff_tank_gate_journeys(
     >,
     mut failures: MessageWriter<NavigationFailed>,
 ) {
-    let tank_water = water.single().ok();
-    let (Some(graph), Some(capacity)) = (graph, capacity.filter(|capacity| capacity.is_valid()))
-    else {
-        return;
-    };
-    let navigation = graph.terrain_derived_navigation_graph();
-    scratch.ensure_capacity(
-        navigation.navigation_node_count(),
-        capacity.max_route_points,
-    );
-    let candidate_route =
-        candidate_route.get_or_insert_with(|| Route::with_capacity(capacity.max_route_points));
-    if candidate_route.points.capacity() < capacity.max_route_points {
-        candidate_route.points.reserve(
-            capacity
-                .max_route_points
-                .saturating_sub(candidate_route.points.len()),
-        );
-    }
     for (actor, transform, agent, mode, (task, step), world, mut destination, mut route, docking) in
         &mut actors
     {
+        let Ok((graph, tank_water, capacity, habitats, grid, terrain_index)) =
+            roots.get(world.root)
+        else {
+            continue;
+        };
+        if !capacity.is_valid() {
+            continue;
+        }
+        let navigation = graph.terrain_derived_navigation_graph();
+        scratch.ensure_capacity(
+            navigation.navigation_node_count(),
+            capacity.max_route_points,
+        );
+        let candidate_route = candidate_route.get_or_insert_with(|| Route::with_capacity(0));
         if !step.is_current(task) {
             continue;
         }
         let position = transform.translation();
-        let source_tank = locate_habitat_at_world_position(&habitats, position.xz(), *grid)
+        let source_tank = locate_habitat_at_world_position(habitats, position.xz(), *grid)
             .filter(|tank| tanks.contains(*tank));
-        let target_tank =
-            locate_habitat_at_world_position(&habitats, destination.world.xz(), *grid)
-                .filter(|tank| tanks.contains(*tank));
+        let target_tank = locate_habitat_at_world_position(habitats, destination.world.xz(), *grid)
+            .filter(|tank| tanks.contains(*tank));
         if source_tank == target_tank {
             continue;
         }
         if !agent
             .capabilities
             .contains(openzt2_zoo_state::locomotion::locomotion_types::NavFlags::AMPHIBIOUS)
-            && surfaces.on_land(destination.world.xz()) == Some(false)
+            && surfaces.on_land(world.root, destination.world.xz()) == Some(false)
         {
             failures.write(NavigationFailed {
                 entity: actor,
@@ -265,9 +266,9 @@ pub(super) fn begin_staff_tank_gate_journeys(
             let mut first = midpoint + Vec3::new(offset.x, 0.0, offset.y);
             let mut second = midpoint - Vec3::new(offset.x, 0.0, offset.y);
             let first_inside =
-                locate_habitat_at_world_position(&habitats, first.xz(), *grid) == Some(tank);
+                locate_habitat_at_world_position(habitats, first.xz(), *grid) == Some(tank);
             let second_inside =
-                locate_habitat_at_world_position(&habitats, second.xz(), *grid) == Some(tank);
+                locate_habitat_at_world_position(habitats, second.xz(), *grid) == Some(tank);
             if first_inside == second_inside {
                 continue;
             }
@@ -276,8 +277,8 @@ pub(super) fn begin_staff_tank_gate_journeys(
             }
             let height = |point: Vec3| {
                 surfaces
-                    .water_surface_height(point.xz())
-                    .or_else(|| surfaces.ground_height(point.xz()))
+                    .water_surface_height(world.root, point.xz())
+                    .or_else(|| surfaces.ground_height(world.root, point.xz()))
             };
             let (Some(first_y), Some(second_y)) = (height(first), height(second)) else {
                 continue;
@@ -295,16 +296,19 @@ pub(super) fn begin_staff_tank_gate_journeys(
                 navigation,
                 tank_water,
                 |from, to| {
-                    fence_crossing_index.crossing_fences(from, to).any(|edge| {
-                        fences.fence_blocks_actor(
-                            edge,
-                            agent.capabilities,
-                            fences.actor_types.actor_types(actor),
-                        )
-                    })
+                    fence_crossing_index
+                        .crossing_fences(world.root, from, to)
+                        .any(|edge| {
+                            fences.fence_blocks_actor(
+                                edge,
+                                agent.capabilities,
+                                fences.actor_types.actor_types(actor),
+                            )
+                        })
                 },
                 |from, to| {
                     fences.world_segment_blocks_actor(
+                        world.root,
                         from,
                         to,
                         agent.capabilities,
@@ -338,7 +342,10 @@ pub(super) fn begin_staff_tank_gate_journeys(
             continue;
         };
         let goal = *destination;
-        let request = sequence.next();
+        let Ok(mut generation) = navigation_generations.get_mut(actor) else {
+            continue;
+        };
+        let request = generation.advance();
         *destination = Destination {
             request_id: request,
             world: entry,
@@ -352,7 +359,7 @@ pub(super) fn begin_staff_tank_gate_journeys(
                 super::spatial_index_and_docking_operations::fit_to_terrain(
                     LocomotionMode::Swim,
                     point,
-                    &terrain_index,
+                    terrain_index,
                     &terrain_assets,
                     &terrain_chunks,
                 );
@@ -389,6 +396,7 @@ pub(super) fn receive_staff_tank_gate_events(
     mut failures: MessageReader<NavigationFailed>,
     mut completed: MessageReader<AnimationCompleted>,
     mut rejected: MessageReader<AnimationClipPlaybackRequestRejected>,
+    owners: Query<&AnimationPresentationOwner>,
     mut journeys: Query<&mut TankGateJourney>,
 ) {
     for event in arrivals.read() {
@@ -414,16 +422,21 @@ pub(super) fn receive_staff_tank_gate_events(
         }
     }
     for event in completed.read() {
-        for mut journey in &mut journeys {
-            if journey.clip_request.is_some()
-                && journey.clip_request == event.explicit_clip_request_id
-            {
+        let Some(request_id) = event.explicit_clip_request_id else {
+            continue;
+        };
+        let controller = event.animation_playback_controller_entity;
+        let actor = owners
+            .get(controller)
+            .map_or(controller, |owner| owner.gameplay_entity);
+        if let Ok(mut journey) = journeys.get_mut(actor) {
+            if journey.clip_request == Some(request_id) {
                 journey.clip_completed = true;
             }
         }
     }
     for event in rejected.read() {
-        for mut journey in &mut journeys {
+        if let Ok(mut journey) = journeys.get_mut(event.animation_subject_entity) {
             if journey.clip_request == Some(event.request_id) {
                 journey.failed = true;
             }
@@ -682,7 +695,7 @@ pub(super) fn execute_staff_tank_gate_journeys(
                 break;
             }
             let root_parent = global.affine().inverse() * parent.affine();
-            let Some(mut motion) = motion.filter(|motion| motion.owns_playback(controller)) else {
+            let Some(mut motion) = motion else {
                 commands
                     .entity(controller_entity)
                     .insert(ConsumedLocomotionRootMotion::new(
@@ -691,6 +704,13 @@ pub(super) fn execute_staff_tank_gate_journeys(
                     ));
                 continue;
             };
+            if !motion.owns_playback(controller) {
+                *motion = ConsumedLocomotionRootMotion::new(
+                    journey.clip_request.expect("an active climb has a request"),
+                    root_parent,
+                );
+                continue;
+            }
             motion.update_root_parent_transform(root_parent);
             if journey.stage == StaffTankGateStage::Cross {
                 let remaining = journey.exit - transform.translation;

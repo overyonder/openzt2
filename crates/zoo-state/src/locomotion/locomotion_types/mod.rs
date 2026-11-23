@@ -25,6 +25,7 @@ impl NavFlags {
 }
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[require(NavigationRequestGeneration)]
 pub struct NavAgent {
     pub radius_m: f32,
     /// Current permitted speed. Zero is a valid stationary animation interval;
@@ -250,23 +251,18 @@ pub struct NavigationFailed {
     pub reason: NavigationFailure,
 }
 
-#[derive(Resource, Debug, Default)]
-pub struct NavigationRequestSequence(u64);
+#[derive(Component, Debug, Clone, Copy, Default)]
+pub struct NavigationRequestGeneration(u64);
 
-impl NavigationRequestSequence {
-    pub const fn from_snapshot(last_issued: u64) -> Self {
-        Self(last_issued)
-    }
-
+impl NavigationRequestGeneration {
     pub const fn last_issued(&self) -> u64 {
         self.0
     }
-
     pub fn reserve_restored(&mut self, request_id: u64) {
         self.0 = self.0.max(request_id);
     }
 
-    pub fn next(&mut self) -> u64 {
+    pub fn advance(&mut self) -> u64 {
         self.0 = self
             .0
             .checked_add(1)
@@ -285,7 +281,7 @@ pub enum NavigationFailure {
 
 /// The navigation index derived from the active terrain during world hydration
 /// and refreshed from authoritative terrain samples after edits.
-#[derive(Resource, Debug)]
+#[derive(Component, Debug)]
 pub struct ActiveTerrainDerivedNavigationGraph {
     terrain_derived_navigation_graph:
         crate::locomotion::terrain_derived_navigation_graph_types::TerrainDerivedNavigationGraph,
@@ -397,7 +393,7 @@ impl ActiveTerrainDerivedNavigationGraph {
 
 /// Capacity policy compiled for the active world and installed during
 /// hydration. It prevents route and spatial storage growth in settled play.
-#[derive(Resource, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LocomotionCapacity {
     pub max_agents: usize,
     pub max_route_points: usize,
@@ -425,22 +421,23 @@ pub struct SpatialCellIndex(pub u32);
 
 #[derive(SystemParam)]
 pub struct SpatialGridMembership<'w, 's> {
-    grid: Res<'w, SpatialGrid>,
+    grids: Query<'w, 's, &'static SpatialGrid>,
     members: Query<'w, 's, &'static SpatialCellMembers>,
 }
 
 impl SpatialGridMembership<'_, '_> {
-    pub fn members(&self, cell: u32) -> impl Iterator<Item = Entity> + '_ {
-        self.grid
-            .cells
-            .get(cell as usize)
+    pub fn members(&self, root: Entity, cell: u32) -> impl Iterator<Item = Entity> + '_ {
+        self.grids
+            .get(root)
+            .ok()
+            .and_then(|grid| grid.cells.get(cell as usize))
             .and_then(|cell| self.members.get(*cell).ok())
             .into_iter()
             .flat_map(|members| members.iter())
     }
 }
 
-#[derive(Resource, Debug)]
+#[derive(Component, Debug)]
 pub struct SpatialGrid {
     pub origin: Vec2,
     pub cell_size_m: f32,

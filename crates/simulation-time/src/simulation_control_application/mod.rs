@@ -1,4 +1,5 @@
 use bevy::{prelude::*, time::Virtual};
+use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
@@ -13,12 +14,15 @@ pub(crate) fn apply_requested_simulation_control_changes(
     mut pause_requests: MessageReader<SimulationPauseRequest>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
-    mut simulation_control: ResMut<SimulationControl>,
+    mut roots: Query<&mut SimulationControl, With<WorldRoot>>,
     mut virtual_time: ResMut<Time<Virtual>>,
     mut control_changes: MessageWriter<SimulationControlChanged>,
     speed_override: Res<super::simulation_speed_override::SimulationSpeedOverride>,
 ) {
     let Some(definitions) = active_definitions.get(&definitions) else {
+        return;
+    };
+    let Ok(mut simulation_control) = roots.single_mut() else {
         return;
     };
     let speed_multipliers = &definitions.timing().speed_multipliers;
@@ -29,17 +33,19 @@ pub(crate) fn apply_requested_simulation_control_changes(
     }
     let previous_control = *simulation_control;
 
+    let mut requested_control = previous_control;
     for request in speed_requests.read() {
         accept_requested_simulation_speed_tier(
-            &mut simulation_control,
+            &mut requested_control,
             request.tier,
             speed_multipliers.len(),
         );
     }
     for request in pause_requests.read() {
-        simulation_control.apply_pause_request(*request);
+        requested_control.apply_pause_request(*request);
     }
 
+    simulation_control.set_if_neq(requested_control);
     let speed_multiplier = &speed_multipliers[usize::from(simulation_control.speed_tier)];
     let relative_speed =
         speed_multiplier.numerator as f32 / speed_multiplier.denominator as f32 * speed_override.0;
@@ -76,9 +82,12 @@ pub(super) fn project_active_simulation_pause_claims(
     >,
     visibility: Query<&Visibility>,
     parents: Query<&ChildOf>,
-    mut simulation_control: ResMut<SimulationControl>,
+    mut roots: Query<&mut SimulationControl, With<WorldRoot>>,
     mut control_changes: MessageWriter<SimulationControlChanged>,
 ) {
+    let Ok(mut simulation_control) = roots.single_mut() else {
+        return;
+    };
     // Authored controls inherit visibility. Explicitly forced-visible nodes
     // still lose their temporary pause when an authored ancestor is hidden.
     let forced_visibility = authored_visibility

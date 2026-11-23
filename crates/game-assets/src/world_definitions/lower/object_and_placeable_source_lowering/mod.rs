@@ -153,6 +153,7 @@ pub(crate) fn lower_authored_world_object_runtime(
     use super::source_element_tree_search::authored_type_family_elements_named;
 
     let mut morph_targets = std::collections::BTreeMap::new();
+    let mut numeric_behavior_properties = std::collections::BTreeMap::new();
     let shared = authored_type_family_elements_named(record, "BFAIEntityDataShared");
     let clip = |attribute| {
         shared
@@ -189,6 +190,11 @@ pub(crate) fn lower_authored_world_object_runtime(
                 morph_targets
                     .entry(id(name))
                     .or_insert_with(|| id(attribute.value()));
+            }
+            if name.get(..2).is_some_and(|prefix| prefix.eq_ignore_ascii_case("f_")) {
+                if let Some(value) = parse_blue_fang_source_numeric_lexeme::<f32>(attribute.value()).filter(|value| value.is_finite()) {
+                    numeric_behavior_properties.entry(id(name)).or_insert(value);
+                }
             }
         }
     }
@@ -242,6 +248,7 @@ pub(crate) fn lower_authored_world_object_runtime(
         fall_animation_clips,
         prop_rotation_offset_radians,
         morph_targets: morph_targets.into_iter().collect(),
+        numeric_behavior_properties: numeric_behavior_properties.into_iter().collect(),
         egg,
         fossil_assembly_surface,
     })

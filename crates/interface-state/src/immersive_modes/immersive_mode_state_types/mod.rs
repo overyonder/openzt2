@@ -21,9 +21,14 @@ pub struct ActiveImmersiveMode {
 
 /// The animal-training child activity of a first-person controller.
 #[derive(Component, Debug, Clone, Copy)]
+#[relationship(relationship_target = FirstPersonTrainingSessions)]
 pub struct FirstPersonTraining {
     pub subject: Entity,
 }
+
+#[derive(Component)]
+#[relationship_target(relationship = FirstPersonTraining)]
+pub struct FirstPersonTrainingSessions(Vec<Entity>);
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 #[relationship(relationship_target = ImmersiveControlledSubjects)]

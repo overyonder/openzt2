@@ -10,9 +10,6 @@ pub struct WorldLoadCompletionSet;
 pub struct WorldLoadCompleted;
 
 #[derive(Component)]
-pub struct WorldClockInitialized;
-
-#[derive(Component)]
 pub struct ImportedPersistentIdsReserved;
 
 #[derive(Component)]

@@ -4,7 +4,7 @@ use std::io;
 
 use crate::source_document::{
     blue_fang_actor_manifest_model_and_scene_resolution_index::BlueFangActorManifestModelAndSceneResolutionIndex,
-    document_semantics::{classify_source_document, SourceDocumentKind},
+    document_semantics::{SourceDocumentKind, classify_source_document},
     ordered_source_document_types::{OrderedSourceDocument, OrderedSourceDocumentNode},
 };
 use openzt2_game_data::world_definitions::document::WorldDefinitionDocument;
@@ -21,6 +21,7 @@ pub(super) fn lower_resolved_world_definition_source_document_closure_to_canonic
     actor_manifest_resolution_index: &BlueFangActorManifestModelAndSceneResolutionIndex,
     primary_path: &str,
     authored_type_registry_source_order: [u64; 2],
+    timekeeper: &mut Option<super::timing::AuthoredTimekeeperPolicy>,
 ) -> io::Result<Option<WorldDefinitionDocument>> {
     if source_documents.is_empty() {
         return Ok(None);
@@ -102,7 +103,8 @@ pub(super) fn lower_resolved_world_definition_source_document_closure_to_canonic
         actor_scene_paths,
         authored_type_registry_source_order,
     )
-    .and_then(|mut document| {
+    .and_then(|(mut document, policy)| {
+        *timekeeper = policy;
         if let Some(modes) = gameplay_modes.filter(|_| primary_path == "ui/modes/modes.xml") {
             document.transport_highlight = lower_transport_highlight_policy(modes)?;
         }

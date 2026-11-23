@@ -5,8 +5,7 @@ use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_zoo_state::animal_health::types::Dead;
 
 use super::{
-    animal_birth_and_release_contracts::{AnimalReleased, ReleaseAnimal},
-    outgoing_animal_adoption_execution::despawn_departing_animal_and_its_crate,
+    animal_birth_and_release_contracts::ReleaseAnimal,
     types::{Animal, AnimalLifeStage, Pregnancy, ReleaseRestricted},
 };
 
@@ -26,11 +25,13 @@ pub(super) fn release_eligible_adult_animals_from_the_zoo(
         if pregnant || life_stage.0 != LifeStage::Adult {
             continue;
         }
-        let root = member.root;
-        commands.queue(move |world: &mut World| {
-            if despawn_departing_animal_and_its_crate(world, animal) {
-                world.write_message(AnimalReleased { root });
-            }
-        });
+        commands
+            .entity(animal)
+            .try_insert(
+                super::outgoing_animal_adoption_execution::AnimalDeparture::Release {
+                    root: member.root,
+                },
+            )
+            .try_despawn();
     }
 }

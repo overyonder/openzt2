@@ -31,16 +31,16 @@ use super::{
 
 #[derive(SystemParam)]
 pub(super) struct ProgressionSnapshotCaptureQueries<'w, 's> {
-    unlocked_catalogue_definitions: Res<'w, UnlockedCatalogueDefinitionSet>,
-    scenario_award_points: Res<'w, ScenarioAwardPointTotal>,
-    endangered_animal_birth_count: Res<'w, TotalEndangeredAnimalBirthCount>,
-    fame_history: Res<'w, FameHistory>,
     world_progression: Query<
         'w,
         's,
         (
             &'static Fame,
             &'static ZooRating,
+            &'static UnlockedCatalogueDefinitionSet,
+            &'static ScenarioAwardPointTotal,
+            &'static TotalEndangeredAnimalBirthCount,
+            &'static FameHistory,
             Option<&'static AnimalAdoptionAvailabilityPolicy>,
         ),
         With<WorldRoot>,
@@ -101,6 +101,7 @@ pub(super) struct ProgressionSnapshotCaptureQueries<'w, 's> {
 
 pub(super) fn capture_progression_snapshot_records_from_live_world(
     progression_snapshot_capture_queries: &ProgressionSnapshotCaptureQueries,
+    root: Entity,
 ) -> Result<ProgressionSnapshotRecords, WorldSnapshotPersistenceFailure> {
     if !progression_snapshot_capture_queries
         .progression_entities_without_persistent_identifiers
@@ -112,10 +113,11 @@ pub(super) fn capture_progression_snapshot_records_from_live_world(
         return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection);
     }
 
-    let (fame, zoo_rating, adoption_policy) = progression_snapshot_capture_queries
-        .world_progression
-        .single()
-        .map_err(|_| WorldSnapshotPersistenceFailure::CorruptSnapshotSection)?;
+    let (fame, zoo_rating, unlocked, award_points, birth_count, history, adoption_policy) =
+        progression_snapshot_capture_queries
+            .world_progression
+            .get(root)
+            .map_err(|_| WorldSnapshotPersistenceFailure::CorruptSnapshotSection)?;
     let animal_adoption_availability_policy = adoption_policy.copied().unwrap_or_default();
 
     let mut research_project_snapshot_records = progression_snapshot_capture_queries
@@ -197,22 +199,12 @@ pub(super) fn capture_progression_snapshot_records_from_live_world(
     let progression_snapshot_records = ProgressionSnapshotRecords {
         fame: *fame,
         zoo_rating: *zoo_rating,
-        unlocked_catalogue_definition_count: progression_snapshot_capture_queries
-            .unlocked_catalogue_definitions
-            .definition_count,
-        unlocked_catalogue_definition_bit_words: progression_snapshot_capture_queries
-            .unlocked_catalogue_definitions
-            .words
-            .clone(),
-        scenario_award_points: progression_snapshot_capture_queries.scenario_award_points.0,
-        endangered_animal_birth_count: progression_snapshot_capture_queries
-            .endangered_animal_birth_count
-            .0,
+        unlocked_catalogue_definition_count: unlocked.definition_count,
+        unlocked_catalogue_definition_bit_words: unlocked.words.clone(),
+        scenario_award_points: award_points.0,
+        endangered_animal_birth_count: birth_count.0,
         animal_adoption_availability_policy,
-        fame_history_samples: progression_snapshot_capture_queries
-            .fame_history
-            .samples()
-            .to_vec(),
+        fame_history_samples: history.samples().to_vec(),
         research_projects: research_project_snapshot_records,
         earned_progression_awards: earned_progression_award_snapshot_records,
         award_condition_duration_progress: award_duration_snapshot_records,

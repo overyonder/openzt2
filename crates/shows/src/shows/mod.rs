@@ -28,9 +28,7 @@ use openzt2_zoo_state::shows::show_stage_types;
 mod show_timing_operations;
 
 use bevy::prelude::*;
-use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
-    BehaviorStep, BehaviorStepSet,
-};
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::BehaviorStepFixedSet;
 
 use openzt2_game_assets::application_lifecycle::GamePhase;
 use openzt2_world_state::application_schedule::FixedGameSet;
@@ -47,6 +45,11 @@ pub struct ShowsPlugin;
 
 impl Plugin for ShowsPlugin {
     fn build(&self, app: &mut App) {
+        use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
+            activated_behavior_actor, update_waiting_behavior_actors,
+        };
+        app.add_observer(activated_behavior_actor::<openzt2_zoo_state::behavior_task_execution_types::running_actions::RunBehaviorWatchShow>.pipe(show_audience_lifecycle::bind_ready_show_watch_actions));
+
         app.register_required_components::<openzt2_world_state::world_spawn::world_membership_types::WorldRoot, WorldTrickPopularity>()
             .init_asset::<authored_show_rewards::AuthoredShowRewards>()
             .init_asset_loader::<authored_show_rewards::AuthoredShowRewardsLoader>()
@@ -174,9 +177,9 @@ impl Plugin for ShowsPlugin {
                     .run_if(in_state(GamePhase::InGame)),
             )
             .add_systems(
-                BehaviorStep,
-                show_audience_lifecycle::bind_ready_show_watch_actions
-                    .in_set(BehaviorStepSet::Actions),
+                FixedUpdate,
+                update_waiting_behavior_actors.pipe(show_audience_lifecycle::bind_ready_show_watch_actions)
+                    .in_set(BehaviorStepFixedSet::Think),
             );
     }
 }

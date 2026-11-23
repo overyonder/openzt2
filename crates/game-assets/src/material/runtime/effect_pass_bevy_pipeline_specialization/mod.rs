@@ -5,7 +5,10 @@ use std::borrow::Cow;
 use bevy::{
     material::AlphaMode,
     pbr::{Material, MaterialPipeline, MaterialPipelineKey},
-    render::render_resource::{RenderPipelineDescriptor, SpecializedMeshPipelineError},
+    render::render_resource::{
+        DepthBiasState, PrimitiveTopology, RenderPipelineDescriptor, SpecializedMeshPipelineError,
+        TextureFormat,
+    },
 };
 
 use super::{
@@ -67,6 +70,28 @@ impl Material for EffectPassMaterial {
         if let Some(depth) = descriptor.depth_stencil.as_mut() {
             depth.depth_write_enabled = Some(key.bind_group_data.depth_write_enabled);
             depth.depth_compare = Some(key.bind_group_data.depth_compare);
+            if matches!(
+                descriptor.primitive.topology,
+                PrimitiveTopology::TriangleList | PrimitiveTopology::TriangleStrip
+            ) && (key.bind_group_data.depth_bias_bits != 0
+                || key.bind_group_data.slope_scale_depth_bias_bits != 0)
+            {
+                // Float depth bias has a primitive-dependent unit. Convert at depth 1.
+                let units_per_depth = match depth.format {
+                    TextureFormat::Depth16Unorm => 65_535.0,
+                    TextureFormat::Depth32Float | TextureFormat::Depth32FloatStencil8 => {
+                        8_388_608.0
+                    }
+                    _ => 16_777_215.0,
+                };
+                let constant = f64::from(f32::from_bits(key.bind_group_data.depth_bias_bits));
+                let slope_scale = f32::from_bits(key.bind_group_data.slope_scale_depth_bias_bits);
+                depth.bias = DepthBiasState {
+                    constant: (-constant * units_per_depth).round() as i32,
+                    slope_scale: -slope_scale,
+                    clamp: 0.0,
+                };
+            }
             if key.mesh_key.depth_stencil_format().has_stencil_aspect() {
                 depth.stencil = key.bind_group_data.stencil;
             }

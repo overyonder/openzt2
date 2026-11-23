@@ -27,8 +27,8 @@ pub(crate) fn identify_spawned_staff_from_world_definition(
     mut commands: Commands,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
-    clock: Res<ZooClock>,
-    calendar: Res<ZooCalendar>,
+    clock: Single<&ZooClock>,
+    calendar: Single<&ZooCalendar>,
     spawned_entities: Query<
         (
             Entity,

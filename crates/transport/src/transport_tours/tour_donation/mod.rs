@@ -106,7 +106,7 @@ pub(super) fn tour_donation_opportunity() -> DonationOpportunity {
 
 #[derive(bevy::ecs::system::SystemParam)]
 pub(super) struct TourDonation<'w, 's> {
-    clock: Res<'w, ZooClock>,
+    clocks: Query<'w, 's, &'static ZooClock>,
     time: Res<'w, Time<Fixed>>,
     source: Res<'w, TourDonationPolicySource>,
     policies: Res<'w, Assets<TourDonationPolicy>>,
@@ -145,6 +145,10 @@ impl TourDonation<'_, '_> {
         else {
             return;
         };
+        let Ok(clock) = self.clocks.get(world.root) else {
+            return;
+        };
+        let tick = clock.tick;
         let operation = commands
             .spawn((
                 world,
@@ -168,7 +172,6 @@ impl TourDonation<'_, '_> {
             kind: TransactionKind::Donation,
             subject: Some(station),
         });
-        let tick = self.clock.tick;
         let lifetime = (policy.timeout_seconds / self.time.timestep().as_secs_f64()).ceil() as u64;
         commands.spawn((
             ChildOf(guest),

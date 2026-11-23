@@ -1,8 +1,11 @@
-use bevy::prelude::*;
+use bevy::{
+    ecs::{entity::EntityHashSet, relationship::RelationshipTarget, system::SystemParam},
+    prelude::*,
+};
 use openzt2_game_data::{
+    AssetId,
     species::ConservationStatus,
     ui_document::{node_property_binding::*, widget::UiWidgetRecord},
-    AssetId,
 };
 
 use openzt2_game_assets::{
@@ -15,7 +18,6 @@ use openzt2_game_assets::{
 };
 use openzt2_interface_state::ui::authored_ui_focus_state::UiFocusable;
 use openzt2_interface_state::ui::authored_ui_interaction_enabled_state::UiInteractionEnabled;
-use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentRoot;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiNodeId;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiValue;
@@ -24,7 +26,7 @@ use openzt2_interface_state::ui::authored_ui_node_projection_components::UiVisib
 use openzt2_ui::authored_multi_icon_presentation::UiMultiIconPolicy;
 use openzt2_ui::authored_ui_interaction_enabled_binding::UiEnabledBinding;
 use openzt2_ui::authored_ui_text_content_binding::UiTextBinding;
-use openzt2_world_state::world_spawn::world_entity_crating::WorldEntityIsCrated;
+use openzt2_world_state::world_spawn::world_entity_crating::{AnimalCrate, WorldEntityIsCrated};
 use openzt2_zoo_state::animal_health::types::Dead;
 use openzt2_zoo_state::animal_health::types::Rampaging;
 use openzt2_zoo_state::animal_lifecycle::types::Adoptable;
@@ -32,7 +34,9 @@ use openzt2_zoo_state::animal_lifecycle::types::Animal;
 use openzt2_zoo_state::animal_lifecycle::types::CratingRestricted;
 use openzt2_zoo_state::animal_lifecycle::types::ReleaseRestricted;
 use openzt2_zoo_state::animal_lifecycle::types::SpeciesHandle;
+use openzt2_zoo_state::placement::placement_preview_types::RelocatingPlacedObject;
 
+use super::panel_binding_families::{AnimalHandlingFieldOf, AnimalHandlingFields};
 use super::text_replacement_operations::replace_projected_ui_text_if_changed;
 use openzt2_interface_state::information::entity_selection_types::{InfoPanel, SelectedSubject};
 
@@ -49,19 +53,55 @@ pub(crate) fn authored_multi_icon_key_for_conservation_status(
     }
 }
 
+#[derive(SystemParam)]
+pub(crate) struct AnimalHandlingChanges<'w, 's> {
+    changed: Query<
+        'w,
+        's,
+        (),
+        Or<(
+            Changed<SpeciesHandle>,
+            Added<Animal>,
+            Added<Adoptable>,
+            Added<ReleaseRestricted>,
+            Added<CratingRestricted>,
+            Added<WorldEntityIsCrated>,
+            Added<Rampaging>,
+            Added<Dead>,
+            Changed<AnimalCrate>,
+            Added<RelocatingPlacedObject>,
+        )>,
+    >,
+    animals: RemovedComponents<'w, 's, Animal>,
+    species: RemovedComponents<'w, 's, SpeciesHandle>,
+    adoptable: RemovedComponents<'w, 's, Adoptable>,
+    release: RemovedComponents<'w, 's, ReleaseRestricted>,
+    crating: RemovedComponents<'w, 's, CratingRestricted>,
+    crated: RemovedComponents<'w, 's, WorldEntityIsCrated>,
+    rampaging: RemovedComponents<'w, 's, Rampaging>,
+    dead: RemovedComponents<'w, 's, Dead>,
+    crates: RemovedComponents<'w, 's, AnimalCrate>,
+    relocating: RemovedComponents<'w, 's, RelocatingPlacedObject>,
+}
+
 pub(crate) fn project_selected_animal_pickup_release_and_conservation_controls(
     species_assets: Res<Assets<SpeciesAsset>>,
     active_species: Res<SpeciesAssets>,
     ui_documents: Res<Assets<UiDocumentAsset>>,
-    ui_document_roots: Query<&UiDocumentRoot>,
     active_localization: Res<LocalizationPrecedenceIndex>,
     localization_assets: Res<Assets<LocalizationAsset>>,
-    information_panels: Query<(Entity, &ChildOf, Ref<InheritedVisibility>), With<InfoPanel>>,
-    selections: Query<Ref<SelectedSubject>>,
-    relocating: Query<
-        (),
-        With<openzt2_zoo_state::placement::placement_preview_types::RelocatingPlacedObject>,
+    panels: Query<
+        (
+            &ChildOf,
+            Ref<InheritedVisibility>,
+            Ref<UiDocumentRoot>,
+            Ref<AnimalHandlingFields>,
+        ),
+        With<InfoPanel>,
     >,
+    selections: Query<Ref<SelectedSubject>>,
+    mut removed_selections: RemovedComponents<SelectedSubject>,
+    relocating: Query<(), With<RelocatingPlacedObject>>,
     animals: Query<
         (
             &SpeciesHandle,
@@ -71,148 +111,170 @@ pub(crate) fn project_selected_animal_pickup_release_and_conservation_controls(
             Has<WorldEntityIsCrated>,
             Has<Rampaging>,
             Has<Dead>,
-            Option<&openzt2_world_state::world_spawn::world_entity_crating::AnimalCrate>,
+            Option<&AnimalCrate>,
         ),
         With<Animal>,
     >,
-    mut visibility_nodes: Query<(&UiDocumentOwner, &UiVisibleBinding, &mut Visibility)>,
-    mut interaction_nodes: Query<(
-        &UiDocumentOwner,
-        &UiEnabledBinding,
-        &mut UiInteractionEnabled,
-        Option<&mut UiFocusable>,
-        &mut Pickable,
-    )>,
-    mut conservation_icon_nodes: Query<(
-        &UiNodeId,
-        &UiDocumentOwner,
-        &UiValueBinding,
-        &UiMultiIconPolicy,
-        &mut UiValue,
-    )>,
-    mut conservation_text_nodes: Query<(&UiDocumentOwner, &UiTextBinding, &mut Text)>,
+    mut changes: AnimalHandlingChanges,
+    mut visibility_nodes: Query<(&UiVisibleBinding, &mut Visibility), With<AnimalHandlingFieldOf>>,
+    mut interaction_nodes: Query<
+        (
+            &UiEnabledBinding,
+            &mut UiInteractionEnabled,
+            Option<&mut UiFocusable>,
+            &mut Pickable,
+        ),
+        With<AnimalHandlingFieldOf>,
+    >,
+    mut conservation_icons: Query<
+        (&UiNodeId, &UiValueBinding, &mut UiValue),
+        (With<AnimalHandlingFieldOf>, With<UiMultiIconPolicy>),
+    >,
+    mut conservation_texts: Query<(&UiTextBinding, &mut Text), With<AnimalHandlingFieldOf>>,
 ) {
-    let Some(species_index) = active_species.get(&species_assets) else {
+    let data_changed = species_assets.is_changed()
+        || active_species.is_changed()
+        || ui_documents.is_changed()
+        || active_localization.is_changed()
+        || localization_assets.is_changed();
+    let Some(species) = active_species.get(&species_assets) else {
         return;
     };
-    for (panel_entity, parent, inherited_visibility) in &information_panels {
-        let Ok(selection) = selections.get(parent.parent()) else {
-            continue;
-        };
-        if !inherited_visibility.get() {
+    let removed = changes
+        .animals
+        .read()
+        .chain(changes.species.read())
+        .chain(changes.adoptable.read())
+        .chain(changes.release.read())
+        .chain(changes.crating.read())
+        .chain(changes.crated.read())
+        .chain(changes.rampaging.read())
+        .chain(changes.dead.read())
+        .chain(changes.crates.read())
+        .chain(changes.relocating.read())
+        .chain(removed_selections.read())
+        .collect::<EntityHashSet>();
+    let localization = active_localization.borrow_loaded_localization_view(&localization_assets);
+    for (parent, visible, document, fields) in &panels {
+        if !visible.get() {
             continue;
         }
-        let Ok((
-            species_handle,
-            is_adoptable,
-            release_is_restricted,
-            crating_is_restricted,
-            is_crated,
-            is_rampaging,
-            is_dead,
-            crate_link,
-        )) = animals.get(selection.0)
-        else {
+        let selection = selections.get(parent.parent()).ok();
+        let facts = selection
+            .as_ref()
+            .and_then(|selection| animals.get(selection.0).ok());
+        let crate_entity = facts.and_then(|facts| facts.7.map(|link| link.0));
+        let selection_changed = selection.as_ref().is_some_and(|selection| {
+            selection.is_changed()
+                || changes.changed.contains(selection.0)
+                || removed.contains(&selection.0)
+        }) || removed.contains(&parent.parent());
+        let crate_changed = crate_entity
+            .is_some_and(|entity| changes.changed.contains(entity) || removed.contains(&entity));
+        if !data_changed
+            && !visible.is_changed()
+            && !document.is_changed()
+            && !fields.is_changed()
+            && !selection_changed
+            && !crate_changed
+        {
             continue;
-        };
-        let conservation_status = species_index
-            .find(species_handle.species)
-            .map(|species| species.conservation)
-            .unwrap_or(ConservationStatus::Unspecified);
-        let conservation_status_key =
-            authored_multi_icon_key_for_conservation_status(conservation_status);
-        let ui_document = ui_document_roots
-            .get(panel_entity)
-            .ok()
-            .and_then(|document_root| ui_documents.get(&document_root.document));
-        let mut conservation_localization_key = None;
-        for (node_id, document_owner, value_binding, _, mut value) in &mut conservation_icon_nodes {
-            if document_owner.0 != panel_entity
-                || !matches!(
-                    value_binding.0,
-                    UiIntegerPropertyBindingSource::AnimalConservationStatus
-                )
-            {
+        }
+        let status = facts
+            .and_then(|facts| species.find(facts.0.species))
+            .map_or(ConservationStatus::Unspecified, |species| {
+                species.conservation
+            });
+        let status_key = authored_multi_icon_key_for_conservation_status(status);
+        let source = ui_documents.get(&document.document);
+        let mut label_key = None;
+        for entity in fields.iter() {
+            let Ok((node, binding, mut value)) = conservation_icons.get_mut(entity) else {
+                continue;
+            };
+            if !matches!(
+                binding.0,
+                UiIntegerPropertyBindingSource::AnimalConservationStatus
+            ) {
                 continue;
             }
-            let Some((entry_index, icon_entry)) = ui_document.and_then(|ui_document| {
-                let UiWidgetRecord::MultiIcon { entries } = &ui_document
+            let icon = source.and_then(|source| {
+                let widget = &source
                     .canonical_ui_document()
                     .nodes
-                    .get(node_id.index as usize)?
-                    .widget
-                else {
+                    .get(node.index as usize)?
+                    .widget;
+                let UiWidgetRecord::MultiIcon { entries } = widget else {
                     return None;
                 };
-                entries.iter().enumerate().find(|(_, icon_entry)| {
-                    Some(AssetId(icon_entry.key.0)) == conservation_status_key
-                })
-            }) else {
-                value.0 = -1;
-                continue;
-            };
-            value.0 = entry_index as i64;
-            conservation_localization_key = Some(AssetId(icon_entry.localization_key.0));
+                entries
+                    .iter()
+                    .enumerate()
+                    .find(|(_, entry)| Some(entry.key) == status_key)
+            });
+            if let Some((index, entry)) = icon {
+                value.set_if_neq(UiValue(i64::try_from(index).unwrap_or(i64::MAX)));
+                label_key = Some(entry.localization_key);
+            } else {
+                value.set_if_neq(UiValue(-1));
+            }
         }
-        let conservation_label = active_localization
-            .borrow_loaded_localization_view(&localization_assets)
-            .zip(conservation_localization_key)
-            .and_then(|(active_localization, localization_key)| {
-                active_localization.find_plain_localized_text(localization_key)
-            })
+        let label = localization
+            .zip(label_key)
+            .and_then(|(localization, key)| localization.find_plain_localized_text(key))
             .unwrap_or_default();
-        for (document_owner, text_binding, text) in &mut conservation_text_nodes {
-            if document_owner.0 == panel_entity
-                && matches!(
-                    text_binding.0,
+        let pickup_visible = facts.is_some_and(|facts| facts.1 && !facts.6);
+        let release_visible = facts.is_some_and(|facts| !facts.2 && !facts.6);
+        let pickup_enabled = facts.is_some_and(|facts| pickup_visible && !facts.3 && !facts.5);
+        let crated = facts.is_some_and(|facts| facts.4);
+        let crate_can_move = crated
+            && selection
+                .as_ref()
+                .is_some_and(|selection| !relocating.contains(crate_entity.unwrap_or(selection.0)));
+        for entity in fields.iter() {
+            if let Ok((binding, text)) = conservation_texts.get_mut(entity) {
+                if matches!(
+                    binding.0,
                     UiTextPropertyBindingSource::AnimalConservationStatus
-                )
-            {
-                replace_projected_ui_text_if_changed(text, conservation_label);
-            }
-        }
-        let pickup_should_be_visible = is_adoptable && !is_dead;
-        let release_should_be_visible = !release_is_restricted && !is_dead;
-        let pickup_should_be_enabled =
-            pickup_should_be_visible && !crating_is_restricted && !is_rampaging;
-        for (document_owner, visibility_binding, mut visibility) in &mut visibility_nodes {
-            if document_owner.0 != panel_entity {
-                continue;
-            }
-            let should_be_visible = match &visibility_binding.0 {
-                UiBooleanPropertyBindingSource::AnimalPickupVisible => pickup_should_be_visible,
-                UiBooleanPropertyBindingSource::AnimalReleaseVisible => release_should_be_visible,
-                UiBooleanPropertyBindingSource::SelectedEntityCrated => is_crated,
-                _ => continue,
-            };
-            *visibility = if should_be_visible {
-                Visibility::Inherited
-            } else {
-                Visibility::Hidden
-            };
-        }
-        for (document_owner, enabled_binding, mut interaction_enabled, focusable, mut pickable) in
-            &mut interaction_nodes
-        {
-            if document_owner.0 != panel_entity {
-                continue;
-            }
-            let enabled = match &enabled_binding.0 {
-                UiBooleanPropertyBindingSource::AnimalPickupEnabled => pickup_should_be_enabled,
-                UiBooleanPropertyBindingSource::SelectedEntityCrated => {
-                    is_crated && !relocating.contains(crate_link.map_or(selection.0, |link| link.0))
+                ) {
+                    replace_projected_ui_text_if_changed(text, label);
                 }
-                _ => continue,
-            };
-            interaction_enabled.0 = enabled;
-            if let Some(mut focusable) = focusable {
-                focusable.enabled = enabled;
             }
-            *pickable = if enabled {
-                Pickable::default()
-            } else {
-                Pickable::IGNORE
-            };
+            if let Ok((binding, mut visibility)) = visibility_nodes.get_mut(entity) {
+                let visible = match binding.0 {
+                    UiBooleanPropertyBindingSource::AnimalPickupVisible => Some(pickup_visible),
+                    UiBooleanPropertyBindingSource::AnimalReleaseVisible => Some(release_visible),
+                    UiBooleanPropertyBindingSource::SelectedEntityCrated => Some(crated),
+                    _ => None,
+                };
+                if let Some(visible) = visible {
+                    visibility.set_if_neq(if visible {
+                        Visibility::Inherited
+                    } else {
+                        Visibility::Hidden
+                    });
+                }
+            }
+            if let Ok((binding, mut interaction, focusable, mut pickable)) =
+                interaction_nodes.get_mut(entity)
+            {
+                let enabled = match binding.0 {
+                    UiBooleanPropertyBindingSource::AnimalPickupEnabled => pickup_enabled,
+                    UiBooleanPropertyBindingSource::SelectedEntityCrated => crate_can_move,
+                    _ => continue,
+                };
+                interaction.set_if_neq(UiInteractionEnabled(enabled));
+                if let Some(mut focusable) = focusable {
+                    if focusable.enabled != enabled {
+                        focusable.enabled = enabled;
+                    }
+                }
+                pickable.set_if_neq(if enabled {
+                    Pickable::default()
+                } else {
+                    Pickable::IGNORE
+                });
+            }
         }
     }
 }

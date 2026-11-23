@@ -234,7 +234,7 @@ pub(in crate::terrain) fn project_terrain_water_membership(
     active_definitions: Res<WorldDefinitions>,
     definition_assets: Res<Assets<WorldDefinitionAsset>>,
     selector_fences: selector_projection::SelectorFences,
-    topology: Res<TopologyGrid>,
+    topology: Single<Ref<TopologyGrid>>,
     mut inputs: MembershipInputs,
     mut diagnostic: Local<
         Option<(
@@ -243,6 +243,7 @@ pub(in crate::terrain) fn project_terrain_water_membership(
         )>,
     >,
 ) {
+    let topology = topology.into_inner();
     let changes: Vec<_> = changes.read().copied().collect();
     let changed_chunks: Vec<_> = changes.iter().map(|change| change.chunk).collect();
     let mut changed_regions = bevy::platform::collections::HashMap::<

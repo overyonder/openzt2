@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 use openzt2_game_data::ui_document::action::simulation_time::UiSimulationAction;
+use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 
 use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner;
@@ -15,11 +16,14 @@ use openzt2_world_state::simulation_time::simulation_control_types::UiSimulation
 /// Synchronizes the pause toggle before input so its image and next `on`/`off`
 /// event reflect changes made by keyboard.
 pub(super) fn project_simulation_pause_state_into_authored_pause_toggle_selection(
-    simulation_control: Res<SimulationControl>,
+    roots: Query<&SimulationControl, With<WorldRoot>>,
     ui_documents: Res<Assets<UiDocumentAsset>>,
     ui_document_roots: Query<&UiDocumentRoot>,
     mut simulation_action_nodes: Query<(&UiSimulationActions, &UiDocumentOwner, &mut UiSelected)>,
 ) {
+    let Ok(simulation_control) = roots.single() else {
+        return;
+    };
     for (authored_action_range, document_owner, mut selected) in &mut simulation_action_nodes {
         let Ok(document_root) = ui_document_roots.get(document_owner.0) else {
             continue;
@@ -46,12 +50,15 @@ pub(super) fn project_simulation_pause_state_into_authored_pause_toggle_selectio
 
 /// Shows or hides pause indicators.
 pub(super) fn project_simulation_pause_state_into_authored_paused_node_visibility(
-    simulation_control: Res<SimulationControl>,
+    roots: Query<&SimulationControl, With<WorldRoot>>,
     mut paused_visibility_nodes: Query<
         (&UiAuthoredLayoutDisplay, &mut Node, &mut Visibility),
         With<UiSimulationPausedVisibility>,
     >,
 ) {
+    let Ok(simulation_control) = roots.single() else {
+        return;
+    };
     for (authored_display, mut node, mut visibility) in &mut paused_visibility_nodes {
         let next_visibility = if simulation_control.paused {
             Visibility::Inherited

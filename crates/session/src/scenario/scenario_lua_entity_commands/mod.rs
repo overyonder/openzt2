@@ -65,14 +65,11 @@ impl EntityOperations {
 #[derive(SystemParam)]
 pub(super) struct ScenarioAnimalSpawnSources<'w, 's> {
     commands: Commands<'w, 's>,
-    roots: Query<'w, 's, (Entity, &'static mut PersistentIdAllocator), With<WorldRoot>>,
+    roots: Query<'w, 's, (Entity, &'static mut PersistentIdAllocator, &'static ZooSeed, &'static ZooClock, &'static TerrainIndex), With<WorldRoot>>,
     species: Res<'w, SpeciesAssets>,
     species_assets: Res<'w, Assets<SpeciesAsset>>,
     definitions: Res<'w, WorldDefinitions>,
     definition_assets: Res<'w, Assets<WorldDefinitionAsset>>,
-    seed: Option<Res<'w, ZooSeed>>,
-    clock: Option<Res<'w, ZooClock>>,
-    terrain: Res<'w, TerrainIndex>,
     terrain_assets: Res<'w, Assets<TerrainAsset>>,
     chunks: Query<'w, 's, (&'static TerrainChunk, Option<&'static EditedTerrainSamples>)>,
     animals: Query<'w, 's, (&'static openzt2_zoo_state::animal_lifecycle::types::AnimalVariant, &'static Transform), With<Animal>>,
@@ -99,7 +96,8 @@ impl ScenarioAnimalSpawnSources<'_, '_> {
                 "animal placement coordinates must be finite",
             ));
         }
-        let (root, mut allocator) = self.roots.single_mut().map_err(|_| unavailable())?;
+        let (root, mut allocator, seed, clock, terrain) =
+            self.roots.single_mut().map_err(|_| unavailable())?;
         let world = WorldMember { root };
         let species_view = self
             .species
@@ -110,7 +108,7 @@ impl ScenarioAnimalSpawnSources<'_, '_> {
             .get(&self.definition_assets)
             .ok_or_else(unavailable)?;
         let mut rng = DeterministicRng::from_entity(
-            **self.seed.as_ref().ok_or_else(unavailable)?,
+            *seed,
             PersistentId(allocator.next()),
             RngDomain::Reproduction,
         );
@@ -177,7 +175,7 @@ impl ScenarioAnimalSpawnSources<'_, '_> {
             if occupied.iter().all(|(center, other)| {
                 candidate.distance_squared(*center) >= (radius + other).powi(2)
             }) {
-                if let Some((chunk, edited)) = terrain_chunk_at(&self.terrain, candidate)
+                if let Some((chunk, edited)) = terrain_chunk_at(terrain, candidate)
                     .and_then(|entity| self.chunks.get(entity).ok())
                 {
                     if let Some(point) = self
@@ -193,11 +191,12 @@ impl ScenarioAnimalSpawnSources<'_, '_> {
                                 candidate,
                                 radius,
                                 policy.maximum_slope_radians,
-                                &self.terrain,
+                                terrain,
                                 &self.terrain_assets,
                                 &self.chunks,
                             )
                             && !self.obstacles.overlaps(
+                                root,
                                 grounded,
                                 radius,
                                 height,
@@ -225,7 +224,7 @@ impl ScenarioAnimalSpawnSources<'_, '_> {
         position = chosen.ok_or_else(|| {
             mlua::Error::runtime("no dry unoccupied animal placement site near authored position")
         })?;
-        let born_tick = self.clock.as_ref().ok_or_else(unavailable)?.tick;
+        let born_tick = clock.tick;
         let name = definitions
             .find_object(components.definition)
             .and_then(|definition| {

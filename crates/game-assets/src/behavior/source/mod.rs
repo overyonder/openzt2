@@ -210,9 +210,8 @@ fn lower_behavior_outcome_phase(
                 .flat_map(DataNode::element_children),
         ),
     )?;
-    if let BehaviorTaskActionPhase::Supported(actions)
-    | BehaviorTaskActionPhase::SupportedPrefix { actions, .. } = &mut phase
     {
+        let BehaviorTaskActionPhase::Supported(actions) = &mut phase;
         let terminal_fact_count = actions
             .iter()
             .take(terminal_nodes.len())
@@ -260,17 +259,11 @@ fn lower_behavior_action_nodes<'a>(
             };
         match lowered {
             Ok(actions) => lowered_actions.extend(actions),
-            Err(_) if lowered_actions.is_empty() => {
-                return Ok(BehaviorTaskActionPhase::Unsupported {
-                    first_unsupported_action: action_node.name.to_string(),
-                });
-            }
-            Err(_) => {
-                return Ok(BehaviorTaskActionPhase::SupportedPrefix {
-                    actions: lowered_actions,
-                    first_unsupported_action: action_node.name.to_string(),
-                });
-            }
+            Err(_) => lowered_actions.push(
+                openzt2_game_data::behavior::action_record::BehaviorAction::InvalidAuthoredAction(
+                    action_node.name.to_string(),
+                ),
+            ),
         }
     }
     Ok(BehaviorTaskActionPhase::Supported(lowered_actions))

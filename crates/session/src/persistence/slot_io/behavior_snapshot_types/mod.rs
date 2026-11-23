@@ -1,7 +1,7 @@
 use openzt2_game_data::{world_definitions::staff_management::StaffJobKind, AssetId};
 use openzt2_zoo_state::{
     animal_behavior::behavior_pursuit_types::BehaviorPursuitLeg,
-    behavior_task_execution_types::BehaviorTaskExecutionPhase,
+    behavior_task_execution_types::{running_actions::SplineDockPhase, BehaviorTaskExecutionPhase},
     locomotion::locomotion_types::{
         ContactSteering, Destination, LocomotionMode, MotionProgress, NavAgent, Route, SwimLayer,
         Velocity,
@@ -101,6 +101,22 @@ pub(super) struct BehaviorDockingSnapshot {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub(super) struct BehaviorFollowSnapshot {
+    pub target: BehaviorSnapshotEntityReference,
+    pub until_tick: u64,
+    pub request_id: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct BehaviorSplineDockSnapshot {
+    pub target: BehaviorSnapshotEntityReference,
+    pub phase: SplineDockPhase,
+    pub owns_disabled_collider: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct BehaviorOwnedNavigationSnapshot {
     pub agent: NavAgent,
     pub mode: LocomotionMode,
@@ -117,7 +133,21 @@ pub(super) struct BehaviorOwnedNavigationSnapshot {
     pub move_completion: Option<BehaviorNavigationCompletionSnapshot>,
     pub docking_completion: Option<BehaviorNavigationCompletionSnapshot>,
     pub pursuit: Option<BehaviorPursuitSnapshot>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub follow: Option<BehaviorFollowSnapshot>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spline: Option<BehaviorSplineDockSnapshot>,
     pub pending_results: Vec<BehaviorNavigationResultSnapshot>,
+}
+
+impl BehaviorOwnedNavigationSnapshot {
+    pub(super) fn action_navigation_requests(&self) -> impl Iterator<Item = u64> + '_ {
+        self.follow.iter().map(|pending| pending.request_id).chain(
+            self.spline
+                .iter()
+                .filter_map(|pending| pending.phase.request()),
+        )
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

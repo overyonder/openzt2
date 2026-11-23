@@ -36,7 +36,6 @@ pub(super) fn apply_all_authored_world_spawn_values_once(
     scenarios: Res<Assets<WorldScenarioDocumentAsset>>,
     active_definitions: Res<WorldDefinitions>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
-    seed: Option<Res<ZooSeed>>,
     mut names: Query<&mut Name>,
     mut wallets: Query<&mut Wallet>,
     mut pending: Query<
@@ -46,6 +45,7 @@ pub(super) fn apply_all_authored_world_spawn_values_once(
             &SelectedWorldDocumentHandles,
             &mut PersistentIdAllocator,
             &WorldHydration,
+            &ZooSeed,
         ),
         (
             With<StartingPrefabsHydrated>,
@@ -63,10 +63,11 @@ pub(super) fn apply_all_authored_world_spawn_values_once(
         )>,
     >,
 ) {
-    let (Some(definitions), Some(seed)) = (active_definitions.get(&definitions), seed) else {
+    let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };
-    let Ok((root, selected_world, documents, mut allocator, hydration)) = pending.single_mut()
+    let Ok((root, selected_world, documents, mut allocator, hydration, seed)) =
+        pending.single_mut()
     else {
         return;
     };

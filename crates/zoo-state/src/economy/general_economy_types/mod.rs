@@ -1,4 +1,4 @@
-use bevy::prelude::{Component, Resource};
+use bevy::prelude::Component;
 
 use super::{
     money_types::Money,
@@ -19,7 +19,7 @@ pub enum GeneralEconomyTransaction {
 }
 
 /// Zoo-wide transactions have their own balance and monthly totals.
-#[derive(Resource, Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct GeneralEconomyLedger {
     history: MonthlyFinanceHistory,
 }

@@ -46,7 +46,7 @@ use openzt2_world_state::application_schedule::GameSet;
 use openzt2_world_state::game_session_types::WorldSessionMode;
 use openzt2_world_state::simulation_time::deterministic_random_stream::ZooSeed;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooCalendar;
-use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
+use openzt2_world_state::simulation_time::simulation_clock_types::{ZooClock, ZooDay, ZooMonth};
 use openzt2_world_state::simulation_time::simulation_control_types::SimulationControl;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator;
@@ -81,7 +81,7 @@ use super::{
             capture_progression_snapshot_records_from_live_world, ProgressionSnapshotCaptureQueries,
         },
         progression_snapshot_section_encoding::append_encoded_progression_snapshot_section,
-        simulation_time_snapshot_section::SimulationTimeSnapshotSaveResources,
+        simulation_time_snapshot_section::SimulationTimeSnapshotCapture,
         snapshot_container_encoding_and_validation::{
             append_encoded_world_snapshot_section_to_container,
             finalize_world_snapshot_container_header_and_checksum,
@@ -116,14 +116,12 @@ pub(crate) fn loading_app() -> (App, Entity) {
     ))
     .insert_state(GamePhase::Loading)
     .init_resource::<ReusableWorldSnapshotByteBuffer>()
-    .init_resource::<openzt2_zoo_state::topology::topology_graph_types::TopologyIndex>()
-    .init_resource::<openzt2_zoo_state::topology::topology_graph_types::TopologyGrid>()
     .add_message::<openzt2_zoo_state::topology::topology_edit_types::TopologyChanged>()
     .init_asset::<openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset>()
-    .init_resource::<openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionSequence>()
+
     .add_message::<openzt2_zoo_state::locomotion::locomotion_types::Arrived>()
     .add_message::<openzt2_zoo_state::locomotion::locomotion_types::NavigationFailed>()
-    .init_resource::<openzt2_zoo_state::locomotion::locomotion_types::NavigationRequestSequence>()
+
     .add_message::<openzt2_zoo_state::locomotion::locomotion_types::NavigateTo>()
     .add_message::<openzt2_zoo_state::locomotion::locomotion_types::PursueEntity>()
     .init_resource::<Assets<LocalizationAsset>>()
@@ -138,31 +136,10 @@ pub(crate) fn loading_app() -> (App, Entity) {
     .init_asset::<ScenePrefabAsset>()
     .init_asset::<bevy::gltf::Gltf>()
     .init_resource::<Assets<Image>>()
-    .init_resource::<FameHistory>()
-    .init_resource::<UnlockedCatalogueDefinitionSet>()
-    .init_resource::<ScenarioAwardPointTotal>()
-    .init_resource::<TotalEndangeredAnimalBirthCount>()
-    .init_resource::<ZooCash>()
-    .init_resource::<AdmissionPrice>()
-    .init_resource::<ZooAdmissionsOpen>()
-    .init_resource::<MonthlyFinanceHistory>()
     .insert_resource(ProfileOptions {
         profile_identifier: PROFILE,
         ..default()
     })
-    .insert_resource(ZooClock {
-        fractional_tick: Default::default(),
-        tick: 1,
-        absolute_day: 0,
-        tick_in_day: 1,
-    })
-    .insert_resource(ZooCalendar {
-        year: 2000,
-        month: 1,
-        day: 1,
-    })
-    .insert_resource(SimulationControl::new(0, false))
-    .insert_resource(ZooSeed(17))
     .add_message::<AssetEvent<LuaScriptAsset>>()
     .add_message::<BeginWorldLoad>()
     .add_message::<UnloadWorld>()
@@ -187,7 +164,37 @@ pub(crate) fn loading_app() -> (App, Entity) {
             Fame::default(),
             ZooRating::default(),
             WorldLoadCompleted,
-            openzt2_world_state::world_spawn::world_load_completion_marker::WorldClockInitialized,
+            ZooClock {
+                fractional_tick: Default::default(),
+                tick: 1,
+                absolute_day: 0,
+                tick_in_day: 1,
+            },
+            ZooCalendar {
+                year: 2000,
+                month: 1,
+                day: 1,
+            },
+            ZooDay(0),
+            ZooMonth::from(ZooCalendar {
+                year: 2000,
+                month: 1,
+                day: 1,
+            }),
+            SimulationControl::new(0, false),
+            ZooSeed(17),
+            (
+                openzt2_zoo_state::topology::topology_graph_types::TopologyIndex::default(),
+                openzt2_zoo_state::topology::topology_graph_types::TopologyGrid::default(),
+                FameHistory::default(),
+                UnlockedCatalogueDefinitionSet::default(),
+                ScenarioAwardPointTotal::default(),
+                TotalEndangeredAnimalBirthCount::default(),
+                ZooCash::default(),
+                AdmissionPrice::default(),
+                ZooAdmissionsOpen::default(),
+                MonthlyFinanceHistory::default(),
+            ),
             Name::new("baseline"),
         ))
         .id();
@@ -236,14 +243,19 @@ pub(crate) fn saved_photo_container(world: &mut World) -> Vec<u8> {
 }
 
 pub(crate) fn saved_photo_container_for_scenario(world: &mut World, scenario: AssetId) -> Vec<u8> {
+    let root = world
+        .query_filtered::<Entity, With<WorldRoot>>()
+        .single(world)
+        .unwrap();
     let mut state = bevy::ecs::system::SystemState::<(
         ProgressionSnapshotCaptureQueries,
-        SimulationTimeSnapshotSaveResources,
+        SimulationTimeSnapshotCapture,
     )>::new(world);
     let (progression, time) = state.get(world).unwrap();
-    let progression = capture_progression_snapshot_records_from_live_world(&progression).unwrap();
+    let progression =
+        capture_progression_snapshot_records_from_live_world(&progression, root).unwrap();
     let time = time
-        .capture_validated_simulation_time_snapshot_record()
+        .capture_validated_simulation_time_snapshot_record(root)
         .unwrap();
     let photos = [41, 42]
         .into_iter()
@@ -412,10 +424,15 @@ fn prevalidation_rejection_preserves_the_active_world_and_simulation() {
         .get::<PersistentIdAllocator>(root)
         .unwrap()
         .next();
-    let clock = *app.world().resource::<ZooClock>();
-    let calendar = *app.world().resource::<ZooCalendar>();
-    let control = *app.world().resource::<SimulationControl>();
-    let seed = *app.world().resource::<ZooSeed>();
+    let clock = *app
+        .world()
+        .try_query::<&ZooClock>()
+        .unwrap()
+        .single(app.world())
+        .unwrap();
+    let calendar = *app.world().get::<ZooCalendar>(root).unwrap();
+    let control = *app.world().get::<SimulationControl>(root).unwrap();
+    let seed = *app.world().get::<ZooSeed>(root).unwrap();
     // This boundary exercises the coordinator and its deferred commands; the
     // fixture does not install the input/rendering dependencies of Photos UI.
     let mut restore = Schedule::default();
@@ -439,10 +456,20 @@ fn prevalidation_rejection_preserves_the_active_world_and_simulation() {
             .next(),
         next_identifier
     );
-    assert_eq!(*app.world().resource::<ZooClock>(), clock);
-    assert_eq!(*app.world().resource::<ZooCalendar>(), calendar);
-    assert_eq!(*app.world().resource::<SimulationControl>(), control);
-    assert_eq!(*app.world().resource::<ZooSeed>(), seed);
+    assert_eq!(
+        *app.world()
+            .try_query::<&ZooClock>()
+            .unwrap()
+            .single(app.world())
+            .unwrap(),
+        clock
+    );
+    assert_eq!(*app.world().get::<ZooCalendar>(root).unwrap(), calendar);
+    assert_eq!(
+        *app.world().get::<SimulationControl>(root).unwrap(),
+        control
+    );
+    assert_eq!(*app.world().get::<ZooSeed>(root).unwrap(), seed);
     assert!(app.world().get_entity(operation).is_err());
     assert_eq!(
         app.world()
@@ -491,10 +518,13 @@ fn snapshot_replacement_is_requested_after_ingame_teardown_removes_world_resourc
     );
     assert!(app.world().get_entity(old_root).is_err());
     assert!(app.world().get::<PersistentIdAllocator>(old_root).is_none());
-    assert!(!app.world().contains_resource::<ZooClock>());
-    assert!(!app.world().contains_resource::<ZooCalendar>());
-    assert!(!app.world().contains_resource::<SimulationControl>());
-    assert!(!app.world().contains_resource::<ZooSeed>());
+    assert!(app
+        .world()
+        .try_query::<&ZooClock>()
+        .is_none_or(|mut clocks| clocks.iter(app.world()).next().is_none()));
+    assert!(app.world().get::<ZooCalendar>(old_root).is_none());
+    assert!(app.world().get::<SimulationControl>(old_root).is_none());
+    assert!(app.world().get::<ZooSeed>(old_root).is_none());
     assert!(app
         .world()
         .get::<AwaitingSnapshotWorldLoad>(pending)
@@ -661,7 +691,10 @@ fn loading_initializes_photo_receivers_before_snapshot_reference_validation_and_
         GamePhase::Loading
     );
     assert_eq!(app.world().get::<Name>(root).unwrap().as_str(), "restored");
-    assert_eq!(app.world().resource::<AdmissionPrice>().0, Money(250));
+    assert_eq!(
+        app.world().get::<AdmissionPrice>(root).unwrap().adult,
+        Money(250)
+    );
     assert_eq!(
         app.world()
             .resource::<Messages<WorldSnapshotLoadedFromSlot>>()

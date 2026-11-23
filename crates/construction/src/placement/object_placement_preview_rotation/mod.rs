@@ -2,6 +2,7 @@ use bevy::prelude::*;
 
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_data::world_definitions::object_placement::PlaceableDefinition;
 use openzt2_zoo_state::construction::construction_interaction_types::ConstructionPreview;
 use openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::ConstructionTool;
 use openzt2_interface_state::input::input_types::ActionRequest;
@@ -26,10 +27,6 @@ pub(super) fn rotate_active_object_placement_preview_by_authored_increment(
     let Some(definition) = resolve_object_placeable_definition(catalogue, definition_id) else {
         return;
     };
-    let increment = definition.rotation_increment_degrees;
-    if increment == 0 {
-        return;
-    }
     let turns = actions.read().fold(0_i32, |turns, request| {
         turns
             + match request.action {
@@ -41,8 +38,20 @@ pub(super) fn rotate_active_object_placement_preview_by_authored_increment(
     if turns == 0 {
         return;
     }
-    let radians = f32::from(increment).to_radians() * turns as f32;
     for mut preview in &mut previews {
-        preview.transform.rotate_y(radians);
+        rotate_object_placement_transform_by_authored_steps(
+            &mut preview.transform,
+            definition,
+            turns,
+        );
     }
+}
+
+pub(super) fn rotate_object_placement_transform_by_authored_steps(
+    transform: &mut Transform,
+    definition: &PlaceableDefinition,
+    steps: i32,
+) {
+    let increment = f32::from(definition.rotation_increment_degrees).to_radians();
+    transform.rotate_y(increment * steps as f32);
 }

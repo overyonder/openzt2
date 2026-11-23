@@ -19,7 +19,7 @@ use openzt2_zoo_state::{
 };
 
 use super::{
-    behavior_docking_execution::{find_named_descendant_global_transform, NamedNodeTransforms},
+    behavior_named_nodes::NamedNodeTransforms,
     behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation,
 };
 
@@ -43,7 +43,6 @@ fn follow_target_nodes(
     mut commands: Commands,
     clock: Single<&ZooClock>,
     fixed_time: Res<Time<Fixed>>,
-    children: Query<&Children>,
     nodes: NamedNodeTransforms,
     transforms: Query<(&GlobalTransform, &WorldMember)>,
     mut actors: Query<
@@ -82,11 +81,11 @@ fn follow_target_nodes(
         };
         let action = &action.0;
         let target_node = match action.target_node.as_deref() {
-            Some(name) => find_named_descendant_global_transform(target, name, &children, &nodes),
+            Some(name) => nodes.pose(target, name),
             None => Some(target_pose),
         };
         let subject_node = match action.subject_node.as_deref() {
-            Some(name) => find_named_descendant_global_transform(actor, name, &children, &nodes),
+            Some(name) => nodes.pose(actor, name),
             None => Some(subject_pose),
         };
         let (Some(target_node), Some(subject_node)) = (target_node, subject_node) else {
@@ -109,9 +108,15 @@ fn follow_target_nodes(
                         && docking.request_id == state.request_id
                 })
             {
-                destination.world = goal;
-                docking.point = goal;
-                docking.forward = world_forward;
+                destination.set_if_neq(Destination {
+                    world: goal,
+                    ..*destination
+                });
+                docking.set_if_neq(Docking {
+                    point: goal,
+                    forward: world_forward,
+                    ..*docking
+                });
                 continue;
             }
             let request = generation.advance();

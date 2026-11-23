@@ -6,8 +6,8 @@ use openzt2_game_assets::{
         world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
     },
 };
-use openzt2_game_data::behavior::action::token::BehaviorTokenRecipient;
 use openzt2_game_data::AssetId;
+use openzt2_game_data::behavior::action::token::BehaviorTokenRecipient;
 use openzt2_world_state::{
     application_schedule::FixedGameSet, simulation_time::simulation_clock_types::ZooClock,
 };
@@ -20,8 +20,8 @@ use openzt2_zoo_state::{
     animal_health::types::Dead,
     animal_lifecycle::types::{Animal, SpeciesHandle},
     behavior_task_execution_types::{
-        abandon_behavior_task_for_reconsideration, BehaviorTaskExecutionState, BehaviorTaskFailed,
-        PendingBehaviorTaskFailure,
+        BehaviorTaskExecutionState, BehaviorTaskFailed, PendingBehaviorTaskFailure,
+        abandon_behavior_task_for_reconsideration,
     },
     guests::guest_simulation_types::GuestRng,
     staff::staff_job_types::CurrentJob,
@@ -213,6 +213,7 @@ fn execute_current_self_token_deliveries(
     mut candidates: Local<Vec<Entity>>,
     animals: Query<(Entity, &GlobalTransform, &SpeciesHandle), (With<Animal>, Without<Dead>)>,
     animal_types: super::behavior_subject_type_resolution::AnimalBehaviorSubjectTypes,
+    world_members: Query<&openzt2_world_state::world_spawn::world_membership_types::WorldMember>,
     staff: Query<
         (Entity, &GlobalTransform),
         With<openzt2_zoo_state::staff::staff_employment_types::Staff>,
@@ -276,9 +277,13 @@ fn execute_current_self_token_deliveries(
                 let Ok((_, origin, _)) = animals.get(actor) else {
                     continue;
                 };
+                let Ok(world) = world_members.get(actor) else {
+                    continue;
+                };
                 let position = origin.translation();
                 let margin = Vec2::splat(nearby.radius_m.abs());
                 spatial.in_bounds(
+                    world.root,
                     position.xz() - margin,
                     position.xz() + margin,
                     &mut candidates,

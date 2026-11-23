@@ -87,6 +87,7 @@ impl AssetLoader for NativeModelAssetLoader {
                     glb: native_model_source_bytes,
                     particle_effects: Vec::new(),
                     materials: Vec::new(),
+                    embedded_textures: Vec::new(),
                 }
             } else {
                 let replacement = self
@@ -115,6 +116,7 @@ impl AssetLoader for NativeModelAssetLoader {
                         glb: replacement.to_vec(),
                         particle_effects: lowered.particle_effects,
                         materials: Vec::new(),
+                        embedded_textures: Vec::new(),
                     },
                     // A replacement still loads when the model it replaces cannot.
                     (Err(_), Some(replacement)) => LoweredNativeModel {
@@ -126,6 +128,7 @@ impl AssetLoader for NativeModelAssetLoader {
                         glb: replacement.to_vec(),
                         particle_effects: Vec::new(),
                         materials: Vec::new(),
+                        embedded_textures: Vec::new(),
                     },
                     (Err(error), None) => return Err(io::Error::other(error)),
                 }
@@ -139,7 +142,7 @@ impl AssetLoader for NativeModelAssetLoader {
         .await
         .map_err(io::Error::other)?;
 
-        let embedded_clips = loaded_gltf
+        let mut embedded_clips = loaded_gltf
             .animations
             .iter()
             .enumerate()
@@ -165,6 +168,19 @@ impl AssetLoader for NativeModelAssetLoader {
                 ))
             })
             .collect::<Result<Vec<_>, io::Error>>()?;
+        let embedded_animation_graph = if embedded_clips.is_empty() {
+            None
+        } else {
+            let (graph, nodes) = AnimationGraph::from_clips(
+                embedded_clips
+                    .iter()
+                    .map(|clip| clip.animation_clip_handle.clone()),
+            );
+            for (clip, node) in embedded_clips.iter_mut().zip(nodes) {
+                clip.graph_node = Some(node);
+            }
+            Some(native_model_load_context.add_labeled_asset("EmbeddedAnimationGraph", graph))
+        };
         let mut embedded = AnimationSetAsset::create_ready_animation_set_asset(
             String::new(),
             String::new(),
@@ -174,18 +190,12 @@ impl AssetLoader for NativeModelAssetLoader {
             Vec::new(),
             None,
         );
-        if !embedded.animation_clips.is_empty() {
-            let (graph, _) = AnimationGraph::from_clips(
-                embedded
-                    .animation_clips
-                    .iter()
-                    .map(|clip| clip.animation_clip_handle.clone()),
-            );
-            embedded.embedded_animation_graph =
-                Some(native_model_load_context.add_labeled_asset("EmbeddedAnimationGraph", graph));
-        }
+        embedded.embedded_animation_graph = embedded_animation_graph;
         native_model_load_context.add_labeled_asset(EMBEDDED_ANIMATION_SET_LABEL, embedded);
 
+        for (label, image) in lowered_native_model.embedded_textures {
+            native_model_load_context.add_labeled_asset(label, image);
+        }
         for lowered_material in lowered_native_model.materials {
             let label = labelled_native_model_subasset_label(&lowered_material.labelled_asset_path)
                 .ok_or_else(|| {

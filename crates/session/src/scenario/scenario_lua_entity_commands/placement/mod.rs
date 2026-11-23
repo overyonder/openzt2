@@ -3,7 +3,7 @@
 use avian3d::prelude::{Collider, Sensor, SpatialQuery, SpatialQueryFilter};
 use bevy::{ecs::system::SystemParam, prelude::*};
 use openzt2_zoo_state::{
-    placement::placement_occupancy_index::PlacedObjectFootprintOccupancyIndex,
+    placement::placement_occupancy_index::PlacedObjectFootprintQueries,
     terrain::terrain_collision_rebuilding_types::TerrainChunkCollisionSurface,
     topology::{
         gate_operation_types::Gate,
@@ -14,9 +14,8 @@ use openzt2_zoo_state::{
 
 #[derive(SystemParam)]
 pub(super) struct ScriptedAnimalPlacementObstacles<'w, 's> {
-    occupancy: Res<'w, PlacedObjectFootprintOccupancyIndex>,
-    topology: Res<'w, TopologyIndex>,
-    grid: Res<'w, TopologyGrid>,
+    occupancy: PlacedObjectFootprintQueries<'w, 's>,
+    roots: Query<'w, 's, (&'static TopologyIndex, &'static TopologyGrid)>,
     fences: Query<'w, 's, (&'static FenceEdge, Option<&'static Gate>)>,
     spatial: SpatialQuery<'w, 's>,
     nonblocking: Query<'w, 's, (), Or<(With<TerrainChunkCollisionSurface>, With<Sensor>)>>,
@@ -25,6 +24,7 @@ pub(super) struct ScriptedAnimalPlacementObstacles<'w, 's> {
 impl ScriptedAnimalPlacementObstacles<'_, '_> {
     pub(super) fn overlaps(
         &self,
+        root: Entity,
         position: Vec3,
         radius: f32,
         height: f32,
@@ -42,7 +42,7 @@ impl ScriptedAnimalPlacementObstacles<'_, '_> {
             for x in first.x..=last.x {
                 if self
                     .occupancy
-                    .entities_occupying_cell(IVec2::new(x, y))
+                    .entities_occupying_cell(root, IVec2::new(x, y))
                     .next()
                     .is_some()
                 {
@@ -50,8 +50,11 @@ impl ScriptedAnimalPlacementObstacles<'_, '_> {
                 }
             }
         }
+        let Ok((topology, grid)) = self.roots.get(root) else {
+            return true;
+        };
         let corners = [min, Vec2::new(max.x, min.y), max, Vec2::new(min.x, max.y)];
-        for (edge, entity) in &self.topology.edges {
+        for (edge, entity) in &topology.edges {
             let Ok((fence, gate)) = self.fences.get(*entity) else {
                 return true;
             };
@@ -75,8 +78,8 @@ impl ScriptedAnimalPlacementObstacles<'_, '_> {
             }) {
                 continue;
             }
-            let a = self.grid.cell_translation(edge.lo).xz();
-            let b = self.grid.cell_translation(edge.hi).xz();
+            let a = grid.cell_translation(edge.lo).xz();
+            let b = grid.cell_translation(edge.hi).xz();
             let inside = |point: Vec2| point.cmpge(min).all() && point.cmple(max).all();
             if inside(a)
                 || inside(b)

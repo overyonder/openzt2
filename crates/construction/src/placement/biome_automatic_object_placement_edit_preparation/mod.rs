@@ -41,18 +41,16 @@ use openzt2_zoo_state::placement::object_placement_definition_queries::resolve_o
 use openzt2_zoo_state::placement::object_placement_validation::validate_object_placement_footprint_cells;
 use openzt2_zoo_state::placement::object_placement_validation::ObjectPlacementAuthoritativeFacts;
 use openzt2_zoo_state::placement::placement_occupancy_index::PlacedObjectFootprintQueries;
-use openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementCellCollectionScratch;
 use openzt2_zoo_state::placement::placement_transaction_types::ObjectPlacementEditPrepared;
 use openzt2_zoo_state::placement::placement_transaction_types::PreparedObjectPlacementEdit;
 use openzt2_zoo_state::placement::placement_transaction_types::PreparedObjectPlacementEditMutationKind;
 use openzt2_zoo_state::placement::placement_transaction_types::PreparedObjectPlacementMutation;
 use openzt2_zoo_state::topology::topology_edit_types::TopologyEditPrepared;
 
-#[derive(Component, Debug, Clone)]
+#[derive(Component, Debug, Clone, PartialEq, Eq)]
 pub(super) struct BiomeAutomaticPlacementAssetDependencies {
     biome: openzt2_game_data::AssetId,
     mask: Handle<Image>,
-    enabled_object_classes: [bool; 3],
     scene_prefab_handles: Box<[Handle<ScenePrefabAsset>]>,
 }
 
@@ -85,7 +83,7 @@ pub(super) struct BiomeAutomaticObjectPlacementPreparationParameters<'w, 's> {
     ground_paths: GroundPathPlacementStomp<'w, 's>,
     placed: Query<'w, 's, StompablePlacedObject>,
     allocator: Query<'w, 's, &'static mut PersistentIdAllocator>,
-    scratch: ResMut<'w, ObjectPlacementCellCollectionScratch>,
+    scratch: Local<'s, Vec<IVec2>>,
 }
 
 pub(super) fn hydrate_biome_automatic_placement_state_onto_world_and_terrain_brush_previews(
@@ -100,10 +98,10 @@ pub(super) fn hydrate_biome_automatic_placement_state_onto_world_and_terrain_bru
             Without<BiomeAutomaticPlacementRandomStream>,
         ),
     >,
-    previews: Query<(
+    mut previews: Query<(
         Entity,
-        &TerrainBrushPreview,
-        Option<&BiomeAutomaticPlacementAssetDependencies>,
+        Ref<TerrainBrushPreview>,
+        Option<&mut BiomeAutomaticPlacementAssetDependencies>,
     )>,
 ) {
     let seed = seed.into_inner();
@@ -121,7 +119,11 @@ pub(super) fn hydrate_biome_automatic_placement_state_onto_world_and_terrain_bru
     let Some(catalogue) = active_definitions.get(&definitions) else {
         return;
     };
-    for (entity, preview, retained) in &previews {
+    let catalogue_changed = active_definitions.is_changed() || definitions.is_changed();
+    for (entity, preview, retained) in &mut previews {
+        if retained.is_some() && !preview.is_changed() && !catalogue_changed {
+            continue;
+        }
         let TerrainBrushKind::Paint { biome, .. } = preview.kind else {
             if retained.is_some() {
                 commands
@@ -130,28 +132,20 @@ pub(super) fn hydrate_biome_automatic_placement_state_onto_world_and_terrain_bru
             }
             continue;
         };
-        let enabled_object_classes = [
-            preview.paint_trees,
-            preview.paint_foliage,
-            preview.paint_rocks,
-        ];
-        if retained.is_some_and(|retained| {
-            retained.biome == biome && retained.enabled_object_classes == enabled_object_classes
-        }) && !active_definitions.is_changed()
-            && !definitions.is_changed()
-        {
-            continue;
-        }
         let Some(definition) = catalogue.find_biome(biome) else {
-            commands
-                .entity(entity)
-                .remove::<BiomeAutomaticPlacementAssetDependencies>();
+            if retained.is_some() {
+                commands
+                    .entity(entity)
+                    .remove::<BiomeAutomaticPlacementAssetDependencies>();
+            }
             continue;
         };
         let Some(mask) = catalogue.texture_image(definition.automatic_placement_mask) else {
-            commands
-                .entity(entity)
-                .remove::<BiomeAutomaticPlacementAssetDependencies>();
+            if retained.is_some() {
+                commands
+                    .entity(entity)
+                    .remove::<BiomeAutomaticPlacementAssetDependencies>();
+            }
             continue;
         };
         let mut candidate_object_identifiers = definition
@@ -167,21 +161,23 @@ pub(super) fn hydrate_biome_automatic_placement_state_onto_world_and_terrain_bru
             .into_iter()
             .filter_map(|identifier| catalogue.find_object(identifier))
             .filter(|object| {
-                object
-                    .biome_automatic_placement_class
-                    .is_some_and(|class| biome_automatic_placement_class_is_enabled(class, preview))
+                object.biome_automatic_placement_class.is_some_and(|class| {
+                    biome_automatic_placement_class_is_enabled(class, &preview)
+                })
             })
             .filter_map(|object| catalogue.scene(object.prefab))
             .collect::<Vec<_>>()
             .into_boxed_slice();
-        commands
-            .entity(entity)
-            .insert(BiomeAutomaticPlacementAssetDependencies {
-                biome,
-                mask,
-                enabled_object_classes,
-                scene_prefab_handles: strong_scene_prefab_handles,
-            });
+        let dependencies = BiomeAutomaticPlacementAssetDependencies {
+            biome,
+            mask,
+            scene_prefab_handles: strong_scene_prefab_handles,
+        };
+        if let Some(mut retained) = retained {
+            retained.set_if_neq(dependencies);
+        } else {
+            commands.entity(entity).insert(dependencies);
+        }
     }
 }
 
@@ -307,7 +303,7 @@ pub(super) fn prepare_biome_automatic_object_placement_edits(
                 let Some(cells) = collect_occupied_placement_cells_for_transform(
                     footprints.resolve(definition, Some(&prefab.0)),
                     transform,
-                    &mut scratch.cells,
+                    &mut scratch,
                 ) else {
                     continue;
                 };
@@ -419,11 +415,9 @@ pub(super) fn prepare_biome_automatic_object_placement_edits(
             if !matches!(validity, PlacementValidity::Valid { .. }) {
                 continue;
             }
-            let Some(cells) = collect_occupied_placement_cells_for_transform(
-                geometry,
-                &transform,
-                &mut scratch.cells,
-            ) else {
+            let Some(cells) =
+                collect_occupied_placement_cells_for_transform(geometry, &transform, &mut scratch)
+            else {
                 continue;
             };
             if prefabs.get(&prefab).is_none_or(|scene| {

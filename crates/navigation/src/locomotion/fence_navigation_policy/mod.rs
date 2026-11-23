@@ -15,30 +15,34 @@ use openzt2_zoo_state::locomotion::locomotion_types::NavFlags;
 pub(super) struct FenceNavigationPolicy<'w, 's> {
     pub(super) actor_types: GateActorTypeQueries<'w, 's>,
     fences: Query<'w, 's, (FenceSegment, Option<&'static Gate>)>,
-    index: Res<'w, TopologyIndex>,
+    roots: Query<'w, 's, (&'static TopologyGrid, &'static TopologyIndex)>,
     nodes: Query<'w, 's, &'static TopologyNode>,
-    grid: Res<'w, TopologyGrid>,
 }
 
 impl FenceNavigationPolicy<'_, '_> {
     pub(super) fn world_segment_blocks_actor(
         &self,
+        root: Entity,
         from: Vec3,
         to: Vec3,
         capabilities: NavFlags,
         actor_types: &[AssetId],
     ) -> bool {
-        self.segment_candidates(from, to).any(|(edge, gate)| {
-            let (Ok(a), Ok(b)) = (self.nodes.get(edge.a()), self.nodes.get(edge.b())) else {
-                return false;
-            };
-            horizontal_world_segments_intersect(
-                from.xz(),
-                to.xz(),
-                self.grid.cell_translation(a.cell).xz(),
-                self.grid.cell_translation(b.cell).xz(),
-            ) && self.definition_blocks_actor(edge.edge, gate, capabilities, actor_types, true)
-        })
+        let Ok((grid, index)) = self.roots.get(root) else {
+            return false;
+        };
+        self.segment_candidates(grid, index, from, to)
+            .any(|(edge, gate)| {
+                let (Ok(a), Ok(b)) = (self.nodes.get(edge.a()), self.nodes.get(edge.b())) else {
+                    return false;
+                };
+                horizontal_world_segments_intersect(
+                    from.xz(),
+                    to.xz(),
+                    grid.cell_translation(a.cell).xz(),
+                    grid.cell_translation(b.cell).xz(),
+                ) && self.definition_blocks_actor(edge.edge, gate, capabilities, actor_types, true)
+            })
     }
 
     pub(super) fn fence_blocks_actor(
@@ -57,56 +61,63 @@ impl FenceNavigationPolicy<'_, '_> {
     /// movement still requires the gate's live open bit and collision exception.
     pub(super) fn gate_blocks_movement(
         &self,
+        root: Entity,
         actor: Entity,
         capabilities: NavFlags,
         from: Vec3,
         to: Vec3,
     ) -> bool {
-        self.segment_candidates(from, to).any(|(edge, gate)| {
-            let Some(gate) = gate else { return false };
-            let (Ok(a), Ok(b)) = (self.nodes.get(edge.a()), self.nodes.get(edge.b())) else {
-                return false;
-            };
-            horizontal_world_segments_intersect(
-                from.xz(),
-                to.xz(),
-                self.grid.cell_translation(a.cell).xz(),
-                self.grid.cell_translation(b.cell).xz(),
-            ) && self.definition_blocks_actor(
-                edge.edge,
-                Some(gate),
-                capabilities,
-                self.actor_types.actor_types(actor),
-                false,
-            )
-        })
+        let Ok((grid, index)) = self.roots.get(root) else {
+            return false;
+        };
+        self.segment_candidates(grid, index, from, to)
+            .any(|(edge, gate)| {
+                let Some(gate) = gate else { return false };
+                let (Ok(a), Ok(b)) = (self.nodes.get(edge.a()), self.nodes.get(edge.b())) else {
+                    return false;
+                };
+                horizontal_world_segments_intersect(
+                    from.xz(),
+                    to.xz(),
+                    grid.cell_translation(a.cell).xz(),
+                    grid.cell_translation(b.cell).xz(),
+                ) && self.definition_blocks_actor(
+                    edge.edge,
+                    Some(gate),
+                    capabilities,
+                    self.actor_types.actor_types(actor),
+                    false,
+                )
+            })
     }
 
-    fn segment_candidates(
-        &self,
+    fn segment_candidates<'a>(
+        &'a self,
+        grid: &TopologyGrid,
+        index: &'a TopologyIndex,
         from: Vec3,
         to: Vec3,
     ) -> impl Iterator<
         Item = (
-            openzt2_zoo_state::topology::topology_graph_types::FenceSegmentItem<'_, '_>,
-            Option<&Gate>,
+            openzt2_zoo_state::topology::topology_graph_types::FenceSegmentItem<'a, 'a>,
+            Option<&'a Gate>,
         ),
-    > + '_ {
+    > + 'a {
         let valid = from.is_finite()
             && to.is_finite()
-            && self.grid.spacing_m.is_finite()
-            && self.grid.spacing_m > 0.0;
-        let first = ((from.xz() - self.grid.origin) / self.grid.spacing_m)
+            && grid.spacing_m.is_finite()
+            && grid.spacing_m > 0.0;
+        let first = ((from.xz() - grid.origin) / grid.spacing_m)
             .floor()
             .as_ivec2();
-        let last = ((to.xz() - self.grid.origin) / self.grid.spacing_m)
+        let last = ((to.xz() - grid.origin) / grid.spacing_m)
             .floor()
             .as_ivec2();
         let mut seen = bevy::ecs::entity::EntityHashSet::new();
         valid
             .then_some((first.min(last) - IVec2::ONE, first.max(last) + IVec2::ONE))
             .into_iter()
-            .flat_map(|(min, max)| self.index.fences_within(min, max))
+            .flat_map(|(min, max)| index.fences_within(min, max))
             .filter(move |&entity| seen.insert(entity))
             .filter_map(|entity| self.fences.get(entity).ok())
     }

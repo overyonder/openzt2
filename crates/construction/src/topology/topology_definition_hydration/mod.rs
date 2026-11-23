@@ -21,16 +21,27 @@ pub(super) fn hydrate_save_loaded_topology_definition_facts(
     active_definitions: Res<WorldDefinitions>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     nodes: Query<&TopologyNode>,
-    fences: Query<(
-        Entity,
-        FenceSegment,
-        Option<&Gate>,
-        Option<&GateMechanism>,
-        Option<&Transform>,
-        Option<&FenceTerrainEndpointPresentationCells>,
-        Option<&Visibility>,
-    )>,
-    paths: Query<(Entity, &PathTile, Option<&TileSurface>, Option<&Transform>)>,
+    fences: Query<
+        (
+            Entity,
+            FenceSegment,
+            Has<Gate>,
+            Has<GateMechanism>,
+            Has<Transform>,
+            Has<FenceTerrainEndpointPresentationCells>,
+            Has<Visibility>,
+        ),
+        Or<(
+            Without<Transform>,
+            Without<FenceTerrainEndpointPresentationCells>,
+            Without<Visibility>,
+            (With<Gate>, Without<GateMechanism>),
+        )>,
+    >,
+    paths: Query<
+        (Entity, &PathTile, Has<TileSurface>, Has<Transform>),
+        Or<(Without<TileSurface>, Without<Transform>)>,
+    >,
 ) {
     let grid = grid.into_inner();
     let Some(definitions) = active_definitions.get(&definitions) else {
@@ -44,21 +55,21 @@ pub(super) fn hydrate_save_loaded_topology_definition_facts(
             continue;
         }
         let mut entity_commands = commands.entity(entity);
-        if transform.is_none() {
+        if !transform {
             entity_commands.insert(calculate_topology_edge_world_transform(
                 a.cell, b.cell, *grid,
             ));
         }
-        if endpoint_cells.is_none() {
+        if !endpoint_cells {
             entity_commands.insert(FenceTerrainEndpointPresentationCells {
                 first: a.cell,
                 second: b.cell,
             });
         }
-        if visibility.is_none() {
+        if !visibility {
             entity_commands.insert(Visibility::Inherited);
         }
-        if gate.is_some() && mechanism.is_none() {
+        if gate && !mechanism {
             entity_commands.insert(GateMechanism::default());
         }
     }
@@ -68,12 +79,12 @@ pub(super) fn hydrate_save_loaded_topology_definition_facts(
             continue;
         };
         let mut entity_commands = commands.entity(entity);
-        if transform.is_none() {
+        if !transform {
             entity_commands.insert(Transform::from_translation(
                 grid.cell_translation(path.cell),
             ));
         }
-        if surface.is_none() {
+        if !surface {
             entity_commands.insert(TileSurface {
                 height_cm: definition.surface.height_cm,
             });

@@ -221,7 +221,7 @@ pub(super) fn parse_billboard_node(
     })
 }
 
-fn parse_switch_node(
+pub(super) fn parse_switch_node(
     source_bytes: &[u8],
     cursor: &mut usize,
     source_path: &str,
@@ -231,7 +231,7 @@ fn parse_switch_node(
     let switch_flags = (encoded_version >= NETIMMERSE_VERSION_10_1_0_0)
         .then(|| read_u16_little_endian(source_bytes, cursor, source_path, "NiSwitchNode flags"))
         .transpose()?;
-    let active_child_index = read_u32_little_endian(
+    let active_child_index = read_i32_little_endian(
         source_bytes,
         cursor,
         source_path,

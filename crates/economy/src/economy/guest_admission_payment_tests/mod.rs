@@ -1,6 +1,10 @@
 use bevy::prelude::*;
+use openzt2_game_assets::world_definitions::{
+    world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions,
+    world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
+};
 
-use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
+use openzt2_world_state::world_spawn::world_membership_types::{WorldMember, WorldRoot};
 use openzt2_zoo_state::guests::guest_simulation_types::Guest;
 use openzt2_zoo_state::guests::guest_simulation_types::GuestArrived;
 use openzt2_zoo_state::guests::guest_simulation_types::GuestPhase;
@@ -25,14 +29,13 @@ use super::{
 fn create_application_with_guest_admission_payment(admission_price: Money) -> App {
     let mut application = App::new();
     application
+        .init_resource::<WorldDefinitions>()
+        .init_resource::<Assets<WorldDefinitionAsset>>()
         .add_message::<GuestReachedEntrance>()
         .add_message::<GuestArrived>()
         .add_message::<TransactionRequest>()
         .add_message::<TransactionCompleted>()
         .add_message::<TransactionRejected>()
-        .insert_resource(AdmissionPrice(admission_price))
-        .insert_resource(ZooAdmissionsOpen(true))
-        .insert_resource(ZooCash(Money(1_000)))
         .add_systems(
             Update,
             (
@@ -44,11 +47,28 @@ fn create_application_with_guest_admission_payment(admission_price: Money) -> Ap
             )
                 .chain(),
         );
+    application.world_mut().spawn((
+        WorldRoot {
+            scenario: Default::default(),
+        },
+        AdmissionPrice::from_adult(admission_price),
+        ZooAdmissionsOpen(true),
+        ZooCash(Money(1_000)),
+    ));
     application
 }
 
+fn zoo_root(application: &App) -> Entity {
+    application
+        .world()
+        .iter_entities()
+        .find(|entity| entity.contains::<WorldRoot>())
+        .unwrap()
+        .id()
+}
+
 fn spawn_arriving_guest_with_wallet(application: &mut App, wallet: Money) -> Entity {
-    let world_root = application.world_mut().spawn_empty().id();
+    let world_root = zoo_root(application);
     application
         .world_mut()
         .spawn((
@@ -81,7 +101,14 @@ fn repeated_paid_gate_arrivals_enter_visiting_after_one_atomic_payment() {
         application.world().get::<Wallet>(guest),
         Some(&Wallet(Money(375)))
     );
-    assert_eq!(application.world().resource::<ZooCash>().0, Money(1_125));
+    assert_eq!(
+        application
+            .world()
+            .get::<ZooCash>(zoo_root(&application))
+            .unwrap()
+            .0,
+        Money(1_125)
+    );
     assert_eq!(
         application
             .world()
@@ -94,9 +121,11 @@ fn repeated_paid_gate_arrivals_enter_visiting_after_one_atomic_payment() {
 #[test]
 fn closed_admissions_turn_gate_arrival_away_without_payment() {
     let mut application = create_application_with_guest_admission_payment(Money(125));
+    let root = zoo_root(&application);
     application
         .world_mut()
-        .resource_mut::<ZooAdmissionsOpen>()
+        .get_mut::<ZooAdmissionsOpen>(root)
+        .unwrap()
         .0 = false;
     let guest = spawn_arriving_guest_with_wallet(&mut application, Money(500));
     application
@@ -113,7 +142,14 @@ fn closed_admissions_turn_gate_arrival_away_without_payment() {
         application.world().get::<Wallet>(guest),
         Some(&Wallet(Money(500)))
     );
-    assert_eq!(application.world().resource::<ZooCash>().0, Money(1_000));
+    assert_eq!(
+        application
+            .world()
+            .get::<ZooCash>(zoo_root(&application))
+            .unwrap()
+            .0,
+        Money(1_000)
+    );
     assert!(application
         .world()
         .resource::<Messages<GuestArrived>>()
@@ -138,7 +174,14 @@ fn unaffordable_admission_preserves_balances_and_routes_guest_out() {
         application.world().get::<Wallet>(guest),
         Some(&Wallet(Money(100)))
     );
-    assert_eq!(application.world().resource::<ZooCash>().0, Money(1_000));
+    assert_eq!(
+        application
+            .world()
+            .get::<ZooCash>(zoo_root(&application))
+            .unwrap()
+            .0,
+        Money(1_000)
+    );
     assert!(application
         .world()
         .resource::<Messages<GuestArrived>>()

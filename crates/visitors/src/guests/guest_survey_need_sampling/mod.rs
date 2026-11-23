@@ -1,4 +1,4 @@
-use bevy::{platform::collections::HashSet, prelude::*};
+use bevy::prelude::*;
 use openzt2_game_assets::world_definitions::{
     world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions,
     world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
@@ -28,26 +28,14 @@ pub(super) fn sample_current_guest_need_observations(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active: Res<WorldDefinitions>,
     mut cadences: Query<&mut GuestSurveyNeedCadence>,
-    thinking_guests: Query<
-        (
-            Option<&BehaviorTaskExecutionState>,
-            Option<&RunningBehaviorInstruction>,
-            Has<PendingBehaviorTaskFailure>,
-            &WorldMember,
-        ),
-        (
-            With<WorldMember>,
-            Without<Dead>,
-            Without<Frozen>,
-            Without<Tranquilized>,
-            Without<WorldEntityIsCrated>,
-            Without<SynchronizedBehaviorParticipant>,
-            Without<PendingBehaviorSet>,
-        ),
-    >,
     mut guests: Query<
         (
-            Entity,
+            (
+                &WorldMember,
+                Option<&BehaviorTaskExecutionState>,
+                Option<&RunningBehaviorInstruction>,
+                Has<PendingBehaviorTaskFailure>,
+            ),
             &GuestArchetype,
             &GuestHunger,
             &GuestThirst,
@@ -62,7 +50,15 @@ pub(super) fn sample_current_guest_need_observations(
             &mut GuestCriticalNeedObservations,
             &mut GuestSurveyExperience,
         ),
-        With<Guest>,
+        (
+            With<Guest>,
+            Without<Dead>,
+            Without<Frozen>,
+            Without<Tranquilized>,
+            Without<WorldEntityIsCrated>,
+            Without<SynchronizedBehaviorParticipant>,
+            Without<PendingBehaviorSet>,
+        ),
     >,
 ) {
     let Some(definitions) = active.get(&definitions) else {
@@ -78,56 +74,39 @@ pub(super) fn sample_current_guest_need_observations(
         return;
     }
     let interval = generation.need_survey.check_interval_ns as f32 * 1e-9;
-    let mut eligible = HashSet::new();
-    let mut due = Vec::new();
-    for (entity, archetype, ..) in &guests {
-        let Ok((task, instruction, pending_failure, world)) = thinking_guests.get(entity) else {
-            continue;
-        };
+    let delta = time.timestep().as_secs_f32();
+    for (
+        (world, task, instruction, pending_failure),
+        archetype,
+        hunger,
+        thirst,
+        dessert,
+        gift,
+        rest,
+        bathroom,
+        social,
+        amusement,
+        happiness,
+        viewing,
+        mut counters,
+        mut experience,
+    ) in &mut guests
+    {
         if task.is_some_and(|task| {
             pending_failure || instruction.is_none_or(|instruction| !instruction.is_current(task))
-        }) || definitions.find_guest(archetype.0).is_none()
-        {
+        }) {
             continue;
         }
-        let Ok(mut cadence) = cadences.get_mut(world.root) else {
-            continue;
-        };
-        eligible.insert(entity);
-        if cadence.sample_after_thinker(time.timestep().as_secs_f32(), interval) {
-            due.push(entity);
-        }
-    }
-    guests.par_iter_mut().for_each(
-        |(entity, _, _, _, _, _, _, _, _, _, happiness, _, _, mut experience)| {
-            if eligible.contains(&entity) {
-                experience.observe_happiness(happiness.source_q16() as f32 / 65_536.0);
-            }
-        },
-    );
-    for entity in due {
-        let Ok((
-            _,
-            archetype,
-            hunger,
-            thirst,
-            dessert,
-            gift,
-            rest,
-            bathroom,
-            social,
-            amusement,
-            happiness,
-            viewing,
-            mut counters,
-            _,
-        )) = guests.get_mut(entity)
-        else {
-            continue;
-        };
         let Some(definition) = definitions.find_guest(archetype.0) else {
             continue;
         };
+        let Ok(mut cadence) = cadences.get_mut(world.root) else {
+            continue;
+        };
+        experience.observe_happiness(happiness.source_q16() as f32 / 65_536.0);
+        if !cadence.sample_after_thinker(delta, interval) {
+            continue;
+        }
         let values = [
             (hunger.value, hunger.residual_q16),
             (thirst.value, thirst.residual_q16),
@@ -231,17 +210,6 @@ mod tests {
         .collect();
         app.init_resource::<Assets<WorldDefinitionAsset>>()
             .insert_resource(Time::<Fixed>::from_hz(10.0))
-            .insert_resource(GuestSurvey {
-                previous_day_of_month: 9,
-                current_day_of_month: 1,
-                ..Default::default()
-            })
-            .insert_resource(ZooClock {
-                tick: 1,
-                absolute_day: 0,
-                tick_in_day: 1,
-                fractional_tick: Default::default(),
-            })
             .add_systems(Update, sample_current_guest_need_observations);
         let handle = app
             .world_mut()
@@ -250,7 +218,23 @@ mod tests {
         let mut active = WorldDefinitions::default();
         active.index_test_document(handle, &document);
         app.insert_resource(active);
-        let root = app.world_mut().spawn(GuestSurveyNeedCadence(5.0)).id();
+        let root = app
+            .world_mut()
+            .spawn((
+                GuestSurveyNeedCadence(5.0),
+                GuestSurvey {
+                    previous_day_of_month: 9,
+                    current_day_of_month: 1,
+                    ..Default::default()
+                },
+                ZooClock {
+                    tick: 1,
+                    absolute_day: 0,
+                    tick_in_day: 1,
+                    fractional_tick: Default::default(),
+                },
+            ))
+            .id();
         (app, root)
     }
 
@@ -258,12 +242,13 @@ mod tests {
     fn empty_zoo_preserves_loaded_countdown_when_the_world_clock_advances() {
         let (mut app, root) = fixture();
         for _ in 0..20 {
-            app.world_mut().resource_mut::<ZooClock>().tick += 1_000;
+            app.world_mut().get_mut::<ZooClock>(root).unwrap().tick += 1_000;
             app.update();
         }
         let survey = app
             .world()
-            .resource::<openzt2_zoo_state::guests::guest_survey_types::GuestSurvey>();
+            .get::<openzt2_zoo_state::guests::guest_survey_types::GuestSurvey>(root)
+            .unwrap();
         assert_eq!(
             app.world().get::<GuestSurveyNeedCadence>(root).unwrap().0,
             5.0

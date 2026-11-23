@@ -5,7 +5,7 @@ use bevy::ecs::relationship::RelationshipTarget;
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::behavior_action_actors;
 
 use super::super::behavior_subject_type_resolution::{
-    behavior_subject_type_identifiers, AnimalBehaviorSubjectTypes,
+    AnimalBehaviorSubjectTypes, behavior_subject_type_identifiers,
 };
 use super::*;
 use openzt2_game_assets::behavior::behavior_asset_types::LoadedBehaviorDocumentCollection;
@@ -121,6 +121,7 @@ pub(super) fn finish_food_prop_admission(
     tasks: &mut Query<(&mut BehaviorTaskExecutionState, &RunningBehaviorInstruction)>,
     playback: &mut MessageWriter<AnimationClipPlaybackRequest>,
     commands: &mut Commands,
+    pending: &mut Query<&mut HeldFoodPropAttachment>,
 ) {
     let Ok((mut task, instruction)) = tasks.get_mut(actor) else {
         commands.entity(item).try_despawn();
@@ -149,12 +150,17 @@ pub(super) fn finish_food_prop_admission(
     commands
         .entity(item)
         .try_insert(FoodPropInstructionOwner(actor));
-    commands.entity(actor).try_insert(HeldFoodPropAttachment {
+    let attachment = HeldFoodPropAttachment {
         origin,
         attached: completed,
         detached: false,
         completed,
-    });
+    };
+    if let Ok(mut pending) = pending.get_mut(actor) {
+        *pending = attachment;
+    } else {
+        commands.entity(actor).try_insert(attachment);
+    }
     task.next_action_tick = admission.tick.saturating_add(1);
 }
 
@@ -162,6 +168,7 @@ fn execute_food_prop_attachments(
     activation: In<Option<Entity>>,
     mut commands: Commands,
     assets: AttachmentAssets,
+    mut prefab_events: AttachmentPrefabEvents,
     loaded: Res<LoadedBehaviorDocumentCollection>,
     animal_types: AnimalBehaviorSubjectTypes,
     clock: Single<&ZooClock>,
@@ -176,7 +183,7 @@ fn execute_food_prop_attachments(
             ),
             &DefinitionId,
             &WorldMember,
-            Option<&HeldFoodPropAttachment>,
+            Option<&mut HeldFoodPropAttachment>,
             Option<&HeldFoodProp>,
             Option<&SpeciesHandle>,
             Option<&StaffRole>,
@@ -193,9 +200,9 @@ fn execute_food_prop_attachments(
     sources: Query<(&DefinitionId, &WorldMember), Without<WorldEntityIsCrated>>,
     objects: Query<(&ContainedObject, &DefinitionId, Option<&WorldMember>)>,
     transforms: Query<&GlobalTransform>,
-    children: Query<&Children>,
-    nodes: Query<&PrefabAuthoredAttachmentIdentifier>,
+    nodes: super::super::behavior_named_nodes::NamedNodeTransforms,
 ) {
+    let settled = prefab_events.settled();
     let Some(definitions) = assets.definitions.get(&assets.definition_assets) else {
         return;
     };
@@ -224,8 +231,9 @@ fn execute_food_prop_attachments(
         if !action.attaches_target_held_prop() {
             continue;
         }
-        if let Some(pending) =
-            pending.filter(|pending| pending.origin.request_id.is_some() || pending.completed)
+        if let Some(pending) = pending
+            .as_ref()
+            .filter(|pending| pending.origin.request_id.is_some() || pending.completed)
         {
             if !pending.detached && !pending.completed {
                 continue;
@@ -291,6 +299,17 @@ fn execute_food_prop_attachments(
             }
             continue;
         }
+        if activation.0.is_none()
+            && pending.as_ref().is_some_and(|pending| {
+                pending
+                    .origin
+                    .prefab
+                    .as_ref()
+                    .is_some_and(|prefab| !settled.contains(&prefab.id()))
+            })
+        {
+            continue;
+        }
         let Some(target) = task.target else {
             mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
             continue;
@@ -315,10 +334,7 @@ fn execute_food_prop_attachments(
         };
         if let Some(name) = &action.subject_node {
             let identifier = AssetId::from_key(&name.to_ascii_lowercase());
-            let Some(joint) = children
-                .iter_descendants_depth_first::<Children>(actor)
-                .find(|entity| nodes.get(*entity).is_ok_and(|node| node.0 == identifier))
-            else {
+            let Some(joint) = nodes.socket(actor, identifier) else {
                 mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
                 continue;
             };
@@ -345,10 +361,7 @@ fn execute_food_prop_attachments(
             };
             let joint = if let Some(name) = &action.target_node {
                 let identifier = AssetId::from_key(&name.to_ascii_lowercase());
-                let Some(joint) = children
-                    .iter_descendants_depth_first::<Children>(target)
-                    .find(|entity| nodes.get(*entity).is_ok_and(|node| node.0 == identifier))
-                else {
+                let Some(joint) = nodes.socket(target, identifier) else {
                     mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
                     continue;
                 };
@@ -360,6 +373,7 @@ fn execute_food_prop_attachments(
                 continue;
             };
             let Some(handle) = pending
+                .as_ref()
                 .and_then(|pending| pending.origin.prefab.clone())
                 .or_else(|| definitions.scene(object.prefab))
             else {
@@ -375,7 +389,7 @@ fn execute_food_prop_attachments(
                     Some(LoadState::Failed(_))
                 ) {
                     mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
-                } else {
+                } else if pending.is_none() {
                     commands.entity(actor).insert(state);
                 }
                 continue;
@@ -437,7 +451,11 @@ fn execute_food_prop_attachments(
                     .id,
             );
         }
-        commands.entity(actor).insert(state);
+        if let Some(mut pending) = pending {
+            *pending = state;
+        } else {
+            commands.entity(actor).insert(state);
+        }
         task.next_action_tick = clock.tick.saturating_add(1);
     }
 }

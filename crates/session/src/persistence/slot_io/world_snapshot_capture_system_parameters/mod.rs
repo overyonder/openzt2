@@ -170,10 +170,15 @@ pub(super) struct EconomyCaptureQueries<'w, 's> {
             Without<openzt2_zoo_state::guests::guest_simulation_types::Guest>,
         ),
     >,
-    pub(super) unlimited_cash:
-        Option<Res<'w, openzt2_zoo_state::economy::zoo_cash_types::UnlimitedZooCash>>,
-    pub(super) zoo_cash: Res<'w, ZooCash>,
-    pub(super) zoo_admission_price: Res<'w, AdmissionPrice>,
-    pub(super) zoo_admissions_open_state: Res<'w, ZooAdmissionsOpen>,
-    pub(super) monthly_finance_history: Res<'w, MonthlyFinanceHistory>,
+    pub(super) roots: Query<
+        'w,
+        's,
+        (
+            &'static ZooCash,
+            &'static AdmissionPrice,
+            &'static ZooAdmissionsOpen,
+            &'static MonthlyFinanceHistory,
+            Option<&'static openzt2_zoo_state::economy::zoo_cash_types::UnlimitedZooCash>,
+        ),
+    >,
 }

@@ -11,6 +11,8 @@ use openzt2_game_data::ui_document::action::staff_management::UiWorkerDuty;
 use openzt2_game_data::ui_document::action::{UiActionRecord, UiTrigger};
 use openzt2_game_data::ui_document::document::UiDocumentRole;
 use openzt2_game_data::ui_document::node::UiNodeDefinition;
+use openzt2_game_data::ui_document::timed_presentation::UiTimedEventAction;
+use openzt2_game_data::ui_document::widget::UiWidgetRecord;
 use openzt2_game_data::AssetId;
 use std::collections::BTreeMap;
 use std::io;
@@ -57,6 +59,10 @@ pub(super) fn resolve_repeated_target_names_to_nearest_scope(
         (u32, usize),
         super::authored_ui_event_collection_lowering::UiActionReceiverPath,
     >,
+    timed_receivers: &BTreeMap<
+        (u32, usize),
+        super::authored_ui_event_collection_lowering::UiActionReceiverPath,
+    >,
 ) {
     let mut named = BTreeMap::<AssetId, Vec<u32>>::new();
     for (index, node) in nodes.iter().enumerate() {
@@ -95,14 +101,31 @@ pub(super) fn resolve_repeated_target_names_to_nearest_scope(
             .actions
             .iter()
             .chain(node.hotkeys.iter().map(|hotkey| &hotkey.action))
-            .enumerate();
-        for (record_index, record) in records {
+            .enumerate()
+            .map(|(index, action)| (index, action, receivers.get(&(actor, index))));
+        let timed_start = node.actions.len() + node.hotkeys.len();
+        let timed_records = match &node.widget {
+            UiWidgetRecord::TimedSequence { events, .. } => events.as_slice(),
+            _ => &[],
+        };
+        let timed_records = timed_records
+            .iter()
+            .enumerate()
+            .filter_map(|(index, event)| {
+                let UiTimedEventAction::Ui(action) = &event.action else {
+                    return None;
+                };
+                Some((
+                    timed_start + index,
+                    action,
+                    timed_receivers.get(&(actor, index)),
+                ))
+            });
+        for (record_index, record, receiver) in records.chain(timed_records) {
             let UiActionRecord::Presentation(record) = record else {
                 continue;
             };
-            let scope = receivers
-                .get(&(actor, record_index))
-                .map_or(actor, |receiver| {
+            let scope = receiver.map_or(actor, |receiver| {
                     receiver.nodes.iter().fold(
                         if receiver.from_root { 0 } else { actor },
                         |scope, node| {
@@ -136,10 +159,20 @@ pub(super) fn resolve_repeated_target_names_to_nearest_scope(
     for (actor, record_index, target_index, id) in resolved {
         let node = &mut nodes[actor as usize];
         let action_count = node.actions.len();
+        let timed_start = action_count + node.hotkeys.len();
         let record = if record_index < action_count {
             &mut node.actions[record_index]
-        } else {
+        } else if record_index < timed_start {
             &mut node.hotkeys[record_index - action_count].action
+        } else {
+            let UiWidgetRecord::TimedSequence { events, .. } = &mut node.widget else {
+                continue;
+            };
+            let UiTimedEventAction::Ui(action) = &mut events[record_index - timed_start].action
+            else {
+                continue;
+            };
+            action
         };
         if let UiActionRecord::Presentation(record) = record {
             if let Some(target) = record.action.local_node_targets_mut().nth(target_index) {
@@ -330,29 +363,19 @@ pub(super) fn required_tenths(
 pub(super) fn current_named(current: AssetId, role: UiDocumentRole, name: &str) -> bool {
     current == UiDocumentRole::node_id(role, name)
 }
-pub(super) fn worker_duty(
-    current: AssetId,
-    role: UiDocumentRole,
-    input: &AuthoredUiDocument,
-) -> io::Result<UiWorkerDuty> {
+
+pub(super) fn worker_duty(event: &SourceUiEvent) -> Option<UiWorkerDuty> {
+    let token = event.string.as_deref()?;
     [
-        ("clean_filter_button", UiWorkerDuty::CleanAquaticTankFilter),
-        (
-            "clean_recycle_button",
-            UiWorkerDuty::EmptyRecyclingContainer,
-        ),
-        ("empty_trash_button", UiWorkerDuty::EmptyTrashContainer),
-        ("sweep_trash_button", UiWorkerDuty::SweepLitter),
+        ("t_CleanWaterFilter", UiWorkerDuty::CleanAquaticTankFilter),
+        ("t_EmptyRecyclingBin", UiWorkerDuty::EmptyRecyclingContainer),
+        ("t_EmptyTrash", UiWorkerDuty::EmptyTrashContainer),
+        ("t_SweepTrash", UiWorkerDuty::SweepLitter),
     ]
     .into_iter()
-    .find_map(|(name, duty)| current_named(current, role, name).then_some(duty))
-    .ok_or_else(|| {
-        invalid_at(
-            input,
-            "worker assignment button has no closed duty classification",
-        )
-    })
+    .find_map(|(name, duty)| token.eq_ignore_ascii_case(name).then_some(duty))
 }
+
 pub(super) fn price_index(
     current: AssetId,
     role: UiDocumentRole,

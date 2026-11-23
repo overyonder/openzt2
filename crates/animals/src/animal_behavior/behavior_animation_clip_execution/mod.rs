@@ -1,12 +1,20 @@
 use bevy::prelude::*;
-use openzt2_game_data::behavior::action::animation::BehaviorAnimationPlaybackSpeed;
+use openzt2_game_data::behavior::action::animation::{
+    BehaviorAnimationClipAction, BehaviorAnimationPlaybackSpeed,
+};
+use openzt2_game_assets::animation::animation_set_asset_types::AnimationSetAsset;
+use openzt2_world_state::animation_graph::{
+    animation_graph_playback_state_types::AnimationGraphPlaybackState,
+    animation_presentation_relationship_types::AnimationPresentations,
+};
+use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackController;
 use openzt2_world_state::animation_graph::animation_graph_playback_message_types::{
     AnimationClipPlaybackRequestStarted, AnimationReturnRouteOutcome, AnimationReturnRouteRequest,
     CancelAnimationClipPlaybackRequest,
 };
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::behavior_action_actors;
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
-    RunBehaviorAnimationClip, RunningBehaviorInstruction,
+    RunBehaviorAnimationClip, RunBehaviorAnimationSwitch, RunningBehaviorInstruction,
 };
 
 use openzt2_game_assets::world_definitions::{
@@ -44,7 +52,8 @@ pub(super) fn start_current_behavior_animation_clip_actions(
             (
                 &mut BehaviorTaskExecutionState,
                 &RunningBehaviorInstruction,
-                &RunBehaviorAnimationClip,
+                Option<&RunBehaviorAnimationClip>,
+                Option<&RunBehaviorAnimationSwitch>,
             ),
             Option<&mut super::behavior_random_stream_state::BehaviorRandomStream>,
             Option<&mut openzt2_zoo_state::guests::guest_simulation_types::GuestRng>,
@@ -53,16 +62,22 @@ pub(super) fn start_current_behavior_animation_clip_actions(
             Without<PendingBehaviorAnimationClipCompletion>,
             Without<PendingBehaviorTaskFailure>,
             Without<TimedBehaviorAnimationClip>,
+            Or<(With<RunBehaviorAnimationClip>, With<RunBehaviorAnimationSwitch>)>,
         ),
     >,
     mut animation_clip_playback_requests: MessageWriter<AnimationClipPlaybackRequest>,
     mut presentation_selections: MessageWriter<AnimationClipActionOptions>,
     definitions: Option<Res<WorldDefinitions>>,
     definition_assets: Option<Res<Assets<WorldDefinitionAsset>>>,
+    animation_sources: (
+        Option<Res<Assets<AnimationSetAsset>>>,
+        Query<&AnimationPresentations>,
+        Query<(&AnimationPlaybackController, &AnimationGraphPlaybackState)>,
+    ),
 ) {
     for (
         actor,
-        (mut behavior_task, instruction, running_action),
+        (mut behavior_task, instruction, running_action, switch),
         mut behavior_random,
         mut guest_random,
     ) in behavior_action_actors(&mut behavior_tasks, activation.0)
@@ -77,7 +92,43 @@ pub(super) fn start_current_behavior_animation_clip_actions(
         if !instruction.is_current(&behavior_task) {
             continue;
         }
-        let animation = &running_action.0;
+        let switched_clip;
+        let animation = if let Some(clip) = running_action {
+            &clip.0
+        } else {
+            let Some(switch) = switch else {
+                continue;
+            };
+            let (sets, presentations, controllers) = &animation_sources;
+            let key = AnimationPresentations::for_subject(actor, presentations.get(actor).ok())
+                .find_map(|presentation| controllers.get(presentation).ok())
+                .and_then(|(controller, state)| {
+                    let set = sets.as_ref()?.get(&controller.animation_set_asset)?;
+                    let node = set.animation_graph_nodes.get(state.current_animation_graph_node_index as usize)?;
+                    switch.0.clips_by_node.iter()
+                        .find(|(name, _)| name.eq_ignore_ascii_case(&node.animation_graph_node_asset_key))
+                        .map(|(_, clip)| clip)
+                })
+                .or(switch.0.default_clip.as_ref());
+            let Some(key) = key else {
+                super::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation(
+                    actor, &mut commands,
+                );
+                continue;
+            };
+            switched_clip = BehaviorAnimationClipAction {
+                animation_clip_asset_key: key.clone(),
+                looping: false,
+                physical_object: None,
+                play_duration_seconds: None,
+                interrupts_current_animation: false,
+                interruptible: false,
+                ground_fit: None,
+                blend_duration_seconds: None,
+                playback_speed: None,
+            };
+            &switched_clip
+        };
         // A play time repeats the clip until it elapses.
         let play_until_tick = match animation.play_duration_seconds {
             None => None,

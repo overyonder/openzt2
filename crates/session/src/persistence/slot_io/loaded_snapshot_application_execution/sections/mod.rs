@@ -10,7 +10,7 @@ pub(super) fn snapshot_section_dependencies_changed(
     mut failures: MessageReader<UntypedAssetLoadFailedEvent>,
     species: Res<SpeciesAssets>,
     scripts_index: Option<Res<LuaScriptArchivePathIndex>>,
-    locomotion: Option<Res<LocomotionCapacity>>,
+    locomotion: Query<Ref<LocomotionCapacity>>,
     profile: Res<ProfileOptions>,
 ) -> bool {
     let assets_changed = prefabs.read().last().is_some()
@@ -24,7 +24,9 @@ pub(super) fn snapshot_section_dependencies_changed(
             || assets_changed
             || species.is_changed()
             || scripts_index.is_some_and(|index| index.is_changed())
-            || locomotion.is_some_and(|capacity| capacity.is_changed())
+            || locomotion
+                .get(stage.root)
+                .is_ok_and(|capacity| capacity.is_changed())
             || profile.is_changed()
     })
 }
@@ -110,12 +112,15 @@ pub(super) fn apply_saved_fence_edges(
     )>,
     index: Res<PersistentIdIndex>,
     nodes: Query<&TopologyNode>,
-    grid: Res<TopologyGrid>,
+    grids: Query<&TopologyGrid>,
 ) {
     let Ok((operation, decoded, stage, saved)) = operations.single() else {
         return;
     };
     let root = stage.root;
+    let Ok(grid) = grids.get(root) else {
+        return;
+    };
     let mut operation_commands = commands.entity(operation);
     operation_commands.remove::<RestoreSavedFenceEdges>();
     if let Some(records) = decoded
@@ -229,10 +234,7 @@ pub(super) fn attach_saved_economy(
     mut operations: Query<(Entity, &AttachSavedWorldState, &mut AttachSnapshotEconomy)>,
     index: Res<PersistentIdIndex>,
     mut facilities: Query<RestoredFacilityEconomy>,
-    mut cash: ResMut<ZooCash>,
-    mut price: ResMut<AdmissionPrice>,
-    mut admissions: ResMut<ZooAdmissionsOpen>,
-    mut history: ResMut<MonthlyFinanceHistory>,
+    mut roots: Query<RestoredZooEconomy>,
 ) {
     let Ok((operation, stage, mut saved)) = operations.single_mut() else {
         return;
@@ -241,16 +243,13 @@ pub(super) fn attach_saved_economy(
     let Some(saved) = saved.0.take() else {
         return;
     };
-    let result = apply_economy_snapshot_records_to_live_economy_resources_and_facilities(
+    let result = apply_economy_snapshot_records(
         &mut commands,
         saved,
         &index,
         root,
         &mut facilities,
-        &mut cash,
-        &mut price,
-        &mut admissions,
-        &mut history,
+        &mut roots,
     );
     if let Err(reason) = result {
         commands

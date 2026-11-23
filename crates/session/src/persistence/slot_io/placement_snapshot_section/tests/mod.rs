@@ -5,8 +5,7 @@ use crate::persistence::slot_io::donation_snapshot_section::{
 };
 use crate::persistence::slot_io::{
     economy_snapshot_application::{
-        apply_economy_snapshot_records_to_live_economy_resources_and_facilities,
-        RestoredFacilityEconomy,
+        apply_economy_snapshot_records, RestoredFacilityEconomy, RestoredZooEconomy,
     },
     economy_snapshot_section_encoding::{
         append_encoded_economy_snapshot_section, decode_and_validate_economy_snapshot_section,
@@ -55,7 +54,7 @@ use openzt2_zoo_state::{
     },
     guests::guest_simulation_types::Guest,
     placement::{
-        placement_occupancy_index::PlacedObjectFootprintOccupancyIndex,
+        placement_occupancy_index::PlacedObjectFootprintQueries,
         placement_transaction_types::{
             PreparedObjectPlacementEditMutationKind, PreparedObjectPlacementMutation,
         },
@@ -146,15 +145,6 @@ fn fixture() -> (App, Entity, Handle<ScenePrefabAsset>) {
         .init_resource::<Assets<Gltf>>()
         .init_resource::<Assets<WorldDefinitionAsset>>()
         .init_resource::<WorldDefinitions>()
-        .init_resource::<AdmissionPrice>()
-        .init_resource::<ZooAdmissionsOpen>()
-        .init_resource::<MonthlyFinanceHistory>()
-        .insert_resource(ZooClock {
-            fractional_tick: Default::default(),
-            tick: 1,
-            absolute_day: 3,
-            tick_in_day: 1,
-        })
         .configure_sets(
             Update,
             (
@@ -167,7 +157,6 @@ fn fixture() -> (App, Entity, Handle<ScenePrefabAsset>) {
     add_placement_persistence_test_systems(&mut app);
     openzt2_economy::economy::add_account_transaction_test_systems(&mut app);
     add_donation_payment_test_systems(&mut app);
-    app.world_mut().resource_mut::<ZooCash>().0 = Money(10_000);
     let document = document();
     let handle = app
         .world_mut()
@@ -176,10 +165,25 @@ fn fixture() -> (App, Entity, Handle<ScenePrefabAsset>) {
     app.world_mut()
         .resource_mut::<WorldDefinitions>()
         .index_test_document(handle, &document);
-    let root = app.world_mut().spawn_empty().id();
-    app.world_mut()
-        .entity_mut(root)
-        .insert(PersistentIdAllocator::default());
+    let root = app
+        .world_mut()
+        .spawn((
+            openzt2_world_state::world_spawn::world_membership_types::WorldRoot {
+                scenario: default(),
+            },
+            PersistentIdAllocator::default(),
+            ZooCash(Money(10_000)),
+            AdmissionPrice::default(),
+            ZooAdmissionsOpen::default(),
+            MonthlyFinanceHistory::default(),
+            ZooClock {
+                fractional_tick: Default::default(),
+                tick: 1,
+                absolute_day: 3,
+                tick_in_day: 1,
+            },
+        ))
+        .id();
     let entity = |attachment, translation, children| PrefabEntity {
         stable_id: AssetId::from_key(attachment),
         attachment_id: AssetId::from_key(attachment),
@@ -263,7 +267,7 @@ fn donate(app: &mut App, root: Entity, acceptor: Entity) {
 #[test]
 fn purchased_box_survives_cold_restore_and_accepts_another_completed_payment() {
     let (mut source, root, prefab) = fixture();
-    let purchase = source.world_mut().spawn_empty().id();
+    let purchase = source.world_mut().spawn(WorldMember { root }).id();
     source.world_mut().write_message(TransactionRequest {
         operation: purchase,
         debit: Account::Zoo,
@@ -273,7 +277,7 @@ fn purchased_box_survives_cold_restore_and_accepts_another_completed_payment() {
         subject: None,
     });
     source.update();
-    assert_eq!(source.world().resource::<ZooCash>().0, Money(8750));
+    assert_eq!(source.world().get::<ZooCash>(root).unwrap().0, Money(8750));
     let acceptor = apply_settled_placement_purchase_for_test(
         source.world_mut(),
         root,
@@ -304,7 +308,7 @@ fn purchased_box_survives_cold_restore_and_accepts_another_completed_payment() {
         capture_donation_records(&donation_capture.get(source.world()).unwrap()).unwrap();
     let donation_bytes = encode_donation_records(&donations).unwrap();
     let donations = decode_donation_records(&donation_bytes, section(&donation_bytes, 1)).unwrap();
-    let saved_cash = source.world().resource::<ZooCash>().0;
+    let saved_cash = source.world().get::<ZooCash>(root).unwrap().0;
     let saved_profit = *source.world().get::<FacilityProfit>(acceptor).unwrap();
     let saved_age = *source.world().get::<OperatingSinceDay>(acceptor).unwrap();
     let economy = EconomySnapshotRecords {
@@ -381,21 +385,10 @@ fn purchased_box_survives_cold_restore_and_accepts_another_completed_payment() {
         Res<PersistentIdIndex>,
         Query<RestoredDonationComponents>,
         Query<RestoredFacilityEconomy>,
-        ResMut<ZooCash>,
-        ResMut<AdmissionPrice>,
-        ResMut<ZooAdmissionsOpen>,
-        ResMut<MonthlyFinanceHistory>,
+        Query<RestoredZooEconomy>,
     )>::new(destination.world_mut());
-    let (
-        mut commands,
-        identities,
-        mut totals,
-        mut facilities,
-        mut cash,
-        mut price,
-        mut admissions,
-        mut history,
-    ) = finances.get_mut(destination.world_mut()).unwrap();
+    let (mut commands, identities, mut totals, mut facilities, mut roots) =
+        finances.get_mut(destination.world_mut()).unwrap();
     let restored_acceptor = identities.get(restored_root, PersistentId(42)).unwrap();
     restore_donation_totals(
         &mut commands,
@@ -405,16 +398,13 @@ fn purchased_box_survives_cold_restore_and_accepts_another_completed_payment() {
         &mut totals,
     )
     .unwrap();
-    apply_economy_snapshot_records_to_live_economy_resources_and_facilities(
+    apply_economy_snapshot_records(
         &mut commands,
         economy,
         &identities,
         restored_root,
         &mut facilities,
-        &mut cash,
-        &mut price,
-        &mut admissions,
-        &mut history,
+        &mut roots,
     )
     .unwrap();
     finances.apply(destination.world_mut());
@@ -422,12 +412,25 @@ fn purchased_box_survives_cold_restore_and_accepts_another_completed_payment() {
     destination.update();
     assert!(destination.world().get_entity(deleted).is_err());
     assert_eq!(capture(&mut destination), expected);
-    assert_eq!(destination.world().resource::<ZooCash>().0, saved_cash);
     assert_eq!(
-        destination.world().resource::<AdmissionPrice>().0,
+        destination.world().get::<ZooCash>(restored_root).unwrap().0,
+        saved_cash
+    );
+    assert_eq!(
+        destination
+            .world()
+            .get::<AdmissionPrice>(restored_root)
+            .unwrap()
+            .adult,
         Money(250)
     );
-    assert!(destination.world().resource::<ZooAdmissionsOpen>().0);
+    assert!(
+        destination
+            .world()
+            .get::<ZooAdmissionsOpen>(restored_root)
+            .unwrap()
+            .0
+    );
     assert_eq!(
         destination
             .world()
@@ -444,10 +447,11 @@ fn purchased_box_survives_cold_restore_and_accepts_another_completed_payment() {
             .transactions,
         saved_profit.transactions
     );
-    assert!(destination
-        .world()
-        .resource::<PlacedObjectFootprintOccupancyIndex>()
-        .cell_contains_entity(IVec2::new(4, -7), restored_acceptor));
+    let mut footprints = SystemState::<PlacedObjectFootprintQueries>::new(destination.world_mut());
+    assert!(footprints
+        .get(destination.world())
+        .unwrap()
+        .cell_contains_entity(restored_root, IVec2::new(4, -7), restored_acceptor));
     assert_eq!(
         destination
             .world()
@@ -476,7 +480,7 @@ fn purchased_box_survives_cold_restore_and_accepts_another_completed_payment() {
         Money(1000)
     );
     assert_eq!(
-        destination.world().resource::<ZooCash>().0,
+        destination.world().get::<ZooCash>(restored_root).unwrap().0,
         Money(saved_cash.0 + 500)
     );
 }

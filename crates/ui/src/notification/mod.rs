@@ -42,8 +42,8 @@ pub(super) struct BirthNotifications<'w, 's> {
     notices: Option<MessageReader<'w, 's, BehaviorBirthNotice>>,
     subjects: Query<'w, 's, (Option<&'static Name>, Option<&'static WorldMember>)>,
     roots: Query<'w, 's, Entity, With<WorldRoot>>,
-    pending: Query<'w, 's, (Entity, &'static PendingBirthNotification)>,
-    messages: Option<ResMut<'w, ZooMessages>>,
+    pending: Query<'w, 's, (Entity, &'static ChildOf, &'static PendingBirthNotification)>,
+    messages: Query<'w, 's, &'static mut ZooMessages, With<WorldRoot>>,
     time: Option<Res<'w, Time<Real>>>,
 }
 
@@ -81,13 +81,12 @@ pub(super) fn request_notifications(
         }
     }
     if !births.pending.is_empty() {
-        if let (Some(locale), Some(messages), Some(time)) = (
-            localization,
-            births.messages.as_deref_mut(),
-            births.time.as_deref(),
-        ) {
+        if let (Some(locale), Some(time)) = (localization, births.time.as_deref()) {
             let key = AssetId::from_key("zoomessages:AnimalBirth");
-            for (entity, notice) in &births.pending {
+            for (entity, parent, notice) in &births.pending {
+                let Ok(mut messages) = births.messages.get_mut(parent.parent()) else {
+                    continue;
+                };
                 let mut text = String::new();
                 if locale
                     .write_localized_text_with_format_arguments(

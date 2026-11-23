@@ -60,11 +60,17 @@ pub(super) struct EnvironmentVisualOwner(pub(super) Entity);
 pub(super) struct EnvironmentVisuals(Vec<Entity>);
 
 /// One authored sun body awaiting its named joint in a shared position rig.
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Component)]
+#[relationship(relationship_target = PendingSunRigVisuals)]
 pub(super) struct EnvironmentSunPosition {
+    #[relationship]
     pub(super) rig: Entity,
     pub(super) node: AssetId,
 }
+
+#[derive(Component)]
+#[relationship_target(relationship = EnvironmentSunPosition)]
+pub(super) struct PendingSunRigVisuals(Vec<Entity>);
 
 #[derive(Component)]
 #[relationship(relationship_target = EnvironmentFogCameras)]

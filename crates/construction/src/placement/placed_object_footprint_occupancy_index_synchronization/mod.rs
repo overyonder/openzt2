@@ -36,10 +36,10 @@ pub(super) fn hydrate_placed_object_placement_components(
     objects: Query<
         (
             Entity,
-            &DefinitionId,
-            &Transform,
-            &WorldMember,
-            Option<&PrefabSourceAssetHandle>,
+            Ref<DefinitionId>,
+            Ref<Transform>,
+            Ref<WorldMember>,
+            Option<Ref<PrefabSourceAssetHandle>>,
         ),
         (
             With<DefinitionId>,
@@ -48,19 +48,29 @@ pub(super) fn hydrate_placed_object_placement_components(
         ),
     >,
 ) {
+    let catalogue_changed =
+        definitions.is_changed() || active_definitions.is_changed() || footprints.is_changed();
     let Some(catalogue) = active_definitions.get(&definitions) else {
         return;
     };
     for (entity, object, transform, member, prefab) in &objects {
+        if !catalogue_changed
+            && !object.is_changed()
+            && !transform.is_changed()
+            && !member.is_changed()
+            && !prefab.as_ref().is_some_and(|prefab| prefab.is_changed())
+        {
+            continue;
+        }
         let Some(definition) = resolve_object_placeable_definition(catalogue, object.0) else {
             continue;
         };
-        let geometry = footprints.resolve(definition, prefab.map(|prefab| &prefab.0));
+        let geometry = footprints.resolve(definition, prefab.as_deref().map(|prefab| &prefab.0));
         let Some((origin, eighth_turns)) = calculate_authored_object_placement_eighth_turns(
-            definition, transform,
+            definition, &transform,
         )
         .and_then(|turns| {
-            calculate_object_placement_footprint_origin(geometry, transform, turns)
+            calculate_object_placement_footprint_origin(geometry, &transform, turns)
                 .map(|origin| (origin, turns))
         }) else {
             continue;

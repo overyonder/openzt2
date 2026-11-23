@@ -1,4 +1,5 @@
 use bevy::{camera::primitives::Aabb, ecs::relationship::RelationshipTarget, prelude::*};
+use openzt2_game_assets::graphics_settings_types::GraphicsSettings;
 use openzt2_game_data::world_definitions::environment::EnvironmentLightTarget;
 use openzt2_zoo_state::environment::environment_presentation_types::EnvironmentLight;
 use openzt2_zoo_state::environment::environment_presentation_types::EnvironmentSpecularLightColor;
@@ -23,40 +24,49 @@ use super::{
         EnvironmentVisualProjections,
     },
     environment_presentation_types::{
-        AboveWaterFog, EnvironmentCameraRelativeVisual, EnvironmentPresentationPending,
-        EnvironmentSky, EnvironmentTexture, EnvironmentVisualSampleIndex, EnvironmentVisuals,
+        AboveWaterFog, EnvironmentCameraRelativeVisual, EnvironmentOfWorld,
+        EnvironmentPresentationPending, EnvironmentSky, EnvironmentTexture,
+        EnvironmentVisualSampleIndex, EnvironmentVisuals,
     },
-    environment_state_types::{Daylight, EnvironmentDaylightFraction, ObjectAmbientLight},
+    environment_state_types::{Daylight, ObjectAmbientLight},
     environment_visual_construction::create_environment_texture_renderer_components,
     weather_types::{Weather, WeatherTransition},
 };
 
-pub(super) fn sample_environment_daylight_fraction(
-    clock: Res<ZooClock>,
-    definitions: Res<Assets<WorldDefinitionAsset>>,
-    active: Res<WorldDefinitions>,
-    mut sample: ResMut<EnvironmentDaylightFraction>,
+pub(super) fn publish_world_daylight_from_zoo_clock(
+    clocks: Query<Ref<ZooClock>>,
+    assets: Res<Assets<WorldDefinitionAsset>>,
+    definitions: Res<WorldDefinitions>,
+    mut environments: Query<(&EnvironmentOfWorld, &mut Daylight)>,
 ) {
-    if clock.is_changed() || definitions.is_changed() || active.is_changed() {
-        sample.set_if_neq(EnvironmentDaylightFraction(
-            active.get(&definitions).and_then(|definitions| {
-                calculate_environment_month_fraction(&clock, definitions.timing())
-            }),
-        ));
+    let definitions_changed = assets.is_changed() || definitions.is_changed();
+    let Some(definitions) = definitions.get(&assets) else {
+        return;
+    };
+    for (owner, mut daylight) in &mut environments {
+        let Ok(clock) = clocks.get(owner.0) else {
+            continue;
+        };
+        if !clock.is_changed() && !definitions_changed {
+            continue;
+        }
+        if let Some(fraction) = calculate_environment_month_fraction(&clock, definitions.timing()) {
+            daylight.set_if_neq(Daylight { fraction });
+        }
     }
 }
 
 pub(super) fn sample_authored_object_ambient_light(
     mut commands: Commands,
-    daylight: Res<EnvironmentDaylightFraction>,
     mut environments: Query<(
         Entity,
+        Ref<Daylight>,
         Ref<EnvironmentLightCurves>,
         Option<&mut ObjectAmbientLight>,
     )>,
 ) {
-    let Some(fraction) = daylight.0 else { return };
-    for (entity, curves, existing) in &mut environments {
+    for (entity, daylight, curves, existing) in &mut environments {
+        let fraction = daylight.fraction;
         if existing.is_some() && !curves.is_changed() && !daylight.is_changed() {
             continue;
         }
@@ -74,12 +84,12 @@ pub(super) fn sample_authored_object_ambient_light(
 
 pub(super) fn sample_authored_environment_visual_curves(
     mut commands: Commands,
-    fraction: Res<EnvironmentDaylightFraction>,
     assets: Res<Assets<WorldDefinitionAsset>>,
     active: Res<WorldDefinitions>,
     mut source_events: MessageReader<AssetEvent<WorldDefinitionAsset>>,
     mut environments: Query<(
         Entity,
+        Ref<Daylight>,
         Ref<WorldEnvironment>,
         Option<&mut EnvironmentLightCurves>,
         Option<&mut EnvironmentVisualCurves>,
@@ -89,16 +99,16 @@ pub(super) fn sample_authored_environment_visual_curves(
     let definition_revision = source_events.read().fold(false, |changed, event| {
         changed || !matches!(event, AssetEvent::Unused { .. })
     });
-    let (Some(fraction_value), Some(definitions)) = (fraction.0, active.get(&assets)) else {
+    let Some(definitions) = active.get(&assets) else {
         return;
     };
-    for (entity, environment, light, curves, projections) in &mut environments {
+    for (entity, daylight, environment, light, curves, projections) in &mut environments {
         let prepare = light.is_none()
             || curves.is_none()
             || definition_revision
             || active.is_changed()
             || environment.is_changed();
-        if !prepare && !fraction.is_changed() && projections.is_some() {
+        if !prepare && !daylight.is_changed() && projections.is_some() {
             continue;
         }
         let Some(definition) = definitions.find_environment(environment.definition) else {
@@ -117,7 +127,7 @@ pub(super) fn sample_authored_environment_visual_curves(
             .as_ref()
             .or(curves.as_deref())
             .expect("visual curves prepared for this environment")
-            .sample(definition, fraction_value);
+            .sample(definition, daylight.fraction);
         if let Some(prepared) = prepared {
             if let Some(mut curves) = curves {
                 *curves = prepared;
@@ -210,8 +220,7 @@ pub(super) fn center_camera_relative_environment_visuals_on_active_zoo_camera(
 #[allow(clippy::type_complexity)]
 pub(super) fn project_current_daylight_weather_and_sky_into_bevy_renderer(
     mut commands: Commands,
-    clock: Res<ZooClock>,
-    fraction: Res<EnvironmentDaylightFraction>,
+    settings: Res<GraphicsSettings>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -219,10 +228,10 @@ pub(super) fn project_current_daylight_weather_and_sky_into_bevy_renderer(
     mut terrain_ambient: ResMut<EnvironmentTerrainAmbientLight>,
     mut environments: Query<(
         Entity,
-        &mut Daylight,
+        Ref<Daylight>,
         &WorldEnvironment,
         Option<Ref<Weather>>,
-        Option<&WeatherTransition>,
+        Option<Ref<WeatherTransition>>,
         Option<&EnvironmentPresentationPending>,
         Option<&Children>,
         Option<&EnvironmentVisuals>,
@@ -264,10 +273,12 @@ pub(super) fn project_current_daylight_weather_and_sky_into_bevy_renderer(
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };
-    let Some(fraction) = fraction.0 else { return };
+    let fog_quality = super::underwater_environment_presentation::fog_quality_for_view_distance(
+        settings.view_distance,
+    );
     for (
         entity,
-        mut daylight,
+        daylight,
         environment,
         weather,
         transition,
@@ -284,24 +295,20 @@ pub(super) fn project_current_daylight_weather_and_sky_into_bevy_renderer(
         let Some(definition) = definitions.find_environment(environment.definition) else {
             continue;
         };
-        if daylight.fraction == fraction
+        if !daylight.is_changed()
             && !ambient.is_changed()
             && !visual_projections.is_changed()
             && !light_curves.is_changed()
             && !weather.as_ref().is_some_and(|weather| weather.is_changed())
-            && transition.is_none()
+            && !settings.is_changed()
+            && !transition.as_ref().is_some_and(DetectChanges::is_changed)
             && pending.is_none()
         {
             continue;
         }
-        daylight.set_if_neq(Daylight { fraction });
+        let fraction = daylight.fraction;
         let (light_multiplier, fog_multiplier) = weather.as_deref().map_or((1.0, 1.0), |weather| {
-            calculate_weather_light_and_fog_multipliers(
-                definitions,
-                weather,
-                transition,
-                clock.tick,
-            )
+            calculate_weather_light_and_fog_multipliers(definitions, weather, transition.as_deref())
         });
 
         let light_rows = definition.light_keyframes.as_slice();
@@ -518,7 +525,7 @@ pub(super) fn project_current_daylight_weather_and_sky_into_bevy_renderer(
             });
         }
         if fog_rows.is_empty() {
-            if let Some(sampled_fog) = light_curves.fog(fraction) {
+            if let Some(sampled_fog) = light_curves.fog_for_quality(fog_quality, fraction) {
                 let left_keyframe = sampled_fog.left_keyframe;
                 let right_keyframe = sampled_fog.right_keyframe;
                 let interpolation_fraction = sampled_fog.interpolation_fraction;
@@ -555,6 +562,8 @@ pub(super) fn project_current_daylight_weather_and_sky_into_bevy_renderer(
                     end: end_factor,
                     relative_to_far_plane: true,
                 });
+            } else {
+                fog.set_if_neq(AboveWaterFog::default());
             }
         }
 

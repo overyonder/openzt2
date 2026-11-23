@@ -1,6 +1,12 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct BehaviorAnimationSwitchAction {
+    pub clips_by_node: Vec<(String, String)>,
+    pub default_clip: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct BehaviorAnimationClipAction {
     pub animation_clip_asset_key: String,
     /// Repeat until the enclosing behavior cancels this action.

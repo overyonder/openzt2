@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
+use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_zoo_state::animal_lifecycle::types::AnimalVariant;
 use openzt2_zoo_state::aquatic::tank_navigation_water::TankNavigationWater;
 
@@ -20,12 +20,15 @@ use openzt2_zoo_state::locomotion::locomotion_types::TestReachability;
 pub(super) fn test_requested_navigation_destination_reachability(
     mut reachability_test_requests: MessageReader<TestReachability>,
     mut reachability_test_results: MessageWriter<ReachabilityTested>,
-    active_navigation_graph: Option<Res<ActiveTerrainDerivedNavigationGraph>>,
-    water: Query<&TankNavigationWater, With<WorldRoot>>,
+    roots: Query<(
+        &ActiveTerrainDerivedNavigationGraph,
+        &LocomotionCapacity,
+        Option<&TankNavigationWater>,
+    )>,
     fence_crossing_index: FenceNavigationCrossingQueries,
-    locomotion_capacity: Option<Res<LocomotionCapacity>>,
     navigation_agents: Query<(
         &NavAgent,
+        &WorldMember,
         &LocomotionMode,
         &GlobalTransform,
         Option<&AnimalVariant>,
@@ -33,30 +36,6 @@ pub(super) fn test_requested_navigation_destination_reachability(
     animal_policy: AnimalNavigationPolicy,
     fence_policy: FenceNavigationPolicy,
 ) {
-    let tank_water = water.single().ok();
-    let Some(locomotion_capacity) =
-        locomotion_capacity.filter(|locomotion_capacity| locomotion_capacity.is_valid())
-    else {
-        for reachability_test_request in reachability_test_requests.read() {
-            reachability_test_results.write(ReachabilityTested {
-                entity: reachability_test_request.entity,
-                result: Err(NavigationFailure::NoRoute),
-            });
-        }
-        return;
-    };
-    let Some(active_navigation_graph) = active_navigation_graph else {
-        for reachability_test_request in reachability_test_requests.read() {
-            reachability_test_results.write(ReachabilityTested {
-                entity: reachability_test_request.entity,
-                result: Err(NavigationFailure::NoRoute),
-            });
-        }
-        return;
-    };
-    let locomotion_capacity = *locomotion_capacity;
-    let terrain_derived_navigation_graph =
-        active_navigation_graph.terrain_derived_navigation_graph();
     let requests: Vec<_> = reachability_test_requests.read().collect();
     if requests.is_empty() {
         return;
@@ -66,17 +45,13 @@ pub(super) fn test_requested_navigation_destination_reachability(
     let mut results: Vec<_> = bevy::tasks::ComputeTaskPool::get().scope(|scope| {
         for (chunk_index, chunk) in requests.chunks(chunk_size).enumerate() {
             let navigation_agents = &navigation_agents;
+            let roots = &roots;
             let animal_policy = &animal_policy;
             let fence_policy = &fence_policy;
             let fence_crossing_index = &fence_crossing_index;
             scope.spawn(async move {
                 let mut pathfinding_scratch = RouteScratch::default();
-                pathfinding_scratch.ensure_capacity(
-                    terrain_derived_navigation_graph.navigation_node_count(),
-                    locomotion_capacity.max_route_points,
-                );
-                let mut reachability_test_route =
-                    Route::with_capacity(locomotion_capacity.max_route_points);
+                let mut reachability_test_route = Route::with_capacity(0);
                 let results = chunk
                     .iter()
                     .map(|reachability_test_request| {
@@ -87,10 +62,22 @@ pub(super) fn test_requested_navigation_destination_reachability(
                             .and_then(
                                 |(
                                     navigation_agent,
+                                    member,
                                     locomotion_mode,
                                     navigation_agent_transform,
                                     animal_variant,
                                 )| {
+                                    let (graph, capacity, tank_water) = roots
+                                        .get(member.root)
+                                        .ok()
+                                        .filter(|(_, capacity, _)| capacity.is_valid())
+                                        .ok_or(NavigationFailure::NoRoute)?;
+                                    let terrain_derived_navigation_graph =
+                                        graph.terrain_derived_navigation_graph();
+                                    pathfinding_scratch.ensure_capacity(
+                                        terrain_derived_navigation_graph.navigation_node_count(),
+                                        capacity.max_route_points,
+                                    );
                                     let (navigation_agent, maximum_ground_slope_radians) =
                                         animal_policy.agent_with_authored_collision_limits(
                                             navigation_agent,
@@ -100,8 +87,9 @@ pub(super) fn test_requested_navigation_destination_reachability(
                                         terrain_derived_navigation_graph,
                                         tank_water,
                                         |from, to| {
-                                            fence_crossing_index.crossing_fences(from, to).any(
-                                                |fence| {
+                                            fence_crossing_index
+                                                .crossing_fences(member.root, from, to)
+                                                .any(|fence| {
                                                     fence_policy.fence_blocks_actor(
                                                         fence,
                                                         navigation_agent.capabilities,
@@ -109,11 +97,11 @@ pub(super) fn test_requested_navigation_destination_reachability(
                                                             reachability_test_request.entity,
                                                         ),
                                                     )
-                                                },
-                                            )
+                                                })
                                         },
                                         |from, to| {
                                             fence_policy.world_segment_blocks_actor(
+                                                member.root,
                                                 from,
                                                 to,
                                                 navigation_agent.capabilities,

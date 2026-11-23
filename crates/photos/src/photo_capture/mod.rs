@@ -16,7 +16,7 @@ use bevy::{
 };
 
 use openzt2_interface_state::immersive_modes::immersive_mode_control_types::PhotoControl;
-use openzt2_interface_state::immersive_modes::immersive_mode_state_types::ImmersiveCamera;
+use openzt2_interface_state::immersive_modes::immersive_mode_state_types::ImmersiveCameraSessions;
 use openzt2_interface_state::photos::photo_album_types::{
     AlbumMember, AlbumPhotos, CameraRollPhoto, PhotoAlbum,
 };
@@ -34,12 +34,12 @@ use openzt2_world_state::world_spawn::{
 };
 
 use super::{
-    photo_album_types::{ActivePhotoAlbum, PhotoCameraRoll, PHOTO_CAMERA_ROLL_CAPACITY},
+    photo_album_types::{PHOTO_CAMERA_ROLL_CAPACITY, PhotoCameraRoll},
     photo_capture_types::{
         CapturedPhotoEvidence, PendingPhotoCapture, PendingPhotoEvidence, PendingPhotoScore,
-        PhotoCaptionSubject, PhotoCaptureFailed, PhotoFailure, PhotoSubjectsCollected, PhotoView,
+        PhotoCaptureFailed, PhotoFailure, PhotoSubjectsCollected, PhotoView,
     },
-    photo_mode_presentation_lifecycle::AuthoredPhotoModeDocumentPresentationOwner,
+    photo_mode_presentation_lifecycle::PhotoModePresentation,
 };
 
 #[derive(Component)]
@@ -52,19 +52,21 @@ pub(super) struct PhotoViewfinderSuppressors(Vec<Entity>);
 
 pub(super) fn begin_requested_album_photo_captures(
     mut requests: MessageReader<CapturePhotoRequest>,
-    clock: Res<ZooClock>,
+    clock: Single<&ZooClock>,
     realtime: Res<Time<Real>>,
     cameras: Query<(&Camera, &RenderTarget, Has<PhotoMode>)>,
     pending_album_captures: Query<(), With<AlbumPhotoReadbackOf>>,
     screenshots: Query<&Screenshot, Without<Captured>>,
     primary_window: Query<Entity, With<PrimaryWindow>>,
-    controllers: Query<&ImmersiveCamera, With<PhotoControl>>,
-    viewfinders: Query<(Entity, &AuthoredPhotoModeDocumentPresentationOwner)>,
+    camera_sessions: Query<&ImmersiveCameraSessions>,
+    presentations: Query<&PhotoModePresentation, With<PhotoControl>>,
     loaded_worlds: Query<Entity, (With<WorldRoot>, With<WorldLoadCompleted>)>,
+    camera_rolls: Query<(Entity, &WorldMember), (With<PhotoCameraRoll>, With<PhotoAlbum>)>,
     selected_sets: Query<(&PhotoChallengeSet, &WorldMember), With<CurrentPhotoChallengeSet>>,
     mut commands: Commands,
     mut failed: MessageWriter<PhotoCaptureFailed>,
 ) {
+    let clock = clock.into_inner();
     let primary_window = primary_window.single().ok();
     let mut reserved = !pending_album_captures.is_empty();
     for request in requests.read() {
@@ -101,15 +103,27 @@ pub(super) fn begin_requested_album_photo_captures(
                 continue;
             }
         };
-        let challenge_set = loaded_worlds.single().ok().and_then(|world| {
-            selected_sets
+        let destination = loaded_worlds.single().ok().and_then(|world| {
+            camera_rolls
                 .iter()
-                .find_map(|(set, member)| (member.root == world).then_some(set.id))
+                .find(|(_, member)| member.root == world)
+                .map(|(roll, _)| (world, roll))
         });
+        let Some((world, camera_roll)) = destination else {
+            failed.write(PhotoCaptureFailed {
+                reason: PhotoFailure::Storage,
+            });
+            continue;
+        };
+        let challenge_set = selected_sets
+            .iter()
+            .find_map(|(set, member)| (member.root == world).then_some(set.id));
         let mut screenshot = commands.spawn((
             Screenshot(target.clone()),
             AlbumPhotoReadbackOf(request.camera),
             PendingPhotoCapture {
+                world,
+                camera_roll,
                 captured_tick: clock.tick,
                 camera_position: Vec3::ZERO,
                 camera_rotation: Quat::IDENTITY,
@@ -123,11 +137,15 @@ pub(super) fn begin_requested_album_photo_captures(
         screenshot
             .observe(create_album_photo_from_completed_screenshot_capture)
             .observe(reject_retired_album_capture);
-        if let Some((viewfinder, _)) = viewfinders.iter().find(|(_, owner)| {
-            controllers
-                .get(owner.controller)
-                .is_ok_and(|camera| camera.0 == request.camera)
-        }) {
+        let viewfinder = camera_sessions
+            .get(request.camera)
+            .ok()
+            .and_then(|sessions| {
+                sessions
+                    .iter()
+                    .find_map(|session| presentations.get(session).ok()?.iter().next())
+            });
+        if let Some(viewfinder) = viewfinder {
             screenshot.insert(SuppressesPhotoViewfinder(viewfinder));
         }
         reserved = true;
@@ -171,20 +189,11 @@ fn create_album_photo_from_completed_screenshot_capture(
         &mut PendingPhotoEvidence,
         Has<PhotoSubjectsCollected>,
     )>,
-    albums: Query<
-        (
-            Entity,
-            &WorldMember,
-            Has<ActivePhotoAlbum>,
-            Has<PhotoCameraRoll>,
-        ),
-        With<PhotoAlbum>,
+    camera_rolls: Query<
+        (&WorldMember, Option<&AlbumPhotos>),
+        (With<PhotoCameraRoll>, With<PhotoAlbum>),
     >,
-    members: Query<&AlbumPhotos>,
-    mut worlds: Query<
-        (Entity, &mut PersistentIdAllocator),
-        (With<WorldRoot>, With<WorldLoadCompleted>),
-    >,
+    mut worlds: Query<&mut PersistentIdAllocator, (With<WorldRoot>, With<WorldLoadCompleted>)>,
     mut images: ResMut<Assets<Image>>,
     mut commands: Commands,
     mut failed: MessageWriter<PhotoCaptureFailed>,
@@ -203,17 +212,16 @@ fn create_album_photo_from_completed_screenshot_capture(
         if !collected {
             return Err(PhotoFailure::Gpu);
         }
-        let (world, mut allocator) = worlds.single_mut().map_err(|_| PhotoFailure::Storage)?;
-        let world_albums = || albums.iter().filter(|row| row.1.root == world);
-        let (album, member, _, camera_roll) = world_albums()
-            .find(|row| row.3)
-            .or_else(|| world_albums().find(|row| row.2))
-            .or_else(|| world_albums().next())
-            .ok_or(PhotoFailure::Storage)?;
-        if camera_roll
-            && members.get(album).map_or(0, RelationshipTarget::len)
-                >= PHOTO_CAMERA_ROLL_CAPACITY as usize
-        {
+        let (member, members) = camera_rolls
+            .get(capture.camera_roll)
+            .map_err(|_| PhotoFailure::Storage)?;
+        if member.root != capture.world {
+            return Err(PhotoFailure::Storage);
+        }
+        let mut allocator = worlds
+            .get_mut(capture.world)
+            .map_err(|_| PhotoFailure::Storage)?;
+        if members.map_or(0, RelationshipTarget::len) >= PHOTO_CAMERA_ROLL_CAPACITY as usize {
             return Err(PhotoFailure::CapacityExceeded);
         }
         let id = allocator.allocate().map_err(PhotoFailure::PersistentId)?;
@@ -228,14 +236,7 @@ fn create_album_photo_from_completed_screenshot_capture(
             true,
             RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
         ));
-        let caption = evidence
-            .0
-            .iter()
-            .max_by_key(|item| {
-                u32::from(item.facts.screen_permille) + u32::from(item.facts.center_permille)
-            })
-            .map(|item| PhotoCaptionSubject(item.definition));
-        let mut photo = commands.spawn((
+        commands.spawn((
             id,
             *member,
             Photo {
@@ -246,7 +247,8 @@ fn create_album_photo_from_completed_screenshot_capture(
                 score_milli: 0,
             },
             PhotoSubjects(evidence.0.iter().map(|subject| subject.entity).collect()),
-            AlbumMember(album),
+            AlbumMember(capture.camera_roll),
+            CameraRollPhoto,
             CapturedPhotoEvidence {
                 subjects: std::mem::take(&mut evidence.0),
                 challenge_set: capture.challenge_set,
@@ -255,12 +257,6 @@ fn create_album_photo_from_completed_screenshot_capture(
             },
             PendingPhotoScore,
         ));
-        if let Some(caption) = caption {
-            photo.insert(caption);
-        }
-        if camera_roll {
-            photo.insert(CameraRollPhoto);
-        }
         Ok(())
     })();
     if let Err(reason) = result {

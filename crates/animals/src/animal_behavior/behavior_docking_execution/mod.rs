@@ -1,9 +1,10 @@
+use super::behavior_named_nodes::NamedNodeTransforms;
 use super::behavior_container_admission::BehaviorAdmissionInstruction;
 use bevy::{ecs::system::SystemParam, prelude::*};
-use openzt2_game_data::behavior::action::docking::BehaviorDockAction;
+use openzt2_game_data::behavior::action::docking::{BehaviorDockAction, BehaviorDockApproach};
 use openzt2_game_data::world_definitions::world_objects::WorldObjectDefinition;
 use openzt2_zoo_state::animal_behavior::behavior_target_placement_types::{
-    travel_target, BehaviorPlacementTravelSite,
+    BehaviorPlacementTravelTargets,
 };
 use openzt2_zoo_state::animal_behavior::interaction_container_membership::requests::{
     InteractionContainerAdmissionOutcome, InteractionContainerAdmissionRequest,
@@ -31,7 +32,6 @@ use openzt2_zoo_state::locomotion::locomotion_types::LocomotionMode;
 use openzt2_zoo_state::locomotion::locomotion_types::NavigationFailed;
 use openzt2_zoo_state::placement::placed_object_types::PlacedObjectAuthoredEntrance;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
-use openzt2_world_state::world_spawn::prefab_authored_attachment_identifier::PrefabAuthoredAttachmentIdentifier;
 use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 
 pub(super) type DockBehaviorActors<'w, 's> = Query<
@@ -66,8 +66,9 @@ pub(super) struct DockBehaviorGeometry<'w, 's> {
         's,
         &'static openzt2_world_state::world_spawn::world_membership_types::WorldMember,
     >,
+    navigation_graphs: Query<'w, 's, &'static openzt2_zoo_state::locomotion::locomotion_types::ActiveTerrainDerivedNavigationGraph>,
+    tank_water: Query<'w, 's, &'static openzt2_zoo_state::aquatic::tank_navigation_water::TankNavigationWater>,
     ground: openzt2_zoo_state::terrain::dry_surface_eligibility::DrySurfaceEligibility<'w, 's>,
-    children: Query<'w, 's, &'static Children>,
     authored_attachment_transforms: NamedNodeTransforms<'w, 's>,
     entity_global_transforms: Query<'w, 's, &'static GlobalTransform>,
     memberships: InteractionContainerMemberships<'w, 's>,
@@ -79,7 +80,7 @@ pub(super) fn start_current_supported_behavior_docking_actions(
     simulation_clock: Single<&ZooClock>,
     mut behavior_tasks: DockBehaviorActors,
     target_definition_references: Query<&DefinitionId>,
-    travel_sites: Query<&BehaviorPlacementTravelSite>,
+    travel_sites: BehaviorPlacementTravelTargets,
     path_tiles: Query<(), With<openzt2_zoo_state::topology::topology_graph_types::PathTile>>,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,
@@ -90,7 +91,6 @@ pub(super) fn start_current_supported_behavior_docking_actions(
     let world_definitions = active_world_definitions.get(&world_definition_assets);
     let DockBehaviorGeometry {
         fences,
-        children,
         authored_attachment_transforms,
         entity_global_transforms,
         memberships,
@@ -124,7 +124,7 @@ pub(super) fn start_current_supported_behavior_docking_actions(
                 "dock waits: the actor has no navigation agent");
             continue;
         };
-        let Some(target) = travel_target(&behavior_task, travel_sites.get(actor).ok()) else {
+        let Some(target) = travel_sites.for_actor(actor, &behavior_task) else {
             super::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation(
                 actor, &mut commands,
             );
@@ -146,12 +146,13 @@ pub(super) fn start_current_supported_behavior_docking_actions(
         // so the service dock that follows still walks to its reserved slot.
         if let Some(queue_approach) = queue_approach {
             let tag = instruction.reservation_tag();
-            let Some(queue_node_name) = target_definition.and_then(|definition| {
+            let Some((queue_slot, queue_node_name)) = target_definition.and_then(|definition| {
                 definition
                     .interaction_slots
                     .iter()
-                    .find(|slot| slot.is_queue && tag.is_none_or(|tag| slot.reservation_tag == tag))
-                    .map(|slot| slot.target_node_name.as_str())
+                    .enumerate()
+                    .find(|(_, slot)| slot.is_queue && tag.is_none_or(|tag| slot.reservation_tag == tag))
+                    .map(|(index, slot)| (index, slot.target_node_name.as_str()))
             }) else {
                 super::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation(
                     actor, &mut commands,
@@ -167,18 +168,25 @@ pub(super) fn start_current_supported_behavior_docking_actions(
             let queue_node_position = if queue_node_name.is_empty() {
                 target_transform.translation()
             } else {
-                let Some(node) = find_named_descendant_global_transform(
-                    target,
-                    queue_node_name,
-                    children,
-                    authored_attachment_transforms,
-                ) else {
+                let Some(node) = authored_attachment_transforms.pose(target, queue_node_name) else {
                     continue;
                 };
                 node.translation()
             };
-            let offset = (actor_transform.translation() - queue_node_position).xz();
-            if offset.length() <= queue_approach.hit_radius_m {
+            let actor_position = actor_transform.translation();
+            let predecessor = memberships.members_in_slot(target, queue_slot)
+                .take_while(|member| *member != actor)
+                .last()
+                .and_then(|member| entity_global_transforms.get(member).ok())
+                .map(GlobalTransform::translation);
+            let queue_radius_squared = queue_approach.queue_radius_m * queue_approach.queue_radius_m;
+            let approach_position = predecessor.filter(|position| {
+                let to_predecessor = actor_position.xz().distance_squared(position.xz());
+                let to_facility = actor_position.xz().distance_squared(target_transform.translation().xz());
+                to_predecessor.min(to_facility) < queue_radius_squared
+            }).unwrap_or(queue_node_position);
+            let offset = (actor_position - approach_position).xz();
+            if offset.length_squared() <= queue_approach.hit_radius_m * queue_approach.hit_radius_m {
                 instruction.complete(actor, simulation_clock.tick, &mut commands);
                 continue;
             }
@@ -194,7 +202,7 @@ pub(super) fn start_current_supported_behavior_docking_actions(
                 request_id,
                 target,
                 local_point: target_from_world.transform_point3(
-                    queue_node_position + direction * queue_approach.hit_radius_m,
+                    approach_position + direction * queue_approach.hit_radius_m,
                 ),
                 local_forward: target_from_world.transform_vector3(-direction),
                 radius_m: navigation_agent.radius_m.max(0.05),
@@ -245,12 +253,7 @@ pub(super) fn start_current_supported_behavior_docking_actions(
                     let position = if name.is_empty() {
                         entity_global_transforms.get(target).ok()?.translation()
                     } else {
-                        find_named_descendant_global_transform(
-                            target,
-                            name,
-                            children,
-                            authored_attachment_transforms,
-                        )?
+                        authored_attachment_transforms.pose(target, name)?
                         .translation()
                     };
                     Some((position - actor_transform.translation()).xz())
@@ -372,43 +375,36 @@ fn request_behavior_dock(
     let DockBehaviorGeometry {
         target_entrances,
         fences,
-        topology_nodes,
-        topology_grids,
-        world_members,
-        ground,
-        children,
         authored_attachment_transforms,
         entity_global_transforms,
         memberships,
+        ..
     } = geometry;
     if !docking_action.redock && memberships.is_docked(target, actor) {
         instruction.complete(actor, tick, commands);
         return;
     }
-    let (mut local_point, local_forward) = if let Some(radial_distance_m) =
-        docking_action.radial_distance_m
-    {
+    let fence_dock = docking_action.approach == BehaviorDockApproach::Fence;
+    let (mut local_point, local_forward) = if fence_dock {
+        let Some(pose) = fence_dock_pose(
+            actor, target, docking_action.subject_node_name.as_deref(), navigation_agent, geometry,
+        ) else {
+            super::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation(
+                actor, commands,
+            );
+            return;
+        };
+        pose
+    } else if let BehaviorDockApproach::Radial(radial_distance_m) = docking_action.approach {
         let (Ok(actor_transform), Ok(target_transform)) = (
-            entity_global_transforms.get(actor),
-            entity_global_transforms.get(target),
+            entity_global_transforms.get(actor), entity_global_transforms.get(target),
         ) else {
             return;
         };
-        // A fence segment's origin is its first end; dock on its middle,
-        // on the ground there rather than at the topology layer's height.
-        let centre = fences.get(target).ok().and_then(|edge| {
-            let root = world_members.get(actor).ok()?.root;
-            let topology_grid = topology_grids.get(root).ok()?;
-            let first = topology_grid.cell_translation(topology_nodes.get(edge.a()).ok()?.cell);
-            let second = topology_grid.cell_translation(topology_nodes.get(edge.b()).ok()?.cell);
-            let middle = (first + second) * 0.5;
-            let middle = middle.with_y(ground.ground_height(root, middle.xz()).unwrap_or(middle.y));
-            Some(target_transform.affine().inverse().transform_point3(middle))
-        });
         radial_dock_point_and_forward_in_target_space(
             actor_transform,
             target_transform,
-            centre.unwrap_or(Vec3::ZERO),
+            Vec3::ZERO,
             radial_distance_m,
             docking_action.rotation_tolerance_radians,
         )
@@ -426,12 +422,7 @@ fn request_behavior_dock(
             .as_deref()
             .or(interaction_slot_target_node_name);
         let authored_named_target_dock = target_node_name.and_then(|target_node_name| {
-            find_named_descendant_global_transform(
-                target,
-                target_node_name,
-                children,
-                authored_attachment_transforms,
-            )
+            authored_attachment_transforms.pose(target, target_node_name)
             .and_then(|target_node_global_transform| {
                 let target_global_transform = entity_global_transforms.get(target).ok()?;
                 let target_from_node = target_global_transform.affine().inverse()
@@ -457,16 +448,11 @@ fn request_behavior_dock(
                 })
         })
     };
-    if let Some(subject_node_name) = docking_action.subject_node_name.as_deref() {
-        let Some(subject_node_global_transform) = find_named_descendant_global_transform(
-            actor,
-            subject_node_name,
-            children,
-            authored_attachment_transforms,
-        ) else {
+    if let Some(subject_node_name) = docking_action.subject_node_name.as_deref().filter(|_| !fence_dock) {
+        let Some(subject_node_global_transform) = authored_attachment_transforms.pose(actor, subject_node_name) else {
             // Radial subject nodes are often authored position attributes
             // rather than model or virtual nodes; waiting cannot supply one.
-            if docking_action.radial_distance_m.is_some() {
+            if matches!(docking_action.approach, BehaviorDockApproach::Radial(_)) {
                 super::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation(
                     actor, commands,
                 );
@@ -525,6 +511,65 @@ fn request_behavior_dock(
             request_id,
         });
     behavior_task.next_action_tick = tick.saturating_add(1);
+}
+
+fn fence_dock_pose(
+    actor: Entity,
+    fence: Entity,
+    subject_node: Option<&str>,
+    agent: &NavAgent,
+    geometry: &DockBehaviorGeometry,
+) -> Option<(Vec3, Vec3)> {
+    use openzt2_zoo_state::locomotion::locomotion_types::NavFlags;
+
+    let segment = geometry.fences.get(fence).ok()?;
+    let root = geometry.world_members.get(actor).ok()?.root;
+    let grid = geometry.topology_grids.get(root).ok()?;
+    let start = grid.cell_translation(geometry.topology_nodes.get(segment.a()).ok()?.cell);
+    let end = grid.cell_translation(geometry.topology_nodes.get(segment.b()).ok()?.cell);
+    let tangent = (end - start).xz().try_normalize()?;
+    let centre = (start + end) * 0.5;
+    let centre = centre.with_y(geometry.ground.ground_height(root, centre.xz()).unwrap_or(centre.y));
+    let actor_transform = geometry.entity_global_transforms.get(actor).ok()?;
+    let fence_transform = geometry.entity_global_transforms.get(fence).ok()?;
+    let (scale, _, _) = actor_transform.to_scale_rotation_translation();
+    let offset = if let Some(name) = subject_node {
+        let node = geometry.authored_attachment_transforms.pose(actor, name)?;
+        scale * actor_transform.affine().inverse().transform_point3(node.translation())
+    } else {
+        Vec3::ZERO
+    };
+    let normal = Vec2::new(-tangent.y, tangent.x);
+    let pose = |forward: Vec2| {
+        let rotation = Quat::from_rotation_y(forward.x.atan2(forward.y));
+        (centre - rotation * offset, Vec3::new(forward.x, 0.0, forward.y))
+    };
+    let [first, second] = [normal, -normal].map(pose);
+    let traversable = |point: Vec3| {
+        geometry.navigation_graphs.get(root).is_ok_and(|graph| {
+            let graph = graph.terrain_derived_navigation_graph();
+            let water = geometry.tank_water.get(root).ok();
+            graph.navigation_surface_at_world_position(point)
+                .and_then(|index| graph.effective_navigation_node(index, water))
+                .is_some_and(|node| {
+                    node.eligibility_flags.0 & agent.capabilities.0 & NavFlags::ELIGIBILITY_BITS != 0
+                        && node.eligibility_flags.0 & NavFlags::DISABLED_BY_DEFAULT.0 == 0
+                        && f32::from(node.clearance_centimetres) >= agent.radius_m * 100.0
+                })
+        })
+    };
+    let first_passable = traversable(first.0);
+    let second_passable = traversable(second.0);
+    let position = actor_transform.translation();
+    let (point, facing) = if first_passable != second_passable {
+        if first_passable { first } else { second }
+    } else if position.distance_squared(first.0) < position.distance_squared(second.0) {
+        first
+    } else {
+        second
+    };
+    let local_from_world = fence_transform.affine().inverse();
+    Some((local_from_world.transform_point3(point), local_from_world.transform_vector3(facing)))
 }
 
 fn radial_dock_point_and_forward_in_target_space(
@@ -636,8 +681,7 @@ mod tests {
     }
 
     #[test]
-    fn a_fence_dock_stops_short_of_the_segment_middle_not_its_first_end() {
-        // A 4 m segment from (0, 0, 0) along +X; the animal stands to its north.
+    fn a_radial_dock_uses_the_offset_anchor_in_the_target_model() {
         let segment = GlobalTransform::IDENTITY;
         let (point, _) = radial_dock_point_and_forward_in_target_space(
             &GlobalTransform::from_translation(Vec3::new(2.0, 0.0, -6.0)),
@@ -688,44 +732,12 @@ mod tests {
     }
 }
 
-/// Named points behaviors aim at: prefab attachment points and virtual nodes,
-/// and the authored nodes of animated models, such as an animal's `Node_Mouth`.
-pub(super) type NamedNodeTransforms<'w, 's> = Query<
-    'w,
-    's,
-    (
-        Option<&'static PrefabAuthoredAttachmentIdentifier>,
-        Option<&'static Name>,
-        &'static GlobalTransform,
-    ),
-    Or<(With<PrefabAuthoredAttachmentIdentifier>, With<Name>)>,
->;
-
-pub(super) fn find_named_descendant_global_transform<'a>(
-    root: Entity,
-    requested_name: &str,
-    children: &Query<&Children>,
-    named_nodes: &'a NamedNodeTransforms,
-) -> Option<&'a GlobalTransform> {
-    let requested_name = requested_name.trim();
-    let requested_attachment_identifier =
-        openzt2_game_data::AssetId::from_key(&requested_name.to_ascii_lowercase());
-    children
-        .iter_descendants_depth_first::<Children>(root)
-        .find_map(|descendant| {
-            let (identifier, name, transform) = named_nodes.get(descendant).ok()?;
-            (identifier.is_some_and(|identifier| identifier.0 == requested_attachment_identifier)
-                || name.is_some_and(|name| name.as_str().eq_ignore_ascii_case(requested_name)))
-            .then_some(transform)
-        })
-}
-
 pub(super) fn finish_behavior_docking_actions_after_matching_arrival(
     mut commands: Commands,
     mut arrivals: MessageReader<Arrived>,
     simulation_clock: Single<&ZooClock>,
     memberships: InteractionContainerMemberships,
-    travel_sites: Query<&BehaviorPlacementTravelSite>,
+    travel_sites: BehaviorPlacementTravelTargets,
     behavior_tasks: Query<
         (
             &BehaviorTaskExecutionState,
@@ -752,7 +764,7 @@ pub(super) fn finish_behavior_docking_actions_after_matching_arrival(
             || !pending_docking.owns(
                 behavior_task,
                 instruction,
-                travel_target(behavior_task, travel_sites.get(arrival.entity).ok()),
+                travel_sites.for_actor(arrival.entity, behavior_task),
             )
         {
             continue;
@@ -777,7 +789,7 @@ pub(super) fn finish_behavior_docking_actions_after_matching_arrival(
 pub(super) fn fail_behavior_docking_actions_after_navigation_failure(
     mut commands: Commands,
     mut failures: MessageReader<NavigationFailed>,
-    travel_sites: Query<&BehaviorPlacementTravelSite>,
+    travel_sites: BehaviorPlacementTravelTargets,
     waiting_tasks: Query<
         (
             &BehaviorTaskExecutionState,
@@ -799,7 +811,7 @@ pub(super) fn fail_behavior_docking_actions_after_navigation_failure(
                         && pending.owns(
                             task,
                             instruction,
-                            travel_target(task, travel_sites.get(failure.entity).ok()),
+                            travel_sites.for_actor(failure.entity, task),
                         )
                 });
         if waiting_for_dock {

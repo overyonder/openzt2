@@ -124,7 +124,7 @@ pub(super) struct ShowPropPlacement<'w, 's> {
         ),
         With<Tank>,
     >,
-    grid: Res<'w, TopologyGrid>,
+    grids: Query<'w, 's, &'static TopologyGrid>,
     spatial: SpatialQuery<'w, 's>,
     requested: Query<'w, 's, &'static ShowPropAssets>,
     prefabs: Res<'w, Assets<ScenePrefabAsset>>,
@@ -143,13 +143,10 @@ impl ShowPropPlacement<'_, '_> {
         commands: &mut Commands,
     ) -> Option<Entity> {
         let (stage_pose, member) = self.stages.get(stage).ok()?;
+        let grid = self.grids.get(member.root).ok()?;
         let habitat = self.performers.get(performer).ok()?;
         let (region, tank, tank_world) = self.tanks.get(habitat.habitat_entity).ok()?;
-        let cell_at = |point: Vec2| {
-            ((point - self.grid.origin) / self.grid.spacing_m)
-                .floor()
-                .as_ivec2()
-        };
+        let cell_at = |point: Vec2| ((point - grid.origin) / grid.spacing_m).floor().as_ivec2();
         let contains = |cell: IVec2| {
             region
                 .topology_cells
@@ -178,7 +175,7 @@ impl ShowPropPlacement<'_, '_> {
             tank.floor_height + object.terrain_fit_height_offset_m,
             |offset| tank.water_height + offset,
         );
-        let preferred = stage_pose.translation - stage_heading * Vec3::Z * self.grid.spacing_m;
+        let preferred = stage_pose.translation - stage_heading * Vec3::Z * grid.spacing_m;
         let depth = tank.depth();
         let depth_matches = placement.is_none_or(|placement| {
             let surface = placement.surface_policy;
@@ -187,8 +184,7 @@ impl ShowPropPlacement<'_, '_> {
         });
         let candidates = || {
             region.topology_cells.iter().map(|&cell| {
-                let center =
-                    self.grid.origin + (cell.as_vec2() + Vec2::splat(0.5)) * self.grid.spacing_m;
+                let center = grid.origin + (cell.as_vec2() + Vec2::splat(0.5)) * grid.spacing_m;
                 Transform::from_xyz(center.x, height, center.y)
                     .with_rotation(rotation)
                     .with_scale(Vec3::splat(object.prefab_scale))

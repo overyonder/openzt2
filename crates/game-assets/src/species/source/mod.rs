@@ -9,8 +9,8 @@ use self::variants::lower_species_root_actor_to_fallback_canonical_variant;
 use self::variants::lower_species_variant_source_record_to_canonical_variant;
 use crate::source_document::authored_species_purchase_family_queries::find_authored_species_purchase_family_root;
 use crate::source_document::blue_fang_actor_manifest_model_and_scene_resolution_index::BlueFangActorManifestModelAndSceneResolutionIndex;
-use crate::source_document::document_semantics::classify_source_document;
 use crate::source_document::document_semantics::SourceDocumentKind;
+use crate::source_document::document_semantics::classify_source_document;
 use crate::source_document::ordered_source_document_types::OrderedSourceDocument;
 use crate::source_document::ordered_source_document_types::OrderedSourceDocumentNode;
 use crate::source_document::resolved_source_record_index::BindError;
@@ -18,12 +18,12 @@ use crate::source_document::resolved_source_record_index::RecordView;
 use crate::source_document::resolved_source_record_index::SourceIndex;
 use crate::source_document::source_document_semantic_name::canonicalize_source_document_record_key;
 use crate::source_document::source_document_semantic_name::source_document_names_are_semantically_equal;
+use openzt2_game_data::AssetId;
 use openzt2_game_data::species::ConservationStatus;
 use openzt2_game_data::species::Species;
 use openzt2_game_data::species::SpeciesDocument;
 use openzt2_game_data::species::SpeciesFlags;
 use openzt2_game_data::species::SpeciesVariantBinding;
-use openzt2_game_data::AssetId;
 use std::collections::BTreeSet;
 
 pub mod adoption;
@@ -34,7 +34,7 @@ pub mod needs;
 pub mod source_queries;
 pub mod variants;
 
-pub(super) fn collect_authored_species_type_source_references(
+pub(crate) fn collect_authored_species_type_source_references(
     document: &OrderedSourceDocument,
 ) -> BTreeSet<String> {
     fn collect_authored_inheritance_source_references(
@@ -89,8 +89,17 @@ pub(super) fn lower_resolved_species_source_document_closure_to_canonical_docume
     let Some(current) = index.document_root(primary_path) else {
         return Ok(SpeciesDocument::default());
     };
-    let Some(species) = find_authored_species_purchase_family_root(&current, index.records())
-    else {
+    if !current.has_type_token("animal") {
+        return Ok(SpeciesDocument::default());
+    }
+    let purchase_family = find_authored_species_purchase_family_root(&current, index.records());
+    let species = purchase_family.or_else(|| {
+        let species_name = find_effective_authored_animal_shared_attribute(&current, "s_Species")?;
+        current
+            .find_resolved_source_record_by_reference(species_name)
+            .filter(|species| species.has_type_token("animal"))
+    });
+    let Some(species) = species else {
         return Ok(SpeciesDocument::default());
     };
 
@@ -98,7 +107,9 @@ pub(super) fn lower_resolved_species_source_document_closure_to_canonical_docume
         find_effective_authored_animal_shared_attribute(&species, "s_Species")
             .ok_or_else(|| BindError::record(&species, "animal family has no s_Species"))?;
     let species_record = (current.key == species.key)
-        .then(|| lower_species_source_record_to_canonical_species(&species))
+        .then(|| {
+            lower_species_source_record_to_canonical_species(&species, purchase_family.is_some())
+        })
         .transpose()?
         .into_iter()
         .collect();
@@ -127,7 +138,7 @@ pub(super) fn lower_resolved_species_source_document_closure_to_canonical_docume
         variant,
     })
     .collect::<Vec<_>>();
-    if current.key == species.key && variants.is_empty() {
+    if purchase_family.is_some() && current.key == species.key && variants.is_empty() {
         variants.extend(
             lower_species_root_actor_to_fallback_canonical_variant(
                 &species,
@@ -150,6 +161,7 @@ pub(super) fn lower_resolved_species_source_document_closure_to_canonical_docume
 
 fn lower_species_source_record_to_canonical_species(
     species: &RecordView<'_, '_>,
+    adoptable: bool,
 ) -> Result<Species, BindError> {
     let shared = species
         .descendant_named("BFAIEntityDataShared")
@@ -189,7 +201,11 @@ fn lower_species_source_record_to_canonical_species(
             ));
         }
     };
-    let mut flags = SpeciesFlags::ADOPTABLE;
+    let mut flags = if adoptable {
+        SpeciesFlags::ADOPTABLE
+    } else {
+        SpeciesFlags::default()
+    };
     for (attribute, flag) in [
         ("b_Carnivore", SpeciesFlags::PREDATOR),
         ("b_Predator", SpeciesFlags::PREDATOR),

@@ -35,7 +35,7 @@ use super::guest_task_need_facts::GuestTaskNeedFacts;
 /// selection shows what it is still waiting for.
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub(super) fn report_guest_task_progress_changes(
-    clock: Res<ZooClock>,
+    clock: Single<&ZooClock>,
     documents: Res<Assets<BehaviorDocumentAsset>>,
     guests: Query<
         (

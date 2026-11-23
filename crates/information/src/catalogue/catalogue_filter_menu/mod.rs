@@ -57,7 +57,7 @@ pub(crate) fn populate_catalogue_filter_menu(
     documents: Res<Assets<UiDocumentAsset>>,
     active_definitions: Res<WorldDefinitions>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
-    unlocks: Res<UnlockedCatalogueDefinitionSet>,
+    unlocks: Single<&UnlockedCatalogueDefinitionSet>,
     worlds: Query<
         (
             Ref<SelectedWorldIdentity>,
@@ -68,6 +68,7 @@ pub(crate) fn populate_catalogue_filter_menu(
     localization_index: Res<LocalizationPrecedenceIndex>,
     localizations: Res<Assets<LocalizationAsset>>,
 ) {
+    let unlocks = unlocks.into_inner();
     for activation in activations
         .read()
         .filter(|event| event.trigger == UiTrigger::Press)

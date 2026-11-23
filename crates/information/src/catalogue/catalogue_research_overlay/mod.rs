@@ -12,7 +12,7 @@ use openzt2_interface_state::information::catalogue_types::CatalogueRowEntry;
 use openzt2_zoo_state::progression::adoption_and_content_availability_types::ScenarioContentAvailability;
 use openzt2_zoo_state::progression::catalogue_entry_availability::catalogue_entry_can_be_researched;
 use openzt2_zoo_state::progression::catalogue_entry_availability::catalogue_entry_is_available;
-use openzt2_zoo_state::progression::research_types::{ResearchPurchaseState, WorldResearchItems};
+use openzt2_zoo_state::progression::research_types::{ResearchItemPayments, WorldResearchItems};
 use openzt2_zoo_state::progression::research_types::ResearchProject;
 use openzt2_zoo_state::progression::research_types::ResearchProjectAvailability;
 use openzt2_zoo_state::progression::unlock_types::UnlockedCatalogueDefinitionSet;
@@ -179,7 +179,7 @@ pub(crate) fn hydrate_authored_catalogue_research_overlay_controls(
 pub(crate) fn project_catalogue_research_overlays(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
-    unlocks: Res<UnlockedCatalogueDefinitionSet>,
+    unlocks: Single<Ref<UnlockedCatalogueDefinitionSet>>,
     worlds: Query<
         (
             Ref<SelectedWorldIdentity>,
@@ -190,7 +190,7 @@ pub(crate) fn project_catalogue_research_overlays(
     >,
     research_items: Query<(
         Ref<ResearchProjectAvailability>,
-        Ref<ResearchPurchaseState>,
+        Option<Ref<ResearchItemPayments>>,
         Option<Ref<ResearchProject>>,
     )>,
     mut removals: (
@@ -198,6 +198,7 @@ pub(crate) fn project_catalogue_research_overlays(
         RemovedComponents<ScenarioContentAvailability>,
         RemovedComponents<SelectedWorldIdentity>,
         RemovedComponents<WorldResearchItems>,
+        RemovedComponents<ResearchItemPayments>,
     ),
     mut removed_bindings: RemovedComponents<CatalogueRowEntry>,
     overlays: Query<(
@@ -210,6 +211,7 @@ pub(crate) fn project_catalogue_research_overlays(
     progress_bars: Query<(), With<ResearchOverlayProgress>>,
     mut nodes: Query<(&mut Visibility, Option<&mut UiValue>)>,
 ) {
+    let unlocks = unlocks.into_inner();
     if overlays.is_empty() {
         return;
     }
@@ -227,6 +229,7 @@ pub(crate) fn project_catalogue_research_overlays(
         || !removals.2.is_empty()
         || !removals.3.is_empty();
     let finished_projects = removals.0.read().collect::<std::collections::BTreeSet<_>>();
+    let settled_payments = removals.4.read().collect::<std::collections::BTreeSet<_>>();
     removals.1.clear();
     removals.2.clear();
     removals.3.clear();
@@ -261,17 +264,18 @@ pub(crate) fn project_catalogue_research_overlays(
                 .as_ref()
                 .is_some_and(|(item, purchase, project)| {
                     item.is_changed()
-                        || purchase.is_changed()
+                        || purchase.as_ref().is_some_and(Ref::is_changed)
                         || project.as_ref().is_some_and(Ref::is_changed)
                 })
             && !other_items_changed
             && !research.is_some_and(|entity| finished_projects.contains(&entity))
+            && !research.is_some_and(|entity| settled_payments.contains(&entity))
         {
             continue;
         }
         let pending = selected_item
             .as_ref()
-            .is_some_and(|(_, purchase, _)| **purchase != ResearchPurchaseState::Idle);
+            .is_some_and(|(_, purchase, _)| purchase.is_some());
         let project = selected_item.and_then(|(_, _, project)| project);
         let requires_research = entry.is_some_and(|(order, entry)| {
             let definitions = definitions.expect("entry belongs to loaded definitions");

@@ -1,4 +1,4 @@
-use bevy::prelude::Resource;
+use bevy::prelude::Component;
 
 use super::{account_transaction_types::TransactionKind, money_types::Money};
 
@@ -45,7 +45,7 @@ pub const MONTHLY_FINANCE_HISTORY_CAPACITY: usize = 120;
 const MONTHLY_FINANCE_HISTORY_CAPACITY_MONTHS: u32 = 120;
 
 /// The most recent ten years of monthly zoo-account totals.
-#[derive(Resource, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MonthlyFinanceHistory {
     months: [MonthlyFinance; MONTHLY_FINANCE_HISTORY_CAPACITY],
     start: usize,

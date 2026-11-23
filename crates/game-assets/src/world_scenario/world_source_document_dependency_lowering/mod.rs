@@ -1,10 +1,11 @@
 use super::{
     authored,
+    authored_world_scenario_state::AuthoredWorldScenarioState,
     world_scenario_document_asset_and_dependency_handles::DemandLoadedAssetPath,
     world_scenario_document_source::WorldScenarioDocumentSource,
     world_scenario_source_reference_resolution::{
-        resolve_world_scenario_source_references, unresolved_reference, SourceReference,
-        SourceReferenceKind,
+        SourceReference, SourceReferenceKind, resolve_world_scenario_source_references,
+        unresolved_reference,
     },
 };
 use crate::{
@@ -24,7 +25,11 @@ pub(super) async fn lower_world_source_document_and_resolve_dependencies(
     source: &OrderedSourceDocument,
     archives: &AssetArchives,
     context: &mut LoadContext<'_>,
-) -> io::Result<(WorldScenarioDocument, Vec<SourceReference>)> {
+) -> io::Result<(
+    WorldScenarioDocument,
+    AuthoredWorldScenarioState,
+    Vec<SourceReference>,
+)> {
     let path = source.path.as_str();
     let documents = std::slice::from_ref(source);
     let mut actors = BlueFangActorManifestModelAndSceneResolutionIndex::default();
@@ -66,13 +71,13 @@ pub(super) async fn lower_world_source_document_and_resolve_dependencies(
         .transpose()?;
     let references =
         resolve_world_scenario_source_references(source, documents, &actors, archives)?;
-    let document = authored::lower_documents(
+    let (document, authored) = authored::lower_documents(
         &[source],
         &references,
         actors.actor_scene_asset_paths_by_authored_actor_key(),
         timing,
     )?;
-    Ok((document, references))
+    Ok((document, authored, references))
 }
 
 pub(crate) async fn lower_saved_world_starting_document_with_scene_dependencies(
@@ -80,7 +85,7 @@ pub(crate) async fn lower_saved_world_starting_document_with_scene_dependencies(
     archives: &AssetArchives,
     context: &mut LoadContext<'_>,
 ) -> io::Result<WorldScenarioDocumentSource> {
-    let (document, references) =
+    let (document, authored, references) =
         lower_world_source_document_and_resolve_dependencies(source, archives, context).await?;
     let scenes = references
         .iter()
@@ -103,6 +108,7 @@ pub(crate) async fn lower_saved_world_starting_document_with_scene_dependencies(
     scenes.dedup_by_key(|dependency| dependency.id);
     Ok(WorldScenarioDocumentSource {
         document,
+        authored,
         starting_zoos: Box::new([]),
         terrains: Box::new([]),
         scenes: scenes.into_boxed_slice(),

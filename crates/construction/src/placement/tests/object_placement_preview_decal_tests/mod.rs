@@ -28,9 +28,8 @@ fn decals(app: &mut App) -> Vec<Entity> {
     decals
 }
 
-// #199: a preview whose draw inputs are unchanged keeps its decal entities.
 #[test]
-fn unchanged_placement_preview_keeps_its_footprint_and_grid_decals() {
+fn placement_preview_keeps_its_footprint_and_grid_decals_when_the_pose_changes() {
     let mut app = App::new();
     app.init_resource::<Assets<WorldDefinitionAsset>>()
         .init_resource::<WorldDefinitions>()
@@ -133,7 +132,7 @@ fn unchanged_placement_preview_keeps_its_footprint_and_grid_decals() {
     app.update();
     assert_eq!(decals(&mut app), built);
 
-    // Changing a draw input replaces them.
+    // Changing the pose keeps the existing grid and footprint entities.
     app.world_mut()
         .get_mut::<ConstructionPreview>(preview)
         .unwrap()
@@ -141,6 +140,5 @@ fn unchanged_placement_preview_keeps_its_footprint_and_grid_decals() {
         .rotate_y(std::f32::consts::FRAC_PI_2);
     app.update();
     let rebuilt = decals(&mut app);
-    assert_eq!(rebuilt.len(), built.len());
-    assert!(rebuilt.iter().all(|decal| !built.contains(decal)));
+    assert_eq!(rebuilt, built);
 }

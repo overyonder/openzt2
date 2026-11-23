@@ -424,9 +424,6 @@ pub(super) fn prepare_authored_particle_system_emitter_as_hanabi_effect_asset(
             "wave_ramp_scale",
             "wave_depth_offset",
             "wave_depth_scale",
-            "wave_fog_range",
-            "wave_fog_plane",
-            "wave_fog_colour",
         ] {
             expression_writer.add_property(name, Vec4::ZERO.into());
         }

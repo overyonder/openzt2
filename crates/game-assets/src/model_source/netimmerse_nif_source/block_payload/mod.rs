@@ -30,7 +30,7 @@ use super::{
         NetImmerseNiAmbientLight, NetImmerseNiAvObject, NetImmerseNiBillboardNode,
         NetImmerseNiDirectionalLight, NetImmerseNiLodNode, NetImmerseNiNode,
         NetImmerseNiParticleMeshes, NetImmerseNiParticles, NetImmerseNiPointLight,
-        NetImmerseNiTriShape, NetImmerseNiTriStrips,
+        NetImmerseNiSwitchNode, NetImmerseNiTriShape, NetImmerseNiTriStrips,
     },
     transform_and_skin_source_types::{
         NetImmerseNiSkinData, NetImmerseNiSkinInstance, NetImmerseNiSkinPartition,
@@ -42,6 +42,7 @@ pub(in super::super) enum NetImmerseNifBlockPayload {
     NiControllerSequence(NetImmerseNiControllerSequence),
     NiNode(NetImmerseNiNode),
     NiBillboardNode(NetImmerseNiBillboardNode),
+    NiSwitchNode(NetImmerseNiSwitchNode),
     NiLODNode(NetImmerseNiLodNode),
     NiAmbientLight(NetImmerseNiAmbientLight),
     NiDirectionalLight(NetImmerseNiDirectionalLight),
@@ -95,6 +96,7 @@ pub(in super::super) enum NetImmerseNifBlockPayload {
     NiTextKeyExtraData(NetImmerseNiTextKeyExtraData),
     NiTextureEffect(NetImmerseNiTextureEffect),
     NiPixelData(NetImmerseNiPixelData),
+    NiPalette(Vec<[u8; 4]>),
     NiBoneLODController(NetImmerseNiBoneLodController),
 }
 impl NetImmerseNifBlockPayload {
@@ -103,6 +105,7 @@ impl NetImmerseNifBlockPayload {
         match self {
             Self::NiNode(value) => Some(&value.av_object),
             Self::NiBillboardNode(value) => Some(&value.node.av_object),
+            Self::NiSwitchNode(value) => Some(&value.node.av_object),
             Self::NiLODNode(value) => Some(&value.switch_node.node.av_object),
             Self::NiAmbientLight(value) => Some(&value.light.av_object),
             Self::NiDirectionalLight(value) => Some(&value.light.av_object),
@@ -121,6 +124,7 @@ impl NetImmerseNifBlockPayload {
         match self {
             Self::NiNode(value) => (&value.child_refs, &value.effect_refs),
             Self::NiBillboardNode(value) => (&value.node.child_refs, &value.node.effect_refs),
+            Self::NiSwitchNode(value) => (&value.node.child_refs, &value.node.effect_refs),
             Self::NiLODNode(value) => (
                 &value.switch_node.node.child_refs,
                 &value.switch_node.node.effect_refs,

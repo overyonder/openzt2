@@ -3,10 +3,12 @@
 use crate::source_document::ui::model::{
     SourceUiEvent, SourceUiField, SourceUiNode, SourceUiWidgetData, SourceUiWidgetKind,
 };
+use crate::ui_document::source::lower::authored_ui_action_argument_lowering::worker_duty;
 use crate::ui_document::source::lower::authored_ui_document_lowering::AuthoredUiDocument;
 use crate::ui_document::source::lower::authored_ui_node_tree_lowering::BuildOutput;
 use crate::ui_document::source::lower::authored_ui_scalar_value_lowering::parse_bool;
 use crate::ui_document::source::lower::canonical_source_value_resolution::lower_optional_authored_semantic_key_to_asset_id;
+use openzt2_game_data::ui_document::action::staff_management::UiWorkerDuty;
 use openzt2_game_data::ui_document::document::UiDocumentRole;
 use openzt2_game_data::ui_document::node_property_binding::{
     UiBooleanPropertyBindingSource, UiImagePropertyBindingSource, UiIntegerPropertyBindingSource,
@@ -799,32 +801,31 @@ pub(super) fn lower_authored_ui_node_property_bindings_to_canonical_records(
             .bindings
             .push(UiNodePropertyBinding::IntegerValue(source));
     }
-    let worker_duty = (role == UiDocumentRole::EntityInfo)
-        .then_some(node.name.as_deref())
-        .flatten()
-        .and_then(|name| {
-            [
-                (
-                    "clean_filter_button",
-                    UiBooleanPropertyBindingSource::WorkerCleansFilters,
-                ),
-                (
-                    "clean_recycle_button",
-                    UiBooleanPropertyBindingSource::WorkerCleansRecycling,
-                ),
-                (
-                    "empty_trash_button",
-                    UiBooleanPropertyBindingSource::WorkerEmptiesTrash,
-                ),
-                (
-                    "sweep_trash_button",
-                    UiBooleanPropertyBindingSource::WorkerSweepsTrash,
-                ),
-            ]
-            .into_iter()
-            .find_map(|(button, source)| name.eq_ignore_ascii_case(button).then_some(source))
+    let duty = node
+        .events
+        .iter()
+        .flat_map(|block| &block.events)
+        .find_map(|event| {
+            std::iter::successors(Some(event), |event| event.child.as_deref())
+                .find(|event| {
+                    matches!(
+                        event.message.as_str(),
+                        "ZT_ASSIGN_WORKER" | "ZT_UNASSIGN_WORKER"
+                    )
+                })
+                .and_then(worker_duty)
         });
-    if let Some(source) = worker_duty {
+    if let Some(duty) = duty {
+        let source = match duty {
+            UiWorkerDuty::CleanAquaticTankFilter => {
+                UiBooleanPropertyBindingSource::WorkerCleansFilters
+            }
+            UiWorkerDuty::EmptyRecyclingContainer => {
+                UiBooleanPropertyBindingSource::WorkerCleansRecycling
+            }
+            UiWorkerDuty::EmptyTrashContainer => UiBooleanPropertyBindingSource::WorkerEmptiesTrash,
+            UiWorkerDuty::SweepLitter => UiBooleanPropertyBindingSource::WorkerSweepsTrash,
+        };
         output
             .bindings
             .push(UiNodePropertyBinding::SelectionState(source));

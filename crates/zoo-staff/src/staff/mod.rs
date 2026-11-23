@@ -1,8 +1,6 @@
 //! Staff are ordinary world entities; work requests become contended job entities.
 
-use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
-    BehaviorStep, BehaviorStepFixedSet, BehaviorStepSet,
-};
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::BehaviorStepFixedSet;
 use openzt2_zoo_state::staff::StaffBehaviorSettlement;
 use openzt2_zoo_state::staff::StaffJobRequestCreation;
 mod authored_disease_cure_execution;
@@ -57,6 +55,11 @@ pub struct StaffPlugin;
 
 impl Plugin for StaffPlugin {
     fn build(&self, app: &mut App) {
+        use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
+            activated_behavior_actor, update_waiting_behavior_actors,
+        };
+        app.add_observer(activated_behavior_actor::<openzt2_zoo_state::behavior_task_execution_types::running_actions::RunBehaviorExitTankGate>.pipe(idle_staff_task_selection::execute_staff_exit_tank_gate_actions));
+
         app.add_observer(staff_assignment_cleanup::release_staff_restrictions_when_target_leaves_world)
             .init_resource::<staff_job_eligibility::StaffTasksByRequestToken>()
             .add_message::<StaffJobRequest>()
@@ -69,6 +72,8 @@ impl Plugin for StaffPlugin {
             .add_message::<StaffJobCancelled>()
             .add_message::<CancelStaffJobRequest>()
             .add_message::<SetStaffWorkerDutyAssignment>()
+            .add_observer(authored_disease_cure_execution::apply_authored_disease_cures_for_live_staff_claims)
+            .add_observer(staff_behavior_terminal_target_termination_acknowledgement::acknowledge_staff_target_termination_owned_by_terminal_maintenance_systems)
             .add_systems(
                 Update,
                 (
@@ -134,13 +139,11 @@ impl Plugin for StaffPlugin {
                     .in_set(FixedGameSet::Think),
             )
             .add_systems(
-                BehaviorStep,
+                FixedUpdate,
                 (
-                    idle_staff_task_selection::execute_staff_exit_tank_gate_actions,
-                    authored_disease_cure_execution::apply_authored_disease_cures_for_live_staff_claims,
+                    update_waiting_behavior_actors.pipe(idle_staff_task_selection::execute_staff_exit_tank_gate_actions),
                     staff_behavior_fact_completion_execution::acknowledge_staff_job_completion_fact_actions_owned_by_terminal_domain_systems,
-                    staff_behavior_terminal_target_termination_acknowledgement::acknowledge_staff_target_termination_owned_by_terminal_maintenance_systems,
-                ).in_set(BehaviorStepSet::Actions),
+                ).in_set(BehaviorStepFixedSet::Think),
             )
             .add_systems(
                 FixedUpdate,

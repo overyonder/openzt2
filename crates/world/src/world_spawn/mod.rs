@@ -144,7 +144,7 @@ impl Plugin for WorldSpawnPlugin {
                         )
                             .after(WorldLoadPreparationSet::HydrateTerrain)
                             .after(reserve_all_imported_world_persistent_ids)
-                            .run_if(resource_exists::<openzt2_zoo_state::topology::topology_graph_types::TopologyGrid>),
+                            .run_if(any_with_component::<openzt2_zoo_state::topology::topology_graph_types::TopologyGrid>),
                         (
                             admit_starting_prefab_rows,
                             demand_starting_prefab_dependencies,

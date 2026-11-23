@@ -109,7 +109,7 @@ pub(crate) fn project_maintenance_worker_duties_to_information_panel_controls(
 }
 
 pub(crate) fn project_live_staff_status_to_visible_information_panels(
-    calendar: Res<ZooCalendar>,
+    calendar: Single<&ZooCalendar>,
     panels: Query<
         (
             &ChildOf,
@@ -133,6 +133,7 @@ pub(crate) fn project_live_staff_status_to_visible_information_panels(
     mut bools: Query<(&UiVisibleBinding, &mut Visibility), StaffVisibilityField>,
     mut values: Query<(&UiValueBinding, &mut UiValue), StaffField>,
 ) {
+    let calendar = calendar.into_inner();
     let current_month_ordinal = u32::from(calendar.year)
         .saturating_mul(12)
         .saturating_add(u32::from(calendar.month.saturating_sub(1)));

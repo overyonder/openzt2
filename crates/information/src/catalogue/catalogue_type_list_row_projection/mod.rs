@@ -30,7 +30,7 @@ pub(crate) fn project_catalogue_entries_to_authored_type_list_rows(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     research_availability: CatalogueResearchAccess,
-    unlocks: Res<UnlockedCatalogueDefinitionSet>,
+    unlocks: Single<Ref<UnlockedCatalogueDefinitionSet>>,
     worlds: Query<
         (
             Ref<SelectedWorldIdentity>,
@@ -38,11 +38,9 @@ pub(crate) fn project_catalogue_entries_to_authored_type_list_rows(
         ),
         With<WorldRoot>,
     >,
-    scenario_disabled: Res<
-        openzt2_interface_state::information::catalogue_types::ScenarioDisabledCatalogueDefinitions,
-    >,
+    scenario_disabled: Query<Ref<openzt2_interface_state::information::catalogue_types::ScenarioDisabledCatalogueDefinitions>, With<WorldRoot>>,
     lists: Query<Ref<OrderedCatalogueEntries>>,
-    selected_entry: Res<SelectedCatalogueEntry>,
+    selected_entry: Single<Ref<SelectedCatalogueEntry>>,
     children: Query<&Children>,
     mut visual_images: Query<
         (Entity, Option<&mut ImageNode>, Option<&UiSourceRect>),
@@ -61,8 +59,13 @@ pub(crate) fn project_catalogue_entries_to_authored_type_list_rows(
         &mut Visibility,
     )>,
 ) {
+    let unlocks = unlocks.into_inner();
+    let selected_entry = selected_entry.into_inner();
     let definitions_changed = active_definitions.is_changed() || definitions.is_changed();
-    let availability_changed = scenario_disabled.is_changed()
+    let scenario_disabled = scenario_disabled.single().ok();
+    let availability_changed = scenario_disabled
+        .as_ref()
+        .is_some_and(|disabled| disabled.is_changed())
         || research_availability.changed()
         || unlocks.is_changed()
         || catalogue_world_session_or_scenario_availability_changed(&worlds);
@@ -118,7 +121,9 @@ pub(crate) fn project_catalogue_entries_to_authored_type_list_rows(
             *visibility = Visibility::Inherited;
         }
         if let Some(mut interaction_enabled) = interaction_enabled {
-            let enabled = !scenario_disabled.0.contains(&entry.definition)
+            let enabled = !scenario_disabled
+                .as_ref()
+                .is_some_and(|disabled| disabled.0.contains(&entry.definition))
                 && (catalogue_entry_can_be_researched(
                     catalog,
                     entry,

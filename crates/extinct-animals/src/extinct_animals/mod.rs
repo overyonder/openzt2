@@ -25,12 +25,14 @@ pub struct ExtinctAnimalsPlugin;
 
 impl Plugin for ExtinctAnimalsPlugin {
     fn build(&self, app: &mut App) {
+        fossil_sonar::register_fossil_sonar_projection(app);
         app.init_resource::<fossil_definition_index::FossilDefinitionIndex>()
             .add_message::<DiscoverFossilAtSiteRequest>()
             .add_message::<PlaceFossilPieceInAssemblyRequest>()
             .add_message::<ActivateFossilSiteMarkersRequest>()
             .add_message::<CompletedFossilSetAssembly>()
             .add_observer(fossil_assembly::clear_assembly_when_table_marker_is_removed)
+            .add_observer(fossil_discovery::present_fossil_find_feedback)
             .add_systems(
                 Update,
                 (
@@ -39,13 +41,15 @@ impl Plugin for ExtinctAnimalsPlugin {
                     fossil_world_objects::bind_live_fossil_assembly_tables
                         .before(extinct_animal_world_hydration::hydrate_extinct_animal_world_state_from_loaded_definitions),
                     fossil_world_objects::spawn_world_fossil_recovery_sites
-                        .after(fossil_definition_index::index_winning_fossil_definitions)
-                        .before(extinct_animal_world_hydration::hydrate_extinct_animal_world_state_from_loaded_definitions),
+                        .after(fossil_definition_index::index_winning_fossil_definitions),
                     fossil_assembly::place_requested_fossil_pieces
                         .after(fossil_definition_index::index_winning_fossil_definitions)
-                        .after(extinct_animal_world_hydration::hydrate_extinct_animal_world_state_from_loaded_definitions),
+                        .after(extinct_animal_world_hydration::hydrate_extinct_animal_world_state_from_loaded_definitions)
+                        .run_if(on_message::<PlaceFossilPieceInAssemblyRequest>),
                     fossil_assembly::unlock_catalogue_after_fossil_assembly
                         .after(fossil_assembly::place_requested_fossil_pieces),
+                    fossil_discovery::settle_fossil_cash_feedback
+                        .run_if(any_with_component::<fossil_discovery::PendingFossilCashReward>),
                     fossil_sonar::activate_sonar_markers_for_search_session
                         .run_if(on_message::<ActivateFossilSiteMarkersRequest>),
                     fossil_sonar::update_fossil_sonar
@@ -59,6 +63,7 @@ impl Plugin for ExtinctAnimalsPlugin {
                 FixedUpdate,
                 fossil_discovery::discover_requested_fossils
                     .in_set(FixedGameSet::Act)
+                    .run_if(on_message::<DiscoverFossilAtSiteRequest>)
                     .run_if(in_state(GamePhase::InGame)),
             );
     }

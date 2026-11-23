@@ -41,7 +41,7 @@ pub(super) struct ScenarioLuaQueryFacts<'a> {
     pub(super) spawn_animal: Option<&'a dyn Fn(openzt2_game_data::AssetId, [f32; 3], f32, &[openzt2_animals::animal_lifecycle::scripted_animal_spawning::ScriptedAnimalSpawnRequest]) -> mlua::Result<openzt2_animals::animal_lifecycle::scripted_animal_spawning::ScriptedAnimalSpawnRequest>>,
     pub(super) species: Option<openzt2_game_assets::species::species_asset_types::SpeciesView<'a>>,
     pub(super) profile: Option<&'a dyn Fn(openzt2_game_data::AssetId, Option<Option<&str>>) -> mlua::Result<Option<String>>>,
-    pub(super) zoo_cash: &'a ZooCash,
+    pub(super) zoo_cash: ZooCash,
     /// Whether any closed tank exists, as `ZT_IS_TANK_IN_WORLD` reports.
     pub(super) tank_in_world: bool,
     /// Every tank's heights, for `ZT_GET_TANK_WATER_HEIGHT` and
@@ -51,9 +51,9 @@ pub(super) struct ScenarioLuaQueryFacts<'a> {
     /// `ZT_GET_IS_FREEFORM` report.
     pub(super) world_session_mode:
         Option<openzt2_world_state::game_session_types::WorldSessionMode>,
-    pub(super) guest_admission_price: &'a AdmissionPrice,
+    pub(super) guest_admission_price: AdmissionPrice,
     pub(super) finance_history:
-        &'a openzt2_zoo_state::economy::monthly_finance_types::MonthlyFinanceHistory,
+        Option<&'a openzt2_zoo_state::economy::monthly_finance_types::MonthlyFinanceHistory>,
     pub(super) zoo_fame: Option<&'a Fame>,
     pub(super) zoo_clock: Option<&'a ZooClock>,
     pub(super) zoo_calendar: Option<&'a ZooCalendar>,

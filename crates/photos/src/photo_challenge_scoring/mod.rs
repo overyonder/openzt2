@@ -4,8 +4,7 @@ use bevy::prelude::*;
 use openzt2_game_data::AssetId;
 
 use openzt2_game_assets::lua_script::{
-    lua_script_archive_path_index::LuaScriptArchivePathIndex,
-    lua_script_asset_loading::LuaScriptAsset,
+    lua_script_asset_loading::LuaScriptAsset, lua_script_sources::LuaScriptSources,
 };
 use openzt2_game_assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset;
 use openzt2_interface_state::persistence::generated_photo_persistence_types::PersistChallengePhotoJpegCopy;
@@ -22,7 +21,7 @@ use super::photo_challenge_lua_scoring_types::{PhotoChallengeScorer, PhotoRuleSc
 pub(super) fn score_pending_photos_against_incomplete_lua_challenges(
     assets: Res<Assets<WorldScenarioDocumentAsset>>,
     scripts: Res<Assets<LuaScriptAsset>>,
-    script_index: Res<LuaScriptArchivePathIndex>,
+    script_sources: Res<LuaScriptSources>,
     worlds: Query<&PhotoChallengeCatalogueIndex>,
     sets: Query<&PhotoChallengeSet>,
     mut challenges: Query<(
@@ -105,7 +104,7 @@ pub(super) fn score_pending_photos_against_incomplete_lua_challenges(
                         path,
                         script,
                         &scripts,
-                        &script_index,
+                        &script_sources,
                         &binding.entry,
                         evidence,
                     ) {

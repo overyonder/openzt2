@@ -18,7 +18,6 @@ use openzt2_interface_state::ui::authored_ui_node_projection_components::UiNodeI
 use openzt2_ui::authored_ui_text_content_binding::UiTextBinding;
 use openzt2_ui::authored_ui_text_layout_presentation::UiPhysicalFontSize;
 use openzt2_interface_state::ui::authored_ui_selection_state::UiSelected;
-use openzt2_world_state::world_spawn::world_load_completion_marker::WorldLoadCompleted;
 use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 use bevy::prelude::*;
 use openzt2_game_data::ui_document::{
@@ -29,18 +28,15 @@ use openzt2_game_data::ui_document::{
 use openzt2_game_data::AssetId;
 use std::fmt::Write;
 
-#[derive(Resource, Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(super) struct AuthoredZooAdmissionPriceBands(pub [Money; 4]);
-
-#[derive(Component)]
-pub(super) struct WorldZooAdmissionPolicyInitialized;
-
 pub(super) fn project_zoo_admissions_state_into_authored_toggle_selection(
-    admissions_open: Res<ZooAdmissionsOpen>,
+    worlds: Query<Ref<ZooAdmissionsOpen>, With<WorldRoot>>,
     documents: Res<Assets<UiDocumentAsset>>,
     roots: Query<&UiDocumentRoot>,
     mut toggles: Query<(Ref<UiEconomyActions>, &UiDocumentOwner, &mut UiSelected)>,
 ) {
+    let Ok(admissions_open) = worlds.single() else {
+        return;
+    };
     for (actions, owner, mut selected) in &mut toggles {
         if !admissions_open.is_changed() && !documents.is_changed() && !actions.is_changed() {
             continue;
@@ -77,9 +73,12 @@ pub(super) fn project_zoo_admissions_state_into_authored_toggle_selection(
 
 /// Projects the canonical admission price into the shipped zoo-status money field.
 pub(super) fn project_zoo_admission_price_into_authored_ui_text(
-    admission_price: Res<AdmissionPrice>,
+    worlds: Query<Ref<AdmissionPrice>, With<WorldRoot>>,
     mut fields: Query<(Ref<UiTextBinding>, &mut Text)>,
 ) {
+    let Ok(admission_price) = worlds.single() else {
+        return;
+    };
     for (binding, mut text) in &mut fields {
         if !matches!(binding.0, UiTextPropertyBindingSource::ZooAdmissionPrice)
             || (!admission_price.is_changed() && !binding.is_added())
@@ -87,13 +86,13 @@ pub(super) fn project_zoo_admission_price_into_authored_ui_text(
             continue;
         }
         text.0.clear();
-        let cents = admission_price.0 .0.unsigned_abs();
+        let cents = admission_price.adult.0.unsigned_abs();
         let _ = write!(text.0, "${}.{:02}", cents / 100, cents % 100);
     }
 }
 
 pub(super) fn project_zoo_admissions_status_into_authored_ui_text(
-    admissions_open: Res<ZooAdmissionsOpen>,
+    worlds: Query<Ref<ZooAdmissionsOpen>, With<WorldRoot>>,
     documents: Res<Assets<UiDocumentAsset>>,
     roots: Query<&UiDocumentRoot>,
     active_localization: Res<LocalizationPrecedenceIndex>,
@@ -111,6 +110,9 @@ pub(super) fn project_zoo_admissions_status_into_authored_ui_text(
     )>,
     mut commands: Commands,
 ) {
+    let Ok(admissions_open) = worlds.single() else {
+        return;
+    };
     let changed = admissions_open.is_changed()
         || documents.is_changed()
         || active_localization.is_changed()
@@ -227,44 +229,22 @@ fn authored_zoo_admissions_status_localization_key(
     })
 }
 
-pub(super) fn initialize_zoo_admission_price_bands_from_loaded_world_definition(
-    roots: Query<
-        Entity,
-        (
-            With<WorldRoot>,
-            With<WorldLoadCompleted>,
-            Without<WorldZooAdmissionPolicyInitialized>,
-        ),
-    >,
-    active_definitions: Res<WorldDefinitions>,
-    definitions: Res<Assets<WorldDefinitionAsset>>,
-    mut commands: Commands,
-) {
-    let Some(root) = roots.iter().next() else {
-        return;
-    };
-    if let Some(policy) = active_definitions
-        .get(&definitions)
-        .and_then(WorldDefinitionsView::admission_price_bands_cents)
-    {
-        commands.insert_resource(AuthoredZooAdmissionPriceBands(
-            policy.map(|value| Money(i64::from(value))),
-        ));
-        commands
-            .entity(root)
-            .insert(WorldZooAdmissionPolicyInitialized);
-    }
-}
-
 pub(super) fn apply_zoo_admission_policy_changes_from_authored_ui_actions(
     mut activations: MessageReader<UiNodeActivated>,
     documents: Res<Assets<UiDocumentAsset>>,
     nodes: Query<(&UiEconomyActions, &UiDocumentOwner)>,
     roots: Query<&UiDocumentRoot>,
-    price_bands: Res<AuthoredZooAdmissionPriceBands>,
-    mut admission_price: ResMut<AdmissionPrice>,
-    mut admissions_open: ResMut<ZooAdmissionsOpen>,
+    active_definitions: Res<WorldDefinitions>,
+    definitions: Res<Assets<WorldDefinitionAsset>>,
+    mut worlds: Query<(&mut AdmissionPrice, &mut ZooAdmissionsOpen), With<WorldRoot>>,
 ) {
+    let Ok((mut admission_price, mut admissions_open)) = worlds.single_mut() else {
+        return;
+    };
+    let price_bands = active_definitions
+        .get(&definitions)
+        .and_then(WorldDefinitionsView::admission_price_bands_cents)
+        .unwrap_or(&[0; 4]);
     for activation in activations.read() {
         let Ok((action_records, document_owner)) = nodes.get(activation.node) else {
             continue;
@@ -284,12 +264,15 @@ pub(super) fn apply_zoo_admission_policy_changes_from_authored_ui_actions(
                 UiEconomyAction::SetZooAdmissionPriceBand { price_band_index } => {
                     if let Some(price) = usize::try_from(*price_band_index)
                         .ok()
-                        .and_then(|band_index| price_bands.0.get(band_index).copied())
+                        .and_then(|band_index| price_bands.get(band_index).copied())
                     {
-                        admission_price.0 = price;
+                        admission_price
+                            .set_if_neq(AdmissionPrice::from_adult(Money(i64::from(price))));
                     }
                 }
-                UiEconomyAction::SetZooAdmissionsOpen { open } => admissions_open.0 = *open,
+                UiEconomyAction::SetZooAdmissionsOpen { open } => {
+                    admissions_open.set_if_neq(ZooAdmissionsOpen(*open));
+                }
                 _ => {}
             }
         }

@@ -5,7 +5,10 @@ use super::{
 };
 use crate::source_document::ordered_source_document_types::OrderedSourceDocumentNode as DataNode;
 use openzt2_game_data::{
-    behavior::{action::view_event::BehaviorViewEventAction, action_record::BehaviorAction},
+    behavior::{
+        action::view_event::{BehaviorViewEventAction, BehaviorViewEventRadius},
+        action_record::BehaviorAction,
+    },
     AssetId,
 };
 use std::io;
@@ -14,16 +17,11 @@ pub(super) fn lower_view_event_action(node: &DataNode) -> io::Result<Option<Beha
     if node.name != "ZTBehViewEvent" {
         return Ok(None);
     }
-    // Positive-radius events need the native 3D box recipient query; education
-    // attributes additionally need source property resolution. Keep those explicit.
-    if node
-        .attributes
-        .iter()
-        .any(|attribute| !["viewKey", "viewRadius", "targetType"].contains(&attribute.name()))
-        || read_optional_float_attribute(node, "viewRadius")?.unwrap_or(0.0) != 0.0
-    {
+    if node.attributes.iter().any(|attribute| {
+        !["viewKey", "viewRadius", "targetType", "edValue", "edDonate"].contains(&attribute.name())
+    }) {
         return Err(invalid_behavior_source_data(
-            "ZTBehViewEvent recipient or education policy is not implemented",
+            "ZTBehViewEvent has an unknown attribute",
         ));
     }
     let key = read_optional_trimmed_string_attribute(node, "viewKey")
@@ -35,9 +33,24 @@ pub(super) fn lower_view_event_action(node: &DataNode) -> io::Result<Option<Beha
             "ZTBehViewEvent has extra children",
         ));
     }
-    // targetType only filters the positive-radius branch in the original.
+    let property = |key| {
+        read_optional_trimmed_string_attribute(node, key)
+            .map(|value| AssetId::from_key(&value.to_ascii_lowercase()))
+    };
+    let metres = read_optional_float_attribute(node, "viewRadius")?.unwrap_or_default();
+    if !metres.is_finite() || metres < 0.0 {
+        return Err(invalid_behavior_source_data(
+            "ZTBehViewEvent has invalid viewRadius",
+        ));
+    }
     Ok(Some(BehaviorAction::ViewEvent(BehaviorViewEventAction {
         view_key: AssetId::from_key(&key.to_ascii_lowercase()),
+        radius: (metres > 0.0).then(|| BehaviorViewEventRadius {
+            metres,
+            target_type: property("targetType"),
+        }),
+        education_value_property: property("edValue"),
+        education_donation_property: property("edDonate"),
         feedback,
     })))
 }

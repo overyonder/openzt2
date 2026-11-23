@@ -1,5 +1,4 @@
 use bevy::camera::primitives::Aabb;
-use bevy::ecs::system::SystemParam;
 use bevy::picking::mesh_picking::ray_cast::MeshRayCast;
 use bevy::picking::mesh_picking::ray_cast::MeshRayCastSettings;
 use bevy::picking::mesh_picking::ray_cast::RayCastVisibility;
@@ -19,32 +18,34 @@ use openzt2_zoo_state::terrain::terrain_water_presentation_types::{
 use openzt2_zoo_state::construction::construction_interaction_types::ConstructionCursor;
 use openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::ConstructionTool;
 
-#[derive(Component, Default)]
-pub(crate) struct ConstructionSurfaceRay(Option<Ray3d>);
+#[derive(Component, Default, PartialEq)]
+pub(super) struct EffectiveConstructionRay(pub(super) Option<Ray3d>);
 
-#[derive(SystemParam)]
-pub(crate) struct RemovedConstructionSurfaces<'w, 's> {
-    terrain: RemovedComponents<'w, 's, TerrainRenderChunk>,
-    terrain_meshes: RemovedComponents<'w, 's, Mesh3d>,
-    water_membership: RemovedComponents<'w, 's, TerrainWaterMembershipIndex>,
-    water_sources: RemovedComponents<'w, 's, TerrainWaterRegionSource>,
-    water_edits: RemovedComponents<'w, 's, TerrainWaterRegionEdit>,
-    water_retired: RemovedComponents<'w, 's, TerrainWaterRegionRetired>,
+#[derive(Message)]
+pub(super) struct ConstructionSurfaceDiscarded;
+
+pub(super) fn notify_discarded_construction_terrain(
+    discarded: On<Discard<(TerrainRenderChunk, Mesh3d)>>,
+    terrain: Query<(), With<TerrainRenderChunk>>,
+    mut changed: MessageWriter<ConstructionSurfaceDiscarded>,
+) {
+    if terrain.contains(discarded.entity) {
+        changed.write(ConstructionSurfaceDiscarded);
+    }
 }
 
-impl RemovedConstructionSurfaces<'_, '_> {
-    fn changed(&mut self, terrain_chunks: &Query<(), With<TerrainRenderChunk>>) -> bool {
-        let terrain = self.terrain.read().count() != 0;
-        let meshes = self
-            .terrain_meshes
-            .read()
-            .any(|entity| terrain_chunks.contains(entity));
-        let membership = self.water_membership.read().count() != 0;
-        let sources = self.water_sources.read().count() != 0;
-        let edits = self.water_edits.read().count() != 0;
-        let retired = self.water_retired.read().count() != 0;
-        terrain || meshes || membership || sources || edits || retired
-    }
+pub(super) fn notify_discarded_construction_water(
+    _: On<
+        Discard<(
+            TerrainWaterMembershipIndex,
+            TerrainWaterRegionSource,
+            TerrainWaterRegionEdit,
+            TerrainWaterRegionRetired,
+        )>,
+    >,
+    mut changed: MessageWriter<ConstructionSurfaceDiscarded>,
+) {
+    changed.write(ConstructionSurfaceDiscarded);
 }
 
 pub(super) fn ensure_construction_cursor(
@@ -62,21 +63,28 @@ pub(super) fn ensure_construction_cursor(
             normal: Vec3::Y,
             over_terrain: false,
         },
-        ConstructionSurfaceRay::default(),
-        super::construction_delete_hover_target_resolution::DeleteHoverProbe::default(),
+        EffectiveConstructionRay::default(),
         WorldMember { root },
     ));
 }
 
-pub(crate) fn update_construction_cursor(
+pub(super) fn project_effective_construction_ray(
     ray: Res<WorldPointerRay>,
-    ui_pointer_capture: Res<UiPointerCapture>,
+    ui_capture: Res<UiPointerCapture>,
+    mut cursor: Single<&mut EffectiveConstructionRay>,
+) {
+    cursor.set_if_neq(EffectiveConstructionRay(
+        ray.0.filter(|_| !ui_capture.over_ui),
+    ));
+}
+
+pub(super) fn update_construction_cursor(
     mut terrain_surface_mesh_ray_cast: MeshRayCast,
     terrain_chunks: Query<(), With<TerrainRenderChunk>>,
     terrains: Res<Assets<TerrainAsset>>,
     water_memberships: Query<&TerrainWaterMembershipIndex>,
     water_regions: TerrainWaterRegionQuery,
-    mut cursors: Query<(&mut ConstructionCursor, &mut ConstructionSurfaceRay)>,
+    mut cursors: Query<(&mut ConstructionCursor, Ref<EffectiveConstructionRay>)>,
     tool: Res<ConstructionTool>,
     changed_chunks: Query<
         (),
@@ -101,14 +109,14 @@ pub(crate) fn update_construction_cursor(
             Added<TerrainWaterRegionRetired>,
         )>,
     >,
-    mut removed: RemovedConstructionSurfaces,
+    mut discarded: MessageReader<ConstructionSurfaceDiscarded>,
 ) {
-    let removed = removed.changed(&terrain_chunks);
-    let Ok((mut cursor, mut previous_ray)) = cursors.single_mut() else {
+    let removed = !discarded.is_empty();
+    discarded.clear();
+    let Ok((mut cursor, pointer)) = cursors.single_mut() else {
         return;
     };
-    let pointer = ray.0.filter(|_| !ui_pointer_capture.over_ui);
-    if pointer == previous_ray.0
+    if !pointer.is_changed()
         && !tool.is_changed()
         && !removed
         && !terrains.is_changed()
@@ -117,8 +125,7 @@ pub(crate) fn update_construction_cursor(
     {
         return;
     }
-    previous_ray.0 = pointer;
-    let hit = pointer.and_then(|ray| {
+    let hit = pointer.0.and_then(|ray| {
         let mut nearest = raycast_rendered_terrain_surface(
             ray,
             &mut terrain_surface_mesh_ray_cast,
@@ -158,18 +165,18 @@ pub(crate) fn update_construction_cursor(
         }
         nearest
     });
-    let over_terrain = hit.is_some();
-    if cursor.over_terrain != over_terrain {
-        cursor.over_terrain = over_terrain;
-    }
-    if let Some((world, normal)) = hit {
-        if cursor.world != world {
-            cursor.world = world;
-        }
-        if cursor.normal != normal {
-            cursor.normal = normal;
-        }
-    }
+    let next = hit.map_or(
+        ConstructionCursor {
+            over_terrain: false,
+            ..*cursor
+        },
+        |(world, normal)| ConstructionCursor {
+            world,
+            normal,
+            over_terrain: true,
+        },
+    );
+    cursor.set_if_neq(next);
 }
 
 fn raycast_rendered_terrain_surface(

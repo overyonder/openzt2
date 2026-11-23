@@ -1,7 +1,7 @@
 use std::io;
 
 use bevy::{
-    asset::{io::Reader, AssetLoader, LoadContext},
+    asset::{AssetLoader, LoadContext, io::Reader},
     prelude::*,
 };
 
@@ -23,6 +23,8 @@ pub(super) struct RampagePolicy {
     pub(super) duration: f32,
     pub(super) variance: f32,
     pub(super) cooldown: f32,
+    pub(super) music: openzt2_game_data::AssetId,
+    pub(super) end_music: openzt2_game_data::AssetId,
 }
 
 #[derive(Resource)]
@@ -73,6 +75,12 @@ pub(super) fn parse_rampage_policy(bytes: &[u8]) -> io::Result<RampagePolicy> {
                 )
             })
     };
+    let cue = |name| {
+        root.attribute_named_any(&[name])
+            .map_or_else(openzt2_game_data::AssetId::default, |name| {
+                openzt2_game_data::AssetId::from_key(&name.trim().to_ascii_lowercase())
+            })
+    };
     Ok(RampagePolicy {
         check_interval: number("updateInterval")?,
         good_point_limit: number("maxGoodPoints")?,
@@ -83,6 +91,8 @@ pub(super) fn parse_rampage_policy(bytes: &[u8]) -> io::Result<RampagePolicy> {
         duration: number("rampageTimeout")?,
         variance: number("rampageVariance")?,
         cooldown: number("rampageInterval")?,
+        music: cue("rampageMusic"),
+        end_music: cue("rampageEndMusic"),
     })
 }
 

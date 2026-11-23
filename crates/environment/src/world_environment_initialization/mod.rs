@@ -1,4 +1,4 @@
-use bevy::{platform::collections::HashMap, prelude::*};
+use bevy::prelude::*;
 use openzt2_game_data::AssetId;
 use openzt2_world_state::world_spawn::selected_world_document_handles::SelectedWorldDocumentHandles;
 use openzt2_zoo_state::environment::environment_state_types::AuthoredWindShaderPresentationState;
@@ -22,20 +22,16 @@ use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 
 use super::{
-    ambient_animal_types::{AmbientAnimalPopulation, AmbientAnimalSpawner},
+    ambient_animal_types::AmbientSpawnCadence,
     daylight_curve_sampling::calculate_environment_month_fraction,
-    environment_presentation_types::EnvironmentOfWorld,
-    environment_random_sampling::sample_inclusive_u32_range,
+    environment_presentation_types::{EnvironmentOfWorld, WorldEnvironments},
     environment_state_types::{Daylight, EnvironmentRandom},
     weather_rules::generate_deterministic_wind_from_speed_range,
     weather_transition_lifecycle::{
-        project_weather_audio_and_effects, sample_authored_weather_duration_ticks,
+        project_weather_audio_and_effects, sample_authored_weather_duration,
     },
-    weather_types::{Weather, WeatherDuration},
+    weather_types::Weather,
 };
-
-#[derive(Component)]
-pub(super) struct WorldEnvironmentInitialized;
 
 pub(super) fn initialize_world_environment_from_loaded_scenario_and_definitions(
     mut commands: Commands,
@@ -43,31 +39,46 @@ pub(super) fn initialize_world_environment_from_loaded_scenario_and_definitions(
     scenarios: Res<Assets<WorldScenarioDocumentAsset>>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
-    clock: Option<Res<ZooClock>>,
-    seed: Option<Res<ZooSeed>>,
+    time: Res<Time<Fixed>>,
     mut roots: Query<
-        (Entity, &WorldRoot, Option<&SelectedWorldDocumentHandles>, &mut PersistentIdAllocator),
         (
-            With<WorldLoadCompleted>,
-            With<openzt2_interface_state::photos::photo_album_types::DefaultPhotoAlbumStorageInitializedForWorld>,
-            Without<WorldEnvironmentInitialized>,
+            Entity,
+            Ref<WorldRoot>,
+            Ref<WorldLoadCompleted>,
+            Ref<openzt2_interface_state::photos::photo_album_types::DefaultPhotoAlbumStorageInitializedForWorld>,
+            Option<Ref<SelectedWorldDocumentHandles>>,
+            Ref<ZooClock>,
+            Ref<ZooSeed>,
+            &mut PersistentIdAllocator,
         ),
+        Without<WorldEnvironments>,
     >,
     mut audio: MessageWriter<PlayAudioCue>,
     mut effects: MessageWriter<SpawnParticleEffectEmitter>,
     mut stop_effects: MessageWriter<StopParticleEffectsAttachedToEntity>,
 ) {
-    let (Some(clock), Some(seed)) = (clock, seed) else {
-        return;
-    };
+    let catalogue_changed = active_scenarios.is_changed()
+        || scenarios.is_changed()
+        || active_definitions.is_changed()
+        || definitions.is_changed();
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };
     let Some(scenario_catalogue) = active_scenarios.get(&scenarios) else {
         return;
     };
-    for (root, world, documents, mut allocator) in &mut roots {
-        let scoped_catalogue = match documents {
+    for (root, world, loaded, photos, documents, clock, seed, mut allocator) in &mut roots {
+        if !catalogue_changed
+            && !world.is_changed()
+            && !loaded.is_added()
+            && !photos.is_added()
+            && !clock.is_added()
+            && !seed.is_changed()
+            && !documents.as_ref().is_some_and(DetectChanges::is_changed)
+        {
+            continue;
+        }
+        let scoped_catalogue = match documents.as_deref() {
             Some(documents) => scenario_catalogue
                 .with_document(&documents.map)
                 .and_then(|view| view.with_document(&documents.start)),
@@ -89,10 +100,6 @@ pub(super) fn initialize_world_environment_from_loaded_scenario_and_definitions(
             );
             continue;
         };
-        let Ok(persistent_id) = allocator.allocate() else {
-            continue;
-        };
-        let mut random = DeterministicRng::from_entity(*seed, persistent_id, RngDomain::Weather);
         let initial_weather_id = definition.initial_weather;
         let initial_weather = (initial_weather_id != AssetId::default())
             .then(|| definitions.find_weather(initial_weather_id))
@@ -105,6 +112,10 @@ pub(super) fn initialize_world_environment_from_loaded_scenario_and_definitions(
         else {
             continue;
         };
+        let Ok(persistent_id) = allocator.allocate() else {
+            continue;
+        };
+        let mut random = DeterministicRng::from_entity(*seed, persistent_id, RngDomain::Weather);
         let wind_range = initial_weather.map_or(
             [definition.wind_mps[0], definition.wind_mps[1]],
             |weather| [weather.wind_mps[0], weather.wind_mps[1]],
@@ -116,13 +127,7 @@ pub(super) fn initialize_world_environment_from_loaded_scenario_and_definitions(
                 Weather {
                     definition: initial_weather.id,
                 },
-                WeatherDuration {
-                    elapsed_ticks: 0,
-                    duration_ticks: sample_authored_weather_duration_ticks(
-                        initial_weather,
-                        &mut random,
-                    ),
-                },
+                sample_authored_weather_duration(initial_weather, &mut random, time.timestep()),
             )
         });
         let mut environment_commands = commands.spawn((
@@ -147,7 +152,10 @@ pub(super) fn initialize_world_environment_from_loaded_scenario_and_definitions(
             environment_commands.insert(weather);
         }
         let environment_entity = environment_commands.id();
-        commands.entity(root).insert(WorldEnvironmentInitialized);
+        commands.entity(root).insert(AmbientSpawnCadence {
+            timer: Timer::new(std::time::Duration::ZERO, TimerMode::Once),
+            random: DeterministicRng::from_entity(*seed, persistent_id, RngDomain::AmbientSpawner),
+        });
         if let Some(initial_weather) = initial_weather {
             project_weather_audio_and_effects(
                 environment_entity,
@@ -158,42 +166,6 @@ pub(super) fn initialize_world_environment_from_loaded_scenario_and_definitions(
                 &mut effects,
                 &mut stop_effects,
             );
-        }
-
-        let mut populations = HashMap::new();
-        for ambient in definition
-            .ambient
-            .iter()
-            .filter_map(|identifier| definitions.find_ambient_spawn(*identifier))
-        {
-            let Ok(id) = allocator.allocate() else {
-                break;
-            };
-            let mut random = DeterministicRng::from_entity(*seed, id, RngDomain::AmbientSpawner);
-            let interval = sample_inclusive_u32_range(
-                [
-                    ambient.spawn_interval_ticks[0],
-                    ambient.spawn_interval_ticks[1],
-                ],
-                &mut random,
-            );
-            let population = *populations.entry(ambient.id).or_insert_with(|| {
-                commands
-                    .spawn((
-                        AmbientAnimalPopulation(ambient.id),
-                        WorldMember { root },
-                        ChildOf(environment_entity),
-                    ))
-                    .id()
-            });
-            commands.spawn((
-                AmbientAnimalSpawner {
-                    next_tick: clock.tick.saturating_add(u64::from(interval)),
-                    random,
-                },
-                ChildOf(population),
-                id,
-            ));
         }
     }
 }

@@ -31,16 +31,12 @@ mod terrain_edit_navigation_refresh;
 mod topology_navigation_edge_invalidation;
 mod world_navigation_installation;
 
-use openzt2_zoo_state::locomotion::locomotion_types::ActiveTerrainDerivedNavigationGraph;
 use openzt2_zoo_state::locomotion::locomotion_types::Arrived;
 use openzt2_zoo_state::locomotion::locomotion_types::DockAt;
-use openzt2_zoo_state::locomotion::locomotion_types::LocomotionCapacity;
 use openzt2_zoo_state::locomotion::locomotion_types::NavigateTo;
 use openzt2_zoo_state::locomotion::locomotion_types::NavigationFailed;
-use openzt2_zoo_state::locomotion::locomotion_types::NavigationRequestSequence;
 use openzt2_zoo_state::locomotion::locomotion_types::PursueEntity;
 use openzt2_zoo_state::locomotion::locomotion_types::ReachabilityTested;
-use openzt2_zoo_state::locomotion::locomotion_types::SpatialGrid;
 use openzt2_zoo_state::locomotion::locomotion_types::TestReachability;
 
 use bevy::prelude::*;
@@ -55,21 +51,37 @@ use openzt2_zoo_state::locomotion::NavigationRequestAcceptance;
 
 use fence_navigation_crossing_types::FenceNavigationCrossingIndex;
 
+const DEFAULT_LOCOMOTION_RATE_FACTORS:
+    openzt2_zoo_state::locomotion::locomotion_types::CaffeineFactors =
+    openzt2_zoo_state::locomotion::locomotion_types::CaffeineFactors {
+        caffeinated: 3.0,
+        decaffeinated: 3.0,
+    };
+
+fn gait_rate_reset_timer(seconds: f32) -> Timer {
+    let duration = if seconds <= 0.0 {
+        std::time::Duration::ZERO
+    } else {
+        std::time::Duration::try_from_secs_f32(seconds).unwrap_or(std::time::Duration::MAX)
+    };
+    Timer::new(duration, TimerMode::Once)
+}
+
 pub struct LocomotionPlugin;
 
 impl Plugin for LocomotionPlugin {
     fn build(&self, game_application: &mut App) {
         game_application
-            .init_resource::<FenceNavigationCrossingIndex>()
-            .add_observer(fence_navigation_crossing_types::mark_crossing_added)
-            .add_observer(fence_navigation_crossing_types::mark_crossing_removed)
+            .init_resource::<changed_destination_route_planning::ReusableRouteSearchScratch>()
+            .register_required_components::<openzt2_world_state::world_spawn::world_membership_types::WorldRoot, FenceNavigationCrossingIndex>()
+            .add_observer(fence_navigation_crossing_types::mark_crossing_inserted)
+            .add_observer(fence_navigation_crossing_types::mark_crossing_discarded)
             .add_observer(topology_navigation_edge_invalidation::remove_crossings_after_fence_is_removed)
-            .init_resource::<NavigationRequestSequence>()
-            .init_resource::<SpatialGrid>()
             .add_message::<NavigateTo>()
             .add_message::<TestReachability>()
             .add_message::<terrain_edit_navigation_refresh::NavigationTerrainGraphChanged>()
             .add_message::<path_surface_navigation_projection::NavigationPathGraphChanged>()
+            .add_message::<tank_water_navigation_overlay::TankNavigationWaterChanged>()
             .add_message::<ReachabilityTested>()
             .add_message::<DockAt>()
             .add_message::<PursueEntity>()
@@ -77,6 +89,16 @@ impl Plugin for LocomotionPlugin {
             .add_message::<NavigationFailed>()
             .add_message::<world_navigation_installation::NavigationGraphReplaced>()
             .add_message::<openzt2_zoo_state::terrain::terrain_navigation_change_types::TerrainNavigationRestored>()
+            .add_message::<openzt2_zoo_state::terrain::terrain_navigation_change_types::SnapshotTerrainNavigationPending>()
+            .add_message::<openzt2_zoo_state::terrain::terrain_navigation_change_types::SnapshotTerrainNavigationReady>()
+            .add_systems(
+                Update,
+                terrain_edit_navigation_refresh::acknowledge_restored_terrain_navigation
+                    .after(path_surface_navigation_projection::project_path_surfaces_into_navigation_graph)
+                    .after(tank_water_navigation_overlay::project_tank_water_onto_navigation_cells)
+                    .in_set(openzt2_world_state::application_schedule::GameSet::Intent)
+                    .run_if(in_state(GamePhase::Loading)),
+            )
             .add_systems(
                 Update,
                 world_navigation_installation::
@@ -124,7 +146,7 @@ impl Plugin for LocomotionPlugin {
                     terrain_edit_navigation_refresh::refresh_navigation_graph_after_terrain_edits,
                     path_surface_navigation_projection::project_elevated_path_colliders,
                     terrain_edit_navigation_refresh::invalidate_routes_after_navigation_geometry_changes
-                        .after_ignore_deferred(path_surface_navigation_projection::project_path_surfaces_into_navigation_graph),
+                        .after_ignore_deferred(tank_water_navigation_overlay::project_tank_water_onto_navigation_cells),
                     path_surface_navigation_projection::project_path_surfaces_into_navigation_graph
                         .after(terrain_edit_navigation_refresh::refresh_navigation_graph_after_terrain_edits),
                     fence_navigation_crossing_types::prune_empty_route_edges.before(topology_navigation_edge_invalidation::synchronize_fence_navigation_crossings),
@@ -178,13 +200,15 @@ impl Plugin for LocomotionPlugin {
                     staff_tank_gate_navigation::resume_completed_staff_tank_gate_journeys,
                     staff_tank_gate_navigation::begin_staff_tank_gate_journeys
                         .after(staff_tank_gate_navigation::resume_completed_staff_tank_gate_journeys),
-                    changed_destination_route_planning::prepare_changed_navigation_destinations
+                    changed_destination_route_planning::queue_changed_navigation_destinations
                         .after(animal_navigation_policy::invalidate_animal_routes_after_policy_changes)
                         .after(staff_tank_gate_navigation::begin_staff_tank_gate_journeys),
-                    changed_destination_route_planning::admit_pending_route_searches
-                        .after(changed_destination_route_planning::prepare_changed_navigation_destinations),
+                    changed_destination_route_planning::admit_waiting_route_searches
+                        .after(changed_destination_route_planning::queue_changed_navigation_destinations)
+                        .run_if(any_with_component::<changed_destination_route_planning::WaitingRouteSearch>),
                     changed_destination_route_planning::advance_active_navigation_searches
-                        .after_ignore_deferred(changed_destination_route_planning::admit_pending_route_searches),
+                        .after(changed_destination_route_planning::admit_waiting_route_searches)
+                        .run_if(any_with_component::<changed_destination_route_planning::ActiveRouteSearch>),
                     behavior_evasion_steering::project_behavior_evasion_steering
                         .after(entity_pursuit_execution::steer_entity_pursuits_toward_live_targets),
                     local_steering_calculation::calculate_route_following_and_separation_steering
@@ -220,25 +244,11 @@ impl Plugin for LocomotionPlugin {
                     spatial_index_and_docking_operations::detect_stuck_agents
                         .after_ignore_deferred(topology_navigation_edge_invalidation::invalidate_routes_after_topology_changes),
                     spatial_index_and_docking_operations::complete_docking
-                        .after_ignore_deferred(spatial_index_and_docking_operations::detect_stuck_agents)
-                        .after_ignore_deferred(spatial_index_and_docking_operations::order_changed_spatial_cell_members),
+                        .after_ignore_deferred(spatial_index_and_docking_operations::detect_stuck_agents),
                 )
                     .in_set(FixedGameSet::Cleanup),
-            )
-            .add_systems(
-                OnExit(GamePhase::InGame),
-                clear_navigation_resources_after_leaving_gameplay,
             );
     }
-}
-
-fn clear_navigation_resources_after_leaving_gameplay(
-    mut commands: Commands,
-    mut spatial_grid: ResMut<SpatialGrid>,
-) {
-    *spatial_grid = default();
-    commands.remove_resource::<ActiveTerrainDerivedNavigationGraph>();
-    commands.remove_resource::<LocomotionCapacity>();
 }
 
 #[cfg(test)]

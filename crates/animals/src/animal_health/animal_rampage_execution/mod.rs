@@ -1,20 +1,30 @@
 use bevy::prelude::*;
+use std::time::Duration;
 
 use openzt2_game_assets::species::species_asset_types::{SpeciesAsset, SpeciesAssets};
 use openzt2_game_data::species::SpeciesVariantFlags;
 use openzt2_world_state::world_spawn::world_entity_crating::WorldEntityIsCrated;
+use openzt2_world_state::world_spawn::world_membership_types::{WorldMember, WorldRoot};
 use openzt2_zoo_state::animal_behavior::behavior_random_stream_state::BehaviorRandomStream;
 use openzt2_zoo_state::animal_lifecycle::types::{Animal, AnimalVariant};
 use openzt2_zoo_state::animal_welfare::types::NeedPoints;
+use openzt2_zoo_state::audio::audio_playback_message_types::{PlayAudioCue, StopAudioCue};
 
 use super::rampage_policy::{RampagePolicy, RampagePolicySource};
 use super::types::{Dead, Rampaging, Tranquilized};
 
 #[derive(Component)]
-struct RampageStartCheck(f32);
+struct RampageStartCheck(Timer);
 
 #[derive(Component)]
-struct RampageTimeRemaining(f32);
+struct RampageTimeRemaining(Timer);
+
+#[derive(Component)]
+struct RampageMusicPlaying(openzt2_game_data::AssetId);
+
+fn rampage_duration(seconds: f32) -> Duration {
+    Duration::try_from_secs_f32(seconds).unwrap_or_default()
+}
 
 #[derive(bevy::ecs::system::SystemParam)]
 struct ActiveRampagePolicy<'w> {
@@ -43,7 +53,92 @@ pub(super) fn register_rampage_timers(app: &mut App) {
         )
             .in_set(FixedGameSet::Think)
             .run_if(super::in_state(super::GamePhase::InGame)),
-    );
+    )
+    .add_systems(
+        Update,
+        project_rampage_music
+            .in_set(openzt2_world_state::application_schedule::GameSet::Presentation)
+            .run_if(super::in_state(super::GamePhase::InGame)),
+    )
+    .add_observer(stop_music_when_zoo_closes);
+}
+
+fn project_rampage_music(
+    policy: ActiveRampagePolicy,
+    active: Query<&WorldMember, (With<Rampaging>, Without<Dead>)>,
+    mut worlds: Query<(Entity, Option<&mut RampageMusicPlaying>), With<WorldRoot>>,
+    mut commands: Commands,
+    mut play: MessageWriter<PlayAudioCue>,
+    mut stop: MessageWriter<StopAudioCue>,
+) {
+    let Some(policy) = policy.get() else {
+        return;
+    };
+    let active = active
+        .iter()
+        .map(|member| member.root)
+        .collect::<bevy::ecs::entity::EntityHashSet>();
+    for (root, playing) in &mut worlds {
+        let selection = root.to_bits();
+        if active.contains(&root) {
+            if playing
+                .as_ref()
+                .is_some_and(|playing| playing.0 == policy.music)
+            {
+                continue;
+            }
+            if playing.is_some() {
+                stop.write(StopAudioCue {
+                    emitter: None,
+                    selection,
+                });
+            }
+            if policy.music != openzt2_game_data::AssetId::default() {
+                play.write(PlayAudioCue {
+                    cue: policy.music,
+                    emitter: None,
+                    selection,
+                    priority: 192,
+                    force_looped: true,
+                });
+            }
+            if let Some(mut playing) = playing {
+                playing.0 = policy.music;
+            } else {
+                commands
+                    .entity(root)
+                    .insert(RampageMusicPlaying(policy.music));
+            }
+        } else if playing.is_some() {
+            stop.write(StopAudioCue {
+                emitter: None,
+                selection,
+            });
+            commands.entity(root).remove::<RampageMusicPlaying>();
+            if policy.end_music != openzt2_game_data::AssetId::default() {
+                play.write(PlayAudioCue {
+                    cue: policy.end_music,
+                    emitter: None,
+                    selection: !selection,
+                    priority: 192,
+                    force_looped: false,
+                });
+            }
+        }
+    }
+}
+
+fn stop_music_when_zoo_closes(
+    removed: On<Remove<WorldRoot>>,
+    playing: Query<(), With<RampageMusicPlaying>>,
+    mut stop: MessageWriter<StopAudioCue>,
+) {
+    if playing.contains(removed.entity) {
+        stop.write(StopAudioCue {
+            emitter: None,
+            selection: removed.entity.to_bits(),
+        });
+    }
 }
 
 fn project_rampage_eligibility(
@@ -62,15 +157,18 @@ fn project_rampage_eligibility(
             Or<(Changed<AnimalVariant>, Added<NeedPoints>)>,
         ),
     >,
-    mut policy_ready: Local<bool>,
+    mut policy_events: MessageReader<AssetEvent<RampagePolicy>>,
     mut commands: Commands,
 ) {
+    let policy_changed = policy.source.is_changed()
+        || policy_events.read().any(|event| {
+            event.is_added(policy.source.0.id()) || event.is_modified(policy.source.0.id())
+        });
+    policy_events.clear();
     let (Some(policy), Some(species)) = (policy.get(), index.get(&assets)) else {
-        *policy_ready = false;
         return;
     };
-    let definitions_changed = !*policy_ready || assets.is_changed() || index.is_changed();
-    *policy_ready = true;
+    let definitions_changed = policy_changed || assets.is_changed() || index.is_changed();
     let affected = definitions_changed
         .then(|| animals.iter())
         .into_iter()
@@ -86,9 +184,10 @@ fn project_rampage_eligibility(
             .find_variant(variant.0)
             .is_some_and(|variant| variant.flags.contains(SpeciesVariantFlags::RAMPAGER));
         if eligible && !scheduled {
-            commands
-                .entity(animal)
-                .insert(RampageStartCheck(policy.check_interval));
+            commands.entity(animal).insert(RampageStartCheck(Timer::new(
+                rampage_duration(policy.check_interval),
+                TimerMode::Repeating,
+            )));
         } else if scheduled && !eligible {
             commands
                 .entity(animal)
@@ -106,8 +205,7 @@ fn advance_rampage_cooldowns(
     mut commands: Commands,
 ) {
     for (animal, mut cooldown) in &mut cooldowns {
-        cooldown.0 = (cooldown.0 - time.delta_secs()).max(0.0);
-        if cooldown.0 == 0.0 {
+        if cooldown.0.tick(time.timestep()).is_finished() {
             commands.entity(animal).remove::<RampageTimeRemaining>();
         }
     }
@@ -136,11 +234,12 @@ fn check_due_animals_for_rampage(
         if check.is_added() {
             continue;
         }
-        check.0 -= time.delta_secs();
-        if check.0 > 0.0 {
+        if !check.0.tick(time.timestep()).just_finished() {
             continue;
         }
-        check.0 += policy.check_interval;
+        check
+            .0
+            .set_duration(rampage_duration(policy.check_interval));
         let Ok((points, mut random)) = eligible.get_mut(animal) else {
             continue;
         };
@@ -155,7 +254,10 @@ fn check_due_animals_for_rampage(
         let variance = (random.next_u32() % 10_001) as f32 / 10_000.0 * 2.0 - 1.0;
         commands.entity(animal).insert((
             Rampaging { elapsed_ticks: 0 },
-            RampageTimeRemaining(policy.duration + policy.variance * variance),
+            RampageTimeRemaining(Timer::new(
+                rampage_duration(policy.duration + policy.variance * variance),
+                TimerMode::Once,
+            )),
         ));
     }
 }
@@ -198,17 +300,20 @@ fn end_expired_rampages(
     };
     for (animal, timer) in &mut active {
         if let Some(mut timer) = timer {
-            timer.0 = (timer.0 - time.delta_secs()).max(0.0);
-            if timer.0 > 0.0 {
+            if !timer.0.tick(time.timestep()).is_finished() {
                 continue;
             }
-            timer.0 = policy.cooldown;
+            timer.0.set_duration(rampage_duration(policy.cooldown));
+            timer.0.reset();
             commands.entity(animal).remove::<Rampaging>();
         } else {
             commands
                 .entity(animal)
                 .remove::<Rampaging>()
-                .insert(RampageTimeRemaining(policy.cooldown));
+                .insert(RampageTimeRemaining(Timer::new(
+                    rampage_duration(policy.cooldown),
+                    TimerMode::Once,
+                )));
         }
     }
 }
@@ -252,16 +357,5 @@ mod tests {
             rampage_chance_percent(&policy, &points(0.0, 30.0), 2),
             3.024
         ));
-    }
-}
-
-pub(super) fn advance_elapsed_ticks_for_active_untranquilized_animal_rampages(
-    mut rampaging_animals: Query<
-        &mut Rampaging,
-        (With<Animal>, Without<Dead>, Without<Tranquilized>),
-    >,
-) {
-    for mut rampage in &mut rampaging_animals {
-        rampage.elapsed_ticks = rampage.elapsed_ticks.saturating_add(1);
     }
 }

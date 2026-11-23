@@ -55,6 +55,8 @@ pub(super) struct BuildOutput {
     pub(super) actions: Vec<UiActionRecord>,
     pub(super) action_receivers:
         BTreeMap<(u32, usize), super::authored_ui_event_collection_lowering::UiActionReceiverPath>,
+    pub(super) timed_action_receivers:
+        BTreeMap<(u32, usize), super::authored_ui_event_collection_lowering::UiActionReceiverPath>,
     pub(super) visuals: Vec<UiNodeVisualStateDefinition>,
     pub(super) hotkeys: Vec<UiDocumentHotkeyDefinition>,
     pub(super) field_definitions: Vec<UiNodeFieldDefinition>,

@@ -1,5 +1,8 @@
 use bevy::prelude::*;
-use openzt2_world_state::world_spawn::{world_load_completion_marker::WorldLoadCompleted, world_membership_types::WorldRoot};
+use openzt2_world_state::world_spawn::{
+    world_load_completion_marker::WorldLoadCompleted,
+    world_membership_types::{WorldMember, WorldRoot},
+};
 use openzt2_game_data::world_definitions::catalogue_and_progression::research_and_unlock_definition_types::UnlockRequirement;
 
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
@@ -22,7 +25,7 @@ pub(super) fn apply_catalogue_definition_unlock_requests(
     mut requests: MessageReader<ApplyCatalogueDefinitionUnlockRequest>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
-    mut unlocks: ResMut<UnlockedCatalogueDefinitionSet>,
+    mut root_unlocks: Query<&mut UnlockedCatalogueDefinitionSet, With<WorldRoot>>,
     mut applied: MessageWriter<CatalogueDefinitionUnlockApplied>,
     mut rejected: MessageWriter<CatalogueDefinitionUnlockRejected>,
     mut changed: MessageWriter<ProgressionFactChanged>,
@@ -44,8 +47,19 @@ pub(super) fn apply_catalogue_definition_unlock_requests(
             });
             continue;
         };
-        let was_changed =
-            mark_catalogue_definition_unlocked_at_index(&mut unlocks, index).unwrap_or(false);
+        let Some(was_changed) = root_unlocks
+            .get_mut(request.root)
+            .ok()
+            .and_then(|mut unlocks| {
+                mark_catalogue_definition_unlocked_at_index(&mut unlocks, index)
+            })
+        else {
+            rejected.write(CatalogueDefinitionUnlockRejected {
+                operation: request.operation,
+                definition: request.definition,
+            });
+            continue;
+        };
         applied.write(CatalogueDefinitionUnlockApplied {
             operation: request.operation,
             definition: request.definition,
@@ -66,7 +80,7 @@ pub(super) fn apply_catalogue_definition_unlock_requests(
 /// `ApplyCatalogueDefinitionUnlockRequest`, preserving that package's
 /// operation correlation without retaining a scenario mirror in progression.
 pub(super) fn apply_authored_catalogue_unlock_requirements_from_progression_facts(
-    fame: Query<Ref<Fame>, (With<WorldRoot>, With<WorldLoadCompleted>)>,
+    fame: Query<(Entity, Ref<Fame>), (With<WorldRoot>, With<WorldLoadCompleted>)>,
     profile_variables: Option<
         Res<openzt2_zoo_state::progression::profile_scenario_variables::ProfileScenarioVariables>,
     >,
@@ -74,44 +88,53 @@ pub(super) fn apply_authored_catalogue_unlock_requirements_from_progression_fact
     mut awards_granted: MessageReader<ProgressionAwardGranted>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
-    mut unlocks: ResMut<UnlockedCatalogueDefinitionSet>,
+    mut root_unlocks: Query<&mut UnlockedCatalogueDefinitionSet, With<WorldRoot>>,
+    members: Query<&WorldMember>,
     mut changed: MessageWriter<ProgressionFactChanged>,
 ) {
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };
 
-    if let Some(variables) = profile_variables.filter(|variables| variables.is_changed()) {
-        for definition in definitions.unlocks() {
-            if matches!(definition.requirement,
-                UnlockRequirement::Profile(key) if variables.get(key) == Some("true"))
-            {
-                mark_authored_catalogue_definition_target_unlocked(
-                    definitions,
-                    definition,
-                    &mut unlocks,
-                    &mut changed,
-                );
+    let profile_changes = profile_variables.filter(|variables| variables.is_changed());
+    for (root, fame) in &fame {
+        if profile_changes.is_none() && !fame.is_changed() {
+            continue;
+        }
+        let Ok(mut unlocks) = root_unlocks.get_mut(root) else {
+            continue;
+        };
+        if let Some(variables) = &profile_changes {
+            for definition in definitions.unlocks() {
+                if matches!(definition.requirement, UnlockRequirement::Profile(key) if variables.get(key) == Some("true"))
+                {
+                    mark_authored_catalogue_definition_target_unlocked(
+                        definitions,
+                        definition,
+                        &mut unlocks,
+                        &mut changed,
+                    );
+                }
             }
         }
-    }
-    if let Some(fame) = fame.single().ok().filter(|fame| fame.is_changed()) {
-        for definition in definitions.unlocks() {
-            if matches!(
-                &definition.requirement,
-                UnlockRequirement::Fame(required)
-                    if u16::from(fame.half_stars) >= *required
-            ) {
-                mark_authored_catalogue_definition_target_unlocked(
-                    definitions,
-                    definition,
-                    &mut unlocks,
-                    &mut changed,
-                );
+        if fame.is_changed() {
+            for definition in definitions.unlocks() {
+                if matches!(definition.requirement, UnlockRequirement::Fame(required) if u16::from(fame.half_stars) >= required)
+                {
+                    mark_authored_catalogue_definition_target_unlocked(
+                        definitions,
+                        definition,
+                        &mut unlocks,
+                        &mut changed,
+                    );
+                }
             }
         }
     }
     for completed in research_completed.read() {
+        let Ok(mut unlocks) = root_unlocks.get_mut(completed.root) else {
+            continue;
+        };
         for definition in definitions.unlocks() {
             if matches!(
                 &definition.requirement,
@@ -128,6 +151,12 @@ pub(super) fn apply_authored_catalogue_unlock_requirements_from_progression_fact
         }
     }
     for granted in awards_granted.read() {
+        let Ok(member) = members.get(granted.award) else {
+            continue;
+        };
+        let Ok(mut unlocks) = root_unlocks.get_mut(member.root) else {
+            continue;
+        };
         for definition in definitions.unlocks() {
             if matches!(
                 &definition.requirement,

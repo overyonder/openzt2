@@ -150,7 +150,8 @@ fn immersive_mode_captures_once_and_restore_is_exact() {
         .id();
 
     application.world_mut().write_message(SetCameraMode {
-        mode: CameraMode::FirstPerson(immersive_subject_entity),
+        mode: CameraMode::FirstPerson,
+        subject: Some(immersive_subject_entity),
         definition: camera_definition_identifier_with_repeated_byte(2),
         transition_seconds: None,
     });
@@ -168,7 +169,7 @@ fn immersive_mode_captures_once_and_restore_is_exact() {
     assert_eq!(stored_return_state.overhead, original_overhead_camera_rig);
 
     application.world_mut().entity_mut(camera_entity).insert((
-        CameraMode::FirstPerson(immersive_subject_entity),
+        CameraMode::FirstPerson,
         CameraDefinition(camera_definition_identifier_with_repeated_byte(2)),
         Transform::from_xyz(100.0, 3.0, -20.0),
     ));

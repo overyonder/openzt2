@@ -14,7 +14,7 @@ use openzt2_zoo_state::guests::guest_simulation_types::Viewing;
 use openzt2_zoo_state::locomotion::locomotion_types::Destination;
 use openzt2_zoo_state::locomotion::locomotion_types::DockAt;
 use openzt2_zoo_state::locomotion::locomotion_types::NavAgent;
-use openzt2_zoo_state::locomotion::locomotion_types::NavigationRequestSequence;
+use openzt2_zoo_state::locomotion::locomotion_types::NavigationRequestGeneration;
 
 use super::{
     donation_guest_decision_calculations::{
@@ -58,9 +58,9 @@ pub(super) fn choose_donation_candidates_from_new_guest_observations(
         &WorldMember,
     )>,
     subjects: Query<&WorldMember, With<DonationOpportunity>>,
-    clock: Res<openzt2_world_state::simulation_time::simulation_clock_types::ZooClock>,
+    clock: Single<&openzt2_world_state::simulation_time::simulation_clock_types::ZooClock>,
     tokens: Query<&openzt2_zoo_state::animal_behavior::behavior_token_types::BehaviorSelfToken>,
-    mut navigation_request_sequence: ResMut<NavigationRequestSequence>,
+    mut navigation_generations: Query<&mut NavigationRequestGeneration>,
     mut docking_requests: MessageWriter<DockAt>,
 ) {
     for (
@@ -112,7 +112,10 @@ pub(super) fn choose_donation_candidates_from_new_guest_observations(
             continue;
         };
 
-        let navigation_request_id = navigation_request_sequence.next();
+        let Ok(mut generation) = navigation_generations.get_mut(guest) else {
+            continue;
+        };
+        let navigation_request_id = generation.advance();
         pending.0 = None;
         commands
             .entity(guest)

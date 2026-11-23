@@ -40,9 +40,13 @@ pub struct UiValueBinding(pub UiIntegerPropertyBindingSource);
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UiValue(pub i64);
 
-/// An authored slider value chosen through pointer or navigation input.
+/// An accepted edit from pointer, navigation or authored slider controls.
 #[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UiSliderValueChanged {
     pub slider: Entity,
     pub value: i64,
 }
+
+/// Availability of the authored viewport-edge input surface for the live camera.
+#[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct UiEdgePanSurface(pub bool);

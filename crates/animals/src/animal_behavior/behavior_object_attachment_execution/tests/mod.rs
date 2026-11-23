@@ -116,6 +116,7 @@ fn detach_transfers_inventory_and_kills_only_on_the_later_detach_event() {
         .init_resource::<Assets<ScenePrefabAsset>>()
         .add_observer(detach::retire_owned_objects_when_holder_is_destroyed)
         .add_observer(detach::release_detached_object_presentation)
+        .add_observer(detach::finish_object_release)
         .add_observer(admission::apply_object_attachment_admissions)
         .add_message::<AnimationClipPlaybackRequest>()
         .add_message::<AnimationObjectCommand>()
@@ -262,10 +263,11 @@ fn detach_transfers_inventory_and_kills_only_on_the_later_detach_event() {
             survives,
             "an empty detach rule releases; an unknown named rule removes"
         );
-        assert!(app
-            .world()
-            .get::<InteractionContainerMember>(item)
-            .is_none());
+        assert!(
+            app.world()
+                .get::<InteractionContainerMember>(item)
+                .is_none()
+        );
         assert!(app.world().get::<ContainedObject>(item).is_none());
         assert!(app.world().get_entity(carried).is_ok());
     }
@@ -294,9 +296,11 @@ fn detach_transfers_inventory_and_kills_only_on_the_later_detach_event() {
         .single(world)
         .expect("the first key should create exactly one replacement");
     assert_eq!(definition.0, replacement_id);
-    assert!(world
-        .get::<InteractionContainerMember>(replacement)
-        .is_none());
+    assert!(
+        world
+            .get::<InteractionContainerMember>(replacement)
+            .is_none()
+    );
     assert!(world.get::<ContainedObject>(replacement).is_none());
 
     let unowned = app
@@ -325,8 +329,9 @@ fn detach_transfers_inventory_and_kills_only_on_the_later_detach_event() {
         "non-owning hand slot must release its item"
     );
     assert!(app.world().get::<ContainedObject>(unowned).is_none());
-    assert!(app
-        .world()
-        .get::<InteractionContainerMember>(unowned)
-        .is_none());
+    assert!(
+        app.world()
+            .get::<InteractionContainerMember>(unowned)
+            .is_none()
+    );
 }

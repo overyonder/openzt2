@@ -18,10 +18,10 @@ fn radial_docking_preserves_target_radius_arrival_radius_and_heading_tolerance()
     else {
         panic!("both radial docks expected");
     };
-    assert_eq!(shelter.radial_distance_m, Some(3.0));
+    assert_eq!(shelter.approach, openzt2_game_data::behavior::action::docking::BehaviorDockApproach::Radial(3.0));
     assert_eq!(shelter.arrival_radius_m, None);
     assert_eq!(shelter.rotation_tolerance_radians, std::f32::consts::PI);
-    assert_eq!(view.radial_distance_m, Some(10.0));
+    assert_eq!(view.approach, openzt2_game_data::behavior::action::docking::BehaviorDockApproach::Radial(10.0));
     assert_eq!(view.arrival_radius_m, Some(3.0));
 }
 
@@ -36,7 +36,7 @@ fn delayed_subject_tokens_preserve_activation_and_expiration_times() {
     let BehaviorDocument::Sets(sets) = lower_behavior_source_document(&source).unwrap() else {
         panic!("sets expected");
     };
-    assert!(!sets[0].actions.has_unsupported_suffix());
+    assert!(!sets[0].actions.contains_invalid_actions());
     let [BehaviorAction::SendSelfTokens(deliveries)] = sets[0].actions.lowered_actions() else {
         panic!("token delivery expected");
     };
@@ -113,7 +113,7 @@ fn task_evaluation_retains_numeric_attribute_values_separately_from_policy_and_o
     else {
         panic!("terminal need changes must precede the completion continuation");
     };
-    assert!(!tasks[0].completion.has_unsupported_suffix());
+    assert!(!tasks[0].completion.contains_invalid_actions());
     assert_eq!(completion.len(), 1);
     assert_eq!(
         completion[0].affected_entity_role,
@@ -145,7 +145,7 @@ fn task_evaluation_retains_numeric_attribute_values_separately_from_policy_and_o
 }
 
 #[test]
-fn unsupported_set_suffix_does_not_discard_other_declarations() {
+fn invalid_action_preserves_its_instruction_boundary_and_other_declarations() {
     let source = parse_blue_fang_source_document(
         AssetPath::new("ai/tasks/staff/test.beh"),
         br#"<BehaviorSets>
@@ -157,10 +157,14 @@ fn unsupported_set_suffix_does_not_discard_other_declarations() {
         panic!("expected behavior sets");
     };
     assert_eq!(sets.len(), 2);
-    assert_eq!(sets[0].actions.lowered_actions().len(), 1);
-    assert!(sets[0].actions.has_unsupported_suffix());
+    assert_eq!(sets[0].actions.lowered_actions().len(), 3);
+    assert!(matches!(
+        sets[0].actions.lowered_actions()[1],
+        openzt2_game_data::behavior::action_record::BehaviorAction::InvalidAuthoredAction(_)
+    ));
+    assert!(sets[0].actions.contains_invalid_actions());
     assert_eq!(sets[1].actions.lowered_actions().len(), 1);
-    assert!(!sets[1].actions.has_unsupported_suffix());
+    assert!(!sets[1].actions.contains_invalid_actions());
 }
 
 #[test]
@@ -255,7 +259,7 @@ fn keeper_food_placement_lowers_with_its_holding_container_and_placement_set() {
             follows_medium_changes: false,
         }
     );
-    assert!(sets[2].actions.has_unsupported_suffix());
+    assert!(sets[2].actions.contains_invalid_actions());
     let [BehaviorAction::LocomotionSwitchSet(following)] = sets[3].actions.lowered_actions() else {
         panic!("following locomotion switch");
     };
@@ -280,9 +284,8 @@ fn bashing_a_fence_docks_on_it_plays_out_the_bash_and_breaks_it() {
     else {
         panic!("a fence dock, the bash set and the morph expected");
     };
-    // The animal stops short of the fence segment's middle on its own side.
-    assert_eq!(dock.radial_distance_m, Some(2.0));
-    assert_eq!(dock.subject_node_name, None);
+    assert_eq!(dock.approach, openzt2_game_data::behavior::action::docking::BehaviorDockApproach::Fence);
+    assert_eq!(dock.subject_node_name.as_deref(), Some("Node_Front"));
     assert_eq!(
         *interrupt,
         openzt2_game_data::AssetId::from_key("collidewithtarget")
@@ -353,8 +356,8 @@ fn a_rampaging_ankylosaur_s_guest_attack_lowers_whole() {
     let BehaviorDocument::Tasks(tasks) = lower_behavior_source_document(&source).unwrap() else {
         panic!("tasks expected");
     };
-    assert!(!tasks[0].execution.has_unsupported_suffix());
-    assert!(!tasks[0].completion.has_unsupported_suffix());
+    assert!(!tasks[0].execution.contains_invalid_actions());
+    assert!(!tasks[0].completion.contains_invalid_actions());
 }
 
 #[test]

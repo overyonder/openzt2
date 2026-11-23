@@ -33,10 +33,18 @@ use super::{
 
 #[derive(SystemParam)]
 pub(super) struct ProgressionSnapshotApplicationParameters<'w, 's> {
-    world_progression: Query<'w, 's, (&'static mut Fame, &'static mut ZooRating)>,
-    unlocked_catalogue_definitions: ResMut<'w, UnlockedCatalogueDefinitionSet>,
-    scenario_award_points: ResMut<'w, ScenarioAwardPointTotal>,
-    endangered_animal_birth_count: ResMut<'w, TotalEndangeredAnimalBirthCount>,
+    world_progression: Query<
+        'w,
+        's,
+        (
+            &'static mut Fame,
+            &'static mut ZooRating,
+            &'static mut UnlockedCatalogueDefinitionSet,
+            &'static mut ScenarioAwardPointTotal,
+            &'static mut TotalEndangeredAnimalBirthCount,
+            &'static mut FameHistory,
+        ),
+    >,
     adoption_policy: Query<'w, 's, &'static mut AnimalAdoptionAvailabilityPolicy>,
     active_research: Query<
         'w,
@@ -46,7 +54,6 @@ pub(super) struct ProgressionSnapshotApplicationParameters<'w, 's> {
             &'static mut ResearchProject,
         ),
     >,
-    fame_history: ResMut<'w, FameHistory>,
     progression_entities_with_persistent_identifiers:
         Query<'w, 's, ProgressionEntityValues, ProgressionValueFilter>,
 }
@@ -106,30 +113,26 @@ pub(super) fn apply_progression_snapshot_records_to_live_world(
     snapshot_progression_persistent_identifiers
         .sort_unstable_by_key(|persistent_identifier| persistent_identifier.0);
 
-    if !progression_snapshot_application_parameters
-        .fame_history
-        .replace_saved(progression_snapshot_records.fame_history_samples)
-    {
+    let (mut fame, mut rating, mut unlocked, mut award_points, mut birth_count, mut history) =
+        progression_snapshot_application_parameters
+            .world_progression
+            .get_mut(world_root_entity)
+            .map_err(|_| WorldSnapshotPersistenceFailure::CorruptSnapshotSection)?;
+    if !history.replace_saved(progression_snapshot_records.fame_history_samples) {
         return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection);
     }
-    let (mut fame, mut rating) = progression_snapshot_application_parameters
-        .world_progression
-        .get_mut(world_root_entity)
-        .map_err(|_| WorldSnapshotPersistenceFailure::CorruptSnapshotSection)?;
     fame.set_if_neq(progression_snapshot_records.fame);
     rating.set_if_neq(progression_snapshot_records.zoo_rating);
-    progression_snapshot_application_parameters
-        .unlocked_catalogue_definitions
-        .definition_count = progression_snapshot_records.unlocked_catalogue_definition_count;
-    progression_snapshot_application_parameters
-        .unlocked_catalogue_definitions
-        .words = progression_snapshot_records.unlocked_catalogue_definition_bit_words;
-    progression_snapshot_application_parameters
-        .scenario_award_points
-        .0 = progression_snapshot_records.scenario_award_points;
-    progression_snapshot_application_parameters
-        .endangered_animal_birth_count
-        .0 = progression_snapshot_records.endangered_animal_birth_count;
+    unlocked.set_if_neq(UnlockedCatalogueDefinitionSet {
+        definition_count: progression_snapshot_records.unlocked_catalogue_definition_count,
+        words: progression_snapshot_records.unlocked_catalogue_definition_bit_words,
+    });
+    award_points.set_if_neq(ScenarioAwardPointTotal(
+        progression_snapshot_records.scenario_award_points,
+    ));
+    birth_count.set_if_neq(TotalEndangeredAnimalBirthCount(
+        progression_snapshot_records.endangered_animal_birth_count,
+    ));
     restore_optional_component(
         &mut commands.entity(world_root_entity),
         progression_snapshot_application_parameters

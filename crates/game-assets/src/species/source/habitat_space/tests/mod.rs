@@ -40,6 +40,7 @@ fn species_loading_preserves_inherited_space_and_specific_overrides() {
     let index = SourceIndex::build([&parent, &child]).unwrap();
     let species = super::super::lower_species_source_record_to_canonical_species(
         &index.find("Child").unwrap(),
+        true,
     )
     .unwrap();
     assert_eq!(

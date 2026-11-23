@@ -20,6 +20,7 @@ use super::{
         CueVoicePool, CueVoices, NonspatialCueOwner,
     },
     audio_request_lanes::AdmitAudioCue,
+    audio_stage_playback_projection::EnvironmentVoiceGain,
     deterministic_audio_sampling::sample_deterministic_f32_range,
 };
 
@@ -330,6 +331,7 @@ pub(super) fn execute_audio_cue_playback_requests(
     audio_settings: Res<AudioSettings>,
     pools: Query<(Entity, &CueVoicePool, Option<&CueVoices>)>,
     owners: Query<Entity, With<NonspatialCueOwner>>,
+    environment_gains: Query<&EnvironmentVoiceGain>,
     playing: Query<&AudioCueSelection>,
     listener: super::spatial_cue_distance::SpatialCueListener,
 ) {
@@ -338,6 +340,7 @@ pub(super) fn execute_audio_cue_playback_requests(
         return;
     };
     let nonspatial_owner = owners.single().ok();
+    let (listener_pose, _) = listener.snapshot();
     let mut pool_entities = [None; 3];
     for (entity, pool, members) in &pools {
         pool_entities[pool.index()] = Some((entity, members));
@@ -389,8 +392,13 @@ pub(super) fn execute_audio_cue_playback_requests(
         let Some(clip) = resolved.clip(&asset_server, variant.source_id) else {
             continue;
         };
+        let emitter_pose = cue.emitter.and_then(|entity| listener.emitter(entity));
         let distance = spatial.then(|| {
-            super::spatial_cue_distance::SpatialCueDistance::from_authored_range(variant.distance)
+            super::spatial_cue_distance::SpatialCueDistance::from_authored_range(
+                variant.distance,
+                view.mixer(),
+                emitter_pose.is_none_or(|(_, water)| water.is_none()),
+            )
         });
         let settings = PlaybackSettings {
             mode: if cue.force_looped || variant.flags & VARIANT_LOOPED != 0 {
@@ -422,9 +430,15 @@ pub(super) fn execute_audio_cue_playback_requests(
                 nonspatial_owner,
                 lifetime_owner: request.lifetime_owner,
                 distance,
-                distance_gain: distance
-                    .zip(cue.emitter)
-                    .map(|(policy, emitter)| listener.gain(policy, emitter)),
+                distance_gain: distance.map(|policy| {
+                    emitter_pose.map_or(0.0, |(position, water)| {
+                        listener_pose.gain(policy, position, water)
+                    })
+                }),
+                environment_gain: request
+                    .lifetime_owner
+                    .and_then(|owner| environment_gains.get(owner).ok())
+                    .map(|gain| gain.0),
             },
         );
         voices.push((voice, cue.priority));

@@ -63,7 +63,6 @@ pub(super) enum WorldDefinitionSourceRecordKind {
     StaffTankCleaningRequest,
     EnvironmentFog,
     EnvironmentLights,
-    PersonNames,
     Location,
 }
 

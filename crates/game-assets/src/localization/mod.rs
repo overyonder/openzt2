@@ -5,19 +5,19 @@ pub mod localization_asset_loading;
 pub mod localization_asset_types;
 mod localization_configuration;
 pub mod localization_precedence_index;
+mod windows_locale_conventions;
 
 pub mod blue_fang_localization_date_format_tokenization;
 pub mod blue_fang_localization_entry_lowering;
 pub mod blue_fang_localization_format_tokenization;
 pub mod blue_fang_localization_presentation_lowering;
 pub mod blue_fang_localization_texture_path_normalization;
-pub mod fallback_localization_formatting;
 
 use bevy::prelude::*;
 
 use localization_asset_loading::register_localization_catalog_asset_and_loader;
 use localization_precedence_index::{
-    index_loaded_localization_entries_after_asset_events, LocalizationPrecedenceIndex,
+    LocalizationPrecedenceIndex, index_loaded_localization_entries_after_asset_events,
 };
 
 pub struct LocalizationAssetPlugin;

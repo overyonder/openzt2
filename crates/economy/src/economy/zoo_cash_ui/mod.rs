@@ -25,6 +25,7 @@ use openzt2_interface_state::ui::authored_ui_activation_contracts::UiNodeActivat
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentRoot;
 use openzt2_ui::authored_ui_text_content_binding::UiTextBinding;
+use openzt2_world_state::world_spawn::world_membership_types::{WorldMember, WorldRoot};
 
 #[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(super) struct UiCashGrantPendingTransaction;
@@ -32,15 +33,16 @@ pub(super) struct UiCashGrantPendingTransaction;
 /// Projects the authoritative zoo account balance into authored cash fields.
 /// The String owned by Bevy's Text component is retained across updates.
 pub(super) fn project_zoo_cash_balance_into_authored_ui_text(
-    cash: Res<ZooCash>,
-    unlimited: Option<Res<UnlimitedZooCash>>,
+    worlds: Query<(Ref<ZooCash>, Ref<UnlimitedZooCash>), With<WorldRoot>>,
     active_localization: Option<Res<LocalizationPrecedenceIndex>>,
     localizations: Res<Assets<LocalizationAsset>>,
-    mut previously_unlimited: Local<bool>,
     mut fields: Query<(Ref<UiTextBinding>, &mut Text, &mut TextColor, &mut TextFont)>,
 ) {
-    let is_unlimited = unlimited.is_some();
-    let policy_changed = is_unlimited != *previously_unlimited;
+    let Ok((cash, unlimited)) = worlds.single() else {
+        return;
+    };
+    let is_unlimited = unlimited.0;
+    let policy_changed = unlimited.is_changed();
     let localization_changed = active_localization
         .as_ref()
         .is_some_and(|active| active.is_changed())
@@ -112,8 +114,6 @@ pub(super) fn project_zoo_cash_balance_into_authored_ui_text(
             );
         }
     }
-
-    *previously_unlimited = is_unlimited;
 }
 
 fn apply_localized_cash_text_presentation(
@@ -144,8 +144,12 @@ pub(super) fn request_cash_grant_transactions_from_authored_ui_actions(
     documents: Res<Assets<UiDocumentAsset>>,
     nodes: Query<(&UiEconomyActions, &UiDocumentOwner)>,
     roots: Query<&UiDocumentRoot>,
+    worlds: Query<Entity, With<WorldRoot>>,
     mut transactions: MessageWriter<TransactionRequest>,
 ) {
+    let Ok(root) = worlds.single() else {
+        return;
+    };
     for activation in activations.read() {
         let Ok((action_records, document_owner)) = nodes.get(activation.node) else {
             continue;
@@ -168,6 +172,7 @@ pub(super) fn request_cash_grant_transactions_from_authored_ui_actions(
             if amount.is_positive() {
                 let operation = commands.spawn((
                     UiCashGrantPendingTransaction,
+                    WorldMember { root },
                     openzt2_zoo_state::economy::general_economy_types::GeneralEconomyTransaction::CashGrant,
                 )).id();
                 transactions.write(TransactionRequest {

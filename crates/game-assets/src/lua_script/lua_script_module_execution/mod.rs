@@ -2,18 +2,18 @@ use std::{cell::RefCell, collections::BTreeSet};
 
 use bevy::prelude::*;
 use mlua::{Function, Lua, MultiValue, Scope, Table, Value};
+use openzt2_game_data::AssetId;
 
 use crate::lua_script::{
-    lua_script_archive_path_index::LuaScriptArchivePathIndex,
-    lua_script_asset_loading::LuaScriptAsset,
+    lua_script_asset_loading::LuaScriptAsset, lua_script_sources::LuaScriptSources,
 };
 
 pub fn install_lua_script_dependency_loading_functions<'scope, 'env: 'scope>(
     lua: &Lua,
     scope: &'scope Scope<'scope, 'env>,
     assets: &'env Assets<LuaScriptAsset>,
-    index: &'env LuaScriptArchivePathIndex,
-    included_assets: &'env RefCell<BTreeSet<bevy::asset::AssetId<LuaScriptAsset>>>,
+    sources: &'env LuaScriptSources,
+    included_assets: &'env RefCell<BTreeSet<AssetId>>,
     active_paths: &'env RefCell<Vec<String>>,
 ) -> mlua::Result<()> {
     let globals = lua.globals();
@@ -33,15 +33,13 @@ pub fn install_lua_script_dependency_loading_functions<'scope, 'env: 'scope>(
     globals.set(
         "include",
         scope.create_function(move |lua, requested: String| {
-            let (path, handle) = resolve_lua_file(lua, index, active_paths, &requested)?;
-            execute_lua_script_module_once_per_virtual_machine(
-                lua,
-                path,
-                handle,
-                assets,
-                included_assets,
-                active_paths,
-            )
+            let path = resolve_lua_file(lua, sources, active_paths, &requested)?;
+            let id = AssetId::from_virtual_path(&path);
+            if included_assets.borrow().contains(&id) {
+                return Ok(());
+            }
+            let function = compile_resolved_lua_source(lua, sources, assets, &path)?;
+            execute_lua_module_once(function, &path, included_assets, active_paths)
         })?,
     )?;
     globals.set(
@@ -50,9 +48,9 @@ pub fn install_lua_script_dependency_loading_functions<'scope, 'env: 'scope>(
             let Some(requested) = requested else {
                 return read_stdin.call::<MultiValue>(());
             };
-            let (path, handle) = resolve_lua_file(lua, index, active_paths, &requested)?;
-            let function = compile_lua_file(lua, path, handle, assets)?;
-            active_paths.borrow_mut().push(path.to_owned());
+            let path = resolve_lua_file(lua, sources, active_paths, &requested)?;
+            let function = compile_resolved_lua_source(lua, sources, assets, &path)?;
+            active_paths.borrow_mut().push(path);
             let result = function.call::<MultiValue>(());
             active_paths.borrow_mut().pop();
             result
@@ -64,8 +62,8 @@ pub fn install_lua_script_dependency_loading_functions<'scope, 'env: 'scope>(
             let Some(requested) = requested else {
                 return compile_stdin.call::<MultiValue>(());
             };
-            let chunk = resolve_lua_file(lua, index, active_paths, &requested)
-                .and_then(|(path, handle)| compile_lua_file(lua, path, handle, assets));
+            let chunk = resolve_lua_file(lua, sources, active_paths, &requested)
+                .and_then(|path| compile_resolved_lua_source(lua, sources, assets, &path));
             match chunk {
                 Ok(function) => Ok(MultiValue::from_vec(vec![Value::Function(function)])),
                 Err(error) => Ok(MultiValue::from_vec(vec![
@@ -78,21 +76,23 @@ pub fn install_lua_script_dependency_loading_functions<'scope, 'env: 'scope>(
     Ok(())
 }
 
-fn resolve_lua_file<'a>(
+fn resolve_lua_file(
     lua: &Lua,
-    index: &'a LuaScriptArchivePathIndex,
+    sources: &LuaScriptSources,
     active_paths: &RefCell<Vec<String>>,
     requested: &str,
-) -> mlua::Result<(&'a str, &'a Handle<LuaScriptAsset>)> {
+) -> mlua::Result<String> {
     let mut level = 1;
     while let Some(source) = lua.inspect_stack(level, |frame| {
         frame.source().source.and_then(|source| {
-            let path = source.strip_prefix('@')?;
-            index.contains_path(path).then(|| path.to_owned())
+            source
+                .strip_prefix('@')
+                .filter(|path| !path.is_empty())
+                .map(str::to_owned)
         })
     }) {
         if let Some(source) = source {
-            return index.resolve(&source, requested).ok_or_else(|| {
+            return sources.resolve(&source, requested).ok_or_else(|| {
                 mlua::Error::runtime(format!(
                     "Lua file {requested} does not resolve from {source}"
                 ))
@@ -102,11 +102,25 @@ fn resolve_lua_file<'a>(
     }
     let paths = active_paths.borrow();
     let source = paths.last().map_or("", String::as_str);
-    index.resolve(source, requested).ok_or_else(|| {
+    sources.resolve(source, requested).ok_or_else(|| {
         mlua::Error::runtime(format!(
             "Lua file {requested} does not resolve from {source}"
         ))
     })
+}
+
+fn compile_resolved_lua_source(
+    lua: &Lua,
+    sources: &LuaScriptSources,
+    assets: &Assets<LuaScriptAsset>,
+    path: &str,
+) -> mlua::Result<Function> {
+    let asset = sources
+        .read_script(assets, path)
+        .map_err(mlua::Error::external)?;
+    lua.load(asset.normalized_source_or_bytecode_bytes())
+        .set_name(format!("@{path}"))
+        .into_function()
 }
 
 fn compile_lua_file(
@@ -128,14 +142,24 @@ pub fn execute_lua_script_module_once_per_virtual_machine(
     path: &str,
     handle: &Handle<LuaScriptAsset>,
     assets: &Assets<LuaScriptAsset>,
-    included_assets: &RefCell<BTreeSet<bevy::asset::AssetId<LuaScriptAsset>>>,
+    included_assets: &RefCell<BTreeSet<AssetId>>,
     active_paths: &RefCell<Vec<String>>,
 ) -> mlua::Result<()> {
-    let id = handle.id();
+    let id = AssetId::from_virtual_path(path);
     if included_assets.borrow().contains(&id) {
         return Ok(());
     }
     let function = compile_lua_file(lua, path, handle, assets)?;
+    execute_lua_module_once(function, path, included_assets, active_paths)
+}
+
+fn execute_lua_module_once(
+    function: Function,
+    path: &str,
+    included_assets: &RefCell<BTreeSet<AssetId>>,
+    active_paths: &RefCell<Vec<String>>,
+) -> mlua::Result<()> {
+    let id = AssetId::from_virtual_path(path);
     included_assets.borrow_mut().insert(id);
     active_paths.borrow_mut().push(path.to_owned());
     let result = function.call::<()>(());

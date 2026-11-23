@@ -2,8 +2,6 @@ use bevy::prelude::*;
 
 use super::camera_runtime_state_types::OverheadRig;
 use crate::camera::camera_execution_types::CameraBounds;
-use crate::camera::camera_execution_types::CameraEasing;
-use crate::camera::camera_execution_types::CameraTransition;
 use crate::camera::camera_execution_types::CameraTuning;
 
 const ANGLE_TAU: f32 = std::f32::consts::TAU;
@@ -185,6 +183,14 @@ pub(crate) fn consume_wheel_zoom(queue: &mut WheelZoomQueue, delta_seconds: f32)
 }
 
 pub(crate) fn overhead_eye_and_target(rig: &OverheadRig) -> (Vec3, Vec3) {
+    let (eye, target) = overhead_unlifted_eye_and_target(rig);
+    (
+        eye + Vec3::Y * rig.camera_ground_fit_offset_m,
+        target + Vec3::Y * rig.target_ground_fit_offset_m,
+    )
+}
+
+pub(super) fn overhead_unlifted_eye_and_target(rig: &OverheadRig) -> (Vec3, Vec3) {
     let hierarchy_root = Vec3::new(rig.focus.x, rig.height_m, rig.focus.y);
     // The node assembly is root -> vertical node -> `rotNode`, translated
     // `-lookAtDist` and rotated by the pitch -> `camNode`, translated
@@ -194,43 +200,17 @@ pub(crate) fn overhead_eye_and_target(rig: &OverheadRig) -> (Vec3, Vec3) {
     // `parentingOffset` belongs to a sibling node used by parented modes.
     let horizontal = rig.look_at_distance_m + rig.distance * rig.pitch.cos();
     let eye = hierarchy_root
-        + Vec3::Y * (rig.minimum_zoom_offset_m + rig.camera_ground_fit_offset_m)
+        + Vec3::Y * rig.minimum_zoom_offset_m
         + Vec3::new(
             -rig.yaw.sin() * horizontal,
             rig.distance * rig.pitch.sin(),
             rig.yaw.cos() * horizontal,
         );
-    let target = hierarchy_root
-        + Vec3::Y
-            * (rig.minimum_zoom_offset_m + rig.target_ground_fit_offset_m + rig.look_at_height_m);
+    let target = hierarchy_root + Vec3::Y * (rig.minimum_zoom_offset_m + rig.look_at_height_m);
     (eye, target)
 }
 
 pub(crate) fn overhead_pose(rig: &OverheadRig) -> Transform {
     let (eye, target) = overhead_eye_and_target(rig);
     Transform::from_translation(eye).looking_at(target, Vec3::Y)
-}
-
-pub(crate) fn advance_transition(
-    transition: &mut CameraTransition,
-    transform: &mut Transform,
-    delta_seconds: f32,
-) -> bool {
-    transition.elapsed = (transition.elapsed + delta_seconds).min(transition.duration);
-    let linear = (transition.elapsed / transition.duration).clamp(0.0, 1.0);
-    let t = match transition.easing {
-        CameraEasing::SmoothStep => linear * linear * (3.0 - 2.0 * linear),
-    };
-    transform.translation = transition
-        .from
-        .translation
-        .lerp(transition.to.translation, t);
-    transform.scale = transition.from.scale.lerp(transition.to.scale, t);
-    transform.rotation = transition.from.rotation.slerp(transition.to.rotation, t);
-    if transition.elapsed >= transition.duration {
-        *transform = transition.to;
-        true
-    } else {
-        false
-    }
 }

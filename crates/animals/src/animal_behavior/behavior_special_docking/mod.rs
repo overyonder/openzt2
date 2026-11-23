@@ -40,7 +40,7 @@ use openzt2_zoo_state::{
 
 use super::{
     behavior_container_admission::BehaviorAdmissionInstruction,
-    behavior_docking_execution::{find_named_descendant_global_transform, NamedNodeTransforms},
+    behavior_named_nodes::NamedNodeTransforms,
     behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation,
 };
 
@@ -59,15 +59,13 @@ type DockActor<'w, 's, A> = Query<
 #[derive(SystemParam)]
 struct DockPoses<'w, 's> {
     transforms: Query<'w, 's, &'static GlobalTransform>,
-    children: Query<'w, 's, &'static Children>,
     nodes: NamedNodeTransforms<'w, 's>,
 }
 
 impl DockPoses<'_, '_> {
     fn node(&self, actor: Entity, node: Option<&str>) -> Option<GlobalTransform> {
         if let Some(node) = node {
-            find_named_descendant_global_transform(actor, node, &self.children, &self.nodes)
-                .copied()
+            self.nodes.pose(actor, node).copied()
         } else {
             self.transforms.get(actor).ok().copied()
         }
@@ -93,6 +91,7 @@ pub(super) fn register(app: &mut App) {
         .add_observer(start_spline_dock)
         .add_observer(start_tank_wall_dock)
         .add_observer(use_portal)
+        .add_observer(clear_portal_crossing)
         .add_observer(retire_spline_docking)
         .add_systems(
             FixedUpdate,
@@ -103,6 +102,17 @@ pub(super) fn register(app: &mut App) {
             FixedUpdate,
             (finish_special_docks, accept_spline_approach_outcomes).in_set(FixedGameSet::Act),
         );
+}
+
+#[derive(Component)]
+struct PortalCrossing(
+    openzt2_zoo_state::behavior_task_execution_types::running_actions::BehaviorInstructionId,
+);
+
+fn clear_portal_crossing(removed: On<Remove<RunBehaviorUsePortal>>, mut commands: Commands) {
+    commands
+        .entity(removed.entity)
+        .try_remove::<PortalCrossing>();
 }
 
 #[derive(Component)]
@@ -743,7 +753,7 @@ impl TankPortalDocks<'_, '_> {
         let rotation = Quat::from_rotation_y(forward.x.atan2(forward.y));
         let dock =
             |point: Vec2| Transform::from_xyz(point.x, depth, point.y).with_rotation(rotation);
-        let offset = forward * self.grid.spacing_m * 0.5;
+        let offset = forward;
         Some((dock(centre - offset), dock(centre + offset)))
     }
 }
@@ -769,27 +779,52 @@ fn use_portal(
         mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
         return;
     };
-    let Some(place) = poses.node(entrance, None) else {
-        mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
-        return;
-    };
-    let destination = if portals.get(entrance).is_ok_and(|(portal, member, gate)| {
+    let graph_portal = portals.get(entrance).ok().filter(|(portal, member, gate)| {
         member.root == world.root
             && portal.destination != entrance
             && gate.is_none_or(|gate| gate.open && !gate.locked)
-    }) {
+    });
+    let tank_endpoints = poses
+        .node(actor, None)
+        .and_then(|from| tank_portals.endpoints(entrance, world.root, from.translation()));
+    let place = poses.node(entrance, None).or_else(|| {
+        let pose = tank_endpoints.map(|(near, _)| near).or_else(|| {
+            let (portal, _, _) = graph_portal?;
+            tank_portals.graph_endpoint_pose(entrance, portal.destination)
+        })?;
+        let global = GlobalTransform::from(pose);
+        commands.entity(entrance).insert((pose, global));
+        Some(global)
+    });
+    let Some(place) = place else {
+        mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
+        return;
+    };
+    let destination = if graph_portal.is_some() {
         Some(place.compute_transform())
     } else {
-        poses.node(actor, None).and_then(|from| {
-            tank_portals
-                .endpoints(entrance, world.root, from.translation())
-                .map(|(near, _)| near)
-        })
+        tank_endpoints.map(|(near, _)| near)
     };
     if let Some(destination) = destination {
         navigation.request(actor, step, entrance, &place, destination, &mut commands);
     } else {
         mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
+    }
+}
+
+impl TankPortalDocks<'_, '_> {
+    fn graph_endpoint_pose(&self, source: Entity, destination: Entity) -> Option<Transform> {
+        let position = self
+            .grid
+            .cell_translation(self.nodes.get(source).ok()?.cell);
+        let destination = self
+            .grid
+            .cell_translation(self.nodes.get(destination).ok()?.cell);
+        let forward = (destination - position).xz().try_normalize()?;
+        Some(
+            Transform::from_translation(position)
+                .with_rotation(Quat::from_rotation_y(forward.x.atan2(forward.y))),
+        )
     }
 }
 
@@ -804,6 +839,7 @@ fn finish_special_docks(
             &PendingBehaviorDockingCompletion,
             &WorldMember,
             Option<&RunBehaviorUsePortal>,
+            Option<&PortalCrossing>,
         ),
         (
             Without<PendingBehaviorTaskFailure>,
@@ -829,7 +865,7 @@ fn finish_special_docks(
 
     let mut settled_failures = bevy::ecs::entity::EntityHashSet::default();
     for event in failures.read() {
-        let Ok((task, step, waiting, world, portal)) = docks.get(event.entity) else {
+        let Ok((task, step, waiting, world, portal, crossing)) = docks.get(event.entity) else {
             continue;
         };
         if event.request_id != waiting.request_id || !waiting.owns(task, step, Some(waiting.target))
@@ -839,7 +875,9 @@ fn finish_special_docks(
         if !settled_failures.insert(event.entity) {
             continue;
         }
-        let exit = portal.and_then(|_| portal_exit(task.target?, world.root));
+        let exit = portal
+            .filter(|_| crossing.is_none())
+            .and_then(|_| portal_exit(task.target?, world.root));
         if let Some((_, pose)) = exit {
             if let Ok((mut transform, parent)) = actors.get_mut(event.entity) {
                 *transform = parent
@@ -861,7 +899,7 @@ fn finish_special_docks(
         if settled_failures.contains(&event.entity) {
             continue;
         }
-        let Ok((task, step, waiting, world, portal)) = docks.get(event.entity) else {
+        let Ok((task, step, waiting, world, portal, crossing)) = docks.get(event.entity) else {
             continue;
         };
         if event.request_id != waiting.request_id || !waiting.owns(task, step, event.target) {
@@ -870,6 +908,10 @@ fn finish_special_docks(
         commands
             .entity(event.entity)
             .remove::<PendingBehaviorDockingCompletion>();
+        if crossing.is_some_and(|crossing| crossing.0 == step.id()) {
+            step.complete(event.entity, clock.tick, &mut commands);
+            continue;
+        }
         if let Some(portal) = portal.filter(|_| task.target == Some(waiting.target)) {
             if let Some(clip) = &portal.0.animation {
                 clips.write(AnimationClipPlaybackRequest {
@@ -892,7 +934,7 @@ fn finish_special_docks(
                 );
                 continue;
             }
-            if let Ok((mut transform, parent)) = actors.get_mut(event.entity) {
+            if let Ok((transform, parent)) = actors.get(event.entity) {
                 let parent = parent
                     .and_then(|parent| transforms.get(parent.parent()).ok())
                     .map(|(pose, _)| pose);
@@ -900,11 +942,20 @@ fn finish_special_docks(
                     parent.transform_point(transform.translation)
                 });
                 if let Some((_, exit)) = tank_portals.endpoints(waiting.target, world.root, from) {
-                    *transform = parent.map_or(exit, |parent| {
-                        GlobalTransform::from(exit).reparented_to(parent)
-                    });
-                    step.complete(event.entity, clock.tick, &mut commands);
-                    continue;
+                    if let Ok((entrance, _)) = transforms.get(waiting.target) {
+                        commands
+                            .entity(event.entity)
+                            .insert(PortalCrossing(step.id()));
+                        navigation.request(
+                            event.entity,
+                            step,
+                            waiting.target,
+                            entrance,
+                            exit,
+                            &mut commands,
+                        );
+                        continue;
+                    }
                 }
             }
             mark_behavior_task_for_failure_and_stop_navigation(event.entity, &mut commands);

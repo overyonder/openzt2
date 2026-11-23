@@ -17,8 +17,8 @@ use super::{
 
 pub(super) fn initialize_catalogue_unlock_storage_from_active_world_definitions(
     mut commands: Commands,
-    roots: Query<
-        Entity,
+    mut roots: Query<
+        (Entity, &mut UnlockedCatalogueDefinitionSet),
         (
             With<WorldRoot>,
             With<WorldLoadCompleted>,
@@ -30,14 +30,8 @@ pub(super) fn initialize_catalogue_unlock_storage_from_active_world_definitions(
     profile_variables: Option<
         Res<openzt2_zoo_state::progression::profile_scenario_variables::ProfileScenarioVariables>,
     >,
-    mut unlocked_catalogue_definitions: ResMut<UnlockedCatalogueDefinitionSet>,
-    active_world: Query<Entity, (With<WorldRoot>, With<WorldLoadCompleted>)>,
 ) {
-    let Some(root) = active_world
-        .single()
-        .ok()
-        .filter(|&world| roots.contains(world))
-    else {
+    let Ok((root, mut unlocked_catalogue_definitions)) = roots.single_mut() else {
         return;
     };
     let Some(definitions) = active_definitions.get(&definitions) else {

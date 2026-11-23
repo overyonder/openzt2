@@ -2,6 +2,7 @@ use super::world_unloading::retire_world_root;
 use bevy::prelude::*;
 use openzt2_interface_state::shell::shell_screen_presentation_types::LoadingScreen;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentRoot;
+use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_world_state::world_spawn::starting_animal_hydration::PendingStartingAnimal;
 use openzt2_world_state::world_spawn::world_hydration_completion::WorldLoadFinished;
 use openzt2_world_state::world_spawn::world_hydration_types::{
@@ -10,7 +11,7 @@ use openzt2_world_state::world_spawn::world_hydration_types::{
 };
 use openzt2_world_state::world_spawn::world_load_completion_marker::{
     StartingFenceTopologyHydrated, StartingPathsHydrated, StartingSpawnValuesApplied,
-    StartingTerrainHydrated, WorldClockInitialized, WorldLoadCompleted,
+    StartingTerrainHydrated, WorldLoadCompleted,
 };
 use openzt2_world_state::world_spawn::world_load_failure::{WorldLoadFailed, WorldLoadFailure};
 use openzt2_world_state::world_spawn::world_load_request_acceptance::WorldLoadOperationOwner;
@@ -66,7 +67,6 @@ pub fn complete_or_fail_finished_world_hydration(
             &WorldRoot,
             &WorldLoadFailure,
             Option<&WorldLoadOperationOwner>,
-            Has<WorldClockInitialized>,
         ),
         With<WorldHydration>,
     >,
@@ -74,7 +74,7 @@ pub fn complete_or_fail_finished_world_hydration(
         (Entity, &WorldRoot, Option<&WorldLoadOperationOwner>),
         (
             With<WorldHydration>,
-            With<WorldClockInitialized>,
+            With<ZooClock>,
             With<StartingTerrainHydrated>,
             With<StartingPathsHydrated>,
             With<StartingFenceTopologyHydrated>,
@@ -87,9 +87,9 @@ pub fn complete_or_fail_finished_world_hydration(
     mut finished: MessageWriter<WorldLoadFinished>,
     mut failed: MessageWriter<WorldLoadFailed>,
 ) {
-    for (root, world, reason, operation, initialized_clock) in &failures {
+    for (root, world, reason, operation) in &failures {
         warn!(?root, scenario = ?world.scenario, ?reason, "world hydration failed");
-        retire_world_root(&mut commands, root, initialized_clock);
+        retire_world_root(&mut commands, root);
         failed.write(WorldLoadFailed {
             operation: operation.map(|owner| owner.0),
             root: Some(root),

@@ -75,10 +75,11 @@ pub(crate) fn project_live_world_subject_values_to_information_list_rows(
     facility_profits: Query<&FacilityProfit>,
     donation_totals: Query<&DonationTotal>,
     transport_vehicles: Query<(&TransportVehicle, Option<&VehicleRiders>)>,
-    zoo_day: Res<ZooDay>,
+    zoo_day: Single<Ref<ZooDay>>,
     mut bound_values: Query<(Ref<UiValueBinding>, &mut UiValue, Option<&mut Text>)>,
     mut invalidation: InformationValueInvalidation,
 ) {
+    let zoo_day = zoo_day.into_inner();
     let day_changed = zoo_day.is_changed();
     let removed = &mut invalidation.removed;
     let dirty_subjects = invalidation

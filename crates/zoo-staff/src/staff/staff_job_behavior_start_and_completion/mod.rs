@@ -1,3 +1,4 @@
+use openzt2_zoo_state::behavior_task_execution_types::allocate_behavior_execution_id;
 #[cfg(test)]
 mod tests;
 use bevy::prelude::*;
@@ -9,10 +10,10 @@ use openzt2_zoo_state::animal_behavior::behavior_task_effective_score_types::Beh
 use openzt2_zoo_state::animal_health::types::Dead;
 use openzt2_zoo_state::animal_lifecycle::types::Animal;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionPhase;
-use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionSequence;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskFailed;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskFinished;
+use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskGeneration;
 use openzt2_zoo_state::locomotion::locomotion_types::Destination;
 use openzt2_zoo_state::maintenance::maintenance_types::AppliedHabitatWasteCleanup;
 
@@ -28,7 +29,7 @@ use super::{
 pub(crate) fn start_unstarted_authored_behavior_tasks_for_claimed_staff_jobs(
     mut commands: Commands,
     behavior_document_assets: Res<Assets<BehaviorDocumentAsset>>,
-    mut execution_sequence: ResMut<BehaviorTaskExecutionSequence>,
+    mut behavior_generations: Query<&mut BehaviorTaskGeneration>,
     staff: Query<
         (Entity, &CurrentJob),
         (
@@ -72,7 +73,11 @@ pub(crate) fn start_unstarted_authored_behavior_tasks_for_claimed_staff_jobs(
             continue;
         };
         behavior_task.declaration_index = declaration_index;
-        let execution_id = execution_sequence.next();
+        let execution_id = allocate_behavior_execution_id(
+            staff_entity,
+            behavior_generations.get_mut(staff_entity).ok(),
+            &mut commands,
+        );
         behavior_task.execution_id = Some(execution_id);
         commands
             .entity(staff_entity)

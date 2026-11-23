@@ -27,8 +27,8 @@ pub(super) fn clip_authored_graph_generated_geometry(
 
 pub(super) fn update_visible_authored_graph_drawings(
     mut commands: Commands,
-    finance: Res<MonthlyFinanceHistory>,
-    fame: Res<FameHistory>,
+    finance: Single<Ref<MonthlyFinanceHistory>>,
+    fame: Single<Ref<FameHistory>>,
     active_localization: Res<LocalizationPrecedenceIndex>,
     localizations: Res<Assets<LocalizationAsset>>,
     graphs: Query<(
@@ -49,6 +49,8 @@ pub(super) fn update_visible_authored_graph_drawings(
         With<UiGeneratedGraphPresentationElement>,
     >,
 ) {
+    let finance = finance.into_inner();
+    let fame = fame.into_inner();
     let localization_changed = active_localization.is_changed() || localizations.is_changed();
     let Some(localization) = active_localization.borrow_loaded_localization_view(&localizations)
     else {

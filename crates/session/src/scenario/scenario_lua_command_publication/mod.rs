@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
 use openzt2_zoo_state::economy::scenario_economy_command_types::ScenarioEconomyCommand;
 use openzt2_zoo_state::progression::award_and_progression_fact_types::AdjustScenarioAwardPointTotalRequest;
@@ -9,7 +10,8 @@ use super::{
 };
 
 #[derive(bevy::ecs::system::SystemParam)]
-pub(super) struct ScenarioLuaOutputs<'w> {
+pub(super) struct ScenarioLuaOutputs<'w, 's> {
+    members: Query<'w, 's, &'static WorldMember>,
     economy: MessageWriter<'w, ScenarioEconomyCommand>,
     award_points: MessageWriter<'w, AdjustScenarioAwardPointTotalRequest>,
     challenge_offers: MessageWriter<'w, CreateScenarioChallengeOfferFromLuaSourcePathRequest>,
@@ -31,7 +33,7 @@ pub(super) struct ScenarioLuaOutputs<'w> {
     fame: MessageWriter<'w, openzt2_zoo_state::progression::fame_types::SetScenarioMaximumFame>,
 }
 
-impl ScenarioLuaOutputs<'_> {
+impl ScenarioLuaOutputs<'_, '_> {
     pub(super) fn write_timed_boundary(
         &mut self,
         command: super::scenario_lua_ui::ScenarioUiCommand,
@@ -40,13 +42,27 @@ impl ScenarioLuaOutputs<'_> {
     }
 
     pub(super) fn publish(&mut self, terminal: Entity, result: ScenarioLuaScriptResult) {
+        let root = self
+            .members
+            .get(terminal)
+            .map_or(terminal, |member| member.root);
         if let Some(percent) = result.maximum_fame_percent {
             self.fame.write(
                 openzt2_zoo_state::progression::fame_types::SetScenarioMaximumFame { percent },
             );
         }
         let _ = self.entities.write_batch(result.entities);
-        let _ = self.ui.write_batch(result.ui);
+        let _ = self
+            .ui
+            .write_batch(result.ui.into_iter().map(|mut command| {
+                if let super::scenario_lua_ui::ScenarioUiCommand::ZooMessage {
+                    root: owner, ..
+                } = &mut command
+                {
+                    *owner = Some(root);
+                }
+                command
+            }));
         if result.persist_profile_variables {
             self.persist_profile_variables.write(openzt2_zoo_state::progression::profile_scenario_variables::PersistProfileScenarioVariables);
         }
@@ -86,7 +102,7 @@ impl ScenarioLuaOutputs<'_> {
             .into_iter()
             .for_each(|delta| {
                 self.award_points
-                    .write(AdjustScenarioAwardPointTotalRequest { delta });
+                    .write(AdjustScenarioAwardPointTotalRequest { root, delta });
             });
         result
             .challenge_offer_source_paths

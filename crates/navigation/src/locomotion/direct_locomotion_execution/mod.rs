@@ -87,11 +87,13 @@ pub(super) fn calculate_direct_locomotion_steering(
 pub(super) fn integrate_non_physics_direct_locomotion(
     animation_samples: LocomotionAnimationSamples,
     time: Res<Time<Fixed>>,
-    navigation_graph: Option<
-        Res<openzt2_zoo_state::locomotion::locomotion_types::ActiveTerrainDerivedNavigationGraph>,
-    >,
+    roots: Query<(
+        &TerrainIndex,
+        Option<
+            &openzt2_zoo_state::locomotion::locomotion_types::ActiveTerrainDerivedNavigationGraph,
+        >,
+    )>,
     fences: FenceNavigationPolicy,
-    terrain_index: Res<TerrainIndex>,
     terrain_assets: Res<Assets<TerrainAsset>>,
     terrain_chunks: Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
     world_bounds: Query<&WorldTerrainHorizontalBounds>,
@@ -104,7 +106,7 @@ pub(super) fn integrate_non_physics_direct_locomotion(
             &mut Velocity,
             &Steering,
             &DirectLocomotion,
-            Option<&WorldMember>,
+            &WorldMember,
             Option<&LocomotionAnimationSource>,
         ),
         Without<RigidBody>,
@@ -123,6 +125,9 @@ pub(super) fn integrate_non_physics_direct_locomotion(
         animation_source,
     ) in &mut direct_locomotion_agents
     {
+        let Ok((terrain_index, navigation_graph)) = roots.get(world_member.root) else {
+            continue;
+        };
         let playback = animation_samples.get(entity, animation_source);
         let animation_mean_speed = animation_source
             .map_or(navigation_agent.max_speed_mps, |source| {
@@ -141,22 +146,21 @@ pub(super) fn integrate_non_physics_direct_locomotion(
         let mut next_translation = previous_translation + local_velocity.0 * fixed_delta_seconds;
         // These actors have no Avian body, so world-edge colliders cannot
         // constrain them. Use their world's authored bounds at the motion owner.
-        if let Some(member) = world_member {
-            let Ok(bounds) = world_bounds.get(member.root) else {
-                local_velocity.0 = Vec3::ZERO;
-                continue;
-            };
-            let horizontal = next_translation.xz().clamp(bounds.min, bounds.max);
-            if horizontal.x != next_translation.x {
-                local_velocity.0.x = 0.0;
-            }
-            if horizontal.y != next_translation.z {
-                local_velocity.0.z = 0.0;
-            }
-            next_translation.x = horizontal.x;
-            next_translation.z = horizontal.y;
+        let Ok(bounds) = world_bounds.get(world_member.root) else {
+            local_velocity.0 = Vec3::ZERO;
+            continue;
+        };
+        let horizontal = next_translation.xz().clamp(bounds.min, bounds.max);
+        if horizontal.x != next_translation.x {
+            local_velocity.0.x = 0.0;
         }
+        if horizontal.y != next_translation.z {
+            local_velocity.0.z = 0.0;
+        }
+        next_translation.x = horizontal.x;
+        next_translation.z = horizontal.y;
         if fences.gate_blocks_movement(
+            world_member.root,
             entity,
             navigation_agent.capabilities,
             previous_translation,
@@ -169,7 +173,7 @@ pub(super) fn integrate_non_physics_direct_locomotion(
 
         let locomotion_mode = locomotion_mode.copied().unwrap_or_default();
         if locomotion_mode != LocomotionMode::Flight {
-            let path_height = navigation_graph.as_deref().and_then(|graph| {
+            let path_height = navigation_graph.and_then(|graph| {
                 super::spatial_index_and_docking_operations::connected_path_surface_height(
                     graph.terrain_derived_navigation_graph(),
                     previous_translation,
@@ -183,7 +187,7 @@ pub(super) fn integrate_non_physics_direct_locomotion(
                 fit_to_terrain(
                     locomotion_mode,
                     &mut local_transform.translation,
-                    &terrain_index,
+                    terrain_index,
                     &terrain_assets,
                     &terrain_chunks,
                 );

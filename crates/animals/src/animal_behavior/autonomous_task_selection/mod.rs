@@ -9,7 +9,7 @@ mod world_object_targets;
 
 use super::{
     behavior_candidate_selection::{
-        candidate_requirements_are_satisfied, WeightedBehaviorTaskRanking,
+        candidate_requirements_are_satisfied, BehaviorCandidateRanking,
     },
     behavior_random_stream_state::BehaviorRandomStream,
     behavior_set_start_request_types::PendingBehaviorSet,
@@ -187,13 +187,14 @@ pub(super) fn select_idle_animal_tasks(
         let area_restricted = authored_types.contains(&AssetId::from_key("b_generatestraversabilityinfo"))
             || authored_types.contains(&AssetId::from_key("unspecified"));
         let animal_habitat = world_objects.habitat_at(facts.world.root, facts.transform.translation());
-        let mut ranking = WeightedBehaviorTaskRanking::new(policy.minimum_score);
+        let mut ranking = BehaviorCandidateRanking::new(policy.minimum_score);
         let mut considered_candidates = 0_u32;
         let held_tokens: Vec<_> = tokens
             .iter_many(token_owners.get(animal).ok().into_iter().flatten().copied())
             .flatten()
             .filter(|(_, token)| clock.tick >= token.available_at && clock.tick < token.expires_at)
             .collect();
+        let ticks_per_day = definitions.timing().ticks_per_day;
         for (document, declaration) in declarations.iter() {
             let declaration = *declaration;
             let Some(task) = assets
@@ -202,7 +203,7 @@ pub(super) fn select_idle_animal_tasks(
             else {
                 continue;
             };
-            if !subject_can_consider_task(task, &facts, authored_types) {
+            if !subject_can_consider_task(task, &facts, authored_types, clock.tick, ticks_per_day) {
                 cooldowns.disarm(task.id);
                 continue;
             }
@@ -241,7 +242,7 @@ pub(super) fn select_idle_animal_tasks(
                         },
                         |role, fact| match role {
                             BehaviorCandidateRole::Subject => true,
-                            BehaviorCandidateRole::Target => facts.satisfies(fact),
+                            BehaviorCandidateRole::Target => facts.satisfies(fact, clock.tick, ticks_per_day),
                             BehaviorCandidateRole::Object => false,
                         },
                     ) {
@@ -263,7 +264,6 @@ pub(super) fn select_idle_animal_tasks(
                     trace!(?animal, task = %task.name, score, priority = task.priority.unwrap_or_default(),
                     "animal self task scored");
                     ranking.consider(
-                        task.id,
                         (
                             document,
                             declaration,
@@ -274,7 +274,6 @@ pub(super) fn select_idle_animal_tasks(
                         ),
                         task.priority.unwrap_or_default(),
                         score,
-                        |upper| random.range_u32(upper),
                     );
                 }
                 continue;
@@ -291,7 +290,7 @@ pub(super) fn select_idle_animal_tasks(
                     requirement.candidate_role == BehaviorCandidateRole::Target
                         && !requirement.candidate_type_identifiers.is_empty()
                 });
-                target_types.candidates(requirement, true, candidates);
+                target_types.candidates(facts.world.root, requirement, true, candidates);
             }
             for (target, target_facts) in animal_targets.animals.iter_many(candidates.iter().copied()).flatten() {
                 if target == animal || target_facts.world.root != facts.world.root {
@@ -330,6 +329,8 @@ pub(super) fn select_idle_animal_tasks(
                             target,
                             &target_facts,
                             fact,
+                            clock.tick,
+                            ticks_per_day,
                         ),
                         BehaviorCandidateRole::Object => false,
                     },
@@ -354,7 +355,6 @@ pub(super) fn select_idle_animal_tasks(
                 debug!(?animal, task = %task.name, ?target, score, distance,
                     "animal task animal target scored");
                 ranking.consider(
-                    task.id,
                     (
                         document,
                         declaration,
@@ -365,7 +365,6 @@ pub(super) fn select_idle_animal_tasks(
                     ),
                     task.priority.unwrap_or_default(),
                     score,
-                    |upper| random.range_u32(upper),
                 );
             }
             }
@@ -479,11 +478,9 @@ pub(super) fn select_idle_animal_tasks(
                     };
                     considered_candidates += 1;
                     ranking.consider(
-                        task.id,
                         (document, declaration, task, shore.region, None, Some(shore)),
                         task.priority.unwrap_or_default(),
                         score,
-                        |upper| random.range_u32(upper),
                     );
                 }
                 continue;
@@ -566,11 +563,9 @@ pub(super) fn select_idle_animal_tasks(
                     debug!(?animal, task = %task.name, ?fence, score, "animal fence task scored");
                     considered_candidates += 1;
                     ranking.consider(
-                        task.id,
                         (document, declaration, task, fence, None, None),
                         task.priority.unwrap_or_default(),
                         score,
-                        |upper| random.range_u32(upper),
                     );
                 }
             }
@@ -580,7 +575,7 @@ pub(super) fn select_idle_animal_tasks(
                 else {
                     continue;
                 };
-                target_types.candidates(Some(target_requirement), false, candidates);
+                target_types.candidates(facts.world.root, Some(target_requirement), false, candidates);
             }
             for candidate in candidates.iter().copied() {
                 let Ok(target) = world_objects.objects.get(candidate) else {
@@ -681,19 +676,15 @@ pub(super) fn select_idle_animal_tasks(
                     minimum_score = policy.minimum_score,
                     "animal task target scored");
                 ranking.consider(
-                    task.id,
                     (document, declaration, task, target.entity, token.map(|(entity, _)| entity), None),
                     task.priority.unwrap_or_default(),
                     score,
-                    |upper| random.range_u32(upper),
                 );
                 }
             }
         }
-        // The known candidate subset cannot establish a native singleton.
-        // Do not promote a zero score merely because another producer is missing.
         let Some(((document, declaration, task, target, object, shore), score)) =
-            ranking.finish(|upper| random.range_u32(upper))
+            ranking.finish(|| random.next_u32())
         else {
             debug!(?animal, considered_candidates,
                 thirst = ?facts.source_need(AssetId::from_key("thirst")),
@@ -830,6 +821,8 @@ fn subject_can_consider_task(
     task: &BehaviorTask,
     facts: &AnimalCandidateFactsItem<'_, '_>,
     authored_types: &[AssetId],
+    tick: u64,
+    ticks_per_day: u32,
 ) -> bool {
     // Prune subject mismatches before scanning world targets, while retaining
     // all authored target checks for concrete candidate evaluation.
@@ -838,7 +831,7 @@ fn subject_can_consider_task(
         |role, required| {
             role != BehaviorCandidateRole::Subject || facts.matches_type(required, authored_types)
         },
-        |role, fact| role != BehaviorCandidateRole::Subject || facts.satisfies(fact),
+        |role, fact| role != BehaviorCandidateRole::Subject || facts.satisfies(fact, tick, ticks_per_day),
     )
 }
 

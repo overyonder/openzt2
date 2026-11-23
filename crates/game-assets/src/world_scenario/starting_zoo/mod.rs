@@ -7,8 +7,8 @@ pub mod entities;
 use std::{collections::BTreeMap, io};
 
 use openzt2_game_data::{
-    world_definitions::simulation_time::SimulationTimingDefinition,
-    world_scenario::StartingZooRecord, AssetId,
+    AssetId, world_definitions::simulation_time::SimulationTimingDefinition,
+    world_scenario::StartingZooRecord,
 };
 
 use crate::source_coordinate_conversion::convert_source_z_up_vector_to_bevy_y_up_coordinates;
@@ -22,6 +22,7 @@ pub(super) fn lower(
     dependencies: &[SourceReference],
     actor_scene_paths: &BTreeMap<String, String>,
     timing: &SimulationTimingDefinition,
+    former_fence_types: &mut BTreeMap<(AssetId, u64), AssetId>,
 ) -> io::Result<StartingZooRecord> {
     let map = map_id(document)?;
     let roots = document.root.element_children().collect::<Vec<_>>();
@@ -115,6 +116,7 @@ pub(super) fn lower(
         dependencies,
         actor_scene_paths,
         &mut starting_zoo_record,
+        former_fence_types,
     )?;
     Ok(starting_zoo_record)
 }

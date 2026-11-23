@@ -1,5 +1,6 @@
 //! Direct adapter from shipped Blue Fang document shapes to the owned scenario schema input.
 
+use super::authored_world_scenario_state::{AuthoredWorldScenarioState, ScenarioNodePolicy};
 use crate::world_scenario::world_scenario_source_reference_resolution::SourceReference;
 
 use std::{collections::BTreeMap, io};
@@ -9,6 +10,7 @@ use crate::source_document::ordered_source_document_types::{
 };
 use crate::source_document::source_document_semantic_name::canonicalize_source_document_record_key;
 use openzt2_game_data::{
+    AssetId,
     world_definitions::simulation_time::SimulationTimingDefinition,
     world_scenario::{
         CampaignScenarioRecord, PhotoChallengeMemberRecord, PhotoChallengeRule,
@@ -17,7 +19,6 @@ use openzt2_game_data::{
         ScenarioObjectiveGroupRecord, ScenarioObjectiveRecord, ScenarioRecordFlags,
         ScenarioScriptBinding, ScenarioScriptPhase, WorldLocationRecord, WorldScenarioDocument,
     },
-    AssetId,
 };
 
 pub(in crate::world_scenario) fn lower_documents(
@@ -25,8 +26,9 @@ pub(in crate::world_scenario) fn lower_documents(
     dependencies: &[SourceReference],
     actor_scene_paths: &BTreeMap<String, String>,
     timing: Option<&SimulationTimingDefinition>,
-) -> io::Result<WorldScenarioDocument> {
+) -> io::Result<(WorldScenarioDocument, AuthoredWorldScenarioState)> {
     let mut output = WorldScenarioDocument::default();
+    let mut authored = AuthoredWorldScenarioState::default();
     let mut bindings = Vec::new();
     let mut photo_bindings = Vec::new();
     for document in documents {
@@ -43,6 +45,7 @@ pub(in crate::world_scenario) fn lower_documents(
                     dependencies,
                     actor_scene_paths,
                     timing,
+                    &mut authored.former_fence_types,
                 )?);
                 Ok(())
             }
@@ -86,17 +89,13 @@ pub(in crate::world_scenario) fn lower_documents(
             }
             _ => {
                 let mut rules = Vec::new();
-                let roots = document.root.element_children().collect::<Vec<_>>();
-                collect_rules(
-                    &roots,
-                    None,
-                    document.root.attribute("chain").is_some_and(truthy),
-                    document
-                        .root
-                        .attribute("updateWhenPaused")
-                        .is_some_and(truthy),
-                    &mut rules,
-                );
+                if matches!(root, "BFScenarioGroup" | "ZTScenarioMgr" | "BFScenarioRule") {
+                    collect_rules(&document.root, &mut rules);
+                } else {
+                    for child in document.root.element_children() {
+                        collect_rules(child, &mut rules);
+                    }
+                }
                 if !rules.is_empty() {
                     let scenario = source_stem(&path)?;
                     collect_bindings(
@@ -109,25 +108,46 @@ pub(in crate::world_scenario) fn lower_documents(
                         &mut bindings,
                     )?;
                     let mut objective_groups = Vec::new();
-                    collect_objective_groups(
-                        document,
-                        &document.root,
-                        &scenario,
-                        &rules,
-                        &mut objective_groups,
-                        &mut bindings,
-                    )?;
+                    let rule_ids = rules
+                        .iter()
+                        .enumerate()
+                        .map(|(index, rule)| {
+                            (
+                                std::ptr::from_ref(*rule),
+                                AssetId::from_key(&format!("{scenario}:rule:{index}")),
+                            )
+                        })
+                        .collect::<BTreeMap<_, _>>();
+                    if matches!(root, "BFScenarioGroup" | "ZTScenarioMgr") {
+                        collect_objective_groups(
+                            document,
+                            &document.root,
+                            &scenario,
+                            &rule_ids,
+                            &mut objective_groups,
+                            &mut bindings,
+                            &mut authored.scenario_nodes,
+                        )?;
+                    } else {
+                        for child in document.root.element_children() {
+                            collect_objective_groups(
+                                document,
+                                child,
+                                &scenario,
+                                &rule_ids,
+                                &mut objective_groups,
+                                &mut bindings,
+                                &mut authored.scenario_nodes,
+                            )?;
+                        }
+                    }
                     let mut objectives = Vec::with_capacity(rules.len());
                     for (index, rule) in rules.into_iter().enumerate() {
                         let objective = format!("{scenario}:rule:{index}");
-                        let prerequisite = rule
-                            .prerequisite
-                            .as_deref()
-                            .and_then(|value| value.strip_prefix("rule-source-"))
-                            .map(|value| format!("{scenario}:rule:{value}"));
+                        let policy = node_policy(document, rule)?;
                         collect_bindings(
                             document,
-                            rule.node,
+                            rule,
                             &scenario,
                             &objective,
                             "evaluate",
@@ -136,7 +156,7 @@ pub(in crate::world_scenario) fn lower_documents(
                         )?;
                         collect_bindings(
                             document,
-                            rule.node,
+                            rule,
                             &scenario,
                             &objective,
                             "success",
@@ -145,7 +165,7 @@ pub(in crate::world_scenario) fn lower_documents(
                         )?;
                         collect_bindings(
                             document,
-                            rule.node,
+                            rule,
                             &scenario,
                             &objective,
                             "failure",
@@ -153,31 +173,29 @@ pub(in crate::world_scenario) fn lower_documents(
                             &mut bindings,
                         )?;
                         let id = AssetId::from_key(&objective);
+                        authored.scenario_nodes.insert(id, policy);
                         objectives.push(ScenarioObjectiveRecord {
                             id,
-                            name: rule.node.attribute("name").map(AssetId::from_key),
-                            category: child(rule.node, "info")
+                            name: rule.attribute("name").map(AssetId::from_key),
+                            category: child(rule, "info")
                                 .and_then(|info| info.attribute("type"))
                                 .map(AssetId::from_key)
                                 .unwrap_or_default(),
-                            text_key: status_text(rule.node, "neutral")
+                            text_key: status_text(rule, "neutral")
                                 .as_deref()
                                 .map(AssetId::from_key)
                                 .unwrap_or_default(),
-                            success_text_key: status_text(rule.node, "success")
+                            success_text_key: status_text(rule, "success")
                                 .as_deref()
                                 .map(AssetId::from_key)
                                 .unwrap_or_default(),
-                            failure_text_key: status_text(rule.node, "failure")
+                            failure_text_key: status_text(rule, "failure")
                                 .as_deref()
                                 .map(AssetId::from_key)
                                 .unwrap_or_default(),
-                            prerequisite_objectives: prerequisite
-                                .as_deref()
-                                .map(|value| vec![AssetId::from_key(value)])
-                                .unwrap_or_default(),
-                            hidden: rule.node.attribute("hidden").is_some_and(truthy),
-                            update_when_paused: rule.update_when_paused,
+                            prerequisite_objectives: Vec::new(),
+                            hidden: rule.attribute("hidden").is_some_and(truthy),
+                            update_when_paused: policy.update_when_paused,
                         });
                     }
                     let lower_path = path.to_ascii_lowercase();
@@ -286,7 +304,7 @@ pub(in crate::world_scenario) fn lower_documents(
     }));
     output.scenario_script_bindings = bindings;
     output.photo_challenge_script_bindings = photo_bindings;
-    Ok(output)
+    Ok((output, authored))
 }
 
 fn lower_photo_challenges(
@@ -353,38 +371,76 @@ fn lower_photo_challenges(
     Ok(())
 }
 
-struct RuleEntry<'a> {
+fn collect_rules<'a>(
     node: &'a OrderedSourceDocumentNode,
-    prerequisite: Option<String>,
-    update_when_paused: bool,
+    output: &mut Vec<&'a OrderedSourceDocumentNode>,
+) {
+    match local(&node.name) {
+        "BFScenarioRule" => output.push(node),
+        "BFScenarioGroup" | "ZTScenarioMgr" | "children" => {
+            for child in node.element_children() {
+                collect_rules(child, output);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn node_policy(
+    document: &OrderedSourceDocument,
+    node: &OrderedSourceDocumentNode,
+) -> io::Result<ScenarioNodePolicy> {
+    let initial_state = node
+        .attribute("state")
+        .map(|value| {
+            value
+                .trim()
+                .parse()
+                .map_err(|error| at(document, node, error))
+        })
+        .transpose()?;
+    Ok(ScenarioNodePolicy {
+        initial_state,
+        sticky: node.attribute("sticky").map(truthy),
+        optional: node.attribute("optional").map(truthy),
+        chain: node.attribute("chain").is_some_and(truthy),
+        update_when_paused: node.attribute("updateWhenPaused").is_some_and(truthy),
+    })
 }
 
 fn collect_objective_groups(
     document: &OrderedSourceDocument,
     node: &OrderedSourceDocumentNode,
     scenario: &str,
-    rules: &[RuleEntry<'_>],
+    rules: &BTreeMap<*const OrderedSourceDocumentNode, AssetId>,
     groups: &mut Vec<ScenarioObjectiveGroupRecord>,
     bindings: &mut Vec<ScenarioScriptBinding>,
+    policies: &mut BTreeMap<AssetId, ScenarioNodePolicy>,
 ) -> io::Result<Vec<AssetId>> {
-    if local(&node.name) == "BFScenarioRule" {
-        return Ok(rules
-            .iter()
-            .position(|rule| std::ptr::eq(rule.node, node))
-            .map(|index| vec![AssetId::from_key(&format!("{scenario}:rule:{index}"))])
-            .unwrap_or_default());
+    match local(&node.name) {
+        "BFScenarioRule" => {
+            return Ok(rules
+                .get(&std::ptr::from_ref(node))
+                .copied()
+                .into_iter()
+                .collect());
+        }
+        "BFScenarioGroup" | "ZTScenarioMgr" | "children" => {}
+        _ => return Ok(Vec::new()),
     }
     let mut members = Vec::new();
     for child in node.element_children() {
         members.extend(collect_objective_groups(
-            document, child, scenario, rules, groups, bindings,
+            document, child, scenario, rules, groups, bindings, policies,
         )?);
     }
-    if !matches!(local(&node.name), "BFScenarioGroup" | "ZTScenarioMgr") || members.is_empty() {
+    if local(&node.name) == "children" || members.is_empty() {
         return Ok(members);
     }
     let key = format!("{scenario}:group:{}", groups.len());
     let id = AssetId::from_key(&key);
+    let policy = node_policy(document, node)?;
+    policies.insert(id, policy);
     for (name, phase) in [
         ("success", ScenarioScriptPhase::Success),
         ("failure", ScenarioScriptPhase::Failure),
@@ -394,59 +450,9 @@ fn collect_objective_groups(
     groups.push(ScenarioObjectiveGroupRecord {
         id,
         members,
-        all_success: node.attribute("allsuccess").is_none_or(truthy),
+        all_success: node.attribute("allsuccess").is_some_and(truthy),
     });
     Ok(vec![id])
-}
-fn collect_rules<'a>(
-    nodes: &[&'a OrderedSourceDocumentNode],
-    inherited: Option<String>,
-    chain: bool,
-    update_when_paused: bool,
-    output: &mut Vec<RuleEntry<'a>>,
-) -> Option<String> {
-    let mut previous = inherited;
-    for node in nodes {
-        match local(&node.name) {
-            "BFScenarioRule" => {
-                let id = format!("rule-source-{}", output.len());
-                output.push(RuleEntry {
-                    node,
-                    prerequisite: chain.then(|| previous.clone()).flatten(),
-                    update_when_paused: update_when_paused
-                        || node.attribute("updateWhenPaused").is_some_and(truthy),
-                });
-                previous = Some(id);
-            }
-            "children" => {
-                // This wrapper has no sequencing policy of its own.
-                previous = collect_rules(
-                    &node.element_children().collect::<Vec<_>>(),
-                    previous,
-                    chain,
-                    update_when_paused,
-                    output,
-                );
-            }
-            "BFScenarioGroup" | "ZTScenarioMgr" => {
-                let children = child(node, "children")
-                    .map(|value| value.element_children().collect::<Vec<_>>())
-                    .unwrap_or_default();
-                let nested = collect_rules(
-                    &children,
-                    previous.clone(),
-                    node.attribute("chain").is_some_and(truthy),
-                    update_when_paused || node.attribute("updateWhenPaused").is_some_and(truthy),
-                    output,
-                );
-                if chain {
-                    previous = nested.or(previous);
-                }
-            }
-            _ => {}
-        }
-    }
-    previous
 }
 
 fn collect_bindings(

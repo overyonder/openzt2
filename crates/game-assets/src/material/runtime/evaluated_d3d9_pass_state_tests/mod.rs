@@ -28,6 +28,8 @@ float4 pixel_main() : COLOR { return Included; }
 technique Novel {
   pass Fixed { ZWriteEnable = WriteDepth; ColorOp[0] = SelectArg1; ColorArg1[0] = Diffuse; }
   pass Programmed {
+    DepthBias = -0.000125;
+    SlopeScaleDepthBias = -0.25;
     VertexShader = compile vs_2_0 vertex_main();
     PixelShader = compile ps_2_0 pixel_main();
   }
@@ -128,6 +130,10 @@ fn accumulates_parameter_state_and_programmable_shader_bytecode(
     let programmed = enabled_states
         .get(1)
         .ok_or_else(|| std::io::Error::other("D3DX returned no programmable pass"))?;
+    assert_eq!(
+        programmed.effective_depth_bias_bits(),
+        ((-0.000125_f32).to_bits(), (-0.25_f32).to_bits())
+    );
     let vertex = d3d9_effects::shader_translation::translate_d3d9_shader_bytecode_to_spirv(
         programmed
             .vertex_shader

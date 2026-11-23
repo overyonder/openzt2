@@ -385,6 +385,7 @@ pub(super) fn update_transport_track_construction_preview_from_pointer_and_stati
         if selected_kind == TransportationTrackKind::Ground {
             drape_ground_level_track_points_on_terrain(
                 &mut path_points,
+                world_member.root,
                 to_station.is_none(),
                 &terrain,
             );
@@ -849,7 +850,7 @@ fn light_deleted_track_leg(
 }
 
 type TrackTerrain<'w, 's> = (
-    Res<'w, openzt2_zoo_state::terrain::terrain_chunk_types::TerrainIndex>,
+    Query<'w, 's, &'static openzt2_zoo_state::terrain::terrain_chunk_types::TerrainIndex>,
     Res<
         'w,
         Assets<
@@ -872,10 +873,14 @@ type TrackTerrain<'w, 's> = (
 /// it was drawn as an elevated strip.
 fn drape_ground_level_track_points_on_terrain(
     path_points: &mut [Vec3],
+    world_root: Entity,
     free_end: bool,
-    (index, assets, chunks): &TrackTerrain,
+    (indexes, assets, chunks): &TrackTerrain,
 ) {
     use openzt2_zoo_state::terrain::terrain_world_sampling::{sample_terrain, terrain_chunk_at};
+    let Ok(index) = indexes.get(world_root) else {
+        return;
+    };
     let ground = |point: Vec3| {
         let (chunk, edited) = chunks.get(terrain_chunk_at(index, point.xz())?).ok()?;
         Some(sample_terrain(chunk, assets.get(&chunk.asset)?, edited, point.xz())?.height_m)

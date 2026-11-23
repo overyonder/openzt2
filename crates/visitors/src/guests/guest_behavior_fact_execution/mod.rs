@@ -4,6 +4,7 @@ use bevy::prelude::*;
 use openzt2_game_data::behavior::action::modification::{
     BehaviorFact, BehaviorFactModificationOperation,
 };
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::WhenBehaviorAction;
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
     RunBehaviorFactModifications, RunningBehaviorInstruction,
 };
@@ -11,7 +12,7 @@ use openzt2_zoo_state::locomotion::locomotion_types::CaffeineMode;
 
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_zoo_state::animal_behavior::behavior_entity_role_resolution::resolve_behavior_entity_role_to_live_entity;
-use openzt2_zoo_state::animal_behavior::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation;
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::mark_behavior_task_for_failure_and_stop_navigation;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
 use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorTaskFailure;
 use openzt2_zoo_state::economy::price_effect::BehaviorPriceEffectContext;
@@ -24,7 +25,8 @@ use openzt2_zoo_state::guests::guest_survey_types::GuestSurveyExperience;
 use super::{guest_simulation_calculations::apply_q16, guest_simulation_types::*};
 
 pub(super) fn apply_authored_guest_behavior_fact_modifications(
-    clock: Res<ZooClock>,
+    activation: On<WhenBehaviorAction<RunBehaviorFactModifications>>,
+    clock: Single<&ZooClock>,
     price_effect: BehaviorPriceEffectContext,
     satisfaction: Query<(), With<GuestSatisfaction>>,
     mut satisfaction_changes: MessageWriter<AdjustGuestSatisfaction>,
@@ -62,7 +64,9 @@ pub(super) fn apply_authored_guest_behavior_fact_modifications(
     mut trash_changes: MessageWriter<AdjustFacilityContainedWaste>,
     mut commands: Commands,
 ) {
-    for (actor, (task, instruction, running_action), mut random) in &mut tasks {
+    for (actor, (task, instruction, running_action), mut random) in
+        std::iter::once(tasks.get_mut(activation.entity)).flatten()
+    {
         if task.next_action_tick > clock.tick {
             continue;
         }

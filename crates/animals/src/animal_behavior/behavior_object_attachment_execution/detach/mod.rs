@@ -4,6 +4,14 @@ use openzt2_zoo_state::animal_behavior::interaction_container_membership::reques
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
 use openzt2_game_data::world_definitions::world_objects::WorldObjectDetachDestination;
 use openzt2_zoo_state::animal_behavior::interaction_container_membership::InteractionContainerSlots;
+use openzt2_world_state::animation_playback::model_joint_attachment_binding::CarriedPrefabPresentation;
+
+#[derive(EntityEvent)]
+pub(super) struct FinishObjectRelease {
+    #[event_target]
+    item: Entity,
+    motion: Option<BehaviorWorldObjectReleased>,
+}
 
 pub(super) fn detach_slot_objects(
     holder: Entity,
@@ -48,10 +56,7 @@ pub(super) fn detach_object(
             despawn: false,
         }
         .submit(commands);
-        commands
-            .entity(item)
-            .remove::<ContainedObject>()
-            .insert(Visibility::Inherited);
+        commands.trigger(FinishObjectRelease { item, motion: None });
         return true;
     }
     let Some(object) = definitions.find_object(definition.0) else {
@@ -153,7 +158,7 @@ pub(super) fn detach_object(
                 let motion = if rule.destination == WorldObjectDetachDestination::Drop {
                     BehaviorWorldReleaseMotion::Drop
                 } else {
-                    BehaviorWorldReleaseMotion::Fall
+                    BehaviorWorldReleaseMotion::Fall { speed_mps: 0.0 }
                 };
                 let Some(world) = world else {
                     return false;
@@ -167,26 +172,14 @@ pub(super) fn detach_object(
                     despawn: false,
                 }
                 .submit(commands);
-                commands.entity(item).queue_silenced(
-                    move |mut item: bevy::ecs::world::EntityWorldMut<'_>| {
-                        item.remove::<ContainedObject>();
-                        if let Some(mut transform) = item.get_mut::<Transform>() {
-                            transform.set_if_neq(pose);
-                        } else {
-                            item.insert(pose);
-                        }
-                        if let Some(mut visibility) = item.get_mut::<Visibility>() {
-                            visibility.set_if_neq(Visibility::Inherited);
-                        } else {
-                            item.insert(Visibility::Inherited);
-                        }
-                    },
-                );
-                commands.trigger(BehaviorWorldObjectReleased {
-                    object: item,
-                    world: world.root,
-                    pose,
-                    motion,
+                commands.trigger(FinishObjectRelease {
+                    item,
+                    motion: Some(BehaviorWorldObjectReleased {
+                        object: item,
+                        world: world.root,
+                        pose,
+                        motion,
+                    }),
                 });
             }
         }
@@ -251,23 +244,56 @@ pub(super) fn release_detached_object_presentation(
     carried: Query<(), With<ContainedObject>>,
     mut commands: Commands,
 ) {
-    if !carried.contains(removed.entity) {
+    if carried.contains(removed.entity) {
+        commands.trigger(FinishObjectRelease {
+            item: removed.entity,
+            motion: None,
+        });
+    }
+}
+
+pub(super) fn finish_object_release(
+    release: On<FinishObjectRelease>,
+    mut items: Query<
+        (
+            Has<ContainedObject>,
+            Option<&mut Transform>,
+            Option<&mut Visibility>,
+        ),
+        Without<InteractionContainerMember>,
+    >,
+    mut commands: Commands,
+) {
+    let Ok((contained, transform, visibility)) = items.get_mut(release.item) else {
+        return;
+    };
+    if !contained && release.motion.is_none() {
         return;
     }
-    commands.entity(removed.entity).queue_silenced(
-        |mut item: bevy::ecs::world::EntityWorldMut<'_>| {
-            if item.contains::<InteractionContainerMember>() || !item.contains::<ContainedObject>()
-            {
-                return;
-            }
-            item.remove::<ContainedObject>();
-            if let Some(mut visibility) = item.get_mut::<Visibility>() {
-                visibility.set_if_neq(Visibility::Inherited);
-            } else {
-                item.insert(Visibility::Inherited);
-            }
-        },
-    );
+    let mut item = commands.entity(release.item);
+    if let Some(motion) = &release.motion {
+        // An explicit release pose takes precedence over the old carry anchor.
+        item.try_remove::<CarriedPrefabPresentation>();
+        if let Some(mut transform) = transform {
+            transform.set_if_neq(motion.pose);
+        } else {
+            item.try_insert(motion.pose);
+        }
+    }
+    if let Some(mut visibility) = visibility {
+        visibility.set_if_neq(Visibility::Inherited);
+    } else {
+        item.try_insert(Visibility::Inherited);
+    }
+    item.try_remove::<ContainedObject>();
+    if let Some(motion) = &release.motion {
+        commands.trigger(BehaviorWorldObjectReleased {
+            object: motion.object,
+            world: motion.world,
+            pose: motion.pose,
+            motion: motion.motion,
+        });
+    }
 }
 
 /// Text-key traversal may cross attach and detach in one simulation step. The

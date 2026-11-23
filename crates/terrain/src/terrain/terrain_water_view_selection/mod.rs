@@ -4,20 +4,20 @@ use openzt2_game_assets::application_lifecycle::GamePhase;
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use openzt2_interface_state::camera::camera_runtime_state_types::ZooCamera;
 use openzt2_zoo_state::terrain::terrain_water_presentation_types::{
-    TerrainWaterMembershipIndex, TerrainWaterRegionQuery,
+    TerrainWaterMembershipIndex, TerrainWaterRegionEdit, TerrainWaterRegionQuery,
+    TerrainWaterRegionRetired, TerrainWaterRegionSource,
 };
-use openzt2_zoo_state::terrain::terrain_water_view_state::TerrainWaterViewState;
 use openzt2_zoo_state::terrain::terrain_water_view_state::{
-    TerrainWaterCameraPose, TerrainWaterRegionFade, TerrainWaterRegionVisibility,
+    TerrainWaterCameraContact, TerrainWaterCameraPose, TerrainWaterCaptureSelection,
+    TerrainWaterRegionFade, TerrainWaterRegionVisibility,
 };
 
 pub(super) fn sample_terrain_water_camera_pose(
-    mut commands: Commands,
     phase: Res<State<GamePhase>>,
-    mut cameras: Query<(Entity, &Camera, Option<&mut TerrainWaterCameraPose>), With<ZooCamera>>,
+    mut cameras: Query<(Entity, &Camera, &mut TerrainWaterCameraPose), With<ZooCamera>>,
     transforms: TransformHelper,
 ) {
-    let Ok((entity, camera, pose)) = cameras.single_mut() else {
+    let Ok((entity, camera, mut pose)) = cameras.single_mut() else {
         return;
     };
     let transform = if camera.is_active && *phase.get() == GamePhase::InGame {
@@ -25,65 +25,121 @@ pub(super) fn sample_terrain_water_camera_pose(
     } else {
         None
     };
-    let next = TerrainWaterCameraPose(transform);
-    if let Some(mut pose) = pose {
-        pose.set_if_neq(next);
-    } else {
-        commands.entity(entity).insert(next);
-    }
+    pose.set_if_neq(TerrainWaterCameraPose(transform));
 }
 
+type ChangedWaterRegion = Or<(
+    Changed<TerrainWaterRegionSource>,
+    Changed<TerrainWaterRegionEdit>,
+    Added<TerrainWaterRegionRetired>,
+)>;
+
 pub(super) fn update_camera_terrain_water_membership(
-    cameras: Query<Option<&TerrainWaterCameraPose>, (With<ZooCamera>, With<Camera>)>,
-    indexes: Query<&TerrainWaterMembershipIndex>,
+    mut cameras: Query<
+        (Ref<TerrainWaterCameraPose>, &mut TerrainWaterCameraContact),
+        With<ZooCamera>,
+    >,
+    indexes: Query<Ref<TerrainWaterMembershipIndex>>,
+    changed_regions: Query<(), ChangedWaterRegion>,
+    (mut removed_edits, mut removed_sources, mut restored_regions): (
+        RemovedComponents<TerrainWaterRegionEdit>,
+        RemovedComponents<TerrainWaterRegionSource>,
+        RemovedComponents<TerrainWaterRegionRetired>,
+    ),
     regions: TerrainWaterRegionQuery,
     assets: Res<Assets<TerrainAsset>>,
-    mut view: ResMut<TerrainWaterViewState>,
 ) {
-    let camera = cameras.single().ok().flatten().and_then(|pose| pose.0);
-    let Some(camera) = camera else {
-        view.update_camera(None, None);
+    let geometry_changed = !changed_regions.is_empty()
+        | (removed_edits.read().count() != 0)
+        | (removed_sources.read().count() != 0)
+        | (restored_regions.read().count() != 0);
+    let Ok((pose, mut contact)) = cameras.single_mut() else {
         return;
     };
+    let Some(camera) = pose.0 else {
+        contact.set_if_neq(TerrainWaterCameraContact::default());
+        return;
+    };
+    let Ok(index) = indexes.single() else {
+        contact.set_if_neq(TerrainWaterCameraContact::from_membership(
+            camera.translation(),
+            None,
+        ));
+        return;
+    };
+    if !(pose.is_changed() || index.is_changed() || geometry_changed || assets.is_changed()) {
+        return;
+    }
     let position = camera.translation();
-    let wet_region = indexes.single().ok().and_then(|index| {
-        let asset = assets.get(index.terrain())?;
-        let owner = index.owner_at_world_xz(Vec2::new(position.x, position.z), asset)?;
+    let wet_region = assets.get(index.terrain()).and_then(|asset| {
+        let owner = index.owner_at_world_xz(position.xz(), asset)?;
         match owner {
             Some(owner) => Some(Some((owner, regions.get(owner)?.surface_height(asset)?))),
             None => Some(None),
         }
     });
-    view.update_camera(Some(position), wet_region);
+    contact.set_if_neq(TerrainWaterCameraContact::from_membership(
+        position, wet_region,
+    ));
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(super) fn update_terrain_water_view_selection(
-    cameras: Query<(&Projection, Option<&TerrainWaterCameraPose>), (With<ZooCamera>, With<Camera>)>,
-    indexes: Query<&TerrainWaterMembershipIndex>,
-    mut regions: Query<(
-        Entity,
-        &TerrainWaterRegionVisibility,
-        &mut TerrainWaterRegionFade,
-    )>,
+#[derive(Component, Default)]
+pub(super) struct TerrainWaterCaptureHits(Option<Vec<TerrainWaterViewHit>>);
+
+pub(super) fn update_terrain_water_capture_hits(
+    mut cameras: Query<
+        (
+            Ref<Projection>,
+            Ref<TerrainWaterCameraPose>,
+            &mut TerrainWaterCaptureHits,
+        ),
+        With<ZooCamera>,
+    >,
+    indexes: Query<Ref<TerrainWaterMembershipIndex>>,
+    changed_regions: Query<(), ChangedWaterRegion>,
+    (mut removed_edits, mut removed_sources, mut restored_regions): (
+        RemovedComponents<TerrainWaterRegionEdit>,
+        RemovedComponents<TerrainWaterRegionSource>,
+        RemovedComponents<TerrainWaterRegionRetired>,
+    ),
     region_sources: TerrainWaterRegionQuery,
     assets: Res<Assets<TerrainAsset>>,
-    mut view: ResMut<TerrainWaterViewState>,
 ) {
-    let Ok((Projection::Perspective(projection), Some(TerrainWaterCameraPose(Some(camera))))) =
-        cameras.single()
+    let geometry_changed = !changed_regions.is_empty()
+        | (removed_edits.read().count() != 0)
+        | (removed_sources.read().count() != 0)
+        | (restored_regions.read().count() != 0);
+    let Ok((projection, pose, mut hits)) = cameras.single_mut() else {
+        return;
+    };
+    let (Projection::Perspective(perspective), Some(camera), Ok(index)) =
+        (&*projection, pose.0, indexes.single())
     else {
-        view.update_selection(None, false);
+        if hits.0.is_some() {
+            hits.0 = None;
+        }
         return;
     };
-    let Ok(index) = indexes.single() else {
-        view.update_selection(None, false);
+    if !(projection.is_changed()
+        || pose.is_changed()
+        || index.is_changed()
+        || geometry_changed
+        || assets.is_changed())
+    {
         return;
-    };
-    let Some(asset) = assets.get(index.terrain()) else {
-        view.update_selection(None, false);
-        return;
-    };
+    }
+    hits.0 = assets.get(index.terrain()).and_then(|asset| {
+        collect_water_capture_hits(perspective, camera, &index, asset, &region_sources)
+    });
+}
+
+fn collect_water_capture_hits(
+    projection: &PerspectiveProjection,
+    camera: GlobalTransform,
+    index: &TerrainWaterMembershipIndex,
+    asset: &TerrainAsset,
+    region_sources: &TerrainWaterRegionQuery,
+) -> Option<Vec<TerrainWaterViewHit>> {
     let config = asset
         .canonical_terrain_grid()
         .presentation
@@ -102,8 +158,7 @@ pub(super) fn update_terrain_water_view_selection(
             .biome(asset)
             .and_then(|biome| biome.water_presentation.as_ref())
         else {
-            view.update_selection(None, false);
-            return;
+            return None;
         };
         if presentation
             .surface_material
@@ -117,8 +172,7 @@ pub(super) fn update_terrain_water_view_selection(
             continue;
         }
         let Some(height) = source.surface_height(asset) else {
-            view.update_selection(None, false);
-            return;
+            return None;
         };
         match intersect_water_region_footprint(
             owner, height, position, forward, across, up, index, asset,
@@ -126,14 +180,46 @@ pub(super) fn update_terrain_water_view_selection(
             Ok(Some(hit)) => hits.push(hit),
             Ok(None) => {}
             Err(()) => {
-                view.update_selection(None, false);
-                return;
+                return None;
             }
         }
     }
-    let previous = view.selected_region();
+    Some(hits)
+}
+
+pub(super) fn update_terrain_water_view_selection(
+    mut cameras: Query<
+        (&TerrainWaterCaptureHits, &mut TerrainWaterCaptureSelection),
+        With<ZooCamera>,
+    >,
+    indexes: Query<&TerrainWaterMembershipIndex>,
+    mut regions: Query<(
+        Entity,
+        &TerrainWaterRegionVisibility,
+        &mut TerrainWaterRegionFade,
+    )>,
+    region_sources: TerrainWaterRegionQuery,
+    assets: Res<Assets<TerrainAsset>>,
+) {
+    let Ok((hits, mut selection)) = cameras.single_mut() else {
+        return;
+    };
+    let Some((hits, (index, asset))) = hits.0.as_ref().zip(
+        indexes
+            .single()
+            .ok()
+            .and_then(|index| assets.get(index.terrain()).map(|asset| (index, asset))),
+    ) else {
+        selection.set_if_neq(TerrainWaterCaptureSelection::default());
+        return;
+    };
+    let config = asset
+        .canonical_terrain_grid()
+        .presentation
+        .water_distance_fade;
+    let previous = selection.region.map(|(owner, _)| owner);
     let candidate = select_water_region_from_view_hits(
-        hits,
+        hits.iter().copied(),
         previous,
         config.minimum_distance,
         config.maximum_distance,
@@ -141,20 +227,24 @@ pub(super) fn update_terrain_water_view_selection(
     let mut selected = candidate;
     if let Some(previous) = previous {
         if let Ok((_, visibility, mut fade)) = regions.get_mut(previous) {
+            let mut next = *fade;
             if candidate == Some(previous) {
-                fade.fade_in(config.time_seconds);
+                next.fade_in(config.time_seconds);
             } else {
-                fade.fade_out(config.time_seconds, visibility.0);
+                next.fade_out(config.time_seconds, visibility.0);
                 if visibility.0 {
                     selected = Some(previous);
                 }
             }
+            fade.set_if_neq(next);
         }
     }
     if selected != previous {
         if let Some(selected) = selected {
             if let Ok((_, _, mut fade)) = regions.get_mut(selected) {
-                fade.fade_in(config.time_seconds);
+                let mut next = *fade;
+                next.fade_in(config.time_seconds);
+                fade.set_if_neq(next);
             }
         }
     }
@@ -168,7 +258,11 @@ pub(super) fn update_terrain_water_view_selection(
                     || (Some(owner) == selected && fade.is_transitioning())
                     || (candidate != previous && Some(owner) == previous && visible.0))
         });
-    view.update_selection(Some(selected.zip(height)), alternate);
+    selection.set_if_neq(TerrainWaterCaptureSelection {
+        region: selected.zip(height),
+        resolved: true,
+        alternate_regions_visible: alternate,
+    });
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -220,6 +314,7 @@ fn intersect_water_region_footprint(
 }
 
 /// A footprint hit is a transient query result, not another water record.
+#[derive(Clone, Copy)]
 pub(super) struct TerrainWaterViewHit {
     pub(super) owner: Entity,
     pub(super) distance: f32,

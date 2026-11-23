@@ -1,4 +1,4 @@
-use bevy::{platform::collections::{HashMap, HashSet}, prelude::*};
+use bevy::{ecs::relationship::RelationshipTarget, platform::collections::{HashMap, HashSet}, prelude::*};
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::{
     WorldDefinitions, WorldDefinitionsView,
 };
@@ -14,7 +14,8 @@ use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 use openzt2_world_state::world_spawn::world_membership_types::{DefinitionId, WorldMember, WorldRoot};
 use openzt2_zoo_state::animal_behavior::disease_exposure_state::{
-    ActiveZooDisease, DiseaseExposureDeadline, DiseaseResearchFunding,
+    ActiveZooDisease, AssignedDiseaseTarget, AssignedDiseaseTargets,
+    DiseaseExposureDeadline, DiseaseResearchFunding,
 };
 use openzt2_zoo_state::animal_behavior::behavior_token_types::BehaviorSelfToken;
 use openzt2_zoo_state::animal_health::types::{Dead, Disease};
@@ -24,6 +25,8 @@ use openzt2_zoo_state::progression::fame_types::Fame;
 use super::autonomous_task_selection::candidate_facts::{
     AnimalCandidateFacts, AnimalCandidateFactsItem,
 };
+use super::autonomous_task_selection::target_types::BehaviorTargetTypeMemberships;
+use super::behavior_spatial_candidates::BehaviorSpatialCandidates;
 use super::behavior_subject_type_resolution::AnimalBehaviorSubjectTypes;
 
 fn disease_check_interval(definitions: WorldDefinitionsView<'_>) -> Option<u64> {
@@ -63,6 +66,7 @@ fn disease_probability(chance_percent: f32, funding: f32) -> u32 {
 pub(super) type DiseaseAnimals<'w, 's> =
     Query<'w, 's, (Entity, AnimalCandidateFacts, Has<Disease>), (With<Animal>, Without<Dead>)>;
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn expose_animals_to_authored_diseases(
     mut commands: Commands,
     clock: Single<&ZooClock>,
@@ -72,6 +76,8 @@ pub(super) fn expose_animals_to_authored_diseases(
     subject_types: AnimalBehaviorSubjectTypes,
     animals: DiseaseAnimals,
     objects: Query<(&DefinitionId, &GlobalTransform, &WorldMember), Without<Animal>>,
+    types: BehaviorTargetTypeMemberships,
+    spatial: BehaviorSpatialCandidates,
     mut worlds: Query<
         (
             Entity,
@@ -85,6 +91,10 @@ pub(super) fn expose_animals_to_authored_diseases(
     infected: Query<&WorldMember, (With<Animal>, With<Disease>, Without<Dead>)>,
     tokens: Query<&BehaviorSelfToken>,
     token_owners: Query<&Children>,
+    (assigned_targets, assignments): (
+        Query<&AssignedDiseaseTargets>,
+        Query<(Entity, &AssignedDiseaseTarget, &ChildOf)>,
+    ),
 ) {
     let Some(view) = definitions.get(&definition_assets) else {
         return;
@@ -144,15 +154,21 @@ pub(super) fn expose_animals_to_authored_diseases(
         return;
     }
     deadline.0 = clock.tick.saturating_add(interval);
-    let cloning_center_present = objects.iter().any(|(definition, _, member)| {
-        member.root == root
-            && (view.find_cloning_center(definition.0).is_some()
-                || view.find_object(definition.0).is_some_and(|object| {
-                    object
-                        .behavior_type_identifiers
-                        .contains(&AssetId::from_key("cloningcenter"))
-                }))
-    });
+    let mut candidates = Vec::new();
+    types.extend_type(root, AssetId::from_key("cloningcenter"), &mut candidates);
+    let cloning_center_present =
+        objects
+            .iter_many(candidates.iter().copied())
+            .flatten()
+            .any(|(definition, _, member)| {
+                member.root == root
+                    && (view.find_cloning_center(definition.0).is_some()
+                        || view.find_object(definition.0).is_some_and(|object| {
+                            object
+                                .behavior_type_identifiers
+                                .contains(&AssetId::from_key("cloningcenter"))
+                        }))
+            });
     if has_disease
         || fame.half_stars < policy.half_star_minimum
         || !cloning_center_present
@@ -164,13 +180,27 @@ pub(super) fn expose_animals_to_authored_diseases(
     let mut random =
         DeterministicRng::from_entity(**seed, PersistentId(clock.tick), RngDomain::Disease);
     let first = random.next_u32() as usize % policy.diseases.len();
+    let registered: Vec<_> = assignments
+        .iter_many(
+            assigned_targets
+                .get(root)
+                .ok()
+                .into_iter()
+                .flat_map(RelationshipTarget::iter),
+        )
+        .flatten()
+        .collect();
     let authored = policy.diseases[first..]
         .iter()
         .chain(&policy.diseases[..first])
         .filter(|disease| {
-            !disease.force_only && disease.search_for_targets && disease.chance_percent > 0.0
+            !disease.force_only
+                && disease.chance_percent > 0.0
+                && (disease.search_for_targets
+                    || registered
+                        .iter()
+                        .any(|(_, item, _)| item.disease == disease.name))
         });
-    let mut object_types = HashSet::new();
     let mut count_keys = HashSet::new();
     for disease in authored.clone() {
         if let Some(entity_type) = disease.chance_multiplier {
@@ -179,7 +209,6 @@ pub(super) fn expose_animals_to_authored_diseases(
                 attribute: None,
                 different: false,
             });
-            object_types.insert(entity_type);
         }
         for test in &disease.zoo_tests {
             if let DiseaseZooTest::EntityCount {
@@ -194,40 +223,6 @@ pub(super) fn expose_animals_to_authored_diseases(
                     attribute,
                     different,
                 });
-                if attribute.is_none() {
-                    object_types.insert(entity_type);
-                }
-            }
-        }
-        object_types.extend(
-            disease
-                .animal_filters
-                .iter()
-                .filter_map(|filter| match filter {
-                    DiseaseAnimalFilter::Proximity { entity_type, .. } => Some(*entity_type),
-                    _ => None,
-                }),
-        );
-    }
-    let mut populations: HashMap<AssetId, ObjectExposurePopulation> = HashMap::default();
-    if !object_types.is_empty() {
-        for (definition, transform, member) in &objects {
-            if member.root != root {
-                continue;
-            }
-            let tags = view
-                .find_object(definition.0)
-                .into_iter()
-                .flat_map(|object| object.behavior_type_identifiers.iter().copied())
-                .filter(|tag| *tag != definition.0);
-            for tag in std::iter::once(definition.0)
-                .chain(tags)
-                .filter(|tag| object_types.contains(tag))
-            {
-                populations
-                    .entry(tag)
-                    .or_default()
-                    .insert(definition.0, transform.translation());
             }
         }
     }
@@ -239,17 +234,21 @@ pub(super) fn expose_animals_to_authored_diseases(
             } else {
                 ExposureCount::Total(0)
             };
-            if let Some(population) = key
-                .attribute
-                .is_none()
-                .then(|| populations.get(&key.entity_type))
-                .flatten()
-            {
-                match &mut count {
-                    ExposureCount::Distinct(definitions) => {
-                        definitions.extend(population.definitions.iter().copied())
+            if key.attribute.is_none() {
+                candidates.clear();
+                types.extend_type(root, key.entity_type, &mut candidates);
+                for (definition, _, member) in
+                    objects.iter_many(candidates.iter().copied()).flatten()
+                {
+                    if member.root != root {
+                        continue;
                     }
-                    ExposureCount::Total(total) => *total = population.count,
+                    match &mut count {
+                        ExposureCount::Distinct(definitions) => {
+                            definitions.insert(definition.0);
+                        }
+                        ExposureCount::Total(total) => *total = total.saturating_add(1),
+                    }
                 }
             }
             (key, count)
@@ -279,11 +278,45 @@ pub(super) fn expose_animals_to_authored_diseases(
     }
     let world = DiseaseExposureWorld {
         subject_types: &subject_types,
-        populations,
         counts,
         fame: fame.half_stars,
     };
+    let mut nearby = |origin: Vec3, radius: f32, entity_type: AssetId| {
+        let radius = radius.abs();
+        let extent = Vec2::splat(radius);
+        spatial.in_bounds(
+            root,
+            origin.xz() - extent,
+            origin.xz() + extent,
+            &mut candidates,
+        );
+        objects
+            .iter_many(candidates.iter().copied())
+            .flatten()
+            .any(|(definition, pose, member)| {
+                member.root == root
+                    && pose.translation().distance_squared(origin) <= radius * radius
+                    && (definition.0 == entity_type
+                        || view.find_object(definition.0).is_some_and(|object| {
+                            object.behavior_type_identifiers.contains(&entity_type)
+                        }))
+            })
+    };
     for disease in authored {
+        let registered_for_disease = registered
+            .iter()
+            .filter(|(_, item, _)| item.disease == disease.name);
+        let has_registered = registered_for_disease.clone().next().is_some();
+        for (assignment, _, _) in registered_for_disease.clone() {
+            commands.entity(*assignment).try_despawn();
+        }
+        let registered_animals =
+            registered_for_disease.filter_map(|(_, _, parent)| animals.get(parent.parent()).ok());
+        let candidate_animals = registered_animals.chain(
+            animals
+                .iter()
+                .filter(|_| !has_registered && disease.search_for_targets),
+        );
         if !disease.zoo_tests.iter().all(|test| world.passes(test)) {
             continue;
         }
@@ -300,11 +333,11 @@ pub(super) fn expose_animals_to_authored_diseases(
             continue;
         }
         let mut assigned = false;
-        for (animal, facts, diseased) in &animals {
+        for (animal, facts, diseased) in candidate_animals {
             if diseased
                 || facts.world.root != root
                 || !facts.is_adult()
-                || !world.qualifies(animal, &facts, disease)
+                || (!has_registered && !world.qualifies(animal, &facts, disease, &mut nearby))
                 || tokens
                     .iter_many(token_owners.get(animal).ok().into_iter().flatten().copied())
                     .flatten()
@@ -344,60 +377,6 @@ pub(super) fn expose_animals_to_authored_diseases(
     }
 }
 
-#[derive(Default)]
-struct ObjectExposurePopulation {
-    count: u32,
-    definitions: HashSet<AssetId>,
-    cells: HashMap<IVec3, Vec<Vec3>>,
-}
-
-impl ObjectExposurePopulation {
-    const CELL_WIDTH_M: f32 = 8.0;
-
-    fn insert(&mut self, definition: AssetId, position: Vec3) {
-        self.count = self.count.saturating_add(1);
-        self.definitions.insert(definition);
-        if position.is_finite() {
-            let cell = (position / Self::CELL_WIDTH_M).floor().as_ivec3();
-            self.cells.entry(cell).or_default().push(position);
-        }
-    }
-
-    fn any_within(&self, origin: Vec3, radius: f32) -> bool {
-        let radius = radius.abs();
-        let min = ((origin - Vec3::splat(radius)) / Self::CELL_WIDTH_M)
-            .floor()
-            .as_ivec3();
-        let max = ((origin + Vec3::splat(radius)) / Self::CELL_WIDTH_M)
-            .floor()
-            .as_ivec3();
-        let contains = |position: &Vec3| position.distance_squared(origin) <= radius * radius;
-        let volume = min
-            .to_array()
-            .into_iter()
-            .zip(max.to_array())
-            .map(|(min, max)| (f64::from(max) - f64::from(min) + 1.0).max(0.0))
-            .product::<f64>();
-        if volume > self.cells.len() as f64 {
-            return self.cells.values().flatten().any(contains);
-        }
-        for x in min.x..=max.x {
-            for y in min.y..=max.y {
-                for z in min.z..=max.z {
-                    if self
-                        .cells
-                        .get(&IVec3::new(x, y, z))
-                        .is_some_and(|points| points.iter().any(contains))
-                    {
-                        return true;
-                    }
-                }
-            }
-        }
-        false
-    }
-}
-
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
 struct EntityPopulationKey {
     entity_type: AssetId,
@@ -412,7 +391,6 @@ enum ExposureCount {
 
 struct DiseaseExposureWorld<'a, 'w, 's> {
     subject_types: &'a AnimalBehaviorSubjectTypes<'w, 's>,
-    populations: HashMap<AssetId, ObjectExposurePopulation>,
     counts: HashMap<EntityPopulationKey, ExposureCount>,
     fame: u8,
 }
@@ -465,6 +443,7 @@ impl DiseaseExposureWorld<'_, '_, '_> {
         animal: Entity,
         facts: &AnimalCandidateFactsItem,
         disease: &AuthoredDisease,
+        nearby: &mut impl FnMut(Vec3, f32, AssetId) -> bool,
     ) -> bool {
         disease
             .target_types
@@ -478,14 +457,7 @@ impl DiseaseExposureWorld<'_, '_, '_> {
                     entity_type,
                     distance_m,
                     closer,
-                } => {
-                    self.populations
-                        .get(&entity_type)
-                        .is_some_and(|population| {
-                            population.any_within(facts.transform.translation(), distance_m)
-                        })
-                        == closer
-                }
+                } => nearby(facts.transform.translation(), distance_m, entity_type) == closer,
             })
     }
 }
@@ -548,6 +520,7 @@ pub(super) fn add_authored_disease_target(
     infected: Query<&WorldMember, (With<Animal>, With<Disease>, Without<Dead>)>,
     tokens: Query<&BehaviorSelfToken>,
     token_owners: Query<&Children>,
+    assignments: Query<&AssignedDiseaseTarget>,
     mut commands: Commands,
 ) {
     let actor = activation.entity;
@@ -579,7 +552,7 @@ pub(super) fn add_authored_disease_target(
         return;
     };
 
-    let Ok((active, deadline, fame)) = worlds.get(root) else {
+    let Ok((active, _, fame)) = worlds.get(root) else {
         super::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation(
             actor,
             &mut commands,
@@ -640,13 +613,23 @@ pub(super) fn add_authored_disease_target(
                 comparison.holds(u32::try_from(count).unwrap_or(u32::MAX), quantity)
             }
         });
-    let available_at = if immediate {
-        clock.tick
-    } else {
-        deadline.map_or(clock.tick.saturating_add(1), |deadline| {
-            deadline.0.max(clock.tick.saturating_add(1))
-        })
-    };
+    if !immediate {
+        if !assignments
+            .iter_many(token_owners.get(actor).ok().into_iter().flatten().copied())
+            .flatten()
+            .any(|assignment| assignment.root == root && assignment.disease == disease.name)
+        {
+            commands.spawn((
+                AssignedDiseaseTarget {
+                    root,
+                    disease: disease.name,
+                },
+                ChildOf(actor),
+            ));
+        }
+        instruction.complete(actor, clock.tick, &mut commands);
+        return;
+    }
     if !tokens
         .iter_many(token_owners.get(actor).ok().into_iter().flatten().copied())
         .flatten()
@@ -655,7 +638,7 @@ pub(super) fn add_authored_disease_target(
         commands.spawn((
             BehaviorSelfToken {
                 name: disease.token,
-                available_at,
+                available_at: clock.tick,
                 expires_at: u64::MAX,
                 payload: None,
                 retain_on_failure: false,

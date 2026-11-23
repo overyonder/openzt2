@@ -159,9 +159,12 @@ fn lower_bfm_animation_playback_policy(
         explicit_use_only: animation_source_node
             .attribute("explicitUseOnly")
             .and_then(parse_blue_fang_animation_boolean),
-        resolve_unit_collisions: animation_source_node
-            .attribute("resolveUnitCollisions")
-            .and_then(parse_blue_fang_animation_boolean),
+        resolve_unit_collisions: Some(
+            animation_source_node
+                .attribute("resolveUnitCollisions")
+                .and_then(parse_blue_fang_animation_boolean)
+                .unwrap_or(true),
+        ),
         ground_fit_rotation_is_enabled: animation_source_node
             .attribute("groundFitRotation")
             .and_then(parse_blue_fang_animation_boolean),
@@ -172,6 +175,7 @@ fn lower_bfm_animation_playback_policy(
             animation_source_node
                 .attribute(attribute_name)
                 .and_then(parse_blue_fang_animation_number)
+                .map(f32::to_radians)
         }),
         authored_animation_attributes: collect_unrecognized_bfm_animation_attributes(
             animation_source_node,

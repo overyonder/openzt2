@@ -2,10 +2,10 @@ use super::*;
 use crate::source_document::{
     blue_fang_source_document_parsing::parse_blue_fang_source_document, path::AssetPath,
 };
+use openzt2_game_data::AssetId;
 use openzt2_game_data::world_definitions::animal_health::{
     DiseaseAnimalFilter, DiseaseComparison, DiseaseZooTest,
 };
-use openzt2_game_data::AssetId;
 
 #[test]
 fn environment_retains_distinct_light_and_fog_programs() {
@@ -18,6 +18,7 @@ fn environment_retains_distinct_light_and_fog_programs() {
         &BlueFangActorManifestModelAndSceneResolutionIndex::default(),
         "world/environments/env1coastal_small.xml",
         [0, 0],
+        &mut None,
     )
     .unwrap()
     .unwrap();
@@ -46,6 +47,7 @@ fn fossil_policy_requires_mode_dependency_and_preserves_its_authored_dig_range()
             &index,
             "config/puzzlemgr.xml",
             [0, 0],
+            &mut None,
         )
         .is_err(),
         "missing mode policy must not silently publish an empty manager"
@@ -65,6 +67,7 @@ fn fossil_policy_requires_mode_dependency_and_preserves_its_authored_dig_range()
                 &index,
                 "config/puzzlemgr.xml",
                 [0, 0],
+                &mut None,
             )
             .unwrap()
             .unwrap();
@@ -107,6 +110,7 @@ fn disease_manager_keeps_each_disease_and_its_exposure_rules() {
         &BlueFangActorManifestModelAndSceneResolutionIndex::default(),
         "config/diseasemgr.xml",
         [0, 0],
+        &mut None,
     )
     .unwrap()
     .unwrap();

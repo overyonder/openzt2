@@ -36,8 +36,8 @@ pub(super) fn evaluate_active_scenario_objective_lua_condition_scripts(
         Option<&super::challenge_offer_types::ScenarioChallengeRuleContext>,
     )>,
     time: Res<Time<Fixed>>,
-    simulation: Res<
-        openzt2_world_state::simulation_time::simulation_control_types::SimulationControl,
+    simulation: Single<
+        &openzt2_world_state::simulation_time::simulation_control_types::SimulationControl,
     >,
     mut sessions: Query<(
         Entity,

@@ -245,15 +245,11 @@ pub(super) fn restore_snapshot_terrain(
     mut commands: Commands,
     mut operations: Query<(Entity, &RestoreSnapshotTerrain, &mut DecodedSnapshot)>,
     mut terrain_application: TerrainSnapshotApplicationParameters,
-    graph: Option<Res<ActiveTerrainDerivedNavigationGraph>>,
 ) {
     let Ok((operation, stage, mut decoded)) = operations.single_mut() else {
         return;
     };
     let root = stage.0;
-    let Some(graph) = graph else {
-        return;
-    };
     let Some(terrain) = decoded.terrain.as_ref() else {
         commands
             .entity(operation)
@@ -270,10 +266,7 @@ pub(super) fn restore_snapshot_terrain(
             commands
                 .entity(operation)
                 .remove::<RestoreSnapshotTerrain>()
-                .insert(AwaitingSnapshotTerrainNavigation {
-                    root,
-                    previous_change: graph.last_changed(),
-                });
+                .insert(AwaitingSnapshotTerrainNavigation { root });
         }
         Err(Failure::SnapshotTransactionInFlight) => {}
         Err(reason) => {
@@ -290,17 +283,21 @@ pub(super) fn restore_snapshot_terrain(
 
 pub(super) fn accept_restored_terrain_navigation(
     mut commands: Commands,
-    operations: Query<(Entity, &AwaitingSnapshotTerrainNavigation)>,
-    graph: Option<Res<ActiveTerrainDerivedNavigationGraph>>,
+    operations: Query<&AwaitingSnapshotTerrainNavigation>,
+    mut ready: MessageReader<
+        openzt2_zoo_state::terrain::terrain_navigation_change_types::SnapshotTerrainNavigationReady,
+    >,
 ) {
-    let (Ok((operation, stage)), Some(graph)) = (operations.single(), graph) else {
-        return;
-    };
-    if stage.previous_change != graph.last_changed() {
-        commands
-            .entity(operation)
-            .remove::<AwaitingSnapshotTerrainNavigation>()
-            .insert(AwaitingSnapshotDomainBaseline(stage.root));
+    for completion in ready.read() {
+        if operations
+            .get(completion.operation)
+            .is_ok_and(|stage| stage.root == completion.root)
+        {
+            commands
+                .entity(completion.operation)
+                .remove::<AwaitingSnapshotTerrainNavigation>()
+                .insert(AwaitingSnapshotDomainBaseline(completion.root));
+        }
     }
 }
 
@@ -310,7 +307,7 @@ pub(super) fn accept_snapshot_domain_baseline(
     profile: Res<ProfileOptions>,
     allocators: Query<&PersistentIdAllocator, With<WorldRoot>>,
     photos: PhotoSnapshotBaselineReadiness,
-    time: SimulationTimeSnapshotLoadResources,
+    time: SimulationTimeSnapshotRestore,
 ) {
     let Ok((operation, stage, decoded)) = operations.single() else {
         return;
@@ -318,7 +315,7 @@ pub(super) fn accept_snapshot_domain_baseline(
     let root = stage.0;
     let readiness = if profile.profile_identifier != decoded.profile {
         Err(Failure::SnapshotProfileMismatch)
-    } else if !time.is_initialized() {
+    } else if !time.is_initialized(root) {
         return;
     } else {
         allocators

@@ -1,4 +1,4 @@
-use bevy::prelude::*;
+use bevy::{ecs::relationship::RelationshipTarget, prelude::*};
 
 use openzt2_game_assets::application_lifecycle::GamePhase;
 use openzt2_interface_state::camera::camera_control_message_types::RestoreCameraMode;
@@ -7,9 +7,10 @@ use openzt2_zoo_state::locomotion::locomotion_types::DirectLocomotion;
 
 use super::immersive_mode_message_types::{ExitImmersiveMode, ImmersiveModeExited, ModeExitReason};
 use super::immersive_mode_state_types::{
-    ActiveImmersiveMode, ControlledEntity, EquippedInteractionTool, ImmersiveCamera, ImmersiveMode,
-    ImmersiveSubject,
+    ActiveImmersiveMode, ControlledEntity, EquippedInteractionTool, FirstPersonTraining,
+    FirstPersonTrainingSessions, ImmersiveCamera, ImmersiveMode, ImmersiveSubject,
 };
+use openzt2_zoo_state::{animal_health::types::Dead, animal_lifecycle::types::Animal};
 
 #[derive(Component)]
 pub(super) struct SessionExit(ModeExitReason);
@@ -61,6 +62,9 @@ pub(super) fn release_session(
             commands.entity(camera.0).try_remove::<PhotoMode>();
         }
     }
+    commands
+        .entity(removed.entity)
+        .try_remove::<FirstPersonTraining>();
     if active.restore_camera_on_exit {
         restore.write(RestoreCameraMode {
             transition_seconds: None,
@@ -70,6 +74,34 @@ pub(super) fn release_session(
         mode: active.mode,
         reason,
     });
+}
+
+fn end_training_for_dead_subject(
+    death: On<Add, Dead>,
+    subjects: Query<&FirstPersonTrainingSessions>,
+    mut commands: Commands,
+) {
+    end_training_for_subject(death.entity, &subjects, &mut commands);
+}
+
+fn end_training_for_removed_animal(
+    removal: On<Remove, Animal>,
+    subjects: Query<&FirstPersonTrainingSessions>,
+    mut commands: Commands,
+) {
+    end_training_for_subject(removal.entity, &subjects, &mut commands);
+}
+
+fn end_training_for_subject(
+    subject: Entity,
+    subjects: &Query<&FirstPersonTrainingSessions>,
+    commands: &mut Commands,
+) {
+    if let Ok(sessions) = subjects.get(subject) {
+        for session in sessions.iter() {
+            commands.entity(session).try_remove::<FirstPersonTraining>();
+        }
+    }
 }
 
 pub(super) fn exit_when_link_breaks<T: Component>(
@@ -108,6 +140,8 @@ pub(super) fn release_direct_locomotion(
 pub(super) fn register(app: &mut App) {
     app.add_observer(release_session)
         .add_observer(release_direct_locomotion)
+        .add_observer(end_training_for_dead_subject)
+        .add_observer(end_training_for_removed_animal)
         .add_observer(exit_when_link_breaks::<ImmersiveSubject>)
         .add_observer(exit_when_link_breaks::<ImmersiveCamera>)
         .add_observer(exit_when_link_breaks::<EquippedInteractionTool>);

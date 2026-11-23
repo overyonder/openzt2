@@ -13,7 +13,7 @@ use super::staff_job_types::UnsuccessfulStaffJobCandidates;
 pub(super) struct StaffCandidateCleanupDeadline(u64);
 
 pub(super) fn staff_candidate_cleanup_is_due(
-    clock: Res<ZooClock>,
+    clock: Single<&ZooClock>,
     roots: Query<
         Option<&StaffCandidateCleanupDeadline>,
         (With<WorldRoot>, With<WorldLoadCompleted>),
@@ -26,7 +26,7 @@ pub(super) fn staff_candidate_cleanup_is_due(
 
 pub(super) fn clear_unsuccessful_candidates_at_authored_manager_interval(
     mut commands: Commands,
-    clock: Res<ZooClock>,
+    clock: Single<&ZooClock>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     mut requests: Query<&mut UnsuccessfulStaffJobCandidates>,

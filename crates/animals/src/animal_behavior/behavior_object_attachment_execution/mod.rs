@@ -3,8 +3,8 @@
 use super::behavior_animation_key_execution::CrossedBehaviorAnimationEffect;
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::behavior_action_actors;
 use openzt2_zoo_state::behavior_task_execution_types::{
-    running_actions::{BehaviorAnimationEffect, TimedBehaviorAnimationEffect},
     PendingBehaviorAnimationClipCompletion,
+    running_actions::{BehaviorAnimationEffect, TimedBehaviorAnimationEffect},
 };
 
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
@@ -37,7 +37,6 @@ use openzt2_zoo_state::behavior_task_execution_types::BehaviorHeldAnimationClip;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
 use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorTaskFailure;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
-use openzt2_world_state::world_spawn::prefab_authored_attachment_identifier::PrefabAuthoredAttachmentIdentifier;
 use openzt2_world_state::world_spawn::prefab_transform_conversion::transform_from_authored;
 use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
@@ -46,7 +45,7 @@ use avian3d::prelude::RigidBody;
 use openzt2_zoo_state::animal_behavior::behavior_world_release_types::{
     BehaviorWorldObjectReleased, BehaviorWorldReleaseMotion,
 };
-use bevy::{asset::LoadState, ecs::system::SystemParam, prelude::*};
+use bevy::{asset::{AssetLoadFailedEvent, LoadState}, ecs::system::SystemParam, platform::collections::HashSet, prelude::*};
 use openzt2_game_data::{AssetId};
 
 #[derive(Component)]
@@ -63,6 +62,25 @@ struct PendingObjectAttachment {
 /// A valid text-key detach crossed before the corresponding prefab admission.
 #[derive(Component)]
 struct DeliveredAttachmentDetach;
+
+#[derive(SystemParam)]
+struct AttachmentPrefabEvents<'w, 's> {
+    loaded: MessageReader<'w, 's, AssetEvent<ScenePrefabAsset>>,
+    failed: MessageReader<'w, 's, AssetLoadFailedEvent<ScenePrefabAsset>>,
+}
+
+impl AttachmentPrefabEvents<'_, '_> {
+    fn settled(&mut self) -> HashSet<bevy::asset::AssetId<ScenePrefabAsset>> {
+        self.loaded
+            .read()
+            .filter_map(|event| match *event {
+                AssetEvent::Added { id } | AssetEvent::LoadedWithDependencies { id } => Some(id),
+                _ => None,
+            })
+            .chain(self.failed.read().map(|event| event.id))
+            .collect()
+    }
+}
 
 fn release_detached_object_locomotion_modifiers(
     mut commands: Commands,
@@ -163,15 +181,17 @@ pub(super) fn register_object_attachment_execution(app: &mut App) {
     events::register_attachment_animation_observers(app);
     app.add_observer(detach::retire_owned_objects_when_holder_is_destroyed)
         .add_observer(detach::release_detached_object_presentation)
+        .add_observer(detach::finish_object_release)
+        .add_observer(cancel_object_attachment_demand)
         .add_observer(admission::apply_object_attachment_admissions)
         .add_observer(presentation::unbind_carried_prefab_presentation);
     use openzt2_zoo_state::behavior_task_execution_types::running_actions::BehaviorStepFixedSet;
     app.add_systems(FixedUpdate, (
         update_waiting_behavior_actors.pipe(start_or_finish_object_attachment).in_set(BehaviorObjectAttachmentSet),
-        detach::apply_delivered_detach_after_object_admission,
-        created::hydrate_detach_created_objects,
-        release_detached_object_locomotion_modifiers,
-    ).chain().in_set(BehaviorStepFixedSet::Think)
+        detach::apply_delivered_detach_after_object_admission.after(BehaviorObjectAttachmentSet),
+        created::hydrate_detach_created_objects.after(detach::apply_delivered_detach_after_object_admission),
+        release_detached_object_locomotion_modifiers.after(detach::apply_delivered_detach_after_object_admission),
+    ).in_set(BehaviorStepFixedSet::Think)
         .run_if(in_state(GamePhase::InGame)))
         .add_systems(FixedUpdate, held_clip::release_behavior_held_animation_clips
             .in_set(FixedGameSet::Act)
@@ -189,10 +209,23 @@ pub(super) fn register_object_attachment_execution(app: &mut App) {
             .run_if(in_state(GamePhase::InGame)));
 }
 
+fn cancel_object_attachment_demand(
+    removed: On<Remove<openzt2_zoo_state::behavior_task_execution_types::running_actions::RunBehaviorAttachObject>>,
+    pending: Query<(), With<PendingObjectAttachment>>,
+    mut commands: Commands,
+) {
+    if pending.contains(removed.entity) {
+        commands
+            .entity(removed.entity)
+            .try_remove::<PendingObjectAttachment>();
+    }
+}
+
 fn start_or_finish_object_attachment(
     activation: In<Option<Entity>>,
     mut commands: Commands,
     assets: AttachmentAssets,
+    mut prefab_events: AttachmentPrefabEvents,
     clock: Single<&ZooClock>,
     memberships: InteractionContainerMemberships,
     mut requests: MessageWriter<AnimationClipPlaybackRequest>,
@@ -206,7 +239,7 @@ fn start_or_finish_object_attachment(
             ),
             &DefinitionId,
             &WorldMember,
-            Option<&PendingObjectAttachment>,
+            Option<&mut PendingObjectAttachment>,
         ),
         Without<PendingBehaviorTaskFailure>,
     >,
@@ -222,14 +255,14 @@ fn start_or_finish_object_attachment(
     >,
     objects: Query<(&ContainedObject, &DefinitionId, Option<&WorldMember>)>,
     transforms: Query<&GlobalTransform>,
-    children: Query<&Children>,
-    attachment_nodes: Query<&PrefabAuthoredAttachmentIdentifier>,
+    attachment_nodes: super::behavior_named_nodes::NamedNodeTransforms,
     presentations: Query<&openzt2_world_state::animation_graph::animation_presentation_relationship_types::AnimationPresentations>,
     animated: Query<
         (),
         With<openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackController>,
     >,
 ) {
+    let settled = prefab_events.settled();
     let mut all_obsolete = activation.0.is_none().then(|| obsolete.iter());
     let mut obsolete_actor = activation.0.and_then(|actor| obsolete.get(actor).ok());
     while let Some(actor) = match &mut all_obsolete {
@@ -247,8 +280,22 @@ fn start_or_finish_object_attachment(
         if activation.0.is_none() && !instruction.can_update_after_activation(clock.tick) {
             continue;
         }
-        if pending.is_some_and(|pending| !pending.owns(task, instruction)) {
+        if pending
+            .as_ref()
+            .is_some_and(|pending| !pending.owns(task, instruction))
+        {
             commands.entity(actor).remove::<PendingObjectAttachment>();
+            continue;
+        }
+        if activation.0.is_none()
+            && pending.as_ref().is_some_and(|pending| {
+                pending.request_id.is_none()
+                    && pending
+                        .prefab
+                        .as_ref()
+                        .is_some_and(|prefab| !settled.contains(&prefab.id()))
+            })
+        {
             continue;
         }
         if task.next_action_tick > clock.tick {
@@ -301,6 +348,7 @@ fn start_or_finish_object_attachment(
             None
         } else {
             let Some(prefab_handle) = pending
+                .as_ref()
                 .and_then(|pending| pending.prefab.clone())
                 .or_else(|| definitions.scene(object.prefab))
             else {
@@ -341,7 +389,10 @@ fn start_or_finish_object_attachment(
             ).any(|controller| animated.contains(controller));
         let detach_at_once = action.animation.is_some() && !plays_clip;
         if let Some(animation) = action.animation.as_ref().filter(|_| plays_clip) {
-            if pending.is_none_or(|pending| pending.request_id.is_none()) {
+            if pending
+                .as_ref()
+                .is_none_or(|pending| pending.request_id.is_none())
+            {
                 let request = requests.write(AnimationClipPlaybackRequest {
                     animation_subject_entity: actor,
                     animation_clip_asset_key: animation.clone(),
@@ -349,22 +400,27 @@ fn start_or_finish_object_attachment(
                     playback_speed_permille: 1000,
                     playback_repetition_policy: AnimationPlaybackRepetitionPolicy::PlayOnce,
                 });
-                commands.entity(actor).insert((
-                    PendingObjectAttachment {
+                if let Some(mut pending) = pending {
+                    pending.request_id = Some(request.id);
+                } else {
+                    commands.entity(actor).insert(PendingObjectAttachment {
                         request_id: Some(request.id),
                         ..PendingObjectAttachment::waiting_for_attachment(
                             task,
                             instruction,
                             prefab_handle.clone(),
                         )
-                    },
-                    BehaviorHeldAnimationClip {
-                        request_id: request.id,
-                    },
-                ));
+                    });
+                }
+                commands.entity(actor).insert(BehaviorHeldAnimationClip {
+                    request_id: request.id,
+                });
                 continue;
             }
-            if pending.is_none_or(|pending| pending.joint.is_none()) {
+            if pending
+                .as_ref()
+                .is_none_or(|pending| pending.joint.is_none())
+            {
                 continue;
             }
         }
@@ -372,21 +428,17 @@ fn start_or_finish_object_attachment(
         let joint = match action.subject_node.as_deref() {
             Some(name) => {
                 let identifier = AssetId::from_key(&name.to_ascii_lowercase());
-                let Some(node) = children
-                    .iter_descendants_depth_first::<Children>(actor)
-                    .find(|node| {
-                        attachment_nodes
-                            .get(*node)
-                            .is_ok_and(|attachment| attachment.0 == identifier)
-                    })
-                else {
+                let Some(node) = attachment_nodes.socket(actor, identifier) else {
                     warn!(?actor, node = name, "attachment subject node is absent");
                     mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
                     continue;
                 };
                 node
             }
-            None => pending.and_then(|pending| pending.joint).unwrap_or(actor),
+            None => pending
+                .as_ref()
+                .and_then(|pending| pending.joint)
+                .unwrap_or(actor),
         };
         let Ok(joint_transform) = transforms.get(joint) else {
             mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
@@ -430,7 +482,7 @@ fn start_or_finish_object_attachment(
             detach_rule: action.detach_rule,
             joint: Some(joint),
             relative_transform,
-            attachment_request: pending.and_then(|pending| {
+            attachment_request: pending.as_ref().and_then(|pending| {
                 pending
                     .request_id
                     .map(|request| (request, pending.execution_id))
@@ -442,8 +494,10 @@ fn start_or_finish_object_attachment(
         } else {
             Visibility::Inherited
         };
-        let detach =
-            detach_at_once || pending.is_some_and(|pending| pending.detach_after_attachment);
+        let detach = detach_at_once
+            || pending
+                .as_ref()
+                .is_some_and(|pending| pending.detach_after_attachment);
         let tick = clock.tick;
         let spawn = held_item.is_none().then(|| admission::NewAttachedObject {
             world: *world,
@@ -584,7 +638,7 @@ fn detach_held_objects_for_current_actions(
     }
 }
 
-#[derive(Component)]
+#[derive(Component, PartialEq)]
 pub(super) struct ContainedObject {
     holder_definition: AssetId,
     detach_rule: AssetId,

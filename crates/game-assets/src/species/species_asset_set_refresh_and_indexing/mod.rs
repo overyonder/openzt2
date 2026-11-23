@@ -4,39 +4,58 @@ use bevy::{
 };
 
 use crate::asset_source::{
-    archive_entry_asset_path::archive_entry_asset_path, ArchiveCatalogue, ArchiveOverlayChanged,
-    AssetArchives,
+    ArchiveOverlayChanged, AssetArchives,
+    archive_entry_asset_path::definition_archive_entry_asset_path,
 };
 use std::{collections::BTreeSet, path::Path};
 
 use super::species_asset_types::{SpeciesAsset, SpeciesAssets};
-
-pub(crate) fn is_species_catalogue_source(path: &Path) -> bool {
-    path.starts_with("entities/units/animals/ai")
-        && path
-            .extension()
-            .is_some_and(|extension| extension.eq_ignore_ascii_case("xml"))
-}
 
 pub(super) fn discover_species_catalogue_sources(
     archives: Res<AssetArchives>,
     mut index: ResMut<SpeciesAssets>,
     mut overlay_changes: MessageReader<ArchiveOverlayChanged>,
 ) {
+    let binders = archives.authored_binder_sources();
     let changed = overlay_changes
         .read()
         .flat_map(|change| &change.changes)
-        .any(|change| is_species_catalogue_source(&change.normalized_asset_path));
+        .any(|change| {
+            change.normalized_asset_path == Path::new("config/gamectxt.xml")
+                || binders.contains_path(&change.normalized_asset_path)
+        });
     overlay_changes.clear();
-    if index.discovered && !changed {
+    if !changed
+        && index
+            .binder_sources
+            .as_ref()
+            .is_some_and(|old| std::sync::Arc::ptr_eq(old, &binders))
+    {
         return;
     }
-    let sources = archives.catalogue_sources(ArchiveCatalogue::Species);
-    index.pending_paths = sources.iter().map(archive_entry_asset_path).collect();
+    let animal_paths = match binders.animal_binder_paths(&archives) {
+        Ok(paths) => paths,
+        Err(error) => {
+            error!(%error, "could not discover animal binders");
+            BTreeSet::new()
+        }
+    };
+    index.source_generation += 1;
+    let generation = index.source_generation;
+    let mut loose = animal_paths;
+    let mut paths = archives
+        .resolved_archive_entries()
+        .iter()
+        .filter(|entry| loose.remove(&entry.normalized_asset_path))
+        .map(|entry| definition_archive_entry_asset_path(entry, generation))
+        .collect::<std::collections::VecDeque<_>>();
+    paths.extend(loose);
+    index.pending_paths = paths;
     index.handles.clear();
     index.source_ids.clear();
     index.pending.clear();
     index.failed.clear();
+    index.binder_sources = Some(binders);
     index.discovered = true;
     index.source_set_changed = true;
 }

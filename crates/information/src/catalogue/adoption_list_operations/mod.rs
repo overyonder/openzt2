@@ -148,8 +148,14 @@ pub(crate) fn select_first_available_species_after_adoption_catalogue_and_offer_
     adoption_lists: Query<(Ref<UiTablePolicy>, &UiDocumentOwner)>,
     selected_genders: Query<&AnimalCatalogueGender>,
     offers: AdoptionCatalogueOffers,
-    mut selected_catalogue_entry: ResMut<SelectedCatalogueEntry>,
+    mut selections: Query<
+        &mut SelectedCatalogueEntry,
+        With<openzt2_interface_state::ui::ui_document_lifecycle_contracts::InGameUiOwner>,
+    >,
 ) {
+    let Ok(mut selected_catalogue_entry) = selections.single_mut() else {
+        return;
+    };
     let Ok((_, clock, Some(members))) = offers.roots.single() else {
         return;
     };
@@ -252,7 +258,7 @@ pub(crate) fn project_adoption_catalogue_entries_to_authored_rows(
     adoption_lists: Query<(&UiTablePolicy, &UiDocumentOwner)>,
     selected_genders: Query<Ref<AnimalCatalogueGender>>,
     mut offers: AdoptionCatalogueOffers,
-    selected_catalogue_entry: Res<SelectedCatalogueEntry>,
+    selected_catalogue_entry: Single<Ref<SelectedCatalogueEntry>>,
     child_entities: Query<&Children>,
     mut visual_images: Query<
         (Entity, Option<&mut ImageNode>, Option<&UiSourceRect>),
@@ -275,6 +281,7 @@ pub(crate) fn project_adoption_catalogue_entries_to_authored_rows(
         (Without<UiListRow>, Without<UiVisualLayer>),
     >,
 ) {
+    let selected_catalogue_entry = selected_catalogue_entry.into_inner();
     let catalogue_content_changed =
         world_definition_assets.is_changed() || active_world_definitions.is_changed();
     let adoption_rows_changed = adoption_rows

@@ -26,15 +26,14 @@ use super::{
 pub(super) fn create_challenge_offers_requested_by_scenario_scripts(
     mut commands: Commands,
     mut requests: MessageReader<CreateScenarioChallengeOfferFromLuaSourcePathRequest>,
-    mut roots: Query<(Entity, &mut PersistentIdAllocator), With<WorldRoot>>,
+    mut roots: Query<(Entity, &ZooClock, &mut PersistentIdAllocator), With<WorldRoot>>,
     existing: Query<(), With<ScenarioChallengeOffer>>,
     contexts: Query<(Entity, &ScenarioChallengeLuaCandidate, &WorldMember)>,
     scenarios: Res<WorldScenarios>,
     assets: Res<Assets<WorldScenarioDocumentAsset>>,
-    clock: Res<ZooClock>,
     mut runtime: NonSendMut<ScenarioLuaVirtualMachineContexts>,
 ) {
-    let Ok((root, mut allocator)) = roots.single_mut() else {
+    let Ok((root, clock, mut allocator)) = roots.single_mut() else {
         return;
     };
     let Some(scenarios) = scenarios.get(&assets) else {
@@ -131,22 +130,30 @@ pub(super) fn create_challenge_offers_requested_by_scenario_scripts(
 
 pub(super) fn validate_and_apply_requested_challenge_responses(
     mut requests: MessageReader<RespondToScenarioChallengeRequest>,
-    clock: Res<ZooClock>,
+    clocks: Query<&ZooClock>,
     mut runtime: NonSendMut<ScenarioLuaVirtualMachineContexts>,
-    mut offers: Query<(&mut ScenarioChallengeOffer, &ScenarioChallengeRuleContext)>,
+    mut offers: Query<(
+        &mut ScenarioChallengeOffer,
+        &ScenarioChallengeRuleContext,
+        &WorldMember,
+    )>,
     mut accepted: MessageWriter<ScenarioChallengeAccepted>,
     mut rejected: MessageWriter<ScenarioChallengeAcceptanceRejected>,
 ) {
     for request in requests.read() {
         let reason = match offers.get_mut(request.offer) {
             Err(_) => Some(ScenarioChallengeAcceptanceRejectionReason::Missing),
-            Ok((offer, _)) if offer.state != ScenarioChallengeOfferState::Offered => {
+            Ok((offer, _, _)) if offer.state != ScenarioChallengeOfferState::Offered => {
                 Some(ScenarioChallengeAcceptanceRejectionReason::AlreadyActive)
             }
-            Ok((offer, _)) if clock.tick >= offer.expires_tick => {
+            Ok((offer, _, member))
+                if clocks
+                    .get(member.root)
+                    .is_ok_and(|clock| clock.tick >= offer.expires_tick) =>
+            {
                 Some(ScenarioChallengeAcceptanceRejectionReason::Expired)
             }
-            Ok((mut offer, owner)) => {
+            Ok((mut offer, owner, _)) => {
                 match runtime.set_challenge_response(owner.0, request.accept) {
                     Ok(()) => {
                         offer.state = if request.accept {

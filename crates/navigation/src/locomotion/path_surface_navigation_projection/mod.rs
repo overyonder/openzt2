@@ -9,6 +9,7 @@ use openzt2_game_assets::{
         world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
     },
 };
+use openzt2_world_state::world_spawn::world_membership_types::{WorldMember, WorldRoot};
 use openzt2_zoo_state::terrain::terrain_navigation_change_types::{
     TerrainNavigationChanged, TerrainNavigationRestored,
 };
@@ -29,13 +30,24 @@ use openzt2_zoo_state::{
 
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(super) fn project_path_surfaces_into_navigation_graph(
-    mut graph: Option<ResMut<ActiveTerrainDerivedNavigationGraph>>,
-    mut capacity: Option<
-        ResMut<openzt2_zoo_state::locomotion::locomotion_types::LocomotionCapacity>,
+    mut roots: Query<
+        (
+            Entity,
+            &mut ActiveTerrainDerivedNavigationGraph,
+            &mut openzt2_zoo_state::locomotion::locomotion_types::LocomotionCapacity,
+            &TerrainIndex,
+        ),
+        With<WorldRoot>,
     >,
     definitions: Res<WorldDefinitions>,
     assets: Res<Assets<WorldDefinitionAsset>>,
-    paths: Query<(Entity, &PathTile, &TileSurface, &GlobalTransform)>,
+    paths: Query<(
+        Entity,
+        &PathTile,
+        &TileSurface,
+        &GlobalTransform,
+        &WorldMember,
+    )>,
     changes: Query<
         (),
         (
@@ -51,7 +63,6 @@ pub(super) fn project_path_surfaces_into_navigation_graph(
         RemovedComponents<PathTile>,
         RemovedComponents<TileSurface>,
     ),
-    terrain_index: Res<TerrainIndex>,
     terrain_assets: Res<Assets<TerrainAsset>>,
     terrain_chunks: Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
     mut path_changes: MessageWriter<NavigationPathGraphChanged>,
@@ -64,7 +75,7 @@ pub(super) fn project_path_surfaces_into_navigation_graph(
     let graph_replaced = installations.read().count() != 0;
     let terrain_changed =
         (terrain_changes.read().count() != 0) | (restored_terrain.read().count() != 0);
-    let Some(graph) = graph.as_mut() else {
+    let Ok((root, mut graph, mut capacity, terrain_index)) = roots.single_mut() else {
         return;
     };
     if !graph_replaced
@@ -81,7 +92,10 @@ pub(super) fn project_path_surfaces_into_navigation_graph(
     };
     let mut elevated = Vec::new();
     let mut ground = Vec::new();
-    for (entity, path, surface, transform) in &paths {
+    for (entity, path, surface, transform, member) in &paths {
+        if member.root != root {
+            continue;
+        }
         let Some(definition) = definitions.find_path(path.definition) else {
             continue;
         };
@@ -104,7 +118,7 @@ pub(super) fn project_path_surfaces_into_navigation_graph(
         .terrain_derived_navigation_graph_mut()
         .replace_navigation_path_surfaces(elevated, ground, |point| {
             let (chunk, edited) = terrain_chunks
-                .get(terrain_chunk_at(&terrain_index, point)?)
+                .get(terrain_chunk_at(terrain_index, point)?)
                 .ok()?;
             let terrain = terrain_assets.get(&chunk.asset)?;
             Some(sample_terrain(chunk, terrain, edited, point)?.height_m)
@@ -117,11 +131,12 @@ pub(super) fn project_path_surfaces_into_navigation_graph(
         .terrain_derived_navigation_graph()
         .navigation_node_count()
         .saturating_add(1);
-    if let Some(capacity) = capacity.as_mut() {
+    if capacity.max_route_points != point_capacity {
         capacity.max_route_points = point_capacity;
     }
     if *phase.get() == GamePhase::InGame {
         path_changes.write(NavigationPathGraphChanged {
+            root,
             elevated: changes.elevated,
         });
     }
@@ -129,6 +144,7 @@ pub(super) fn project_path_surfaces_into_navigation_graph(
 
 #[derive(Message)]
 pub(super) struct NavigationPathGraphChanged {
+    pub(super) root: Entity,
     pub(super) elevated: bool,
 }
 

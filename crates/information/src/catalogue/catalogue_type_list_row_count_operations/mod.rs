@@ -38,7 +38,7 @@ pub(crate) fn initialize_authored_catalogue_type_list_state(
 pub(crate) fn reconcile_authored_catalogue_type_lists(
     assets: Res<Assets<WorldDefinitionAsset>>,
     definitions: Res<WorldDefinitions>,
-    unlocks: Res<UnlockedCatalogueDefinitionSet>,
+    unlocks: Single<Ref<UnlockedCatalogueDefinitionSet>>,
     worlds: Query<
         (
             Ref<SelectedWorldIdentity>,
@@ -53,6 +53,7 @@ pub(crate) fn reconcile_authored_catalogue_type_lists(
         Option<&mut RequestedUiListRowCount>,
     )>,
 ) {
+    let unlocks = unlocks.into_inner();
     let inputs_changed = assets.is_changed()
         || definitions.is_changed()
         || unlocks.is_changed()

@@ -1,4 +1,5 @@
 use bevy::camera::visibility::RenderLayers;
+use bevy::ecs::relationship::RelationshipTarget;
 use bevy::prelude::*;
 use openzt2_game_data::terrain::TerrainGrid;
 use openzt2_game_data::world_definitions::environment::EnvironmentVisualFlags;
@@ -9,7 +10,9 @@ use openzt2_game_data::{
 use openzt2_world_state::model_render::environment_render_layer::EnvironmentRenderLayer;
 
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
-use openzt2_world_state::animation_playback::animation_joint_target_types::AnimationJointTarget;
+use openzt2_world_state::animation_playback::animation_joint_target_types::{
+    AnimationJointTarget, AnimationRigJoints,
+};
 use openzt2_world_state::world_spawn::prefab_authored_billboard_orientation_mode::PrefabAuthoredBillboardOrientationMode;
 use openzt2_world_state::world_spawn::prefab_fixed_function_world_lighting_policy::PrefabFixedFunctionWorldLightingPolicy;
 use openzt2_world_state::world_spawn::prefab_model_tint::PrefabModelTint;
@@ -23,7 +26,7 @@ use openzt2_zoo_state::terrain::terrain_chunk_presentation_types::TERRAIN_RENDER
 
 use super::environment_presentation_types::{
     EnvironmentCameraRelativeVisual, EnvironmentModelVisual, EnvironmentSunPosition,
-    EnvironmentTexture, EnvironmentVisualOwner, EnvironmentVisualSampleIndex,
+    EnvironmentTexture, EnvironmentVisualOwner, EnvironmentVisualSampleIndex, PendingSunRigVisuals,
 };
 
 pub(super) fn hydrate_environment_visual_sample_renderer_entities(
@@ -242,21 +245,54 @@ fn hydrate_environment_sun_position_rig(
     }
 }
 
-pub(crate) fn attach_environment_sun_visuals_to_loaded_animation_joints(
+pub(super) fn attach_pending_sun_visual_to_existing_joint(
+    inserted: On<Insert<EnvironmentSunPosition>>,
     mut commands: Commands,
-    visuals: Query<(Entity, &EnvironmentSunPosition)>,
-    joints: Query<(Entity, &AnimationJointTarget)>,
+    pending: Query<&EnvironmentSunPosition>,
+    rigs: Query<&AnimationRigJoints>,
+    joints: Query<&AnimationJointTarget>,
 ) {
-    for (visual, position) in &visuals {
-        let Some(joint) = joints.iter().find_map(|(entity, target)| {
-            (target.animation_playback_controller_entity == position.rig
-                && AssetId::from_key(target.joint_asset_key.as_str()) == position.node)
-                .then_some(entity)
-        }) else {
-            continue;
-        };
-        commands.entity(joint).add_child(visual);
-        commands.entity(visual).remove::<EnvironmentSunPosition>();
+    let Ok(position) = pending.get(inserted.entity) else {
+        return;
+    };
+    let Ok(rig) = rigs.get(position.rig) else {
+        return;
+    };
+    if let Some(&joint) = rig.joints().iter().find(|&&joint| {
+        joints
+            .get(joint)
+            .is_ok_and(|target| target.authored_joint_id == position.node)
+    }) {
+        commands
+            .entity(inserted.entity)
+            .try_insert(ChildOf(joint))
+            .try_remove::<EnvironmentSunPosition>();
+    }
+}
+
+pub(super) fn attach_pending_sun_visuals_to_inserted_joint(
+    inserted: On<Insert<AnimationJointTarget>>,
+    mut commands: Commands,
+    joints: Query<&AnimationJointTarget>,
+    rigs: Query<&PendingSunRigVisuals>,
+    pending: Query<&EnvironmentSunPosition>,
+) {
+    let Ok(target) = joints.get(inserted.entity) else {
+        return;
+    };
+    let Ok(visuals) = rigs.get(target.animation_playback_controller_entity) else {
+        return;
+    };
+    for visual in visuals.iter() {
+        if pending
+            .get(visual)
+            .is_ok_and(|position| position.node == target.authored_joint_id)
+        {
+            commands
+                .entity(visual)
+                .try_insert(ChildOf(inserted.entity))
+                .try_remove::<EnvironmentSunPosition>();
+        }
     }
 }
 

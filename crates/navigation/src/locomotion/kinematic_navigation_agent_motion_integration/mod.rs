@@ -3,6 +3,7 @@ use super::sampled_animation_motion_projection::{
 };
 use avian3d::prelude::RigidBody;
 use bevy::prelude::*;
+use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use openzt2_zoo_state::terrain::terrain_chunk_types::EditedTerrainSamples;
@@ -27,11 +28,13 @@ pub(super) fn integrate_non_physics_planned_navigation_motion(
     mut commands: Commands,
     animation_samples: LocomotionAnimationSamples,
     time: Res<Time<Fixed>>,
-    navigation_graph: Option<
-        Res<openzt2_zoo_state::locomotion::locomotion_types::ActiveTerrainDerivedNavigationGraph>,
-    >,
+    roots: Query<(
+        &TerrainIndex,
+        Option<
+            &openzt2_zoo_state::locomotion::locomotion_types::ActiveTerrainDerivedNavigationGraph,
+        >,
+    )>,
     fences: FenceNavigationPolicy,
-    terrain_index: Res<TerrainIndex>,
     terrain_assets: Res<Assets<TerrainAsset>>,
     terrain_chunks: Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
     pursuit_targets: Query<&GlobalTransform>,
@@ -39,6 +42,7 @@ pub(super) fn integrate_non_physics_planned_navigation_motion(
         (
             Entity,
             &NavAgent,
+            &WorldMember,
             Option<&LocomotionMode>,
             &mut Transform,
             &mut Velocity,
@@ -57,6 +61,7 @@ pub(super) fn integrate_non_physics_planned_navigation_motion(
     for (
         navigation_agent_entity,
         navigation_agent,
+        world_member,
         locomotion_mode,
         mut local_transform,
         mut local_velocity,
@@ -68,6 +73,9 @@ pub(super) fn integrate_non_physics_planned_navigation_motion(
         pursuit,
     ) in &mut non_physics_navigation_agents
     {
+        let Ok((terrain_index, navigation_graph)) = roots.get(world_member.root) else {
+            continue;
+        };
         let playback = animation_samples.get(navigation_agent_entity, animation_source);
         let animation_mean_speed = animation_source
             .map_or(navigation_agent.max_speed_mps, |source| {
@@ -85,6 +93,7 @@ pub(super) fn integrate_non_physics_planned_navigation_motion(
         let previous_translation = local_transform.translation;
         let next_translation = previous_translation + local_velocity.0 * fixed_delta_seconds;
         if fences.gate_blocks_movement(
+            world_member.root,
             navigation_agent_entity,
             navigation_agent.capabilities,
             previous_translation,
@@ -97,7 +106,7 @@ pub(super) fn integrate_non_physics_planned_navigation_motion(
 
         let locomotion_mode = locomotion_mode.copied().unwrap_or_default();
         if locomotion_mode != LocomotionMode::Flight {
-            let path_height = navigation_graph.as_deref().and_then(|graph| {
+            let path_height = navigation_graph.and_then(|graph| {
                 let aim_height = pursuit
                     .and_then(|pursuit| pursuit_targets.get(pursuit.target).ok())
                     .map(|target| target.translation().y)
@@ -120,7 +129,7 @@ pub(super) fn integrate_non_physics_planned_navigation_motion(
                 fit_to_terrain(
                     locomotion_mode,
                     &mut local_transform.translation,
-                    &terrain_index,
+                    terrain_index,
                     &terrain_assets,
                     &terrain_chunks,
                 );

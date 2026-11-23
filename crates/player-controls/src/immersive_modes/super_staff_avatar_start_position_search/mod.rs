@@ -21,25 +21,23 @@ const AVATAR_START_SEARCH_STEP_COUNT: u32 = 150;
 
 #[derive(SystemParam)]
 pub(super) struct SuperStaffAvatarStartSurface<'w, 's> {
-    terrain_index: Res<'w, TerrainIndex>,
+    terrain_indexes: Query<'w, 's, &'static TerrainIndex>,
     terrain_assets: Res<'w, Assets<TerrainAsset>>,
     terrain_chunks: Query<'w, 's, (&'static TerrainChunk, Option<&'static EditedTerrainSamples>)>,
-    habitat_index: Res<'w, HabitatIndex>,
-    topology_grid: Option<Res<'w, TopologyGrid>>,
+    habitats: Query<'w, 's, (&'static HabitatIndex, &'static TopologyGrid)>,
 }
 
 impl SuperStaffAvatarStartSurface<'_, '_> {
-    fn terrain_height_at(&self, world_xz: Vec2) -> Option<f32> {
-        let chunk_entity = terrain_chunk_at(&self.terrain_index, world_xz)?;
+    fn terrain_height_at(&self, root: Entity, world_xz: Vec2) -> Option<f32> {
+        let chunk_entity = terrain_chunk_at(self.terrain_indexes.get(root).ok()?, world_xz)?;
         let (chunk, edited) = self.terrain_chunks.get(chunk_entity).ok()?;
         let asset = self.terrain_assets.get(&chunk.asset)?;
         sample_terrain(chunk, asset, edited, world_xz).map(|terrain| terrain.height_m)
     }
 
-    fn is_inside_habitat(&self, world_xz: Vec2) -> bool {
-        self.topology_grid.as_deref().is_some_and(|topology_grid| {
-            locate_habitat_at_world_position(&self.habitat_index, world_xz, *topology_grid)
-                .is_some()
+    fn is_inside_habitat(&self, root: Entity, world_xz: Vec2) -> bool {
+        self.habitats.get(root).is_ok_and(|(index, grid)| {
+            locate_habitat_at_world_position(index, world_xz, *grid).is_some()
         })
     }
 
@@ -48,6 +46,7 @@ impl SuperStaffAvatarStartSurface<'_, '_> {
     /// Entry and the retained fallback stay within the same world edges as movement.
     pub(super) fn find_avatar_start_position(
         &self,
+        root: Entity,
         camera_eye: Vec3,
         heading_yaw: f32,
         bounds: &WorldTerrainHorizontalBounds,
@@ -57,8 +56,8 @@ impl SuperStaffAvatarStartSurface<'_, '_> {
         let start = camera_eye.xz().clamp(bounds.min, bounds.max);
         let mut candidate = start;
         for _ in 0..AVATAR_START_SEARCH_STEP_COUNT {
-            if !self.is_inside_habitat(candidate) {
-                if let Some(height) = self.terrain_height_at(candidate) {
+            if !self.is_inside_habitat(root, candidate) {
+                if let Some(height) = self.terrain_height_at(root, candidate) {
                     return Vec3::new(candidate.x, height, candidate.y);
                 }
             }
@@ -66,7 +65,7 @@ impl SuperStaffAvatarStartSurface<'_, '_> {
         }
         Vec3::new(
             start.x,
-            self.terrain_height_at(start).unwrap_or(camera_eye.y),
+            self.terrain_height_at(root, start).unwrap_or(camera_eye.y),
             start.y,
         )
     }

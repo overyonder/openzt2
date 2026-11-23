@@ -1,6 +1,6 @@
 //! Direct steering at a live entity: a one-point route on its current position.
 use bevy::ecs::entity::EntityIndexMap;
-use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
+use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_zoo_state::aquatic::tank_navigation_water::TankNavigationWater;
 
 use avian3d::prelude::LinearVelocity;
@@ -28,10 +28,13 @@ use openzt2_zoo_state::locomotion::locomotion_types::Velocity;
 pub(super) fn accept_entity_pursuit_requests(
     mut commands: Commands,
     mut pursuit_requests: MessageReader<PursueEntity>,
-    active_navigation_graph: Option<Res<ActiveTerrainDerivedNavigationGraph>>,
-    water: Query<&TankNavigationWater, With<WorldRoot>>,
+    roots: Query<(
+        &ActiveTerrainDerivedNavigationGraph,
+        Option<&TankNavigationWater>,
+    )>,
     mut pursuers: Query<(
         &NavAgent,
+        &WorldMember,
         Option<&LocomotionMode>,
         &GlobalTransform,
         Option<&AnimalVariant>,
@@ -44,7 +47,6 @@ pub(super) fn accept_entity_pursuit_requests(
     mut route_requests: MessageWriter<NavigateTo>,
     mut navigation_failures: MessageWriter<NavigationFailed>,
 ) {
-    let tank_water = water.single().ok();
     let mut inserted_destinations = EntityIndexMap::<Destination>::default();
     let mut transitions = EntityIndexMap::<Option<EntityPursuit>>::default();
     for request in pursuit_requests.read() {
@@ -71,9 +73,9 @@ pub(super) fn accept_entity_pursuit_requests(
             .copied()
             .unwrap_or_else(|| pursuer.and_then(|(.., current, _)| current.copied()))
             .is_some_and(|current| current.request_id == request.request_id);
-        let line_is_clear = pursuer.is_some_and(|(agent, mode, transform, variant, ..)| {
-            let (Some(graph), Ok((agent, maximum_ground_slope_radians))) = (
-                active_navigation_graph.as_deref(),
+        let line_is_clear = pursuer.is_some_and(|(agent, member, mode, transform, variant, ..)| {
+            let (Ok((graph, tank_water)), Ok((agent, maximum_ground_slope_radians))) = (
+                roots.get(member.root),
                 animal_policy.agent_with_authored_collision_limits(agent, variant),
             ) else {
                 return false;
@@ -89,11 +91,13 @@ pub(super) fn accept_entity_pursuit_requests(
                 target,
                 target_mode.copied(),
             ) && !fence_policy.world_segment_blocks_actor(
+                member.root,
                 from,
                 target,
                 agent.capabilities,
                 fence_policy.actor_types.actor_types(request.entity),
             ) && !fence_policy.gate_blocks_movement(
+                member.root,
                 request.entity,
                 agent.capabilities,
                 from,

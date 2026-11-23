@@ -1,9 +1,9 @@
-use bevy::prelude::Resource;
+use bevy::prelude::Component;
 
 use super::money_types::Money;
 
-#[derive(Resource, Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ZooCash(pub Money);
 
-#[derive(Resource, Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct UnlimitedZooCash;
+#[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct UnlimitedZooCash(pub bool);

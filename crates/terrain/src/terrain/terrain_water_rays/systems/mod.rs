@@ -13,7 +13,7 @@ use openzt2_zoo_state::terrain::terrain_water_presentation_types::{
 };
 use openzt2_zoo_state::terrain::terrain_water_ray_types::TerrainWaterRayAnimation;
 use openzt2_zoo_state::terrain::terrain_water_renderer_types::TERRAIN_WATER_RENDER_LAYER;
-use openzt2_zoo_state::terrain::terrain_water_view_state::TerrainWaterViewState;
+use openzt2_zoo_state::terrain::terrain_water_view_state::TerrainWaterCameraContact;
 
 use super::{build_water_ray_disk_mesh, build_water_ray_strip_mesh};
 
@@ -193,7 +193,7 @@ pub(in crate::terrain) fn maintain_terrain_water_ray_effects(
 
 pub(in crate::terrain) fn advance_terrain_water_ray_materials(
     time: Res<Time>,
-    view: Option<Res<TerrainWaterViewState>>,
+    view: Query<&TerrainWaterCameraContact>,
     mut effects: Query<(
         &TerrainWaterRayEffect,
         &mut TerrainWaterRayAnimation,
@@ -213,7 +213,12 @@ pub(in crate::terrain) fn advance_terrain_water_ray_materials(
         }
         // Unknown camera membership cannot enable an effect. Environment
         // inputs are also required and have no fallback value.
-        if view.as_ref().and_then(|view| view.underwater_status()) != Some(true) {
+        if view
+            .single()
+            .ok()
+            .and_then(|contact| contact.underwater_status)
+            != Some(true)
+        {
             visibility.set_if_neq(Visibility::Hidden);
         }
     }

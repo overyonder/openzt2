@@ -14,8 +14,7 @@ const PATH_TILE_EDGE_CONTACT_TOLERANCE_M: f32 = 0.001;
 
 #[derive(SystemParam)]
 pub struct GroundPathPlacementStomp<'w, 's> {
-    topology: Option<Res<'w, TopologyIndex>>,
-    grid: Res<'w, TopologyGrid>,
+    roots: Query<'w, 's, (&'static TopologyGrid, Ref<'static, TopologyIndex>)>,
     paths: Query<
         'w,
         's,
@@ -37,28 +36,38 @@ pub struct GroundPathFootprintOverlaps<'a, 'w, 's> {
     paths: &'a GroundPathPlacementStomp<'w, 's>,
     definition: &'a PlaceableDefinition,
     catalogue: WorldDefinitionsView<'a>,
+    grid_and_topology: Option<(&'a TopologyGrid, &'a TopologyIndex)>,
     search_reach: Option<f32>,
 }
 
 impl<'w, 's> GroundPathPlacementStomp<'w, 's> {
-    pub fn topology_change_tick(&self) -> Option<bevy::ecs::change_detection::Tick> {
-        self.topology
-            .as_ref()
-            .map(|topology| topology.last_changed())
+    pub fn topology_changed(&self, root: Entity) -> bool {
+        self.roots
+            .get(root)
+            .is_ok_and(|(_, topology)| topology.is_changed())
     }
 
     pub fn overlaps<'a>(
         &'a self,
+        root: Entity,
         definition: &'a PlaceableDefinition,
         catalogue: WorldDefinitionsView<'a>,
     ) -> GroundPathFootprintOverlaps<'a, 'w, 's> {
-        let spacing = self.grid.spacing_m;
-        let search_reach = (definition.stomp.grid_snap && spacing.is_finite() && spacing > 0.0)
-            .then(|| f32::from(catalogue.maximum_ground_path_width_cm()) * 0.005);
+        let grid_and_topology = self
+            .roots
+            .get(root)
+            .ok()
+            .map(|(grid, topology)| (grid, topology.into_inner()));
+        let search_reach = grid_and_topology
+            .filter(|(grid, _)| {
+                definition.stomp.grid_snap && grid.spacing_m.is_finite() && grid.spacing_m > 0.0
+            })
+            .map(|_| f32::from(catalogue.maximum_ground_path_width_cm()) * 0.005);
         GroundPathFootprintOverlaps {
             paths: self,
             definition,
             catalogue,
+            grid_and_topology,
             search_reach,
         }
     }
@@ -68,21 +77,22 @@ impl GroundPathFootprintOverlaps<'_, '_, '_> {
     pub fn actions_at(&self, cell: IVec2) -> impl Iterator<Item = GroundPathPlacementAction> + '_ {
         let minimum = cell.as_vec2();
         let maximum = minimum + Vec2::ONE;
-        let grid = &self.paths.grid;
-        self.search_reach
+        self.grid_and_topology
+            .zip(self.search_reach)
             .into_iter()
-            .flat_map(move |reach| {
+            .flat_map(move |((grid, topology), reach)| {
                 let first = ((minimum - Vec2::splat(reach) - grid.origin) / grid.spacing_m)
                     .floor()
                     .as_ivec2();
                 let last = ((maximum + Vec2::splat(reach) - grid.origin) / grid.spacing_m)
                     .ceil()
                     .as_ivec2();
-                (first.x..=last.x)
-                    .flat_map(move |x| (first.y..=last.y).map(move |y| IVec3::new(x, y, 0)))
+                (first.x..=last.x).flat_map(move |x| {
+                    (first.y..=last.y).map(move |y| (grid, topology, IVec3::new(x, y, 0)))
+                })
             })
-            .filter_map(move |cell| {
-                let entity = *self.paths.topology.as_ref()?.paths.get(&cell)?;
+            .filter_map(move |(grid, topology, cell)| {
+                let entity = *topology.paths.get(&cell)?;
                 let (tile, id, protected) = self.paths.paths.get(entity).ok()?;
                 let path = self.catalogue.find_path(tile.definition)?;
                 let half_width =

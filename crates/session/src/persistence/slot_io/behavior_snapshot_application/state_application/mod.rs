@@ -1,3 +1,4 @@
+use super::super::behavior_snapshot_identity_high_water_marks::maximum_owned_navigation_request;
 use super::super::behavior_snapshot_types::{
     BehaviorSnapshotEntityReference, BehaviorTaskActorSnapshot,
 };
@@ -19,7 +20,8 @@ use openzt2_zoo_state::{
         PendingBehaviorMoveCompletion, PendingBehaviorTaskFailure,
     },
     locomotion::locomotion_types::{
-        Destination, Docking, EntityPursuit, MotionProgress, Route, Steering, SwimLayer,
+        Destination, Docking, EntityPursuit, MotionProgress, NavigationRequestGeneration, Route,
+        Steering, SwimLayer,
     },
     staff::staff_job_types::{
         JobClaim, JobProgress, StaffJob, StaffJobBehaviorTask, StaffJobRouting,
@@ -29,6 +31,7 @@ use std::collections::BTreeMap;
 
 pub(super) fn apply_prepared_behavior_actor(
     commands: &mut Commands,
+    root: Entity,
     record: &BehaviorTaskActorSnapshot,
     prepared: PreparedBehaviorActor,
     identities: &BTreeMap<BehaviorSnapshotEntityReference, Entity>,
@@ -52,7 +55,15 @@ pub(super) fn apply_prepared_behavior_actor(
         interaction_slot: record.task.interaction_slot,
         depth: prepared.stack.len(),
     };
-    application.executions.reserve_restored(execution_id);
+    if let Ok(mut generation) = application.executions.get_mut(actor) {
+        generation.reserve_restored(execution_id);
+    } else {
+        commands.entity(actor).insert(
+            openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskGeneration::from_restored(
+                execution_id,
+            ),
+        );
+    }
     commands
         .entity(actor)
         .remove::<BehaviorTaskExecutionState>();
@@ -100,10 +111,29 @@ pub(super) fn apply_prepared_behavior_actor(
     }
     let mut restored_pursuit = None;
     if let Some(nav) = &record.navigation {
+        let mut generation = application.requests.get(actor).copied().unwrap_or_default();
+        generation.reserve_restored(maximum_owned_navigation_request(nav));
+        if let Some(pending) = &nav.pursuit {
+            let leg = reissue_unaccepted_pursuit_navigation(
+                actor,
+                nav,
+                &task,
+                &mut generation,
+                application,
+            );
+            restored_pursuit = Some((leg, pending.poll_remaining_seconds));
+        }
+        if let Ok(mut current) = application.requests.get_mut(actor) {
+            if current.last_issued() < generation.last_issued() {
+                *current = generation;
+            }
+        } else {
+            entity.insert(generation);
+        }
         let mut route = Route::with_capacity(
             application
                 .capacity
-                .as_ref()
+                .get(root)
                 .expect("validated navigation capacity")
                 .max_route_points,
         );
@@ -145,9 +175,6 @@ pub(super) fn apply_prepared_behavior_actor(
             entity.insert(contact);
         }
         if let Some(destination) = nav.destination {
-            application
-                .requests
-                .reserve_restored(destination.request_id);
             entity.insert(destination);
             if nav.pursuit_target.is_none() {
                 entity.insert(
@@ -164,7 +191,6 @@ pub(super) fn apply_prepared_behavior_actor(
             }
         }
         if let Some(dock) = &nav.docking {
-            application.requests.reserve_restored(dock.request_id);
             entity.insert(Docking {
                 request_id: dock.request_id,
                 target: resolve(&dock.target),
@@ -172,19 +198,6 @@ pub(super) fn apply_prepared_behavior_actor(
                 forward: Vec3::from_array(dock.forward),
                 radius_m: dock.radius_m,
             });
-        }
-        if let Some(pending) = &nav.move_completion {
-            application.requests.reserve_restored(pending.request_id);
-        }
-        if let Some(pending) = &nav.docking_completion {
-            application.requests.reserve_restored(pending.request_id);
-        }
-        if let Some(pending) = &nav.pursuit {
-            for request in pending.leg.navigation_request_ids().into_iter().flatten() {
-                application.requests.reserve_restored(request);
-            }
-            let leg = reissue_unaccepted_pursuit_navigation(actor, nav, &task, application);
-            restored_pursuit = Some((leg, pending.poll_remaining_seconds));
         }
         for result in &nav.pending_results {
             use super::super::behavior_snapshot_types::BehaviorNavigationResultSnapshot;
@@ -265,6 +278,56 @@ pub(super) fn apply_prepared_behavior_actor(
         }
     }
     if let Some(nav) = &record.navigation {
+        use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
+            FollowingEntity, RunningBehaviorInstruction, SplineDockMotion, SplineDockPhase,
+        };
+        if let Some(pending) = &nav.follow {
+            let (target, until_tick, request_id) = (
+                resolve(&pending.target),
+                pending.until_tick,
+                pending.request_id,
+            );
+            entity.queue(move |mut actor: bevy::ecs::world::EntityWorldMut<'_>| {
+                if let Some(instruction) = actor
+                    .get::<RunningBehaviorInstruction>()
+                    .map(RunningBehaviorInstruction::id)
+                {
+                    actor.insert(FollowingEntity {
+                        instruction,
+                        target,
+                        until_tick,
+                        request_id,
+                    });
+                }
+            });
+        }
+        if let Some(pending) = &nav.spline {
+            let mut phase = pending.phase;
+            if phase.request().is_some_and(|request_id| {
+                nav.destination.is_none()
+                    && !nav
+                        .pending_results
+                        .iter()
+                        .any(|result| result.request_id() == request_id)
+            }) {
+                phase = SplineDockPhase::Ready;
+            }
+            let (target, owns_disabled_collider) =
+                (resolve(&pending.target), pending.owns_disabled_collider);
+            entity.queue(move |mut actor: bevy::ecs::world::EntityWorldMut<'_>| {
+                if let Some(instruction) = actor
+                    .get::<RunningBehaviorInstruction>()
+                    .map(RunningBehaviorInstruction::id)
+                {
+                    actor.insert(SplineDockMotion {
+                        instruction,
+                        target,
+                        phase,
+                        owns_disabled_collider,
+                    });
+                }
+            });
+        }
         if let Some(pending) = &nav.docking_completion {
             let request_id = pending.request_id;
             let target = resolve(pending.target.as_ref().expect("validated docking target"));
@@ -330,6 +393,7 @@ fn reissue_unaccepted_pursuit_navigation(
     actor: Entity,
     nav: &super::super::behavior_snapshot_types::BehaviorOwnedNavigationSnapshot,
     task: &BehaviorTaskExecutionState,
+    generation: &mut NavigationRequestGeneration,
     application: &mut BehaviorSnapshotApplication,
 ) -> openzt2_zoo_state::animal_behavior::behavior_pursuit_types::BehaviorPursuitLeg {
     use openzt2_zoo_state::animal_behavior::behavior_pursuit_types::BehaviorPursuitLeg;
@@ -394,7 +458,7 @@ fn reissue_unaccepted_pursuit_navigation(
             request_id,
             refused_route_request_id: None,
         } => {
-            let route_request_id = application.requests.next();
+            let route_request_id = generation.advance();
             application.pursuit_requests.write(PursueEntity {
                 entity: actor,
                 request_id,

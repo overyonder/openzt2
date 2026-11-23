@@ -1,8 +1,9 @@
-use std::io;
+use std::{collections::BTreeMap, io};
 
 use openzt2_game_data::{
-    localization::{LocalizationEntry, LocalizationRichContentKind, LocalizationRichContentNode},
     AssetId,
+    localization::{LocalizationEntry, LocalizationRichContentKind, LocalizationRichContentNode},
+    world_definitions::guest_simulation_definitions::PersonNamePool,
 };
 
 use crate::source_document::ordered_source_document_types::{
@@ -21,32 +22,87 @@ use super::{
 
 pub(super) fn lower_blue_fang_localization_entries(
     source_document: &OrderedSourceDocument,
-) -> io::Result<Vec<LocalizationEntry>> {
-    let mut localization_entries = Vec::new();
+    locale: &str,
+    entries: &mut BTreeMap<AssetId, LocalizationEntry>,
+    person_name_pools: &mut BTreeMap<AssetId, PersonNamePool>,
+) -> io::Result<()> {
     for source_node in source_document.root.element_children() {
         lower_localization_entries_beneath_source_node(
             source_document,
             source_node,
-            &mut localization_entries,
+            AssetId::from_key(locale),
+            entries,
+            person_name_pools,
         )?;
     }
-    Ok(localization_entries)
+    Ok(())
 }
 
 fn lower_localization_entries_beneath_source_node(
     source_document: &OrderedSourceDocument,
     source_node: &OrderedSourceDocumentNode,
-    localization_entries: &mut Vec<LocalizationEntry>,
+    locale: AssetId,
+    entries: &mut BTreeMap<AssetId, LocalizationEntry>,
+    person_name_pools: &mut BTreeMap<AssetId, PersonNamePool>,
 ) -> io::Result<()> {
     if source_node.name.eq_ignore_ascii_case("LOC_STRING") {
-        localization_entries.push(lower_localization_entry(source_document, source_node)?);
+        let key = source_node
+            .attribute("_locID")
+            .map(str::trim)
+            .unwrap_or_default();
+        let normalized = canonicalize_source_document_record_key(key);
+        if normalized.starts_with("personname:") {
+            let id = AssetId::from_key(&normalized);
+            let candidates = |group: &str| {
+                source_node
+                    .element_children()
+                    .filter(|child| child.name.eq_ignore_ascii_case(group))
+                    .flat_map(OrderedSourceDocumentNode::element_children)
+                    .filter(|child| child.name.eq_ignore_ascii_case("name"))
+                    .filter_map(OrderedSourceDocumentNode::first_text)
+                    .map(str::trim)
+                    .filter(|name| !name.is_empty())
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>()
+            };
+            let first_names = candidates("first");
+            let last_names = candidates("last");
+            if first_names.is_empty() || last_names.is_empty() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "{}: {key} lacks first or last names",
+                        source_document.path.as_str()
+                    ),
+                ));
+            }
+            person_name_pools.insert(
+                id,
+                PersonNamePool {
+                    id,
+                    locale,
+                    key: id,
+                    delimiter: source_node
+                        .attribute_named_any(&["delimiter"])
+                        .unwrap_or(" ")
+                        .to_owned(),
+                    first_names,
+                    last_names,
+                },
+            );
+        } else {
+            let entry = lower_localization_entry(source_document, source_node)?;
+            entries.insert(entry.localization_entry_identifier, entry);
+        }
         return Ok(());
     }
     for child_node in source_node.element_children() {
         lower_localization_entries_beneath_source_node(
             source_document,
             child_node,
-            localization_entries,
+            locale,
+            entries,
+            person_name_pools,
         )?;
     }
     Ok(())
@@ -259,7 +315,14 @@ impl LocalizationEntryBuilder {
 mod tests {
     use openzt2_game_data::localization::LocalizationRichContentKind;
 
-    use super::lower_blue_fang_localization_entries;
+    use super::*;
+
+    fn lower_test_entries(source: &OrderedSourceDocument) -> Vec<LocalizationEntry> {
+        let mut entries = BTreeMap::new();
+        lower_blue_fang_localization_entries(source, "1033", &mut entries, &mut BTreeMap::new())
+            .expect("localization entries lower");
+        entries.into_values().collect()
+    }
     use crate::source_document::{
         blue_fang_source_document_parsing::parse_blue_fang_source_document, path::AssetPath,
     };
@@ -271,7 +334,7 @@ mod tests {
             br#"<ZT2Strings><LOC_STRING _locID="shell:ingameoptions_mainmenu"><font name="arial" size="14"><b>Return to Main Menu</b><font name="comic sans ms">Help</font></font></LOC_STRING></ZT2Strings>"#,
         )
         .expect("localized fonts parse");
-        let entries = lower_blue_fang_localization_entries(&source).expect("localized fonts lower");
+        let entries = lower_test_entries(&source);
         let entry = &entries[0];
         assert_eq!(
             entry.localized_text_presentation.font_family.as_deref(),
@@ -298,7 +361,7 @@ mod tests {
     fn zoopedia_labels_emphasis_and_breaks_retain_source_order() {
         let source = parse_blue_fang_source_document(AssetPath::new("lang/1033/animal_entries.xml"),
             br#"<ZT2Strings><LOC_STRING _locID="zoopedia_tiger:text"><cell width="284" pady="10"><color r="255" g="255" b="255">Class: Mammals <i>(Mammalia)</i><br/>Order: Carnivores <i>(Carnivora)</i><br/>Family: Cats</color></cell></LOC_STRING></ZT2Strings>"#).expect("authored rich text parses");
-        let entries = lower_blue_fang_localization_entries(&source).expect("rich text lowers");
+        let entries = lower_test_entries(&source);
         let records = &entries[0].localized_rich_content_nodes;
         let ordered_text: String = records
             .iter()

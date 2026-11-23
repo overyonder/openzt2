@@ -1,5 +1,6 @@
 use bevy::{ecs::entity::EntityHashSet, prelude::*};
 use openzt2_game_data::world_definitions::object_placement::PlacementConstraints;
+use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
@@ -35,13 +36,17 @@ pub(super) fn prepare_authored_object_placement_terrain_flattening(
     mut commands: Commands,
     mut requests: MessageReader<PrepareConstruction>,
     previews: Query<
-        (&ConstructionPreview, Option<&ObjectPlacementPrefabSource>),
+        (
+            &ConstructionPreview,
+            &WorldMember,
+            Option<&ObjectPlacementPrefabSource>,
+        ),
         Without<TankGeometryEdit>,
     >,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     scene_footprints: Option<Res<ScenePlacementFootprints>>,
-    terrain_index: Res<TerrainIndex>,
+    terrain: Query<&TerrainIndex>,
     terrain_assets: Res<Assets<TerrainAsset>>,
     chunks: Query<(
         &TerrainChunk,
@@ -55,7 +60,7 @@ pub(super) fn prepare_authored_object_placement_terrain_flattening(
         return;
     };
     for request in requests.read() {
-        let Ok((preview, scene)) = previews.get(request.preview) else {
+        let Ok((preview, member, scene)) = previews.get(request.preview) else {
             continue;
         };
         let Some(definition) = resolve_object_placeable_definition(catalogue, preview.definition)
@@ -68,6 +73,10 @@ pub(super) fn prepare_authored_object_placement_terrain_flattening(
         {
             continue;
         }
+        let Ok(terrain_index) = terrain.get(member.root) else {
+            reject_authored_object_placement_terrain_flattening(&mut rejected, request.transaction);
+            continue;
+        };
         let geometry = scene_footprints
             .as_ref()
             .map_or(definition.into(), |footprints| {
@@ -94,7 +103,7 @@ pub(super) fn prepare_authored_object_placement_terrain_flattening(
         let Some(flattened_world_sample_positions) =
             collect_authored_object_placement_flattened_world_sample_positions(
                 occupied_cells,
-                &terrain_index,
+                terrain_index,
                 &chunks,
             )
         else {

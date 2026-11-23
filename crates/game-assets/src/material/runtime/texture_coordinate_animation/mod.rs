@@ -3,13 +3,22 @@
 #[cfg(test)]
 mod tests;
 
-use std::{
-    collections::{HashMap, HashSet},
-    ops::RangeInclusive,
-};
+use std::{collections::HashSet, ops::RangeInclusive, sync::Arc};
 
 use bevy::{
-    asset::AssetId, curve::cubic_splines::CubicSegment, prelude::*, render::storage::ShaderBuffer,
+    asset::AssetEvent,
+    curve::cubic_splines::CubicSegment,
+    pbr::MeshMaterial3d,
+    prelude::*,
+    render::{
+        extract_component::{ExtractComponent, ExtractComponentPlugin},
+        render_asset::{prepare_assets, RenderAssets},
+        render_resource::BufferId,
+        renderer::RenderQueue,
+        storage::{GpuShaderBuffer, ShaderBuffer},
+        sync_world::RenderEntity,
+        Extract, ExtractSchedule, Render, RenderApp, RenderSystems,
+    },
 };
 
 use super::effect_pass_gpu_data::EffectPassMaterial;
@@ -115,94 +124,263 @@ impl GeometryTextureCoordinateAnimationClock {
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TextureCoordinateAnimationSet;
 
-#[derive(Default)]
-pub(super) struct TextureCoordinateAnimationSamples {
-    animated: HashSet<AssetId<EffectPassMaterial>>,
-    geometry_samples: HashMap<(Option<Entity>, usize), Vec<(u16, Mat4)>>,
+#[derive(Clone, PartialEq)]
+struct TextureAnimationBufferTarget {
+    geometry: Entity,
+    transforms: Handle<ShaderBuffer>,
+    uv_sets: [Option<u32>; 8],
 }
 
-pub(super) fn advance_texture_coordinate_animations(
-    mut events: MessageReader<AssetEvent<EffectPassMaterial>>,
-    mut samples: Local<TextureCoordinateAnimationSamples>,
-    time: Res<Time>,
-    clocks: Query<&GeometryTextureCoordinateAnimationClock>,
-    mut materials: ResMut<Assets<EffectPassMaterial>>,
-    mut buffers: ResMut<Assets<ShaderBuffer>>,
+#[derive(Component)]
+struct TextureAnimationPass {
+    target: TextureAnimationBufferTarget,
+    controllers: Option<Arc<[TextureCoordinateAnimation]>>,
+}
+
+#[derive(Clone, Debug, Component, PartialEq, ExtractComponent)]
+#[extract_app(RenderApp)]
+#[extract_component_filter(Changed<GeometryTextureAnimationSample>)]
+struct GeometryTextureAnimationSample(Vec<(u16, Mat4)>);
+
+#[derive(Component)]
+struct ExtractedTextureAnimationBufferTarget {
+    target: TextureAnimationBufferTarget,
+    prepared_buffer: Option<BufferId>,
+}
+
+pub(super) fn register_texture_coordinate_animation(application: &mut App) {
+    application
+        .add_plugins(ExtractComponentPlugin::<GeometryTextureAnimationSample>::default())
+        .add_systems(
+            PostUpdate,
+            (
+                project_texture_animation_passes,
+                sample_geometry_texture_animations.after(project_texture_animation_passes),
+            )
+                .in_set(TextureCoordinateAnimationSet),
+        );
+    if let Some(render) = application.get_sub_app_mut(RenderApp) {
+        render
+            .add_systems(ExtractSchedule, extract_texture_animation_targets)
+            .add_systems(
+                Render,
+                upload_geometry_texture_animations
+                    .in_set(RenderSystems::PrepareResources)
+                    .after(prepare_assets::<GpuShaderBuffer>),
+            );
+    }
+}
+
+fn project_texture_animation_passes(
+    mut commands: Commands,
+    materials: Res<Assets<EffectPassMaterial>>,
+    mut material_events: MessageReader<AssetEvent<EffectPassMaterial>>,
+    mut removed_materials: RemovedComponents<MeshMaterial3d<EffectPassMaterial>>,
+    changed_passes: Query<Entity, Changed<MeshMaterial3d<EffectPassMaterial>>>,
+    material_handles: Query<(Entity, &MeshMaterial3d<EffectPassMaterial>)>,
+    mut animations: Query<&mut TextureAnimationPass>,
 ) {
-    let elapsed = time.elapsed_secs();
-    let TextureCoordinateAnimationSamples {
-        animated,
-        geometry_samples,
-    } = &mut *samples;
-    for event in events.read() {
-        match *event {
-            AssetEvent::Added { id } | AssetEvent::Modified { id } => {
-                if materials
-                    .get(id)
-                    .is_some_and(EffectPassMaterial::has_texture_coordinate_animation)
-                {
-                    animated.insert(id);
-                } else {
-                    animated.remove(&id);
-                }
+    let changed_materials: HashSet<_> = material_events
+        .read()
+        .filter_map(|event| match *event {
+            AssetEvent::Added { id } | AssetEvent::Modified { id } | AssetEvent::Removed { id } => {
+                Some(id)
             }
-            AssetEvent::Removed { id } => {
-                animated.remove(&id);
-            }
-            _ => {}
+            _ => None,
+        })
+        .collect();
+    let mut selected: bevy::ecs::entity::EntityHashSet = changed_passes.iter().collect();
+    if !changed_materials.is_empty() {
+        selected.extend(material_handles.iter().filter_map(|(entity, material)| {
+            changed_materials
+                .contains(&material.0.id())
+                .then_some(entity)
+        }));
+    }
+    for entity in removed_materials.read() {
+        if !material_handles.contains(entity) && animations.contains(entity) {
+            commands
+                .entity(entity)
+                .remove::<(TextureAnimationPass, GeometryTextureAnimationSample)>();
         }
     }
-    geometry_samples.clear();
-    for &id in animated.iter() {
-        let Some(material) = materials.get_mut_untracked(id) else {
+
+    for (entity, handle) in material_handles.iter_many(selected).matched() {
+        let current = animations.get_mut(entity).ok();
+        let Some(material) = materials
+            .get(&handle.0)
+            .filter(|item| item.has_texture_coordinate_animation())
+        else {
+            if current.is_some() {
+                commands
+                    .entity(entity)
+                    .remove::<(TextureAnimationPass, GeometryTextureAnimationSample)>();
+            }
             continue;
         };
-        let geometry = material.texture_coordinate_animation_geometry;
-        let started = match geometry {
-            Some(geometry) => {
-                let Ok(clock) = clocks.get(geometry) else {
-                    continue;
-                };
-                clock.start_seconds
-            }
-            None => elapsed,
+        let geometry = material
+            .texture_coordinate_animation_geometry
+            .unwrap_or(entity);
+        let target = TextureAnimationBufferTarget {
+            geometry,
+            transforms: material.uniform_buffer_assets.fixed_transforms.clone(),
+            uv_sets: std::array::from_fn(|stage| {
+                (material.fixed_function.values[stage * 5 + 4].x.to_bits() == 2.0_f32.to_bits())
+                    .then(|| material.fixed_function.values[stage * 5 + 3].y.to_bits())
+            }),
         };
-        let curves = &material.texture_coordinate_animations;
-        let matrices = geometry_samples
-            .entry((geometry, curves.as_ptr() as usize))
-            .or_insert_with(|| {
-                let mut values = Vec::<(u16, Mat4)>::new();
-                for animation in curves.iter() {
-                    let transform = animation.transform(elapsed, started);
-                    if let Some((_, value)) = values
-                        .iter_mut()
-                        .find(|(uv_set, _)| *uv_set == animation.uv_set)
-                    {
-                        *value = transform * *value;
-                    } else {
-                        values.push((animation.uv_set, transform));
-                    }
-                }
-                values
+        let controllers =
+            (geometry == entity).then(|| material.texture_coordinate_animations.clone());
+        if let Some(mut current) = current {
+            let same_controllers = match (&current.controllers, &controllers) {
+                (Some(previous), Some(next)) => Arc::ptr_eq(previous, next),
+                (None, None) => true,
+                _ => false,
+            };
+            if current.target != target || !same_controllers {
+                *current = TextureAnimationPass {
+                    target,
+                    controllers,
+                };
+            }
+        } else {
+            commands.entity(entity).insert(TextureAnimationPass {
+                target,
+                controllers,
             });
-        let mut changed = false;
-        for stage in 0..8 {
-            if material.fixed_function.values[stage * 5 + 4].x.to_bits() != 2.0_f32.to_bits() {
+        }
+    }
+}
+
+fn sample_geometry_texture_animations(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut geometries: Query<(
+        Entity,
+        &TextureAnimationPass,
+        Option<&GeometryTextureCoordinateAnimationClock>,
+        Option<&mut GeometryTextureAnimationSample>,
+    )>,
+) {
+    let elapsed = time.elapsed_secs();
+    for (entity, animation, clock, sample) in &mut geometries {
+        let Some(controllers) = &animation.controllers else {
+            if sample.is_some() {
+                commands
+                    .entity(entity)
+                    .remove::<GeometryTextureAnimationSample>();
+            }
+            continue;
+        };
+        let started = clock.map_or(elapsed, |clock| clock.start_seconds);
+        let mut values: Vec<(u16, Mat4)> = Vec::with_capacity(controllers.len());
+        for animation in controllers.iter() {
+            let transform = animation.transform(elapsed, started);
+            if let Some((_, matrix)) = values.iter_mut().find(|(uv, _)| *uv == animation.uv_set) {
+                *matrix = transform * *matrix;
+            } else {
+                values.push((animation.uv_set, transform));
+            }
+        }
+        let next = GeometryTextureAnimationSample(values);
+        if let Some(mut sample) = sample {
+            sample.set_if_neq(next);
+        } else {
+            commands.entity(entity).insert(next);
+        }
+    }
+}
+
+fn extract_texture_animation_targets(
+    mut commands: Commands,
+    passes: Extract<Query<(RenderEntity, Ref<TextureAnimationPass>)>>,
+    render_entities: Extract<Query<RenderEntity>>,
+    mut removed: Extract<RemovedComponents<TextureAnimationPass>>,
+    mut shader_buffer_events: Extract<MessageReader<AssetEvent<ShaderBuffer>>>,
+    mut extracted: Query<&mut ExtractedTextureAnimationBufferTarget>,
+) {
+    let uploaded: HashSet<_> = shader_buffer_events
+        .read()
+        .filter_map(|event| match *event {
+            AssetEvent::Added { id } | AssetEvent::Modified { id } => Some(id),
+            _ => None,
+        })
+        .collect();
+    for (render_entity, animation) in &passes {
+        let mut previous = extracted.get_mut(render_entity).ok();
+        if let Some(previous) = previous.as_mut() {
+            if !animation.is_changed() && !uploaded.contains(&previous.target.transforms.id()) {
                 continue;
             }
-            let uv_set = material.fixed_function.values[stage * 5 + 3].y.to_bits();
-            if let Some((_, next)) = matrices
-                .iter()
-                .find(|(set, _)| f32::from(*set).to_bits() == uv_set)
-            {
-                if material.fixed_transforms.values[stage] != *next {
-                    material.fixed_transforms.values[stage] = *next;
-                    changed = true;
-                }
+        }
+        let mut target = animation.target.clone();
+        let Ok(geometry) = render_entities.get(target.geometry) else {
+            if previous.is_some() {
+                commands
+                    .entity(render_entity)
+                    .remove::<ExtractedTextureAnimationBufferTarget>();
+            }
+            continue;
+        };
+        target.geometry = geometry;
+        if let Some(mut previous) = previous {
+            *previous = ExtractedTextureAnimationBufferTarget {
+                target,
+                prepared_buffer: None,
+            };
+        } else {
+            commands
+                .entity(render_entity)
+                .insert(ExtractedTextureAnimationBufferTarget {
+                    target,
+                    prepared_buffer: None,
+                });
+        }
+    }
+    for entity in removed.read() {
+        if let Ok(render_entity) = render_entities.get(entity) {
+            if !passes.contains(entity) && extracted.contains(render_entity) {
+                commands
+                    .entity(render_entity)
+                    .remove::<ExtractedTextureAnimationBufferTarget>();
             }
         }
-        if changed {
-            material.write_fixed_function_transforms_to_persistent_buffer(&mut buffers);
+    }
+}
+
+fn upload_geometry_texture_animations(
+    queue: Res<RenderQueue>,
+    buffers: Res<RenderAssets<GpuShaderBuffer>>,
+    samples: Query<Ref<GeometryTextureAnimationSample>>,
+    mut targets: Query<&mut ExtractedTextureAnimationBufferTarget>,
+) {
+    for mut draw in &mut targets {
+        let target = &draw.target;
+        let (Ok(sample), Some(buffer)) = (
+            samples.get(target.geometry),
+            buffers.get(&target.transforms),
+        ) else {
+            continue;
+        };
+        if !sample.is_changed() && draw.prepared_buffer == Some(buffer.buffer.id()) {
+            continue;
         }
+        for (stage, uv) in target.uv_sets.iter().enumerate() {
+            let Some(matrix) = uv.and_then(|uv| {
+                sample
+                    .0
+                    .iter()
+                    .find_map(|(set, matrix)| (uv == f32::from(*set).to_bits()).then_some(matrix))
+            }) else {
+                continue;
+            };
+            let bytes = matrix.to_cols_array().map(f32::to_le_bytes);
+            queue.write_buffer(
+                &buffer.buffer,
+                (stage * bytes.as_flattened().len()) as u64,
+                bytes.as_flattened(),
+            );
+        }
+        draw.prepared_buffer = Some(buffer.buffer.id());
     }
 }

@@ -5,12 +5,12 @@ use mlua::{Function, Lua, MultiValue, Scope, Table, Value};
 use openzt2_game_data::AssetId;
 
 use openzt2_game_assets::lua_script::{
-    lua_script_archive_path_index::LuaScriptArchivePathIndex,
     lua_script_asset_loading::LuaScriptAsset,
     lua_script_module_execution::{
         execute_lua_script_module_once_per_virtual_machine,
         install_lua_script_dependency_loading_functions,
     },
+    lua_script_sources::LuaScriptSources,
 };
 
 use super::{
@@ -27,7 +27,7 @@ impl PhotoChallengeScorer {
         path: &str,
         script: &Handle<LuaScriptAsset>,
         scripts: &Assets<LuaScriptAsset>,
-        index: &LuaScriptArchivePathIndex,
+        sources: &LuaScriptSources,
         entry: &str,
         evidence: &CapturedPhotoEvidence,
     ) -> mlua::Result<i32> {
@@ -42,7 +42,7 @@ impl PhotoChallengeScorer {
                 lua,
                 scope,
                 scripts,
-                index,
+                sources,
                 &modules,
                 &active_module_paths,
             )?;
@@ -138,7 +138,7 @@ fn photo_task_target_type_predicate<'scope, 'env: 'scope>(
     })
 }
 
-fn create_lua_photo_exposure<'scope, 'env: 'scope>(
+pub(super) fn create_lua_photo_exposure<'scope, 'env: 'scope>(
     lua: &Lua,
     scope: &'scope Scope<'scope, 'env>,
     evidence: &'env CapturedPhotoEvidence,
@@ -165,6 +165,34 @@ fn create_lua_photo_exposure<'scope, 'env: 'scope>(
                 lua.create_function(|_, entity: Table| Ok(entity))?,
             )?;
             entity.set("getBM", lua.create_function(|_, entity: Table| Ok(entity))?)?;
+            entity.set(
+                "getEDI",
+                lua.create_function(|_, entity: Table| Ok(entity))?,
+            )?;
+            entity.set(
+                "getVar",
+                scope.create_function(move |lua, (_, key): (Table, String)| {
+                    if key == "s_name" {
+                        subject
+                            .semantics
+                            .name
+                            .as_deref()
+                            .map(|name| lua.create_string(name))
+                            .transpose()
+                    } else {
+                        Ok(None)
+                    }
+                })?,
+            )?;
+            for (name, value) in [
+                ("percentOfScreen", subject.facts.screen_permille),
+                ("percentSeen", subject.facts.viewport_visible_permille),
+                ("percentSeenInCenter", subject.facts.center_permille),
+                ("getPercentOfScreen", subject.facts.screen_permille),
+            ] {
+                entity.set(name, f32::from(value) * 0.001)?;
+            }
+            entity.set("obscured", !subject.facts.unoccluded)?;
             entity.set(
                 "getCurrentPlaySet",
                 scope.create_function(move |lua, _: Table| {
@@ -226,7 +254,7 @@ fn create_lua_photo_exposure<'scope, 'env: 'scope>(
             )?;
             entity.set(
                 "getIsInWater",
-                scope.create_function(move |_, _: Table| Ok(subject.semantics.aquatic))?,
+                scope.create_function(move |_, _: Table| Ok(subject.semantics.in_water))?,
             )?;
             let occupants = match &subject.semantics.contained_entities {
                 PhotoSubjectContainedEntitiesEvidence::Contained(occupants) => occupants.as_slice(),
@@ -322,7 +350,7 @@ fn install_photo_count_predicates<'scope, 'env: 'scope>(
                 .iter()
                 .filter(|subject| {
                     subject_matches_type(subject, &requested_type)
-                        && (!in_water || subject.semantics.aquatic)
+                        && (!in_water || subject.semantics.in_water)
                 })
                 .count())
         })?;
@@ -362,15 +390,10 @@ fn convert_lua_photo_score_to_game_score(lua_score: Value) -> mlua::Result<i32> 
         _ => {
             return Err(mlua::Error::runtime(
                 "photo scorer must return a finite number",
-            ))
+            ));
         }
     };
-    let milli = if score <= 5.0 {
-        score * 1000.0
-    } else if score <= 5000.0 {
-        score
-    } else {
-        score / 100.0
-    };
-    Ok(milli.clamp(0.0, 5000.0).floor() as i32)
+    // The scorer returns a normalized value. Each tenth is half a star.
+    let half_stars = (f64::from(score.clamp(0.0, 1.0) as f32) * 10.0).trunc() as i32;
+    Ok(half_stars * 500)
 }

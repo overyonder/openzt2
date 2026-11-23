@@ -18,14 +18,9 @@ mod zoopedia;
 use bevy::prelude::*;
 use information_view_types::InformationViewFilters;
 use openzt2_interface_state::information::catalogue_types::PurchaseChoice;
-use openzt2_interface_state::information::catalogue_types::SelectedCareAnimal;
-use openzt2_interface_state::information::catalogue_types::SelectedCatalogueEntry;
 
 use openzt2_game_assets::application_lifecycle::GamePhase;
 use openzt2_world_state::application_schedule::GameSet;
-use openzt2_world_state::simulation_time::{
-    simulation_clock_types::ZooDay, zoo_day_publication::publish_zoo_day,
-};
 
 pub struct InformationPlugin;
 
@@ -40,17 +35,7 @@ impl Plugin for InformationPlugin {
                     .before(projection::entity_editor_data_root_projection::project_inspectable_entities_to_visible_entity_editor_data_roots)
                     .before(projection::information_list_projection::project_live_world_entities_to_visible_information_list_rows),
             )
-            .init_resource::<SelectedCatalogueEntry>()
-            .init_resource::<SelectedCareAnimal>()
             .init_resource::<InformationViewFilters>()
-            .init_resource::<ZooDay>()
-            .add_systems(
-                Update,
-                publish_zoo_day
-                    .in_set(GameSet::Ui)
-                    .before(projection::information_list_projection::project_live_world_entities_to_visible_information_list_rows)
-                    .before(projection::information_list_row_value_projection::project_live_world_subject_values_to_information_list_rows),
-            )
             .add_message::<PurchaseChoice>()
             .add_systems(
                 Update,
@@ -58,7 +43,6 @@ impl Plugin for InformationPlugin {
                     .in_set(GameSet::Ui)
                     .before(openzt2_interface_state::ui::UiSet::Projection),
             )
-            .add_systems(OnExit(GamePhase::InGame), catalogue::animal_care_subject_projection::clear_care_animal)
             .add_message::<openzt2_interface_state::information::overview::overview_types::ExportOverviewMap>()
             .add_systems(
                 Update,
@@ -199,7 +183,8 @@ impl Plugin for InformationPlugin {
                 (
                     projection::selected_animal_summary_projection::project_selected_entity_information_section_visibility,
                     projection::selected_animal_summary_projection::project_selected_animal_identity_health_and_action_summary.after(projection::panel_binding_families::bind_information_panel_fields),
-                    projection::animal_pickup_release_information_projection::project_selected_animal_pickup_release_and_conservation_controls,
+                    projection::animal_pickup_release_information_projection::project_selected_animal_pickup_release_and_conservation_controls
+                        .after(projection::panel_binding_families::bind_information_panel_fields),
                     projection::guest_status_projection::project_live_guest_status_to_visible_information_panels.after(projection::panel_binding_families::bind_information_panel_fields),
                     projection::staff_status_projection::project_maintenance_worker_duties_to_information_panel_controls.after(projection::panel_binding_families::bind_information_panel_fields),
                     projection::staff_status_projection::project_live_staff_status_to_visible_information_panels.after(projection::panel_binding_families::bind_information_panel_fields),
@@ -246,10 +231,7 @@ impl Plugin for InformationPlugin {
                 (
                     (
                         overview::canvas_hydration_operations::create_missing_authored_overview_map_canvas_entities,
-                        (
-                            overview::map_rasterization_operations::refresh_overview_map_canvas_policies,
-                            overview::map_rasterization_operations::invalidate_changed_overview_map_sources,
-                        ),
+                        overview::map_rasterization_operations::invalidate_changed_overview_map_sources,
                         (
                             overview::map_rasterization_operations::rasterize_dirty_overview_topology_canvases,
                             overview::terrain_rasterization_operations::rasterize_dirty_overview_terrain_and_water_canvases,

@@ -15,7 +15,7 @@ use bevy::picking::pointer::{
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use openzt2_game_assets::terrain::terrain_test_asset::terrain_test_asset;
 use openzt2_interface_state::ui::pointer_capture_types::UiPointerCapture;
-use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
+use openzt2_world_state::world_spawn::world_membership_types::{WorldMember, WorldRoot};
 use openzt2_zoo_state::construction::construction_interaction_types::CommitConstruction;
 use openzt2_zoo_state::construction::construction_interaction_types::ConstructionCursor;
 use openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::ConstructionPlacementPolicy;
@@ -164,9 +164,16 @@ fn flatten_offsets_hold_the_press_height_through_drag_commit_undo_and_redo() {
             .world_mut()
             .resource_mut::<Assets<TerrainAsset>>()
             .add(stepped_terrain_asset(destination_height_cm));
+        let root = app
+            .world_mut()
+            .spawn(WorldRoot {
+                scenario: default(),
+            })
+            .id();
         let chunk = app
             .world_mut()
             .spawn((
+                WorldMember { root },
                 TerrainChunk {
                     source_coord: IVec2::ZERO,
                     coord: IVec2::ZERO,
@@ -178,27 +185,27 @@ fn flatten_offsets_hold_the_press_height_through_drag_commit_undo_and_redo() {
                 TerrainChunkId(0),
             ))
             .id();
-        app.insert_resource(TerrainIndex {
-            chunks: [(IVec2::ZERO, chunk)].into_iter().collect(),
-            origin: Vec2::ZERO,
-            chunk_span_m: 16.0,
-        });
-        app.insert_resource(
+        app.world_mut().entity_mut(root).insert((
+            TerrainIndex {
+                chunks: [(IVec2::ZERO, chunk)].into_iter().collect(),
+                origin: Vec2::ZERO,
+                chunk_span_m: 16.0,
+            },
             crate::terrain::terrain_chunk_index_cleanup::TerrainChunkIdLookup(
                 [(TerrainChunkId(0), chunk)].into_iter().collect(),
             ),
-        );
-        app.world_mut().spawn(WorldRoot {
-            scenario: default(),
-        });
+        ));
         let cursor = app
             .world_mut()
-            .spawn(ConstructionCursor {
-                // The target comes from canonical ground, not this presentation height.
-                world: Vec3::new(4.0, 99.0, 4.0),
-                normal: Vec3::Y,
-                over_terrain: true,
-            })
+            .spawn((
+                WorldMember { root },
+                ConstructionCursor {
+                    // The target comes from canonical ground, not this presentation height.
+                    world: Vec3::new(4.0, 99.0, 4.0),
+                    normal: Vec3::Y,
+                    over_terrain: true,
+                },
+            ))
             .id();
         app.world_mut()
             .resource_mut::<Time>()
@@ -258,7 +265,7 @@ fn flatten_offsets_hold_the_press_height_through_drag_commit_undo_and_redo() {
             app.world().resource::<Messages<CommitConstruction>>().len(),
             1
         );
-        let transaction = app.world_mut().spawn_empty().id();
+        let transaction = app.world_mut().spawn(WorldMember { root }).id();
         app.world_mut().write_message(PrepareConstruction {
             transaction,
             preview,

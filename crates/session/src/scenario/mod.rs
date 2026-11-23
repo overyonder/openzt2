@@ -59,7 +59,6 @@ impl Plugin for ScenarioPlugin {
         scenario_lua_entity_commands::register(app);
         app.init_non_send::<scenario_lua_types::ScenarioLuaVirtualMachineContexts>()
             .init_resource::<openzt2_zoo_state::progression::profile_scenario_variables::ProfileScenarioVariables>()
-            .init_resource::<openzt2_interface_state::information::zoo_message_types::ZooMessages>()
             .add_message::<openzt2_zoo_state::progression::profile_scenario_variables::SetProfileScenarioVariable>()
             .add_message::<openzt2_zoo_state::progression::profile_scenario_variables::PersistProfileScenarioVariables>()
             .add_systems(Update, profile_scenario_variable_application::apply_profile_scenario_variable_changes.in_set(GameSet::Intent))

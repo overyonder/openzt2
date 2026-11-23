@@ -74,11 +74,22 @@ pub enum TransactionSettlement {
     },
     Settled {
         player_operation: bool,
+        world: Option<Entity>,
     },
 }
 
 impl TransactionSettlement {
+    pub fn settled_world_in_domain(&self, player: bool) -> Option<Entity> {
+        match *self {
+            Self::Settled {
+                player_operation,
+                world,
+            } if player_operation == player => world,
+            _ => None,
+        }
+    }
+
     pub const fn is_settled_in_domain(&self, player: bool) -> bool {
-        matches!(self, Self::Settled { player_operation } if *player_operation == player)
+        matches!(self, Self::Settled { player_operation, .. } if *player_operation == player)
     }
 }

@@ -3,7 +3,8 @@ mod economy_tracker_lowering;
 use std::{io, path::Path};
 
 use bevy::asset::{Handle, LoadContext};
-use openzt2_game_data::{world_scenario::WorldScenarioDocument, AssetId};
+use openzt2_game_data::world_scenario::ScenarioScriptPhase;
+use openzt2_game_data::{AssetId, world_scenario::WorldScenarioDocument};
 
 use crate::{
     asset_source::AssetArchives,
@@ -17,6 +18,7 @@ use crate::{
 };
 
 use super::{
+    authored_world_scenario_state::AuthoredWorldScenarioState,
     starting_zoo::{at, child, required, required_f32},
     world_source_document_dependency_lowering::lower_world_source_document_and_resolve_dependencies,
 };
@@ -26,7 +28,12 @@ pub(crate) async fn load_saved_world_configuration(
     saved_map: AssetId,
     archives: &AssetArchives,
     context: &mut LoadContext<'_>,
-) -> io::Result<(WorldScenarioDocument, bool, Handle<SavedWorldEconomyAsset>)> {
+) -> io::Result<(
+    WorldScenarioDocument,
+    AuthoredWorldScenarioState,
+    bool,
+    Handle<SavedWorldEconomyAsset>,
+)> {
     let (economy, unlimited_cash) = load_saved_world_economy(saved, archives, context).await?;
     let economy = context.add_labeled_asset(SAVED_WORLD_ECONOMY_LABEL, economy);
     let root = saved_context(saved)?;
@@ -39,7 +46,7 @@ pub(crate) async fn load_saved_world_configuration(
         required(saved, manager, "context")?,
     )
     .await?;
-    let (mut document, _) =
+    let (mut document, authored, _) =
         lower_world_source_document_and_resolve_dependencies(&goals, archives, context).await?;
     if document.scenarios.len() != 1 {
         return Err(at(
@@ -48,6 +55,9 @@ pub(crate) async fn load_saved_world_configuration(
             "saved scenario context must define one scenario",
         ));
     }
+    document
+        .scenario_script_bindings
+        .retain(|binding| binding.phase != ScenarioScriptPhase::AlwaysRun);
     let previous_id = document.scenarios[0].id;
     document.scenarios[0].id = saved_map;
     document.scenarios[0].evaluation_interval_seconds = required_f32(saved, manager, "interval")?;
@@ -59,18 +69,29 @@ pub(crate) async fn load_saved_world_configuration(
                 "scenario script binding belongs to a different scenario",
             ));
         }
+        binding.script =
+            super::world_scenario_script_dependency_loading::resolve_scenario_script_path(
+                archives,
+                goals.path.as_str(),
+                &binding.script,
+            )?;
         binding.scenario = saved_map;
         if binding.objective == previous_id {
             binding.objective = saved_map;
         }
     }
-    let always_run =
+    let mut always_run =
         super::authored::lower_scenario_manager_always_run_bindings(saved, manager, saved_map)?;
-    document.scenario_script_bindings.retain(|binding| {
-        binding.phase != openzt2_game_data::world_scenario::ScenarioScriptPhase::AlwaysRun
-    });
+    for binding in &mut always_run {
+        binding.script =
+            super::world_scenario_script_dependency_loading::resolve_scenario_script_path(
+                archives,
+                saved.path.as_str(),
+                &binding.script,
+            )?;
+    }
     document.scenario_script_bindings.extend(always_run);
-    Ok((document, unlimited_cash, economy))
+    Ok((document, authored, unlimited_cash, economy))
 }
 
 fn saved_context(
@@ -131,7 +152,7 @@ async fn load_template_economy(
                 &economy_config,
                 &economy_config.root,
                 "economy active is not a canonical boolean",
-            ))
+            ));
         }
     };
     let trackers = economy_tracker_lowering::lower_economy_trackers(&economy_config)?;

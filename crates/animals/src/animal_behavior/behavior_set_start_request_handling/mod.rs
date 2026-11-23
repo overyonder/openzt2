@@ -9,7 +9,9 @@ use openzt2_zoo_state::staff::staff_employment_types::StaffRole;
 use bevy::{ecs::entity::EntityHashMap, prelude::*};
 
 use super::behavior_set_start_request_types::{PendingBehaviorSet, StartBehaviorSet};
-use openzt2_zoo_state::animal_behavior::behavior_pursuit_types::PendingBehaviorPursuit;
+use openzt2_zoo_state::animal_behavior::behavior_pursuit_types::{
+    BehaviorPursuitPoll, PendingBehaviorPursuit,
+};
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionPhase;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskFailed;
@@ -167,6 +169,7 @@ pub(super) fn resolve_pending_animal_behavior_sets_to_loaded_declarations(
                 PendingBehaviorMoveCompletion,
                 PendingBehaviorDockingCompletion,
                 PendingBehaviorPursuit,
+                BehaviorPursuitPoll,
                 PendingBehaviorTaskFailure,
             )>()
             .remove::<PendingBehaviorSet>();

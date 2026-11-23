@@ -261,9 +261,10 @@ pub(crate) fn project_live_world_entities_to_visible_information_list_rows(
         Option<&VehicleRiders>,
     )>,
     entity_names: Query<&Name>,
-    zoo_day: Res<ZooDay>,
+    zoo_day: Single<Ref<ZooDay>>,
     mut commands: Commands,
 ) {
+    let zoo_day = zoo_day.into_inner();
     let day_changed = zoo_day.is_changed();
     let removed = membership.removals();
     let removed_sort_inputs = inputs.take_removed_inputs();

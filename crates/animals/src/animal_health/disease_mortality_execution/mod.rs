@@ -23,16 +23,20 @@ type AnimalActivityStateRemovedAfterDeath = (
 pub(super) fn finalize_disease_deaths_after_vitality_reaches_zero(
     mut commands: Commands,
     clock: Single<&ZooClock>,
-    live_animals: Query<(Entity, &Vitality, Option<&Disease>), (With<Animal>, Without<Dead>)>,
+    live_animals: Query<
+        (Entity, &Vitality, &Disease),
+        (
+            With<Animal>,
+            Without<Dead>,
+            Or<(Changed<Vitality>, Added<Disease>)>,
+        ),
+    >,
     mut animal_died_messages: MessageWriter<AnimalDied>,
 ) {
     for (animal, vitality, disease) in &live_animals {
         if vitality.0 > 0.0 {
             continue;
         }
-        let Some(disease) = disease else {
-            continue;
-        };
         let death_cause = DeathCause::Disease(disease.definition);
         finalize_animal_death(
             &mut commands,

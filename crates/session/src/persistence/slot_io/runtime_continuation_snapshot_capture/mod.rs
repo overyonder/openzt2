@@ -12,13 +12,13 @@ use openzt2_zoo_state::animal_behavior::{
 use openzt2_zoo_state::guests::guest_favourite_animal_trend_types::GuestFavouriteAnimalTrend;
 use openzt2_zoo_state::shows::running_show_types::WorldTrickPopularity;
 use openzt2_zoo_state::{
-    behavior_task_execution_types::BehaviorTaskExecutionSequence,
+    behavior_task_execution_types::BehaviorTaskGeneration,
     economy::service_types::ServiceRequestSequence,
     guests::{
         guest_simulation_types::GuestArrivalState,
         guest_survey_types::{GuestSurvey, GuestSurveyNeedCadence},
     },
-    locomotion::locomotion_types::NavigationRequestSequence,
+    locomotion::locomotion_types::NavigationRequestGeneration,
 };
 
 use super::{
@@ -33,14 +33,24 @@ use super::{
 #[derive(SystemParam)]
 pub(in crate::persistence) struct RuntimeContinuationSnapshotCapture<'w, 's> {
     allocator: Query<'w, 's, &'static PersistentIdAllocator, With<WorldRoot>>,
-    navigation: Res<'w, NavigationRequestSequence>,
-    behavior: Res<'w, BehaviorTaskExecutionSequence>,
-    service: Option<Res<'w, ServiceRequestSequence>>,
+    generations: Query<
+        'w,
+        's,
+        (
+            Option<&'static NavigationRequestGeneration>,
+            Option<&'static BehaviorTaskGeneration>,
+        ),
+    >,
+    service: Query<'w, 's, &'static ServiceRequestSequence, With<WorldRoot>>,
     arrivals: Query<'w, 's, &'static GuestArrivalState, With<WorldRoot>>,
-    survey: Option<Res<'w, GuestSurvey>>,
+    survey: Query<'w, 's, &'static GuestSurvey, With<WorldRoot>>,
     survey_cadence: Query<'w, 's, &'static GuestSurveyNeedCadence, With<WorldRoot>>,
-    general_economy:
-        Option<Res<'w, openzt2_zoo_state::economy::general_economy_types::GeneralEconomyLedger>>,
+    general_economy: Query<
+        'w,
+        's,
+        &'static openzt2_zoo_state::economy::general_economy_types::GeneralEconomyLedger,
+        With<WorldRoot>,
+    >,
     audio_assets:
         Option<Res<'w, Assets<openzt2_game_assets::audio::audio_asset_types::AudioAsset>>>,
     audio_presets: Query<
@@ -165,9 +175,23 @@ impl RuntimeContinuationSnapshotCapture<'_, '_> {
                     .collect()
             }),
         });
+        let (navigation_sequence, behavior_execution_sequence) = self
+            .generations
+            .iter_many(members.into_iter().flat_map(RelationshipTarget::iter))
+            .flatten()
+            .fold(
+                (0, 0),
+                |(navigation_max, behavior_max), (navigation, behavior)| {
+                    (
+                        navigation_max
+                            .max(navigation.map_or(0, NavigationRequestGeneration::last_issued)),
+                        behavior_max.max(behavior.map_or(0, BehaviorTaskGeneration::last_issued)),
+                    )
+                },
+            );
         let record = RuntimeContinuationSnapshot {
             domain_continuation,
-            general_economy: self.general_economy.as_deref().copied(),
+            general_economy: self.general_economy.get(world_root).ok().copied(),
             entity_names: Some(names),
             world_audio_preset: self
                 .audio_presets
@@ -184,11 +208,12 @@ impl RuntimeContinuationSnapshotCapture<'_, '_> {
             entity_name_counters: self.name_counters.get(world_root).ok().cloned(),
             registered_entity_name_identifiers: Some(registered_names),
             next_persistent_identifier: allocator.next(),
-            navigation_sequence: self.navigation.last_issued(),
-            behavior_execution_sequence: self.behavior.last_issued(),
+            navigation_sequence,
+            behavior_execution_sequence,
             service_request_sequence: self
                 .service
-                .as_ref()
+                .get(world_root)
+                .ok()
                 .map(|sequence| sequence.next_sequence()),
             guest_arrivals: self.arrivals.get(world_root).ok().copied(),
             guest_survey: self
@@ -196,7 +221,7 @@ impl RuntimeContinuationSnapshotCapture<'_, '_> {
                 .get(world_root)
                 .ok()
                 .copied()
-                .zip(self.survey.as_deref().copied()),
+                .zip(self.survey.get(world_root).ok().copied()),
             guest_favourite_animal_trend: self.favourite_trends.get(world_root).ok().copied(),
         };
         validate_runtime_continuation_snapshot(&record)?;

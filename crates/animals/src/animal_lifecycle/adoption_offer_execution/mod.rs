@@ -4,8 +4,8 @@ use bevy::{
     prelude::*,
 };
 use openzt2_game_data::{
-    species::{LifeStage, Sex, SpeciesFlags},
     AssetId,
+    species::{LifeStage, Sex, SpeciesFlags},
 };
 
 use openzt2_game_assets::application_lifecycle::GamePhase;
@@ -24,8 +24,8 @@ use openzt2_zoo_state::progression::adoption_and_content_availability_types::Spe
 use openzt2_zoo_state::progression::fame_types::Fame;
 
 use super::adoption_offer_types::{
-    AdoptionOfferClock, AdoptionOfferCooldown, AdoptionOfferForOption, AdoptionOfferOption,
-    AdoptionOfferOptions, AdoptionOfferRandom, AdoptionOfferSupply, AdoptionOfferUnlocked,
+    AdoptionOfferCooldown, AdoptionOfferForOption, AdoptionOfferOption, AdoptionOfferOptions,
+    AdoptionOfferRandom, AdoptionOfferSupply, AdoptionOfferTiming, AdoptionOfferUnlocked,
     CurrentAdoptionOffer,
 };
 use super::animal_adoption_contracts::DeclineCurrentAnimalAdoptionOffers;
@@ -44,7 +44,7 @@ impl AdoptionOfferClaim {
 
 #[derive(SystemParam)]
 pub(super) struct AdoptionOfferClaims<'w, 's> {
-    worlds: Query<'w, 's, (&'static AdoptionOfferClock, &'static AdoptionOfferOptions)>,
+    worlds: Query<'w, 's, &'static AdoptionOfferOptions>,
     options: Query<'w, 's, (&'static AdoptionOfferOption, &'static CurrentAdoptionOffer)>,
     offers: Query<
         'w,
@@ -52,6 +52,7 @@ pub(super) struct AdoptionOfferClaims<'w, 's> {
         (
             &'static mut AdoptionOfferSupply,
             Option<&'static AdoptionOfferForOption>,
+            Has<AdoptionOfferUnlocked>,
         ),
     >,
 }
@@ -69,7 +70,7 @@ impl AdoptionOfferClaims<'_, '_> {
             Sex::Male => 1,
             Sex::Any => return None,
         };
-        let (clock, options) = self.worlds.get(world).ok()?;
+        let options = self.worlds.get(world).ok()?;
         let offer = self
             .options
             .iter_many(options.iter())
@@ -77,10 +78,8 @@ impl AdoptionOfferClaims<'_, '_> {
             .filter(|(option, _)| option.slot == slot)
             .find_map(|(_, current)| {
                 let offer = *current.collection();
-                let (supply, _) = self.offers.get(offer).ok()?;
-                (supply.species == species
-                    && supply.unlock_at <= clock.0
-                    && supply.available_by_sex[sex_index] != 0)
+                let (supply, _, unlocked) = self.offers.get(offer).ok()?;
+                (supply.species == species && unlocked && supply.available_by_sex[sex_index] != 0)
                     .then_some(offer)
             })?;
         self.offers.get_mut(offer).ok()?.0.reserve(sex_index);
@@ -96,56 +95,67 @@ impl AdoptionOfferClaims<'_, '_> {
         let Some((offer, sex_index)) = claim.0.take() else {
             return;
         };
-        let Ok((mut supply, option)) = self.offers.get_mut(offer) else {
+        let Ok((mut supply, option, _)) = self.offers.get_mut(offer) else {
             return;
         };
         supply.settle(sex_index, purchased);
         if supply.has_pending_claims() {
             return;
         }
-        let Some((option_entity, option)) = option.and_then(|relation| {
-            self.options
-                .get(relation.0)
-                .ok()
-                .map(|(option, _)| (relation.0, option))
-        }) else {
+        let Some(option_entity) = option
+            .map(|option| option.0)
+            .filter(|&entity| self.options.contains(entity))
+        else {
             commands.entity(offer).try_despawn();
             return;
         };
         if supply.available_by_sex == [0; 2] {
-            if let Ok((clock, _)) = self.worlds.get(option.world) {
-                commands.entity(option_entity).insert(AdoptionOfferCooldown(
-                    clock.0 + f64::from(supply.dismiss_cooldown),
-                ));
-            }
+            commands
+                .entity(option_entity)
+                .insert(AdoptionOfferCooldown::from_remaining_seconds(f64::from(
+                    supply.dismiss_cooldown,
+                )));
             commands.entity(offer).try_despawn();
         }
     }
 }
 
 pub(super) fn register_adoption_offers(app: &mut App) {
-    app.add_systems(
-        Update,
-        (
-            initialize_adoption_offer_options,
-            refill_adoption_offer_options::<true>,
+    app.init_resource::<AdoptionSpeciesOfferProfiles>()
+        .add_systems(
+            Update,
+            (
+                initialize_adoption_offer_options,
+                project_adoption_species_offer_profiles,
+                refill_adoption_offer_options::<true>
+                    .after(initialize_adoption_offer_options)
+                    .after(project_adoption_species_offer_profiles),
+            )
+                .in_set(GameSet::Intent)
+                .run_if(in_state(GamePhase::InGame)),
         )
-            .chain()
-            .in_set(GameSet::Intent)
-            .run_if(in_state(GamePhase::InGame)),
-    )
-    .add_systems(
-        FixedUpdate,
-        (
-            resize_adoption_offer_options,
-            advance_adoption_offer_deadlines,
-            refill_adoption_offer_options::<false>.run_if(adoption_options_are_fillable),
-        )
-            .chain()
-            .in_set(FixedGameSet::Act)
-            .run_if(in_state(GamePhase::InGame))
-            .run_if(simulation_is_running),
-    );
+        .add_systems(
+            FixedUpdate,
+            (
+                resize_adoption_offer_options,
+                decline_current_adoption_offers
+                    .after(resize_adoption_offer_options)
+                    .run_if(
+                        bevy::ecs::schedule::common_conditions::on_message::<
+                            DeclineCurrentAnimalAdoptionOffers,
+                        >,
+                    ),
+                advance_adoption_offer_timers.after(decline_current_adoption_offers),
+                advance_adoption_cooldowns.after(decline_current_adoption_offers),
+                refill_adoption_offer_options::<false>
+                    .after(advance_adoption_offer_timers)
+                    .after(advance_adoption_cooldowns)
+                    .run_if(adoption_options_are_fillable),
+            )
+                .in_set(FixedGameSet::Act)
+                .run_if(in_state(GamePhase::InGame))
+                .run_if(simulation_is_running),
+        );
 }
 
 fn adoption_options_are_fillable(
@@ -186,7 +196,6 @@ fn initialize_adoption_offer_options(
             continue;
         }
         commands.entity(world).insert((
-            AdoptionOfferClock(0.0),
             AdoptionOfferRandom(DeterministicRng::from_entity(
                 **seed,
                 PersistentId(0),
@@ -208,19 +217,40 @@ fn initialize_adoption_offer_options(
 
 fn resize_adoption_offer_options(
     roots: Query<(Entity, Option<&AdoptionOfferOptions>, &Fame), With<AdoptionOfferRandom>>,
+    changed_roots: Query<
+        (Entity, Option<&AdoptionOfferOptions>, &Fame),
+        (
+            With<AdoptionOfferRandom>,
+            Or<(Changed<Fame>, Added<AdoptionOfferRandom>)>,
+        ),
+    >,
     options: Query<(Entity, &AdoptionOfferOption, Option<&CurrentAdoptionOffer>)>,
     offers: Query<&AdoptionOfferSupply>,
     assets: Res<Assets<WorldDefinitionAsset>>,
     definitions: Res<WorldDefinitions>,
+    mut events: MessageReader<AssetEvent<WorldDefinitionAsset>>,
     mut commands: Commands,
 ) {
+    let modified = events.read().any(|event| {
+        matches!(
+            event,
+            AssetEvent::Added { .. } | AssetEvent::Modified { .. } | AssetEvent::Removed { .. }
+        )
+    });
+    events.clear();
     let Some(configuration) = definitions
         .get(&assets)
         .and_then(|view| view.animal_adoption_offer_configuration())
     else {
         return;
     };
-    for (world, members, fame) in &roots {
+    let all = definitions.is_changed() || modified;
+    let affected = all
+        .then(|| roots.iter())
+        .into_iter()
+        .flatten()
+        .chain((!all).then(|| changed_roots.iter()).into_iter().flatten());
+    for (world, members, fame) in affected {
         let count = authored_adoption_slot_count(configuration, u16::from(fame.half_stars) * 10);
         let current_count = members
             .into_iter()
@@ -272,58 +302,78 @@ fn authored_adoption_slot_count(
         )
 }
 
-fn advance_adoption_offer_deadlines(
-    mut worlds: Query<&mut AdoptionOfferClock>,
-    options: Query<(
-        Entity,
-        &AdoptionOfferOption,
-        Option<&CurrentAdoptionOffer>,
-        Option<&AdoptionOfferCooldown>,
-    )>,
-    offers: Query<&AdoptionOfferSupply>,
-    waiting: Query<
-        (Entity, &AdoptionOfferSupply, &WorldMember),
-        (With<AdoptionOfferForOption>, Without<AdoptionOfferUnlocked>),
+fn decline_current_adoption_offers(
+    options: Query<
+        (
+            Entity,
+            Option<&CurrentAdoptionOffer>,
+            Has<AdoptionOfferCooldown>,
+        ),
+        With<AdoptionOfferOption>,
     >,
-    time: Res<Time<Fixed>>,
+    offers: Query<&AdoptionOfferSupply>,
     mut declines: MessageReader<DeclineCurrentAnimalAdoptionOffers>,
     mut commands: Commands,
 ) {
-    let decline = declines.read().count() != 0;
-    let delta = f64::from(time.delta_secs().max(0.0));
-    for mut clock in &mut worlds {
-        clock.0 += delta;
-    }
-    if !decline {
-        for (entity, offer, member) in &waiting {
-            if worlds.get(member.root).is_ok_and(|clock| {
-                offer.unlock_at <= clock.0 && offer.remove_at.is_none_or(|due| due > clock.0)
-            }) {
-                commands.entity(entity).insert(AdoptionOfferUnlocked);
-            }
-        }
-    }
-    for (entity, option, offer, cooldown) in &options {
-        let Ok(clock) = worlds.get(option.world) else {
-            continue;
-        };
-        let Some((offer, supply)) = offer.and_then(|offer| {
+    declines.clear();
+    for (entity, offer, cooling) in &options {
+        if let Some((offer, supply)) = offer.and_then(|offer| {
             let entity = *offer.collection();
             offers.get(entity).ok().map(|supply| (entity, supply))
-        }) else {
-            if cooldown.is_some_and(|cooldown| decline || cooldown.0 <= clock.0) {
-                commands.entity(entity).remove::<AdoptionOfferCooldown>();
+        }) {
+            if supply.dismiss_cooldown > 0.0 {
+                commands
+                    .entity(entity)
+                    .insert(AdoptionOfferCooldown::from_remaining_seconds(f64::from(
+                        supply.dismiss_cooldown,
+                    )));
             }
+            retire_adoption_offer(offer, &offers, &mut commands);
+        } else if cooling {
+            commands.entity(entity).remove::<AdoptionOfferCooldown>();
+        }
+    }
+}
+
+fn advance_adoption_offer_timers(
+    mut offers: Query<(Entity, &mut AdoptionOfferTiming), With<AdoptionOfferForOption>>,
+    supplies: Query<&AdoptionOfferSupply>,
+    time: Res<Time<Fixed>>,
+    mut commands: Commands,
+) {
+    let delta = time.timestep();
+    for (offer, mut timing) in &mut offers {
+        if timing
+            .retirement
+            .as_mut()
+            .is_some_and(|timer| timer.tick(delta).is_finished())
+        {
+            retire_adoption_offer(offer, &supplies, &mut commands);
             continue;
-        };
-        if decline {
-            let ready = clock.0 - delta + f64::from(supply.dismiss_cooldown);
-            if ready > clock.0 {
-                commands.entity(entity).insert(AdoptionOfferCooldown(ready));
-            }
-            retire_adoption_offer(offer, &offers, &mut commands);
-        } else if supply.remove_at.is_some_and(|due| due <= clock.0) {
-            retire_adoption_offer(offer, &offers, &mut commands);
+        }
+        if timing
+            .unlock
+            .as_mut()
+            .is_some_and(|timer| timer.tick(delta).is_finished())
+        {
+            commands.entity(offer).insert(AdoptionOfferUnlocked);
+            timing.unlock = None;
+        }
+        if timing.unlock.is_none() && timing.retirement.is_none() {
+            commands.entity(offer).remove::<AdoptionOfferTiming>();
+        }
+    }
+}
+
+fn advance_adoption_cooldowns(
+    mut options: Query<(Entity, &mut AdoptionOfferCooldown), Without<CurrentAdoptionOffer>>,
+    time: Res<Time<Fixed>>,
+    mut commands: Commands,
+) {
+    let delta = time.timestep();
+    for (option, mut cooldown) in &mut options {
+        if cooldown.0.tick(delta).is_finished() {
+            commands.entity(option).remove::<AdoptionOfferCooldown>();
         }
     }
 }
@@ -343,7 +393,7 @@ fn retire_adoption_offer(
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 struct AdoptionSpeciesOfferProfile {
     species: AssetId,
     minimum_fame: u16,
@@ -389,10 +439,24 @@ fn adoption_offer_profiles(species_view: SpeciesView<'_>) -> Vec<AdoptionSpecies
         .collect()
 }
 
+#[derive(Resource, Default, PartialEq)]
+struct AdoptionSpeciesOfferProfiles(Option<Vec<AdoptionSpeciesOfferProfile>>);
+
+fn project_adoption_species_offer_profiles(
+    assets: Res<Assets<SpeciesAsset>>,
+    index: Res<SpeciesAssets>,
+    mut profiles: ResMut<AdoptionSpeciesOfferProfiles>,
+) {
+    if assets.is_changed() || index.is_changed() {
+        profiles.set_if_neq(AdoptionSpeciesOfferProfiles(
+            index.get(&assets).map(adoption_offer_profiles),
+        ));
+    }
+}
+
 fn refill_adoption_offer_options<const INITIAL: bool>(
     mut worlds: Query<(
         Entity,
-        &AdoptionOfferClock,
         &mut AdoptionOfferRandom,
         &SelectedWorldIdentity,
         Option<&AdoptionOfferOptions>,
@@ -406,23 +470,15 @@ fn refill_adoption_offer_options<const INITIAL: bool>(
         Has<AdoptionOfferCooldown>,
     )>,
     supplies: Query<&AdoptionOfferSupply>,
-    species_assets: Res<Assets<SpeciesAsset>>,
-    species_index: Res<SpeciesAssets>,
     chance: Query<&SpeciesAdoptionChanceMultiplier>,
-    mut profiles: Local<Option<Vec<AdoptionSpeciesOfferProfile>>>,
+    profiles: Res<AdoptionSpeciesOfferProfiles>,
     mut commands: Commands,
 ) {
-    let Some(species) = species_index.get(&species_assets) else {
-        return;
-    };
-    if profiles.is_none() || species_assets.is_changed() || species_index.is_changed() {
-        *profiles = Some(adoption_offer_profiles(species));
-    }
-    let Some(profiles) = profiles.as_deref() else {
+    let Some(profiles) = profiles.0.as_deref() else {
         return;
     };
     let mut weights = None;
-    for (world, clock, mut random, identity, members, initial, fame) in &mut worlds {
+    for (world, mut random, identity, members, initial, fame) in &mut worlds {
         if initial != INITIAL {
             continue;
         }
@@ -510,15 +566,14 @@ fn refill_adoption_offer_options<const INITIAL: bool>(
             let mut offer = commands.spawn((
                 WorldMember { root: world },
                 AdoptionOfferForOption(entity),
-                AdoptionOfferSupply::new(
-                    profile.species,
-                    remaining,
-                    clock.0 + f64::from(unlock_delay),
-                    (profile.remove_after > 0.0)
-                        .then_some(clock.0 + f64::from(profile.remove_after)),
-                    profile.dismiss_cooldown,
-                ),
+                AdoptionOfferSupply::new(profile.species, remaining, profile.dismiss_cooldown),
             ));
+            if unlock_delay > 0.0 || profile.remove_after > 0.0 {
+                offer.insert(AdoptionOfferTiming::from_remaining_seconds(
+                    f64::from(unlock_delay),
+                    (profile.remove_after > 0.0).then_some(f64::from(profile.remove_after)),
+                ));
+            }
             if unlock_delay <= 0.0 {
                 offer.insert(AdoptionOfferUnlocked);
             }

@@ -1,41 +1,63 @@
-//! Cache of winning UI template declaration paths for the current resolved archive paths.
+//! Immutable UI template declaration indexes keyed by winning archive entries.
 
 use std::{
     collections::BTreeMap,
-    path::PathBuf,
     sync::{Arc, Mutex},
 };
 
+use z2f::ResolvedArchiveEntry;
+
+use crate::asset_source::AssetArchives;
+
 #[derive(Default)]
-pub(super) struct UiTemplateDeclarationPathIndexCache {
-    resolved_paths_and_template_paths: Mutex<(Option<Arc<[PathBuf]>>, BTreeMap<String, String>)>,
+pub(super) struct UiTemplateDeclarationPathIndexCache(Mutex<UiTemplateDeclarationIndex>);
+
+#[derive(Default)]
+struct UiTemplateDeclarationIndex {
+    archive_entries: Arc<[ResolvedArchiveEntry]>,
+    template_entries: Vec<ResolvedArchiveEntry>,
+    declarations: Arc<BTreeMap<String, String>>,
 }
 
 impl UiTemplateDeclarationPathIndexCache {
-    /// Archive mutation publishes a new resolved path list, so the cached
-    /// index is rebuilt whenever the list it was built from is replaced.
-    pub(super) fn template_declaration_paths_for_resolved_archive_paths(
+    pub(super) fn template_declaration_paths(
         &self,
-        asset_archives: &crate::asset_source::AssetArchives,
-    ) -> BTreeMap<String, String> {
-        let resolved_paths = asset_archives.resolved_paths();
-        let mut cached_index = self
-            .resolved_paths_and_template_paths
+        asset_archives: &AssetArchives,
+    ) -> Arc<BTreeMap<String, String>> {
+        let mut index = self
+            .0
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if !cached_index
-            .0
-            .as_ref()
-            .is_some_and(|cached| Arc::ptr_eq(cached, &resolved_paths))
-        {
-            *cached_index = (
-                Some(Arc::clone(&resolved_paths)),
-                super::source::ui_template_source_path_discovery::build_ui_template_declaration_source_path_index(
-                    asset_archives,
-                    &resolved_paths,
-                ),
-            );
+        loop {
+            let entries = asset_archives.resolved_archive_entries();
+            if Arc::ptr_eq(&index.archive_entries, &entries) {
+                return Arc::clone(&index.declarations);
+            }
+            let template_entries = entries
+                .iter()
+                .filter(|entry| {
+                    let path = &entry.normalized_asset_path;
+                    path.starts_with("ui/template")
+                        && path.extension().is_some_and(|ext| ext == "xml")
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            if index.template_entries != template_entries {
+                let declarations =
+                    super::source::ui_template_source_path_discovery::build_ui_template_declaration_source_path_index(
+                        asset_archives,
+                        &template_entries,
+                    );
+                if !Arc::ptr_eq(&entries, &asset_archives.resolved_archive_entries()) {
+                    continue;
+                }
+                if index.declarations.as_ref() != &declarations {
+                    index.declarations = Arc::new(declarations);
+                }
+                index.template_entries = template_entries;
+            }
+            index.archive_entries = entries;
+            return Arc::clone(&index.declarations);
         }
-        cached_index.1.clone()
     }
 }

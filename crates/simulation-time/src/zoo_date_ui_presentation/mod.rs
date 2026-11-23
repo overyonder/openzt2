@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 use openzt2_game_data::ui_document::node_property_binding::UiTextPropertyBindingSource;
+use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 
 use openzt2_game_assets::localization::{
     localization_asset_types::LocalizationAsset,
@@ -11,11 +12,14 @@ use super::simulation_clock_types::ZooCalendar;
 
 /// Updates the date field when the calendar changes, reusing its string allocation.
 pub(super) fn project_authoritative_zoo_calendar_into_authored_zoo_date_text(
-    zoo_calendar: Res<ZooCalendar>,
+    roots: Query<Ref<ZooCalendar>, With<WorldRoot>>,
     active_localization_assets: Option<Res<LocalizationPrecedenceIndex>>,
     localization_assets: Res<Assets<LocalizationAsset>>,
     mut ui_text_bindings: Query<(Ref<UiTextBinding>, &mut Text)>,
 ) {
+    let Ok(zoo_calendar) = roots.single() else {
+        return;
+    };
     let Some(active_localization) = active_localization_assets
         .as_deref()
         .and_then(|sources| sources.borrow_loaded_localization_view(&localization_assets))

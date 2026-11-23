@@ -1,26 +1,23 @@
 use bevy::prelude::*;
 use openzt2_game_data::AssetId;
-
 use openzt2_world_state::simulation_time::deterministic_random_stream::DeterministicRng;
 
-#[derive(Component, Clone, Copy)]
-pub(super) struct AmbientAnimalSpawner {
-    pub(super) next_tick: u64,
+#[derive(Component)]
+pub(super) struct AmbientSpawnCadence {
+    pub(super) timer: Timer,
     pub(super) random: DeterministicRng,
 }
 
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Component)]
 pub(super) struct AmbientAnimal {
-    pub(super) despawn_tick: u64,
+    pub(super) definition: AssetId,
+    pub(super) despawn_tick: Option<u64>,
 }
 
 #[derive(Component)]
-pub(super) struct AmbientAnimalPopulation(pub(super) AssetId);
+#[relationship(relationship_target = WorldAmbientAnimals)]
+pub(super) struct AmbientAnimalOfWorld(pub(super) Entity);
 
 #[derive(Component)]
-#[relationship(relationship_target = AmbientAnimalPopulationMembers)]
-pub(super) struct AmbientAnimalPopulationMember(pub(super) Entity);
-
-#[derive(Component)]
-#[relationship_target(relationship = AmbientAnimalPopulationMember, linked_spawn)]
-pub(super) struct AmbientAnimalPopulationMembers(Vec<Entity>);
+#[relationship_target(relationship = AmbientAnimalOfWorld, linked_spawn)]
+pub(super) struct WorldAmbientAnimals(Vec<Entity>);

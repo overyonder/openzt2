@@ -290,6 +290,8 @@ pub struct WaterFilterPolicy {
 pub struct AuthoredWorldObjectRuntime {
     /// Effective entity-type string attributes, such as a fence's broken binder.
     pub morph_targets: Vec<(AssetId, AssetId)>,
+    #[serde(default)]
+    pub numeric_behavior_properties: Vec<(AssetId, f32)>,
     pub egg: Option<WorldObjectEggDefinition>,
     pub fossil_assembly_surface: bool,
     pub whap_physics: Option<WorldObjectWhapPhysics>,

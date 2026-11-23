@@ -15,7 +15,7 @@ use crate::economy::money_types::Money;
 use crate::terrain::terrain_world_sampling_types::TerrainPoint;
 
 use crate::placement::object_placement_geometry::ObjectPlacementGeometry;
-use crate::placement::placement_occupancy_index::PlacedObjectFootprintOccupancyIndex;
+use crate::placement::placement_occupancy_index::PlacedObjectFootprintQueries;
 
 const POSITION_EPSILON_M: f32 = 0.01;
 const ROTATION_EPSILON_RADIANS: f32 = 0.002;
@@ -31,14 +31,15 @@ pub struct ObjectPlacementAuthoritativeFacts {
 }
 
 pub fn object_placement_cell_is_blocked_by_existing_object(
-    placement: &PlacedObjectFootprintOccupancyIndex,
+    placement: &PlacedObjectFootprintQueries,
+    root: Entity,
     cell: IVec2,
     ignored: Option<Entity>,
     definition: &PlaceableDefinition,
     catalogue: WorldDefinitionsView<'_>,
     mut definition_for: impl FnMut(Entity) -> Option<openzt2_game_data::AssetId>,
 ) -> bool {
-    placement.entities_occupying_cell(cell).any(|entity| {
+    placement.entities_occupying_cell(root, cell).any(|entity| {
         Some(entity) != ignored
             && object_placement_stomp_action(definition, catalogue, definition_for(entity))
                 != PlacementStompAction::Allow

@@ -2,7 +2,7 @@ use bevy::prelude::*;
 
 use openzt2_zoo_state::locomotion::locomotion_types::NavAgent;
 use openzt2_zoo_state::locomotion::locomotion_types::NavigateTo;
-use openzt2_zoo_state::locomotion::locomotion_types::NavigationRequestSequence;
+use openzt2_zoo_state::locomotion::locomotion_types::NavigationRequestGeneration;
 
 use openzt2_zoo_state::transport_tours::transport_circuit_types::CircuitMember;
 use openzt2_zoo_state::transport_tours::transport_topology_types::SkyTowerTransitionRequest;
@@ -18,7 +18,7 @@ pub(super) fn request_sky_tower_rider_navigation_to_authored_endpoint(
     sky_towers: Query<(), (With<SkyTowerHeight>, With<CircuitMember>)>,
     endpoints: SkyTowerEndpoints,
     transport_riders: Query<&NavAgent>,
-    mut navigation_request_sequence: ResMut<NavigationRequestSequence>,
+    mut navigation_generations: Query<&mut NavigationRequestGeneration>,
     mut navigation_requests: MessageWriter<NavigateTo>,
 ) {
     for transition_request in transition_requests.read() {
@@ -36,9 +36,12 @@ pub(super) fn request_sky_tower_rider_navigation_to_authored_endpoint(
         let Ok(rider_nav_agent) = transport_riders.get(transition_request.rider) else {
             continue;
         };
+        let Ok(mut generation) = navigation_generations.get_mut(transition_request.rider) else {
+            continue;
+        };
         navigation_requests.write(NavigateTo {
             entity: transition_request.rider,
-            request_id: navigation_request_sequence.next(),
+            request_id: generation.advance(),
             destination,
             arrival_radius_m: rider_nav_agent.radius_m,
         });

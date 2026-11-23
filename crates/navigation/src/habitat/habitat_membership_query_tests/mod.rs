@@ -7,8 +7,8 @@ use openzt2_zoo_state::topology::topology_graph_types::TopologyGrid;
 #[test]
 fn preassigned_habitat_membership_still_initializes_containment() {
     use crate::habitat::habitat_membership_and_containment::{
-        resolve_changed_habitat_membership_and_containment, HabitatLocationCells,
-        LostHabitatMembership,
+        resolve_changed_habitat_membership_and_containment, HabitatCellOwnershipChanged,
+        HabitatLocationCells, LostHabitatMembership,
     };
     use openzt2_zoo_state::habitat::habitat_types::Containment;
     use openzt2_zoo_state::habitat::habitat_types::ContainmentChanged;
@@ -18,8 +18,8 @@ fn preassigned_habitat_membership_still_initializes_containment() {
     use openzt2_zoo_state::habitat::habitat_types::HabitatSummary;
     for breached in [false, true] {
         let mut app = App::new();
-        app.init_resource::<TopologyGrid>()
-            .init_resource::<HabitatLocationCells>()
+        app.register_required_components::<WorldRoot, HabitatLocationCells>()
+            .add_message::<HabitatCellOwnershipChanged>()
             .add_message::<LostHabitatMembership>()
             .add_message::<HabitatChanged>()
             .add_message::<ContainmentChanged>()
@@ -35,7 +35,13 @@ fn preassigned_habitat_membership_still_initializes_containment() {
             .id();
         let mut index = HabitatIndex::default();
         index.record_habitat_for_topology_cell(IVec2::ZERO, habitat);
-        app.insert_resource(index);
+        app.world_mut().spawn((
+            TopologyGrid::default(),
+            index,
+            WorldRoot {
+                scenario: openzt2_game_data::AssetId::from_key("test"),
+            },
+        ));
         let animal = app
             .world_mut()
             .spawn((

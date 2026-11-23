@@ -738,7 +738,7 @@ pub(super) fn project_committed_transport_track_piece_authored_prefabs(
     mut effect_pass_materials: ResMut<Assets<EffectPassMaterial>>,
     mut effect_uniform_buffers: ResMut<Assets<ShaderBuffer>>,
     mut meshes: ResMut<Assets<Mesh>>,
-    terrain_index: Res<TerrainIndex>,
+    terrain_index: Single<&TerrainIndex>,
     terrain_assets: Res<Assets<TerrainAsset>>,
     terrain_chunks: Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
     (endpoint_transforms, rope_anchors, children, sky_drawings, incidence, routes): (
@@ -759,6 +759,7 @@ pub(super) fn project_committed_transport_track_piece_authored_prefabs(
         Without<AuthoredTransportTrackPiecePresentationProjected>,
     >,
 ) {
+    let terrain_index = terrain_index.into_inner();
     let Some(definitions) = active_definitions.get(&definition_assets) else {
         return;
     };

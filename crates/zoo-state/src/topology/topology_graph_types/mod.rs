@@ -102,7 +102,7 @@ pub struct TileSurface {
     pub height_cm: [i16; 5],
 }
 
-#[derive(Resource, Debug, Default)]
+#[derive(Component, Debug, Default)]
 pub struct TopologyIndex {
     pub nodes: HashMap<IVec3, Entity>,
     pub paths: HashMap<IVec3, Entity>,
@@ -152,7 +152,7 @@ impl TopologyIndex {
 }
 
 /// Spatial projection of integer topology cells for the active terrain.
-#[derive(Resource, Debug, Clone, Copy, PartialEq)]
+#[derive(Component, Debug, Clone, Copy, PartialEq)]
 pub struct TopologyGrid {
     pub origin: Vec2,
     pub spacing_m: f32,

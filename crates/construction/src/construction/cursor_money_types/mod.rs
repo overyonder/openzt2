@@ -12,5 +12,7 @@ pub(super) struct CursorMoneyPreviewFragmentOwner;
 pub(super) struct CursorMoneySpendFragmentOwner {
     pub(super) cost: Money,
     pub(super) screen_position: Vec2,
-    pub(super) animation_started: bool,
 }
+
+#[derive(Component)]
+pub(super) struct PendingCursorMoneySpendAnimation;

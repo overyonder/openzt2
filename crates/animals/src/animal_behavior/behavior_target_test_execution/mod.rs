@@ -16,7 +16,7 @@ use openzt2_zoo_state::guests::guest_simulation_types::GuestArchetype;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_zoo_state::staff::staff_employment_types::StaffRole;
 use openzt2_zoo_state::topology::topology_graph_types::FenceEdge;
-use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
+use openzt2_world_state::world_spawn::world_membership_types::{DefinitionId, WorldMember};
 
 use super::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
@@ -43,6 +43,8 @@ pub(super) fn find_target_and_enter_success_or_failure_behavior_set(
     )>,
     positions: Query<(Entity, Option<&DefinitionId>, &GlobalTransform)>,
     fences: Query<(Entity, &FenceEdge, &GlobalTransform)>,
+    worlds: Query<&WorldMember>,
+    spatial: super::behavior_spatial_candidates::BehaviorSpatialCandidates,
     mut commands: Commands,
 ) {
     let Some(view) = documents.create_declaration_index_view(&assets) else {
@@ -81,13 +83,38 @@ pub(super) fn find_target_and_enter_success_or_failure_behavior_set(
             }
             Some(distance_squared.unwrap_or_default())
         };
+        let mut bounded_candidates = Vec::new();
+        let bounded = action.target_radius_cm != 0
+            && (action.target_test_kind == BehaviorTargetTestKind::Fence
+                || action.target_definition_asset_id.is_some())
+            && origin
+                .zip(worlds.get(entity).ok())
+                .is_some_and(|(origin, world)| {
+                    let margin = Vec2::splat(action.target_radius_cm as f32 * 0.01);
+                    let centre = origin.translation().xz();
+                    spatial.in_bounds(
+                        world.root,
+                        centre - margin,
+                        centre + margin,
+                        &mut bounded_candidates,
+                    );
+                    spatial.preserve_query_order(&mut bounded_candidates);
+                    true
+                });
         let selected = match action.target_test_kind {
             BehaviorTargetTestKind::Fence => select_authored_target(
                 task.target
                     .and_then(|target| fences.get(target).ok())
                     .map(|(entity, edge, pose)| (entity, Some(edge.definition), pose)),
-                fences
-                    .iter()
+                bounded
+                    .then(|| {
+                        fences
+                            .iter_many(bounded_candidates.iter().copied())
+                            .flatten()
+                    })
+                    .into_iter()
+                    .flatten()
+                    .chain((!bounded).then(|| fences.iter()).into_iter().flatten())
                     .map(|(entity, edge, pose)| (entity, Some(edge.definition), pose)),
                 entity,
                 matches,
@@ -98,9 +125,18 @@ pub(super) fn find_target_and_enter_success_or_failure_behavior_set(
                     .map(|(entity, definition, pose)| {
                         (entity, definition.map(|definition| definition.0), pose)
                     }),
-                positions.iter().map(|(entity, definition, pose)| {
-                    (entity, definition.map(|definition| definition.0), pose)
-                }),
+                bounded
+                    .then(|| {
+                        positions
+                            .iter_many(bounded_candidates.iter().copied())
+                            .flatten()
+                    })
+                    .into_iter()
+                    .flatten()
+                    .chain((!bounded).then(|| positions.iter()).into_iter().flatten())
+                    .map(|(entity, definition, pose)| {
+                        (entity, definition.map(|definition| definition.0), pose)
+                    }),
                 entity,
                 matches,
             ),

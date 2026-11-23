@@ -3,6 +3,8 @@ use bevy::{
     prelude::*,
 };
 
+use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
+
 use super::topology_edit_types::{FenceConnectivityChanged, PathConnectivityChanged};
 use super::topology_graph_types::{
     EdgeKey, FenceEnd, FenceStart, PathTile, TopologyIndex, TopologyNode,
@@ -10,19 +12,31 @@ use super::topology_graph_types::{
 use super::topology_grid_geometry::calculate_adjacent_topology_grid_cells_between_endpoints;
 
 pub(super) fn index_inserted_topology_node(mut world: DeferredWorld, context: HookContext) {
+    let Some(root) = world
+        .get::<WorldMember>(context.entity)
+        .map(|member| member.root)
+    else {
+        return;
+    };
     let Some(node) = world.get::<TopologyNode>(context.entity).copied() else {
         return;
     };
-    if let Some(mut index) = world.get_resource_mut::<TopologyIndex>() {
+    if let Some(mut index) = world.get_mut::<TopologyIndex>(root) {
         index.nodes.entry(node.cell).or_insert(context.entity);
     }
 }
 
 pub(super) fn discard_indexed_topology_node(mut world: DeferredWorld, context: HookContext) {
+    let Some(root) = world
+        .get::<WorldMember>(context.entity)
+        .map(|member| member.root)
+    else {
+        return;
+    };
     let Some(node) = world.get::<TopologyNode>(context.entity).copied() else {
         return;
     };
-    if let Some(mut index) = world.get_resource_mut::<TopologyIndex>() {
+    if let Some(mut index) = world.get_mut::<TopologyIndex>(root) {
         if index.nodes.get(&node.cell) == Some(&context.entity) {
             index.nodes.remove(&node.cell);
         }
@@ -30,10 +44,16 @@ pub(super) fn discard_indexed_topology_node(mut world: DeferredWorld, context: H
 }
 
 pub(super) fn index_inserted_path_tile(mut world: DeferredWorld, context: HookContext) {
+    let Some(root) = world
+        .get::<WorldMember>(context.entity)
+        .map(|member| member.root)
+    else {
+        return;
+    };
     let Some(path) = world.get::<PathTile>(context.entity).copied() else {
         return;
     };
-    if let Some(mut index) = world.get_resource_mut::<TopologyIndex>() {
+    if let Some(mut index) = world.get_mut::<TopologyIndex>(root) {
         if let bevy::platform::collections::hash_map::Entry::Vacant(slot) =
             index.paths.entry(path.cell)
         {
@@ -52,10 +72,16 @@ pub(super) fn index_inserted_path_tile(mut world: DeferredWorld, context: HookCo
 }
 
 pub(super) fn discard_indexed_path_tile(mut world: DeferredWorld, context: HookContext) {
+    let Some(root) = world
+        .get::<WorldMember>(context.entity)
+        .map(|member| member.root)
+    else {
+        return;
+    };
     let Some(path) = world.get::<PathTile>(context.entity).copied() else {
         return;
     };
-    if let Some(mut index) = world.get_resource_mut::<TopologyIndex>() {
+    if let Some(mut index) = world.get_mut::<TopologyIndex>(root) {
         if index.paths.get(&path.cell) == Some(&context.entity) {
             index.paths.remove(&path.cell);
             if let bevy::platform::collections::hash_map::Entry::Occupied(mut column) =
@@ -75,12 +101,25 @@ pub(super) fn discard_indexed_path_tile(mut world: DeferredWorld, context: HookC
 }
 
 pub(super) fn index_inserted_fence_edge(mut world: DeferredWorld, context: HookContext) {
+    let Some(root) = world
+        .get::<WorldMember>(context.entity)
+        .map(|member| member.root)
+    else {
+        return;
+    };
     let (Some(start), Some(end)) = (
         world.get::<FenceStart>(context.entity).copied(),
         world.get::<FenceEnd>(context.entity).copied(),
     ) else {
         return;
     };
+    if [start.0, end.0].into_iter().any(|node| {
+        world
+            .get::<WorldMember>(node)
+            .is_none_or(|member| member.root != root)
+    }) {
+        return;
+    }
     let (Some(first), Some(second)) = (
         world.get::<TopologyNode>(start.0),
         world.get::<TopologyNode>(end.0),
@@ -90,14 +129,16 @@ pub(super) fn index_inserted_fence_edge(mut world: DeferredWorld, context: HookC
     let Some(key) = EdgeKey::new(first.cell, second.cell) else {
         return;
     };
-    let canonical_nodes = world.get_resource::<TopologyIndex>().is_some_and(|index| {
+    let canonical_nodes = world.get::<TopologyIndex>(root).is_some_and(|index| {
         index.nodes.get(&first.cell) == Some(&start.0)
             && index.nodes.get(&second.cell) == Some(&end.0)
     });
     if !canonical_nodes {
         return;
     }
-    let mut index = world.resource_mut::<TopologyIndex>();
+    let mut index = world
+        .get_mut::<TopologyIndex>(root)
+        .expect("canonical nodes have a topology index");
     if let bevy::platform::collections::hash_map::Entry::Vacant(slot) = index.edges.entry(key) {
         slot.insert(context.entity);
         index.edge_keys.insert(context.entity, key);
@@ -122,7 +163,13 @@ pub(super) fn index_inserted_fence_edge(mut world: DeferredWorld, context: HookC
 }
 
 pub(super) fn discard_indexed_fence_edge(mut world: DeferredWorld, context: HookContext) {
-    if let Some(mut index) = world.get_resource_mut::<TopologyIndex>() {
+    let Some(root) = world
+        .get::<WorldMember>(context.entity)
+        .map(|member| member.root)
+    else {
+        return;
+    };
+    if let Some(mut index) = world.get_mut::<TopologyIndex>(root) {
         if let Some(key) = index.edge_keys.remove(&context.entity) {
             index.edges.remove(&key);
             for cell in fence_columns(key) {

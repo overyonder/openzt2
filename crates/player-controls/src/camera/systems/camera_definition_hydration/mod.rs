@@ -21,20 +21,25 @@ pub(in crate::camera) fn apply_view_distance_graphics_setting_to_zoo_camera_far_
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     graphics: Res<GraphicsSettings>,
-    mut cameras: Query<(&CameraDefinition, &mut Projection), With<ZooCamera>>,
+    mut cameras: Query<(Ref<CameraDefinition>, &mut Projection), With<ZooCamera>>,
 ) {
-    if !graphics.is_changed() {
-        return;
-    }
+    let refresh =
+        graphics.is_changed() || active_definitions.is_changed() || definitions.is_changed();
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };
     for (selected, mut projection) in &mut cameras {
+        if !refresh && !selected.is_changed() && !projection.is_added() {
+            continue;
+        }
         let Some(definition) = definitions.find_camera(selected.0) else {
             continue;
         };
         let far =
             select_three_level_graphics_detail_value(definition.far_m, graphics.view_distance);
+        if projection.far() == far {
+            continue;
+        }
         match &mut *projection {
             Projection::Custom(custom) => {
                 if let Some(perspective) = custom.get_mut::<FixedAspectPerspectiveProjection>() {

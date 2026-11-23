@@ -64,6 +64,7 @@ fn release_emits_one_consumed_outcome_and_removes_the_animal() {
     let mut app = App::new();
     app.add_message::<ReleaseAnimal>()
         .add_message::<AnimalReleased>()
+        .add_observer(super::outgoing_animal_adoption_execution::settle_departing_animal)
         .add_systems(
             Update,
             super::animal_release_execution::release_eligible_adult_animals_from_the_zoo,
@@ -89,6 +90,7 @@ fn pregnant_and_non_adult_animals_are_not_released() {
     let mut app = App::new();
     app.add_message::<ReleaseAnimal>()
         .add_message::<AnimalReleased>()
+        .add_observer(super::outgoing_animal_adoption_execution::settle_departing_animal)
         .add_systems(
             Update,
             super::animal_release_execution::release_eligible_adult_animals_from_the_zoo,
@@ -112,10 +114,11 @@ fn pregnant_and_non_adult_animals_are_not_released() {
     app.update();
     assert!(app.world().get_entity(juvenile).is_ok());
     assert!(app.world().get_entity(pregnant).is_ok());
-    assert!(app
-        .world()
-        .resource::<Messages<AnimalReleased>>()
-        .is_empty());
+    assert!(
+        app.world()
+            .resource::<Messages<AnimalReleased>>()
+            .is_empty()
+    );
 }
 
 #[test]
@@ -129,6 +132,7 @@ fn outgoing_adoption_removes_animal_and_crate_without_wild_release_credit() {
     let mut app = App::new();
     app.add_message::<PlaceAnimalForAdoption>()
         .add_message::<AnimalReleased>()
+        .add_observer(super::outgoing_animal_adoption_execution::settle_departing_animal)
         .add_systems(
             Update,
             super::outgoing_animal_adoption_execution::transfer_animals_out_for_adoption,
@@ -166,8 +170,9 @@ fn outgoing_adoption_removes_animal_and_crate_without_wild_release_credit() {
         app.world().get::<AnimalFather>(child).unwrap().0,
         restricted
     );
-    assert!(app
-        .world()
-        .resource::<Messages<AnimalReleased>>()
-        .is_empty());
+    assert!(
+        app.world()
+            .resource::<Messages<AnimalReleased>>()
+            .is_empty()
+    );
 }

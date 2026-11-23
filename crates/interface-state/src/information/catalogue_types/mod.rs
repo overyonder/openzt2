@@ -11,7 +11,7 @@ pub struct CataloguePanel {
 }
 
 /// Selection shown in the buy-details panel.
-#[derive(Resource, Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct SelectedCatalogueEntry(pub Option<AssetId>);
 
 /// Last accepted child of one authored type list, independent of buy-details selection.
@@ -19,7 +19,7 @@ pub struct SelectedCatalogueEntry(pub Option<AssetId>);
 pub struct RememberedCatalogueEntry(pub AssetId);
 
 /// Animal reference retained while the player selects its care supplies.
-#[derive(Resource, Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct SelectedCareAnimal(pub Option<AssetId>);
 
 #[derive(Component, Debug, Default)]
@@ -62,5 +62,5 @@ pub struct PurchaseChoice {
 pub struct CatalogueTypeListRowProjection;
 
 /// Catalogue entries a scenario script has disabled.
-#[derive(Resource, Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Component, Clone, Debug, Default, PartialEq, Eq)]
 pub struct ScenarioDisabledCatalogueDefinitions(pub std::collections::BTreeSet<AssetId>);

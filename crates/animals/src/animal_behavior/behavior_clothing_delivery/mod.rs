@@ -5,27 +5,73 @@ pub(super) mod state;
 
 use self::state::PendingClothingDelivery;
 use bevy::{
-    asset::{LoadState, RecursiveDependencyLoadState},
+    asset::{AssetLoadFailedEvent, LoadState, RecursiveDependencyLoadState},
+    ecs::{entity::EntityHashSet, system::SystemParam},
+    platform::collections::HashSet,
     prelude::*,
 };
 use openzt2_game_assets::material::material_asset_types::MaterialAsset;
+use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabClothingTextures;
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabMaterialOverrides;
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabPresentation;
-use openzt2_zoo_state::behavior_task_execution_types::running_actions::RunningBehaviorInstruction;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
 use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorTaskFailure;
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
+    RunBehaviorScript, RunningBehaviorInstruction,
+};
 
+#[derive(SystemParam)]
+pub(super) struct ClothingLoadChanges<'w, 's> {
+    image_events: MessageReader<'w, 's, AssetEvent<Image>>,
+    image_failures: MessageReader<'w, 's, AssetLoadFailedEvent<Image>>,
+    material_events: MessageReader<'w, 's, AssetEvent<MaterialAsset>>,
+    material_failures: MessageReader<'w, 's, AssetLoadFailedEvent<MaterialAsset>>,
+    prefab_events: MessageReader<'w, 's, AssetEvent<ScenePrefabAsset>>,
+    prefab_failures: MessageReader<'w, 's, AssetLoadFailedEvent<ScenePrefabAsset>>,
+    structure: Query<
+        'w,
+        's,
+        Entity,
+        Or<(
+            Changed<Children>,
+            Changed<PrefabMaterialOverrides>,
+            Changed<PrefabPresentation>,
+        )>,
+    >,
+    parents: Query<'w, 's, &'static ChildOf>,
+}
+
+fn changed_asset<A: Asset>(event: &AssetEvent<A>) -> Option<bevy::asset::AssetId<A>> {
+    match *event {
+        AssetEvent::Added { id }
+        | AssetEvent::Modified { id }
+        | AssetEvent::LoadedWithDependencies { id } => Some(id),
+        _ => None,
+    }
+}
+
+pub(super) fn cancel_clothing_delivery(
+    removed: On<Remove<RunBehaviorScript>>,
+    mut commands: Commands,
+) {
+    commands
+        .entity(removed.entity)
+        .try_remove::<PendingClothingDelivery>();
+}
+
+#[allow(clippy::too_many_arguments)]
 pub(super) fn finish_clothing_delivery(
     mut commands: Commands,
     clock: Single<&ZooClock>,
     server: Res<AssetServer>,
     images: Res<Assets<Image>>,
     materials: Res<Assets<MaterialAsset>>,
+    mut changed: ClothingLoadChanges,
     actors: Query<(
         Entity,
-        &PendingClothingDelivery,
+        Ref<PendingClothingDelivery>,
         Option<(&BehaviorTaskExecutionState, &RunningBehaviorInstruction)>,
         Has<PendingBehaviorTaskFailure>,
     )>,
@@ -37,6 +83,34 @@ pub(super) fn finish_clothing_delivery(
     )>,
     entities: Query<()>,
 ) {
+    let images_changed = changed
+        .image_events
+        .read()
+        .filter_map(changed_asset)
+        .chain(changed.image_failures.read().map(|event| event.id))
+        .collect::<HashSet<_>>();
+    let materials_changed = changed
+        .material_events
+        .read()
+        .filter_map(changed_asset)
+        .chain(changed.material_failures.read().map(|event| event.id))
+        .collect::<HashSet<_>>();
+    let prefabs_changed = changed
+        .prefab_events
+        .read()
+        .filter_map(changed_asset)
+        .chain(changed.prefab_failures.read().map(|event| event.id))
+        .collect::<HashSet<_>>();
+    let mut changed_actors = EntityHashSet::default();
+    if !actors.is_empty() {
+        for entity in &changed.structure {
+            changed_actors.extend(
+                std::iter::once(entity)
+                    .chain(changed.parents.iter_ancestors::<ChildOf>(entity))
+                    .filter(|&owner| actors.contains(owner)),
+            );
+        }
+    }
     for (actor, delivery, task, failed) in &actors {
         let Some((_, instruction)) =
             task.filter(|(task, instruction)| !failed && delivery.owns(task, instruction))
@@ -49,6 +123,19 @@ pub(super) fn finish_clothing_delivery(
             .is_some_and(|target| !entities.contains(target))
         {
             fail_delivery(actor, &mut commands);
+            continue;
+        }
+        if !delivery.is_added()
+            && !delivery
+                .textures
+                .iter()
+                .any(|(_, image)| images_changed.contains(&image.id()))
+            && materials_changed.is_empty()
+            && !presentations
+                .get(actor)
+                .is_ok_and(|prefab| prefabs_changed.contains(&prefab.0.id()))
+            && !changed_actors.contains(&actor)
+        {
             continue;
         }
         if delivery.textures.iter().any(|(_, image)| {

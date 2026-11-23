@@ -6,7 +6,7 @@ use bevy::{
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::{
-    lua_script::{lua_script_archive_path_index::LuaScriptArchivePathIndex, lua_script_asset_loading::LuaScriptAsset},
+    lua_script::{lua_script_sources::LuaScriptSources, lua_script_asset_loading::LuaScriptAsset},
     localization::{localization_asset_types::LocalizationAsset, localization_precedence_index::LocalizationPrecedenceIndex},
 };
 use openzt2_game_data::AssetId;
@@ -64,10 +64,10 @@ pub(super) fn apply_scenario_maximum_fame_requests(
 }
 
 #[derive(bevy::ecs::system::SystemParam)]
-pub(super) struct FamePresentation<'w> {
+pub(super) struct FamePresentation<'w, 's> {
     active_localization: Option<Res<'w, LocalizationPrecedenceIndex>>,
     localizations: Option<Res<'w, Assets<LocalizationAsset>>>,
-    messages: Option<ResMut<'w, ZooMessages>>,
+    messages: Query<'w, 's, &'static mut ZooMessages>,
     now: Option<Res<'w, Time<Real>>>,
     gates: MessageWriter<'w, FameGateAppearanceRequested>,
     variables: Option<Res<'w, ProfileScenarioVariables>>,
@@ -76,10 +76,9 @@ pub(super) struct FamePresentation<'w> {
 pub(super) fn update_fame_and_apply_authored_fame_unlocks(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
-    scenario_award_points: Res<ScenarioAwardPointTotal>,
-    total_animals_released: Res<TotalAnimalsReleasedCount>,
+
     script_assets: Res<Assets<LuaScriptAsset>>,
-    script_index: Res<LuaScriptArchivePathIndex>,
+    script_sources: Res<LuaScriptSources>,
     active_world: Query<Entity, (With<WorldRoot>, With<WorldLoadCompleted>)>,
     mut worlds: Query<
         (
@@ -89,6 +88,9 @@ pub(super) fn update_fame_and_apply_authored_fame_unlocks(
             &GuestRatingFacts,
             &EarnedAwardFamePoints,
             &ZooRating,
+            &ScenarioAwardPointTotal,
+            &TotalAnimalsReleasedCount,
+            &mut UnlockedCatalogueDefinitionSet,
             Option<(&mut AuthoredFameScript, &mut FameAuthoredPresentation)>,
         ),
         With<WorldRoot>,
@@ -103,28 +105,39 @@ pub(super) fn update_fame_and_apply_authored_fame_unlocks(
         (With<ZooEntrance>, Allow<Disabled>),
     >,
     mut presentation: FamePresentation,
-    mut unlocks: ResMut<UnlockedCatalogueDefinitionSet>,
     mut changed: MessageWriter<ProgressionFactChanged>,
 ) {
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };
     let active_world = active_world.single().ok();
-    for (world, mut world_fame, animals, guests, awards, rating, script) in &mut worlds {
+    for (
+        world,
+        mut world_fame,
+        animals,
+        guests,
+        awards,
+        rating,
+        scenario_award_points,
+        total_animals_released,
+        mut unlocks,
+        script,
+    ) in &mut worlds
+    {
         let active = active_world == Some(world);
         let mut fame_written = false;
         let mut next_fame = *world_fame;
         if let Some((mut script, mut authored_ui)) = script {
             let gates = entrance_gate_definitions(world, definitions, &gates);
             let result = script.evaluate(
-                &script_index,
+                &script_sources,
                 &script_assets,
                 animals,
                 guests,
                 next_fame,
                 awards.0,
-                if active { scenario_award_points.0 } else { 0 },
-                if active { total_animals_released.0 } else { 0 },
+                scenario_award_points.0,
+                total_animals_released.0,
                 &gates,
                 presentation.variables.as_deref(),
             );
@@ -156,9 +169,9 @@ pub(super) fn update_fame_and_apply_authored_fame_unlocks(
                             .and_then(|(index, assets)| {
                                 index.borrow_loaded_localization_view(assets)
                             });
-                        if let (Some(view), Some(messages), Some(now)) = (
+                        if let (Some(view), Ok(mut messages), Some(now)) = (
                             view,
-                            presentation.messages.as_deref_mut(),
+                            presentation.messages.get_mut(world),
                             presentation.now.as_deref(),
                         ) {
                             if let Some(text) =

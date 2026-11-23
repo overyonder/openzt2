@@ -109,8 +109,7 @@ fn revision_zero_facility_records_keep_their_profit_and_age() {
 #[test]
 fn complete_absence_clears_retained_state_and_legacy_absence_preserves_it() {
     use super::super::economy_snapshot_application::{
-        apply_economy_snapshot_records_to_live_economy_resources_and_facilities,
-        RestoredFacilityEconomy,
+        apply_economy_snapshot_records, RestoredFacilityEconomy, RestoredZooEconomy,
     };
     use bevy::{ecs::system::SystemState, prelude::*};
     use openzt2_world_state::world_spawn::{
@@ -127,12 +126,15 @@ fn complete_absence_clears_retained_state_and_legacy_absence_preserves_it() {
     let mut app = App::new();
     app.add_plugins(PersistentIdIndexPlugin);
     let world = app.world_mut();
-    let root = world.spawn_empty().id();
-    world.init_resource::<ZooCash>();
-    world.init_resource::<AdmissionPrice>();
-    world.init_resource::<ZooAdmissionsOpen>();
-    world.init_resource::<MonthlyFinanceHistory>();
-    world.insert_resource(UnlimitedZooCash);
+    let root = world
+        .spawn((
+            ZooCash::default(),
+            AdmissionPrice::default(),
+            ZooAdmissionsOpen::default(),
+            MonthlyFinanceHistory::default(),
+            UnlimitedZooCash(true),
+        ))
+        .id();
     let entity = world
         .spawn((
             PersistentId(42),
@@ -147,10 +149,7 @@ fn complete_absence_clears_retained_state_and_legacy_absence_preserves_it() {
         Commands,
         Res<PersistentIdIndex>,
         Query<RestoredFacilityEconomy>,
-        ResMut<ZooCash>,
-        ResMut<AdmissionPrice>,
-        ResMut<ZooAdmissionsOpen>,
-        ResMut<MonthlyFinanceHistory>,
+        Query<RestoredZooEconomy>,
     )>::new(world);
     for complete in [false, true] {
         let mut saved = economy();
@@ -169,25 +168,15 @@ fn complete_absence_clears_retained_state_and_legacy_absence_preserves_it() {
             usage: None,
         }];
         {
-            let (
-                mut commands,
-                identities,
-                mut facilities,
-                mut cash,
-                mut price,
-                mut admissions,
-                mut history,
-            ) = state.get_mut(world).unwrap();
-            apply_economy_snapshot_records_to_live_economy_resources_and_facilities(
+            let (mut commands, identities, mut facilities, mut roots) =
+                state.get_mut(world).unwrap();
+            apply_economy_snapshot_records(
                 &mut commands,
                 saved,
                 &identities,
                 root,
                 &mut facilities,
-                &mut cash,
-                &mut price,
-                &mut admissions,
-                &mut history,
+                &mut roots,
             )
             .unwrap();
         }
@@ -202,7 +191,7 @@ fn complete_absence_clears_retained_state_and_legacy_absence_preserves_it() {
             world.get::<ServiceFacilityFactsResolved>(entity).is_none(),
             complete
         );
-        assert!(world.contains_resource::<UnlimitedZooCash>());
+        assert!(world.get::<UnlimitedZooCash>(root).unwrap().0);
         assert!(world.get::<EconomyUsage>(entity).is_none());
     }
     let mut saved = economy();

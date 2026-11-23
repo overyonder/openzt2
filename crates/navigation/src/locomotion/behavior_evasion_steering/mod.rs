@@ -1,6 +1,6 @@
 use avian3d::prelude::{Collider, ShapeCastConfig, SpatialQuery, SpatialQueryFilter};
 use bevy::prelude::*;
-use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
+use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_zoo_state::aquatic::tank_navigation_water::TankNavigationWater;
 use openzt2_zoo_state::{
     animal_lifecycle::types::AnimalVariant,
@@ -20,8 +20,10 @@ use super::{
 /// precedence. Route following and motion integration consume its one-point
 /// route exactly as they consume direct pursuit.
 pub(super) fn project_behavior_evasion_steering(
-    graph: Option<Res<ActiveTerrainDerivedNavigationGraph>>,
-    water: Query<&TankNavigationWater, With<WorldRoot>>,
+    roots: Query<(
+        &ActiveTerrainDerivedNavigationGraph,
+        Option<&TankNavigationWater>,
+    )>,
     surfaces: DrySurfaceEligibility,
     animal_policy: AnimalNavigationPolicy,
     fences: FenceNavigationPolicy,
@@ -31,6 +33,7 @@ pub(super) fn project_behavior_evasion_steering(
     mut actors: Query<(
         Entity,
         &BehaviorEvasionSteering,
+        &WorldMember,
         &GlobalTransform,
         &NavAgent,
         Option<&AnimalVariant>,
@@ -39,12 +42,12 @@ pub(super) fn project_behavior_evasion_steering(
         &mut Route,
     )>,
 ) {
-    let tank_water = water.single().ok();
-    let Some(graph) = graph else {
-        return;
-    };
-    for (actor, evasion, transform, agent, variant, mode, mut destination, mut route) in &mut actors
+    for (actor, evasion, member, transform, agent, variant, mode, mut destination, mut route) in
+        &mut actors
     {
+        let Ok((graph, tank_water)) = roots.get(member.root) else {
+            continue;
+        };
         if destination.request_id != evasion.request_id {
             continue;
         }
@@ -60,7 +63,7 @@ pub(super) fn project_behavior_evasion_steering(
             .max(agent.max_speed_mps);
         let clear = |direction: Vec2| {
             let endpoint = position + Vec3::new(direction.x, 0.0, direction.y) * lookahead;
-            let medium = surfaces.on_land(endpoint.xz());
+            let medium = surfaces.on_land(member.root, endpoint.xz());
             !(evasion.avoid_water && medium != Some(true)
                 || evasion.avoid_land && medium != Some(false))
                 && straight_line_sweep_admits_agent(
@@ -74,12 +77,19 @@ pub(super) fn project_behavior_evasion_steering(
                     None,
                 )
                 && !fences.world_segment_blocks_actor(
+                    member.root,
                     position,
                     endpoint,
                     agent.capabilities,
                     fences.actor_types.actor_types(actor),
                 )
-                && !fences.gate_blocks_movement(actor, agent.capabilities, position, endpoint)
+                && !fences.gate_blocks_movement(
+                    member.root,
+                    actor,
+                    agent.capabilities,
+                    position,
+                    endpoint,
+                )
         };
         let forward = evasion.direction.normalize_or_zero();
         let cast_direction = Dir3::new(Vec3::new(forward.x, 0.0, forward.y)).ok();

@@ -6,21 +6,16 @@ pub(super) struct Weather {
     pub(super) definition: AssetId,
 }
 
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct WeatherDuration {
-    pub(super) elapsed_ticks: u64,
-    pub(super) duration_ticks: u64,
-}
+#[derive(Component)]
+pub(super) struct WeatherDuration(pub(super) Timer);
 
 #[derive(Message)]
 pub(super) struct WeatherWelfareDue(pub(super) Entity);
 
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Component)]
 pub(super) struct WeatherTransition {
-    pub(super) from: AssetId,
     pub(super) to: AssetId,
-    pub(super) start_tick: u64,
-    pub(super) duration_ticks: u32,
+    pub(super) timer: Timer,
 }
 
 /// A caller operation retained only while its requested weather transition is

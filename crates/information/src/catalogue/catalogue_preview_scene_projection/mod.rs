@@ -77,7 +77,7 @@ pub(crate) fn project_selected_catalogue_entry_into_preview_scene(
     mut materials: ResMut<Assets<StandardMaterial>>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
-    selected_entry: Res<SelectedCatalogueEntry>,
+    selected_entry: Single<Ref<SelectedCatalogueEntry>>,
     mut asset_changes: Option<MessageReader<AssetEvent<WorldDefinitionAsset>>>,
     mut nodes: Query<(
         Entity,
@@ -87,6 +87,7 @@ pub(crate) fn project_selected_catalogue_entry_into_preview_scene(
         Option<&mut ImageNode>,
     )>,
 ) {
+    let selected_entry = selected_entry.into_inner();
     let assets_changed = asset_changes.as_mut().is_some_and(|events| {
         events
             .read()

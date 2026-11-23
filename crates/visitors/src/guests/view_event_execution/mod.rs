@@ -1,9 +1,10 @@
 //! Emits authored view events and delivers them to the guests watching.
 
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::WhenBehaviorAction;
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::{RunBehaviorViewAnimals, RunBehaviorViewEvent, RunningBehaviorInstruction};
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
-use openzt2_zoo_state::animal_behavior::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation;
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::mark_behavior_task_for_failure_and_stop_navigation;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
 use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorTaskFailure;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
@@ -43,9 +44,10 @@ pub(crate) struct BehaviorViewEventEmitted {
 }
 
 pub(super) fn emit_authored_view_events(
+    activation: On<WhenBehaviorAction<RunBehaviorViewEvent>>,
     world_assets: Res<Assets<WorldDefinitionAsset>>,
     world_definitions: Res<WorldDefinitions>,
-    clock: Res<ZooClock>,
+    clock: Single<&ZooClock>,
     mut tasks: Query<
         (
             Entity,
@@ -64,7 +66,9 @@ pub(super) fn emit_authored_view_events(
     let Some(definitions) = world_definitions.get(&world_assets) else {
         return;
     };
-    for (source, definition, (task, instruction, running_action)) in &mut tasks {
+    for (source, definition, (task, instruction, running_action)) in
+        std::iter::once(tasks.get_mut(activation.entity)).flatten()
+    {
         if task.next_action_tick > clock.tick {
             continue;
         }

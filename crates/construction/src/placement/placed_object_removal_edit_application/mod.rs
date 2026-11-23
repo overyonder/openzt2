@@ -10,7 +10,6 @@ use openzt2_zoo_state::placement::object_placement_definition_queries::resolve_o
 use openzt2_zoo_state::placement::placed_object_types::PlacedObjectDefinitionReference;
 use openzt2_zoo_state::placement::placed_object_types::PlacedObjectFootprintOccupancy;
 use openzt2_zoo_state::placement::placement_occupancy_index::PlacedObjectFootprintQueries;
-use openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementCellCollectionScratch;
 use openzt2_zoo_state::placement::placement_transaction_types::PreparedObjectPlacementMutation;
 
 pub(super) fn apply_prepared_placed_object_removal_edit(
@@ -19,7 +18,7 @@ pub(super) fn apply_prepared_placed_object_removal_edit(
     catalogue: openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView<'_>,
     root: Entity,
     placement: &PlacedObjectFootprintQueries,
-    scratch: &mut ObjectPlacementCellCollectionScratch,
+    scratch: &mut Vec<IVec2>,
     footprints: &ScenePlacementFootprints,
     placed: &Query<(
         &PersistentId,
@@ -50,7 +49,7 @@ pub(super) fn apply_prepared_placed_object_removal_edit(
             let exact_cells = collect_occupied_placement_cells_for_transform(
                 footprints.resolve(definition, Some(&edit.prefab)),
                 transform,
-                &mut scratch.cells,
+                scratch,
             )
             .is_some_and(|expected| expected == edit.cells.as_ref());
             Some(

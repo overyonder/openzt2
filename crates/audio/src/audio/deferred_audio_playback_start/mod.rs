@@ -6,6 +6,7 @@ use bevy::{
 use super::audio_player_spawning::{
     calculate_mixed_audio_gain, AudioCueSelection, AudioSourceGain, DeferredAudioPlayback,
 };
+use super::audio_stage_playback_projection::EnvironmentVoiceGain;
 use super::spatial_cue_distance::{SpatialCueDistance, SpatialCueListener};
 use openzt2_interface_state::settings::audio_settings_types::AudioSettings;
 
@@ -20,25 +21,37 @@ pub(super) fn start_deferred_audio_playback_after_delays_finish(
         &AudioSourceGain,
         &mut DeferredAudioPlayback,
         Option<&SpatialCueDistance>,
+        Option<&ChildOf>,
     )>,
+    environment_gains: Query<&EnvironmentVoiceGain>,
 ) {
-    for (playback_entity, selection, source_gain, mut deferred_playback, distance) in
+    let (listener_pose, _) = listener.snapshot();
+    for (playback_entity, selection, source_gain, mut deferred_playback, distance, owner) in
         &mut deferred_audio
     {
         deferred_playback.timer.tick(time.delta());
         if deferred_playback.timer.is_finished() {
-            let gain = distance
-                .copied()
-                .zip(selection.emitter)
-                .map_or(1.0, |(distance, emitter)| listener.gain(distance, emitter));
+            let gain =
+                distance
+                    .copied()
+                    .zip(selection.emitter)
+                    .map_or(1.0, |(distance, emitter)| {
+                        listener.emitter(emitter).map_or(0.0, |(position, water)| {
+                            listener_pose.gain(distance, position, water)
+                        })
+                    });
             let mut playback = deferred_playback.settings;
+            let environment_gain = owner
+                .and_then(|owner| environment_gains.get(owner.parent()).ok())
+                .map_or(1.0, |gain| gain.0);
             playback.volume = Volume::Linear(
                 calculate_mixed_audio_gain(
                     &settings,
                     selection.usage,
                     selection.emitter.is_some(),
                     source_gain.0,
-                ) * gain,
+                ) * gain
+                    * environment_gain,
             );
             commands
                 .entity(playback_entity)

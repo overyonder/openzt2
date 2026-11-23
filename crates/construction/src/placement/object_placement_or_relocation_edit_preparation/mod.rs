@@ -38,7 +38,6 @@ use openzt2_zoo_state::placement::object_placement_validation::ObjectPlacementAu
 use openzt2_zoo_state::placement::placed_object_types::PlacedObjectDefinitionReference;
 use openzt2_zoo_state::placement::placed_object_types::PlacedObjectFootprintOccupancy;
 use openzt2_zoo_state::placement::placement_occupancy_index::PlacedObjectFootprintQueries;
-use openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementCellCollectionScratch;
 use openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementPrefabSource;
 use openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementPreviewPermissionFacts;
 use openzt2_zoo_state::placement::placement_preview_types::RelocatingPlacedObject;
@@ -89,7 +88,7 @@ pub(super) fn prepare_object_placement_or_relocation_edit(
         Res<ScenePlacementFootprints>,
     ),
     mut allocators: Query<&mut PersistentIdAllocator>,
-    mut scratch: ResMut<ObjectPlacementCellCollectionScratch>,
+    mut scratch: Local<Vec<IVec2>>,
     (mut prepared, mut topology_prepared): (
         MessageWriter<ObjectPlacementEditPrepared>,
         MessageWriter<TopologyEditPrepared>,
@@ -250,7 +249,7 @@ pub(super) fn prepare_object_placement_or_relocation_edit(
             let Some(cells) = collect_occupied_placement_cells_for_transform(
                 geometry,
                 &preview.transform,
-                &mut scratch.cells,
+                &mut scratch,
             ) else {
                 reject_object_placement_edit_preparation(
                     &mut rejected,
@@ -296,7 +295,7 @@ pub(super) fn prepare_object_placement_or_relocation_edit(
                             .cells(occupancy.eighth_turns),
                         occupancy.origin,
                         occupancy.eighth_turns / 2,
-                        &mut scratch.cells,
+                        &mut scratch,
                     )
                     .map(<[IVec2]>::to_vec)
                 else {

@@ -5,7 +5,7 @@ use bevy_hanabi::EffectAsset;
 use openzt2_game_data::{
     particle::{
         authored_particle_system::{
-            AuthoredParticleCurvePoint, AuthoredParticleSpawnPolicy, AuthoredParticleSystemEmitter,
+            AuthoredParticleSpawnPolicy, AuthoredParticleSystemEmitter,
             AuthoredParticleSystemModifier, ParticleEffectSimulationClock,
         },
         legacy_nif_particle_effect::LegacyNifParticleModifier,
@@ -22,6 +22,7 @@ use super::{
     effect_document_runtime_queries::{
         collect_root_effect_emitter_ids, create_collision_spawn_initialization,
     },
+    effect_runtime_types::ControlledEffectEmissionSettings,
     legacy_nif_hanabi_effect_preparation::prepare_legacy_nif_particle_effect_as_hanabi_effect_asset,
     ParticleEffectDocumentAsset,
 };
@@ -38,12 +39,8 @@ pub(super) struct PreparedParticleEmitter {
     pub(super) renderers: Vec<PreparedParticleRenderer>,
     #[dependency]
     pub(super) prototype_mesh: Option<Handle<GltfMesh>>,
-    pub(super) clock: ParticleEffectSimulationClock,
-    pub(super) retires_when_empty: bool,
-    pub(super) emission_window: Option<ParticleEmissionWindow>,
-    pub(super) birth_rate_curve: Option<(Box<[AuthoredParticleCurvePoint]>, bool)>,
+    pub(super) emission_settings: ControlledEffectEmissionSettings,
     pub(super) authored_initial_size: Option<f32>,
-    pub(super) manually_driven: bool,
     pub(super) uses_plane: bool,
 }
 
@@ -56,7 +53,7 @@ pub(super) struct PreparedParticleRenderer {
     pub(super) sort_by_distance: bool,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct ParticleEmissionWindow {
     pub(super) start: f32,
     pub(super) stop: f32,
@@ -65,18 +62,33 @@ pub(super) struct ParticleEmissionWindow {
 }
 
 impl ParticleEmissionWindow {
-    pub(super) fn contains(self, elapsed: f32) -> bool {
+    pub(super) fn sample(self, elapsed: f32) -> (bool, bool) {
         let time = self.phase + elapsed * self.frequency;
-        (self.start..=self.stop).contains(&time)
-    }
-
-    pub(super) fn has_ended(self, elapsed: f32) -> bool {
-        let time = self.phase + elapsed * self.frequency;
-        if self.frequency < 0.0 {
+        let closed = if self.frequency < 0.0 {
             time < self.start
         } else {
             time > self.stop
+        };
+        ((self.start..=self.stop).contains(&time), closed)
+    }
+
+    pub(super) fn active_interval(self, start: f32, end: f32) -> (f32, f32) {
+        if self.start > self.stop {
+            return (start, start);
         }
+        if self.frequency == 0.0 {
+            return if self.sample(start).0 {
+                (start, end)
+            } else {
+                (start, start)
+            };
+        }
+        let window_start = (self.start - self.phase) / self.frequency;
+        let window_end = (self.stop - self.phase) / self.frequency;
+        (
+            start.max(window_start.min(window_end)),
+            end.min(window_start.max(window_end)),
+        )
     }
 }
 
@@ -211,37 +223,44 @@ pub(crate) fn prepare_particle_effect_document(
                         collision_children,
                         renderers,
                         prototype_mesh: None,
-                        clock: emitter.clock,
-                        retires_when_empty: emitter_tree_can_retire_when_empty(
-                            id,
-                            &emitters,
-                            &mut retiring_emitters,
-                        ),
-                        emission_window: emitter.modifiers.iter().find_map(
-                            |modifier| match modifier {
-                                AuthoredParticleSystemModifier::EmitWindow {
-                                    start_seconds,
-                                    stop_seconds,
-                                    frequency,
-                                    phase,
-                                } => Some(ParticleEmissionWindow {
-                                    start: *start_seconds,
-                                    stop: *stop_seconds,
-                                    frequency: *frequency,
-                                    phase: *phase,
-                                }),
-                                _ => None,
-                            },
-                        ),
-                        birth_rate_curve: emitter.modifiers.iter().find_map(|modifier| {
-                            match modifier {
-                                AuthoredParticleSystemModifier::BirthRateCurve {
-                                    points,
-                                    looped,
-                                } => Some((points.clone().into_boxed_slice(), *looped)),
-                                _ => None,
-                            }
-                        }),
+                        emission_settings: ControlledEffectEmissionSettings {
+                            clock: emitter.clock,
+                            retires_when_empty: emitter_tree_can_retire_when_empty(
+                                id,
+                                &emitters,
+                                &mut retiring_emitters,
+                            ),
+                            emission_window: emitter.modifiers.iter().find_map(|modifier| {
+                                match modifier {
+                                    AuthoredParticleSystemModifier::EmitWindow {
+                                        start_seconds,
+                                        stop_seconds,
+                                        frequency,
+                                        phase,
+                                    } => Some(ParticleEmissionWindow {
+                                        start: *start_seconds,
+                                        stop: *stop_seconds,
+                                        frequency: *frequency,
+                                        phase: *phase,
+                                    }),
+                                    _ => None,
+                                }
+                            }),
+                            birth_rate_curve: emitter.modifiers.iter().find_map(|modifier| {
+                                match modifier {
+                                    AuthoredParticleSystemModifier::BirthRateCurve {
+                                        points,
+                                        looped,
+                                    } => Some((points.clone().into(), *looped)),
+                                    _ => None,
+                                }
+                            }),
+                            manually_driven: matches!(
+                                emitter.spawn,
+                                AuthoredParticleSpawnPolicy::Manual
+                                    | AuthoredParticleSpawnPolicy::Curve { .. },
+                            ),
+                        },
                         authored_initial_size: Some(
                             emitter
                                 .modifiers
@@ -254,11 +273,6 @@ pub(crate) fn prepare_particle_effect_document(
                                     _ => None,
                                 })
                                 .unwrap_or_default(),
-                        ),
-                        manually_driven: matches!(
-                            emitter.spawn,
-                            AuthoredParticleSpawnPolicy::Manual
-                                | AuthoredParticleSpawnPolicy::Curve { .. },
                         ),
                         uses_plane,
                     },
@@ -291,17 +305,19 @@ pub(crate) fn prepare_particle_effect_document(
                     collision_children: Vec::new(),
                     renderers: Vec::new(),
                     prototype_mesh,
-                    clock: ParticleEffectSimulationClock::Presentation,
-                    retires_when_empty: true,
-                    emission_window: Some(ParticleEmissionWindow {
-                        start: effect.emit_start_seconds,
-                        stop: effect.emit_stop_seconds,
-                        frequency: 1.0,
-                        phase: 0.0,
-                    }),
-                    birth_rate_curve: None,
+                    emission_settings: ControlledEffectEmissionSettings {
+                        clock: ParticleEffectSimulationClock::Presentation,
+                        retires_when_empty: true,
+                        emission_window: Some(ParticleEmissionWindow {
+                            start: effect.emit_start_seconds,
+                            stop: effect.emit_stop_seconds,
+                            frequency: 1.0,
+                            phase: 0.0,
+                        }),
+                        birth_rate_curve: None,
+                        manually_driven: false,
+                    },
                     authored_initial_size: None,
-                    manually_driven: false,
                     uses_plane: false,
                 },
             );

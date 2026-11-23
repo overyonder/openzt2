@@ -70,11 +70,11 @@ pub(super) fn evaluate_challenge_manager_and_validate_one_picked_challenge(
     )>,
     mut outputs: ScenarioLuaOutputs,
 ) {
-    let Some(clock) = fact_sources.zoo_clock() else {
-        return;
-    };
     let Ok((root, selection, mut rng, next_evaluation, instant_decided)) = roots.single_mut()
     else {
+        return;
+    };
+    let Some(clock) = fact_sources.zoo_clock(root) else {
         return;
     };
     if selection.mode != WorldSessionMode::Challenge {
@@ -136,7 +136,7 @@ pub(super) fn evaluate_challenge_manager_and_validate_one_picked_challenge(
         commands
             .entity(root)
             .insert(ScenarioInstantChallengeDecided);
-        let eligibility = fact_sources.read_instant_challenge_eligibility();
+        let eligibility = fact_sources.read_instant_challenge_eligibility(root);
         let allowed = eligibility.is_some_and(|eligibility| eligibility.allows_instant_challenge());
         info!(
             tick = clock.tick,

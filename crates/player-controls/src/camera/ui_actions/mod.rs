@@ -17,6 +17,7 @@ use openzt2_interface_state::immersive_modes::immersive_mode_state_types::Active
 use openzt2_interface_state::information::entity_selection_types::WorldUiSelection;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentRoot;
+use openzt2_interface_state::ui::authored_ui_node_projection_components::UiEdgePanSurface;
 use openzt2_world_state::world_spawn::world_terrain_hydration::WorldTerrainHorizontalBounds;
 use openzt2_zoo_state::staff::staff_assignment_types::StaffAssignmentMode;
 
@@ -27,7 +28,7 @@ use super::camera_runtime_state_types::CameraDefinition;
 use super::camera_runtime_state_types::CameraMode;
 use super::camera_runtime_state_types::CameraMouseLook;
 use super::camera_runtime_state_types::ZooCamera;
-use crate::camera::camera_execution_types::CameraIntent;
+use crate::camera::camera_execution_types::{CameraIntent, CameraTuning};
 use openzt2_interface_state::ui::authored_ui_action_projection_components::UiCameraActions;
 use openzt2_interface_state::ui::authored_ui_activation_contracts::UiNodeActivated;
 
@@ -37,6 +38,11 @@ pub(super) fn route_camera_ui_actions(
         MessageReader<openzt2_interface_state::input::input_types::ActionRequest>,
     ),
     documents: Res<Assets<UiDocumentAsset>>,
+    (parents, edges, camera_policies): (
+        Query<&ChildOf>,
+        Query<&UiEdgePanSurface>,
+        Query<(&CameraMode, &CameraTuning), With<ZooCamera>>,
+    ),
     action_nodes: Query<(&UiCameraActions, &UiDocumentOwner)>,
     action_geometry: Query<(&ComputedNode, &UiGlobalTransform)>,
     pointers: Query<(&PointerId, &PointerLocation)>,
@@ -89,6 +95,9 @@ pub(super) fn route_camera_ui_actions(
             continue;
         };
         let records = range.authored_action_records(document);
+        let edge_surface = std::iter::once(activation.node)
+            .chain(parents.iter_ancestors::<ChildOf>(activation.node))
+            .find(|node| edges.contains(*node));
         for record in records {
             if activation.trigger != record.trigger {
                 continue;
@@ -101,7 +110,8 @@ pub(super) fn route_camera_ui_actions(
                     if let Some(subject) = selected.subject() {
                         for (_, definition, _, _) in &mut cameras {
                             set_mode.write(SetCameraMode {
-                                mode: CameraMode::Follow(subject),
+                                mode: CameraMode::Follow,
+                                subject: Some(subject),
                                 definition: definition.0,
                                 transition_seconds: None,
                             });
@@ -131,9 +141,22 @@ pub(super) fn route_camera_ui_actions(
                             std::f32::consts::FRAC_1_SQRT_2,
                         ),
                     };
-                    cameras
-                        .iter_mut()
-                        .for_each(|(_, _, mut intent, _)| intent.ui_pan = axis);
+                    for (camera, _, intent, _) in &mut cameras {
+                        if let Some(surface) = edge_surface {
+                            if camera_policies.get(camera).is_ok_and(|(mode, tuning)| {
+                                *mode == CameraMode::Overhead && tuning.edge_scroll
+                            }) && edges.get(surface).is_ok_and(|surface| surface.0)
+                            {
+                                intent
+                                    .map_unchanged(|intent| &mut intent.edge_pan)
+                                    .set_if_neq(Some((surface, axis)));
+                            }
+                        } else {
+                            intent
+                                .map_unchanged(|intent| &mut intent.ui_pan)
+                                .set_if_neq(axis);
+                        }
+                    }
                 }
                 UiCameraAction::FocusCameraOnSelectedEntity => {
                     if let Some(world) = selected
@@ -184,7 +207,8 @@ pub(super) fn route_camera_ui_actions(
                     if let Some(subject) = selected.subject() {
                         for (_, definition, _, _) in &mut cameras {
                             set_mode.write(SetCameraMode {
-                                mode: CameraMode::FirstPerson(subject),
+                                mode: CameraMode::FirstPerson,
+                                subject: Some(subject),
                                 definition: definition.0,
                                 transition_seconds: None,
                             });
@@ -232,9 +256,17 @@ pub(super) fn route_camera_ui_actions(
                         .for_each(|(_, _, mut intent, _)| intent.ui_turn = 0.0);
                 }
                 UiCameraAction::StopCameraPan => {
-                    cameras
-                        .iter_mut()
-                        .for_each(|(_, _, mut intent, _)| intent.ui_pan = Vec2::ZERO);
+                    for (_, _, intent, _) in &mut cameras {
+                        if edge_surface.is_some() {
+                            intent
+                                .map_unchanged(|intent| &mut intent.edge_pan)
+                                .set_if_neq(None);
+                        } else {
+                            intent
+                                .map_unchanged(|intent| &mut intent.ui_pan)
+                                .set_if_neq(Vec2::ZERO);
+                        }
+                    }
                 }
             }
         }

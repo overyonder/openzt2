@@ -1,4 +1,6 @@
 //! Bounded entry into the authored task executor for idle guests.
+
+use openzt2_zoo_state::behavior_task_execution_types::allocate_behavior_execution_id;
 mod target_index;
 use openzt2_zoo_state::animal_behavior::behavior_token_types::{
     BehaviorSelfToken, ClaimedBehaviorSelfToken,
@@ -30,7 +32,7 @@ use openzt2_world_state::animation_graph::animation_graph_playback_state_types::
 use openzt2_world_state::animation_graph::animation_presentation_relationship_types::AnimationPresentations;
 use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackController;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionPhase;
-use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionSequence;
+use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskGeneration;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
 use openzt2_zoo_state::economy::price_effect::BehaviorPriceEffectContext;
 use openzt2_zoo_state::animal_lifecycle::types::Animal;
@@ -70,10 +72,10 @@ pub(super) fn select_idle_guest_tasks(
     ),
     world_assets: Res<Assets<WorldDefinitionAsset>>,
     world_definitions: Res<WorldDefinitions>,
-    clock: Res<ZooClock>,
+    clock: Single<&ZooClock>,
     fixed_time: Res<Time<Fixed>>,
     (price_effect, biomes): (BehaviorPriceEffectContext, BehaviorTargetBiome),
-    mut executions: ResMut<BehaviorTaskExecutionSequence>,
+    mut behavior_generations: Query<&mut BehaviorTaskGeneration>,
     mut guests: Query<
         (
             Entity,
@@ -427,7 +429,7 @@ pub(super) fn select_idle_guest_tasks(
                     task,
                     policy.outside_range_need_value,
                     transform.translation().distance(target_position),
-                    || biomes.at(target_position),
+                    || biomes.at(world.root, target_position),
                     source_need,
                     |value| {
                         price_effect.sample(value, Some(target), |upper| {
@@ -706,17 +708,13 @@ pub(super) fn select_idle_guest_tasks(
                 commands.entity(guest).insert(cooldowns);
             }
         }
-        // An unsupported winning action does not promote a lower-ranked choice.
-        if task.execution.has_unsupported_suffix()
-            || task.completion.has_unsupported_suffix()
-            || task.failure.has_unsupported_suffix()
-        {
-            debug!(?guest, task = %task.name, "idle guest's best task has unsupported actions");
-            continue;
-        }
         debug!(?guest, task = %task.name, ?target, self_target = target == guest,
             "idle guest chose a task");
-        let execution_id = executions.next();
+        let execution_id = allocate_behavior_execution_id(
+            guest,
+            behavior_generations.get_mut(guest).ok(),
+            &mut commands,
+        );
         if let Some(token) = object.filter(|&entity| tokens.contains(entity)) {
             commands
                 .entity(token)

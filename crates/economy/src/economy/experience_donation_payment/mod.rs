@@ -5,12 +5,12 @@ use openzt2_world_state::{
     world_spawn::world_membership_types::WorldMember,
 };
 use openzt2_zoo_state::{
-    animal_behavior::{
-        behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation,
-        behavior_token_types::{BehaviorSelfToken, ClaimedBehaviorSelfToken},
-    },
+    animal_behavior::behavior_token_types::{BehaviorSelfToken, ClaimedBehaviorSelfToken},
     behavior_task_execution_types::{
-        running_actions::{BehaviorInstructionId, RunBehaviorEconomy, RunningBehaviorInstruction},
+        running_actions::{
+            mark_behavior_task_for_failure_and_stop_navigation, BehaviorInstructionId,
+            RunBehaviorEconomy, RunningBehaviorInstruction, WhenBehaviorAction,
+        },
         BehaviorTaskExecutionState, PendingBehaviorTaskFailure,
     },
     donations::{
@@ -33,8 +33,8 @@ use openzt2_zoo_state::{
 pub(super) struct ShowDonationInstruction(BehaviorInstructionId);
 
 pub(super) fn request_experience_donation_payments(
+    activation: On<WhenBehaviorAction<RunBehaviorEconomy>>,
     mut commands: Commands,
-    clock: Res<ZooClock>,
     guests: Query<
         (
             Entity,
@@ -60,67 +60,71 @@ pub(super) fn request_experience_donation_payments(
     mut payments: MessageWriter<TransactionRequest>,
 ) {
     let donate = AssetId::from_key("donate");
-    for (guest, world, task, instruction, economy) in &guests {
-        if !instruction.is_current(task) || task.next_action_tick > clock.tick {
-            continue;
-        }
-        let (Some(token), Some(acceptor)) = (task.object, task.target) else {
-            continue;
-        };
-        let Ok((owner, token, claim, mut donation)) = tokens.get_mut(token) else {
-            continue;
-        };
-        if owner.parent() != guest || claim.execution_id != task.execution_id || donation.submitted
-        {
-            continue;
-        }
-
-        if token.name != AssetId::from_key("t_donationshow") || economy.transaction != donate {
-            continue;
-        }
-        if !subjects
-            .get(donation.subject)
-            .is_ok_and(|member| member.root == world.root)
-            || !boxes
-                .get(acceptor)
-                .is_ok_and(|member| member.root == world.root)
-            || !donation.amount.is_positive()
-        {
-            mark_behavior_task_for_failure_and_stop_navigation(guest, &mut commands);
-            continue;
-        }
-        donation.submitted = true;
-        commands
-            .entity(guest)
-            .insert(DonationPaymentRequested { submitted: true });
-        let operation = commands.spawn((
-            *world,
-            PendingDonationPayment {
-                guest,
-                acceptor,
-                subject: donation.subject,
-                amount: donation.amount,
-            },
-            DonationPaymentState::Pending,
-            ShowDonationInstruction(instruction.id()),
-        ));
-        payments.write(TransactionRequest {
-            operation: operation.id(),
-            debit: Account::Entity(guest),
-            credit: Account::Zoo,
-            amount: donation.amount,
-            kind: TransactionKind::Donation,
-            subject: Some(acceptor),
-        });
+    let Ok((guest, world, task, instruction, economy)) = guests.get(activation.entity) else {
+        return;
+    };
+    if instruction.id() != activation.instruction || !instruction.is_current(task) {
+        return;
     }
+    let (Some(token), Some(acceptor)) = (task.object, task.target) else {
+        return;
+    };
+    let Ok((owner, token, claim, mut donation)) = tokens.get_mut(token) else {
+        return;
+    };
+    if owner.parent() != guest || claim.execution_id != task.execution_id || donation.submitted {
+        return;
+    }
+
+    if token.name != AssetId::from_key("t_donationshow") || economy.transaction != donate {
+        return;
+    }
+    if !subjects
+        .get(donation.subject)
+        .is_ok_and(|member| member.root == world.root)
+        || !boxes
+            .get(acceptor)
+            .is_ok_and(|member| member.root == world.root)
+        || !donation.amount.is_positive()
+    {
+        mark_behavior_task_for_failure_and_stop_navigation(guest, &mut commands);
+        return;
+    }
+    donation.submitted = true;
+    commands
+        .entity(guest)
+        .insert(DonationPaymentRequested { submitted: true });
+    let operation = commands.spawn((
+        *world,
+        PendingDonationPayment {
+            guest,
+            acceptor,
+            subject: donation.subject,
+            amount: donation.amount,
+        },
+        DonationPaymentState::Pending,
+        ShowDonationInstruction(instruction.id()),
+    ));
+    payments.write(TransactionRequest {
+        operation: operation.id(),
+        debit: Account::Entity(guest),
+        credit: Account::Zoo,
+        amount: donation.amount,
+        kind: TransactionKind::Donation,
+        subject: Some(acceptor),
+    });
 }
 
 pub(super) fn resume_show_donation_instructions_after_payment(
     mut commands: Commands,
-    clock: Res<ZooClock>,
+    clocks: Query<&ZooClock>,
     mut completed: MessageReader<TransactionCompleted>,
     mut rejected: MessageReader<TransactionRejected>,
-    payments: Query<(&PendingDonationPayment, &ShowDonationInstruction)>,
+    payments: Query<(
+        &PendingDonationPayment,
+        &ShowDonationInstruction,
+        &WorldMember,
+    )>,
     actors: Query<
         (&BehaviorTaskExecutionState, &RunningBehaviorInstruction),
         With<RunBehaviorEconomy>,
@@ -131,7 +135,7 @@ pub(super) fn resume_show_donation_instructions_after_payment(
         .map(|result| (result.operation, true))
         .chain(rejected.read().map(|result| (result.operation, false)));
     for (operation, accepted) in results {
-        let Ok((payment, owner)) = payments.get(operation) else {
+        let Ok((payment, owner, member)) = payments.get(operation) else {
             continue;
         };
         let Ok((task, instruction)) = actors.get(payment.guest) else {
@@ -139,6 +143,9 @@ pub(super) fn resume_show_donation_instructions_after_payment(
         };
         if instruction.id() == owner.0 && instruction.is_current(task) {
             if accepted {
+                let Ok(clock) = clocks.get(member.root) else {
+                    continue;
+                };
                 instruction.complete(payment.guest, clock.tick, &mut commands);
             } else {
                 mark_behavior_task_for_failure_and_stop_navigation(payment.guest, &mut commands);

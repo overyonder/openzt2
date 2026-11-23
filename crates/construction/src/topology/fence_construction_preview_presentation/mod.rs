@@ -20,7 +20,9 @@ use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
 use crate::topology::topology_construction_planning::GateHostEdges;
 use crate::topology::topology_construction_preview_types::FencePreview;
-use crate::topology::topology_presentation_types::TopologyPresentation;
+use crate::topology::topology_presentation_types::{
+    EmptyTopologyPresentation, TopologyPresentationRoot,
+};
 use openzt2_zoo_state::topology::fence_segment_prefab_selection::select_authored_fence_segment_prefab_for_adjacent_topology;
 use openzt2_zoo_state::topology::fence_segment_prefab_selection::select_reciprocal_fence_curve_partners;
 use openzt2_zoo_state::topology::fence_segment_presentation_types::FenceSegmentPrefab;
@@ -96,11 +98,12 @@ pub(super) fn reconcile_fence_construction_preview_presentation_segments(
     incident: Query<(Option<&FencesStartingHere>, Option<&FencesEndingHere>)>,
     gate_hosts: GateHostEdges,
     nodes: Query<&TopologyNode>,
+    presentation_roots: Query<(), With<TopologyPresentationRoot>>,
     mut presentation_segments: Query<(
         Entity,
         &FenceConstructionPreviewPresentationSegment,
         Option<&mut FenceSegmentPrefab>,
-        Option<&TopologyPresentation>,
+        Option<&Children>,
         &mut Transform,
         &mut FenceTerrainEndpointPresentationCells,
     )>,
@@ -175,24 +178,22 @@ pub(super) fn reconcile_fence_construction_preview_presentation_segments(
             let transform = calculate_topology_edge_world_transform(first, second, *grid);
             let cells = FenceTerrainEndpointPresentationCells { first, second };
             if let Some(entity) = entity_at_index[segment_index] {
-                let Ok((
-                    _,
-                    _,
-                    current_prefab,
-                    presentation,
-                    mut current_transform,
-                    mut current_cells,
-                )) = presentation_segments.get_mut(entity)
+                let Ok((_, _, current_prefab, children, mut current_transform, mut current_cells)) =
+                    presentation_segments.get_mut(entity)
                 else {
                     continue;
                 };
                 current_transform.set_if_neq(transform);
                 current_cells.set_if_neq(cells);
                 if current_prefab.as_deref() != Some(&prefab) {
-                    if let Some(TopologyPresentation(Some(presentation_root))) = presentation {
-                        commands.entity(*presentation_root).despawn();
+                    for child in children.into_iter().flat_map(|children| children.iter()) {
+                        if presentation_roots.contains(child) {
+                            commands.entity(child).try_despawn();
+                        }
                     }
-                    commands.entity(entity).remove::<TopologyPresentation>();
+                    commands
+                        .entity(entity)
+                        .remove::<EmptyTopologyPresentation>();
                     if let Some(mut current_prefab) = current_prefab {
                         *current_prefab = prefab;
                     } else {
@@ -219,8 +220,9 @@ pub(super) fn project_fence_construction_preview_validity_onto_prefab_model_tint
     documents: Res<Assets<UiDocumentAsset>>,
     roots: Query<&UiDocumentRoot>,
     previews: Query<&ConstructionPreview, With<FencePreview>>,
-    presentation_segments: Query<(&FencePreviewSegmentOf, &TopologyPresentation)>,
+    presentation_segments: Query<(&FencePreviewSegmentOf, &Children)>,
     children: Query<&Children>,
+    roots_of_presentations: Query<(), With<TopologyPresentationRoot>>,
     mut renderables: Query<(Entity, Option<&mut PrefabModelTint>), With<PrefabRenderable>>,
 ) {
     let Some(policy) = roots.iter().find_map(|root| {
@@ -237,10 +239,13 @@ pub(super) fn project_fence_construction_preview_validity_onto_prefab_model_tint
     }) else {
         return;
     };
-    for (segment, presentation) in &presentation_segments {
-        let (Ok(preview), TopologyPresentation(Some(presentation_root))) =
-            (previews.get(segment.0), presentation)
-        else {
+    for (segment, segment_children) in &presentation_segments {
+        let (Ok(preview), Some(presentation_root)) = (
+            previews.get(segment.0),
+            segment_children
+                .iter()
+                .find(|&child| roots_of_presentations.contains(child)),
+        ) else {
             continue;
         };
         let authored_srgba = if matches!(preview.validity, PlacementValidity::Valid { .. }) {
@@ -254,7 +259,7 @@ pub(super) fn project_fence_construction_preview_validity_onto_prefab_model_tint
             authored_srgba[2],
             authored_srgba[3],
         );
-        for entity in children.iter_descendants_depth_first::<Children>(*presentation_root) {
+        for entity in children.iter_descendants_depth_first::<Children>(presentation_root) {
             let Ok((entity, current)) = renderables.get_mut(entity) else {
                 continue;
             };

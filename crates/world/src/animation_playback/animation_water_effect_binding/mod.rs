@@ -109,7 +109,7 @@ pub(super) fn update_animation_water_effect_planes(
     pending: Query<(Entity, &PendingAnimationWaterEffect, &ChildOf)>,
     transforms: Query<&GlobalTransform>,
     chunks: Query<&ViewVisibility, With<TerrainChunk>>,
-    terrain_index: Res<TerrainIndex>,
+    terrain_index: Single<Ref<TerrainIndex>>,
     changed: Query<Entity, (With<AnimationWaterEffect>, Changed<GlobalTransform>)>,
     mut effects: Query<(
         Entity,
@@ -131,6 +131,7 @@ pub(super) fn update_animation_water_effect_planes(
     regions: TerrainWaterRegionQuery,
     terrains: Res<Assets<TerrainAsset>>,
 ) {
+    let terrain_index = terrain_index.into_inner();
     spawn_ready_animation_water_effects(
         &mut commands,
         &pending,

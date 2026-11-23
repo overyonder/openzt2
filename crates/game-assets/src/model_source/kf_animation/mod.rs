@@ -21,9 +21,11 @@ use super::{
         convert_netimmerse_xyz_euler_angles_to_quaternion, convert_wxyz_quaternion_to_xyzw,
         normalize_netimmerse_rotation_quaternion, NetImmerseKeyCurve, NetImmerseSourceKeyframe,
     },
-    kf_animation_source_extraction::extract_netimmerse_kf_animation_markers,
+    kf_animation_source_extraction::extract_netimmerse_kf_text_keys,
     netimmerse_nif_source::{
-        animation_controller_source_types::{NetImmerseNiKeyframeData, NetImmerseNiTimeController},
+        animation_controller_source_types::{
+            NetImmerseNiControllerSequence, NetImmerseNiKeyframeData, NetImmerseNiTimeController,
+        },
         block_payload::NetImmerseNifBlockPayload,
         document_source_types::NetImmerseNifDocument,
         interpolated_key_source_types::NetImmerseFloatKeyGroup,
@@ -33,20 +35,9 @@ use super::{
 pub(super) fn lower_netimmerse_kf_clip(
     path: &str,
     document: &NetImmerseNifDocument,
+    sequence: &NetImmerseNiControllerSequence,
     text_keys: &[AuthoredAnimationTextKey],
 ) -> Result<(AnimationClip, AuthoredAnimationClipMetadata), ConversionError> {
-    let mut sequences = document.blocks().filter_map(|block| match &block.payload {
-        NetImmerseNifBlockPayload::NiControllerSequence(sequence) => Some(sequence),
-        _ => None,
-    });
-    let sequence = sequences.next().ok_or(ConversionError::InvalidSource(
-        "KF has no controller sequence",
-    ))?;
-    if sequences.next().is_some() {
-        return Err(ConversionError::InvalidSource(
-            "KF has multiple controller sequences",
-        ));
-    }
     let mut clip = AnimationClip::default();
     let mut targets = BTreeSet::new();
     let mut duration = 0.001_f32;
@@ -101,6 +92,8 @@ pub(super) fn lower_netimmerse_kf_clip(
             super::native_animation_source_lowering::sample_root_motion(&clip, name);
         (Some(joint), Some(motion))
     });
+    let (animation_markers, authored_animation_text_keys) =
+        extract_netimmerse_kf_text_keys(document, sequence.text_keys_ref, text_keys)?;
     Ok((
         clip,
         AuthoredAnimationClipMetadata {
@@ -111,11 +104,8 @@ pub(super) fn lower_netimmerse_kf_clip(
             additive_blending_is_enabled: false,
             root_motion_transform,
             root_motion_joint,
-            animation_markers: extract_netimmerse_kf_animation_markers(
-                document,
-                sequence.text_keys_ref,
-            )?,
-            authored_animation_text_keys: text_keys.to_vec(),
+            animation_markers,
+            authored_animation_text_keys,
         },
     ))
 }

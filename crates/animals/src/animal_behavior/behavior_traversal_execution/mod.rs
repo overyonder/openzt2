@@ -31,20 +31,18 @@ use openzt2_zoo_state::behavior_task_execution_types::running_actions::behavior_
 use openzt2_zoo_state::{
     behavior_task_execution_types::running_actions::mark_behavior_task_for_failure_and_stop_navigation,
     behavior_task_execution_types::{
+        BehaviorTaskExecutionState, PendingBehaviorTaskFailure,
         running_actions::{
             BehaviorInstructionId, RunBehaviorTraversalAnimation, RunBehaviorTraversalDock,
             RunningBehaviorInstruction,
         },
-        BehaviorTaskExecutionState, PendingBehaviorTaskFailure,
     },
     locomotion::locomotion_types::{
         Arrived, DockAt, NavAgent, NavigationFailed, NavigationRequestGeneration,
     },
 };
 
-use super::behavior_docking_execution::{
-    find_named_descendant_global_transform, NamedNodeTransforms,
-};
+use super::behavior_named_nodes::NamedNodeTransforms;
 
 #[derive(Component)]
 struct TraversalDock {
@@ -88,29 +86,13 @@ pub(super) fn register_behavior_traversal_execution(app: &mut App) {
     );
 }
 
-fn find_path(
-    target: Entity,
-    name: &str,
-    children: &Query<&Children>,
-    paths: &Query<(&Name, &TraversalAnimationPath, &GlobalTransform)>,
-) -> Option<Entity> {
-    children
-        .iter_descendants_depth_first::<Children>(target)
-        .find(|entity| {
-            paths
-                .get(*entity)
-                .is_ok_and(|(path, _, _)| path.as_str().eq_ignore_ascii_case(name))
-        })
-}
-
 fn traversal_attachment(
     actor: Entity,
     node: &str,
     transform: &GlobalTransform,
-    children: &Query<&Children>,
     named: &NamedNodeTransforms,
 ) -> Option<Vec3> {
-    let node = find_named_descendant_global_transform(actor, node, children, named)?;
+    let node = named.pose(actor, node)?;
     Some(
         transform
             .affine()
@@ -133,7 +115,6 @@ fn start_traversal_docks(
         ),
         (Without<TraversalDock>, Without<PendingBehaviorTaskFailure>),
     >,
-    children: Query<&Children>,
     named: NamedNodeTransforms,
     paths: Query<(&Name, &TraversalAnimationPath, &GlobalTransform)>,
     sources: Res<Assets<AnimationClipSourceAsset>>,
@@ -154,9 +135,8 @@ fn start_traversal_docks(
         }
         let path = task
             .target
-            .and_then(|target| find_path(target, &action.target_path, &children, &paths));
-        let attachment =
-            traversal_attachment(actor, &action.subject_node, transform, &children, &named);
+            .and_then(|target| named.path(target, &action.target_path));
+        let attachment = traversal_attachment(actor, &action.subject_node, transform, &named);
         let (Some(path), Some(attachment)) = (path, attachment) else {
             mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
             continue;
@@ -265,7 +245,6 @@ fn start_traversal_animation(
             Without<PendingBehaviorTaskFailure>,
         ),
     >,
-    children: Query<&Children>,
     named: NamedNodeTransforms,
     paths: Query<(&Name, &TraversalAnimationPath, &GlobalTransform)>,
     mut playback: MessageWriter<AnimationClipPlaybackRequest>,
@@ -282,9 +261,8 @@ fn start_traversal_animation(
         }
         let path = task
             .target
-            .and_then(|target| find_path(target, &action.target_path, &children, &paths));
-        let attachment =
-            traversal_attachment(actor, &action.subject_node, transform, &children, &named);
+            .and_then(|target| named.path(target, &action.target_path));
+        let attachment = traversal_attachment(actor, &action.subject_node, transform, &named);
         let (Some(path), Some(attachment)) = (path, attachment) else {
             mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
             continue;

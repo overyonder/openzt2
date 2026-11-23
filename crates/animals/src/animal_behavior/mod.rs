@@ -41,6 +41,7 @@ mod behavior_hide_execution;
 mod behavior_interaction_container_execution;
 mod behavior_locomotion_switch_set_execution;
 pub(crate) mod behavior_move_execution;
+mod behavior_named_nodes;
 mod behavior_object_attachment_execution;
 mod behavior_object_spawn_execution;
 mod behavior_pursuit_execution;
@@ -101,6 +102,7 @@ impl Plugin for AnimalBehaviorExecutionPlugin {
         );
         application.add_observer(activated_behavior_actor::<(openzt2_zoo_state::behavior_task_execution_types::running_actions::RunBehaviorDock, openzt2_zoo_state::behavior_task_execution_types::running_actions::RunBehaviorDockQueue)>.pipe(behavior_docking_execution::start_current_supported_behavior_docking_actions));
         application.add_observer(activated_behavior_actor::<openzt2_zoo_state::behavior_task_execution_types::running_actions::RunBehaviorAnimationClip>.pipe(behavior_animation_clip_execution::start_current_behavior_animation_clip_actions));
+        application.add_observer(activated_behavior_actor::<openzt2_zoo_state::behavior_task_execution_types::running_actions::RunBehaviorAnimationSwitch>.pipe(behavior_animation_clip_execution::start_current_behavior_animation_clip_actions));
         application.add_observer(activated_behavior_actor::<openzt2_zoo_state::behavior_task_execution_types::running_actions::RunBehaviorRandomAnimation>.pipe(behavior_random_animation_execution::start_next_random_behavior_animation));
 
         application
@@ -140,6 +142,9 @@ impl Plugin for AnimalBehaviorExecutionPlugin {
         behavior_hide_execution::register_hide_execution(application);
         behavior_synchronized_set_execution::register_synchronized_behavior_execution(application);
         behavior_spatial_candidates::register_behavior_spatial_candidates(application);
+        behavior_named_nodes::register_behavior_named_nodes(application);
+        behavior_script_execution::script_particles::register(application);
+        application.add_observer(behavior_clothing_delivery::cancel_clothing_delivery);
         behavior_wander_execution::register_wander_execution(application);
         behavior_pursuit_execution::register_pursuit_execution(application);
         behavior_face_target_execution::register_face_target_execution(application);
@@ -217,10 +222,12 @@ impl Plugin for AnimalBehaviorExecutionPlugin {
                 Update,
                 (
                     behavior_script_execution::invalidate_changed_behavior_script_contexts,
-                    behavior_set_start_request_handling::accept_animal_behavior_set_start_requests,
-                    behavior_set_start_request_handling::resolve_pending_animal_behavior_sets_to_loaded_declarations,
+                    behavior_set_start_request_handling::accept_animal_behavior_set_start_requests
+                        .run_if(bevy::ecs::schedule::common_conditions::on_message::<StartBehaviorSet>),
+                    behavior_set_start_request_handling::resolve_pending_animal_behavior_sets_to_loaded_declarations
+                        .after(behavior_set_start_request_handling::accept_animal_behavior_set_start_requests)
+                        .after(behavior_script_execution::invalidate_changed_behavior_script_contexts),
                 )
-                    .chain()
                     .run_if(in_state(GamePhase::InGame)),
             )
             .add_systems(

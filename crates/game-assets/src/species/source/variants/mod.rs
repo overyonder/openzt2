@@ -11,11 +11,11 @@ use crate::source_document::resolved_source_record_index::BindError;
 use crate::source_document::resolved_source_record_index::RecordView;
 use crate::source_document::source_document_semantic_name::canonicalize_source_document_record_key;
 use crate::source_document::source_document_semantic_name::source_document_names_are_semantically_equal;
+use openzt2_game_data::AssetId;
 use openzt2_game_data::species::LifeStage;
 use openzt2_game_data::species::Sex;
 use openzt2_game_data::species::SpeciesVariant;
 use openzt2_game_data::species::SpeciesVariantFlags;
-use openzt2_game_data::AssetId;
 
 pub(super) fn lower_species_root_actor_to_fallback_canonical_variant(
     species: &RecordView<'_, '_>,
@@ -108,76 +108,48 @@ pub(super) fn lower_species_variant_source_record_to_canonical_variant(
     candidate: &RecordView<'_, '_>,
     actor_manifest_resolution_index: &BlueFangActorManifestModelAndSceneResolutionIndex,
 ) -> Result<Option<SpeciesVariant>, BindError> {
-    if candidate.key == species.key {
+    use super::source_queries::{
+        authored_optional_boolean_is_true, find_effective_authored_animal_shared_attribute,
+    };
+
+    if authored_optional_boolean_is_true(candidate.source_document_element().attribute("abstract"))
+    {
         return Ok(None);
     }
-    let Some(shared) = find_first_semantically_named_source_descendant(
-        candidate.source_document_element(),
-        "BFAIEntityDataShared",
-    ) else {
-        return Ok(None);
-    };
-    let candidate_key = candidate.key.to_ascii_lowercase();
-    let sex = shared
-        .attribute_named_any(&["b_Male"])
-        .and_then(|value| match value.trim().to_ascii_lowercase().as_str() {
-            "0" | "false" => Some(Sex::Female),
-            "1" | "true" => Some(Sex::Male),
-            _ => None,
-        })
-        .or_else(|| candidate_key.contains("_adult_f").then_some(Sex::Female))
-        .or_else(|| candidate_key.contains("_young_f").then_some(Sex::Female))
-        .or_else(|| candidate_key.contains("_adult_m").then_some(Sex::Male))
-        .or_else(|| candidate_key.contains("_young_m").then_some(Sex::Male));
-    let Some(sex) = sex else {
-        return Ok(None);
-    };
-    let tokens = candidate.type_tokens();
-    let belongs_to_species = shared.attribute_named_any(&["s_Species"]).map_or_else(
-        || {
-            tokens
-                .iter()
-                .any(|token| token.eq_ignore_ascii_case(species.key))
-        },
-        |value| source_document_names_are_semantically_equal(value, species.key),
-    );
-    if !belongs_to_species || candidate_key.contains("_super") || candidate_key.contains("_old") {
-        return Ok(None);
-    }
-    let stage_record = tokens
-        .iter()
+    let ancestors = candidate
+        .type_tokens()
+        .into_iter()
         .rev()
-        .find(|token| {
-            token.to_ascii_lowercase().ends_with("_adult")
-                || token.to_ascii_lowercase().ends_with("_young")
-        })
-        .and_then(|stage| candidate.find_resolved_source_record_by_reference(stage))
-        .or_else(|| candidate.find_resolved_source_record_by_reference(candidate.key))
-        .unwrap_or(*candidate);
-    let life_stage = if candidate_key.contains("_adult")
-        || stage_record.key.to_ascii_lowercase().ends_with("_adult")
-    {
-        LifeStage::Adult
-    } else if candidate_key.contains("_young")
-        || stage_record.key.to_ascii_lowercase().ends_with("_young")
-    {
-        LifeStage::Young
-    } else {
-        return Ok(None);
+        .filter(|name| !source_document_names_are_semantically_equal(name, candidate.key))
+        .filter_map(|name| candidate.find_resolved_source_record_by_reference(&name))
+        .collect::<Vec<_>>();
+    let effective = |name| find_effective_authored_animal_shared_attribute(candidate, name);
+    let sex = effective("b_Male").map_or(Sex::Any, |value| {
+        if authored_optional_boolean_is_true(Some(value)) {
+            Sex::Male
+        } else {
+            Sex::Female
+        }
+    });
+    let life_stage = match effective("b_Adult") {
+        Some(value) if !authored_optional_boolean_is_true(Some(value)) => LifeStage::Young,
+        _ => LifeStage::Adult,
     };
-    let candidate_actor = find_first_semantically_named_source_descendant(
-        candidate.source_document_element(),
-        "BFActorComponent",
-    );
-    let stage_actor = find_first_semantically_named_source_descendant(
-        stage_record.source_document_element(),
-        "BFActorComponent",
-    );
-    let species_actor = find_first_semantically_named_source_descendant(
-        species.source_document_element(),
-        "BFActorComponent",
-    );
-    let actor = candidate_actor.or(stage_actor).or(species_actor);
+    let stage_record = ancestors
+        .iter()
+        .find(|record| record.descendant_named("weights").is_some())
+        .copied()
+        .unwrap_or(*candidate);
+    let actor = std::iter::once(candidate)
+        .chain(ancestors.iter())
+        .chain(std::iter::once(species))
+        .filter_map(|record| {
+            find_first_semantically_named_source_descendant(
+                record.source_document_element(),
+                "BFActorComponent",
+            )
+        })
+        .find(|actor| actor.attribute_named_any(&["actorfile"]).is_some());
     let Some(actorfile) = actor.and_then(|actor| actor.attribute_named_any(&["actorfile"])) else {
         return Ok(None);
     };
@@ -197,10 +169,16 @@ pub(super) fn lower_species_variant_source_record_to_canonical_variant(
             &stage_record,
             species,
         )?;
-    let probability =
+    let probability = if ["b_Super", "b_Old", "b_Sickly"]
+        .into_iter()
+        .any(|flag| authored_optional_boolean_is_true(effective(flag)))
+    {
+        0
+    } else {
         find_authored_numbered_species_variant_probability(&stage_record, candidate.key)
             .or_else(|| find_authored_base_species_variant_probability(&stage_record))
-            .unwrap_or(100);
+            .unwrap_or(100)
+    };
     Ok(Some(SpeciesVariant {
         need_points: lower_need_point_policy(candidate)?,
         placement_surface_policy: crate::world_definitions::lower::authored_placement_footprint_lowering::authored_surface_policy(candidate)?,

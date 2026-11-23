@@ -1,7 +1,6 @@
 //! Source-backed default ground locomotion through the existing animation owner.
 
 use super::locomotion_clip_dependencies::LocomotionClipDependencies;
-use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use openzt2_game_assets::animation::animation_clip_source_queries::AnimationClipSources;
 use openzt2_game_assets::animation::animation_set_asset_types::AnimationSetAsset;
@@ -23,7 +22,7 @@ use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorAnimationCl
 use openzt2_zoo_state::behavior_task_execution_types::{
     running_actions::BehaviorLocomotionIntent, PendingBehaviorTaskFailure,
 };
-use openzt2_zoo_state::locomotion::locomotion_types::CaffeineMode;
+use openzt2_zoo_state::locomotion::locomotion_types::CaffeineFlags;
 use openzt2_zoo_state::locomotion::locomotion_types::Destination;
 use openzt2_zoo_state::locomotion::locomotion_types::DirectLocomotion;
 use openzt2_zoo_state::locomotion::locomotion_types::LocomotionMode;
@@ -31,21 +30,24 @@ use openzt2_zoo_state::locomotion::locomotion_types::NavAgent;
 use openzt2_zoo_state::locomotion::locomotion_types::NavFlags;
 
 /// Identifies only navigation created here; other agent owners are untouched.
-#[derive(Component, Clone, Copy)]
+#[derive(Component, Clone)]
 pub(super) struct AnimalNavigationAnimationOwner {
     move_request_id: Option<usize>,
     requested_generation: u64,
     rate_source: Option<openzt2_game_data::AssetId>,
     playback_speed_permille: i16,
-    rate_seconds_remaining: f32,
+    rate_reset: Timer,
 }
+
+#[derive(Component)]
+struct AnimalAnimationProjectionPending(&'static str);
 
 #[derive(bevy::ecs::system::SystemParam)]
 pub(super) struct AnimalLocomotionRuntime<'w, 's> {
     fixed_time: Res<'w, Time<Fixed>>,
     random_streams: Query<'w, 's, &'static mut openzt2_zoo_state::animal_behavior::behavior_random_stream_state::BehaviorRandomStream>,
-    unprojected_reasons: Local<'s, HashMap<Entity, &'static str>>,
-    caffeine_modes: Query<'w, 's, &'static CaffeineMode>,
+    unprojected: Query<'w, 's, &'static mut AnimalAnimationProjectionPending>,
+    caffeine_flags: Query<'w, 's, &'static CaffeineFlags>,
 }
 
 pub(super) fn project_animal_animation_motion_to_navigation(
@@ -96,51 +98,69 @@ pub(super) fn project_animal_animation_motion_to_navigation(
     let AnimalLocomotionRuntime {
         fixed_time,
         mut random_streams,
-        mut unprojected_reasons,
-        caffeine_modes,
+        mut unprojected,
+        caffeine_flags,
     } = runtime;
-    // Logs why an animal has no navigation agent yet, once per change of reason.
-    let mut wait = |animal: Entity, has_agent: bool, reason: &'static str| {
-        if has_agent {
+    let diagnostics = bevy::log::tracing::enabled!(bevy::log::Level::DEBUG);
+    let mut wait = |commands: &mut Commands,
+                    animal: Entity,
+                    agent: Option<&mut Mut<NavAgent>>,
+                    reason: &'static str| {
+        let has_agent = agent.is_some();
+        if let Some(agent) = agent {
+            agent
+                .reborrow()
+                .map_unchanged(|agent| &mut agent.max_speed_mps)
+                .set_if_neq(0.0);
+        }
+        if !diagnostics || has_agent {
             return;
         }
-        if unprojected_reasons.insert(animal, reason) != Some(reason) {
-            debug!(?animal, reason, "animal has no navigation agent yet");
-        }
-    };
-    // Suspend owned agents first. A missing/reloaded controller or asset must
-    // never leave stale movement enabled; successful projection restores speed.
-    for (_, _, agent, owner, _, _, _, _, _) in &mut animals {
-        if owner.is_some() {
-            if let Some(mut agent) = agent {
-                agent.max_speed_mps = 0.0;
+        if let Ok(mut current) = unprojected.get_mut(animal) {
+            if !current
+                .reborrow()
+                .map_unchanged(|current| &mut current.0)
+                .set_if_neq(reason)
+            {
+                return;
             }
+        } else {
+            commands
+                .entity(animal)
+                .insert(AnimalAnimationProjectionPending(reason));
         }
-    }
-    let Some(species) = species_index.get(&species_assets) else {
-        for (animal, _, agent, ..) in &animals {
+        debug!(?animal, reason, "animal has no navigation agent yet");
+    };
+    let species = species_index.get(&species_assets);
+    for (animal, _, mut agent, owner, ..) in &mut animals {
+        if agent.is_some() && owner.is_none() {
+            continue;
+        }
+        if species.is_none() {
             wait(
+                &mut commands,
                 animal,
-                agent.is_some(),
+                agent.as_mut(),
                 "species definitions are not loaded",
             );
-        }
-        return;
-    };
-    for (animal, _, agent, ..) in &animals {
-        if !controllers.contains(animal) {
+        } else if !controllers.contains(animal) {
             wait(
+                &mut commands,
                 animal,
-                agent.is_some(),
+                agent.as_mut(),
                 "no animation controller is attached to its model",
             );
         }
     }
-    for (controller_entity, controller, player, rig, consumed, dependencies) in &mut controllers {
+    let Some(species) = species else {
+        return;
+    };
+    for (controller_entity, controller, player, rig, mut consumed, dependencies) in &mut controllers
+    {
         let Ok((
             animal_entity,
             selected_variant,
-            agent,
+            mut agent,
             owner,
             mode,
             navigating,
@@ -151,7 +171,6 @@ pub(super) fn project_animal_animation_motion_to_navigation(
         else {
             continue;
         };
-        let has_agent = agent.is_some();
         let task_animation =
             task_animation || held_animation || docking_poses.contains(animal_entity);
         if agent.is_some() && owner.is_none() {
@@ -160,16 +179,18 @@ pub(super) fn project_animal_animation_motion_to_navigation(
         if mode.is_some_and(|mode| !matches!(*mode, LocomotionMode::Ground | LocomotionMode::Swim))
         {
             wait(
+                &mut commands,
                 animal_entity,
-                has_agent,
+                agent.as_mut(),
                 "its locomotion mode is not ground",
             );
             continue;
         }
         let Some(variant) = species.find_variant(selected_variant.0) else {
             wait(
+                &mut commands,
                 animal_entity,
-                has_agent,
+                agent.as_mut(),
                 "its variant is not in the species definitions",
             );
             continue;
@@ -207,7 +228,7 @@ pub(super) fn project_animal_animation_motion_to_navigation(
             .or(slow)
         };
         if movement.is_some() && locomotion_key.is_none() {
-            openzt2_zoo_state::animal_behavior::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation(animal_entity, &mut commands);
+            openzt2_zoo_state::behavior_task_execution_types::running_actions::mark_behavior_task_for_failure_and_stop_navigation(animal_entity, &mut commands);
         }
         let (Some(radius), Some(locomotion_key)) = (
             variant
@@ -217,18 +238,29 @@ pub(super) fn project_animal_animation_motion_to_navigation(
             locomotion_key,
         ) else {
             wait(
+                &mut commands,
                 animal_entity,
-                has_agent,
+                agent.as_mut(),
                 "its variant has no collision radius or ground clip",
             );
             continue;
         };
         if !radius.is_finite() || radius < 0.0 {
-            wait(animal_entity, has_agent, "its collision radius is invalid");
+            wait(
+                &mut commands,
+                animal_entity,
+                agent.as_mut(),
+                "its collision radius is invalid",
+            );
             continue;
         }
         let Some(set) = animations.get(&controller.animation_set_asset) else {
-            wait(animal_entity, has_agent, "its animation set is not loaded");
+            wait(
+                &mut commands,
+                animal_entity,
+                agent.as_mut(),
+                "its animation set is not loaded",
+            );
             continue;
         };
         LocomotionClipDependencies::retain(
@@ -272,16 +304,18 @@ pub(super) fn project_animal_animation_motion_to_navigation(
                     .any(|key| pending(key))
             {
                 wait(
+                    &mut commands,
                     animal_entity,
-                    has_agent,
+                    agent.as_mut(),
                     "its ground clips are still loading",
                 );
                 continue;
             }
             let Some(selected) = selected else {
                 wait(
+                    &mut commands,
                     animal_entity,
-                    has_agent,
+                    agent.as_mut(),
                     "its ground graph node selects no loaded clip",
                 );
                 continue;
@@ -291,7 +325,12 @@ pub(super) fn project_animal_animation_motion_to_navigation(
             locomotion_key.clone()
         };
         let Some(clip) = resolve(&clip_key) else {
-            wait(animal_entity, has_agent, "its ground clip is unavailable");
+            wait(
+                &mut commands,
+                animal_entity,
+                agent.as_mut(),
+                "its ground clip is unavailable",
+            );
             continue;
         };
         let Some(root) = clip
@@ -299,8 +338,9 @@ pub(super) fn project_animal_animation_motion_to_navigation(
             .and_then(|metadata| metadata.root_motion_joint.as_ref())
         else {
             wait(
+                &mut commands,
                 animal_entity,
-                has_agent,
+                agent.as_mut(),
                 "its ground clip has no root motion joint",
             );
             continue;
@@ -316,8 +356,9 @@ pub(super) fn project_animal_animation_motion_to_navigation(
             });
         let Some(parent) = parent else {
             wait(
+                &mut commands,
                 animal_entity,
-                has_agent,
+                agent.as_mut(),
                 "its root motion joint is not bound to the model",
             );
             continue;
@@ -328,31 +369,37 @@ pub(super) fn project_animal_animation_motion_to_navigation(
                 actor.affine().inverse()
             })
             * parent.affine();
-        if let Some(mut consumed) = consumed {
+        if let Some(consumed) = consumed.as_deref_mut() {
             consumed.update_root_parent_transform(actor_from_root_parent);
         }
         let Some(default_velocity) = clip_motion_velocity(&clip, parent, 1000) else {
             wait(
+                &mut commands,
                 animal_entity,
-                has_agent,
+                agent.as_mut(),
                 "its ground clip motion cannot be measured",
             );
             continue;
         };
         let default_speed = default_velocity.length();
         if !default_speed.is_finite() || default_speed <= 0.0 {
-            wait(animal_entity, has_agent, "its ground clip does not move");
+            wait(
+                &mut commands,
+                animal_entity,
+                agent.as_mut(),
+                "its ground clip does not move",
+            );
             continue;
         }
         let mut ownership = owner
             .as_deref()
-            .copied()
+            .cloned()
             .unwrap_or(AnimalNavigationAnimationOwner {
                 move_request_id: None,
                 requested_generation: controller.playback_generation,
                 rate_source: None,
                 playback_speed_permille: 1000,
-                rate_seconds_remaining: 0.0,
+                rate_reset: Timer::default(),
             });
         let rate_source = water_row.map(|row| {
             openzt2_game_data::AssetId::from_key(&format!(
@@ -361,12 +408,17 @@ pub(super) fn project_animal_animation_motion_to_navigation(
                 movement.unwrap_or_default()
             ))
         });
-        ownership.rate_seconds_remaining -= fixed_time.delta_secs();
-        if rate_source != ownership.rate_source
-            || (rate_source.is_some() && ownership.rate_seconds_remaining <= 0.0)
-        {
+        let rate_due =
+            rate_source.is_some() && ownership.rate_reset.tick(fixed_time.delta()).is_finished();
+        if rate_source != ownership.rate_source || rate_due {
             if let Some(row) = water_row {
                 let Ok(mut random) = random_streams.get_mut(animal_entity) else {
+                    wait(
+                        &mut commands,
+                        animal_entity,
+                        agent.as_mut(),
+                        "its locomotion random stream is unavailable",
+                    );
                     continue;
                 };
                 let rate = row.playback_speed_range[0]
@@ -374,9 +426,10 @@ pub(super) fn project_animal_animation_motion_to_navigation(
                         * (row.playback_speed_range[1] - row.playback_speed_range[0]);
                 ownership.playback_speed_permille =
                     (rate * 1000.0).round().clamp(1.0, f32::from(i16::MAX)) as i16;
-                ownership.rate_seconds_remaining = row.reset_seconds_range[0]
+                let reset_seconds = row.reset_seconds_range[0]
                     + random.0.unit_f32()
                         * (row.reset_seconds_range[1] - row.reset_seconds_range[0]);
+                ownership.rate_reset = super::gait_rate_reset_timer(reset_seconds);
             } else {
                 ownership.playback_speed_permille = 1000;
             }
@@ -385,10 +438,16 @@ pub(super) fn project_animal_animation_motion_to_navigation(
         let moving = navigating || direct;
         // Movement follows the clip's root motion, so scaling its rate speeds
         // the animal up or slows it down.
-        let rate = (f32::from(ownership.playback_speed_permille)
-            * CaffeineMode::speed_factor(caffeine_modes.get(animal_entity).ok()))
-        .round()
-        .clamp(1.0, f32::from(i16::MAX)) as i16;
+        let rate = caffeine_flags
+            .get(animal_entity)
+            .copied()
+            .unwrap_or_default()
+            .apply_to_rate(
+                f32::from(ownership.playback_speed_permille),
+                super::DEFAULT_LOCOMOTION_RATE_FACTORS,
+            )
+            .round()
+            .clamp(1.0, f32::from(i16::MAX)) as i16;
         if !task_animation
             && ownership.move_request_id.is_some()
             && ((controller.playback_generation != ownership.requested_generation
@@ -409,12 +468,12 @@ pub(super) fn project_animal_animation_motion_to_navigation(
             });
             ownership.move_request_id = Some(request.id);
             ownership.requested_generation = controller.playback_generation;
-            commands
-                .entity(controller_entity)
-                .insert(ConsumedLocomotionRootMotion::new(
-                    request.id,
-                    actor_from_root_parent,
-                ));
+            let motion = ConsumedLocomotionRootMotion::new(request.id, actor_from_root_parent);
+            if let Some(mut current) = consumed {
+                *current = motion;
+            } else {
+                commands.entity(controller_entity).insert(motion);
+            }
         } else if !moving && ownership.move_request_id.take().is_some() {
             commands
                 .entity(controller_entity)
@@ -470,9 +529,12 @@ pub(super) fn project_animal_animation_motion_to_navigation(
             ),
         };
         if let Some(mut agent) = agent {
-            *agent = projected;
+            agent.set_if_neq(projected);
         } else {
-            commands.entity(animal_entity).insert(projected);
+            commands
+                .entity(animal_entity)
+                .insert(projected)
+                .remove::<AnimalAnimationProjectionPending>();
         }
         if let Some(mut owner) = owner {
             *owner = ownership;

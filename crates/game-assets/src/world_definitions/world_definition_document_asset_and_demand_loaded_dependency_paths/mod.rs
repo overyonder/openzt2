@@ -1,7 +1,7 @@
 //! One lowered world-definition source document and its demand-loaded dependencies.
 
 use bevy::prelude::*;
-use openzt2_game_data::{world_definitions::document::WorldDefinitionDocument, AssetId};
+use openzt2_game_data::{AssetId, world_definitions::document::WorldDefinitionDocument};
 
 pub const AUTHORED_GROUND_PATH_SURFACE_MASK_SOURCE_PATHS: [&str; 18] = [
     "entities/objects/paths/shared/north_mask.dds",
@@ -33,6 +33,7 @@ pub(super) struct DemandLoadedDependencyPath {
 #[derive(Asset, TypePath, Debug)]
 pub struct WorldDefinitionAsset {
     pub(super) document: WorldDefinitionDocument,
+    pub(super) timekeeper: Option<super::timing::AuthoredTimekeeperPolicy>,
     // Directory membership and unselected binder declarations also determine
     // reference uniqueness; selected-file dependencies alone cannot track them.
     pub(super) authored_binder_sources:
@@ -56,6 +57,7 @@ impl WorldDefinitionAsset {
     pub fn from_test_document(document: WorldDefinitionDocument) -> Self {
         Self {
             document,
+            timekeeper: None,
             authored_binder_sources: None,
             textures: Box::new([]),
             models: Box::new([]),

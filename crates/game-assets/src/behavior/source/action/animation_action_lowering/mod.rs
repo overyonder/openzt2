@@ -1,7 +1,9 @@
 use std::io;
 
 use openzt2_game_data::behavior::{
-    action::animation::{BehaviorAnimationClipAction, BehaviorAnimationPlaybackSpeed},
+    action::animation::{
+        BehaviorAnimationClipAction, BehaviorAnimationPlaybackSpeed, BehaviorAnimationSwitchAction,
+    },
     action_record::BehaviorAction,
 };
 
@@ -42,6 +44,9 @@ mod tests {
 pub(super) fn lower_animation_action_source_node(
     animation_action_source_node: &DataNode,
 ) -> io::Result<Option<BehaviorAction>> {
+    if animation_action_source_node.name == "BFBehAnimateSwitch" {
+        return lower_animation_switch(animation_action_source_node).map(Some);
+    }
     if animation_action_source_node.name != "BFBehAnimate" {
         return Ok(None);
     }
@@ -153,6 +158,33 @@ pub(super) fn lower_animation_action_source_node(
     } else {
         BehaviorAction::AnimationWithTextKeys { animation, keys }
     }))
+}
+
+fn lower_animation_switch(node: &DataNode) -> io::Result<BehaviorAction> {
+    let mut tables = node.element_children();
+    let table = tables
+        .next()
+        .filter(|table| table.name == "animTable")
+        .ok_or_else(|| invalid_behavior_source_data("BFBehAnimateSwitch requires animTable"))?;
+    if !node.attributes.is_empty() || tables.next().is_some() {
+        return Err(invalid_behavior_source_data(
+            "BFBehAnimateSwitch has unmapped playback policy",
+        ));
+    }
+    let mut action = BehaviorAnimationSwitchAction {
+        clips_by_node: Vec::new(),
+        default_clip: None,
+    };
+    for row in table.element_children() {
+        let clip = super::source_value_reading::read_optional_trimmed_string_attribute(row, "anim")
+            .ok_or_else(|| invalid_behavior_source_data("BFBehAnimateSwitch row requires anim"))?;
+        if row.name.eq_ignore_ascii_case("default") {
+            action.default_clip = Some(clip);
+        } else {
+            action.clips_by_node.push((row.name.to_string(), clip));
+        }
+    }
+    Ok(BehaviorAction::AnimationSwitch(action))
 }
 
 pub(super) fn lower_behavior_animation_text_keys(

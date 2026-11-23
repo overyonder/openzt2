@@ -55,6 +55,8 @@ pub(super) struct EvaluatedD3d9PassState {
     depth_enabled: bool,
     pub(super) depth_write: bool,
     depth_compare: CompareFunction,
+    depth_bias_bits: u32,
+    slope_scale_depth_bias_bits: u32,
     stencil_enabled: bool,
     stencil_two_sided: bool,
     stencil: StencilState,
@@ -115,6 +117,8 @@ impl Default for EvaluatedD3d9PassState {
             // Bevy's perspective projection uses reversed Z, so D3D9's
             // default LESS_EQUAL comparison becomes GREATER_EQUAL.
             depth_compare: CompareFunction::GreaterEqual,
+            depth_bias_bits: 0,
+            slope_scale_depth_bias_bits: 0,
             stencil_enabled: false,
             stencil_two_sided: false,
             stencil: StencilState {
@@ -340,11 +344,13 @@ impl EvaluatedD3d9PassState {
                     .ok_or_else(|| invalid("color write mask", value))?;
             }
             171 => self.blend_operation = value,
+            175 => self.slope_scale_depth_bias_bits = value,
             185 => self.stencil_two_sided = value != 0,
             186 => self.stencil.back.fail_op = stencil_operation(value)?,
             187 => self.stencil.back.depth_fail_op = stencil_operation(value)?,
             188 => self.stencil.back.pass_op = stencil_operation(value)?,
             189 => self.stencil.back.compare = compare_stencil(value)?,
+            195 => self.depth_bias_bits = value,
             206 => self.separate_alpha_blend = value != 0,
             207 => self.source_alpha_blend = value,
             208 => self.destination_alpha_blend = value,
@@ -359,6 +365,14 @@ impl EvaluatedD3d9PassState {
             (self.depth_write, self.depth_compare)
         } else {
             (false, CompareFunction::Always)
+        }
+    }
+
+    pub(super) fn effective_depth_bias_bits(&self) -> (u32, u32) {
+        if self.depth_enabled {
+            (self.depth_bias_bits, self.slope_scale_depth_bias_bits)
+        } else {
+            (0, 0)
         }
     }
 

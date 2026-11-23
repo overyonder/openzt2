@@ -5,10 +5,11 @@ use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
 };
 
 use bevy::prelude::*;
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::behavior_action_actors;
 
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use openzt2_zoo_state::animal_behavior::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation;
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::mark_behavior_task_for_failure_and_stop_navigation;
 use openzt2_zoo_state::animal_lifecycle::types::Animal;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
 use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorTaskFailure;
@@ -21,7 +22,8 @@ use super::guest_simulation_types::{Guest, GuestArchetype, GuestPhase, GuestRng,
 /// Starts, holds and ends the native observation for the running view action.
 /// The observation's area is the task's target, the path viewed from.
 pub(super) fn watch_animals_for_current_view_actions(
-    clock: Res<ZooClock>,
+    activation: In<Option<Entity>>,
+    clock: Single<&ZooClock>,
     time: Res<Time<Fixed>>,
     world_assets: Res<Assets<WorldDefinitionAsset>>,
     world_definitions: Res<WorldDefinitions>,
@@ -68,8 +70,11 @@ pub(super) fn watch_animals_for_current_view_actions(
         archetype,
         mut random,
         meter,
-    ) in &mut guests
+    ) in behavior_action_actors(&mut guests, activation.0)
     {
+        if activation.0.is_none() && !instruction.can_update_after_activation(clock.tick) {
+            continue;
+        }
         if task.next_action_tick > clock.tick {
             continue;
         }

@@ -1,6 +1,9 @@
 //! Staff without a job choose among the authored tasks they may start on
 //! their own, scored by their authored needs, as animals and guests do.
 
+use openzt2_zoo_state::behavior_task_execution_types::allocate_behavior_execution_id;
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::behavior_action_actors;
+
 use bevy::prelude::*;
 use openzt2_game_data::{
     behavior::{
@@ -41,7 +44,7 @@ use openzt2_zoo_state::aquatic::aquatic_simulation_types::Tank;
 use openzt2_zoo_state::behavior_task_execution_types::{
     abandon_behavior_task_for_reconsideration,
     BehaviorTaskExecutionPhase,
-    BehaviorTaskExecutionSequence, BehaviorTaskExecutionState, PendingBehaviorTaskFailure,
+    BehaviorTaskGeneration, BehaviorTaskExecutionState, PendingBehaviorTaskFailure,
     SynchronizedBehaviorParticipant,
 };
 use openzt2_zoo_state::habitat::habitat_membership_and_containment::locate_habitat_at_world_position;
@@ -68,7 +71,7 @@ pub(crate) fn start_authored_idle_staff_tasks(
     assets: Res<Assets<BehaviorDocumentAsset>>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
-    mut sequence: ResMut<BehaviorTaskExecutionSequence>,
+    mut behavior_generations: Query<&mut BehaviorTaskGeneration>,
     target_retry_delays: BehaviorTargetRejections,
     surfaces: DrySurfaceEligibility,
     biomes: BehaviorTargetBiome,
@@ -155,6 +158,7 @@ pub(crate) fn start_authored_idle_staff_tasks(
                             BehaviorCandidateRole::Object => return false,
                         };
                         satisfies_idle_staff_fact(
+                            world.root,
                             fact,
                             fact_position,
                             position,
@@ -170,7 +174,7 @@ pub(crate) fn start_authored_idle_staff_tasks(
                     task,
                     0.0,
                     position.xz().distance(target_position.xz()),
-                    || biomes.at(target_position),
+                    || biomes.at(world.root, target_position),
                     |attribute| staff_need(role, attribute),
                     |value| value.sample_q16(|_| 0),
                 ) else {
@@ -192,7 +196,11 @@ pub(crate) fn start_authored_idle_staff_tasks(
         let Some(((document, declaration, task, target), score)) = ranking.finish(false) else {
             continue;
         };
-        let execution_id = sequence.next();
+        let execution_id = allocate_behavior_execution_id(
+            staff,
+            behavior_generations.get_mut(staff).ok(),
+            &mut commands,
+        );
         commands.entity(staff).insert((
             BehaviorTaskEffectiveScore {
                 execution_id,
@@ -273,6 +281,7 @@ fn staff_need(role: &StaffRoleDefinition, attribute: AssetId) -> Option<(i32, bo
 /// Qualifiers an idle employee's own tasks use. Any other qualifier refuses
 /// the candidate rather than passing unevaluated.
 fn satisfies_idle_staff_fact(
+    root: Entity,
     fact: &BehaviorCandidateEligibilityFact,
     fact_position: Vec3,
     subject_position: Vec3,
@@ -296,13 +305,13 @@ fn satisfies_idle_staff_fact(
             return inside == (kind == BehaviorSpatialEligibilityFact::InSight);
         }
         BehaviorEligibilityFactInput::Spatial(BehaviorSpatialEligibilityFact::OnLand) => {
-            let Some(on_land) = surfaces.on_land(fact_position.xz()) else {
+            let Some(on_land) = surfaces.on_land(root, fact_position.xz()) else {
                 return false;
             };
             i32::from(on_land) << 16
         }
         BehaviorEligibilityFactInput::Spatial(BehaviorSpatialEligibilityFact::InWater) => {
-            let Some(on_land) = surfaces.on_land(fact_position.xz()) else {
+            let Some(on_land) = surfaces.on_land(root, fact_position.xz()) else {
                 return false;
             };
             i32::from(!on_land) << 16
@@ -358,10 +367,9 @@ pub(crate) struct PendingStaffExitTankGate {
 /// Chooses an outside endpoint across an actual tank gate. The navigation
 /// owner approaches and traverses that gate before completing this request.
 pub(crate) fn execute_staff_exit_tank_gate_actions(
+    activation: In<Option<Entity>>,
     mut commands: Commands,
-    clock: Res<ZooClock>,
-    habitats: Res<HabitatIndex>,
-    topology: Res<TopologyGrid>,
+    roots: Query<(&ZooClock, &HabitatIndex, &TopologyGrid)>,
     tanks: Query<(), With<Tank>>,
     boundaries: HabitatBoundaryQueries,
     gates: Query<(
@@ -370,17 +378,18 @@ pub(crate) fn execute_staff_exit_tank_gate_actions(
     )>,
     nodes: Query<&openzt2_zoo_state::topology::topology_graph_types::TopologyNode>,
     surfaces: DrySurfaceEligibility,
-    mut sequence: ResMut<
-        openzt2_zoo_state::locomotion::locomotion_types::NavigationRequestSequence,
+    mut navigation_generations: Query<
+        &mut openzt2_zoo_state::locomotion::locomotion_types::NavigationRequestGeneration,
     >,
     mut requests: MessageWriter<openzt2_zoo_state::locomotion::locomotion_types::NavigateTo>,
     mut arrivals: MessageReader<openzt2_zoo_state::locomotion::locomotion_types::Arrived>,
     mut failures: MessageReader<openzt2_zoo_state::locomotion::locomotion_types::NavigationFailed>,
-    actors: Query<
+    mut actors: Query<
         (
             Entity,
             &GlobalTransform,
             &BehaviorTaskExecutionState,
+            &WorldMember,
             Option<(&RunningBehaviorInstruction, &RunBehaviorExitTankGate)>,
             Option<&PendingStaffExitTankGate>,
         ),
@@ -395,7 +404,12 @@ pub(crate) fn execute_staff_exit_tank_gate_actions(
         .read()
         .map(|event| (event.entity, event.request_id))
         .collect();
-    for (actor, transform, task, running, exiting) in &actors {
+    for (actor, transform, task, member, running, exiting) in
+        behavior_action_actors(&mut actors, activation.0)
+    {
+        let Ok((clock, habitats, topology)) = roots.get(member.root) else {
+            continue;
+        };
         let Some((instruction, _)) =
             running.filter(|(instruction, _)| instruction.is_current(task))
         else {
@@ -404,17 +418,20 @@ pub(crate) fn execute_staff_exit_tank_gate_actions(
             }
             continue;
         };
+        if activation.0.is_none() && !instruction.can_update_after_activation(clock.tick) {
+            continue;
+        }
         let exiting = exiting.filter(|exiting| exiting.instruction == instruction.id());
         if task.next_action_tick > clock.tick {
             continue;
         }
         let tank =
-            locate_habitat_at_world_position(&habitats, transform.translation().xz(), *topology)
+            locate_habitat_at_world_position(habitats, transform.translation().xz(), *topology)
                 .filter(|habitat| tanks.contains(*habitat));
         if let Some(exiting) = exiting {
             if failed.contains(&(actor, exiting.request_id)) {
                 commands.entity(actor).remove::<PendingStaffExitTankGate>();
-                openzt2_zoo_state::animal_behavior::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
+                openzt2_zoo_state::behavior_task_execution_types::running_actions::mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
             } else if arrived.contains(&(actor, exiting.request_id)) && tank.is_none() {
                 commands.entity(actor).remove::<PendingStaffExitTankGate>();
                 instruction.complete(actor, clock.tick, &mut commands);
@@ -439,14 +456,14 @@ pub(crate) fn execute_staff_exit_tank_gate_actions(
                 let normal = Vec2::new(-tangent.y, tangent.x) * topology.spacing_m;
                 [-1.0, 1.0].into_iter().find_map(|sign| {
                     let mut point = middle + Vec3::new(normal.x, 0.0, normal.y) * sign;
-                    if locate_habitat_at_world_position(&habitats, point.xz(), *topology)
+                    if locate_habitat_at_world_position(habitats, point.xz(), *topology)
                         == Some(tank)
                     {
                         return None;
                     }
                     point.y = surfaces
-                        .water_surface_height(point.xz())
-                        .or_else(|| surfaces.ground_height(point.xz()))?;
+                        .water_surface_height(member.root, point.xz())
+                        .or_else(|| surfaces.ground_height(member.root, point.xz()))?;
                     Some(point)
                 })
             })
@@ -455,10 +472,13 @@ pub(crate) fn execute_staff_exit_tank_gate_actions(
                     .total_cmp(&right.distance_squared(transform.translation()))
             });
         let Some(destination) = endpoint else {
-            openzt2_zoo_state::animal_behavior::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
+            openzt2_zoo_state::behavior_task_execution_types::running_actions::mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
             continue;
         };
-        let request_id = sequence.next();
+        let Ok(mut generation) = navigation_generations.get_mut(actor) else {
+            continue;
+        };
+        let request_id = generation.advance();
         requests.write(
             openzt2_zoo_state::locomotion::locomotion_types::NavigateTo {
                 entity: actor,
@@ -486,13 +506,18 @@ pub(crate) fn start_staff_token_tasks(
     assets: Res<Assets<BehaviorDocumentAsset>>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
-    clock: Res<ZooClock>,
-    mut sequence: ResMut<BehaviorTaskExecutionSequence>,
+    clocks: Query<&ZooClock>,
+    mut behavior_generations: Query<&mut BehaviorTaskGeneration>,
     surfaces: DrySurfaceEligibility,
     token_tasks: Res<crate::staff::staff_job_eligibility::StaffTasksByRequestToken>,
     tokens: Query<(Entity, &BehaviorSelfToken, &ChildOf), Without<ClaimedBehaviorSelfToken>>,
     staff: Query<
-        (&StaffRole, &GlobalTransform, Option<&LocomotionMode>),
+        (
+            &StaffRole,
+            &GlobalTransform,
+            Option<&LocomotionMode>,
+            &WorldMember,
+        ),
         (
             With<Staff>,
             With<NavAgent>,
@@ -514,16 +539,20 @@ pub(crate) fn start_staff_token_tasks(
     let mut started = Vec::new();
     for (token_entity, token, holder) in &tokens {
         let member = holder.parent();
+        let (Ok((role, transform, mode, world)), Some(payload)) =
+            (staff.get(member), token.payload)
+        else {
+            continue;
+        };
+        let Ok(clock) = clocks.get(world.root) else {
+            continue;
+        };
         if clock.tick < token.available_at
             || clock.tick >= token.expires_at
             || started.contains(&member)
         {
             continue;
         }
-        let (Ok((role, transform, mode)), Some(payload)) = (staff.get(member), token.payload)
-        else {
-            continue;
-        };
         let Some(role) = catalogue.find_staff(role.0) else {
             continue;
         };
@@ -537,7 +566,6 @@ pub(crate) fn start_staff_token_tasks(
                 .targets
                 .iter()
                 .any(|target| target.eq_ignore_ascii_case("fromtoken"))
-                || task.execution.has_unsupported_suffix()
                 || !(task.subjects.is_empty()
                     || task.subjects.iter().any(|subject| {
                         staff_subject_matches(
@@ -561,6 +589,7 @@ pub(crate) fn start_staff_token_tasks(
                 |candidate_role, fact| {
                     candidate_role == BehaviorCandidateRole::Subject
                         && satisfies_idle_staff_fact(
+                            world.root,
                             fact,
                             position,
                             position,
@@ -583,7 +612,11 @@ pub(crate) fn start_staff_token_tasks(
         let Some((document, declaration, task)) = chosen else {
             continue;
         };
-        let execution_id = sequence.next();
+        let execution_id = allocate_behavior_execution_id(
+            member,
+            behavior_generations.get_mut(member).ok(),
+            &mut commands,
+        );
         debug!(staff = ?member, task = %task.name, animal = ?payload, "staff started a token task");
         commands
             .entity(token_entity)

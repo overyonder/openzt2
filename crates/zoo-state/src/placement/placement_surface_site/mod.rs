@@ -17,14 +17,12 @@ use openzt2_world_state::world_spawn::world_membership_types::{WorldMember, Worl
 /// Whether an actor or object may stand at a site, by its authored land, water,
 /// tank and show tank placement rules and its depth limits.
 pub struct PlacementSiteQueries<'w, 's> {
-    terrain_index: Res<'w, TerrainIndex>,
     terrain_assets: Res<'w, Assets<TerrainAsset>>,
     terrain_chunks: Query<'w, 's, (&'static TerrainChunk, Option<&'static EditedTerrainSamples>)>,
     habitats: Query<'w, 's, &'static WorldMember, With<Habitat>>,
-    roots: Query<'w, 's, Entity, With<WorldRoot>>,
+    roots: Query<'w, 's, (&'static TerrainIndex, &'static TopologyGrid), With<WorldRoot>>,
     tanks: Query<'w, 's, (&'static TankGeometry, &'static HabitatRegion), With<Tank>>,
     stages: Query<'w, 's, (&'static Transform, &'static WorldMember), With<ShowStage>>,
-    grid: Res<'w, TopologyGrid>,
 }
 
 impl PlacementSiteQueries<'_, '_> {
@@ -36,7 +34,6 @@ impl PlacementSiteQueries<'_, '_> {
         position: Vec3,
     ) -> Result<(), PlacementFailure> {
         if !position.is_finite()
-            || !self.roots.contains(world)
             || habitat.is_some_and(|habitat| {
                 self.habitats
                     .get(habitat)
@@ -45,7 +42,11 @@ impl PlacementSiteQueries<'_, '_> {
         {
             return Err(PlacementFailure::OutsideMap);
         }
-        let chunk = terrain_chunk_at(&self.terrain_index, position.xz())
+        let (terrain_index, grid) = self
+            .roots
+            .get(world)
+            .map_err(|_| PlacementFailure::OutsideMap)?;
+        let chunk = terrain_chunk_at(terrain_index, position.xz())
             .and_then(|entity| self.terrain_chunks.get(entity).ok())
             .ok_or(PlacementFailure::OutsideMap)?;
         let asset = self
@@ -74,7 +75,7 @@ impl PlacementSiteQueries<'_, '_> {
                 if member.root != world {
                     return false;
                 }
-                let cell = ((stage.translation.xz() - self.grid.origin) / self.grid.spacing_m)
+                let cell = ((stage.translation.xz() - grid.origin) / grid.spacing_m)
                     .floor()
                     .as_ivec2();
                 region

@@ -45,7 +45,7 @@ pub struct ServiceCompleted {
     pub service: AssetId,
 }
 
-#[derive(Resource, Debug, Default)]
+#[derive(Component, Debug, Default)]
 pub struct ServiceRequestSequence {
     next: u64,
 }

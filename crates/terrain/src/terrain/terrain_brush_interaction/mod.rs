@@ -6,7 +6,6 @@ use openzt2_interface_state::input::input_types::MousePointer;
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use openzt2_interface_state::ui::pointer_capture_types::UiPointerCapture;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
-use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 use openzt2_zoo_state::construction::construction_interaction_types::CommitConstruction;
 use openzt2_zoo_state::construction::construction_interaction_types::ConstructionCursor;
 use openzt2_zoo_state::construction::construction_interaction_types::ConstructionPreview;
@@ -40,9 +39,8 @@ pub(super) fn update_terrain_brush_preview_and_commit_completed_pointer_strokes(
     pointer: MousePointer,
     mut pointer_inputs: MessageReader<PointerInput>,
     ui_capture: Res<UiPointerCapture>,
-    cursors: Query<&ConstructionCursor>,
-    roots: Query<Entity, With<WorldRoot>>,
-    index: Res<TerrainIndex>,
+    cursors: Query<(&ConstructionCursor, &WorldMember)>,
+    terrain: Query<&TerrainIndex>,
     assets: Res<Assets<TerrainAsset>>,
     chunks: Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
     mut previews: Query<
@@ -72,7 +70,11 @@ pub(super) fn update_terrain_brush_preview_and_commit_completed_pointer_strokes(
     let ConstructionTool::Terrain(kind) = *tool else {
         return;
     };
-    let (Ok(cursor), Ok(root)) = (cursors.single(), roots.single()) else {
+    let Ok((cursor, member)) = cursors.single() else {
+        return;
+    };
+    let root = member.root;
+    let Ok(index) = terrain.get(root) else {
         return;
     };
     let Some(strength_per_s) = policy.selected_terrain_brush_strength_metres_per_second(*tool)

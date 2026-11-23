@@ -165,7 +165,7 @@ pub(super) fn release_behavior_object_into_world(
 pub(super) fn advance_falling_released_objects(
     mut commands: Commands,
     time: Res<Time<Fixed>>,
-    terrain_index: Option<Res<TerrainIndex>>,
+    terrain_index: Option<Single<&TerrainIndex>>,
     terrain_assets: Res<Assets<TerrainAsset>>,
     chunks: Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
     memberships: Query<&TerrainWaterMembershipIndex>,
@@ -180,6 +180,7 @@ pub(super) fn advance_falling_released_objects(
     mut options: MessageWriter<AnimationClipActionOptions>,
     mut cancel: MessageWriter<CancelAnimationClipPlaybackRequest>,
 ) {
+    let terrain_index = terrain_index.map(Single::into_inner);
     let Some(index) = terrain_index.filter(|index| !index.chunks.is_empty()) else {
         return;
     };

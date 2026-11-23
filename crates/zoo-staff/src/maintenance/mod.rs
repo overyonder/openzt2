@@ -1,6 +1,4 @@
-use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
-    BehaviorStep, BehaviorStepFixedSet, BehaviorStepSet,
-};
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::BehaviorStepFixedSet;
 use openzt2_zoo_state::maintenance::ZooCleanlinessProjection;
 mod animal_habitat_waste_cleaning_staff_job_execution;
 mod animal_waste_production;
@@ -64,14 +62,13 @@ impl Plugin for MaintenancePlugin {
         );
 
         game_application
+            .add_observer(authored_trash_level_application::request_authored_trash_level_changes)
             .add_systems(
-                BehaviorStep,
+                FixedUpdate,
                 (
-                    authored_trash_level_application::request_authored_trash_level_changes,
-                    authored_trash_level_application::apply_authored_trash_level_changes
-                        .after(authored_trash_level_application::request_authored_trash_level_changes),
+                    authored_trash_level_application::apply_authored_trash_level_changes,
                     apply_authored_staff_habitat_waste_termination,
-                ).in_set(BehaviorStepSet::Actions)
+                ).in_set(BehaviorStepFixedSet::Think)
                     .in_set(openzt2_zoo_state::maintenance::maintenance_types::FacilityWasteBehaviorModification),
             )
             .add_systems(

@@ -15,7 +15,7 @@ use crate::topology::topology_graph_types::TopologyGrid;
 /// Borrows the same resolved water membership used by rendering and physics.
 #[derive(SystemParam)]
 pub struct TerrainDrySurfaceEligibility<'w, 's> {
-    index: Res<'w, TerrainIndex>,
+    indexes: Query<'w, 's, &'static TerrainIndex>,
     assets: Res<'w, Assets<TerrainAsset>>,
     chunks: Query<'w, 's, (&'static TerrainChunk, Option<&'static EditedTerrainSamples>)>,
     membership: Query<'w, 's, &'static TerrainWaterMembershipIndex>,
@@ -24,8 +24,8 @@ pub struct TerrainDrySurfaceEligibility<'w, 's> {
 
 impl TerrainDrySurfaceEligibility<'_, '_> {
     /// Terrain water only; [`DrySurfaceEligibility`] also includes tank water.
-    pub fn on_land(&self, world: Vec2) -> Option<bool> {
-        let entity = terrain_chunk_at(&self.index, world)?;
+    pub fn on_land(&self, root: Entity, world: Vec2) -> Option<bool> {
+        let entity = terrain_chunk_at(self.indexes.get(root).ok()?, world)?;
         let (chunk, edited) = self.chunks.get(entity).ok()?;
         let asset = self.assets.get(&chunk.asset)?;
         let membership = self
@@ -40,8 +40,8 @@ impl TerrainDrySurfaceEligibility<'_, '_> {
     }
 
     /// The terrain water surface over a world position, if water covers it.
-    fn water_surface_height(&self, world: Vec2) -> Option<f32> {
-        let entity = terrain_chunk_at(&self.index, world)?;
+    fn water_surface_height(&self, root: Entity, world: Vec2) -> Option<f32> {
+        let entity = terrain_chunk_at(self.indexes.get(root).ok()?, world)?;
         let (chunk, edited) = self.chunks.get(entity).ok()?;
         let asset = self.assets.get(&chunk.asset)?;
         let membership = self
@@ -53,10 +53,10 @@ impl TerrainDrySurfaceEligibility<'_, '_> {
         (sample_terrain(chunk, asset, edited, world)?.height_m < surface).then_some(surface)
     }
 
-    fn ground_height(&self, world: Vec2) -> Option<f32> {
+    fn ground_height(&self, root: Entity, world: Vec2) -> Option<f32> {
         let (chunk, edited) = self
             .chunks
-            .get(terrain_chunk_at(&self.index, world)?)
+            .get(terrain_chunk_at(self.indexes.get(root).ok()?, world)?)
             .ok()?;
         Some(sample_terrain(chunk, self.assets.get(&chunk.asset)?, edited, world)?.height_m)
     }
@@ -69,47 +69,64 @@ impl TerrainDrySurfaceEligibility<'_, '_> {
 #[derive(SystemParam)]
 pub struct DrySurfaceEligibility<'w, 's> {
     terrain: TerrainDrySurfaceEligibility<'w, 's>,
-    habitats: Res<'w, HabitatIndex>,
-    topology: Res<'w, TopologyGrid>,
+    roots: Query<'w, 's, (&'static HabitatIndex, &'static TopologyGrid)>,
     tanks: Query<'w, 's, &'static TankGeometry, With<Tank>>,
 }
 
 impl DrySurfaceEligibility<'_, '_> {
     /// Terrain height under a world position.
-    pub fn ground_height(&self, world: Vec2) -> Option<f32> {
-        self.terrain.ground_height(world)
+    pub fn ground_height(&self, root: Entity, world: Vec2) -> Option<f32> {
+        self.terrain.ground_height(root, world)
     }
 
     /// The water surface over a world position, tank water included, and
     /// `None` on dry ground.
-    pub fn water_surface_height(&self, world: Vec2) -> Option<f32> {
-        let tank = locate_habitat_at_world_position(&self.habitats, world, *self.topology)
+    pub fn water_surface_height(&self, root: Entity, world: Vec2) -> Option<f32> {
+        let tank = self
+            .roots
+            .get(root)
+            .ok()
+            .and_then(|(habitats, topology)| {
+                locate_habitat_at_world_position(habitats, world, *topology)
+            })
             .and_then(|habitat| self.tanks.get(habitat).ok());
         match tank {
-            Some(tank) => (self.terrain.ground_height(world)? < tank.water_height)
+            Some(tank) => (self.terrain.ground_height(root, world)? < tank.water_height)
                 .then_some(tank.water_height),
-            None => self.terrain.water_surface_height(world),
+            None => self.terrain.water_surface_height(root, world),
         }
     }
 
-    pub fn on_land(&self, world: Vec2) -> Option<bool> {
-        let tank = locate_habitat_at_world_position(&self.habitats, world, *self.topology)
+    pub fn on_land(&self, root: Entity, world: Vec2) -> Option<bool> {
+        let tank = self
+            .roots
+            .get(root)
+            .ok()
+            .and_then(|(habitats, topology)| {
+                locate_habitat_at_world_position(habitats, world, *topology)
+            })
             .and_then(|habitat| self.tanks.get(habitat).ok());
         match tank {
-            Some(tank) => Some(self.terrain.ground_height(world)? >= tank.water_height),
-            None => self.terrain.on_land(world),
+            Some(tank) => Some(self.terrain.ground_height(root, world)? >= tank.water_height),
+            None => self.terrain.on_land(root, world),
         }
     }
 
     /// Entity qualifiers compare the target's height with tank water, so an
     /// animal above the surface is not classified as submerged by the ground.
-    pub fn on_land_at_position(&self, position: Vec3) -> Option<bool> {
+    pub fn on_land_at_position(&self, root: Entity, position: Vec3) -> Option<bool> {
         let world = position.xz();
-        let tank = locate_habitat_at_world_position(&self.habitats, world, *self.topology)
+        let tank = self
+            .roots
+            .get(root)
+            .ok()
+            .and_then(|(habitats, topology)| {
+                locate_habitat_at_world_position(habitats, world, *topology)
+            })
             .and_then(|habitat| self.tanks.get(habitat).ok());
         match tank {
             Some(tank) => Some(position.y >= tank.water_height),
-            None => self.terrain.on_land(world),
+            None => self.terrain.on_land(root, world),
         }
     }
 }

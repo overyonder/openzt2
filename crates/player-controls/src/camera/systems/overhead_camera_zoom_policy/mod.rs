@@ -12,13 +12,12 @@ use crate::camera::camera_execution_types::CameraTuning;
 /// authored low/medium/high limits without changing the current focus.
 pub(crate) fn apply_overhead_camera_zoom_graphics_setting(
     graphics: Res<GraphicsSettings>,
-    mut cameras: Query<(&mut CameraTuning, &mut OverheadRig, &CameraMode), With<ZooCamera>>,
+    mut cameras: Query<(&mut CameraTuning, &mut OverheadRig, Ref<CameraMode>), With<ZooCamera>>,
 ) {
-    if !graphics.is_changed() {
-        return;
-    }
     for (mut tuning, mut rig, mode) in &mut cameras {
-        if *mode != CameraMode::Overhead {
+        if *mode != CameraMode::Overhead
+            || !(graphics.is_changed() || mode.is_changed() || tuning.is_changed())
+        {
             continue;
         }
         let maximum = select_three_level_graphics_detail_value(
@@ -26,8 +25,12 @@ pub(crate) fn apply_overhead_camera_zoom_graphics_setting(
             graphics.max_overhead_zoom,
         );
         let minimum = *tuning.distance.start();
-        tuning.distance = minimum..=maximum;
-        rig.distance = rig.distance.min(maximum);
+        tuning
+            .map_unchanged(|tuning| &mut tuning.distance)
+            .set_if_neq(minimum..=maximum);
+        let distance = rig.distance.min(maximum);
+        rig.map_unchanged(|rig| &mut rig.distance)
+            .set_if_neq(distance);
     }
 }
 

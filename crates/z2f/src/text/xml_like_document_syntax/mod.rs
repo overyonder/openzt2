@@ -227,8 +227,10 @@ fn collect_prefixes(text: &str) -> BTreeSet<String> {
             .map_or(text.len(), |relative| cursor + relative);
         collect_name_prefix(&text[cursor..end], &mut prefixes);
         if !closing {
-            let tag_end = find_tag_end(text, cursor.saturating_sub(1)).unwrap_or(text.len());
-            let mut attributes = &text[end..tag_end.saturating_sub(1)];
+            let Some(tag_end) = find_tag_end(text, cursor.saturating_sub(1)) else {
+                break;
+            };
+            let mut attributes = &text[end..tag_end - 1];
             while let Some((name, _, remainder)) = take_attribute(attributes) {
                 if !name.starts_with("xmlns:") {
                     collect_name_prefix(name, &mut prefixes);

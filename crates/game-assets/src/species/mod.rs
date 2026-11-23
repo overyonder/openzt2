@@ -32,10 +32,13 @@ impl Plugin for SpeciesAssetPlugin {
                 PreUpdate,
                 (
                     discover_species_catalogue_sources.run_if(
-                        in_state(GamePhase::Loading)
-                            .or_else(in_state(GamePhase::InGame))
-                            .or_else(any_with_component::<WorldAssetPreparation>)
-                            .or_else(on_message::<ArchiveOverlayChanged>),
+                        condition_changed_to(
+                            true,
+                            in_state(GamePhase::Loading)
+                                .or_else(in_state(GamePhase::InGame))
+                                .or_else(any_with_component::<WorldAssetPreparation>),
+                        )
+                        .or_else(on_message::<ArchiveOverlayChanged>),
                     ),
                     index_loaded_species_assets_by_species_and_variant_identifier,
                 )

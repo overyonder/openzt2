@@ -22,7 +22,7 @@ pub(crate) fn project_animation_surface_effects_into_water_disturbances(
     parents: Query<&ChildOf>,
     definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
-    terrain_index: Option<Res<TerrainIndex>>,
+    terrain_index: Option<Single<&TerrainIndex>>,
     terrain_assets: Res<Assets<TerrainAsset>>,
     memberships: Query<&TerrainWaterMembershipIndex>,
     regions: TerrainWaterRegionQuery,
@@ -30,6 +30,7 @@ pub(crate) fn project_animation_surface_effects_into_water_disturbances(
     mut spray: MessageWriter<WaterSurfaceSpraySample>,
     mut wakes: MessageWriter<WaterSurfaceWakeSample>,
 ) {
+    let terrain_index = terrain_index.map(Single::into_inner);
     let Some(index) = terrain_index else { return };
     let Some(definition_view) = active_definitions.get(&definition_assets) else {
         return;

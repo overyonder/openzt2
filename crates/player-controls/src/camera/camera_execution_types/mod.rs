@@ -106,9 +106,7 @@ pub(crate) enum CameraSpawnPendingReason {
 pub(crate) struct CameraTransition {
     pub(crate) from: Transform,
     pub(crate) to: Transform,
-    pub(crate) elapsed: f32,
-    pub(crate) duration: f32,
-    pub(crate) easing: CameraEasing,
+    pub(crate) timer: Timer,
 }
 
 #[derive(Component, Clone, Debug, PartialEq)]
@@ -117,12 +115,6 @@ pub(crate) struct CameraReturnState {
     pub(crate) definition: AssetId,
     pub(crate) transform: Transform,
     pub(crate) overhead: OverheadRig,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) enum CameraEasing {
-    #[default]
-    SmoothStep,
 }
 
 #[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
@@ -136,6 +128,7 @@ pub(crate) struct CameraIntent {
     /// Latched axes owned by authored UI press/release actions. The input system's
     /// frame-local input is combined with these without overwriting it.
     pub(crate) ui_pan: Vec2,
+    pub(crate) edge_pan: Option<(Entity, Vec2)>,
     pub(crate) ui_turn: f32,
     pub(crate) ui_zoom: f32,
     /// Independent held states of the authored photo commands.

@@ -1,56 +1,172 @@
-//! Authored earthquake UI actions applied directly to world environment state.
-
-use openzt2_zoo_state::environment::environment_state_types::WorldEnvironment;
-
 use bevy::prelude::*;
-use openzt2_game_data::ui_document::action::scenarios::UiScenarioAction;
-
+use bevy::time::Stopwatch;
 use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
-use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner;
-use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentRoot;
+use openzt2_game_data::ui_document::{
+    action::{presentation::UiPresentationAction, scenarios::UiScenarioAction, UiActionRecord},
+    timed_presentation::UiTimedEventAction,
+    widget::UiWidgetRecord,
+};
+use openzt2_game_data::AssetId;
+use openzt2_interface_state::{
+    camera::camera_runtime_state_types::{CameraMode, OverheadRig, ZooCamera},
+    ui::{
+        authored_ui_action_projection_components::{UiPresentationActions, UiScenarioActions},
+        authored_ui_activation_contracts::UiNodeActivated,
+        authored_ui_node_projection_components::{UiDocumentOwner, UiDocumentRoot},
+    },
+};
 
-use openzt2_interface_state::ui::authored_ui_action_projection_components::UiScenarioActions;
-use openzt2_interface_state::ui::authored_ui_activation_contracts::UiNodeActivated;
+const EARTHQUAKE_DROPOFF_SECONDS: f64 = 5.6;
 
-use super::environment_state_types::{Earthquake, EarthquakeRefreshed};
+#[derive(Component, Clone, PartialEq)]
+pub(super) struct EarthquakeCameraMotion {
+    document: Entity,
+    elapsed: Stopwatch,
+    distance: f32,
+    focus: Vec2,
+}
 
-pub(super) fn route_authored_earthquake_ui_actions_to_world_environment_state(
+fn is_earthquake_runner(document: &UiDocumentAsset, target: AssetId) -> bool {
+    document.canonical_ui_document().nodes.iter().any(|node| {
+        node.id == target
+            && match &node.widget {
+                UiWidgetRecord::TimedSequence { events, .. } => events.iter().any(|event| {
+                    matches!(
+                        &event.action,
+                        UiTimedEventAction::Ui(UiActionRecord::Scenario(record))
+                            if record.action == UiScenarioAction::RefreshEarthquake
+                    )
+                }),
+                _ => false,
+            }
+    })
+}
+
+#[allow(clippy::type_complexity)]
+pub(super) fn apply_authored_earthquake_motion_to_overhead_camera(
     mut commands: Commands,
-    mut activated_ui_nodes: MessageReader<UiNodeActivated>,
-    ui_document_assets: Res<Assets<UiDocumentAsset>>,
-    scenario_action_nodes: Query<(&UiScenarioActions, &UiDocumentOwner)>,
-    ui_document_roots: Query<&UiDocumentRoot>,
-    world_environments: Query<Entity, With<WorldEnvironment>>,
+    mut activations: MessageReader<UiNodeActivated>,
+    document_assets: Res<Assets<UiDocumentAsset>>,
+    routes: Query<(
+        &UiDocumentOwner,
+        Option<&UiScenarioActions>,
+        Option<&UiPresentationActions>,
+    )>,
+    roots: Query<&UiDocumentRoot>,
+    time: Res<Time<Real>>,
+    mut cameras: Query<
+        (
+            Entity,
+            &Camera,
+            &CameraMode,
+            &mut OverheadRig,
+            Option<&mut EarthquakeCameraMotion>,
+        ),
+        With<ZooCamera>,
+    >,
 ) {
-    for activated_ui_node in activated_ui_nodes.read() {
-        let Ok((authored_scenario_actions, ui_document_owner)) =
-            scenario_action_nodes.get(activated_ui_node.node)
+    let active = cameras
+        .iter()
+        .find(|(_, camera, mode, _, _)| camera.is_active && **mode == CameraMode::Overhead)
+        .map(|(entity, ..)| entity);
+    let Some(camera) = active else {
+        // A runner can keep issuing UI actions while the camera changes mode.
+        for (entity, _, _, _, motion) in &cameras {
+            if motion.is_some() {
+                commands.entity(entity).remove::<EarthquakeCameraMotion>();
+            }
+        }
+        activations.clear();
+        return;
+    };
+    let Ok((_, _, _, mut rig, motion)) = cameras.get_mut(camera) else {
+        return;
+    };
+    let mut next = motion
+        .as_deref()
+        .filter(|motion| roots.contains(motion.document))
+        .cloned();
+    if let Some(motion) = next.as_mut() {
+        motion.elapsed.tick(time.delta());
+    }
+    for activation in activations.read() {
+        let Ok((owner, scenario_actions, presentation_actions)) = routes.get(activation.node)
         else {
             continue;
         };
-        let Ok(ui_document_root) = ui_document_roots.get(ui_document_owner.0) else {
+        let Some(document) = roots
+            .get(owner.0)
+            .ok()
+            .and_then(|root| document_assets.get(&root.document))
+        else {
             continue;
         };
-        let Some(ui_document_asset) = ui_document_assets.get(&ui_document_root.document) else {
-            continue;
-        };
-        for authored_scenario_action in
-            authored_scenario_actions.authored_action_records(ui_document_asset)
+        for action in scenario_actions
+            .into_iter()
+            .flat_map(|actions| actions.authored_action_records(document))
+            .filter(|action| action.trigger == activation.trigger)
         {
-            if activated_ui_node.trigger != authored_scenario_action.trigger {
-                continue;
-            }
-            let refresh = match &authored_scenario_action.action {
-                UiScenarioAction::TriggerEarthquake => false,
-                UiScenarioAction::RefreshEarthquake => true,
-                _ => continue,
-            };
-            for entity in &world_environments {
-                commands.entity(entity).insert_if_new(Earthquake);
-                if refresh {
-                    commands.trigger(EarthquakeRefreshed { entity });
+            match action.action {
+                UiScenarioAction::TriggerEarthquake => {
+                    next = Some(EarthquakeCameraMotion {
+                        document: owner.0,
+                        elapsed: Stopwatch::new(),
+                        distance: rig.distance,
+                        focus: rig.focus,
+                    });
                 }
+                UiScenarioAction::RefreshEarthquake => {
+                    if let Some(motion) = next.as_ref().filter(|motion| motion.document == owner.0)
+                    {
+                        let elapsed = motion.elapsed.elapsed_secs_f64();
+                        let remaining = (EARTHQUAKE_DROPOFF_SECONDS - elapsed).max(0.0);
+                        let envelope =
+                            (std::f64::consts::PI * remaining / EARTHQUAKE_DROPOFF_SECONDS).sin();
+                        rig.reborrow()
+                            .map_unchanged(|rig| &mut rig.distance)
+                            .set_if_neq(
+                                motion.distance + (2.0 * (elapsed * 0.5).sin() * envelope) as f32,
+                            );
+                        rig.reborrow()
+                            .map_unchanged(|rig| &mut rig.focus)
+                            .set_if_neq(
+                                motion.focus
+                                    + Vec2::X * (1.5 * (elapsed * 85.0).sin() * envelope) as f32,
+                            );
+                    }
+                }
+                _ => {}
             }
         }
+        if next
+            .as_ref()
+            .is_some_and(|motion| motion.document == owner.0)
+            && presentation_actions
+                .into_iter()
+                .flat_map(|actions| actions.authored_action_records(document))
+                .any(|action| {
+                    action.trigger == activation.trigger
+                        && matches!(
+                            action.action,
+                            UiPresentationAction::SetTargetNodeSelectionAndTimedSequencesActive {
+                                target_node, active: false, document_role: None,
+                            } if is_earthquake_runner(document, target_node)
+                        )
+                })
+        {
+            next = None;
+        }
+    }
+    match (motion, next) {
+        (Some(mut current), Some(next)) => {
+            current.set_if_neq(next);
+        }
+        (Some(_), None) => {
+            commands.entity(camera).remove::<EarthquakeCameraMotion>();
+        }
+        (None, Some(next)) => {
+            commands.entity(camera).insert(next);
+        }
+        (None, None) => {}
     }
 }

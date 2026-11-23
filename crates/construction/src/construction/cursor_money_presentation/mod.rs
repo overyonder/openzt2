@@ -20,6 +20,7 @@ use openzt2_ui::authored_ui_text_content_binding::UiTextBinding;
 use crate::construction::cursor_money_types::CursorMoneyContainer;
 use crate::construction::cursor_money_types::CursorMoneyPreviewFragmentOwner;
 use crate::construction::cursor_money_types::CursorMoneySpendFragmentOwner;
+use crate::construction::cursor_money_types::PendingCursorMoneySpendAnimation;
 use openzt2_zoo_state::animal_lifecycle::animal_adoption_contracts::{
     AnimalPlacementOperation, AnimalSpeciesAwaitingHabitatPlacement,
 };
@@ -30,8 +31,13 @@ use openzt2_zoo_state::construction::construction_interaction_types::PlacementVa
 pub(super) fn project_cursor_money_text_position_and_animation(
     windows: Query<&Window, With<PrimaryWindow>>,
     containers: Query<(&ComputedNode, &UiGlobalTransform), With<CursorMoneyContainer>>,
-    preview_fragment_owners: Query<(), With<CursorMoneyPreviewFragmentOwner>>,
-    mut spend_fragment_owners: Query<&mut CursorMoneySpendFragmentOwner>,
+    fragment_owners: Query<
+        (Entity, &Children, Option<&CursorMoneySpendFragmentOwner>),
+        Or<(
+            With<CursorMoneyPreviewFragmentOwner>,
+            With<PendingCursorMoneySpendAnimation>,
+        )>,
+    >,
     mut fragment_layouts: Query<&mut Node, Without<UiDocumentRoot>>,
     previews: Query<(&ConstructionPreview, Has<PlacedObjectRelocationSource>)>,
     animal_placements: Query<&AnimalSpeciesAwaitingHabitatPlacement>,
@@ -42,7 +48,6 @@ pub(super) fn project_cursor_money_text_position_and_animation(
     mut roots: Query<
         (
             Entity,
-            &ChildOf,
             &UiTextBinding,
             &mut Text,
             &mut TextFont,
@@ -62,6 +67,9 @@ pub(super) fn project_cursor_money_text_position_and_animation(
     else {
         return;
     };
+    if cursor_money_container_node.size() == Vec2::ZERO {
+        return;
+    }
     let Some(localization) = active_localization.borrow_loaded_localization_view(&localizations)
     else {
         return;
@@ -91,9 +99,15 @@ pub(super) fn project_cursor_money_text_position_and_animation(
     };
     let current_pointer_screen_position = primary_window.cursor_position();
 
-    for (root, parent, binding, text, font, mut node, mut visibility, mut animation, origin) in
-        &mut roots
-    {
+    for (owner, children, spend) in &fragment_owners {
+        let Some(root) = children.iter().find(|&child| roots.contains(child)) else {
+            continue;
+        };
+        let Ok((root, binding, text, font, mut node, mut visibility, mut animation, origin)) =
+            roots.get_mut(root)
+        else {
+            continue;
+        };
         let UiTextPropertyBindingSource::ConstructionPreviewCost {
             positive_format,
             negative_format,
@@ -103,37 +117,26 @@ pub(super) fn project_cursor_money_text_position_and_animation(
         else {
             continue;
         };
-        let (cost, screen_position, spending, animate, start_animation) = if preview_fragment_owners
-            .contains(parent.parent())
-        {
+        let (cost, screen_position) = if let Some(spend) = spend {
+            if animation.duration_ms <= 0.0 {
+                commands.entity(owner).try_despawn();
+                continue;
+            }
+            (spend.cost, spend.screen_position)
+        } else {
             let (Some(cost), Some(position)) =
                 (construction_preview_cost, current_pointer_screen_position)
             else {
                 visibility.set_if_neq(Visibility::Hidden);
                 continue;
             };
-            // A credit (negative net cost) uses the positive format, as the
-            // original negates the net cost before formatting it by sign.
-            (cost, position, cost.0 > 0, false, false)
-        } else if let Ok(mut spend_fragment_owner) = spend_fragment_owners.get_mut(parent.parent())
-        {
-            let start_animation = !spend_fragment_owner.animation_started;
-            spend_fragment_owner.animation_started = true;
-            (
-                spend_fragment_owner.cost,
-                spend_fragment_owner.screen_position,
-                spend_fragment_owner.cost.0 > 0,
-                true,
-                start_animation,
-            )
-        } else {
-            continue;
+            (cost, position)
         };
         let authored_position = cursor_money_container_transform
             .inverse()
             .transform_point2(screen_position)
             + cursor_money_container_node.size() * 0.5;
-        if let Ok(mut layout) = fragment_layouts.get_mut(parent.parent()) {
+        if let Ok(mut layout) = fragment_layouts.get_mut(owner) {
             layout.set_if_neq(Node {
                 position_type: PositionType::Absolute,
                 left: px(0.0),
@@ -150,20 +153,19 @@ pub(super) fn project_cursor_money_text_position_and_animation(
             *negative_format,
             *no_cents,
             *no_minus,
-            spending,
+            cost.0 > 0,
             text,
             font,
         );
         visibility.set_if_neq(Visibility::Inherited);
         if let Some(mut origin) = origin {
-            origin.0 = authored_position;
+            origin.set_if_neq(UiAnimationOrigin(authored_position));
         } else {
             commands
                 .entity(root)
                 .insert(UiAnimationOrigin(authored_position));
         }
-        if !animate || start_animation {
-            node.reborrow()
+        node.reborrow()
                 .map_unchanged(|n| &mut n.position_type)
                 .set_if_neq(PositionType::Absolute);
             node.reborrow()
@@ -181,12 +183,12 @@ pub(super) fn project_cursor_money_text_position_and_animation(
                 .set_if_neq(px(animation.base_rect[2]));
             node.map_unchanged(|n| &mut n.height)
                 .set_if_neq(px(animation.base_rect[3]));
-        }
-        if animate && start_animation {
-            animation.elapsed_ms = animation.duration_ms;
-            animation.forward = false;
-            animation.running = animation.duration_ms > 0.0;
-        } else if !animate {
+        if spend.is_some() {
+            animation.start_authored_visibility_transition(false);
+            commands
+                .entity(owner)
+                .remove::<PendingCursorMoneySpendAnimation>();
+        } else {
             animation.elapsed_ms = animation.duration_ms;
             animation.forward = true;
             animation.running = false;

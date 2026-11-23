@@ -1,6 +1,6 @@
 //! Loaded behavior-document asset and precedence-index data.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use bevy::prelude::*;
 use openzt2_game_data::{behavior::document::BehaviorDocument, AssetId};
@@ -62,10 +62,24 @@ pub(super) struct BehaviorDeclarationLocation {
 #[derive(Resource, Default)]
 pub struct LoadedBehaviorDocumentCollection {
     pub(super) index_ready: bool,
-    pub(super) behavior_document_assets: Vec<Handle<BehaviorDocumentAsset>>,
+    pub(super) documents:
+        BTreeMap<bevy::asset::AssetId<BehaviorDocumentAsset>, IndexedBehaviorDocument>,
+    pub(super) pending: BTreeSet<bevy::asset::AssetId<BehaviorDocumentAsset>>,
     pub(super) behavior_sets_by_identifier: BTreeMap<AssetId, Vec<BehaviorDeclarationLocation>>,
     pub(super) behavior_tasks_by_unique_identifier:
         BTreeMap<AssetId, Vec<BehaviorDeclarationLocation>>,
+}
+
+pub(super) struct IndexedBehaviorDocument {
+    pub(super) handle: Handle<BehaviorDocumentAsset>,
+    pub(super) precedence: (usize, usize),
+    pub(super) rows: BehaviorDeclarationRows,
+}
+
+#[derive(Default, PartialEq, Eq)]
+pub(super) struct BehaviorDeclarationRows {
+    pub(super) sets: Vec<(AssetId, usize)>,
+    pub(super) tasks: Vec<(AssetId, usize)>,
 }
 
 #[derive(Clone, Copy)]

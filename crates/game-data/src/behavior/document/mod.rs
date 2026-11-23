@@ -60,35 +60,25 @@ pub struct BehaviorTask {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum BehaviorTaskActionPhase {
     Supported(Vec<BehaviorAction>),
-    SupportedPrefix {
-        actions: Vec<BehaviorAction>,
-        first_unsupported_action: String,
-    },
-    Unsupported {
-        first_unsupported_action: String,
-    },
 }
 
 impl BehaviorTaskActionPhase {
     #[must_use]
     pub fn lowered_actions(&self) -> &[BehaviorAction] {
-        match self {
-            Self::Supported(actions) | Self::SupportedPrefix { actions, .. } => actions,
-            Self::Unsupported { .. } => &[],
-        }
+        let Self::Supported(actions) = self;
+        actions
     }
 
     #[must_use]
-    pub const fn has_unsupported_suffix(&self) -> bool {
-        matches!(
-            self,
-            Self::SupportedPrefix { .. } | Self::Unsupported { .. }
-        )
+    pub fn contains_invalid_actions(&self) -> bool {
+        self.lowered_actions()
+            .iter()
+            .any(|action| matches!(action, BehaviorAction::InvalidAuthoredAction(_)))
     }
 
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        !self.has_unsupported_suffix() && self.lowered_actions().is_empty()
+        self.lowered_actions().is_empty()
     }
 }
 

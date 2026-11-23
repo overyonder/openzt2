@@ -15,7 +15,7 @@ use crate::{
     },
 };
 use bevy::{
-    asset::{io::Reader, AssetLoader, LoadContext},
+    asset::{AssetLoader, LoadContext, io::Reader},
     prelude::*,
 };
 use std::io;
@@ -130,8 +130,15 @@ impl AssetLoader for OriginalSavedGameAssetLoader {
         starting_zoos[0].map = map.id;
         source.document.starting_zoos = starting_zoos;
         source.scenes = starting.scenes;
-        let (configuration, unlimited_cash, economy) =
+        source.authored.former_fence_types = starting
+            .authored
+            .former_fence_types
+            .into_iter()
+            .map(|((_, persistent), former)| ((map.starting_zoo, persistent), former))
+            .collect();
+        let (configuration, authored, unlimited_cash, economy) =
             load_saved_world_configuration(&document, map.id, &self.archives, context).await?;
+        source.authored.scenario_nodes = authored.scenario_nodes;
         source.document.scenarios = configuration.scenarios;
         source.document.scenario_script_bindings = configuration.scenario_script_bindings;
         let terrain = context.load(path);

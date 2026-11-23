@@ -1,6 +1,7 @@
 use avian3d::prelude::AngularVelocity;
 use avian3d::prelude::LinearVelocity;
 use bevy::prelude::*;
+use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use openzt2_zoo_state::terrain::terrain_chunk_types::EditedTerrainSamples;
@@ -28,6 +29,7 @@ use openzt2_zoo_state::locomotion::locomotion_types::{SpatialCell, SpatialCellMe
 type SpatialAgentData = (
     Entity,
     &'static GlobalTransform,
+    &'static WorldMember,
     Option<&'static SpatialCell>,
 );
 
@@ -35,13 +37,18 @@ type SpatialAgentData = (
 pub(super) fn project_agent_spatial_membership(
     mut commands: Commands,
     parallel: ParallelCommands,
-    grid: Res<SpatialGrid>,
+    grids: Query<&SpatialGrid>,
+    changed_grids: Query<(), Changed<SpatialGrid>>,
     agents: Query<SpatialAgentData, With<NavAgent>>,
     moved_agents: Query<
         SpatialAgentData,
         (
             With<NavAgent>,
-            Or<(Changed<GlobalTransform>, Added<NavAgent>)>,
+            Or<(
+                Changed<GlobalTransform>,
+                Changed<WorldMember>,
+                Added<NavAgent>,
+            )>,
         ),
     >,
     mut removed: RemovedComponents<NavAgent>,
@@ -51,25 +58,30 @@ pub(super) fn project_agent_spatial_membership(
             commands.entity(entity).try_remove::<SpatialCell>();
         }
     }
-    let project =
-        |(entity, transform, current): (Entity, &GlobalTransform, Option<&SpatialCell>)| {
-            let next = grid
-                .cell_of(transform.translation().xz())
-                .and_then(|index| grid.cells.get(index as usize).copied());
-            if current.map(|cell| cell.0) != next {
-                parallel.command_scope(|mut commands| {
-                    if let Some(next) = next {
-                        commands.entity(entity).insert(SpatialCell(next));
-                    } else {
-                        commands.entity(entity).remove::<SpatialCell>();
-                    }
-                });
-            }
-        };
-    if grid.is_changed() {
-        agents.par_iter().for_each(project);
-    } else {
+    let project = |(entity, transform, member, current): (
+        Entity,
+        &GlobalTransform,
+        &WorldMember,
+        Option<&SpatialCell>,
+    )| {
+        let next = grids.get(member.root).ok().and_then(|grid| {
+            grid.cell_of(transform.translation().xz())
+                .and_then(|index| grid.cells.get(index as usize).copied())
+        });
+        if current.map(|cell| cell.0) != next {
+            parallel.command_scope(|mut commands| {
+                if let Some(next) = next {
+                    commands.entity(entity).insert(SpatialCell(next));
+                } else {
+                    commands.entity(entity).remove::<SpatialCell>();
+                }
+            });
+        }
+    };
+    if changed_grids.is_empty() {
         moved_agents.par_iter().for_each(project);
+    } else {
+        agents.par_iter().for_each(project);
     }
 }
 

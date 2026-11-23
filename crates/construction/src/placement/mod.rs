@@ -27,6 +27,7 @@ use crate::placement::object_placement_edit_application::apply_prepared_object_p
 use crate::placement::object_placement_or_relocation_edit_preparation::prepare_object_placement_or_relocation_edit;
 use crate::placement::object_placement_preview_lifecycle::animate_object_placement_preview_presentation_toward_authoritative_transform;
 use crate::placement::object_placement_preview_lifecycle::apply_authored_initial_animal_placement_preview_animation_repetition_policy;
+use crate::placement::object_placement_preview_lifecycle::attach_pending_animal_placement_preview_animations;
 use crate::placement::object_placement_preview_lifecycle::create_active_object_placement_preview;
 use crate::placement::object_placement_preview_lifecycle::hydrate_object_placement_preview_prefab_render_tree;
 use crate::placement::object_placement_preview_lifecycle::synchronize_object_placement_preview_with_construction_cursor;
@@ -46,7 +47,6 @@ use crate::placement::placed_object_footprint_occupancy_index_synchronization::s
 use crate::placement::placed_object_removal_edit_preparation::prepare_placed_object_removal_edit;
 use crate::placement::placed_object_terrain_support_reconciliation::reconcile_static_placed_object_support_after_terrain_changes;
 use openzt2_zoo_state::placement::placement_occupancy_index::PlacedObjectFootprintOccupancyIndex;
-use openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementCellCollectionScratch;
 use openzt2_zoo_state::placement::placement_transaction_types::ApplyPreparedObjectPlacementEditRequest;
 use openzt2_zoo_state::placement::placement_transaction_types::CommitObjectPlacementPreviewRequest;
 use openzt2_zoo_state::placement::placement_transaction_types::ObjectPlacementCommitted;
@@ -112,7 +112,6 @@ impl Plugin for ObjectPlacementPlugin {
                 .run_if(in_state(GamePhase::InGame)),
         );
         app.register_required_components::<openzt2_world_state::world_spawn::world_membership_types::WorldRoot, PlacedObjectFootprintOccupancyIndex>()
-            .init_resource::<ObjectPlacementCellCollectionScratch>()
             .add_message::<openzt2_zoo_state::placement::object_placement_geometry::ScenePlacementFootprintChanged>()
             .add_message::<CommitObjectPlacementPreviewRequest>()
             .add_message::<RemovePlacedObjectRequest>()
@@ -133,8 +132,10 @@ impl Plugin for ObjectPlacementPlugin {
                         .after(crate::construction::construction_tool_and_action_routing::select_construction_tool),
                     biome_automatic_object_placement_edit_preparation::hydrate_biome_automatic_placement_state_onto_world_and_terrain_brush_previews,
                     hydrate_object_placement_preview_prefab_render_tree.after(create_active_object_placement_preview),
-                    apply_authored_initial_animal_placement_preview_animation_repetition_policy
+                    attach_pending_animal_placement_preview_animations
                         .after(hydrate_object_placement_preview_prefab_render_tree),
+                    apply_authored_initial_animal_placement_preview_animation_repetition_policy
+                        .after(attach_pending_animal_placement_preview_animations),
                     hydrate_object_placement_preview_materials_from_ui_document,
                     rotate_active_object_placement_preview_by_authored_increment.after(create_active_object_placement_preview),
                     synchronize_object_placement_preview_with_construction_cursor
@@ -148,6 +149,7 @@ impl Plugin for ObjectPlacementPlugin {
                     route_valid_object_placement_requests_to_construction.after(evaluate_dirty_object_placement_previews),
                     rebuild_object_placement_preview_footprint_and_grid_decals
                         .after(evaluate_dirty_object_placement_previews)
+                        .after(hydrate_object_placement_preview_prefab_render_tree)
                         .after(hydrate_object_placement_preview_materials_from_ui_document),
                     (
                         crate::placement::object_placement_preview_presentation::pulse_object_placement_entrance_arrows
@@ -215,19 +217,10 @@ impl Plugin for ObjectPlacementPlugin {
                     reconcile_static_placed_object_support_after_terrain_changes,
                     synchronize_physics_moved_object_footprints_with_occupancy_index,
                 )
-                    .chain()
                     .after(PhysicsSystems::Writeback)
                     .run_if(in_state(GamePhase::InGame)),
-            )
-            .add_systems(
-                OnExit(GamePhase::InGame),
-                reset_object_placement_resources,
             );
     }
-}
-
-fn reset_object_placement_resources(mut scratch: ResMut<ObjectPlacementCellCollectionScratch>) {
-    *scratch = default();
 }
 
 #[cfg(test)]

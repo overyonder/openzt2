@@ -29,6 +29,14 @@ use crate::camera::camera_execution_types::CameraIntent;
 use crate::camera::camera_execution_types::CameraSpawnPending;
 use crate::camera::camera_execution_types::CameraSpawnPendingReason;
 
+#[derive(Component)]
+#[relationship(relationship_target = WorldZooCameras)]
+pub(crate) struct ZooCameraForWorld(Entity);
+
+#[derive(Component)]
+#[relationship_target(relationship = ZooCameraForWorld)]
+pub(crate) struct WorldZooCameras(Vec<Entity>);
+
 /// Spawns the selected camera once world bounds and its definition have loaded.
 pub(crate) fn spawn_zoo_camera(
     mut commands: Commands,
@@ -37,25 +45,43 @@ pub(crate) fn spawn_zoo_camera(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     graphics: Res<GraphicsSettings>,
-    roots: Query<
+    mut roots: Query<
         (
             Entity,
-            &SelectedWorldIdentity,
-            &WorldTerrainHorizontalBounds,
-            Option<&CameraSpawnPending>,
-            Option<&SelectedWorldDocumentHandles>,
+            Ref<SelectedWorldIdentity>,
+            Ref<WorldTerrainHorizontalBounds>,
+            Option<&mut CameraSpawnPending>,
+            Option<Ref<SelectedWorldDocumentHandles>>,
         ),
-        With<WorldRoot>,
+        (With<WorldRoot>, Without<WorldZooCameras>),
     >,
-    cameras: Query<&WorldMember, With<ZooCamera>>,
+    mut released_camera_worlds: RemovedComponents<WorldZooCameras>,
 ) {
+    let released: bevy::ecs::entity::EntityHashSet = released_camera_worlds.read().collect();
+    if roots.is_empty() {
+        return;
+    }
+    let assets_changed = active_scenarios.is_changed()
+        || scenarios.is_changed()
+        || definitions.is_changed()
+        || active_definitions.is_changed()
+        || graphics.is_changed();
     let Some(scenario_catalogue) = active_scenarios.get(&scenarios) else {
         return;
     };
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };
-    for (root, selection, world_bounds, pending, documents) in &roots {
+    for (root, selection, world_bounds, pending, documents) in &mut roots {
+        if !assets_changed
+            && !selection.is_changed()
+            && !world_bounds.is_changed()
+            && !documents.as_ref().is_some_and(DetectChanges::is_changed)
+            && !released.contains(&root)
+        {
+            continue;
+        }
+        let documents = documents.as_deref();
         let scoped_catalogue = match documents {
             Some(documents) => scenario_catalogue
                 .with_document(&documents.map)
@@ -65,13 +91,6 @@ pub(crate) fn spawn_zoo_camera(
         let Some(scoped_catalogue) = scoped_catalogue else {
             continue;
         };
-        if cameras.iter().any(|member| member.root == root) {
-            if pending.is_some() {
-                commands.entity(root).remove::<CameraSpawnPending>();
-            }
-            continue;
-        }
-
         let Some(map) = scoped_catalogue.map(selection.map) else {
             set_zoo_camera_spawn_pending_reason(
                 &mut commands,
@@ -109,7 +128,11 @@ pub(crate) fn spawn_zoo_camera(
             continue;
         };
         let Some((projection, tuning, mut rig, bounds)) =
-            camera_runtime_components_from_authored_definition(definition, world_bounds, &graphics)
+            camera_runtime_components_from_authored_definition(
+                definition,
+                &world_bounds,
+                &graphics,
+            )
         else {
             set_zoo_camera_spawn_pending_reason(
                 &mut commands,
@@ -166,7 +189,7 @@ pub(crate) fn spawn_zoo_camera(
             tuning,
             bounds,
             CameraIntent::default(),
-            WorldMember { root },
+            (WorldMember { root }, ZooCameraForWorld(root)),
         ));
         if pending.is_some() {
             commands.entity(root).remove::<CameraSpawnPending>();
@@ -177,15 +200,20 @@ pub(crate) fn spawn_zoo_camera(
 fn set_zoo_camera_spawn_pending_reason(
     commands: &mut Commands,
     root: Entity,
-    current: Option<&CameraSpawnPending>,
+    current: Option<Mut<CameraSpawnPending>>,
     reason: CameraSpawnPendingReason,
 ) {
-    if current.is_none_or(|current| current.0 != reason) {
-        warn!(
-            ?root,
-            ?reason,
-            "zoo camera hydration is waiting on a native dependency"
-        );
+    if current.as_ref().is_some_and(|current| current.0 == reason) {
+        return;
+    }
+    warn!(
+        ?root,
+        ?reason,
+        "zoo camera hydration is waiting on a native dependency"
+    );
+    if let Some(mut current) = current {
+        current.set_if_neq(CameraSpawnPending(reason));
+    } else {
         commands.entity(root).insert(CameraSpawnPending(reason));
     }
 }

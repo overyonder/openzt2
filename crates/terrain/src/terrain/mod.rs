@@ -81,14 +81,20 @@ use openzt2_zoo_state::terrain::terrain_edit_types::TerrainWaterChanged;
 use openzt2_zoo_state::terrain::terrain_navigation_change_types::TerrainNavigationChanged;
 use openzt2_zoo_state::terrain::terrain_water_geometric_wave_shader_state::ActivateTerrainWaterImpactWave;
 
-use openzt2_game_assets::application_lifecycle::GamePhase;
 use openzt2_world_state::application_schedule::FixedGameSet;
 use openzt2_world_state::application_schedule::GameSet;
 use openzt2_world_state::application_schedule::WaterPresentationSet;
 use openzt2_world_state::model_render::ModelRenderPresentationSet;
+use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 use openzt2_zoo_state::construction::FixedConstructionPreparedDomainEditMaterializationSet;
 use openzt2_zoo_state::construction::FixedConstructionSet;
 use openzt2_zoo_state::construction::FixedConstructionTransactionMaterializationSet;
+
+use openzt2_interface_state::camera::camera_runtime_state_types::ZooCamera;
+use openzt2_zoo_state::terrain::terrain_water_view_state::{
+    TerrainWaterCameraContact, TerrainWaterCameraPose, TerrainWaterCaptureSelection,
+    TerrainWaterTrainingFade,
+};
 
 /// Registers terrain-owned state and messages. Root integration owns placement in
 /// the shared schedules and render sub-app.
@@ -96,12 +102,16 @@ pub struct TerrainPlugin;
 
 impl Plugin for TerrainPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<TerrainIndex>()
-            .init_resource::<terrain_chunk_index_cleanup::TerrainChunkIdLookup>()
+        app.register_required_components::<ZooCamera, TerrainWaterCameraPose>()
+            .register_required_components::<ZooCamera, TerrainWaterCameraContact>()
+            .register_required_components::<ZooCamera, TerrainWaterCaptureSelection>()
+            .register_required_components::<ZooCamera, TerrainWaterTrainingFade>()
+            .register_required_components::<ZooCamera, terrain_water_view_selection::TerrainWaterCaptureHits>()
+            .register_required_components::<WorldRoot, TerrainIndex>()
+            .register_required_components::<WorldRoot, terrain_chunk_index_cleanup::TerrainChunkIdLookup>()
             .add_observer(terrain_chunk_index_cleanup::index_validated_terrain_chunk)
             .add_observer(terrain_chunk_index_cleanup::remove_discarded_terrain_chunk_from_indexes)
             .add_plugins(terrain_water_rays::view_occlusion::WaterRayOcclusionPlugin)
-            .init_resource::<openzt2_zoo_state::terrain::terrain_water_view_state::TerrainWaterViewState>()
             .init_resource::<TerrainCollisionBudget>()
             .add_message::<DiscardedTerrainPaintArea>()
             .add_message::<terrain_ground_path_surface_projection::DiscardedGroundPathCell>()
@@ -187,9 +197,14 @@ impl Plugin for TerrainPlugin {
                         terrain_water_view_selection::update_camera_terrain_water_membership
                             .after(terrain_water_view_selection::sample_terrain_water_camera_pose)
                             .after(water_regions::authored_membership::project_terrain_water_membership),
+                        terrain_water_view_selection::update_terrain_water_capture_hits
+                            .after(terrain_water_view_selection::sample_terrain_water_camera_pose)
+                            .after(water_regions::authored_membership::project_terrain_water_membership),
                         terrain_water_view_selection::update_terrain_water_view_selection
                             .after(terrain_water_renderer_inputs::project_authored_terrain_water_surface_coverage)
-                            .after(terrain_water_view_selection::update_camera_terrain_water_membership),
+                            .after(terrain_water_view_selection::update_terrain_water_capture_hits),
+                        terrain_water_view_transitions::advance_terrain_water_training_fade
+                            .after(terrain_water_view_selection::sample_terrain_water_camera_pose),
                         terrain_water_view_transitions::advance_terrain_water_region_fades
                             .after(terrain_water_view_selection::update_terrain_water_view_selection),
                     ),
@@ -336,17 +351,8 @@ impl Plugin for TerrainPlugin {
                 FixedUpdate,
                 rebuild_pending_terrain_chunk_collisions_within_tick_budget
                     .in_set(FixedGameSet::Cleanup),
-            )
-            .add_systems(OnExit(GamePhase::InGame), reset_terrain_index);
+            );
     }
-}
-
-fn reset_terrain_index(
-    mut index: ResMut<TerrainIndex>,
-    mut ids: ResMut<terrain_chunk_index_cleanup::TerrainChunkIdLookup>,
-) {
-    *index = default();
-    ids.0.clear();
 }
 
 #[cfg(test)]

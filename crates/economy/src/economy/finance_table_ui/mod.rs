@@ -26,6 +26,7 @@ use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types:
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentRoot;
 use openzt2_ui::authored_ui_text_content_binding::UiTextBinding;
+use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 use std::fmt::Write;
 
 use openzt2_interface_state::information::entity_selection_types::InformationEntitySource;
@@ -156,13 +157,16 @@ pub(super) fn project_finance_report_subjects(
 }
 
 pub(super) fn request_finance_balance_sheet_list_sizes(
-    history: Res<MonthlyFinanceHistory>,
+    worlds: Query<Ref<MonthlyFinanceHistory>, With<WorldRoot>>,
     documents: Res<Assets<UiDocumentAsset>>,
     roots: Query<&UiDocumentRoot>,
     owners: Query<&UiDocumentOwner>,
     parents: Query<&ChildOf>,
     mut lists: Query<(Entity, Ref<UiListPolicy>, &mut RequestedUiListRowCount)>,
 ) {
+    let Ok(history) = worlds.single() else {
+        return;
+    };
     use UiWidgetLiveCollectionSource::*;
     for (list, policy, mut count) in &mut lists {
         let rows = match policy.source {
@@ -264,7 +268,7 @@ fn finance_categories_for<'a>(
 /// into the nested native balance-sheet lists created from shipped fragments.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn project_monthly_finance_values_into_native_balance_sheet_lists(
-    history: Res<MonthlyFinanceHistory>,
+    worlds: Query<Ref<MonthlyFinanceHistory>, With<WorldRoot>>,
     documents: Res<Assets<UiDocumentAsset>>,
     active_localization: Res<LocalizationPrecedenceIndex>,
     localizations: Res<Assets<LocalizationAsset>>,
@@ -273,6 +277,9 @@ pub(super) fn project_monthly_finance_values_into_native_balance_sheet_lists(
     roots: Query<&UiDocumentRoot>,
     mut texts: Query<(Ref<FinanceBalanceSheetCell>, Ref<UiTextBinding>, &mut Text)>,
 ) {
+    let Ok(history) = worlds.single() else {
+        return;
+    };
     let refresh = history.is_changed()
         || active_localization.is_changed()
         || localizations.is_changed()
@@ -375,7 +382,7 @@ pub(super) fn request_authored_finance_table_row_counts(
 }
 
 pub(super) fn project_monthly_finance_values_into_authored_table_rows(
-    history: Res<MonthlyFinanceHistory>,
+    worlds: Query<Ref<MonthlyFinanceHistory>, With<WorldRoot>>,
     documents: Res<Assets<UiDocumentAsset>>,
     active_localization: Res<LocalizationPrecedenceIndex>,
     localizations: Res<Assets<LocalizationAsset>>,
@@ -385,6 +392,9 @@ pub(super) fn project_monthly_finance_values_into_authored_table_rows(
     children: Query<&Children>,
     mut texts: Query<&mut Text>,
 ) {
+    let Ok(history) = worlds.single() else {
+        return;
+    };
     let localization_changed = active_localization.is_changed() || localizations.is_changed();
     let Some(localization) = active_localization.borrow_loaded_localization_view(&localizations)
     else {

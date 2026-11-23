@@ -1,13 +1,14 @@
 use bevy::prelude::*;
 use openzt2_game_data::{world_definitions::staff_management::StaffJobKind, AssetId};
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::WhenBehaviorAction;
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
     RunBehaviorCureDisease, RunningBehaviorInstruction,
 };
 
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
-use openzt2_zoo_state::animal_behavior::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation;
 use openzt2_zoo_state::animal_lifecycle::types::Animal;
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::mark_behavior_task_for_failure_and_stop_navigation;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
 use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorTaskFailure;
 use openzt2_zoo_state::staff::staff_employment_types::Staff;
@@ -25,8 +26,9 @@ use openzt2_zoo_state::animal_health::types::Vitality;
 /// The authored cure action clears disease at its execution point, after the
 /// approach and animation. It does not prescribe a vitality or need adjustment.
 pub(crate) fn apply_authored_disease_cures_for_live_staff_claims(
+    activation: On<WhenBehaviorAction<RunBehaviorCureDisease>>,
     mut commands: Commands,
-    clock: Res<ZooClock>,
+    clock: Single<&ZooClock>,
     staff: Query<
         (
             Entity,
@@ -43,7 +45,9 @@ pub(crate) fn apply_authored_disease_cures_for_live_staff_claims(
     >,
     animals: Query<&Vitality, (With<Animal>, With<WorldMember>, Without<Dead>)>,
 ) {
-    for (actor, current, task, instruction, _) in &staff {
+    for (actor, current, task, instruction, _) in
+        std::iter::once(staff.get(activation.entity)).flatten()
+    {
         if task.next_action_tick > clock.tick || !instruction.is_current(task) {
             continue;
         }

@@ -22,7 +22,7 @@ pub(super) fn route_authored_research_ui_actions_to_start_requests(
     documents: Res<Assets<UiDocumentAsset>>,
     action_nodes: Query<(&UiResearchActions, &UiDocumentOwner)>,
     roots: Query<&UiDocumentRoot>,
-    selected: Res<SelectedCatalogueEntry>,
+    selected: Single<&SelectedCatalogueEntry>,
     research: Query<&ResearchProjectAvailability>,
     world_items: Query<(Entity, &WorldResearchItems)>,
     active_world: Query<Entity, (With<WorldRoot>, With<WorldLoadCompleted>)>,
@@ -30,6 +30,7 @@ pub(super) fn route_authored_research_ui_actions_to_start_requests(
     active_definitions: Res<WorldDefinitions>,
     mut requests: MessageWriter<StartResearchProjectRequest>,
 ) {
+    let selected = selected.into_inner();
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };

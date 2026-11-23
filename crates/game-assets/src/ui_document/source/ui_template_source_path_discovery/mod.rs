@@ -55,27 +55,15 @@ pub(in crate::ui_document) fn collect_referenced_ui_template_source_paths(
 
 pub(in crate::ui_document) fn build_ui_template_declaration_source_path_index(
     asset_archives: &AssetArchives,
-    resolved_paths: &[std::path::PathBuf],
+    template_entries: &[z2f::ResolvedArchiveEntry],
 ) -> BTreeMap<String, String> {
-    let candidate_ui_template_source_paths = resolved_paths
-        .iter()
-        .map(|source_path| {
-            z2f::paths::normalize_asset_path_for_case_insensitive_archive_lookup(source_path)
-        })
-        .filter(|source_path| {
-            source_path.starts_with("ui/template")
-                && source_path
-                    .extension()
-                    .is_some_and(|extension| extension.eq_ignore_ascii_case("xml"))
-        })
-        .collect::<Vec<_>>();
-
     let mut ui_template_declaration_source_paths = BTreeMap::new();
-    for source_path in candidate_ui_template_source_paths {
+    for entry in template_entries {
+        let source_path = &entry.normalized_asset_path;
         let source_path_string = source_path.to_string_lossy().replace('\\', "/");
         let Some(source_document) =
             asset_archives
-                .read_source(&source_path)
+                .read_source(source_path)
                 .ok()
                 .and_then(|source_bytes| {
                     parse_blue_fang_source_document(

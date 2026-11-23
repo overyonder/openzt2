@@ -27,6 +27,7 @@ pub struct GuestSurveyRatingHistory {
     pub daily_counts: [u32; GUEST_SURVEY_DAYS],
 }
 
+/// Signed seconds remaining, rounded after each eligible thinker.
 #[derive(Component, Debug, Clone, Copy, Default, PartialEq)]
 pub struct GuestSurveyNeedCadence(pub f32);
 
@@ -42,7 +43,7 @@ impl GuestSurveyNeedCadence {
     }
 }
 
-#[derive(Resource, Debug, Clone, Copy, PartialEq)]
+#[derive(Component, Debug, Clone, Copy, PartialEq)]
 pub struct GuestSurvey {
     pub previous_day_of_month: i32,
     pub current_day_of_month: i32,

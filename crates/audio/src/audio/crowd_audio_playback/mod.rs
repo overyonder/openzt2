@@ -1,4 +1,6 @@
 use super::audio_request_lanes::{ProducedAudioRequest, CROWD};
+use super::world_audio_soundscape_membership::{SoundscapeInputChanges, WorldAudioSoundscapes};
+use bevy::ecs::relationship::RelationshipTarget;
 use bevy::prelude::*;
 use openzt2_game_assets::audio::audio_asset_types::{AudioAsset, AudioAssets};
 use openzt2_game_data::{audio::AudioCrowdPolicy, AssetId as CueId};
@@ -15,6 +17,37 @@ pub(super) struct CrowdCuePlayback {
     band: Option<u8>,
     cue: Option<CueId>,
     selection: u64,
+}
+
+#[derive(Component, Clone, Copy, PartialEq, Eq)]
+pub(super) struct ActiveAudioGuestCount(i32);
+
+#[derive(Component)]
+pub(super) struct CrowdBandTransitionPending;
+
+pub(super) fn publish_world_guest_count_for_crowd_audio(
+    mut commands: Commands,
+    mut worlds: Query<
+        (
+            Entity,
+            &MonthlyFinanceHistory,
+            Option<&mut ActiveAudioGuestCount>,
+        ),
+        Changed<MonthlyFinanceHistory>,
+    >,
+) {
+    for (root, history, count) in &mut worlds {
+        let next = ActiveAudioGuestCount(
+            history
+                .current_month_finance()
+                .map_or(0, |row| row.active_users),
+        );
+        if let Some(mut count) = count {
+            count.set_if_neq(next);
+        } else {
+            commands.entity(root).insert(next);
+        }
+    }
 }
 
 fn select_crowd_band(count: i32, current: Option<u8>, policy: &AudioCrowdPolicy) -> Option<u8> {
@@ -45,26 +78,39 @@ pub(super) fn project_current_crowd_into_audio_playback(
     mut commands: Commands,
     assets: Res<Assets<AudioAsset>>,
     catalogue: Res<AudioAssets>,
-    finance: Query<&MonthlyFinanceHistory>,
+    counts: Query<&ActiveAudioGuestCount>,
+    changed_counts: Query<Entity, Changed<ActiveAudioGuestCount>>,
+    transitioning: Query<Entity, With<CrowdBandTransitionPending>>,
+    mut inputs: SoundscapeInputChanges,
     presets: Query<&WorldAudioPreset>,
     mut soundscapes: Query<(
         Entity,
         &AudioSoundscape,
         &WorldMember,
         Option<&mut CrowdCuePlayback>,
+        Has<CrowdBandTransitionPending>,
     )>,
     mut requests: MessageWriter<ProducedAudioRequest<CROWD>>,
 ) {
     let catalogue_policy = catalogue
         .get(&assets)
         .and_then(|catalogue| catalogue.crowd());
-    for (entity, soundscape, member, playback) in &mut soundscapes {
-        let Some(count) = finance
-            .get(member.root)
-            .ok()
-            .and_then(|history| history.current_month_finance())
-            .map(|row| row.active_users)
-        else {
+    let mut candidates = inputs.affected_soundscapes();
+    if catalogue.is_changed() {
+        candidates.extend(soundscapes.iter().map(|(entity, ..)| entity));
+    }
+    candidates.extend(transitioning.iter());
+    candidates.extend(
+        changed_counts
+            .iter()
+            .filter_map(|root| inputs.world_soundscapes.get(root).ok())
+            .flat_map(WorldAudioSoundscapes::iter),
+    );
+    let mut soundscapes = soundscapes.iter_many_mut(candidates).matched();
+    while let Some((entity, soundscape, member, playback, has_pending_transition)) =
+        soundscapes.fetch_next()
+    {
+        let Ok(&ActiveAudioGuestCount(count)) = counts.get(member.root) else {
             continue;
         };
         let policy = match presets.get(member.root) {
@@ -83,6 +129,19 @@ pub(super) fn project_current_crowd_into_audio_playback(
                 policy,
             )
         });
+        let pending_transition =
+            policy.is_some_and(|policy| select_crowd_band(count, band, policy) != band);
+        match (pending_transition, has_pending_transition) {
+            (true, false) => {
+                commands.entity(entity).insert(CrowdBandTransitionPending);
+            }
+            (false, true) => {
+                commands
+                    .entity(entity)
+                    .remove::<CrowdBandTransitionPending>();
+            }
+            _ => {}
+        }
         let cue = band.and_then(|band| policy.and_then(|policy| policy.cues[usize::from(band)]));
         let selection = soundscape.selection ^ 0xc7d2_63a5_80e1_b49f;
         let next = CrowdCuePlayback {
@@ -109,7 +168,7 @@ pub(super) fn project_current_crowd_into_audio_playback(
             }));
         }
         if let Some(mut playback) = playback {
-            *playback = next;
+            playback.set_if_neq(next);
         } else {
             commands.entity(entity).insert(next);
         }
@@ -141,8 +200,13 @@ mod tests {
         ));
         app.init_resource::<Assets<AudioAsset>>()
             .init_resource::<AudioAssets>()
+            .add_message::<AssetEvent<AudioAsset>>()
             .add_message::<ProducedAudioRequest<CROWD>>()
-            .add_systems(Update, project_current_crowd_into_audio_playback);
+            .add_systems(Update, (
+                super::super::world_audio_soundscape_membership::bind_world_soundscape_membership,
+                publish_world_guest_count_for_crowd_audio,
+                project_current_crowd_into_audio_playback,
+            ).chain());
         let cues = ["quiet", "small", "medium", "large", "huge"].map(CueId::from_key);
         let preset = app.world_mut().resource_mut::<Assets<AudioAsset>>().add(
             AudioAsset::from_world_preset(

@@ -23,6 +23,10 @@ use bevy_inspector_egui::{
 
 use openzt2_game_assets::application_lifecycle::GamePhase;
 
+use developer_diagnostics_egui_context_ownership::{
+    reconcile_primary_egui_context, shell_camera_added, shell_camera_removed,
+    ShellCameraMembershipChanged,
+};
 use developer_diagnostics_view_types::DeveloperDiagnosticsViewState;
 
 pub(crate) struct OpenZt2DeveloperDiagnosticsPlugin;
@@ -75,21 +79,31 @@ impl Plugin for OpenZt2DeveloperDiagnosticsPlugin {
                     developer_diagnostics_view_operations::spawn_developer_diagnostics_hotkey_legend,
                 ),
             )
+            .add_message::<ShellCameraMembershipChanged>()
+            .add_observer(shell_camera_added)
+            .add_observer(shell_camera_removed)
+            .add_systems(
+                PreUpdate,
+                reconcile_primary_egui_context
+                    .before(EguiPreUpdateSet::InitContexts)
+                    .run_if(on_message::<ShellCameraMembershipChanged>),
+            )
             .add_systems(
                 Update,
                 (
                     developer_diagnostics_view_operations::toggle_developer_diagnostics_views_from_hotkeys,
-                    developer_diagnostics_view_operations::synchronize_developer_diagnostics_view_visibility,
-                    developer_diagnostics_view_operations::update_developer_diagnostics_hotkey_legend,
-                    terrain::synchronize_retained_terrain_wireframe_gizmo_assets,
-                    terrain::synchronize_retained_terrain_wireframe_gizmo_visibility,
-                )
-                    .chain(),
+                    (
+                        developer_diagnostics_view_operations::synchronize_developer_diagnostics_view_visibility
+                            .run_if(resource_changed::<DeveloperDiagnosticsViewState>),
+                        developer_diagnostics_view_operations::update_developer_diagnostics_hotkey_legend
+                            .run_if(resource_changed::<DeveloperDiagnosticsViewState>),
+                        terrain::synchronize_retained_terrain_wireframe_gizmo_assets,
+                        terrain::synchronize_retained_terrain_wireframe_gizmo_visibility
+                            .after(terrain::synchronize_retained_terrain_wireframe_gizmo_assets)
+                            .run_if(resource_changed::<DeveloperDiagnosticsViewState>),
+                    )
+                        .after(developer_diagnostics_view_operations::toggle_developer_diagnostics_views_from_hotkeys),
+                ),
             );
-        app.add_systems(
-            PreUpdate,
-            developer_diagnostics_egui_context_ownership::own_primary_egui_context_on_shell_camera
-                .before(EguiPreUpdateSet::BeginPass),
-        );
     }
 }

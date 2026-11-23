@@ -23,15 +23,16 @@ use super::{
     },
     render_property_and_texture_source_parsing::{
         parse_alpha_property, parse_boolean_extra_data, parse_depth_buffer_property,
-        parse_flag_property, parse_integer_extra_data, parse_material_property, parse_pixel_data,
-        parse_source_texture, parse_specular_property, parse_stencil_property,
+        parse_flag_property, parse_integer_extra_data, parse_material_property, parse_palette,
+        parse_pixel_data, parse_source_texture, parse_specular_property, parse_stencil_property,
         parse_string_extra_data, parse_texture_effect, parse_texturing_property,
         parse_vertex_colour_property,
     },
     scene_object_source_parsing::{
         parse_ambient_light, parse_billboard_node, parse_directional_light, parse_grouping_node,
         parse_level_of_detail_node, parse_particle_meshes_geometry, parse_particles_geometry,
-        parse_point_light, parse_triangle_shape_geometry, parse_triangle_strips_geometry,
+        parse_point_light, parse_switch_node, parse_triangle_shape_geometry,
+        parse_triangle_strips_geometry,
     },
     source_error::NetImmerseNifSourceError,
 };
@@ -50,12 +51,16 @@ pub(super) fn parse_block_payload(
             parse_controller_sequence(source_bytes, cursor, source_path, encoded_version)
                 .map(NetImmerseNifBlockPayload::NiControllerSequence)
         }
+        "NiPalette" => parse_palette(source_bytes, cursor, source_path)
+            .map(NetImmerseNifBlockPayload::NiPalette),
         "NiNode" => parse_grouping_node(source_bytes, cursor, source_path)
             .map(NetImmerseNifBlockPayload::NiNode),
         "NiBillboardNode" => {
             parse_billboard_node(source_bytes, cursor, source_path, encoded_version)
                 .map(NetImmerseNifBlockPayload::NiBillboardNode)
         }
+        "NiSwitchNode" => parse_switch_node(source_bytes, cursor, source_path, encoded_version)
+            .map(NetImmerseNifBlockPayload::NiSwitchNode),
         "NiLODNode" => {
             parse_level_of_detail_node(source_bytes, cursor, source_path, encoded_version)
                 .map(NetImmerseNifBlockPayload::NiLODNode)

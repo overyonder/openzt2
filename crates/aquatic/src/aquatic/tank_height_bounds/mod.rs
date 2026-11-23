@@ -1,10 +1,8 @@
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_zoo_state::topology::habitat_boundary_queries::HabitatBoundaryQueries;
 use openzt2_zoo_state::topology::topology_graph_types::FenceSegment;
-use std::collections::BTreeMap;
 
 use bevy::ecs::system::SystemParam;
-use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
@@ -12,56 +10,14 @@ use openzt2_zoo_state::aquatic::aquatic_simulation_types::TankWallTopHeight;
 use openzt2_zoo_state::aquatic::tank_geometry_edit_types::{TankHeightBounds, TankWallHeightEdit};
 use openzt2_zoo_state::aquatic::tank_wall_ground_sampling::TankWallGroundSampling;
 use openzt2_zoo_state::habitat::habitat_types::HabitatRegion;
-use openzt2_zoo_state::topology::topology_graph_types::{PathTile, TopologyGrid, TopologyNode};
+use openzt2_zoo_state::topology::topology_graph_types::{
+    PathTile, TopologyGrid, TopologyIndex, TopologyNode,
+};
 use openzt2_zoo_state::topology::topology_grid_geometry::calculate_adjacent_topology_grid_cells_between_endpoints;
 
 use super::tank_geometry_rules::TankGeometryLimits;
 
 const ELEVATED_PATH_CLEARANCE_OVER_TANK_WALL_M: f32 = 4.0;
-
-/// Ordered path elevations above each horizontal topology cell.
-#[derive(Resource, Default)]
-pub(super) struct TankPathClearance(HashMap<IVec2, BTreeMap<i32, usize>>);
-
-pub(super) fn record_path_clearance(
-    inserted: On<Insert<PathTile>>,
-    tiles: Query<&PathTile>,
-    mut clearance: ResMut<TankPathClearance>,
-) {
-    let Ok(path) = tiles.get(inserted.entity) else {
-        return;
-    };
-    if path.cell.z != 0 {
-        *clearance
-            .0
-            .entry(path.cell.xy())
-            .or_default()
-            .entry(path.cell.z)
-            .or_default() += 1;
-    }
-}
-
-pub(super) fn discard_path_clearance(
-    discarded: On<Discard<PathTile>>,
-    tiles: Query<&PathTile>,
-    mut clearance: ResMut<TankPathClearance>,
-) {
-    let Ok(path) = tiles.get(discarded.entity) else {
-        return;
-    };
-    let Some(column) = clearance.0.get_mut(&path.cell.xy()) else {
-        return;
-    };
-    if let Some(count) = column.get_mut(&path.cell.z) {
-        *count -= 1;
-        if *count == 0 {
-            column.remove(&path.cell.z);
-        }
-    }
-    if column.is_empty() {
-        clearance.0.remove(&path.cell.xy());
-    }
-}
 
 #[derive(SystemParam)]
 pub(super) struct TankHeightBoundsQueries<'w, 's> {
@@ -75,7 +31,8 @@ pub(super) struct TankHeightBoundsQueries<'w, 's> {
         ),
     >,
     nodes: Query<'w, 's, &'static TopologyNode>,
-    clearance: Res<'w, TankPathClearance>,
+    topology: Query<'w, 's, &'static TopologyIndex>,
+    paths: Query<'w, 's, &'static PathTile>,
     boundaries: HabitatBoundaryQueries<'w, 's>,
     grids: Query<'w, 's, &'static TopologyGrid>,
     members: Query<'w, 's, &'static WorldMember>,
@@ -99,6 +56,7 @@ impl TankHeightBoundsQueries<'_, '_> {
         limits: TankGeometryLimits,
     ) -> Option<Box<[TankWallHeightEdit]>> {
         let root = self.members.get(tank).ok()?.root;
+        let topology = self.topology.get(root).ok();
         let mut walls = Vec::new();
         for fence in self.boundaries.fences(tank) {
             let (edge, id, top) = self.fences.get(fence).ok()?;
@@ -109,21 +67,22 @@ impl TankHeightBoundsQueries<'_, '_> {
             let cells = calculate_adjacent_topology_grid_cells_between_endpoints(a, b).ok()?;
             let mut highest = f32::NEG_INFINITY;
             let mut maximum = f32::INFINITY;
-            for cell in &cells {
-                highest = highest.max(self.ground.ground_height_at_topology_cell(root, *cell)?);
+            for &cell in &cells {
+                highest = highest.max(self.ground.ground_height_at_topology_cell(root, cell)?);
                 maximum = maximum.min(
                     self.ground
-                        .terrain_units_at_topology_cell(root, *cell)?
+                        .terrain_units_at_topology_cell(root, cell)?
                         .maximum_height_metres
                         + limits.default_wall_height_m,
                 );
-            }
-            for cell in &cells {
-                if let Some((&height, _)) = self
-                    .clearance
-                    .0
-                    .get(&cell.xy())
-                    .and_then(BTreeMap::first_key_value)
+                let column = cell.xy();
+                if let Some(height) = topology
+                    .into_iter()
+                    .flat_map(|index| index.paths_within(column, column))
+                    .filter_map(|entity| self.paths.get(entity).ok())
+                    .map(|path| path.cell.z)
+                    .filter(|height| *height != 0)
+                    .min()
                 {
                     maximum = maximum.min(height as f32 - ELEVATED_PATH_CLEARANCE_OVER_TANK_WALL_M);
                 }

@@ -1,7 +1,6 @@
 use bevy::ecs::entity_disabling::Disabled;
 use bevy::prelude::*;
 use openzt2_game_data::AssetId;
-use openzt2_world_state::world_spawn::world_load_completion_marker::WorldClockInitialized;
 
 use crate::world_spawn::world_unloading::unload_requested_worlds_and_their_members;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator;
@@ -98,8 +97,8 @@ fn repeated_unload_retires_owned_hierarchies_before_the_next_system() {
     let unrelated = app.world_mut().spawn_empty().id();
     app.world_mut()
         .entity_mut(root)
-        .insert((PersistentIdAllocator::default(), WorldClockInitialized));
-    app.insert_resource(ZooClock {
+        .insert(PersistentIdAllocator::default());
+    app.world_mut().entity_mut(root).insert(ZooClock {
         fractional_tick: Default::default(),
         tick: 17,
         absolute_day: 1,
@@ -124,7 +123,7 @@ fn repeated_unload_retires_owned_hierarchies_before_the_next_system() {
     }
     assert_no_invalid_entity_commands_during(|| app.update());
     assert!(!app.world().get::<PersistentIdAllocator>(root).is_some());
-    assert!(!app.world().contains_resource::<ZooClock>());
+    assert!(app.world().get::<ZooClock>(root).is_none());
     // A retained request cannot act on any later world or requeue old targets.
     app.world_mut().write_message(UnloadWorld(root));
     assert_no_invalid_entity_commands_during(|| app.update());
@@ -150,7 +149,7 @@ fn delayed_unload_cannot_retire_a_later_worlds_allocator_or_simulation() {
         .id();
     app.world_mut()
         .entity_mut(later)
-        .insert((PersistentIdAllocator::default(), WorldClockInitialized));
+        .insert(PersistentIdAllocator::default());
     let later_member = app
         .world_mut()
         .spawn((WorldMember { root: later }, Disabled))
@@ -161,16 +160,16 @@ fn delayed_unload_cannot_retire_a_later_worlds_allocator_or_simulation() {
         absolute_day: 1,
         tick_in_day: 2,
     };
-    app.insert_resource(clock);
+    app.world_mut().entity_mut(later).insert(clock);
     app.world_mut().write_message(UnloadWorld(old));
     app.update();
     assert!(app.world().get_entity(old).is_err());
     assert!(app.world().get_entity(later).is_ok());
     assert!(app.world().get_entity(later_member).is_ok());
     assert!(app.world().get::<PersistentIdAllocator>(later).is_some());
-    assert_eq!(*app.world().resource::<ZooClock>(), clock);
+    assert_eq!(*app.world().get::<ZooClock>(later).unwrap(), clock);
     app.world_mut().write_message(UnloadWorld(old));
     app.update();
     assert!(app.world().get::<PersistentIdAllocator>(later).is_some());
-    assert_eq!(*app.world().resource::<ZooClock>(), clock);
+    assert_eq!(*app.world().get::<ZooClock>(later).unwrap(), clock);
 }

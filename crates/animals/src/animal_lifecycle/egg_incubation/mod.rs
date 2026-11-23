@@ -1,4 +1,6 @@
-use bevy::prelude::*;
+use std::sync::Arc;
+
+use bevy::{ecs::query::QueryData, platform::collections::HashMap, prelude::*};
 use openzt2_game_assets::{
     behavior::behavior_asset_types::{BehaviorDocumentAsset, LoadedBehaviorDocumentCollection},
     world_definitions::{
@@ -7,12 +9,12 @@ use openzt2_game_assets::{
     },
 };
 use openzt2_game_data::{
+    AssetId,
     behavior::eligibility::{
         BehaviorCandidateRole, BehaviorEligibilityFactInput, BehaviorEligibilityFactValue,
         BehaviorSpatialEligibilityFact, BehaviorWelfareEligibilityFact,
     },
     world_definitions::world_objects::WorldObjectEggDefinition,
-    AssetId,
 };
 use openzt2_world_state::{
     simulation_time::{
@@ -27,8 +29,8 @@ use openzt2_world_state::{
 use openzt2_zoo_state::{
     animal_behavior::{
         behavior_candidate_selection::{
-            candidate_requirements_are_satisfied, score_supported_behavior_task,
-            WeightedBehaviorTaskRanking,
+            BehaviorCandidateRanking, candidate_requirements_are_satisfied,
+            score_supported_behavior_task,
         },
         behavior_random_stream_state::BehaviorRandomStream,
         egg_incubation::EggIncubation,
@@ -36,15 +38,31 @@ use openzt2_zoo_state::{
     behavior_task_execution_types::{
         BehaviorTaskExecutionPhase, BehaviorTaskExecutionState, BehaviorTaskGeneration,
     },
-    need_adjustment::advance_need_adjustment_timer,
     terrain::dry_surface_eligibility::DrySurfaceEligibility,
 };
+
+use super::egg_incubation_types::EggIncubationState;
 
 #[derive(Component, Clone, Copy, PartialEq)]
 pub(super) struct AuthoredEgg(WorldObjectEggDefinition);
 
+type EggTaskLocations = Arc<[(Handle<BehaviorDocumentAsset>, usize)]>;
+
 #[derive(Component)]
-pub(super) struct EggTasks(Vec<(Handle<BehaviorDocumentAsset>, usize)>);
+pub(super) struct EggTasks(EggTaskLocations);
+
+#[derive(QueryData)]
+#[query_data(mutable)]
+pub(super) struct LiveEggPolicy {
+    entity: Entity,
+    definition: &'static DefinitionId,
+    member: &'static WorldMember,
+    id: &'static PersistentId,
+    incubating: Option<&'static mut EggIncubationState>,
+    restored: Option<&'static EggIncubation>,
+    has_random: Has<BehaviorRandomStream>,
+    policy: Option<&'static mut AuthoredEgg>,
+}
 
 pub(super) fn initialize_live_eggs(
     mut commands: Commands,
@@ -52,62 +70,92 @@ pub(super) fn initialize_live_eggs(
     assets: Res<Assets<WorldDefinitionAsset>>,
     mut events: MessageReader<AssetEvent<WorldDefinitionAsset>>,
     seeds: Query<&ZooSeed>,
-    mut entities: Query<(
-        Entity,
-        Ref<DefinitionId>,
-        &WorldMember,
-        &PersistentId,
-        Has<EggIncubation>,
-        Has<BehaviorRandomStream>,
-        Option<&mut AuthoredEgg>,
+    mut entities: ParamSet<(
+        Query<LiveEggPolicy>,
+        Query<
+            LiveEggPolicy,
+            Or<(
+                Changed<DefinitionId>,
+                Changed<WorldMember>,
+                Added<PersistentId>,
+                Added<EggIncubation>,
+            )>,
+        >,
     )>,
 ) {
-    let changed = definitions.is_changed() || events.read().next().is_some();
+    let changed = definitions.is_changed() || events.read().any(changed_definition_asset);
     events.clear();
     let Some(view) = definitions.get(&assets) else {
         return;
     };
-    for (entity, definition, member, id, incubating, has_random, policy) in &mut entities {
-        let Ok(seed) = seeds.get(member.root) else {
-            continue;
+    let mut apply = |egg: LiveEggPolicyItem<'_, '_>| {
+        let Ok(seed) = seeds.get(egg.member.root) else {
+            return;
         };
-        if !changed && !definition.is_changed() {
-            continue;
-        }
-        let authored = view
-            .find_object(definition.0)
-            .and_then(|object| object.authored_runtime.egg);
-        let Some(authored) = authored else {
-            if definitions.is_complete() && policy.is_some() {
-                commands
-                    .entity(entity)
-                    .remove::<(AuthoredEgg, EggIncubation, EggTasks)>();
+        let mut commands = commands.entity(egg.entity);
+        let Some(authored) = view
+            .find_object(egg.definition.0)
+            .and_then(|object| object.authored_runtime.egg)
+        else {
+            if definitions.is_complete() && egg.policy.is_some() {
+                commands.remove::<(AuthoredEgg, EggIncubationState, EggTasks)>();
             }
-            continue;
+            return;
         };
-        if let Some(mut policy) = policy {
+        if let Some(mut policy) = egg.policy {
             policy.set_if_neq(AuthoredEgg(authored));
         } else {
-            commands.entity(entity).insert(AuthoredEgg(authored));
+            commands.insert(AuthoredEgg(authored));
         }
-        if !incubating {
-            commands.entity(entity).insert(EggIncubation {
-                amount: authored.initial_incubation,
-                remaining_ns: 0,
-                random: DeterministicRng::from_entity(*seed, *id, RngDomain::AnimalNeeds),
-            });
+        match (egg.incubating, egg.restored) {
+            (Some(mut incubation), Some(restored)) => {
+                *incubation = EggIncubationState::from_saved_remaining(
+                    restored.amount,
+                    restored.remaining_ns,
+                    restored.random,
+                );
+                commands.remove::<EggIncubation>();
+            }
+            (None, Some(restored)) => {
+                commands.insert(EggIncubationState::from_saved_remaining(
+                    restored.amount,
+                    restored.remaining_ns,
+                    restored.random,
+                ));
+                commands.remove::<EggIncubation>();
+            }
+            (None, None) => {
+                commands.insert(EggIncubationState::from_saved_remaining(
+                    authored.initial_incubation,
+                    0,
+                    DeterministicRng::from_entity(*seed, *egg.id, RngDomain::AnimalNeeds),
+                ));
+            }
+            (Some(_), None) => {}
         }
-        if !has_random {
-            commands
-                .entity(entity)
-                .insert(BehaviorRandomStream(DeterministicRng::from_entity(
-                    *seed,
-                    *id,
-                    RngDomain::Behavior,
-                )));
+        if !egg.has_random {
+            commands.insert(BehaviorRandomStream(DeterministicRng::from_entity(
+                *seed,
+                *egg.id,
+                RngDomain::Behavior,
+            )));
         }
+    };
+    if changed {
+        entities.p0().iter_mut().for_each(&mut apply);
+    } else {
+        entities.p1().iter_mut().for_each(apply);
     }
 }
+
+fn changed_definition_asset<A: Asset>(event: &AssetEvent<A>) -> bool {
+    matches!(
+        event,
+        AssetEvent::Added { .. } | AssetEvent::Modified { .. } | AssetEvent::Removed { .. }
+    )
+}
+
+type EggTaskProjection = (Entity, &'static DefinitionId, Option<&'static mut EggTasks>);
 
 pub(super) fn index_egg_tasks(
     mut commands: Commands,
@@ -116,42 +164,68 @@ pub(super) fn index_egg_tasks(
     mut events: MessageReader<AssetEvent<BehaviorDocumentAsset>>,
     definitions: Res<WorldDefinitions>,
     definition_assets: Res<Assets<WorldDefinitionAsset>>,
-    eggs: Query<(Entity, &DefinitionId, Ref<AuthoredEgg>, Has<EggTasks>)>,
+    mut definition_events: MessageReader<AssetEvent<WorldDefinitionAsset>>,
+    mut index: Local<HashMap<AssetId, EggTaskLocations>>,
+    mut eggs: ParamSet<(
+        Query<EggTaskProjection, With<AuthoredEgg>>,
+        Query<
+            EggTaskProjection,
+            (
+                With<AuthoredEgg>,
+                Or<(Changed<DefinitionId>, Added<AuthoredEgg>, Without<EggTasks>)>,
+            ),
+        >,
+    )>,
 ) {
-    let changed =
-        collection.is_changed() || definitions.is_changed() || events.read().next().is_some();
+    let changed = collection.is_changed()
+        || definitions.is_changed()
+        || events.read().any(changed_definition_asset)
+        || definition_events.read().any(changed_definition_asset);
     events.clear();
+    definition_events.clear();
+    if changed {
+        index.clear();
+    }
     let (Some(declarations), Some(definitions)) = (
         collection.create_declaration_index_view(&assets),
         definitions.get(&definition_assets),
     ) else {
         return;
     };
-    for (egg, definition, policy, indexed) in &eggs {
-        if indexed && !changed && !policy.is_changed() {
-            continue;
-        }
+    let mut apply = |(egg, definition, current): (Entity, &DefinitionId, Option<Mut<EggTasks>>)| {
         let Some(object) = definitions.find_object(definition.0) else {
-            continue;
+            return;
         };
-        let tasks = declarations
-            .behavior_tasks()
-            .filter(|(_, _, task)| {
-                let matches_type = |name: &str| {
-                    let id = AssetId::from_key(&name.trim().to_ascii_lowercase());
-                    id == definition.0 || object.behavior_type_identifiers.contains(&id)
-                };
-                task.subjects.iter().any(|name| matches_type(name))
-                    && (task.targets.is_empty()
-                        || task
+        let tasks = index.entry(definition.0).or_insert_with(|| {
+            declarations
+                .behavior_tasks()
+                .filter(|(_, _, task)| {
+                    let matches_type = |name: &str| {
+                        let id = AssetId::from_key(&name.trim().to_ascii_lowercase());
+                        id == definition.0 || object.behavior_type_identifiers.contains(&id)
+                    };
+                    task.subjects.iter().any(|name| matches_type(name))
+                        && task
                             .targets
                             .iter()
-                            .all(|target| target.eq_ignore_ascii_case("self")))
-                    && task.objects.is_empty()
-            })
-            .map(|(document, declaration, _)| (document.clone(), declaration))
-            .collect();
-        commands.entity(egg).insert(EggTasks(tasks));
+                            .all(|target| target.eq_ignore_ascii_case("self"))
+                        && task.objects.is_empty()
+                })
+                .map(|(document, declaration, _)| (document.clone(), declaration))
+                .collect::<EggTaskLocations>()
+        });
+        if let Some(mut current) = current {
+            if !Arc::ptr_eq(&current.0, tasks) {
+                current.0 = Arc::clone(tasks);
+            }
+        } else {
+            commands.entity(egg).insert(EggTasks(Arc::clone(tasks)));
+        }
+    };
+    if changed {
+        eggs.p0().iter_mut().for_each(&mut apply);
+    } else {
+        eggs.p1().iter_mut().for_each(apply);
     }
 }
 
@@ -159,7 +233,7 @@ pub(super) fn update_egg_incubation(
     time: Res<Time<Fixed>>,
     definitions: Res<WorldDefinitions>,
     assets: Res<Assets<WorldDefinitionAsset>>,
-    mut eggs: Query<(&AuthoredEgg, &mut EggIncubation)>,
+    mut eggs: Query<(&AuthoredEgg, &mut EggIncubationState)>,
 ) {
     let Some(timing) = definitions
         .get(&assets)
@@ -168,15 +242,9 @@ pub(super) fn update_egg_incubation(
     else {
         return;
     };
-    let step_ns = u64::try_from(time.timestep().as_nanos()).unwrap_or(u64::MAX);
+    let step = time.timestep();
     eggs.par_iter_mut().for_each(|(policy, mut incubation)| {
-        let incubation = &mut *incubation;
-        if advance_need_adjustment_timer(
-            &mut incubation.remaining_ns,
-            step_ns,
-            timing.delay_steps,
-            &mut incubation.random,
-        ) {
+        if incubation.cadence.tick(step, timing.delay_steps) {
             incubation.amount = (incubation.amount + policy.0.incubation_per_update).max(0.0);
         }
     });
@@ -196,7 +264,7 @@ pub(super) fn start_idle_egg_tasks(
             &DefinitionId,
             &WorldMember,
             &GlobalTransform,
-            &EggIncubation,
+            &EggIncubationState,
             &EggTasks,
             &mut BehaviorRandomStream,
         ),
@@ -213,8 +281,8 @@ pub(super) fn start_idle_egg_tasks(
         let Some(object) = definitions.find_object(definition.0) else {
             continue;
         };
-        let mut ranking = WeightedBehaviorTaskRanking::new(0.0);
-        for (document, declaration) in &tasks.0 {
+        let mut ranking = BehaviorCandidateRanking::new(0.0);
+        for (document, declaration) in tasks.0.iter() {
             let Some(task) = assets
                 .get(document)
                 .and_then(|paper| paper.behavior_task_at_index(*declaration))
@@ -266,16 +334,12 @@ pub(super) fn start_idle_egg_tasks(
                 continue;
             };
             ranking.consider(
-                task.id,
                 (document, *declaration, task),
                 task.priority.unwrap_or_default(),
                 score,
-                |limit| random.0.range_u32(limit),
             );
         }
-        if let Some(((document, declaration, task), _)) =
-            ranking.finish(|limit| random.0.range_u32(limit))
-        {
+        if let Some(((document, declaration, task), _)) = ranking.finish(|| random.next_u32()) {
             let execution_id =
                 openzt2_zoo_state::behavior_task_execution_types::allocate_behavior_execution_id(
                     egg,

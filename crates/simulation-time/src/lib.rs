@@ -20,9 +20,9 @@ use openzt2_zoo_state::environment::environment_state_types::ZooTickAdvanced;
 
 pub struct SimulationTimePlugin;
 
-use simulation_clock_types::{ZooCalendar, ZooDayAdvanced, ZooYearAdvanced};
+use simulation_clock_types::{ZooDayAdvanced, ZooYearAdvanced};
 use simulation_control_types::{
-    SetSimulationSpeed, SimulationControl, SimulationControlChanged, SimulationPauseRequest,
+    SetSimulationSpeed, SimulationControlChanged, SimulationPauseRequest,
 };
 
 impl Plugin for SimulationTimePlugin {
@@ -41,7 +41,6 @@ impl Plugin for SimulationTimePlugin {
                     .in_set(GameSet::Intent)
                     .after(simulation_time_world_lifecycle::initialize_simulation_time_from_selected_world)
                     .after(openzt2_interface_state::shell::ShellNavigationAfterSettings)
-                    .run_if(resource_exists::<SimulationControl>),
             )
             .add_systems(
                 Update,
@@ -58,15 +57,12 @@ impl Plugin for SimulationTimePlugin {
                 PostUpdate,
                 simulation_control_application::project_active_simulation_pause_claims
                     .after(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate)
-                    .run_if(resource_exists::<SimulationControl>),
             )
             .add_systems(
                 Update,
                 (
-                    zoo_date_ui_presentation::project_authoritative_zoo_calendar_into_authored_zoo_date_text
-                        .run_if(resource_exists::<ZooCalendar>),
-                    simulation_control_ui_presentation::project_simulation_pause_state_into_authored_paused_node_visibility
-                        .run_if(resource_exists::<SimulationControl>),
+                    zoo_date_ui_presentation::project_authoritative_zoo_calendar_into_authored_zoo_date_text,
+                    simulation_control_ui_presentation::project_simulation_pause_state_into_authored_paused_node_visibility,
                 )
                     .in_set(GameSet::Ui)
                     .run_if(in_state(GamePhase::InGame)),
@@ -75,7 +71,6 @@ impl Plugin for SimulationTimePlugin {
                 Update,
                 simulation_control_ui_presentation::project_simulation_pause_state_into_authored_pause_toggle_selection
                     .in_set(openzt2_interface_state::ui::UiSet::DomainProjection)
-                    .run_if(resource_exists::<SimulationControl>)
                     .run_if(in_state(GamePhase::InGame)),
             )
             .add_systems(

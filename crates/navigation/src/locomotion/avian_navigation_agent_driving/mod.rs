@@ -5,6 +5,7 @@ use avian3d::prelude::AngularVelocity;
 use avian3d::prelude::LinearVelocity;
 use avian3d::prelude::RigidBody;
 use bevy::prelude::*;
+use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
 use crate::locomotion::fence_navigation_policy::FenceNavigationPolicy;
 use crate::locomotion::spatial_index_and_docking_operations::advance_route_cursor;
@@ -27,6 +28,7 @@ pub(super) fn drive_avian_navigation_agent_velocities_and_complete_routes(
     mut avian_navigation_agents: Query<(
         Entity,
         &NavAgent,
+        Option<&WorldMember>,
         &Transform,
         &RigidBody,
         &mut LinearVelocity,
@@ -45,6 +47,7 @@ pub(super) fn drive_avian_navigation_agent_velocities_and_complete_routes(
     for (
         navigation_agent_entity,
         navigation_agent,
+        member,
         transform,
         rigid_body,
         mut linear_velocity,
@@ -107,12 +110,15 @@ pub(super) fn drive_avian_navigation_agent_velocities_and_complete_routes(
         // Physics updates the world actor's root Transform each fixed step;
         // GlobalTransform can still describe the preceding rendered frame.
         let position = transform.translation;
-        if fences.gate_blocks_movement(
-            navigation_agent_entity,
-            navigation_agent.capabilities,
-            position,
-            position + linear_velocity.0 * fixed_delta_seconds,
-        ) {
+        if member.is_some_and(|member| {
+            fences.gate_blocks_movement(
+                member.root,
+                navigation_agent_entity,
+                navigation_agent.capabilities,
+                position,
+                position + linear_velocity.0 * fixed_delta_seconds,
+            )
+        }) {
             linear_velocity.x = 0.0;
             linear_velocity.z = 0.0;
         }

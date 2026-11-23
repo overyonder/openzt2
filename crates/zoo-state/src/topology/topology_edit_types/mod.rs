@@ -53,6 +53,7 @@ pub enum TopologySnapshot {
         id: PersistentId,
         destination: PersistentId,
         bidirectional: bool,
+        endpoint_pose: Option<Transform>,
     },
 }
 

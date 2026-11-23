@@ -47,7 +47,7 @@ use openzt2_world_state::world_spawn::world_hydration_types::WorldHydration;
 use openzt2_world_state::world_spawn::world_load_completion_marker::WorldLoadCompletionSet;
 use openzt2_world_state::world_spawn::world_load_completion_marker::{
     StartingFenceTopologyHydrated, StartingPathsHydrated, StartingSpawnValuesApplied,
-    StartingTerrainHydrated, WorldClockInitialized, WorldLoadCompleted,
+    StartingTerrainHydrated, WorldLoadCompleted,
 };
 use openzt2_world_state::world_spawn::{
     selected_world_document_handles::SelectedWorldDocumentHandles,
@@ -134,7 +134,6 @@ fn imported_ids_default_album_and_environment_keep_their_order_with_delayed_loca
         // the completion notification still run through their production systems.
         app.world_mut().entity_mut(root).insert((
             WorldHydration::new_pending_world_hydration(0),
-            WorldClockInitialized,
             StartingTerrainHydrated,
             StartingFenceTopologyHydrated,
             StartingPathsHydrated,

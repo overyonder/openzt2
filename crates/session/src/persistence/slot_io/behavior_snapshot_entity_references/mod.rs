@@ -105,6 +105,8 @@ pub(in crate::persistence) struct BehaviorSnapshotEntityData {
     pub(super) nav_agent: Option<&'static openzt2_zoo_state::locomotion::locomotion_types::NavAgent>,
     pub(super) path_tile: Option<&'static PathTile>,
     pub(super) pending_behavior_docking_completion: Option<&'static openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorDockingCompletion>,
+    pub(super) following: Option<&'static openzt2_zoo_state::behavior_task_execution_types::running_actions::FollowingEntity>,
+    pub(super) spline: Option<&'static openzt2_zoo_state::behavior_task_execution_types::running_actions::SplineDockMotion>,
     pub(super) instruction: Option<&'static openzt2_zoo_state::behavior_task_execution_types::running_actions::RunningBehaviorInstruction>,
     pub(super) pending_behavior_move_completion: Option<&'static openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorMoveCompletion>,
     pub(super) pending_behavior_pursuit: Option<&'static openzt2_zoo_state::animal_behavior::behavior_pursuit_types::PendingBehaviorPursuit>,

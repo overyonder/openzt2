@@ -16,7 +16,7 @@ use super::camera_ground_fit_surface_sampling::sample_highest_terrain_or_water_f
 pub(crate) fn initialize_ground_fitted_free_camera_from_overhead_focus(
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,
-    terrain_index: Res<TerrainIndex>,
+    terrain_index: Single<&TerrainIndex>,
     terrain_assets: Res<Assets<TerrainAsset>>,
     terrain_chunks: Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
     mut cameras: Query<
@@ -24,6 +24,7 @@ pub(crate) fn initialize_ground_fitted_free_camera_from_overhead_focus(
         (With<ZooCamera>, Changed<CameraMode>),
     >,
 ) {
+    let terrain_index = terrain_index.into_inner();
     let Some(world_definitions) = active_world_definitions.get(&world_definition_assets) else {
         return;
     };

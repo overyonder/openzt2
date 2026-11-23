@@ -1,5 +1,8 @@
-use bevy::prelude::*;
-use bevy_hanabi::{ParticleAliveCount, ParticleSpawnBatch, ParticleSpawnPoint};
+use bevy::{diagnostic::FrameCount, prelude::*};
+use bevy_hanabi::{
+    EffectParticleSizeScale, EffectSpawner, ParticleAliveCount, ParticleSpawnBatch,
+    ParticleSpawnPoint,
+};
 use openzt2_game_data::{particle::particle_emission_point::ParticleEmissionPoint, AssetId};
 
 use super::{
@@ -10,15 +13,13 @@ use super::{
 };
 
 #[derive(Component)]
+#[require(ParticleAliveCount, ParticleSpawnBatch, EffectParticleSizeScale)]
 pub struct ParticleEffectPointEmitter {
     effect_asset: Handle<ParticleEffectDocumentAsset>,
     emitter: AssetId,
     queued_points: Vec<ParticleEmissionPoint>,
-    alive_count: ParticleAliveCount,
-    submission: u32,
     mesh: Option<Handle<Mesh>>,
     pending_manual_count: u32,
-    size_scale: f32,
 }
 
 impl ParticleEffectPointEmitter {
@@ -27,11 +28,8 @@ impl ParticleEffectPointEmitter {
             effect_asset,
             emitter,
             queued_points: Vec::new(),
-            alive_count: ParticleAliveCount::default(),
-            submission: 0,
             mesh: None,
             pending_manual_count: 0,
-            size_scale: 1.0,
         }
     }
 
@@ -42,17 +40,16 @@ impl ParticleEffectPointEmitter {
         self
     }
 
-    /// Latest completed GPU sample; unavailable until the emitter has rendered.
-    pub fn sampled_live_count(&self) -> Option<u32> {
+    /// Returns the live count from the current submission once all queued points are uploaded.
+    pub fn sampled_live_count(
+        &self,
+        sample: &ParticleAliveCount,
+        batch: &ParticleSpawnBatch,
+    ) -> Option<u32> {
         if self.pending_manual_count > 0 || !self.queued_points.is_empty() {
             return None;
         }
-        self.alive_count.sampled_count_after(self.submission)
-    }
-
-    pub fn set_size_scale(&mut self, scale: f32) {
-        assert!(scale.is_finite() && scale >= 0.0);
-        self.size_scale = scale;
+        sample.sampled_count_after(batch.submission)
     }
 }
 
@@ -63,62 +60,90 @@ pub struct AppendParticleEffectPoints {
     pub points: Box<[ParticleEmissionPoint]>,
 }
 
+#[derive(Component)]
+struct ParticlePointsAwaitingUpload;
+
+#[derive(Component)]
+struct ParticleSpawnAwaitingClear;
+
 pub(crate) fn prepare_explicit_particle_emitters(
     mut commands: Commands,
     emitters: Query<(Entity, &ParticleEffectPointEmitter), Added<ParticleEffectPointEmitter>>,
 ) {
     for (entity, emitter) in &emitters {
-        commands.entity(entity).insert((
-            PendingEffectInstance {
-                effect_asset: emitter.effect_asset.clone(),
-                requested_emitter: Some(emitter.emitter),
-                manual_particle_count: 0,
-            },
-            emitter.alive_count.clone(),
-            ParticleSpawnBatch::default(),
-            bevy_hanabi::EffectParticleSizeScale(emitter.size_scale),
-        ));
+        let mut target = commands.entity(entity);
+        target.insert(PendingEffectInstance {
+            effect_asset: emitter.effect_asset.clone(),
+            requested_emitter: Some(emitter.emitter),
+            manual_particle_count: 0,
+        });
         if let Some(mesh) = &emitter.mesh {
-            commands
-                .entity(entity)
-                .insert(bevy_hanabi::EffectMesh(mesh.clone()));
+            target.insert((
+                bevy_hanabi::EffectMesh(mesh.clone()),
+                ParticlePointsAwaitingUpload,
+            ));
         }
     }
 }
 
-pub(super) fn upload_explicit_particle_emission_points(
+pub(super) fn collect_requested_particle_points(
     mut commands: Commands,
     mut requests: MessageReader<AppendParticleEffectPoints>,
     mut emitters: Query<(
-        Entity,
         &mut ParticleEffectPointEmitter,
-        Has<ParticleEffectGraphReady>,
-        Option<&mut ParticleSpawnBatch>,
-        Option<&mut bevy_hanabi::EffectSpawner>,
-        Option<&mut bevy_hanabi::EffectParticleSizeScale>,
+        Has<ParticlePointsAwaitingUpload>,
     )>,
 ) {
     for request in requests.read() {
-        if let Ok((_, mut emitter, ..)) = emitters.get_mut(request.emitter) {
-            emitter.queued_points.extend_from_slice(&request.points);
+        if request.points.is_empty() {
+            continue;
         }
-    }
-    for (entity, mut emitter, ready, batch, spawner, size_scale) in &mut emitters {
-        if let Some(mut size_scale) = size_scale {
-            size_scale.0 = emitter.size_scale;
-        }
-        let (Some(mut batch), Some(mut spawner)) = (batch, spawner) else {
+        let Ok((mut emitter, upload_pending)) = emitters.get_mut(request.emitter) else {
             continue;
         };
+        if !upload_pending && emitter.queued_points.is_empty() {
+            commands
+                .entity(request.emitter)
+                .insert(ParticlePointsAwaitingUpload);
+        }
+        emitter.queued_points.extend_from_slice(&request.points);
+    }
+}
+
+pub(super) fn clear_submitted_particle_points(
+    mut commands: Commands,
+    mut emitters: Query<
+        (Entity, &mut ParticleSpawnBatch, &mut EffectSpawner),
+        With<ParticleSpawnAwaitingClear>,
+    >,
+) {
+    for (entity, mut batch, mut spawner) in &mut emitters {
         batch.points.clear();
         spawner.spawn_count = 0;
-        if !ready {
-            continue;
-        }
-        if !emitter.queued_points.is_empty() || emitter.pending_manual_count > 0 {
-            emitter.submission = emitter.submission.wrapping_add(1);
-            batch.submission = emitter.submission;
-        }
+        commands
+            .entity(entity)
+            .remove::<ParticleSpawnAwaitingClear>();
+    }
+}
+
+pub(super) fn upload_queued_particle_points(
+    mut commands: Commands,
+    frame: Res<FrameCount>,
+    mut emitters: Query<
+        (
+            Entity,
+            &mut ParticleEffectPointEmitter,
+            &mut ParticleSpawnBatch,
+            &mut EffectSpawner,
+        ),
+        (
+            With<ParticlePointsAwaitingUpload>,
+            With<ParticleEffectGraphReady>,
+        ),
+    >,
+) {
+    for (entity, mut emitter, mut batch, mut spawner) in &mut emitters {
+        batch.submission = batch.submission.wrapping_add(1);
         batch.points.extend(
             emitter
                 .queued_points
@@ -128,13 +153,18 @@ pub(super) fn upload_explicit_particle_emission_points(
                     velocity: Vec3::from_array(point.velocity),
                 }),
         );
-        spawner.spawn_count = u32::try_from(batch.points.len()).expect("particle batch fits u32");
-        let single_mesh_particle = std::mem::take(&mut emitter.pending_manual_count);
-        spawner.spawn_count = spawner.spawn_count.max(single_mesh_particle);
-        if single_mesh_particle > 0 {
-            commands
-                .entity(entity)
-                .insert(EffectRetirementReadback::WaitingForParticles);
+        let manual_count = std::mem::take(&mut emitter.pending_manual_count);
+        spawner.spawn_count = u32::try_from(batch.points.len())
+            .expect("particle batch fits u32")
+            .max(manual_count);
+        let mut target = commands.entity(entity);
+        target
+            .remove::<ParticlePointsAwaitingUpload>()
+            .insert(ParticleSpawnAwaitingClear);
+        if manual_count != 0 {
+            target.insert(EffectRetirementReadback::WaitingForParticles(
+                frame.0.wrapping_add(1),
+            ));
         }
     }
 }

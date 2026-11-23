@@ -21,9 +21,10 @@ pub(super) fn project_particle_renderer_materials(
     graphics: Option<Res<GraphicsSettings>>,
     mut material_events: MessageReader<AssetEvent<MaterialAsset>>,
     mut pass_events: MessageReader<AssetEvent<EffectPassMaterial>>,
+    changed_emitters: Query<Entity, Changed<LiveParticleEffectInstance>>,
+    emitter_sources: Query<(Entity, &LiveParticleEffectInstance)>,
     mut emitters: Query<(
-        Entity,
-        Ref<LiveParticleEffectInstance>,
+        &LiveParticleEffectInstance,
         Has<ParticleEffectWaveSurface>,
         Option<&mut EffectRenderPasses>,
         Option<&mut EffectMaterial>,
@@ -37,31 +38,42 @@ pub(super) fn project_particle_renderer_materials(
     let quality = graphics
         .as_ref()
         .map_or(GraphicsEffectQuality::High, |settings| settings.effects);
-    for (entity, emitter, wave, existing_draws, existing_material) in &mut emitters {
-        let refresh = quality_changed || emitter.is_changed();
-        if !refresh && changed_materials.is_empty() && changed_passes.is_empty() {
+    let mut selected: HashSet<_> = changed_emitters.iter().collect();
+    if quality_changed {
+        selected.extend(emitter_sources.iter().map(|(entity, _)| entity));
+    } else if !changed_materials.is_empty() || !changed_passes.is_empty() {
+        selected.extend(emitter_sources.iter().filter_map(|(entity, emitter)| {
+            let prepared = documents
+                .get(&emitter.effect_asset)?
+                .prepared_emitters
+                .get(&emitter.emitter_id)?;
+            prepared
+                .renderers
+                .iter()
+                .any(|renderer| {
+                    changed_materials.contains(&renderer.material.id())
+                        || (!changed_passes.is_empty()
+                            && materials.get(&renderer.material).is_some_and(|material| {
+                                material
+                                    .evaluated_pass_material_assets_for_effect_quality(quality)
+                                    .iter()
+                                    .any(|pass| changed_passes.contains(&pass.id()))
+                            }))
+                })
+                .then_some(entity)
+        }));
+    }
+    for entity in selected {
+        let Ok((emitter, wave, existing_draws, existing_material)) = emitters.get_mut(entity)
+        else {
             continue;
-        }
+        };
         let Some(prepared) = documents
             .get(&emitter.effect_asset)
             .and_then(|document| document.prepared_emitters.get(&emitter.emitter_id))
         else {
             continue;
         };
-        if !refresh
-            && !prepared.renderers.iter().any(|renderer| {
-                changed_materials.contains(&renderer.material.id())
-                    || (!changed_passes.is_empty()
-                        && materials.get(&renderer.material).is_some_and(|material| {
-                            material
-                                .evaluated_pass_material_assets_for_effect_quality(quality)
-                                .iter()
-                                .any(|pass| changed_passes.contains(&pass.id()))
-                        }))
-            })
-        {
-            continue;
-        }
         if prepared.renderers.is_empty() {
             if existing_draws.is_some() {
                 commands

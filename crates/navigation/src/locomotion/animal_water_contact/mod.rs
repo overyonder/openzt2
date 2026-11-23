@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 use openzt2_game_assets::species::species_asset_types::{SpeciesAsset, SpeciesAssets};
+use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_zoo_state::{
     animal_lifecycle::types::AnimalVariant,
     locomotion::locomotion_types::{AnimalTerrainWaterContact, LocomotionMode, SwimLayer},
@@ -14,6 +15,7 @@ pub(super) fn project_animal_water_contact(
     mut animals: Query<
         (
             Entity,
+            &WorldMember,
             &AnimalVariant,
             &mut Transform,
             Option<&mut LocomotionMode>,
@@ -28,15 +30,17 @@ pub(super) fn project_animal_water_contact(
     let Some(species) = species_index.get(&species_assets) else {
         return;
     };
-    for (entity, variant, mut transform, current_mode, contact) in &mut animals {
+    for (entity, member, variant, mut transform, current_mode, contact) in &mut animals {
         let position = transform.translation.xz();
-        let Some(ground) = surfaces.ground_height(position) else {
+        let Some(ground) = surfaces.ground_height(member.root, position) else {
             continue;
         };
-        let surface = surfaces.water_surface_height(position);
+        let surface = surfaces.water_surface_height(member.root, position);
         let depth_m = surface.map(|height| height - ground);
-        if let Some(mut contact) = contact {
-            contact.depth_m = depth_m;
+        if let Some(contact) = contact {
+            contact
+                .map_unchanged(|contact| &mut contact.depth_m)
+                .set_if_neq(depth_m);
         } else {
             commands
                 .entity(entity)

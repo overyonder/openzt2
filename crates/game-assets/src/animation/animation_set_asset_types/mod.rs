@@ -2,7 +2,7 @@ use std::{collections::BTreeMap, sync::Arc};
 
 pub mod animation_set_asset_operations;
 
-use bevy::{asset::VisitAssetDependencies, prelude::*};
+use bevy::{asset::VisitAssetDependencies, platform::collections::HashMap, prelude::*};
 use openzt2_game_data::animation::{
     animation_clip_metadata::AuthoredAnimationClipMetadata,
     animation_set::{
@@ -17,14 +17,16 @@ pub struct AnimationSetAsset {
     pub model_asset_path: String,
     pub skeleton_asset_path: String,
     #[dependency]
-    pub animation_clips: Vec<AnimationClipRecord>,
+    pub(crate) animation_clips: Vec<AnimationClipRecord>,
+    pub(crate) embedded_clip_indices: HashMap<String, usize>,
     #[dependency]
     pub embedded_animation_graph: Option<Handle<AnimationGraph>>,
     pub animation_graph_nodes: Vec<AuthoredAnimationGraphNode>,
     pub animation_graph_order: Vec<String>,
     pub animation_graph_edges: Vec<AuthoredAnimationGraphEdge>,
     pub animation_graph_metadata: Option<AuthoredAnimationGraphMetadata>,
-    pub animation_clip_source_references: Vec<AuthoredAnimationSetClipReference>,
+    pub(crate) animation_clip_source_references: Vec<AuthoredAnimationSetClipReference>,
+    pub(crate) clip_source_reference_indices: HashMap<String, usize>,
     #[dependency]
     pub(crate) preloaded_clip_sources: BTreeMap<String, Handle<AnimationClipSourceAsset>>,
 }
@@ -35,6 +37,7 @@ pub struct AnimationClipRecord {
     #[dependency]
     pub animation_clip_handle: Handle<AnimationClip>,
     pub duration_milliseconds: u32,
+    pub(crate) graph_node: Option<AnimationNodeIndex>,
 }
 
 #[derive(Asset, TypePath, Clone, Debug)]

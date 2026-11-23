@@ -4,8 +4,9 @@ use openzt2_world_state::{
     simulation_time::simulation_clock_types::ZooClock,
     world_spawn::world_membership_types::DefinitionId,
 };
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::WhenBehaviorAction;
 use openzt2_zoo_state::{
-    animal_behavior::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation,
+    behavior_task_execution_types::running_actions::mark_behavior_task_for_failure_and_stop_navigation,
     behavior_task_execution_types::{
         running_actions::{RunBehaviorTermination, RunningBehaviorInstruction},
         AppliedBehaviorLitterKill, BehaviorKilledTarget, BehaviorTaskExecutionState,
@@ -23,8 +24,9 @@ use super::{
 };
 
 pub(super) fn acknowledge_staff_target_termination_owned_by_terminal_maintenance_systems(
+    activation: On<WhenBehaviorAction<RunBehaviorTermination>>,
     mut commands: Commands,
-    clock: Res<ZooClock>,
+    clock: Single<&ZooClock>,
     staff: Query<
         (
             Entity,
@@ -48,7 +50,9 @@ pub(super) fn acknowledge_staff_target_termination_owned_by_terminal_maintenance
     cancelling: Query<(), With<StaffJobCancellationPending>>,
     mut completed: MessageWriter<StaffJobCompleted>,
 ) {
-    for (actor, current, task, instruction, action) in &staff {
+    for (actor, current, task, instruction, action) in
+        std::iter::once(staff.get(activation.entity)).flatten()
+    {
         let Ok((job, claim, assigned, applied)) = jobs.get(current.job()) else {
             continue;
         };

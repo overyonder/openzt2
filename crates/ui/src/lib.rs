@@ -133,7 +133,9 @@ impl Plugin for GameUiPlugin {
                 .after(GameSet::Intent)
                 .before(GameSet::Ui),
         );
-        app.add_message::<ShowUiDocument>()
+        app.register_required_components::<openzt2_world_state::world_spawn::world_membership_types::WorldRoot, openzt2_interface_state::information::zoo_message_types::ZooMessages>()
+            .register_required_components::<InGameUiOwner, authored_zoo_message_lists::LatestZooMessagePresentation>()
+            .add_message::<ShowUiDocument>()
             .add_message::<SetWaitCursor>()
             .add_message::<SetUiListRowCount>()
             .add_message::<ShowUiRole>()
@@ -188,12 +190,14 @@ impl Plugin for GameUiPlugin {
                     ).chain(),
                     graph_presentation::clip_authored_graph_generated_geometry
                         .after(projection::ui_document_opening::project_ui_documents),
+                    authored_zoo_message_lists::update_latest_zoo_message_presentation,
                     main_toolbar::initialize_main_toolbar.after(projection::ui_document_opening::project_ui_documents),
                     authored_text_edit_bevy_adaptation::initialize_authored_text_edits_as_bevy_editable_text
                         .after(projection::ui_document_opening::project_ui_documents),
                     (
                         projection::authored_list_row_projection::record_requested_ui_list_row_counts,
-                        authored_zoo_message_lists::size_zoo_message_lists,
+                        authored_zoo_message_lists::size_zoo_message_lists
+                            .after(authored_zoo_message_lists::update_latest_zoo_message_presentation),
                         projection::authored_list_row_projection::reconcile_changed_ui_list_row_counts,
                         projection::authored_list_row_projection::materialize_ready_ui_list_rows,
                         authored_zoo_message_lists::bind_zoo_message_rows,

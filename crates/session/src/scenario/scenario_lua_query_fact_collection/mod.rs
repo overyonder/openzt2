@@ -28,7 +28,6 @@ pub(super) struct ScenarioLuaQueryFactSources<'w, 's> {
     species: Res<'w, openzt2_game_assets::species::species_asset_types::SpeciesAssets>,
     species_assets:
         Res<'w, Assets<openzt2_game_assets::species::species_asset_types::SpeciesAsset>>,
-    zoo_cash: Res<'w, ZooCash>,
     tanks: super::scenario_lua_types::ScenarioLuaTankQuery<'w, 's>,
     selected_worlds: Query<
         'w,
@@ -36,10 +35,10 @@ pub(super) struct ScenarioLuaQueryFactSources<'w, 's> {
         (Entity, &'static openzt2_world_state::world_spawn::selected_world_identity::SelectedWorldIdentity, Option<&'static Fame>),
         With<openzt2_world_state::world_spawn::world_membership_types::WorldRoot>,
     >,
-    guest_admission_price: Res<'w, AdmissionPrice>,
-    finance_history: Res<'w, MonthlyFinanceHistory>,
-    zoo_clock: Option<Res<'w, ZooClock>>,
-    zoo_calendar: Option<Res<'w, ZooCalendar>>,
+    zoo_state: Query<'w, 's, (
+        Option<&'static ZooCash>, Option<&'static AdmissionPrice>, Option<&'static MonthlyFinanceHistory>,
+        Option<&'static ZooClock>, Option<&'static ZooCalendar>,
+    ), With<openzt2_world_state::world_spawn::world_membership_types::WorldRoot>>,
     world_definitions: Res<'w, WorldDefinitions>,
     world_definition_assets: Res<'w, Assets<WorldDefinitionAsset>>,
     selected_entity: WorldUiSelection<'w, 's>,
@@ -73,8 +72,11 @@ impl ScenarioLuaQueryFactSources<'_, '_> {
         self.containers.members_of_container(container).collect()
     }
 
-    pub(super) fn zoo_clock(&self) -> Option<&ZooClock> {
-        self.zoo_clock.as_deref()
+    pub(super) fn zoo_clock(&self, root: Entity) -> Option<&ZooClock> {
+        self.zoo_state
+            .get(root)
+            .ok()
+            .and_then(|(_, _, _, clock, _)| clock)
     }
 
     pub(super) fn borrow_scenario_lua_query_facts<'a>(
@@ -96,7 +98,10 @@ impl ScenarioLuaQueryFactSources<'_, '_> {
             &self.ui_nodes;
         let ui_roots: &'a super::scenario_lua_types::ScenarioLuaUiRootQuery<'a, 'a> =
             &self.ui_roots;
-        let world = self.selected_worlds.single().ok();
+        let selected = self.selected_worlds.single().ok();
+        let (cash, admission_price, history, clock, calendar) = selected
+            .and_then(|(root, ..)| self.zoo_state.get(root).ok())
+            .unwrap_or_default();
         ScenarioLuaQueryFacts {
             donation_totals: &self.donation_totals,
             localization: self
@@ -105,18 +110,21 @@ impl ScenarioLuaQueryFactSources<'_, '_> {
             spawn_animal: None,
             species: self.species.get(&self.species_assets),
             profile: None,
-            zoo_cash: &self.zoo_cash,
+            zoo_cash: cash.copied().unwrap_or_default(),
             tank_in_world: !self.tanks.is_empty(),
             tanks,
-            world_session_mode: world.map(|(_, identity, _)| identity.mode),
-            guest_admission_price: &self.guest_admission_price,
-            finance_history: &self.finance_history,
-            zoo_fame: world.and_then(|(_, _, fame)| fame),
-            zoo_clock: self.zoo_clock.as_deref(),
-            zoo_calendar: self.zoo_calendar.as_deref(),
-            zoo_months_since_calendar_epoch: self.count_zoo_months_since_calendar_epoch(),
-            zoo_month_progress: self.measure_zoo_month_progress(),
-            world: world.map(|(entity, _, _)| entity),
+            world_session_mode: selected.map(|(_, identity, _)| identity.mode),
+            guest_admission_price: admission_price.copied().unwrap_or_default(),
+            finance_history: history,
+            zoo_fame: selected.and_then(|(_, _, fame)| fame),
+            zoo_clock: clock,
+            zoo_calendar: calendar,
+            zoo_months_since_calendar_epoch: calendar
+                .and_then(|calendar| self.count_zoo_months_since_calendar_epoch(calendar)),
+            zoo_month_progress: clock
+                .zip(calendar)
+                .and_then(|(clock, calendar)| self.measure_zoo_month_progress(clock, calendar)),
+            world: selected.map(|(root, ..)| root),
             persistent_ids: &self.persistent_ids,
             contained_crated_animals: &self.contained_crated_animals,
             contained_entities,
@@ -150,16 +158,20 @@ impl ScenarioLuaQueryFactSources<'_, '_> {
     /// instant challenge.
     pub(super) fn read_instant_challenge_eligibility(
         &self,
+        root: Entity,
     ) -> Option<ScenarioInstantChallengeEligibility> {
         use openzt2_zoo_state::economy::monthly_finance_types::FinanceMetric;
         use openzt2_zoo_state::economy::monthly_finance_types::FinancePeriod;
 
-        let months_since_opening = self.count_zoo_months_since_calendar_epoch()?;
-        let month_progress = self.measure_zoo_month_progress()?;
+        let (_, _, Some(history), Some(clock), Some(calendar)) = self.zoo_state.get(root).ok()?
+        else {
+            return None;
+        };
+        let months_since_opening = self.count_zoo_months_since_calendar_epoch(calendar)?;
+        let month_progress = self.measure_zoo_month_progress(clock, calendar)?;
         Some(ScenarioInstantChallengeEligibility {
-            admitted_guests: if self.finance_history.has_initialized_month() {
-                self.finance_history
-                    .finance_metric_value(FinanceMetric::TotalUsers, FinancePeriod::Lifetime)
+            admitted_guests: if history.has_initialized_month() {
+                history.finance_metric_value(FinanceMetric::TotalUsers, FinancePeriod::Lifetime)
             } else {
                 0
             },
@@ -169,9 +181,11 @@ impl ScenarioLuaQueryFactSources<'_, '_> {
     }
 
     /// How far the zoo is through its current calendar month.
-    fn measure_zoo_month_progress(&self) -> Option<ScenarioZooMonthProgress> {
-        let clock = self.zoo_clock.as_deref()?;
-        let calendar = self.zoo_calendar.as_deref()?;
+    fn measure_zoo_month_progress(
+        &self,
+        clock: &ZooClock,
+        calendar: &ZooCalendar,
+    ) -> Option<ScenarioZooMonthProgress> {
         let timing = self
             .world_definitions
             .get(&self.world_definition_assets)?
@@ -189,8 +203,7 @@ impl ScenarioLuaQueryFactSources<'_, '_> {
     }
 
     /// Months the zoo calendar has advanced past its epoch, the zoo's first day.
-    fn count_zoo_months_since_calendar_epoch(&self) -> Option<i64> {
-        let calendar = self.zoo_calendar.as_deref()?;
+    fn count_zoo_months_since_calendar_epoch(&self, calendar: &ZooCalendar) -> Option<i64> {
         let policy = &self
             .world_definitions
             .get(&self.world_definition_assets)?

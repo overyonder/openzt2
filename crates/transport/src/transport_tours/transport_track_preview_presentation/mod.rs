@@ -1,3 +1,4 @@
+use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_zoo_state::transport_tours::transport_highlight_style::TransportHighlightStyle;
 use bevy::prelude::*;
 use bevy::render::storage::ShaderBuffer;
@@ -34,6 +35,7 @@ pub(super) fn project_transport_track_construction_preview_authored_prefabs(
     previews: Query<(
         Entity,
         Ref<ConstructionPreview>,
+        &WorldMember,
         Ref<TransportTrackConstructionPreview>,
         Option<Ref<ObjectPlacementPreviewMaterials>>,
         Option<&Children>,
@@ -83,7 +85,10 @@ pub(super) fn project_transport_track_construction_preview_authored_prefabs(
     let terrain_decal_pass = pass_handle
         .and_then(|material| effect_pass_materials.get(material))
         .cloned();
-    for (preview_entity, preview, track_preview, grid, children) in &previews {
+    for (preview_entity, preview, member, track_preview, grid, children) in &previews {
+        let Ok(terrain_index) = terrain.indexes.get(member.root) else {
+            continue;
+        };
         if !preview.is_changed()
             && !track_preview.is_changed()
             && !grid.as_ref().is_some_and(|grid| grid.is_changed())
@@ -121,6 +126,7 @@ pub(super) fn project_transport_track_construction_preview_authored_prefabs(
                     standard_materials: &mut standard_materials,
                 },
                 &terrain,
+                terrain_index,
                 &rope_anchors,
             );
             continue;
@@ -145,7 +151,7 @@ pub(super) fn project_transport_track_construction_preview_authored_prefabs(
             };
             let elevated = crate::transport_tours::transport_track_piece_presentation::ground_track_piece_is_elevated_above_terrain(
                 [points[0], points[1]],
-                &terrain.index,
+                terrain_index,
                 &terrain.assets,
                 &terrain.chunks,
             );
@@ -198,7 +204,7 @@ pub(super) fn project_transport_track_construction_preview_authored_prefabs(
                 presentation.ground_decal_size_metres[0],
                 decal_centre,
                 presentation.ground_decal_rotation_radians,
-                &terrain.index,
+                terrain_index,
                 &terrain.assets,
                 &terrain.chunks,
             ) else { continue; };
@@ -251,7 +257,7 @@ struct SkyPreviewAssets<'a> {
 /// The ground a preview's decals are fitted to.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(super) struct PreviewTerrain<'w, 's> {
-    index: Res<'w, TerrainIndex>,
+    indexes: Query<'w, 's, &'static TerrainIndex>,
     assets: Res<'w, Assets<TerrainAsset>>,
     chunks: Query<'w, 's, (&'static TerrainChunk, Option<&'static EditedTerrainSamples>)>,
 }
@@ -271,6 +277,7 @@ fn spawn_sky_track_preview(
     terrain_decal_pass: Option<&EffectPassMaterial>,
     assets: &mut SkyPreviewAssets,
     terrain: &PreviewTerrain,
+    terrain_index: &TerrainIndex,
     rope_anchors: &crate::transport_tours::transport_track_piece_presentation::SkyRopeAnchors,
 ) {
     let Some(presentation) = track.sky_tower_presentation.as_ref() else {
@@ -310,6 +317,7 @@ fn spawn_sky_track_preview(
             materials,
             assets,
             terrain,
+            terrain_index,
         );
     }
     // As in the original, a line runs from the last tower top (or
@@ -354,6 +362,7 @@ fn spawn_sky_tower_placement_grid(
     materials: &openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementPreviewMaterials,
     assets: &mut SkyPreviewAssets,
     terrain: &PreviewTerrain,
+    terrain_index: &TerrainIndex,
 ) {
     let valid = matches!(
         preview.validity,
@@ -385,7 +394,7 @@ fn spawn_sky_tower_placement_grid(
                 width,
                 tower_base,
                 0.0,
-                &terrain.index,
+                terrain_index,
                 &terrain.assets,
                 &terrain.chunks,
             ) else {

@@ -2,7 +2,7 @@ mod validation;
 
 use std::marker::PhantomData;
 
-use bevy::prelude::*;
+use bevy::{ecs::system::SystemParam, prelude::*};
 
 use openzt2_game_assets::application_lifecycle::GamePhase;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
@@ -43,7 +43,6 @@ pub(super) struct StaffControl;
 #[derive(Component)]
 pub(in crate::immersive_modes) struct PendingMode<M: Component> {
     subject: Option<Entity>,
-    result: Result<Admission, ModeEntryFailure>,
     marker: PhantomData<M>,
 }
 
@@ -102,7 +101,6 @@ impl Admission {
 fn pending<M: Component>(subject: Option<Entity>) -> PendingMode<M> {
     PendingMode {
         subject,
-        result: Err(ModeEntryFailure::RuleDenied),
         marker: PhantomData,
     }
 }
@@ -121,84 +119,28 @@ pub(super) fn reserve_mode(commands: &mut Commands, request: EnterImmersiveMode)
     };
 }
 
-#[derive(bevy::ecs::query::QueryData)]
-#[query_data(mutable)]
-pub(super) struct ValidatedModes {
+#[derive(SystemParam)]
+pub(in crate::immersive_modes) struct ModeAdmission<'w, 's> {
+    commands: Commands<'w, 's>,
+    camera_requests: MessageWriter<'w, SetCameraMode>,
+    entered: MessageWriter<'w, ImmersiveModeEntered>,
+    rejected: MessageWriter<'w, ImmersiveModeRejected>,
+}
+
+fn commit_admitted_mode<M: Component + Default>(
     session: Entity,
-    guest: Option<&'static mut PendingMode<GuestViewControl>>,
-    first_person: Option<&'static mut PendingMode<FirstPersonControl>>,
-    search: Option<&'static mut PendingMode<FossilSearchControl>>,
-    assembly: Option<&'static mut PendingMode<FossilAssemblyControl>>,
-    photo: Option<&'static mut PendingMode<PhotoControl>>,
-    show: Option<&'static mut PendingMode<ShowEditControl>>,
-    staff: Option<&'static mut PendingMode<StaffControl>>,
-}
-
-fn take_result<M: Component + Default>(
-    mut pending: Mut<PendingMode<M>>,
-    entity: Entity,
-    commands: &mut Commands,
-) -> (Option<Entity>, Result<Admission, ModeEntryFailure>) {
-    let subject = pending.subject;
-    let result = std::mem::replace(&mut pending.result, Err(ModeEntryFailure::RuleDenied));
-    let mut session = commands.entity(entity);
-    session.remove::<PendingMode<M>>();
-    if result.is_ok() {
-        session.insert(M::default());
-    }
-    (subject, result)
-}
-
-pub(super) fn admit_validated_mode(
-    mut pending: Query<ValidatedModes, With<ModeReservation>>,
-    definitions: validation::ModeDefinitions,
-    mut commands: Commands,
-    mut camera_requests: MessageWriter<SetCameraMode>,
-    mut entered: MessageWriter<ImmersiveModeEntered>,
-    mut rejected: MessageWriter<ImmersiveModeRejected>,
+    mode: ImmersiveMode,
+    mut subject: Option<Entity>,
+    result: Result<Admission, ModeEntryFailure>,
+    definitions: &validation::ModeDefinitions,
+    output: ModeAdmission,
 ) {
-    let Ok(pending) = pending.single_mut() else {
-        return;
-    };
-    let session = pending.session;
-    let (mode, (mut subject, result)) = if let Some(pending) = pending.guest {
-        (
-            ImmersiveMode::GuestView,
-            take_result(pending, session, &mut commands),
-        )
-    } else if let Some(pending) = pending.first_person {
-        (
-            ImmersiveMode::FirstPerson,
-            take_result(pending, session, &mut commands),
-        )
-    } else if let Some(pending) = pending.search {
-        (
-            ImmersiveMode::FossilSearch,
-            take_result(pending, session, &mut commands),
-        )
-    } else if let Some(pending) = pending.assembly {
-        (
-            ImmersiveMode::FossilAssembly,
-            take_result(pending, session, &mut commands),
-        )
-    } else if let Some(pending) = pending.photo {
-        (
-            ImmersiveMode::Photo,
-            take_result(pending, session, &mut commands),
-        )
-    } else if let Some(pending) = pending.show {
-        (
-            ImmersiveMode::ShowEdit,
-            take_result(pending, session, &mut commands),
-        )
-    } else if let Some(pending) = pending.staff {
-        (
-            ImmersiveMode::SuperStaff,
-            take_result(pending, session, &mut commands),
-        )
-    } else {
-        return;
-    };
+    let ModeAdmission {
+        mut commands,
+        mut camera_requests,
+        mut entered,
+        mut rejected,
+    } = output;
     let admission = match result {
         Ok(admission) => admission,
         Err(reason) => {
@@ -224,8 +166,8 @@ pub(super) fn admit_validated_mode(
     }
     let camera_mode = match (mode, subject) {
         (ImmersiveMode::Photo, _) => CameraMode::Free,
-        (ImmersiveMode::ShowEdit, Some(subject)) => CameraMode::Follow(subject),
-        (_, Some(subject)) => CameraMode::FirstPerson(subject),
+        (ImmersiveMode::ShowEdit, Some(_)) => CameraMode::Follow,
+        (_, Some(_)) => CameraMode::FirstPerson,
         (_, None) => {
             rejected.write(ImmersiveModeRejected {
                 mode,
@@ -236,7 +178,8 @@ pub(super) fn admit_validated_mode(
         }
     };
     let mut entity = commands.entity(session);
-    entity.remove::<ModeReservation>();
+    entity.remove::<(ModeReservation, PendingMode<M>)>();
+    entity.insert(M::default());
     entity.insert((
         ActiveImmersiveMode {
             mode,
@@ -280,6 +223,7 @@ pub(super) fn admit_validated_mode(
     }
     camera_requests.write(SetCameraMode {
         mode: camera_mode,
+        subject: None,
         definition: admission.definition,
         transition_seconds: None,
     });

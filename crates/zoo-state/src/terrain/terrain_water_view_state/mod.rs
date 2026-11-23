@@ -1,85 +1,42 @@
 use bevy::prelude::*;
 
 /// Current pose of the active zoo camera, sampled before water presentation.
-#[derive(Component, Clone, Copy, PartialEq)]
+#[derive(Component, Clone, Copy, Default, PartialEq)]
 pub struct TerrainWaterCameraPose(pub Option<GlobalTransform>);
 
-/// Camera-dependent water presentation; region entities remain authoritative.
-#[derive(Resource, Default)]
-pub struct TerrainWaterViewState {
-    camera_position: Option<Vec3>,
-    camera_region: Option<Entity>,
-    camera_surface_height: Option<f32>,
-    underwater_status: Option<bool>,
-    selected_region: Option<Entity>,
-    surface_height: Option<f32>,
-    selection_resolved: bool,
-    alternate_regions_visible: bool,
-    training_opacity_mix: f32,
+/// Water contact for the active zoo camera.
+#[derive(Component, Debug, Default, Clone, Copy, PartialEq)]
+pub struct TerrainWaterCameraContact {
+    pub position: Option<Vec3>,
+    pub wet_region: Option<(Entity, f32)>,
+    /// None denotes unresolved membership or an inactive camera.
+    pub underwater_status: Option<bool>,
 }
 
-impl TerrainWaterViewState {
-    pub fn training_opacity_mix(&self) -> f32 {
-        self.training_opacity_mix
-    }
-
-    pub fn advance_training_opacity(&mut self, active: bool, seconds: f32) {
-        let rate = if active { 1.0 } else { -1.0 };
-        self.training_opacity_mix = (self.training_opacity_mix + rate * seconds).clamp(0.0, 1.0);
-    }
-    pub fn camera_position(&self) -> Option<Vec3> {
-        self.camera_position
-    }
-    pub fn camera_region(&self) -> Option<Entity> {
-        self.camera_region
-    }
-    pub fn camera_surface_height(&self) -> Option<f32> {
-        self.camera_surface_height
-    }
-    /// None denotes unresolved membership or no active camera.
-    pub fn underwater_status(&self) -> Option<bool> {
-        self.underwater_status
-    }
-    pub fn selected_region(&self) -> Option<Entity> {
-        self.selected_region
-    }
-    pub fn surface_height(&self) -> Option<f32> {
-        self.surface_height
-    }
-    pub fn selection_resolved(&self) -> bool {
-        self.selection_resolved
-    }
-    pub fn alternate_regions_visible(&self) -> bool {
-        self.alternate_regions_visible
-    }
-
-    pub fn update_camera(&mut self, position: Option<Vec3>, region: Option<Option<(Entity, f32)>>) {
-        self.camera_position = position;
-        let region_above_camera = position
-            .zip(region)
-            .map(|(position, region)| region.filter(|(_, height)| position.y < *height));
-        self.underwater_status = region_above_camera.map(|region| region.is_some());
-        self.camera_region = region_above_camera.flatten().map(|(entity, _)| entity);
-        self.camera_surface_height = region_above_camera.flatten().map(|(_, height)| height);
-        if position.is_none() {
-            *self = Self::default();
+impl TerrainWaterCameraContact {
+    pub fn from_membership(position: Vec3, membership: Option<Option<(Entity, f32)>>) -> Self {
+        let wet = membership.map(|region| region.filter(|(_, height)| position.y < *height));
+        Self {
+            position: Some(position),
+            wet_region: wet.flatten(),
+            underwater_status: wet.map(|region| region.is_some()),
         }
     }
-
-    pub fn update_selection(
-        &mut self,
-        region: Option<Option<(Entity, f32)>>,
-        alternate_visible: bool,
-    ) {
-        self.selection_resolved = region.is_some();
-        self.selected_region = region.flatten().map(|(entity, _)| entity);
-        self.surface_height = region.flatten().map(|(_, height)| height);
-        self.alternate_regions_visible = alternate_visible;
-    }
 }
 
+/// The selected reflection capture and any alternate region still visible.
+#[derive(Component, Debug, Default, Clone, Copy, PartialEq)]
+pub struct TerrainWaterCaptureSelection {
+    pub region: Option<(Entity, f32)>,
+    pub resolved: bool,
+    pub alternate_regions_visible: bool,
+}
+
+#[derive(Component, Debug, Default, Clone, Copy, PartialEq)]
+pub struct TerrainWaterTrainingFade(pub f32);
+
 /// Fade state belongs to the region's water effect, not a global registry.
-#[derive(Component, Debug, Default)]
+#[derive(Component, Debug, Default, Clone, Copy, PartialEq)]
 pub struct TerrainWaterRegionFade {
     fraction: f32,
     rate_per_second: f32,
@@ -133,18 +90,16 @@ mod tests {
     }
 
     #[test]
-    fn camera_wet_region_is_independent_of_the_capture_region() {
-        let capture = Entity::from_bits(1 << 32 | 1);
+    fn camera_contact_preserves_dry_wet_and_unresolved_membership() {
         let wet = Entity::from_bits(1 << 32 | 2);
-        let mut view = TerrainWaterViewState::default();
-        view.update_selection(Some(Some((capture, 20.0))), false);
-        view.update_camera(Some(Vec3::new(0.0, 5.0, 0.0)), Some(None));
-        assert_eq!(view.underwater_status(), Some(false));
-        assert_eq!(view.selected_region(), Some(capture));
-        view.update_camera(Some(Vec3::new(0.0, 5.0, 0.0)), Some(Some((wet, 6.0))));
-        assert_eq!(view.camera_region(), Some(wet));
-        assert_eq!(view.underwater_status(), Some(true));
-        view.update_camera(Some(Vec3::new(0.0, 5.0, 0.0)), None);
-        assert_eq!(view.underwater_status(), None);
+        let position = Vec3::new(0.0, 5.0, 0.0);
+        let dry = TerrainWaterCameraContact::from_membership(position, Some(Some((wet, 4.0))));
+        assert_eq!(dry.underwater_status, Some(false));
+        let submerged =
+            TerrainWaterCameraContact::from_membership(position, Some(Some((wet, 6.0))));
+        assert_eq!(submerged.wet_region, Some((wet, 6.0)));
+        assert_eq!(submerged.underwater_status, Some(true));
+        let unresolved = TerrainWaterCameraContact::from_membership(position, None);
+        assert_eq!(unresolved.underwater_status, None);
     }
 }

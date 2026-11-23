@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use openzt2_zoo_state::economy::general_economy_types::GeneralEconomyTransaction;
 
-use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
+use openzt2_world_state::world_spawn::world_membership_types::{WorldMember, WorldRoot};
 
 use super::{
     account_transaction_types::{
@@ -17,20 +17,25 @@ pub(super) struct ScenarioEconomyCommandTransaction;
 
 pub(super) fn apply_scenario_cash_and_admission_commands(
     mut commands: Commands,
-    mut admission_price: ResMut<AdmissionPrice>,
+    mut admission: Query<&mut AdmissionPrice, With<WorldRoot>>,
     world_members: Query<&WorldMember>,
     mut scenario_commands: MessageReader<ScenarioEconomyCommand>,
     mut transaction_requests: MessageWriter<TransactionRequest>,
 ) {
     for command in scenario_commands.read() {
+        let root = world_members
+            .get(command.terminal)
+            .map_or(command.terminal, |member| member.root);
         if let ScenarioEconomyOperation::SetAdmission(value) = command.operation {
-            admission_price.0 = value;
+            if let Ok(mut admission_price) = admission.get_mut(root) {
+                admission_price.set_if_neq(AdmissionPrice::from_adult(value));
+            }
             continue;
         }
-        let Ok(world_member) = world_members.get(command.terminal) else {
-            continue;
-        };
 
+        if !admission.contains(root) {
+            continue;
+        }
         let zoo_cash_change = match command.operation {
             ScenarioEconomyOperation::GrantCash(value) => value.0,
             ScenarioEconomyOperation::TakeCash(value) => value.0.saturating_neg(),
@@ -44,7 +49,7 @@ pub(super) fn apply_scenario_cash_and_admission_commands(
 
         let transaction_operation = commands
             .spawn((
-                *world_member,
+                WorldMember { root },
                 ScenarioEconomyCommandTransaction,
                 GeneralEconomyTransaction::CashGrant,
             ))

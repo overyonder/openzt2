@@ -4,7 +4,6 @@ use openzt2_zoo_state::economy::authored_transaction_amount;
 use openzt2_zoo_state::economy::behavior_transaction_state;
 use openzt2_zoo_state::economy::currency_formatting;
 use openzt2_zoo_state::economy::facility_economy_types;
-use openzt2_zoo_state::economy::general_economy_types::GeneralEconomyLedger;
 use openzt2_zoo_state::economy::guest_admission_types;
 use openzt2_zoo_state::economy::money_types;
 use openzt2_zoo_state::economy::monthly_finance_types;
@@ -32,7 +31,6 @@ mod service_cancellation;
 mod service_inventory_restocking;
 mod service_progress_and_payment;
 mod service_reservation;
-mod zoo_cash_policy;
 mod zoo_cash_ui;
 
 use bevy::prelude::*;
@@ -40,18 +38,17 @@ use bevy::prelude::*;
 use openzt2_game_assets::application_lifecycle::GamePhase;
 use openzt2_world_state::application_schedule::FixedGameSet;
 use openzt2_world_state::application_schedule::GameSet;
+use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
-    BehaviorStep, BehaviorStepSet,
+    BehaviorStepFixedSet, update_waiting_behavior_actors,
 };
 use openzt2_zoo_state::construction::FixedConstructionSet;
 
 use self::{
     account_transaction_types::{TransactionCompleted, TransactionRejected, TransactionRequest},
-    guest_admission_types::{AdmissionPrice, ZooAdmissionsOpen},
     monthly_finance_types::MonthlyFinanceHistory,
     scenario_economy_command_types::ScenarioEconomyCommand,
     service_types::{ServiceCompleted, ServiceRequestSequence},
-    zoo_cash_types::ZooCash,
 };
 
 pub struct EconomyPlugin;
@@ -59,7 +56,7 @@ pub struct EconomyPlugin;
 impl Plugin for EconomyPlugin {
     fn build(&self, app: &mut App) {
         app.register_required_components::<
-            openzt2_world_state::world_spawn::world_membership_types::WorldRoot,
+            WorldRoot,
             finance_donation_reports::FinanceDonationReports,
         >()
             .add_systems(
@@ -75,24 +72,28 @@ impl Plugin for EconomyPlugin {
             .add_message::<TransactionCompleted>()
             .add_message::<TransactionRejected>()
             .add_message::<ScenarioEconomyCommand>()
-            .init_resource::<ServiceRequestSequence>()
+
+            .register_required_components::<WorldRoot, MonthlyFinanceHistory>()
+            .register_required_components::<WorldRoot, ServiceRequestSequence>()
+            .register_required_components::<facility_economy_types::Wallet, behavior_transaction_state::EconomyUsage>()
+            .register_required_components::<facility_economy_types::ServiceFacility, behavior_transaction_state::EconomyUsage>()
+            .add_systems(
+                FixedUpdate,
+                monthly_finance_recording::enter_published_zoo_finance_month
+                    .after(FixedGameSet::Clock)
+                    .before(account_transaction_settlement::settle_requested_account_transactions::<false>)
+                    .before(FixedConstructionSet::SettleEconomy)
+                    .run_if(in_state(GamePhase::InGame)),
+            )
             .add_message::<ServiceCompleted>()
             .add_observer(service_cancellation::release_removed_service_reservation)
             .add_observer(service_cancellation::cancel_timed_reservations_when_facility_is_removed)
             .add_observer(service_cancellation::cancel_timed_reservation_when_guest_is_removed)
-            .init_resource::<ZooCash>()
-            .init_resource::<AdmissionPrice>()
-            .init_resource::<MonthlyFinanceHistory>()
-            .init_resource::<GeneralEconomyLedger>()
-            .init_resource::<guest_admission_ui::AuthoredZooAdmissionPriceBands>()
-            .init_resource::<ZooAdmissionsOpen>()
+
             .add_systems(
                 Update,
                 (
-                    zoo_cash_policy::apply_selected_world_unlimited_cash_policy,
-                    guest_admission_ui::initialize_zoo_admission_price_bands_from_loaded_world_definition,
-                    guest_admission_ui::apply_zoo_admission_policy_changes_from_authored_ui_actions
-                        .after(guest_admission_ui::initialize_zoo_admission_price_bands_from_loaded_world_definition),
+                    guest_admission_ui::apply_zoo_admission_policy_changes_from_authored_ui_actions,
                     zoo_cash_ui::request_cash_grant_transactions_from_authored_ui_actions,
                     facility_economy_ui::route_selected_facility_economy_ui_actions,
                 )
@@ -146,18 +147,23 @@ impl Plugin for EconomyPlugin {
                 )
                     .in_set(FixedGameSet::Act),
             )
+            .add_observer(behavior_transaction_execution::start_authored_behavior_transactions)
+            .add_observer(experience_donation_payment::request_experience_donation_payments)
+            .add_observer(
+                behavior_transaction_execution::added_behavior_transaction
+                    .pipe(behavior_transaction_execution::execute_authored_behavior_transaction_steps),
+            )
             .add_systems(
-                BehaviorStep,
-                (
-                    behavior_transaction_execution::start_authored_behavior_transactions,
-                    experience_donation_payment::request_experience_donation_payments,
-                    behavior_transaction_execution::execute_authored_behavior_transaction_steps
-                        .after(behavior_transaction_execution::start_authored_behavior_transactions),
-                ).in_set(BehaviorStepSet::Actions),
+                FixedUpdate,
+                update_waiting_behavior_actors
+                    .pipe(behavior_transaction_execution::execute_authored_behavior_transaction_steps)
+                    .in_set(BehaviorStepFixedSet::Think),
             )
             .add_systems(
                 FixedUpdate,
                 (
+                    keeper_refill_settlement::mark_staff_refill_cancellations_before_account_settlement
+                        .before(account_transaction_settlement::settle_requested_account_transactions::<false>),
                     (
                         guest_admission_payment::request_guest_admission_payment_after_entrance_reached,
                         account_transaction_settlement::stage_requested_account_transactions::<false>,
@@ -211,13 +217,6 @@ impl Plugin for EconomyPlugin {
                     scenario_economy_command_application::remove_resolved_scenario_economy_command_transactions,
                 )
                     .in_set(FixedGameSet::Cleanup),
-            )
-            .add_systems(
-                OnExit(GamePhase::InGame),
-                (
-                    zoo_cash_policy::clear_unlimited_cash_policy_after_leaving_game,
-                    monthly_finance_recording::clear_finance_history_after_leaving_game,
-                ),
             );
     }
 }
@@ -233,7 +232,7 @@ pub fn add_account_transaction_test_systems(app: &mut App) {
     app.add_message::<TransactionRequest>()
         .add_message::<TransactionCompleted>()
         .add_message::<TransactionRejected>()
-        .init_resource::<ZooCash>()
+
         .add_systems(
             Update,
             (
