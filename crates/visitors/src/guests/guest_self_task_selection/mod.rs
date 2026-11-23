@@ -61,7 +61,15 @@ use target_index::{GuestTarget, GuestTargetIndex};
 #[derive(Default)]
 pub(super) struct GuestSubjectTaskIndex {
     by_subject_types: HashMap<Vec<AssetId>, Vec<(Handle<BehaviorDocumentAsset>, usize)>>,
+    /// The path tiles guests may view animals from, as of `viewing_paths_tick`.
+    viewing_paths: Vec<(Entity, Vec3, Entity, bool)>,
+    viewing_paths_tick: Option<u64>,
 }
+
+/// How often the viewing paths are worked out again. Animals and paths move
+/// little in a second, and scanning every path against every habitat each
+/// update is heavy in a busy zoo.
+const VIEWING_PATH_REFRESH_TICKS: u64 = 60;
 
 pub(super) fn select_idle_guest_tasks(
     (documents, assets, mut subject_tasks): (
@@ -187,41 +195,49 @@ pub(super) fn select_idle_guest_tasks(
                 )
         })
     };
-    let viewing_paths = definitions
-        .guest_viewing()
-        .map(|viewing| {
-            let range_squared = viewing.ground_range_m * viewing.ground_range_m;
-            paths
-                .iter()
-                .filter(|(_, path, path_world, _)| {
-                    let path = path.translation().xz();
-                    viewable_animals
-                        .iter()
-                        .any(|(animal, visibility, animal_world, member)| {
-                            animal_world.root == path_world.root
-                                && *visibility != Visibility::Hidden
-                                && animal.translation().xz().distance_squared(path) <= range_squared
-                                && beside_habitat(
-                                    path,
-                                    member.habitat_entity,
-                                    viewing.ground_distance_m,
-                                )
-                                && !view_is_walled_off(
-                                    path,
-                                    animal.translation().xz(),
-                                    member.habitat_entity,
-                                )
-                        })
-                })
-                .map(|(path, transform, path_world, tile)| {
-                    let elevated = definitions
-                        .find_path(tile.definition)
-                        .is_some_and(|definition| definition.elevated);
-                    (path, transform.translation(), path_world.root, elevated)
-                })
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
+    let stale = subject_tasks.viewing_paths_tick.is_none_or(|tick| {
+        clock.tick.saturating_sub(tick) >= VIEWING_PATH_REFRESH_TICKS || tick > clock.tick
+    });
+    if stale {
+        subject_tasks.viewing_paths_tick = Some(clock.tick);
+        subject_tasks.viewing_paths = definitions
+            .guest_viewing()
+            .map(|viewing| {
+                let range_squared = viewing.ground_range_m * viewing.ground_range_m;
+                paths
+                    .iter()
+                    .filter(|(_, path, path_world, _)| {
+                        let path = path.translation().xz();
+                        viewable_animals
+                            .iter()
+                            .any(|(animal, visibility, animal_world, member)| {
+                                animal_world.root == path_world.root
+                                    && *visibility != Visibility::Hidden
+                                    && animal.translation().xz().distance_squared(path)
+                                        <= range_squared
+                                    && beside_habitat(
+                                        path,
+                                        member.habitat_entity,
+                                        viewing.ground_distance_m,
+                                    )
+                                    && !view_is_walled_off(
+                                        path,
+                                        animal.translation().xz(),
+                                        member.habitat_entity,
+                                    )
+                            })
+                    })
+                    .map(|(path, transform, path_world, tile)| {
+                        let elevated = definitions
+                            .find_path(tile.definition)
+                            .is_some_and(|definition| definition.elevated);
+                        (path, transform.translation(), path_world.root, elevated)
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+    }
+    let viewing_paths = subject_tasks.viewing_paths.clone();
     // Like the task's `Use_Path` reservation, one guest views from a path
     // tile at a time, so watchers spread along the fence instead of crowding
     // onto the best spot.
