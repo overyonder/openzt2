@@ -127,16 +127,18 @@ pub(super) fn start_current_supported_behavior_docking_actions(
         // so the service dock that follows still walks to its reserved slot.
         if let Some(queue_approach) = queue_approach {
             let tag = behavior_task.reservation_tag(&behavior_document_assets);
-            let Some((queue_slot, queue_node_name)) = target_definition.and_then(|definition| {
-                definition
-                    .interaction_slots
-                    .iter()
-                    .enumerate()
-                    .find(|(_, slot)| {
-                        slot.is_queue && tag.is_none_or(|tag| slot.reservation_tag == tag)
-                    })
-                    .map(|(index, slot)| (index, slot.target_node_name.as_str()))
-            }) else {
+            let Some((queue_slot, queue_capacity, queue_node_name)) =
+                target_definition.and_then(|definition| {
+                    definition
+                        .interaction_slots
+                        .iter()
+                        .enumerate()
+                        .find(|(_, slot)| {
+                            slot.is_queue && tag.is_none_or(|tag| slot.reservation_tag == tag)
+                        })
+                        .map(|(index, slot)| (index, slot.capacity, slot.target_node_name.as_str()))
+                })
+            else {
                 super::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation(
                     actor, &mut commands,
                 );
@@ -161,8 +163,12 @@ pub(super) fn start_current_supported_behavior_docking_actions(
                 };
                 node.translation()
             };
-            // The queue's members in the order they joined it, as the wait
-            // that admitted them keeps it.
+            // Walking up to the line joins it, before the authored wait that
+            // follows confirms the place, so guests arriving together take
+            // successive places rather than one. Admission is immediate, so
+            // the order is the order they arrived in.
+            occupancy.admit(target, actor, queue_slot, queue_capacity);
+            // The queue's members in the order they joined it.
             let members = occupancy
                 .members_in_slot(target, queue_slot)
                 .collect::<Vec<_>>();
