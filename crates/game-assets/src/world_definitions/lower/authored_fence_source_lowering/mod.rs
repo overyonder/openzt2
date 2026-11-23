@@ -81,10 +81,12 @@ fn authored_fence_traversal_blocking_flags(
         .ok_or_else(|| BindError::record(record, "invalid authored fence traversal flags"))
 }
 
+/// `b_SeeThrough` from the fence or the nearest type it inherits from, so a
+/// chain-link gate is as see-through as chain link.
 fn authored_fence_is_see_through(record: &RecordView<'_, '_>) -> bool {
-    record
-        .descendant_named("BFAIEntityDataShared")
-        .and_then(|data| data.attribute_named_any(&["b_SeeThrough"]))
+    authored_type_family_components(record, "BFAIEntityDataShared")
+        .into_iter()
+        .find_map(|data| data.attribute_named_any(&["b_SeeThrough"]))
         .is_some_and(|value| value.trim().eq_ignore_ascii_case("true"))
 }
 
@@ -512,6 +514,13 @@ mod tests {
                 </BFTypedBinder>"#,
             ),
             parse(
+                "chainlinkgate.xml",
+                r#"<BFTypedBinder binderType="chainlinkgate">
+                    <types><entity><fence><chainlink><chainlinkgate/></chainlink></fence></entity></types>
+                    <shared><BFAIEntityDataShared f_FenceStrength="3"/></shared>
+                </BFTypedBinder>"#,
+            ),
+            parse(
                 "concrete.xml",
                 r#"<BFTypedBinder binderType="concrete">
                     <types><entity><fence><concrete/></fence></entity></types>
@@ -522,6 +531,8 @@ mod tests {
         let index = SourceIndex::build(&documents).expect("valid source index");
         let see_through = |name| authored_fence_is_see_through(&index.find(name).expect("fence"));
         assert!(see_through("chainlink"));
+        // A gate inherits its family's view through it.
+        assert!(see_through("chainlinkgate"));
         assert!(!see_through("concrete"));
     }
 
