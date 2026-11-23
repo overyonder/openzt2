@@ -5,6 +5,8 @@ use openzt2_game_data::{
     },
     AssetId,
 };
+use openzt2_zoo_state::person_name_selection_and_resolution::resolve_generated_person_name_text_parts;
+use openzt2_zoo_state::person_name_types::GeneratedPersonNameRowSelection;
 
 use openzt2_game_assets::localization::localization_asset_types::LocalizationAsset;
 use openzt2_game_assets::localization::localization_precedence_index::LocalizationPrecedenceIndex;
@@ -129,20 +131,36 @@ pub(crate) fn project_authored_definition_name_to_selected_entity_panel(
     }
 }
 
-/// Uses the live name when present, otherwise the definition name.
+/// Uses the live name when present, such as a guest's generated name,
+/// otherwise the definition name.
 pub(crate) fn project_live_name_to_selected_entity_panel(
     information_panels: Query<(Entity, &InfoPanel, &InheritedVisibility)>,
-    inspectable_world_subjects: Query<(&Inspectable, Option<&Name>)>,
+    inspectable_world_subjects: Query<(
+        &Inspectable,
+        Option<&Name>,
+        Option<&GeneratedPersonNameRowSelection>,
+    )>,
+    world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
+    active_world_definitions: Res<WorldDefinitions>,
     mut text_nodes: Query<(&UiDocumentOwner, &UiTextBinding, &mut Text)>,
 ) {
+    let world_definitions = active_world_definitions.get(&world_definition_assets);
     for (panel_entity, information_panel, inherited_visibility) in &information_panels {
         if !inherited_visibility.get() {
             continue;
         }
-        let Ok((_, Some(subject_name))) = inspectable_world_subjects.get(information_panel.subject)
+        let Ok((_, live_name, generated)) =
+            inspectable_world_subjects.get(information_panel.subject)
         else {
             continue;
         };
+        let Some(subject_name) = live_name
+            .map(|name| name.as_str().to_owned())
+            .or_else(|| generated_person_name(world_definitions?, generated?))
+        else {
+            continue;
+        };
+        let subject_name = subject_name.as_str();
         for (document_owner, text_binding, mut text) in &mut text_nodes {
             if document_owner.0 == panel_entity
                 && matches!(
@@ -150,7 +168,7 @@ pub(crate) fn project_live_name_to_selected_entity_panel(
                     UiTextPropertyBindingSource::SelectedEntityName
                 )
             {
-                replace_projected_ui_text_if_changed(&mut text.0, subject_name.as_str());
+                replace_projected_ui_text_if_changed(&mut text.0, subject_name);
             }
         }
     }
@@ -161,7 +179,11 @@ pub(crate) fn project_selected_entity_name_to_authored_editable_fields(
     active_world_definitions: Res<WorldDefinitions>,
     active_localization: Res<LocalizationPrecedenceIndex>,
     localization_assets: Res<Assets<LocalizationAsset>>,
-    inspectable_world_subjects: Query<(&Inspectable, Option<&Name>)>,
+    inspectable_world_subjects: Query<(
+        &Inspectable,
+        Option<&Name>,
+        Option<&GeneratedPersonNameRowSelection>,
+    )>,
     information_panels: Query<(Entity, &InfoPanel, &InheritedVisibility)>,
     mut editable_name_nodes: Query<(&UiDocumentOwner, &UiTextBinding, &mut EditableText)>,
 ) {
@@ -175,13 +197,19 @@ pub(crate) fn project_selected_entity_name_to_authored_editable_fields(
         let selected_entity_name = inspectable_world_subjects
             .get(information_panel.subject)
             .ok()
-            .and_then(|(subject, live_name)| {
-                live_name.map(Name::as_str).or_else(|| {
-                    let definition = world_definitions?.find_object(subject.definition)?;
-                    active_localization?.find_plain_localized_text(AssetId(definition.name_key.0))
-                })
+            .and_then(|(subject, live_name, generated)| {
+                live_name
+                    .map(|name| name.as_str().to_owned())
+                    .or_else(|| generated_person_name(world_definitions?, generated?))
+                    .or_else(|| {
+                        let definition = world_definitions?.find_object(subject.definition)?;
+                        active_localization?
+                            .find_plain_localized_text(AssetId(definition.name_key.0))
+                            .map(str::to_owned)
+                    })
             })
             .unwrap_or_default();
+        let selected_entity_name = selected_entity_name.as_str();
         for (document_owner, text_binding, mut editable_text) in &mut editable_name_nodes {
             if document_owner.0 == panel_entity
                 && matches!(
@@ -196,4 +224,14 @@ pub(crate) fn project_selected_entity_name_to_authored_editable_fields(
             }
         }
     }
+}
+
+/// A guest's or staff member's name drawn from its authored name pool.
+fn generated_person_name(
+    world_definitions: openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView<'_>,
+    generated: &GeneratedPersonNameRowSelection,
+) -> Option<String> {
+    let (first, delimiter, last) =
+        resolve_generated_person_name_text_parts(world_definitions, generated)?;
+    Some(format!("{first}{delimiter}{last}"))
 }
