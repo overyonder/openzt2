@@ -47,6 +47,7 @@ pub(super) fn policy_document() -> WorldDefinitionDocument {
             prefab: id,
             catalogue_preview_prefab: None,
             presentation_attachments: vec![],
+            simple_lod_distances_m: None,
             named_physical_presentations: vec![],
             interaction_slots: vec![],
             container_quantity: None,

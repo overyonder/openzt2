@@ -311,6 +311,7 @@ pub(super) fn bind_authored_fence(
         zoopedia_subject: authored_zoopedia_subject_from_world_object_record(record)?,
         prefab: AssetId::default(),
         presentation_attachments: Vec::new(),
+        simple_lod_distances_m: None,
         named_physical_presentations: Vec::new(),
         catalogue_preview_prefab: None,
         interaction_slots: Vec::new(),

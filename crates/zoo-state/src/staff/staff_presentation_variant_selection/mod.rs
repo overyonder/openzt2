@@ -145,7 +145,7 @@ pub fn dress_staff(
                     PendingModelJointAttachment::new(staff, &head.joint),
                     StaffAttachedHead,
                     // A head is a `BFSimpleLODComponent` model.
-                    SimpleLodSwitching,
+                    SimpleLodSwitching(head.simple_lod_distances_m.clone()),
                 ))
                 .id()
         });

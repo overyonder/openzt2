@@ -89,7 +89,7 @@ pub(super) fn lower_named_physical_presentations(
             attach_node: None,
             inherit_attach_rotation: false,
             fade: None,
-            simple_lod: is_simple_lod(component),
+            simple_lod_distances_m: simple_lod_distances(component),
         });
     }
     Ok(presentations)
@@ -189,7 +189,7 @@ pub(super) fn lower_parented_named_physical_presentations(
                 .attribute_named_any(&["rottype"])
                 .is_some_and(|mode| source_document_names_are_semantically_equal(mode, "use")),
             fade: None,
-            simple_lod: is_simple_lod(component),
+            simple_lod_distances_m: simple_lod_distances(component),
         });
     }
     lower_station_construction_markers(&binders, scene_paths, &mut seen, &mut presentations);
@@ -242,7 +242,7 @@ fn lower_station_construction_markers(
             attach_node: None,
             inherit_attach_rotation: false,
             fade: None,
-            simple_lod: is_simple_lod(component),
+            simple_lod_distances_m: simple_lod_distances(component),
         });
     }
 }
@@ -350,7 +350,7 @@ pub(super) fn lower_fade_controller_states(
                 attach_node: None,
                 inherit_attach_rotation: false,
                 fade: Some(fade),
-                simple_lod: is_simple_lod(component),
+                simple_lod_distances_m: simple_lod_distances(component),
             });
         }
     }
@@ -520,8 +520,58 @@ mod tests {
         assert_eq!(head.prefab, AssetId::from_virtual_path("head.nif#scene"));
         assert_eq!(head.attach_node.as_deref(), Some("Link_Head"));
         assert!(
-            head.simple_lod,
+            head.simple_lod_distances_m.is_some(),
             "a BFSimpleLODComponent head switches its own levels"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_simple_lod_model_switches_at_its_authored_distances(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let distances = |component: &str| -> Result<Option<Vec<f32>>, Box<dyn std::error::Error>> {
+            let xml = format!(
+                r#"<BFTypedBinder binderType="stand"><types><entity><building><stand/></building></entity></types>
+                <binder><BFNamedBinder binderName="mainObj"><instance><BFPhysObj>{component}</BFPhysObj></instance></BFNamedBinder></binder>
+            </BFTypedBinder>"#
+            );
+            let source =
+                parse_blue_fang_source_document(AssetPath::new("stand.xml"), xml.as_bytes())
+                    .map_err(|error| std::io::Error::other(format!("{error:?}")))?;
+            let mut scenes = BlueFangActorManifestModelAndSceneResolutionIndex::default();
+            scenes.register_archive_resolved_native_model_scene_asset_path(
+                "stand.nif",
+                "stand.nif#scene",
+            );
+            let document =
+                lower_resolved_world_definition_source_document_closure_to_canonical_document(
+                    &[source],
+                    &scenes,
+                    "stand.xml",
+                    [0, 0],
+                )?
+                .ok_or_else(|| std::io::Error::other("stand produced no document"))?;
+            Ok(document.objects[0].simple_lod_distances_m.clone())
+        };
+        // Unauthored, the game's own distances.
+        assert_eq!(
+            distances(r#"<BFSimpleLODComponent modelfile="stand.nif"/>"#)?,
+            Some(vec![
+                0.0, 15.0, 40.0, 65.0, 90.0, 115.0, 130.0, 145.0, 160.0, 175.0
+            ])
+        );
+        // As the shipped hot dog stands author them: the larger of each pair,
+        // and 0 past the authored entries.
+        assert_eq!(
+            distances(
+                r#"<BFSimpleLODComponent modelfile="stand.nif" switch="7 18 36" minSwitch="0 0 40"/>"#
+            )?,
+            Some(vec![0.0, 18.0, 40.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+        );
+        assert_eq!(
+            distances(r#"<BFSceneGraphComponent modelfile="stand.nif"/>"#)?,
+            None,
+            "a scene graph model keeps its own distances"
         );
         Ok(())
     }
@@ -688,8 +738,60 @@ mod tests {
     }
 }
 
-/// The original switches a `BFSimpleLODComponent` model's LOD levels at its
-/// own distances.
-fn is_simple_lod(component: &OrderedSourceDocumentNode) -> bool {
-    source_document_names_are_semantically_equal(component.name.as_str(), "BFSimpleLODComponent")
+/// The distance, in metres, from which each LOD level of a
+/// `BFSimpleLODComponent` model shows: the larger of its `switch` and
+/// `minSwitch` entries. `zt.exe` starts from 0, 15, 40, 65, 90 and 115 m and
+/// then every 15 m (`FUN_007150b1`). An authored `switch` starts at 0, takes the
+/// one before plus 1 for an invalid entry and 0 past its last
+/// (`FUN_007718b4`); `minSwitch` takes the one before for an invalid entry and
+/// 0 past its last (`FUN_0077191f`). Another component gives none.
+pub(super) fn simple_lod_distances(component: &OrderedSourceDocumentNode) -> Option<Vec<f32>> {
+    if !source_document_names_are_semantically_equal(
+        component.name.as_str(),
+        "BFSimpleLODComponent",
+    ) {
+        return None;
+    }
+    const LEVELS: usize = 10;
+    let authored = |name: &str| {
+        component.attribute_named_any(&[name]).map(|values| {
+            values
+                .split_whitespace()
+                .take(LEVELS)
+                .map(|value| {
+                    parse_blue_fang_source_numeric_lexeme::<f32>(value)
+                        .filter(|value| value.is_finite() && *value >= 0.0)
+                })
+                .collect::<Vec<_>>()
+        })
+    };
+    let mut switch = [0.0_f32; LEVELS];
+    match authored("switch") {
+        None => {
+            switch[..6].copy_from_slice(&[0.0, 15.0, 40.0, 65.0, 90.0, 115.0]);
+            for level in 6..LEVELS {
+                switch[level] = switch[level - 1] + 15.0;
+            }
+        }
+        Some(values) => {
+            for (level, value) in values.into_iter().enumerate().skip(1) {
+                switch[level] = value.unwrap_or(switch[level - 1] + 1.0);
+            }
+        }
+    }
+    let mut min_switch = [0.0_f32; LEVELS];
+    for (level, value) in authored("minSwitch").into_iter().flatten().enumerate() {
+        min_switch[level] = value.unwrap_or(if level == 0 {
+            0.0
+        } else {
+            min_switch[level - 1]
+        });
+    }
+    Some(
+        switch
+            .iter()
+            .zip(min_switch)
+            .map(|(switch, min_switch)| switch.max(min_switch))
+            .collect(),
+    )
 }

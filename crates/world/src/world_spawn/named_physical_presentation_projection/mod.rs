@@ -169,8 +169,8 @@ pub(super) fn spawn_required_named_physical_presentations<'a>(
         if let Some(fade) = presentation.fade {
             child.insert(NamedPresentationFade(fade));
         }
-        if presentation.simple_lod {
-            child.insert(SimpleLodSwitching);
+        if let Some(distances) = &presentation.simple_lod_distances_m {
+            child.insert(SimpleLodSwitching(distances.clone()));
         }
     }
     commands

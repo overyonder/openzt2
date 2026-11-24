@@ -232,10 +232,10 @@ pub struct WorldObjectNamedPhysicalPresentationDefinition {
     /// The `BFAIFadeController` state that shows this binder.
     #[serde(default)]
     pub fade: Option<WorldObjectFadeRange>,
-    /// Its model is a `BFSimpleLODComponent`, whose LOD levels switch at the
-    /// game's own distances.
+    /// The distances its model's LOD levels switch at, when a
+    /// `BFSimpleLODComponent` presents it.
     #[serde(default)]
-    pub simple_lod: bool,
+    pub simple_lod_distances_m: Option<Vec<f32>>,
 }
 
 /// One `BFAIFadeController` state: its binder shows while the controller's
@@ -327,6 +327,10 @@ pub struct WorldObjectDefinition {
     /// Named child-binder states attached to primary prefab sockets. State
     /// selection is live presentation state; geometry remains in scene assets.
     pub presentation_attachments: Vec<WorldObjectPresentationControllerDefinition>,
+    /// The distances its main model's LOD levels switch at, when a
+    /// `BFSimpleLODComponent` presents it.
+    #[serde(default)]
+    pub simple_lod_distances_m: Option<Vec<f32>>,
     #[serde(default)]
     pub named_physical_presentations: Vec<WorldObjectNamedPhysicalPresentationDefinition>,
     /// Caustic eligibility belongs to physical binders, independently of shared models.

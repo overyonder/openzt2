@@ -164,10 +164,14 @@ pub struct StaffWetsuitPresentation {
 }
 
 /// Separate head model the original attaches to a body joint.
-#[derive(Clone, Debug, serde::Deserialize, PartialEq, Eq, serde::Serialize)]
+#[derive(Clone, Debug, serde::Deserialize, PartialEq, serde::Serialize)]
 pub struct StaffHeadPresentation {
     pub prefab: AssetId,
     pub joint: String,
+    /// The distances its LOD levels switch at; a head is a
+    /// `BFSimpleLODComponent`.
+    #[serde(default)]
+    pub simple_lod_distances_m: Vec<f32>,
 }
 #[derive(Clone, Copy, Debug, serde::Deserialize, PartialEq, Eq, serde::Serialize)]
 pub enum StaffJobEffect {

@@ -49,6 +49,7 @@ pub(super) fn install_fence_definition_with_broken_variant(
             prefab: AssetId::default(),
             catalogue_preview_prefab: None,
             presentation_attachments: Vec::new(),
+            simple_lod_distances_m: None,
             named_physical_presentations: Vec::new(),
             interaction_slots: Vec::new(),
             container_quantity: None,

@@ -7,6 +7,10 @@ use openzt2_world_state::world_spawn::prefab_model_level_of_detail_visibility_ra
 };
 
 use crate::model_render::prefab_render_layer_camera_matching::PrefabRenderLayers;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabPresentation;
+use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 
 #[derive(Default)]
 pub(super) struct LodSelection {
@@ -116,22 +120,46 @@ pub(super) fn project_prefab_model_level_of_detail_visibility(
     }
 }
 
-/// Gives the LOD levels of a `SimpleLodSwitching` presentation the game's own
-/// distances once, when they spawn.
+/// Gives the LOD levels of a `BFSimpleLODComponent` model its object's
+/// distances once, when they spawn. The nearest presentation above a level
+/// decides: a `SimpleLodSwitching` part, such as a head, carries its own; an
+/// object's main model takes its definition's; another part keeps its model's.
+#[allow(clippy::type_complexity)]
 pub(super) fn apply_simple_lod_switching(
     mut commands: Commands,
+    world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
+    active_world_definitions: Res<WorldDefinitions>,
     groups: Query<(Entity, &PrefabLodRanges), Added<PrefabLodRanges>>,
     parents: Query<&ChildOf>,
-    switching: Query<(), With<SimpleLodSwitching>>,
+    owners: Query<(
+        Option<&SimpleLodSwitching>,
+        Option<&DefinitionId>,
+        Has<PrefabPresentation>,
+    )>,
     ranges: Query<&PrefabModelLevelOfDetailVisibilityRange>,
 ) {
+    let definitions = active_world_definitions.get(&world_definition_assets);
     for (group, members) in &groups {
-        if !std::iter::once(group)
+        let Some(distances) = std::iter::once(group)
             .chain(parents.iter_ancestors(group))
-            .any(|entity| switching.contains(entity))
-        {
+            .find_map(|entity| {
+                let (switching, definition, presents) = owners.get(entity).ok()?;
+                if let Some(switching) = switching {
+                    return Some(Some(switching.0.clone()));
+                }
+                if let Some(definition) = definition {
+                    return Some(
+                        definitions
+                            .and_then(|definitions| definitions.find_object(definition.0))
+                            .and_then(|object| object.simple_lod_distances_m.clone()),
+                    );
+                }
+                presents.then_some(None)
+            })
+            .flatten()
+        else {
             continue;
-        }
+        };
         let far = members
             .iter()
             .map(|member| {
@@ -140,7 +168,7 @@ pub(super) fn apply_simple_lod_switching(
                     .map_or(f32::INFINITY, |range| range.far_m)
             })
             .collect::<Vec<_>>();
-        for (member, (near_m, far_m)) in members.iter().zip(simple_lod_ranges(&far)) {
+        for (member, (near_m, far_m)) in members.iter().zip(simple_lod_ranges(&far, &distances)) {
             commands
                 .entity(member)
                 .insert(SimpleLodRange { near_m, far_m });

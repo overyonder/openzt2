@@ -34,7 +34,7 @@ fn presentation(
         attach_node: None,
         inherit_attach_rotation: false,
         fade: None,
-        simple_lod: false,
+        simple_lod_distances_m: None,
     }
 }
 
@@ -62,6 +62,7 @@ fn marker_object(id: AssetId) -> WorldObjectDefinition {
         presentation_attachments: Vec::new(),
         // Without an asset server no scene is registered, so the second
         // binder stands in for a scene that never resolves.
+        simple_lod_distances_m: None,
         named_physical_presentations: vec![
             presentation("unfinishedEventObj", AssetId::default(), true),
             presentation(

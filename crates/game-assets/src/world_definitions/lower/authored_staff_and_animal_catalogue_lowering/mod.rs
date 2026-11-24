@@ -459,34 +459,34 @@ fn lower_authored_staff_presentation_variants(
             // A keeper parents its head through `ZTWetsuitComponent`: its
             // `OnLand` hangs `headObj`, its `InWater` `headObjWetsuit`.
             let head = |binder: &str| {
-                family
-                    .iter()
-                    .find_map(|candidate| {
-                        authored_staff_named_presentation_component(candidate, binder)
-                    })
-                    .and_then(|component| {
-                        component.attribute_named_any(&["modelfile", "actorfile"])
-                    })
+                let component = family.iter().find_map(|candidate| {
+                    authored_staff_named_presentation_component(candidate, binder)
+                })?;
+                let scene = component
+                    .attribute_named_any(&["modelfile", "actorfile"])
                     .and_then(|model| {
                         actor_scene_paths.get(&canonicalize_source_document_record_key(model))
-                    })
-                    .zip(
-                        authored_type_family_elements_named(variant, "parentObj")
-                            .into_iter()
-                            .chain(authored_type_family_elements_named(variant, "parenting"))
-                            .find(|parenting| {
-                                parenting
-                                    .attribute_named_any(&["child"])
-                                    .is_some_and(|child| {
-                                        source_document_names_are_semantically_equal(child, binder)
-                                    })
+                    })?;
+                let joint = authored_type_family_elements_named(variant, "parentObj")
+                    .into_iter()
+                    .chain(authored_type_family_elements_named(variant, "parenting"))
+                    .find(|parenting| {
+                        parenting
+                            .attribute_named_any(&["child"])
+                            .is_some_and(|child| {
+                                source_document_names_are_semantically_equal(child, binder)
                             })
-                            .and_then(|parenting| parenting.attribute_named_any(&["attachnode"])),
-                    )
-                    .map(|(scene, joint)| StaffHeadPresentation {
-                        prefab: AssetId::from_virtual_path(scene),
-                        joint: joint.trim().to_owned(),
                     })
+                    .and_then(|parenting| parenting.attribute_named_any(&["attachnode"]))?;
+                Some(StaffHeadPresentation {
+                    prefab: AssetId::from_virtual_path(scene),
+                    joint: joint.trim().to_owned(),
+                    simple_lod_distances_m:
+                        super::named_physical_presentation_source_lowering::simple_lod_distances(
+                            component,
+                        )
+                        .unwrap_or_default(),
+                })
             };
             let wetsuit_head_sets = authored_type_family_elements_named(variant, "BFNamedBinder")
                 .into_iter()
@@ -1148,6 +1148,7 @@ pub(super) fn bind_authored_staff_catalogue(
         prefab: AssetId::from_virtual_path(prefab),
         catalogue_preview_prefab,
         presentation_attachments: Vec::new(),
+        simple_lod_distances_m: None,
         named_physical_presentations: Vec::new(),
         interaction_slots: super::interaction_container_source_lowering::lower_authored_world_object_interaction_slots(record)?,
         container_quantity: None,
@@ -1385,6 +1386,7 @@ pub(super) fn bind_authored_animal_catalogue(
         zoopedia_subject: authored_zoopedia_subject_from_world_object_record(record)?,
         prefab: AssetId::from_virtual_path(prefab),
         presentation_attachments: Vec::new(),
+        simple_lod_distances_m: None,
         named_physical_presentations: Vec::new(),
         catalogue_preview_prefab: None,
         interaction_slots: super::interaction_container_source_lowering::lower_authored_world_object_interaction_slots(record)?,
