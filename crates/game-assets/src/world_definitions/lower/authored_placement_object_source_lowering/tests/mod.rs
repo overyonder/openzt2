@@ -219,3 +219,37 @@ fn a_variant_takes_its_icon_and_name_from_the_family_button(
     );
     Ok(())
 }
+
+#[test]
+fn a_variant_takes_its_portrait_from_the_family_icon_binder(
+) -> Result<(), Box<dyn std::error::Error>> {
+    // As a guest look inherits `iconObj="headObj"` from its family.
+    let documents = [
+        ("entities/bust.xml", r#"<BFTypedBinder binderType="Bust"><types><entity><scenery><Bust/></scenery></entity></types><shared><ZTPlacementData iconObj="headObj" icon3Dscale="5.89"/><BFPhysObj/></shared><binder><BFNamedBinder binderName="headObj"><instance><BFPhysObj><BFSceneGraphComponent modelfile="head.nif"/></BFPhysObj></instance></BFNamedBinder></binder></BFTypedBinder>"#),
+        ("entities/bust_a.xml", r#"<BFTypedBinder binderType="Bust_A"><types><entity><scenery><Bust><Bust_A/></Bust></scenery></entity></types><shared><BFPhysObj/></shared></BFTypedBinder>"#),
+    ].map(|(path, source)| parse_blue_fang_source_document(AssetPath::new(path), source.as_bytes()))
+    .into_iter()
+    .collect::<Result<Vec<_>, _>>()?;
+    let index = SourceIndex::build(&documents)?;
+    let mut tables = WorldDefinitionLoweringTables::default();
+    let scenes = BTreeMap::from([(
+        crate::source_document::source_document_semantic_name::canonicalize_source_document_record_key("head.nif"),
+        "scenes/head.glb".to_owned(),
+    )]);
+    bind_authored_placement_object(
+        &index.find("Bust_A").ok_or("Bust_A")?,
+        &[],
+        &BTreeMap::new(),
+        &scenes,
+        &mut tables,
+    )?;
+    let object = &tables.document.objects[0];
+    assert_eq!(
+        object.catalogue_preview_prefab,
+        Some(openzt2_game_data::AssetId::from_virtual_path(
+            "scenes/head.glb"
+        ))
+    );
+    assert_eq!(object.preview_scale, 5.89);
+    Ok(())
+}
