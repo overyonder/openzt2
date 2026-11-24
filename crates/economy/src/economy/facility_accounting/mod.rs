@@ -4,7 +4,7 @@ use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 
 use super::{
-    account_transaction_types::{Account, TransactionCompleted, TransactionSettlement},
+    account_transaction_settlement::RecordedAccountMovement,
     facility_economy_types::{FacilityProfit, OperatingSinceDay, ServiceFacility},
     money_types::Money,
 };
@@ -30,30 +30,22 @@ pub(super) fn initialize_new_service_facilities_with_operating_age_and_profit(
 }
 
 pub(super) fn record_completed_transaction_results_for_attributed_facilities<const PLAYER: bool>(
-    mut completed_transactions: MessageReader<TransactionCompleted>,
-    settlements: Query<&TransactionSettlement>,
+    mut completed_transactions: MessageReader<RecordedAccountMovement<PLAYER>>,
     mut facility_profits: Query<&mut FacilityProfit>,
 ) {
     for transaction in completed_transactions.read() {
-        if !settlements
-            .get(transaction.operation)
-            .is_ok_and(|state| state.is_settled_in_domain(PLAYER))
-        {
-            continue;
-        }
         let Some(subject) = transaction.subject else {
             continue;
         };
         let Ok(mut facility_profit) = facility_profits.get_mut(subject) else {
             continue;
         };
-        let zoo_cash_change = match (transaction.debit, transaction.credit) {
-            (Account::Zoo, Account::Zoo) => 0,
-            (Account::Zoo, _) => -transaction.amount.0,
-            (_, Account::Zoo) => transaction.amount.0,
-            _ => continue,
-        };
-        facility_profit.total = Money(facility_profit.total.0.saturating_add(zoo_cash_change));
+        facility_profit.total = Money(
+            facility_profit
+                .total
+                .0
+                .saturating_add(transaction.zoo_delta.0),
+        );
         facility_profit.transactions = facility_profit.transactions.saturating_add(1);
     }
 }

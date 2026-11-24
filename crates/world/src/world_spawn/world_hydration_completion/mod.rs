@@ -1,3 +1,4 @@
+use super::world_prefab_record_hydration::ApplyStartingAnimalHiddenVisibility;
 use super::world_unloading::retire_world_root;
 use bevy::prelude::*;
 use openzt2_interface_state::shell::shell_screen_presentation_types::LoadingScreen;
@@ -35,10 +36,15 @@ pub(super) fn loading_screen_is_ready(
 pub(super) fn conclude_starting_animal_projection(
     removed: On<Remove<PendingStartingAnimal>>,
     mut commands: Commands,
+    mut hidden: Query<&mut Visibility, With<ApplyStartingAnimalHiddenVisibility>>,
 ) {
-    commands
-        .entity(removed.entity)
-        .try_remove::<StartingAnimalPendingFor>();
+    if let Ok(mut visibility) = hidden.get_mut(removed.entity) {
+        visibility.set_if_neq(Visibility::Hidden);
+    }
+    commands.entity(removed.entity).try_remove::<(
+        StartingAnimalPendingFor,
+        ApplyStartingAnimalHiddenVisibility,
+    )>();
 }
 
 pub(super) fn conclude_terrain_mesh_projection(

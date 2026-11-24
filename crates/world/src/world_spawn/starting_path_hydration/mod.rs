@@ -9,7 +9,6 @@ use bevy::prelude::Vec3;
 use bevy::prelude::Visibility;
 use bevy::prelude::With;
 use bevy::prelude::Without;
-use openzt2_game_data::AssetId;
 use openzt2_world_state::world_spawn::selected_world_document_handles::SelectedWorldDocumentHandles;
 use openzt2_world_state::world_spawn::selected_world_identity::SelectedWorldIdentity;
 use openzt2_world_state::world_spawn::world_load_completion_marker::{
@@ -67,31 +66,25 @@ pub(super) fn hydrate_all_starting_paths_into_topology_once(
             .insert_if_new(WorldLoadFailure::InvalidRecord(0));
         return;
     };
-    let paths = start.paths.as_slice();
-    for path in paths {
-        let definition_id = AssetId(path.definition.0);
-        if definitions.find_path(definition_id).is_none() {
-            if !active_definitions.is_complete() {
-                return;
+    let mut paths = Vec::with_capacity(start.paths.len());
+    for path in &start.paths {
+        let definition_id = path.definition;
+        let Some(definition) = definitions.find_path(definition_id) else {
+            if active_definitions.is_complete() {
+                commands
+                    .entity(root)
+                    .insert_if_new(WorldLoadFailure::MissingDependency(definition_id));
             }
-            commands
-                .entity(root)
-                .insert_if_new(WorldLoadFailure::MissingDependency(definition_id));
             return;
-        }
-    }
-
-    for path in paths {
-        let definition_id = AssetId(path.definition.0);
-        let position = Vec3::new(path.position_m[0], path.position_m[1], path.position_m[2]);
+        };
+        let position = Vec3::from_array(path.position_m);
         let mut cell = grid.position_cell(position);
-        let elevated = definitions
-            .find_path(definition_id)
-            .map(|definition| definition.elevated)
-            .expect("validated authored starting-path definition");
-        if !elevated {
+        if !definition.elevated {
             cell.z = 0;
         }
+        paths.push((path, definition_id, position, cell));
+    }
+    for (path, definition_id, position, cell) in paths {
         commands.spawn((
             Name::new("starting path"),
             PathTile {

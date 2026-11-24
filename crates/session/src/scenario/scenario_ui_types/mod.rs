@@ -21,18 +21,13 @@ pub(super) enum ScenarioObjectiveStatusFilter {
     Neutral,
 }
 
-/// The live objectives an authored goal list shows, one per row in order.
-#[derive(Component, Debug, Clone, PartialEq, Eq)]
-pub(super) struct ScenarioGoalListProjection {
-    pub(super) objectives: Vec<Entity>,
-}
-
-/// Stable reference from an authored goal row to its live objective.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct ScenarioGoalRowProjection {
-    pub(super) objective: Entity,
-    pub(super) definition: AssetId,
-}
+#[relationship(relationship_target = ScenarioGoalRows)]
+pub(super) struct ScenarioGoalRowOf(pub(super) Entity);
+
+#[derive(Component)]
+#[relationship_target(relationship = ScenarioGoalRowOf)]
+pub(super) struct ScenarioGoalRows(Vec<Entity>);
 
 #[derive(SystemParam)]
 pub(super) struct ScenarioShellMessageWriters<'w> {

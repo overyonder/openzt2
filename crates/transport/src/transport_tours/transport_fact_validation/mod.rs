@@ -3,43 +3,11 @@ use openzt2_game_data::world_definitions::transportation_and_tours::Transportati
 
 use openzt2_game_assets::source_coordinate_conversion::convert_source_z_up_vector_to_bevy_y_up_coordinates;
 
-use openzt2_zoo_state::transport_tours::transport_topology_types::TrackSegment;
 use openzt2_zoo_state::transport_tours::transport_topology_types::TransportStation;
 use openzt2_zoo_state::transport_tours::transport_vehicle_types::TransportVehicle;
 
 pub(crate) fn transport_station_capacity_is_valid(transport_station: &TransportStation) -> bool {
     transport_station.capacity > 0
-}
-
-pub(crate) fn transport_track_segment_is_valid(track_segment: &TrackSegment) -> bool {
-    track_segment.from_endpoint_index < 2
-        && track_segment.to_endpoint_index < 2
-        && track_segment.from_position.is_finite()
-        && track_segment.to_position.is_finite()
-        && track_segment.path_points.first() == Some(&track_segment.from_position)
-        && track_segment.path_points.last() == Some(&track_segment.to_position)
-        && track_segment.travel_path_points.first() == Some(&track_segment.from_position)
-        && track_segment.travel_path_points.last() == Some(&track_segment.to_position)
-        && track_segment.length.is_finite()
-        && track_segment.length > 0.0
-        && transport_track_path_length(&track_segment.travel_path_points).is_some_and(|length| {
-            (length - track_segment.length).abs() <= f32::EPSILON * track_segment.length.max(1.0)
-        })
-}
-
-pub(crate) fn transport_track_path_length(path_points: &[Vec3]) -> Option<f32> {
-    (path_points.len() >= 2
-        && path_points.iter().all(|point| point.is_finite())
-        && path_points
-            .windows(2)
-            .all(|points| points[0].distance_squared(points[1]) > f32::EPSILON))
-    .then(|| {
-        path_points
-            .windows(2)
-            .map(|points| points[0].distance(points[1]))
-            .sum::<f32>()
-    })
-    .filter(|length| length.is_finite() && *length > 0.0)
 }
 
 pub(crate) fn authored_transport_track_piece_chain_is_valid(
@@ -81,7 +49,7 @@ pub(crate) fn authored_transport_track_piece_chain_is_valid(
         && cardinal_piece_span > TRACK_ALIGNMENT_EPSILON_METRES
         && diagonal_piece_span.is_finite()
         && diagonal_piece_span > TRACK_ALIGNMENT_EPSILON_METRES
-        && transport_track_path_length(path_points).is_some()
+        && path_points.len() >= 2
         && path_points.windows(2).all(|points| {
             let displacement = points[1] - points[0];
             let horizontal = displacement.xz();

@@ -1,5 +1,6 @@
 //! Editable terrain projected from live source assets and Bevy images and meshes.
 
+mod authored_terrain_brush_modes;
 mod defined_terrain_stroke_resolution;
 mod ground_path_surface_mask_selection;
 mod terrain_biome_detail_projection;
@@ -50,11 +51,7 @@ use crate::terrain::terrain_chunk_render_refresh::refresh_changed_terrain_chunk_
 use crate::terrain::terrain_collision_rebuilding::rebuild_pending_terrain_chunk_collisions_within_tick_budget;
 use crate::terrain::terrain_edit_application::apply_committed_terrain_sample_deltas_and_publish_changed_regions;
 use crate::terrain::terrain_edit_preparation::prepare_terrain_sample_deltas_for_construction_transactions;
-use crate::terrain::terrain_ground_path_surface_projection::mark_terrain_chunks_requiring_ground_path_surface_recomposition;
-use crate::terrain::terrain_ground_path_surface_projection::mark_terrain_chunks_under_changed_painted_textures;
 use crate::terrain::terrain_ground_path_surface_projection::prepare_terrain_chunk_surface_images;
-use crate::terrain::terrain_ground_path_surface_projection::record_discarded_terrain_paint_area;
-use crate::terrain::terrain_ground_path_surface_projection::DiscardedTerrainPaintArea;
 use crate::terrain::terrain_live_brush_application::apply_held_terrain_brush_dabs_and_accumulate_one_draft_edit;
 use crate::terrain::terrain_live_brush_application::roll_back_cancelled_live_terrain_brush_edit;
 use crate::terrain::terrain_object_placement_flattening_preparation::prepare_authored_object_placement_terrain_flattening;
@@ -96,28 +93,40 @@ use openzt2_zoo_state::terrain::terrain_water_view_state::{
     TerrainWaterTrainingFade,
 };
 
+mod terrain_water_wake_capability;
+
 /// Registers terrain-owned state and messages. Root integration owns placement in
 /// the shared schedules and render sub-app.
 pub struct TerrainPlugin;
 
 impl Plugin for TerrainPlugin {
     fn build(&self, app: &mut App) {
-        app.register_required_components::<ZooCamera, TerrainWaterCameraPose>()
+        app.init_asset::<authored_terrain_brush_modes::TerrainBrushMode>()
+            .init_asset_loader::<authored_terrain_brush_modes::TerrainBrushModeLoader>()
+            .add_systems(Startup, authored_terrain_brush_modes::load_authored_terrain_brush_modes)
+            .register_required_components::<ZooCamera, TerrainWaterCameraPose>()
             .register_required_components::<ZooCamera, TerrainWaterCameraContact>()
             .register_required_components::<ZooCamera, TerrainWaterCaptureSelection>()
             .register_required_components::<ZooCamera, TerrainWaterTrainingFade>()
             .register_required_components::<ZooCamera, terrain_water_view_selection::TerrainWaterCaptureHits>()
+            .register_required_components::<ZooCamera, terrain_water_renderer_inputs::WaterCaptureBoundsIndex>()
+            .register_required_components::<ZooCamera, terrain_water_renderer_inputs::WaterCaptureSceneBounds>()
+            .register_required_components::<ZooCamera, terrain_water_renderer_inputs::WaterCaptureDemand>()
+            .register_required_components::<ZooCamera, terrain_water_renderer_inputs::PreparedWaterCapture>()
             .register_required_components::<WorldRoot, TerrainIndex>()
             .register_required_components::<WorldRoot, terrain_chunk_index_cleanup::TerrainChunkIdLookup>()
+            .register_required_components::<WorldRoot, terrain_water_caustics::scene_projection::SceneCausticSpatialIndex>()
             .add_observer(terrain_chunk_index_cleanup::index_validated_terrain_chunk)
             .add_observer(terrain_chunk_index_cleanup::remove_discarded_terrain_chunk_from_indexes)
+            .add_message::<terrain_water_wake_capability::WaterWakeCapabilityInvalidated>()
+            .add_observer(terrain_water_wake_capability::invalidate_discarded_water_surface_group)
+            .add_observer(terrain_water_wake_capability::invalidate_discarded_water_surface_pass)
             .add_plugins(terrain_water_rays::view_occlusion::WaterRayOcclusionPlugin)
             .init_resource::<TerrainCollisionBudget>()
-            .add_message::<DiscardedTerrainPaintArea>()
             .add_message::<terrain_ground_path_surface_projection::DiscardedGroundPathCell>()
             .add_message::<terrain_ground_path_surface_projection::TerrainOverlayInvalidated>()
             .add_observer(terrain_ground_path_surface_projection::record_discarded_ground_path_cell)
-            .add_observer(record_discarded_terrain_paint_area)
+            .add_observer(terrain_ground_path_surface_projection::unlink_discarded_terrain_paint_footprint)
             .add_observer(water_regions::edit_retention::retain_water_owners_for_terrain_edit)
             .add_observer(water_regions::edit_retention::release_water_owners_from_discarded_terrain_edit)
             .add_message::<TerrainStroke>()
@@ -133,6 +142,7 @@ impl Plugin for TerrainPlugin {
             .add_message::<water_regions::authored_membership::WaterRegionFactsDiscarded>()
             .add_observer(water_regions::authored_membership::invalidate_discarded_water_region_facts)
             .add_observer(terrain_water_caustics::scene_projection::invalidate_bounds_after_dependency_discard)
+            .add_observer(terrain_water_caustics::scene_projection::unindex_discarded_caustic_world_bound)
             .add_message::<ActivateTerrainWaterImpactWave>()
             .add_message::<openzt2_zoo_state::terrain::terrain_water_geometric_wave_shader_state::WaterSurfaceSpraySample>()
             .add_message::<openzt2_zoo_state::terrain::terrain_water_geometric_wave_shader_state::WaterSurfaceWakeSample>()
@@ -213,14 +223,27 @@ impl Plugin for TerrainPlugin {
             )
             .add_systems(
                 Update,
-                terrain_water_renderer_targets::reconcile_water_material_render_views
-                    .after(publish_terrain_water_surfaces)
+                (
+                    terrain_water_renderer_targets::reconcile_water_material_render_views
+                        .after(publish_terrain_water_surfaces),
+                    terrain_water_wake_capability::reconcile_affected_water_wake_capabilities
+                        .after(publish_terrain_water_surfaces)
+                        .after(terrain_water_renderer_inputs::initialize_authored_terrain_water_region_material_state),
+                )
                     .in_set(WaterPresentationSet::View),
             )
             .add_systems(
                 Update,
                 (
-                    update_authored_terrain_water_renderer_inputs,
+                    (
+                        terrain_water_renderer_inputs::update_water_capture_scene_bounds,
+                        terrain_water_renderer_inputs::sample_terrain_water_capture_demand,
+                        terrain_water_renderer_inputs::prepare_changed_water_capture_projections
+                            .after(terrain_water_renderer_inputs::update_water_capture_scene_bounds)
+                            .after(terrain_water_renderer_inputs::sample_terrain_water_capture_demand),
+                        update_authored_terrain_water_renderer_inputs
+                            .after(terrain_water_renderer_inputs::prepare_changed_water_capture_projections),
+                    ),
                     terrain_water_disturbance_presentation::present_authored_water_surface_spray_samples,
                     (
                         terrain_water_caustics::systems::advance_terrain_caustic_animation
@@ -275,11 +298,15 @@ impl Plugin for TerrainPlugin {
                         materialize_terrain_biome_detail_render_trees_within_overhead_camera_range
                             .after(project_terrain_biome_details_after_source_or_setting_changes),
                     ),
-                    mark_terrain_chunks_requiring_ground_path_surface_recomposition,
-                    mark_terrain_chunks_under_changed_painted_textures,
+                    terrain_ground_path_surface_projection::invalidate_indexed_ground_path_surface_footprints,
+                    terrain_ground_path_surface_projection::link_changed_terrain_paint_footprints,
+                    terrain_ground_path_surface_projection::invalidate_changed_terrain_overlay_images,
+                    terrain_ground_path_surface_projection::invalidate_surface_stamps_on_water_membership_changes,
                     terrain_ground_path_surface_projection::merge_terrain_overlay_invalidations
-                        .after(mark_terrain_chunks_requiring_ground_path_surface_recomposition)
-                        .after(mark_terrain_chunks_under_changed_painted_textures),
+                        .after(terrain_ground_path_surface_projection::invalidate_indexed_ground_path_surface_footprints)
+                        .after(terrain_ground_path_surface_projection::link_changed_terrain_paint_footprints)
+                        .after(terrain_ground_path_surface_projection::invalidate_changed_terrain_overlay_images)
+                        .after(terrain_ground_path_surface_projection::invalidate_surface_stamps_on_water_membership_changes),
                     prepare_terrain_chunk_surface_images
                         .after(refresh_changed_terrain_chunk_meshes_and_surface_images)
                         .after(terrain_ground_path_surface_projection::merge_terrain_overlay_invalidations),

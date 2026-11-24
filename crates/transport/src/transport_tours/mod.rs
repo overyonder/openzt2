@@ -66,6 +66,7 @@ impl Plugin for TransportToursPlugin {
             app.add_plugins(PersistentIdIndexPlugin);
         }
         transport_relationship_cleanup::install(app);
+        app.add_observer(behavior_rider_view_animation::animate_rider_for_authored_view);
         app.register_required_components_with::<
             TransportCircuit,
             openzt2_zoo_state::donations::donation_opportunity_types::DonationOpportunity,
@@ -113,8 +114,17 @@ impl Plugin for TransportToursPlugin {
             .add_message::<SkyTowerTransitionRequest>()
             .add_message::<TransportTripCompleted>()
             .add_message::<transport_track_piece_presentation::DiscardedTrackJointEndpoints>()
+            .add_message::<transport_track_piece_presentation::TransportTrackJointChanged>()
+            .add_message::<transport_track_piece_presentation::DiscardedSkyCableAnchor>()
             .add_observer(transport_track_piece_presentation::capture_discarded_track_joint_endpoints)
             .add_observer(transport_track_piece_presentation::remove_discarded_route_drawings)
+            .add_observer(transport_track_piece_presentation::notify_discarded_sky_cable_anchor)
+            .add_systems(
+                PostUpdate,
+                transport_track_piece_presentation::reconcile_sky_track_cable_geometry
+                    .after(bevy::transform::TransformSystems::Propagate)
+                    .run_if(in_state(GamePhase::InGame)),
+            )
             .add_systems(
                 Update,
                 (
@@ -132,14 +142,16 @@ impl Plugin for TransportToursPlugin {
                 (
                     sky_tower_navigation::hydrate_sky_tower_endpoints,
                     crate::transport_tours::transport_track_piece_presentation::invalidate_track_drawings_at_changed_joints,
-                    crate::transport_tours::transport_track_piece_presentation::show_construction_markers_at_open_sky_towers,
-                    crate::transport_tours::transport_track_preview_presentation::project_transport_track_construction_preview_authored_prefabs
-                        .after(openzt2_zoo_state::placement::ObjectPlacementPreviewUpdateSet),
+                    crate::transport_tours::transport_track_piece_presentation::show_construction_markers_at_open_sky_towers
+                        .after(crate::transport_tours::transport_track_piece_presentation::project_committed_transport_track_piece_authored_prefabs),
+                    crate::transport_tours::transport_track_preview_presentation::project_transport_track_construction_preview_authored_prefabs,
                     crate::transport_tours::transport_track_piece_presentation::project_committed_transport_track_piece_authored_prefabs
                         .after(crate::transport_tours::transport_track_piece_presentation::invalidate_track_drawings_at_changed_joints)
                         .after(sky_tower_navigation::hydrate_sky_tower_endpoints),
-                    crate::transport_tours::transport_track_piece_presentation::show_construction_markers_at_unconnected_road_ends,
-                    crate::transport_tours::transport_track_piece_presentation::show_construction_markers_at_unconnected_station_ends,
+                    crate::transport_tours::transport_track_piece_presentation::show_construction_markers_at_unconnected_road_ends
+                        .after(crate::transport_tours::transport_track_piece_presentation::invalidate_track_drawings_at_changed_joints),
+                    crate::transport_tours::transport_track_piece_presentation::show_construction_markers_at_unconnected_station_ends
+                        .after(crate::transport_tours::transport_track_piece_presentation::invalidate_track_drawings_at_changed_joints),
                 )
                     .in_set(GameSet::Presentation)
                     .run_if(in_state(GamePhase::InGame)),
@@ -237,10 +249,12 @@ impl Plugin for TransportToursPlugin {
                         .after(transport_definition_hydration::hydrate_transport_entities_from_authored_world_definitions),
                     transport_definition_hydration::materialize_restored_transport_prefabs
                         .after(transport_definition_hydration::hydrate_transport_entities_from_authored_world_definitions),
+                    transport_route_position_calculations::refresh_transport_track_travel_distances,
                     transport_definition_hydration::request_reopening_saved_transport_circuits
                         .after(transport_definition_hydration::hydrate_transport_entities_from_authored_world_definitions),
                     crate::transport_tours::transport_definition_hydration::initialize_transport_vehicle_routes_from_first_stable_circuit_edge
-                        .after(transport_definition_hydration::hydrate_transport_entities_from_authored_world_definitions),
+                        .after(transport_definition_hydration::hydrate_transport_entities_from_authored_world_definitions)
+                        .after(transport_route_position_calculations::refresh_transport_track_travel_distances),
                     transport_passenger_mounts::hydrate_vehicle_seats
                         .after(transport_definition_hydration::hydrate_transport_entities_from_authored_world_definitions),
                     transport_passenger_mounts::resolve_authored_vehicle_seat_mounts
@@ -252,9 +266,7 @@ impl Plugin for TransportToursPlugin {
             .add_systems(
                 FixedUpdate,
                 (
-                    crate::transport_tours::transport_route_position_calculations::refresh_transport_track_travel_distances,
-                    crate::transport_tours::transport_vehicle_movement::advance_transport_vehicles_along_canonical_track_segments
-                        .after(crate::transport_tours::transport_route_position_calculations::refresh_transport_track_travel_distances),
+                    crate::transport_tours::transport_vehicle_movement::advance_transport_vehicles_along_canonical_track_segments,
                     crate::transport_tours::transport_vehicle_movement::publish_transport_vehicle_arrivals
                         .after(crate::transport_tours::transport_vehicle_movement::advance_transport_vehicles_along_canonical_track_segments),
                     crate::transport_tours::transport_vehicle_movement::project_consumed_transport_vehicle_movement_into_animation_speed

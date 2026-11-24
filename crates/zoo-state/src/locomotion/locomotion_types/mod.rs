@@ -536,42 +536,37 @@ pub const MAX_STEERING_NEIGHBORS: usize = 24;
 #[cfg(test)]
 mod tests;
 
-/// An actor's authored `b_CaffeineMode` or `b_DeCaffeineMode`, which speeds
-/// up or slows down its locomotion clips.
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CaffeineMode {
-    Caffeinated,
-    Decaffeinated,
+/// Independent authored instance flags affecting an actor's locomotion rate.
+#[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CaffeineFlags {
+    pub caffeinated: bool,
+    pub decaffeinated: bool,
 }
 
-impl CaffeineMode {
-    // `people.xml` and `animal.xml` author both factors as 3.0;
-    // lower `f_CaffeineModeFactor` per binder if a mod changes them.
-    const AUTHORED_FACTOR: f32 = 3.0;
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CaffeineFactors {
+    pub caffeinated: f32,
+    pub decaffeinated: f32,
+}
 
-    /// Writes the authored `b_CaffeineMode` (`Caffeinated`) or
-    /// `b_DeCaffeineMode` (`Decaffeinated`). Clearing one mode leaves the
-    /// other in place.
-    pub fn write_authored(
-        actor: &mut EntityCommands,
-        current: Option<&Self>,
-        mode: Self,
-        enabled: bool,
-    ) {
-        if enabled {
-            actor.insert(mode);
-        } else if current == Some(&mode) {
-            actor.remove::<Self>();
+impl Default for CaffeineFactors {
+    fn default() -> Self {
+        Self {
+            caffeinated: 1.0,
+            decaffeinated: 1.0,
         }
     }
+}
 
-    /// The playback-rate multiplier for locomotion clips.
+impl CaffeineFlags {
     #[must_use]
-    pub fn speed_factor(mode: Option<&Self>) -> f32 {
-        match mode {
-            None => 1.0,
-            Some(Self::Caffeinated) => Self::AUTHORED_FACTOR,
-            Some(Self::Decaffeinated) => 1.0 / Self::AUTHORED_FACTOR,
+    pub fn apply_to_rate(self, mut rate: f32, factors: CaffeineFactors) -> f32 {
+        if self.caffeinated {
+            rate *= factors.caffeinated;
         }
+        if self.decaffeinated {
+            rate /= factors.decaffeinated;
+        }
+        rate
     }
 }

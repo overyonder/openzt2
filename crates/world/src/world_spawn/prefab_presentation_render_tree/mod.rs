@@ -41,6 +41,9 @@ pub fn spawn_prefab_render_tree(
                     Visibility::Hidden
                 },
             ));
+            if row.flags.0 & ScenePrefabEntityFlags::ACTIVE.0 == 0 {
+                entity.insert(bevy::ecs::entity_disabling::Disabled);
+            }
             if let Some(bound) = row.local_render_bound {
                 entity.insert(PrefabLocalRenderBound(bound));
             }
@@ -73,7 +76,7 @@ pub fn spawn_prefab_render_tree(
         let spawned = entities[index];
         if let Some(joint) = &row.model_joint_binding {
             commands.entity(spawned).insert(
-                openzt2_world_state::animation_playback::model_joint_attachment_binding::PendingModelJointAttachment::new(root, joint),
+                openzt2_world_state::animation_playback::model_joint_attachment_binding::ModelJointAttachment::new(root, joint),
             );
         }
         for renderable in &row.renderables {
@@ -184,12 +187,32 @@ pub(super) struct PrefabPresentationRenderRoot(Entity);
 pub(super) fn hydrate_prefab_presentations(
     mut commands: Commands,
     prefabs: Res<Assets<ScenePrefabAsset>>,
+    mut asset_events: MessageReader<AssetEvent<ScenePrefabAsset>>,
+    mut released: RemovedComponents<PrefabPresentationHydrated>,
     pending: Query<
-        (Entity, &PrefabPresentation, Option<&PrefabShadowPolicy>),
+        (Entity, Ref<PrefabPresentation>, Option<&PrefabShadowPolicy>),
         Without<PrefabPresentationHydrated>,
     >,
 ) {
+    let ready_assets = asset_events
+        .read()
+        .filter_map(|event| match *event {
+            AssetEvent::Added { id }
+            | AssetEvent::Modified { id }
+            | AssetEvent::LoadedWithDependencies { id } => Some(id),
+            _ => None,
+        })
+        .collect::<HashSet<_>>();
+    let released = released
+        .read()
+        .collect::<bevy::ecs::entity::EntityHashSet>();
     for (entity, request, inherited_shadow_policy) in &pending {
+        if !request.is_changed()
+            && !released.contains(&entity)
+            && !ready_assets.contains(&request.0.id())
+        {
+            continue;
+        }
         let Some(prefab) = prefabs.get(&request.0) else {
             continue;
         };

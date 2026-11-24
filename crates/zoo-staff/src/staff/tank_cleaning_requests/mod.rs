@@ -9,11 +9,13 @@ use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_zoo_state::aquatic::aquatic_simulation_types::{Tank, TankGeometry, WaterQuality};
 use openzt2_zoo_state::habitat::habitat_types::HabitatRegion;
 use openzt2_zoo_state::terrain::dry_surface_eligibility::DrySurfaceEligibility;
+use openzt2_zoo_state::terrain::terrain_navigation_change_types::{TerrainNavigationChanged, TerrainNavigationRestored};
 use openzt2_zoo_state::topology::topology_graph_types::TopologyGrid;
 
 use super::{
     staff_job_types::{
-        authored_staff_request_urgency, StaffJob, TankCleaningRequestSite, TankCleaningSite,
+        authored_staff_request_urgency, StaffJob, StaffJobRouting, TankCleaningRequestSite,
+        TankCleaningSite,
     },
     staff_lifecycle_messages::{CancelStaffJobRequest, StaffJobRequest},
 };
@@ -33,7 +35,15 @@ pub(crate) fn request_keeper_cleaning_for_dirty_tanks(
     >,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
-    grids: Query<&TopologyGrid>,
+    grids: Query<Ref<TopologyGrid>>,
+    terrain_chunks: Query<
+        &WorldMember,
+        With<openzt2_zoo_state::terrain::terrain_chunk_types::TerrainChunk>,
+    >,
+    (mut terrain_edits, mut terrain_restores): (
+        MessageReader<TerrainNavigationChanged>,
+        MessageReader<TerrainNavigationRestored>,
+    ),
     surfaces: DrySurfaceEligibility,
     tanks: Query<
         (
@@ -48,16 +58,28 @@ pub(crate) fn request_keeper_cleaning_for_dirty_tanks(
     >,
     mut sites: Query<&mut Transform, With<TankCleaningRequestSite>>,
     worlds: Query<Ref<SelectedWorldIdentity>>,
-    jobs: Query<(Entity, &StaffJob)>,
+    jobs: Query<(Entity, &StaffJob, Option<&StaffJobRouting>)>,
+    mut removed_sites: RemovedComponents<TankCleaningSite>,
     mut requests: MessageWriter<StaffJobRequest>,
     mut cancellations: MessageWriter<CancelStaffJobRequest>,
 ) {
     let Some(catalogue) = active_definitions.get(&definitions) else {
         return;
     };
+    if catalogue.has_pending_assets() {
+        return;
+    }
     let policy_changed = definitions.is_changed() || active_definitions.is_changed();
+    let edited_worlds: bevy::ecs::entity::EntityHashSet = terrain_edits
+        .read()
+        .map(|edit| edit.chunk)
+        .chain(terrain_restores.read().map(|restore| restore.chunk))
+        .filter_map(|chunk| terrain_chunks.get(chunk).ok().map(|member| member.root))
+        .collect();
+    let lost_sites: bevy::ecs::entity::EntityHashSet = removed_sites.read().collect();
     for (tank, quality, geometry, region, world, site) in &tanks {
         let identity = world.and_then(|world| worlds.get(world.root).ok());
+        let grid = world.and_then(|world| grids.get(world.root).ok());
         let policy = identity.as_ref().and_then(|identity| {
             let path = match identity.mode {
                 WorldSessionMode::Freeform => "config/freeform_mode.xml",
@@ -70,6 +92,9 @@ pub(crate) fn request_keeper_cleaning_for_dirty_tanks(
             && !quality.is_changed()
             && !geometry.is_changed()
             && !region.is_changed()
+            && !lost_sites.contains(&tank)
+            && world.is_none_or(|world| !edited_worlds.contains(&world.root))
+            && !grid.as_ref().is_some_and(DetectChanges::is_changed)
             && !identity
                 .as_ref()
                 .is_some_and(|identity| identity.is_changed())
@@ -85,11 +110,15 @@ pub(crate) fn request_keeper_cleaning_for_dirty_tanks(
                 return None;
             }
             let world = world?;
-            let grid = *grids.get(world.root).ok()?;
+            let grid = *grid.as_deref()?;
             let point = tank_cleaning_point(world.root, &region, &geometry, grid, &surfaces)?;
-            Some((token, urgency, point))
+            let routing = StaffJobRouting {
+                subject_type: policy.request.subject_type,
+                recipient: policy.request.staff,
+            };
+            Some((token, urgency, point, routing))
         });
-        if let Some((token, urgency, point)) = requested {
+        if let Some((token, urgency, point, routing)) = requested {
             let Some(world) = world else {
                 continue;
             };
@@ -99,6 +128,18 @@ pub(crate) fn request_keeper_cleaning_for_dirty_tanks(
                         transform
                             .map_unchanged(|transform| &mut transform.translation)
                             .set_if_neq(point);
+                    } else {
+                        commands
+                            .entity(site)
+                            .insert(Transform::from_translation(point));
+                    }
+                    for (job, _, _) in jobs.iter().filter(|(_, job, current_routing)| {
+                        job.kind == Some(StaffJobKind::MaintainTank)
+                            && job.target == site
+                            && (job.token != Some(token)
+                                || current_routing.copied().unwrap_or_default() != routing)
+                    }) {
+                        cancellations.write(CancelStaffJobRequest { job });
                     }
                     site
                 }
@@ -125,17 +166,16 @@ pub(crate) fn request_keeper_cleaning_for_dirty_tanks(
                 target: site,
                 urgency,
                 token: Some(token),
-                routing: Default::default(),
+                routing,
             });
             continue;
         }
         let Some(site) = site else {
             continue;
         };
-        for (job, _) in jobs
-            .iter()
-            .filter(|(_, job)| job.kind == Some(StaffJobKind::MaintainTank) && job.target == site)
-        {
+        for (job, ..) in jobs.iter().filter(|(_, job, _)| {
+            job.kind == Some(StaffJobKind::MaintainTank) && job.target == site
+        }) {
             cancellations.write(CancelStaffJobRequest { job });
         }
         commands.entity(site).despawn();

@@ -14,7 +14,6 @@ use openzt2_zoo_state::audio::audio_playback_message_types::PlayAudioClip;
 
 use super::{
     authored_ui_focus_navigation_and_activation::AuthoredHoverPresentation,
-    authored_ui_focus_state::UiFocusable,
     authored_ui_interaction_enabled_state::UiInteractionEnabled,
     authored_ui_selection_state::UiSelected,
     authored_ui_visual_types::{
@@ -28,7 +27,6 @@ pub(super) fn present_authored_ui_interaction_visual_state(
         Entity,
         Ref<DirectlyHovered>,
         Option<Ref<UiInteractionEnabled>>,
-        Option<Ref<UiFocusable>>,
         Option<Ref<AuthoredHoverPresentation>>,
         Option<Ref<UiSelected>>,
         Ref<Children>,
@@ -72,9 +70,7 @@ pub(super) fn present_authored_ui_interaction_visual_state(
         .map(|event| event.entity);
     press_changes.extend(press.chain(clicks).chain(drag_ends).chain(cancels));
     let pressed = pointer.get(PointerId::Mouse, PointerButton::Primary);
-    for (entity, hovered, interaction_enabled, focusable, hover_presentation, selected, children) in
-        &parents
-    {
+    for (entity, hovered, interaction_enabled, hover_presentation, selected, children) in &parents {
         if !hovered.is_changed()
             && !focus.is_changed()
             && !focus_visible.is_changed()
@@ -82,7 +78,6 @@ pub(super) fn present_authored_ui_interaction_visual_state(
             && interaction_enabled
                 .as_ref()
                 .is_none_or(|value| !value.is_changed())
-            && focusable.as_ref().is_none_or(|value| !value.is_changed())
             && hover_presentation
                 .as_ref()
                 .is_none_or(|value| !value.is_changed())
@@ -92,9 +87,7 @@ pub(super) fn present_authored_ui_interaction_visual_state(
             continue;
         }
         let alternate = selected.is_some_and(|selected| selected.0);
-        let enabled = interaction_enabled
-            .map(|enabled| enabled.0)
-            .unwrap_or_else(|| focusable.is_none_or(|focusable| focusable.enabled));
+        let enabled = interaction_enabled.is_none_or(|enabled| enabled.0);
         let is_pressed = pressed.is_some_and(|state| state.pressing.contains_key(&entity));
         let highlighted = hovered.get()
             || hover_presentation.is_some_and(|presentation| presentation.0)

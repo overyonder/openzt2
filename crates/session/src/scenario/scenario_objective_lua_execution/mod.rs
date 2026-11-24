@@ -22,7 +22,7 @@ use super::{
     challenge_offer_types::ScenarioChallengeOffer,
     scenario_lua_command_publication::ScenarioLuaOutputs,
     scenario_lua_query_fact_collection::ScenarioLuaQueryFactSources,
-    scenario_lua_types::ScenarioLuaVirtualMachineContexts,
+    scenario_lua_types::ScenarioLuaContext,
     scenario_lua_virtual_machine::execute_loaded_scenario_lua_script_binding,
 };
 
@@ -49,7 +49,7 @@ pub(super) fn evaluate_active_scenario_objective_lua_condition_scripts(
     scenario_assets: Res<Assets<WorldScenarioDocumentAsset>>,
     scripts: Res<Assets<LuaScriptAsset>>,
     script_index: Res<LuaScriptArchivePathIndex>,
-    mut runtime: NonSendMut<ScenarioLuaVirtualMachineContexts>,
+    mut runtime: Query<&mut ScenarioLuaContext>,
     (fact_sources, direct): (
         ScenarioLuaQueryFactSources,
         super::scenario_lua_entity_commands::ScenarioLuaDirectAccess,
@@ -57,6 +57,7 @@ pub(super) fn evaluate_active_scenario_objective_lua_condition_scripts(
     spawn_sources: super::scenario_lua_entity_commands::ScenarioAnimalSpawnSources,
     members: Query<&ScenarioObjectives>,
     edges: Query<&ScenarioObjectiveRequires>,
+    prerequisites_changed: Query<&ScenarioObjectiveOf, Changed<ScenarioObjectiveStatus>>,
     mut objectives: Query<(
         Entity,
         &ScenarioObjective,
@@ -69,7 +70,7 @@ pub(super) fn evaluate_active_scenario_objective_lua_condition_scripts(
     mut finished: MessageWriter<EvaluatedScenarioTerminal>,
     mut outputs: ScenarioLuaOutputs,
 ) {
-    let mut evaluation_due = std::collections::BTreeMap::new();
+    let mut evaluation_due = bevy::ecs::entity::EntityHashSet::default();
     let mut always_run_due = Vec::new();
     for (entity, source, session, offer, mut timing) in &mut sessions {
         let Some(scenario) = session
@@ -86,15 +87,16 @@ pub(super) fn evaluate_active_scenario_objective_lua_condition_scripts(
         };
         let evaluate = timing.evaluation_is_due(&time, definition.evaluation_interval_seconds);
         let always_run = !simulation.paused && timing.always_run_is_due(&time);
-        evaluation_due.insert(
-            entity,
-            evaluate
-                && session.is_none_or(|session| session.state == ScenarioSessionState::Running),
-        );
+        if evaluate && session.is_none_or(|session| session.state == ScenarioSessionState::Running)
+        {
+            evaluation_due.insert(entity);
+        }
         if always_run {
             always_run_due.push((entity, scenario));
         }
     }
+    let activation_due: bevy::ecs::entity::EntityHashSet =
+        prerequisites_changed.iter().map(|owner| owner.0).collect();
     let spawn_sources = std::cell::RefCell::new(spawn_sources);
     let spawn_animal = |kind, position, rotation, reserved: &[_]| {
         spawn_sources
@@ -110,6 +112,10 @@ pub(super) fn evaluate_active_scenario_objective_lua_condition_scripts(
     queries.profile = Some(&profile);
     queries.spawn_animal = Some(&spawn_animal);
     for (owner, source, context) in &sources {
+        let evaluate = evaluation_due.contains(&owner) || !sessions.contains(owner);
+        if !evaluate && !activation_due.contains(&owner) {
+            continue;
+        }
         let Ok(members) = members.get(owner) else {
             continue;
         };
@@ -144,9 +150,7 @@ pub(super) fn evaluate_active_scenario_objective_lua_condition_scripts(
             if activate {
                 status.set_if_neq(ScenarioObjectiveStatus::Active);
             }
-            if *status != ScenarioObjectiveStatus::Active
-                || evaluation_due.get(&owner) == Some(&false)
-            {
+            if *status != ScenarioObjectiveStatus::Active || !evaluate {
                 continue;
             }
             let Some(asset) = scenario_assets.get(&source.0) else {
@@ -170,9 +174,12 @@ pub(super) fn evaluate_active_scenario_objective_lua_condition_scripts(
                         == (objective.scenario, record.id, ScenarioScriptPhase::Evaluate)
                 })
             {
+                let Ok(mut context) = runtime.get_mut(context.map_or(owner, |context| context.0))
+                else {
+                    continue;
+                };
                 match execute_loaded_scenario_lua_script_binding(
-                    &mut runtime,
-                    context.map_or(owner, |context| context.0),
+                    &mut context,
                     source,
                     &scenario_assets,
                     &scripts,
@@ -212,9 +219,13 @@ pub(super) fn evaluate_active_scenario_objective_lua_condition_scripts(
                                         == (objective.scenario, record.id, phase)
                                 })
                         {
+                            let Ok(mut context) =
+                                runtime.get_mut(context.map_or(owner, |context| context.0))
+                            else {
+                                continue;
+                            };
                             match execute_loaded_scenario_lua_script_binding(
-                                &mut runtime,
-                                context.map_or(owner, |context| context.0),
+                                &mut context,
                                 source,
                                 &scenario_assets,
                                 &scripts,
@@ -261,9 +272,12 @@ pub(super) fn evaluate_active_scenario_objective_lua_condition_scripts(
                 binding.scenario == scenario && binding.phase == ScenarioScriptPhase::AlwaysRun
             })
         {
+            let Ok(mut context) = runtime.get_mut(context.map_or(entity, |context| context.0))
+            else {
+                continue;
+            };
             match execute_loaded_scenario_lua_script_binding(
-                &mut runtime,
-                context.map_or(entity, |context| context.0),
+                &mut context,
                 source,
                 &scenario_assets,
                 &scripts,
@@ -293,7 +307,7 @@ pub(super) fn execute_scenario_objective_success_and_failure_lua_scripts(
     scenario_assets: Res<Assets<WorldScenarioDocumentAsset>>,
     scripts: Res<Assets<LuaScriptAsset>>,
     script_index: Res<LuaScriptArchivePathIndex>,
-    mut runtime: NonSendMut<ScenarioLuaVirtualMachineContexts>,
+    mut runtime: Query<&mut ScenarioLuaContext>,
     (fact_sources, direct): (
         ScenarioLuaQueryFactSources,
         super::scenario_lua_entity_commands::ScenarioLuaDirectAccess,
@@ -389,7 +403,23 @@ pub(super) fn execute_scenario_objective_success_and_failure_lua_scripts(
             let Some(group) = definition.objective_groups.get(live.record_index) else {
                 continue;
             };
-            let current = super::scenario_group_completion::derive_group_status(group, &statuses);
+            let current = if asset
+                .authored
+                .scenario_nodes
+                .get(&group.id)
+                .is_some_and(|policy| policy.sticky == Some(true))
+                && matches!(
+                    live.status,
+                    ScenarioObjectiveStatus::Satisfied | ScenarioObjectiveStatus::Failed
+                ) {
+                live.status
+            } else {
+                super::scenario_group_completion::derive_group_status(
+                    group,
+                    &statuses,
+                    &asset.authored,
+                )
+            };
             statuses.insert(group.id, current);
             if live.status == current {
                 continue;
@@ -419,9 +449,12 @@ pub(super) fn execute_scenario_objective_success_and_failure_lua_scripts(
                     == (scenario, objective_id, phase)
             })
         {
+            let Ok(mut context) = runtime.get_mut(context.map_or(owner, |context| context.0))
+            else {
+                continue;
+            };
             match execute_loaded_scenario_lua_script_binding(
-                &mut runtime,
-                context.map_or(owner, |context| context.0),
+                &mut context,
                 source,
                 &scenario_assets,
                 &scripts,

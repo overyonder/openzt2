@@ -1,9 +1,10 @@
+use super::authored_globe_camera_framing::GlobeSphere;
 use super::authored_globe_model_bounds::UiGlobeModelBounds;
 use super::authored_globe_presentation_types::GlobeSelectedMarker;
 use super::authored_globe_presentation_types::GlobeSelectionTurn;
 use super::authored_globe_presentation_types::UiGlobeCamera;
 use super::authored_globe_presentation_types::{
-    GlobeHoveredMarker, GlobeSpin, UiGlobeHostedSceneEntities, UiGlobeRenderScene,
+    GlobeHoveredMarker, GlobeSpin, UiGlobeHostedSceneEntities, UiGlobeRenderScene, UiGlobeWorldOf,
 };
 use super::authored_globe_rotation_geometry::constrained_globe_angles;
 use super::authored_globe_rotation_geometry::globe_alignment_angles;
@@ -30,7 +31,6 @@ use openzt2_interface_state::input::input_types::ActionRequest;
 use openzt2_interface_state::input::input_types::ActiveInputDevice;
 use openzt2_interface_state::input::input_types::GameAction;
 use openzt2_interface_state::input::input_types::MousePointer;
-use openzt2_interface_state::shell::shell_selection_types::ShellSelection;
 use openzt2_interface_state::ui::authored_ui_activation_contracts::UiNodeActivated;
 use openzt2_interface_state::ui::authored_ui_selection_state::UiSelected;
 use openzt2_interface_state::ui::{
@@ -273,91 +273,110 @@ fn ray_box_distance(
     (far >= near.max(0.0)).then_some(near.max(0.0))
 }
 
-/// Turns the selected map location toward the camera over the authored move time.
-pub(crate) fn target_selected_globe_marker(
+pub(super) fn link_selected_globe_marker_anchors(
     mut commands: Commands,
-    selection: Res<ShellSelection>,
-    globes: Query<(&UiGlobePresentation, &UiGlobeRenderScene)>,
-    selected: Query<(Entity, &UiSelected), With<UiGlobeMarkerAnchor>>,
-    targets: Query<&GlobeSelectedMarker>,
-    mut transforms: ParamSet<(
-        Query<&Transform>,
-        Query<&Transform, With<UiGlobeCamera>>,
-        Query<&mut Transform>,
-    )>,
+    changed: Query<&ChildOf, (Changed<UiSelected>, With<UiGlobeMarkerAnchor>)>,
+    anchors: Query<&UiSelected, With<UiGlobeMarkerAnchor>>,
+    worlds: Query<(&Children, Option<&GlobeSelectedMarker>), With<UiGlobeWorldOf>>,
 ) {
-    let Some((presentation, scene)) = globes.iter().next() else {
-        return;
-    };
-    let Some(anchor_entity) = selected
-        .iter()
-        .find_map(|(entity, selected)| selected.0.then_some(entity))
-    else {
-        commands
-            .entity(scene.world())
-            .remove::<GlobeSelectedMarker>()
-            .remove::<GlobeSelectionTurn>();
-        return;
-    };
-    if targets
-        .get(scene.world())
-        .is_ok_and(|target| target.0 == anchor_entity)
-        && !selection.is_changed()
-    {
-        return;
+    let affected: bevy::ecs::entity::EntityHashSet = changed.iter().map(ChildOf::parent).collect();
+    for world in affected {
+        let Ok((children, previous)) = worlds.get(world) else {
+            continue;
+        };
+        let current = children
+            .iter()
+            .find(|anchor| anchors.get(*anchor).is_ok_and(|selected| selected.0));
+        match (current, previous) {
+            (Some(anchor), old) if old != Some(&GlobeSelectedMarker(anchor)) => {
+                commands.entity(world).insert(GlobeSelectedMarker(anchor));
+            }
+            (None, Some(_)) => {
+                commands.entity(world).remove::<GlobeSelectedMarker>();
+            }
+            _ => {}
+        }
     }
-    let Ok(anchor_rotation) = transforms
-        .p0()
-        .get(anchor_entity)
-        .map(|anchor| anchor.rotation)
-    else {
-        return;
-    };
-    let Some(camera_rotation) = transforms.p1().iter().next().map(|camera| camera.rotation) else {
-        return;
-    };
-    let mut worlds = transforms.p2();
-    let Ok(world) = worlds.get_mut(scene.world()) else {
-        return;
-    };
-
-    // Marker anchors rotate source -Y, converted to Bevy +Z, onto the
-    // location normal. The camera's local +Z points back towards the camera.
-    // Aligning those bases centres the selected location without embedding a
-    // longitude correction or any knowledge of an individual map.
-    let marker_normal = anchor_rotation * Vec3::Z;
-    let camera_hemisphere = camera_rotation * Vec3::Z;
-    let (from_yaw, from_pitch) = constrained_globe_angles(world.rotation);
-    let (target_yaw, to_pitch) =
-        globe_alignment_angles(marker_normal, camera_hemisphere, from_yaw, from_pitch);
-    let to_yaw = from_yaw + shortest_angle_delta(from_yaw, target_yaw);
-    commands.entity(scene.world()).insert((
-        GlobeSelectedMarker(anchor_entity),
-        GlobeSelectionTurn {
-            from_yaw,
-            from_pitch,
-            to_yaw,
-            to_pitch,
-            elapsed_seconds: 0.0,
-            duration_seconds: presentation.move_seconds.max(f32::EPSILON),
-        },
-    ));
 }
 
-pub(crate) fn turn_globe_to_selection(
+pub(super) fn cancel_turn_when_globe_marker_is_lost(
+    removal: On<Remove, GlobeSelectedMarker>,
+    mut commands: Commands,
+) {
+    commands
+        .entity(removal.entity)
+        .try_remove::<GlobeSelectionTurn>();
+}
+
+pub(super) fn retarget_selected_globe_turns(
+    mut commands: Commands,
+    mut worlds: Query<(
+        Entity,
+        &Transform,
+        &UiGlobeWorldOf,
+        Ref<GlobeSelectedMarker>,
+        Ref<GlobeSphere>,
+        Option<&mut GlobeSelectionTurn>,
+    )>,
+    globes: Query<(Ref<UiGlobePresentation>, &UiGlobeHostedSceneEntities)>,
+    markers: Query<Ref<Transform>, With<UiGlobeMarkerAnchor>>,
+    cameras: Query<&Transform, With<UiGlobeCamera>>,
+) {
+    for (world, transform, owner, selected_marker, sphere, current) in &mut worlds {
+        let (Ok((policy, hosted)), Ok(marker)) =
+            (globes.get(owner.0), markers.get(selected_marker.0))
+        else {
+            continue;
+        };
+        if !selected_marker.is_changed()
+            && !sphere.is_changed()
+            && !marker.is_changed()
+            && !policy.is_changed()
+        {
+            continue;
+        }
+        let Some(camera) = hosted.iter().find_map(|entity| cameras.get(entity).ok()) else {
+            continue;
+        };
+        let normal = marker.rotation * Vec3::Z;
+        let view = camera.rotation * Vec3::Z;
+        let (from_yaw, from_pitch) = constrained_globe_angles(transform.rotation);
+        let (target_yaw, to_pitch) = globe_alignment_angles(normal, view, from_yaw, from_pitch);
+        let duration =
+            std::time::Duration::try_from_secs_f32(policy.move_seconds.max(f32::EPSILON))
+                .unwrap_or(std::time::Duration::MAX);
+        let turn = GlobeSelectionTurn {
+            from_yaw,
+            from_pitch,
+            to_yaw: from_yaw + shortest_angle_delta(from_yaw, target_yaw),
+            to_pitch,
+            timer: Timer::new(duration, TimerMode::Once),
+        };
+        if let Some(mut current) = current {
+            *current = turn;
+        } else {
+            commands.entity(world).insert(turn);
+        }
+    }
+}
+
+pub(super) fn advance_globe_selection_turns(
     mut commands: Commands,
     time: Res<Time>,
     mut worlds: Query<(Entity, &mut Transform, &mut GlobeSelectionTurn)>,
 ) {
-    for (entity, mut transform, mut turn) in &mut worlds {
-        turn.elapsed_seconds =
-            (turn.elapsed_seconds + time.delta_secs()).min(turn.duration_seconds);
-        let progress = turn.elapsed_seconds / turn.duration_seconds;
-        let yaw = turn.from_yaw.lerp(turn.to_yaw, progress);
-        let pitch = turn.from_pitch.lerp(turn.to_pitch, progress);
-        transform.rotation = globe_rotation(yaw, pitch);
-        if progress >= 1.0 {
-            commands.entity(entity).remove::<GlobeSelectionTurn>();
+    for (world, transform, mut turn) in &mut worlds {
+        turn.timer.tick(time.delta());
+        let progress = turn.timer.fraction();
+        let rotation = globe_rotation(
+            turn.from_yaw.lerp(turn.to_yaw, progress),
+            turn.from_pitch.lerp(turn.to_pitch, progress),
+        );
+        transform
+            .map_unchanged(|transform| &mut transform.rotation)
+            .set_if_neq(rotation);
+        if turn.timer.is_finished() {
+            commands.entity(world).remove::<GlobeSelectionTurn>();
         }
     }
 }

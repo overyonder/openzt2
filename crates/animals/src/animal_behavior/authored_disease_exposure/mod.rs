@@ -68,6 +68,7 @@ pub(super) type DiseaseAnimals<'w, 's> =
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn expose_animals_to_authored_diseases(
+    immediate: In<Option<AssetId>>,
     mut commands: Commands,
     clock: Single<&ZooClock>,
     seed: Single<&ZooSeed>,
@@ -110,7 +111,7 @@ pub(super) fn expose_animals_to_authored_diseases(
         * f64::from(view.timing().fixed_hz))
     .ceil() as u64;
     let mut deadline = match deadline {
-        Some(deadline) => deadline,
+        Some(deadline) => Some(deadline),
         None => {
             let first_check = clock
                 .tick
@@ -121,11 +122,14 @@ pub(super) fn expose_animals_to_authored_diseases(
             commands
                 .entity(root)
                 .insert(DiseaseExposureDeadline(first_check));
-            return;
+            if immediate.0.is_none() {
+                return;
+            }
+            None
         }
     };
     let has_disease = infected.iter().any(|member| member.root == root);
-    if let Some(active) = active {
+    if let Some(active) = active.filter(|_| immediate.0.is_none()) {
         let pending = policy
             .diseases
             .iter()
@@ -142,6 +146,9 @@ pub(super) fn expose_animals_to_authored_diseases(
                             })
                 })
             });
+        let Some(deadline) = deadline.as_deref_mut() else {
+            return;
+        };
         if clock.tick < active.cure_due_tick && (has_disease || pending) {
             deadline.0 = clock
                 .tick
@@ -153,7 +160,12 @@ pub(super) fn expose_animals_to_authored_diseases(
         }
         return;
     }
-    deadline.0 = clock.tick.saturating_add(interval);
+    if immediate.0.is_some() && active.is_some() {
+        return;
+    }
+    if let Some(deadline) = deadline.as_deref_mut().filter(|_| immediate.0.is_none()) {
+        deadline.0 = clock.tick.saturating_add(interval);
+    }
     let mut candidates = Vec::new();
     types.extend_type(root, AssetId::from_key("cloningcenter"), &mut candidates);
     let cloning_center_present =
@@ -179,7 +191,11 @@ pub(super) fn expose_animals_to_authored_diseases(
     let funding = funding.map_or_else(|| DiseaseResearchFunding::default().0, |funding| funding.0);
     let mut random =
         DeterministicRng::from_entity(**seed, PersistentId(clock.tick), RngDomain::Disease);
-    let first = random.next_u32() as usize % policy.diseases.len();
+    let first = if immediate.0.is_some() {
+        0
+    } else {
+        random.next_u32() as usize % policy.diseases.len()
+    };
     let registered: Vec<_> = assignments
         .iter_many(
             assigned_targets
@@ -194,8 +210,10 @@ pub(super) fn expose_animals_to_authored_diseases(
         .iter()
         .chain(&policy.diseases[..first])
         .filter(|disease| {
-            !disease.force_only
-                && disease.chance_percent > 0.0
+            immediate
+                .0
+                .map_or(!disease.force_only, |name| disease.name == name)
+                && (immediate.0.is_some() || disease.chance_percent > 0.0)
                 && (disease.search_for_targets
                     || registered
                         .iter()
@@ -371,7 +389,12 @@ pub(super) fn expose_animals_to_authored_diseases(
                 definition: disease.name,
                 cure_due_tick: clock.tick.saturating_add(cure_duration),
             });
-            deadline.0 = clock.tick.saturating_add(update_interval.max(1));
+            let next = clock.tick.saturating_add(update_interval.max(1));
+            if let Some(deadline) = deadline.as_deref_mut() {
+                deadline.0 = next;
+            } else {
+                commands.entity(root).insert(DiseaseExposureDeadline(next));
+            }
             break;
         }
     }
@@ -495,6 +518,17 @@ pub(super) fn clear_authored_disease_tokens_when_cured(
     }
 }
 
+#[derive(Event)]
+pub(super) struct EvaluateAssignedDisease(AssetId);
+
+pub(super) fn evaluation_request(event: On<EvaluateAssignedDisease>) -> Option<AssetId> {
+    Some(event.0)
+}
+
+pub(super) fn periodic_evaluation() -> Option<AssetId> {
+    None
+}
+
 pub(super) fn add_authored_disease_target(
     activation: On<openzt2_zoo_state::behavior_task_execution_types::running_actions::WhenBehaviorAction<
         openzt2_zoo_state::behavior_task_execution_types::running_actions::RunBehaviorAddSubjectAsDiseaseTarget,
@@ -507,152 +541,63 @@ pub(super) fn add_authored_disease_target(
     actions: Query<(
         &openzt2_zoo_state::behavior_task_execution_types::running_actions::RunningBehaviorInstruction,
         &openzt2_zoo_state::behavior_task_execution_types::running_actions::RunBehaviorAddSubjectAsDiseaseTarget,
+        &openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState,
     )>,
-    worlds: Query<
-        (
-            Option<&ActiveZooDisease>,
-            Option<&DiseaseExposureDeadline>,
-            &Fame,
-        ),
-        With<WorldRoot>,
-    >,
-    facilities: Query<(&DefinitionId, &WorldMember), Without<Animal>>,
-    infected: Query<&WorldMember, (With<Animal>, With<Disease>, Without<Dead>)>,
-    tokens: Query<&BehaviorSelfToken>,
     token_owners: Query<&Children>,
     assignments: Query<&AssignedDiseaseTarget>,
     mut commands: Commands,
 ) {
     let actor = activation.entity;
-    let Ok((instruction, action)) = actions.get(actor) else {
+    let Ok((instruction, action, task)) = actions.get(actor) else {
         return;
     };
+    if !instruction.is_current(task) {
+        return;
+    }
     let action = &action.0;
-    let Some((root, view, policy, disease)) = (|| {
-        let (_, facts, _) = animals.get(actor).ok()?;
-        let matches = |id| facts.matches_type(id, subject_types.borrow_for(actor));
-        if !facts.is_adult()
-            || (!action.types.is_empty() && !action.types.iter().copied().any(matches))
-            || !action
+    let eligible = animals.get(actor).ok().filter(|(_, facts, _)| {
+        let types = subject_types.borrow_for(actor);
+        (action.types.is_empty() || action.types.iter().any(|&id| facts.matches_type(id, types)))
+            && action
                 .attributes
                 .iter()
-                .all(|&(id, value)| matches(id) == value)
+                .all(|&(id, value)| facts.matches_type(id, types) == value)
+    });
+    if let Some((_, facts, _)) = eligible {
+        if definitions
+            .get(&assets)
+            .and_then(|view| view.disease_exposure())
+            .is_some_and(|policy| {
+                policy
+                    .diseases
+                    .iter()
+                    .any(|disease| disease.name == action.disease)
+            })
         {
-            return None;
-        }
-        let view = definitions.get(&assets)?;
-        let policy = view.disease_exposure()?;
-        let disease = policy
-            .diseases
-            .iter()
-            .find(|disease| disease.name == action.disease)?;
-        Some((facts.world.root, view, policy, disease))
-    })() else {
-        instruction.complete(actor, clock.tick, &mut commands);
-        return;
-    };
-
-    let Ok((active, _, fame)) = worlds.get(root) else {
-        super::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation(
-            actor,
-            &mut commands,
-        );
-        return;
-    };
-    let has_cloning_center = || {
-        facilities.iter().any(|(definition, member)| {
-            member.root == root
-                && (view.find_cloning_center(definition.0).is_some()
-                    || view.find_object(definition.0).is_some_and(|object| {
-                        object
-                            .behavior_type_identifiers
-                            .contains(&AssetId::from_key("cloningcenter"))
-                    }))
-        })
-    };
-    let immediate = action.immediate
-        && active.is_none()
-        && fame.half_stars >= policy.half_star_minimum
-        && !infected.iter().any(|member| member.root == root)
-        && has_cloning_center()
-        && disease.zoo_tests.iter().all(|test| match *test {
-            DiseaseZooTest::Fame {
-                half_stars,
-                comparison,
-            } => comparison.holds(u32::from(fame.half_stars), half_stars),
-            DiseaseZooTest::EntityCount {
-                entity_type,
-                attribute,
-                quantity,
-                comparison,
-                different,
-            } => {
-                let animal_keys = animals.iter().filter_map(|(entity, facts, _)| {
-                    let types = subject_types.borrow_for(entity);
-                    (facts.world.root == root
-                        && facts.matches_type(entity_type, types)
-                        && attribute
-                            .is_none_or(|(name, state)| facts.matches_type(name, types) == state))
-                    .then_some(facts.variant_id())
-                });
-                let object_keys = facilities.iter().filter_map(|(definition, member)| {
-                    (member.root == root
-                        && attribute.is_none()
-                        && (definition.0 == entity_type
-                            || view.find_object(definition.0).is_some_and(|object| {
-                                object.behavior_type_identifiers.contains(&entity_type)
-                            })))
-                    .then_some(definition.0)
-                });
-                let matching = animal_keys.chain(object_keys);
-                let count = if different {
-                    matching.collect::<HashSet<_>>().len()
-                } else {
-                    matching.count()
-                };
-                comparison.holds(u32::try_from(count).unwrap_or(u32::MAX), quantity)
+            let root = facts.world.root;
+            let assigned = assignments
+                .iter_many(
+                    token_owners
+                        .get(actor)
+                        .ok()
+                        .into_iter()
+                        .flat_map(RelationshipTarget::iter),
+                )
+                .flatten()
+                .any(|assignment| assignment.root == root && assignment.disease == action.disease);
+            if !assigned {
+                commands.spawn((
+                    AssignedDiseaseTarget {
+                        root,
+                        disease: action.disease,
+                    },
+                    ChildOf(actor),
+                ));
             }
-        });
-    if !immediate {
-        if !assignments
-            .iter_many(token_owners.get(actor).ok().into_iter().flatten().copied())
-            .flatten()
-            .any(|assignment| assignment.root == root && assignment.disease == disease.name)
-        {
-            commands.spawn((
-                AssignedDiseaseTarget {
-                    root,
-                    disease: disease.name,
-                },
-                ChildOf(actor),
-            ));
+            if action.immediate {
+                commands.trigger(EvaluateAssignedDisease(action.disease));
+            }
         }
-        instruction.complete(actor, clock.tick, &mut commands);
-        return;
-    }
-    if !tokens
-        .iter_many(token_owners.get(actor).ok().into_iter().flatten().copied())
-        .flatten()
-        .any(|token| token.name == disease.token)
-    {
-        commands.spawn((
-            BehaviorSelfToken {
-                name: disease.token,
-                available_at: clock.tick,
-                expires_at: u64::MAX,
-                payload: None,
-                retain_on_failure: false,
-            },
-            ChildOf(actor),
-        ));
-    }
-    if immediate {
-        let duration = (f64::from(policy.cure_timeout_seconds) * f64::from(view.timing().fixed_hz))
-            .ceil() as u64;
-        commands.entity(root).insert_if_new(ActiveZooDisease {
-            definition: disease.name,
-            cure_due_tick: clock.tick.saturating_add(duration),
-        });
     }
     instruction.complete(actor, clock.tick, &mut commands);
 }

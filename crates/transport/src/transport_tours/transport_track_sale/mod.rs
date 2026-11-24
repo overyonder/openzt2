@@ -10,24 +10,98 @@ use openzt2_zoo_state::transport_tours::transport_track_construction_types::Tran
 use openzt2_zoo_state::transport_tours::transport_track_sale::TransportTrackSaleQueries;
 use openzt2_zoo_state::transport_tours::transport_track_construction_types::PreparedTransportTrackConstructionEdit;
 use openzt2_zoo_state::transport_tours::transport_track_construction_types::TransportTrackConstructionEditSteps;
+use openzt2_zoo_state::transport_tours::transport_track_construction_types::{TrackPieces, TransportTrackConstructionPiece};
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
+use openzt2_interface_state::information::entity_selection_types::SelectedSubject;
+use openzt2_interface_state::ui::ui_document_lifecycle_contracts::InGameUiOwner;
+use openzt2_game_data::world_definitions::world_objects::WorldObjectPropertyFlags;
+use openzt2_zoo_state::economy::object_sale_refund::calculate_authored_object_sale_refund;
+use openzt2_zoo_state::transport_tours::transport_circuit_types::CircuitMember;
+use openzt2_zoo_state::transport_tours::transport_topology_types::{
+    TrackEnd, TrackIncidence, TrackProfile, TrackRoute, TrackSegment, TrackStart,
+};
+
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct TransportSaleQuoteChanges<'w, 's> {
+    pieces: Query<'w, 's, Ref<'static, TransportTrackConstructionPiece>>,
+    changed_piece_profiles:
+        Query<'w, 's, &'static TransportTrackConstructionPiece, Changed<TrackProfile>>,
+    routes: Query<'w, 's, TrackRoute>,
+    changed_routes: Query<
+        'w,
+        's,
+        (),
+        Or<(
+            Changed<TrackSegment>,
+            Changed<TrackPieces>,
+            Changed<CircuitMember>,
+            Changed<TrackStart>,
+            Changed<TrackEnd>,
+            Changed<WorldMember>,
+        )>,
+    >,
+    incidence: TrackIncidence<'w, 's>,
+    discarded: MessageReader<
+        'w,
+        's,
+        super::transport_track_piece_presentation::DiscardedTrackJointEndpoints,
+    >,
+}
 
 pub(crate) fn refresh_selected_transport_sale_quote(
     mut commands: Commands,
-    selected: openzt2_interface_state::information::entity_selection_types::WorldUiSelection,
+    selected: Query<Ref<SelectedSubject>, With<InGameUiOwner>>,
     sales: TransportTrackSaleQueries,
+    mut changes: TransportSaleQuoteChanges,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active: Res<WorldDefinitions>,
     mut quotes: Query<&mut openzt2_zoo_state::economy::facility_economy_types::CurrentSellQuote>,
 ) {
     use openzt2_zoo_state::economy::facility_economy_types::CurrentSellQuote;
-    let Some(target) = selected
-        .subject()
-        .filter(|target| sales.requires_transport_sale(*target))
-    else {
+    let Ok(selected) = selected.single() else {
+        changes.discarded.clear();
         return;
     };
+    let target = selected.0;
+    let piece = changes.pieces.get(target).ok();
+    let route = piece.as_ref().map(|piece| piece.route_segment).or_else(|| {
+        changes
+            .incidence
+            .incoming(target)
+            .find(|route| changes.routes.contains(*route))
+    });
+    let destination =
+        route.and_then(|route| changes.routes.get(route).ok().map(|route| route.to()));
+    let joint_discarded = changes.discarded.read().any(|event| {
+        event.0.contains(&target) || destination.is_some_and(|end| event.0.contains(&end))
+    });
+    changes.discarded.clear();
+    let topology_changed = joint_discarded
+        || piece.as_ref().is_some_and(|piece| piece.is_changed())
+        || route.is_some_and(|route| {
+            changes.changed_routes.contains(route)
+                || changes
+                    .changed_piece_profiles
+                    .iter()
+                    .any(|piece| piece.route_segment == route)
+        })
+        || destination.is_some_and(|end| {
+            changes
+                .incidence
+                .incident(end)
+                .any(|route| changes.changed_routes.contains(route))
+        });
+    if !selected.is_changed()
+        && !active.is_changed()
+        && !definitions.is_changed()
+        && !topology_changed
+    {
+        return;
+    }
+    if !sales.requires_transport_sale(target) && !joint_discarded {
+        return;
+    }
     let quote = active
         .get(&definitions)
         .and_then(|definitions| sales.quote(target, definitions));
@@ -59,11 +133,28 @@ pub(super) fn prepare_transport_track_sale(
         if !sales.requires_transport_sale(request.target) {
             continue;
         }
+        let piece = sales.single_piece(request.target);
         let sale = active.get(&definitions).and_then(|definitions| {
-            Some((
-                sales.terminal_route_edit(request.target)?,
-                sales.quote(request.target, definitions)?.0.checked_neg()?,
-            ))
+            let edit = sales.terminal_route_edit(request.target)?;
+            let removed = if piece.is_some() {
+                1
+            } else {
+                edit.piece_entities.len()
+            };
+            let definition = definitions.find_track(edit.definition)?;
+            let object = definitions.find_object(definition.object)?;
+            if !object
+                .properties
+                .contains_all(WorldObjectPropertyFlags::DELETABLE)
+            {
+                return None;
+            }
+            let refund = calculate_authored_object_sale_refund(object)?;
+            let cost = refund
+                .0
+                .checked_mul(i64::try_from(removed).ok()?)?
+                .checked_neg()?;
+            Some((edit, cost))
         });
         let Some((edit, cost)) = sale else {
             rejected.write(TransportTrackConstructionEditPreparationRejected {
@@ -72,7 +163,7 @@ pub(super) fn prepare_transport_track_sale(
             });
             continue;
         };
-        if let Some((index, world)) = sales.single_piece(request.target) {
+        if let Some((index, world)) = piece {
             let steps = allocators
                 .get_mut(world.root)
                 .ok()

@@ -1,6 +1,6 @@
 use super::{
     scenario_lua_snapshot_types::{ScenarioLuaSavedState, ScenarioLuaSavedValue},
-    scenario_lua_types::ScenarioLuaVirtualMachine,
+    scenario_lua_types::{ScenarioLuaContext, ScenarioLuaVirtualMachine},
 };
 use bevy::prelude::*;
 use mlua::{Lua, Value};
@@ -254,8 +254,6 @@ fn restore_globals(
     Ok(())
 }
 
-pub(crate) struct PreparedScenarioLuaRuntime(ScenarioLuaVirtualMachine);
-
 pub(crate) fn normalize_original_saved_scenario_lua_state(
     saved_arguments: &ScenarioLuaSavedState,
     document: bevy::asset::AssetId<WorldScenarioDocumentAsset>,
@@ -266,35 +264,18 @@ pub(crate) fn normalize_original_saved_scenario_lua_state(
     capture_runtime(&runtime)
 }
 
-impl super::scenario_lua_types::ScenarioLuaVirtualMachineContexts {
-    pub(crate) fn capture_saved_scenario_state(
-        &self,
-        owner: Entity,
-    ) -> mlua::Result<Option<ScenarioLuaSavedState>> {
-        self.virtual_machines
-            .get(&super::scenario_lua_types::ScenarioLuaRuntimeOwner::Scenario(owner))
-            .map(capture_runtime)
-            .transpose()
+impl ScenarioLuaContext {
+    pub(crate) fn capture_saved_state(&self) -> mlua::Result<Option<ScenarioLuaSavedState>> {
+        self.0.as_ref().map(capture_runtime).transpose()
     }
 
-    pub(crate) fn prepare_saved_scenario_state(
+    pub(crate) fn prepare_saved_state(
         saved: &ScenarioLuaSavedState,
         document: bevy::asset::AssetId<WorldScenarioDocumentAsset>,
         scripts: &Assets<LuaScriptAsset>,
         index: &LuaScriptArchivePathIndex,
-    ) -> mlua::Result<PreparedScenarioLuaRuntime> {
-        prepare_runtime(saved, document, scripts, index, true).map(PreparedScenarioLuaRuntime)
-    }
-
-    pub(crate) fn install_saved_scenario_state(
-        &mut self,
-        owner: Entity,
-        prepared: PreparedScenarioLuaRuntime,
-    ) {
-        self.virtual_machines.insert(
-            super::scenario_lua_types::ScenarioLuaRuntimeOwner::Scenario(owner),
-            prepared.0,
-        );
+    ) -> mlua::Result<Self> {
+        prepare_runtime(saved, document, scripts, index, true).map(|vm| Self(Some(vm)))
     }
 }
 

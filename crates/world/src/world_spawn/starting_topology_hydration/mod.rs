@@ -1,3 +1,5 @@
+use std::collections::{BTreeMap, BTreeSet};
+
 use bevy::prelude::Assets;
 use bevy::prelude::Commands;
 use bevy::prelude::Entity;
@@ -18,7 +20,6 @@ use openzt2_world_state::world_spawn::world_load_completion_marker::{
 
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
-use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
 use openzt2_game_assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset;
 use openzt2_zoo_state::topology::gate_operation_types::Gate;
 use openzt2_zoo_state::topology::topology_graph_types::FenceEdge;
@@ -76,22 +77,38 @@ pub(super) fn hydrate_all_starting_fence_nodes_and_edges_into_topology_once(
         return;
     };
     let nodes = start.topology_nodes.as_slice();
-    let fences = start.fences.as_slice();
-
-    for fence in fences {
-        let source_definition = AssetId(fence.definition.0);
-        if resolve_starting_fence_definition(definitions, source_definition).is_none() {
-            if !active_definitions.is_complete() {
-                return;
+    let curb_type = AssetId::from_key("curb");
+    let mut fences = Vec::with_capacity(start.fences.len());
+    let mut fence_definitions_by_gate = None;
+    for fence in &start.fences {
+        let source_definition = fence.definition;
+        let resolved = definitions
+            .find_fence(source_definition)
+            .map(|definition| (definition, false))
+            .or_else(|| {
+                fence_definitions_by_gate
+                    .get_or_insert_with(|| {
+                        let mut by_gate = BTreeMap::new();
+                        for definition in definitions.fences() {
+                            by_gate.entry(definition.gate).or_insert(definition);
+                        }
+                        by_gate
+                    })
+                    .get(&source_definition)
+                    .copied()
+                    .map(|definition| (definition, true))
+            });
+        let Some((definition, gate)) = resolved else {
+            if active_definitions.is_complete() {
+                commands
+                    .entity(root)
+                    .insert_if_new(WorldLoadFailure::MissingDependency(source_definition));
             }
-            commands
-                .entity(root)
-                .insert_if_new(WorldLoadFailure::MissingDependency(source_definition));
             return;
-        }
+        };
         let a_index = fence.a as usize;
         let b_index = fence.b as usize;
-        if nodes.get(a_index).is_none() || nodes.get(b_index).is_none() {
+        if a_index >= nodes.len() || b_index >= nodes.len() {
             commands
                 .entity(root)
                 .insert_if_new(WorldLoadFailure::InvalidRecord(
@@ -99,24 +116,19 @@ pub(super) fn hydrate_all_starting_fence_nodes_and_edges_into_topology_once(
                 ));
             return;
         }
+        // Curbs belong to path presentation and must not occupy enclosure edges.
+        if definitions
+            .find_object(definition.object)
+            .is_some_and(|object| object.behavior_type_identifiers.contains(&curb_type))
+        {
+            continue;
+        }
+        fences.push((fence, definition.id, gate));
     }
-
-    // Saved curbs are path presentation. Importing them as fences makes them
-    // compete with actual enclosure edges in the topology index.
-    let curb_type = AssetId::from_key("curb");
-    let fences = fences
-        .iter()
-        .filter(|fence| {
-            resolve_starting_fence_definition(definitions, fence.definition)
-                .and_then(|(id, _)| definitions.find_fence(id))
-                .and_then(|fence| definitions.find_object(fence.object))
-                .is_none_or(|object| !object.behavior_type_identifiers.contains(&curb_type))
-        })
-        .collect::<Vec<_>>();
     let used_nodes = fences
         .iter()
-        .flat_map(|fence| [fence.a as usize, fence.b as usize])
-        .collect::<std::collections::BTreeSet<_>>();
+        .flat_map(|(fence, ..)| [fence.a as usize, fence.b as usize])
+        .collect::<BTreeSet<_>>();
     let node_entities = used_nodes
         .into_iter()
         .map(|index| {
@@ -136,32 +148,13 @@ pub(super) fn hydrate_all_starting_fence_nodes_and_edges_into_topology_once(
                     WorldMember { root },
                 ))
                 .id();
-            (index, entity)
+            (index, (entity, cell))
         })
-        .collect::<std::collections::BTreeMap<_, _>>();
+        .collect::<BTreeMap<_, _>>();
 
-    for fence in fences {
-        let source_definition = AssetId(fence.definition.0);
-        let (definition, gate) = resolve_starting_fence_definition(definitions, source_definition)
-            .expect("validated authored starting-fence definition");
-        let a_index = fence.a as usize;
-        let b_index = fence.b as usize;
-        let a = node_entities[&a_index];
-        let b = node_entities[&b_index];
-        let a_record = &nodes[a_index];
-        let b_record = &nodes[b_index];
-        let mut a_cell = grid.position_cell(Vec3::new(
-            a_record.position_m[0],
-            a_record.position_m[1],
-            a_record.position_m[2],
-        ));
-        let mut b_cell = grid.position_cell(Vec3::new(
-            b_record.position_m[0],
-            b_record.position_m[1],
-            b_record.position_m[2],
-        ));
-        a_cell.z = 0;
-        b_cell.z = 0;
+    for (fence, definition, gate) in fences {
+        let (a, a_cell) = node_entities[&(fence.a as usize)];
+        let (b, b_cell) = node_entities[&(fence.b as usize)];
         let entity = commands
             .spawn((
                 Name::new("starting fence"),
@@ -183,19 +176,4 @@ pub(super) fn hydrate_all_starting_fence_nodes_and_edges_into_topology_once(
         }
     }
     commands.entity(root).insert(StartingFenceTopologyHydrated);
-}
-
-fn resolve_starting_fence_definition(
-    definitions: WorldDefinitionsView<'_>,
-    source_definition: AssetId,
-) -> Option<(AssetId, bool)> {
-    definitions
-        .find_fence(source_definition)
-        .map(|record| (record.id, false))
-        .or_else(|| {
-            definitions
-                .fences()
-                .find(|record| record.gate == source_definition)
-                .map(|record| (record.id, true))
-        })
 }

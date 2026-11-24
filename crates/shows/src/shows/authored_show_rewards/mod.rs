@@ -1,7 +1,7 @@
 use std::io;
 
 use bevy::{
-    asset::{io::Reader, AssetLoader, LoadContext},
+    asset::{AssetLoader, LoadContext, io::Reader},
     prelude::*,
 };
 use openzt2_game_assets::source_document::{
@@ -22,6 +22,7 @@ pub(super) struct AuthoredShowRewards {
     pub(super) score_fraction: f32,
     pub(super) popularity: TrickPopularityPolicy,
     default: Vec<DonationFeedback>,
+    cancelled: Vec<DonationFeedback>,
     bands: Vec<DonationBand>,
 }
 
@@ -48,21 +49,28 @@ struct DonationFeedback {
 impl AuthoredShowRewards {
     pub(super) fn audience_feedback(
         &self,
-        completed_tricks: u16,
-        score: f32,
+        completed: Option<(u16, f32)>,
         favourite: bool,
         mut draw: impl FnMut() -> u32,
     ) -> (f64, f32) {
-        let feedback = self
-            .bands
-            .iter()
-            .filter(|band| band.minimum_tricks <= completed_tricks && band.minimum_score <= score)
-            .max_by(|left, right| {
-                left.minimum_tricks
-                    .cmp(&right.minimum_tricks)
-                    .then_with(|| left.minimum_score.total_cmp(&right.minimum_score))
-            })
-            .map_or(self.default.as_slice(), |band| band.feedback.as_slice());
+        let feedback = if let Some((completed_tricks, score)) = completed {
+            self.bands
+                .iter()
+                .filter(|band| {
+                    band.minimum_tricks <= completed_tricks && band.minimum_score <= score
+                })
+                .max_by(|left, right| {
+                    left.minimum_tricks
+                        .cmp(&right.minimum_tricks)
+                        .then_with(|| left.minimum_score.total_cmp(&right.minimum_score))
+                })
+                .map_or(self.default.as_slice(), |band| band.feedback.as_slice())
+        } else {
+            self.cancelled.as_slice()
+        };
+        if feedback.is_empty() {
+            return (0.0, 0.0);
+        }
         let unit_draw = |value| f64::from(value) / f64::from(u32::MAX);
         let total_weight: f64 = feedback.iter().map(|row| f64::from(row.weight)).sum();
         let mut choice = unit_draw(draw()) * total_weight;
@@ -152,6 +160,12 @@ impl AssetLoader for AuthoredShowRewardsLoader {
                 "DefaultTrickTokenTimeout",
             )?,
             default: donation_feedback(child(show, "DefaultFeedback")?)?,
+            cancelled: show
+                .element_children()
+                .find(|node| node.name.eq_ignore_ascii_case("ShowCancelledFeedback"))
+                .map(donation_feedback)
+                .transpose()?
+                .unwrap_or_default(),
             bands,
         })
     }

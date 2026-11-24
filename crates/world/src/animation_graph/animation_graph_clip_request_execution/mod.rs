@@ -28,8 +28,10 @@ pub(super) struct PendingAnimationClipPlayback {
     request_id: usize,
     source: Handle<AnimationClipSourceAsset>,
     options: Option<AnimationClipActionOptions>,
-    ready: bool,
 }
+
+#[derive(Component)]
+pub(super) struct ReadyPendingAnimationClipPlayback;
 
 #[allow(clippy::too_many_lines)]
 pub(super) fn execute_explicit_animation_clip_playback_requests(
@@ -40,7 +42,13 @@ pub(super) fn execute_explicit_animation_clip_playback_requests(
     mut presentation_selections: MessageReader<AnimationClipActionOptions>,
     mut rejected_animation_clip_requests: MessageWriter<AnimationClipPlaybackRequestRejected>,
     mut started_animation_clip_requests: MessageWriter<openzt2_world_state::animation_graph::animation_graph_playback_message_types::AnimationClipPlaybackRequestStarted>,
-    pending: Query<&PendingAnimationClipPlayback>,
+    (pending, ready_pending): (
+        Query<(
+            &PendingAnimationClipPlayback,
+            Has<ReadyPendingAnimationClipPlayback>,
+        )>,
+        Query<Entity, With<ReadyPendingAnimationClipPlayback>>,
+    ),
     mut cancellations: MessageReader<openzt2_world_state::animation_graph::animation_graph_playback_message_types::CancelAnimationClipPlaybackRequest>,
     subjects: Query<()>,
     presentations: Query<&AnimationPresentations>,
@@ -78,7 +86,7 @@ pub(super) fn execute_explicit_animation_clip_playback_requests(
                 .is_some_and(|owner| owner.request_id == cancellation.request_id)
             {
                 graph.route_owner = None;
-                graph.remaining_transition_nodes.clear();
+                graph.remaining_transition_steps.clear();
                 graph.active_animation_graph_transition = None;
                 if let Ok(mut player) = active_players.get_mut(entity) {
                     player.pause_all();
@@ -107,8 +115,19 @@ pub(super) fn execute_explicit_animation_clip_playback_requests(
         .map(|(request, ..)| request.animation_subject_entity)
         .collect::<HashSet<_>>();
     let mut pending_requests = Vec::new();
-    for deferred in &pending {
-        let subject = deferred.request.animation_subject_entity;
+    let pending_subjects = ready_pending
+        .iter()
+        .chain(new_subjects.iter().copied())
+        .chain(
+            cancelled
+                .iter()
+                .map(|cancel| cancel.animation_subject_entity),
+        )
+        .collect::<bevy::ecs::entity::EntityHashSet>();
+    for subject in pending_subjects {
+        let Ok((deferred, ready)) = pending.get(subject) else {
+            continue;
+        };
         if new_subjects.contains(&subject) {
             rejected_animation_clip_requests.write(AnimationClipPlaybackRequestRejected {
                 request_id: deferred.request_id,
@@ -119,14 +138,15 @@ pub(super) fn execute_explicit_animation_clip_playback_requests(
             cancellation.animation_subject_entity == subject
                 && cancellation.request_id == deferred.request_id
         }) {
-            if !deferred.ready {
+            if !ready {
                 continue;
             }
             pending_requests.push((&deferred.request, deferred.request_id, deferred.options));
         }
-        commands
-            .entity(subject)
-            .try_remove::<PendingAnimationClipPlayback>();
+        commands.entity(subject).try_remove::<(
+            PendingAnimationClipPlayback,
+            ReadyPendingAnimationClipPlayback,
+        )>();
     }
     pending_requests.sort_unstable_by_key(|(_, request_id, _)| *request_id);
     let mut seen_subjects = HashSet::<Entity>::default();
@@ -314,7 +334,7 @@ pub(super) fn execute_explicit_animation_clip_playback_requests(
                 let set = animation_set_assets.get(handle)?;
                 let source =
                     clip_sources.request(set, &animation_clip_request.animation_clip_asset_key)?;
-                (!clip_sources.failed(&source)).then_some(source)
+                (!clip_sources.failed(&source) && !clip_sources.resolved(&source)).then_some(source)
             });
         if let Some(source) = loading_source {
             commands
@@ -322,7 +342,6 @@ pub(super) fn execute_explicit_animation_clip_playback_requests(
                 .try_insert(PendingAnimationClipPlayback {
                     request: request.clone(),
                     request_id,
-                    ready: clip_sources.resolved(&source),
                     source,
                     options,
                 });
@@ -342,14 +361,18 @@ pub(super) fn execute_explicit_animation_clip_playback_requests(
 }
 
 pub(super) fn wake_animation_clip_requests_after_asset_loading(
+    mut commands: Commands,
     mut loaded: MessageReader<AssetEvent<AnimationClipSourceAsset>>,
     mut failures: MessageReader<AssetLoadFailedEvent<AnimationClipSourceAsset>>,
-    mut pending: Query<&mut PendingAnimationClipPlayback>,
+    pending: Query<
+        (Entity, &PendingAnimationClipPlayback),
+        Without<ReadyPendingAnimationClipPlayback>,
+    >,
 ) {
     let finished = loaded
         .read()
         .filter_map(|event| match *event {
-            AssetEvent::LoadedWithDependencies { id } => Some(id),
+            AssetEvent::Added { id } | AssetEvent::LoadedWithDependencies { id } => Some(id),
             _ => None,
         })
         .chain(failures.read().map(|failure| failure.id))
@@ -357,9 +380,11 @@ pub(super) fn wake_animation_clip_requests_after_asset_loading(
     if finished.is_empty() {
         return;
     }
-    for mut request in &mut pending {
-        if !request.ready && finished.contains(&request.source.id()) {
-            request.ready = true;
+    for (entity, request) in &pending {
+        if finished.contains(&request.source.id()) {
+            commands
+                .entity(entity)
+                .try_insert(ReadyPendingAnimationClipPlayback);
         }
     }
 }

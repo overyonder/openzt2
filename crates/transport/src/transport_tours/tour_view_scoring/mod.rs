@@ -17,7 +17,6 @@ use openzt2_zoo_state::guests::guest_simulation_types::GuestReaction;
 use openzt2_zoo_state::locomotion::locomotion_types::{SpatialGrid, SpatialGridMembership};
 
 use crate::transport_tours::tour_score_calculations::add_observation_value_to_tour_score;
-use openzt2_zoo_state::transport_tours::tour_scoring_types::TourObservationCadence;
 use openzt2_zoo_state::transport_tours::tour_scoring_types::TourObservationMemory;
 use openzt2_zoo_state::transport_tours::tour_scoring_types::TourScore;
 use openzt2_zoo_state::transport_tours::tour_scoring_types::TourViewable;
@@ -25,6 +24,9 @@ use openzt2_zoo_state::transport_tours::transport_rider_types::{
     TransportRider, TransportSeat, TransportSeatRider, VehicleRiders,
 };
 use openzt2_zoo_state::transport_tours::transport_vehicle_types::TransportVehicle;
+
+#[derive(Component, Default)]
+pub(super) struct TourObservationDwell(Option<Timer>);
 
 fn find_vehicle_seat_emote_behavior_for_tour_score(
     definitions: WorldDefinitionsView<'_>,
@@ -170,6 +172,7 @@ pub(super) fn calculate_tour_rating_from_authored_score_ranges(
 }
 
 pub(super) fn observe_visible_tour_subjects_and_accumulate_rider_scores(
+    fixed_time: Res<Time<Fixed>>,
     grids: Query<&SpatialGrid>,
     membership: SpatialGridMembership,
     spatial_query: SpatialQuery,
@@ -182,7 +185,7 @@ pub(super) fn observe_visible_tour_subjects_and_accumulate_rider_scores(
             &TransportSeatRider,
             &mut TourScore,
             &mut TourObservationMemory,
-            &mut TourObservationCadence,
+            &mut TourObservationDwell,
         ),
         With<Guest>,
     >,
@@ -228,7 +231,7 @@ pub(super) fn observe_visible_tour_subjects_and_accumulate_rider_scores(
             .iter_many(passengers.iter())
             .filter_map(Result::ok)
             .filter(|(_, _, _, score, _, cadence)| {
-                cadence.ticks_until_next == 0
+                cadence.0.as_ref().is_none_or(Timer::is_finished)
                     && policy
                         .is_none_or(|policy| score.observations < u32::from(policy.tour_history))
             })
@@ -270,10 +273,11 @@ pub(super) fn observe_visible_tour_subjects_and_accumulate_rider_scores(
 
     let mut feedback =
         bevy::utils::Parallel::<Vec<(Entity, Option<StartBehaviorSet>, GuestReaction)>>::default();
+    let observation_step = fixed_time.timestep();
     riders.par_iter_mut().for_each(
         |(guest, rider, mount, mut score, mut memory, mut cadence)| {
-            if cadence.ticks_until_next > 0 {
-                cadence.ticks_until_next -= 1;
+            if let Some(timer) = cadence.0.as_mut().filter(|timer| !timer.is_finished()) {
+                timer.tick(observation_step);
                 return;
             }
             let Some((vehicle_definition, origin, candidates)) =
@@ -380,7 +384,12 @@ pub(super) fn observe_visible_tour_subjects_and_accumulate_rider_scores(
                 };
                 feedback.scope(|items| items.push((guest, emote, reaction)));
             }
-            cadence.ticks_until_next = next_observation;
+            cadence.0 = (next_observation > 0).then(|| {
+                Timer::new(
+                    observation_step.saturating_mul(next_observation),
+                    TimerMode::Once,
+                )
+            });
         },
     );
     let mut by_rider = EntityHashMap::<Vec<_>>::default();

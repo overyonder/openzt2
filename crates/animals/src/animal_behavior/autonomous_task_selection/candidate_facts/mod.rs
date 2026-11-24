@@ -125,12 +125,16 @@ pub(crate) struct AnimalCandidateFacts {
     diseased: Has<Disease>,
     rampaging: Has<Rampaging>,
     frozen: Has<Frozen>,
+    dead: Has<openzt2_zoo_state::animal_health::types::Dead>,
     velocity: Option<&'static Velocity>,
     habitat: Option<&'static HabitatMember>,
     pub(super) mate: Option<&'static AnimalMate>,
     reproduction: Option<&'static ReproductionNeed>,
     pub(super) escaped: Has<openzt2_zoo_state::animal_health::types::Escaped>,
     need_points: Option<&'static openzt2_zoo_state::animal_welfare::types::NeedPoints>,
+    training: Option<&'static openzt2_zoo_state::shows::performer_training::PerformerTraining>,
+    rehearsing: Has<openzt2_zoo_state::shows::running_show_types::AnimalPerformingShowTrick>,
+    authored_values: Option<&'static crate::animal_behavior::ScriptFloatAttributes>,
 }
 
 impl AnimalCandidateFactsItem<'_, '_> {
@@ -146,6 +150,10 @@ impl AnimalCandidateFactsItem<'_, '_> {
 
     pub(in crate::animal_behavior) fn is_adult(&self) -> bool {
         self.life_stage.0 == LifeStage::Adult
+    }
+
+    pub(super) fn is_dead(&self) -> bool {
+        self.dead
     }
 
     pub(super) fn habitat_entity(&self) -> Option<Entity> {
@@ -176,17 +184,30 @@ impl AnimalCandidateFactsItem<'_, '_> {
             BehaviorEntityStateEligibilityFact::Diseased => self.diseased,
             BehaviorEntityStateEligibilityFact::Rampaging => self.rampaging,
             BehaviorEntityStateEligibilityFact::Frozen => self.frozen,
-            BehaviorEntityStateEligibilityFact::Dead => false, // Caller excludes Dead actors.
+            BehaviorEntityStateEligibilityFact::Dead => self.dead,
             BehaviorEntityStateEligibilityFact::Moving => self.velocity?.0.length_squared() > 0.0,
             BehaviorEntityStateEligibilityFact::Swimming => *self.mode? == LocomotionMode::Swim,
             BehaviorEntityStateEligibilityFact::InHabitat => self.habitat.is_some(),
             BehaviorEntityStateEligibilityFact::HasMate => self.mate.is_some(),
+            BehaviorEntityStateEligibilityFact::InShow => self.rehearsing,
             _ => return None,
         })
     }
 
+    pub(super) fn age_q16(&self, tick: u64, ticks_per_day: u32) -> Option<i32> {
+        let age = self.age.filter(|_| ticks_per_day != 0)?;
+        Some(
+            (age.ticks_at(tick) as f64 * f64::from(Q16_ONE) / f64::from(ticks_per_day)).round()
+                as i32,
+        )
+    }
+
     /// Canonical wellness uses 0..1000; authored BFAI values are deprivation 0..100.
     pub(super) fn source_need(&self, name: AssetId) -> Option<(i32, bool)> {
+        if name == AssetId::from_key("breath") {
+            let value = self.authored_value(name);
+            return Some((value, value > 0));
+        }
         let needs = [
             self.hunger.0,
             self.thirst.0,
@@ -224,8 +245,27 @@ impl AnimalCandidateFactsItem<'_, '_> {
         fact: &BehaviorCandidateEligibilityFact,
         tick: u64,
         ticks_per_day: u32,
+        authored_types: &[AssetId],
     ) -> bool {
         use openzt2_zoo_state::locomotion::locomotion_types::SwimLayer;
+        if fact.fact_input
+            == BehaviorEligibilityFactInput::Relationship(
+                BehaviorRelationshipEligibilityFact::HasTrick,
+            )
+        {
+            return match fact.expected_value {
+                BehaviorEligibilityFactValue::SymbolThreshold { symbol, q16 } => {
+                    let score = self
+                        .training
+                        .map_or(0, |training| training.proficiency(symbol));
+                    i64::from(score) * i64::from(Q16_ONE) >= i64::from(q16)
+                }
+                BehaviorEligibilityFactValue::Symbol(trick) => self
+                    .training
+                    .is_some_and(|training| training.proficiency(trick) != 0),
+                BehaviorEligibilityFactValue::Q16(_) => false,
+            };
+        }
         let BehaviorEligibilityFactValue::Q16(expected) = fact.expected_value else {
             return false;
         };
@@ -276,10 +316,36 @@ impl AnimalCandidateFactsItem<'_, '_> {
                 }
             }
             BehaviorEligibilityFactInput::State(state) => {
-                let Some(value) = self.boolean_state(state) else {
-                    return false;
-                };
+                let value = self.boolean_state(state).unwrap_or_else(|| {
+                    let key = match state {
+                        BehaviorEntityStateEligibilityFact::Attacked => "b_attacked",
+                        BehaviorEntityStateEligibilityFact::Electric => "b_electric",
+                        BehaviorEntityStateEligibilityFact::InCloningCenter => "b_incloningcenter",
+                        BehaviorEntityStateEligibilityFact::NurseYoung => "b_nurseyoung",
+                        BehaviorEntityStateEligibilityFact::ScentEmitter => "b_scentemitter",
+                        BehaviorEntityStateEligibilityFact::Teleportable => "b_teleport",
+                        BehaviorEntityStateEligibilityFact::Talking => "b_talking",
+                        BehaviorEntityStateEligibilityFact::InTrainingArea => "issubjectinta",
+                        BehaviorEntityStateEligibilityFact::Floating => "isfloating",
+                        BehaviorEntityStateEligibilityFact::Elevated => "iselevated",
+                        _ => return false,
+                    };
+                    authored_types.contains(&AssetId::from_key(key))
+                });
                 if value { Q16_ONE } else { 0 }
+            }
+            BehaviorEligibilityFactInput::Taxonomy(taxonomy) => {
+                let key = match taxonomy {
+                    BehaviorTaxonomyEligibilityFact::Felidae => "b_felidae",
+                    BehaviorTaxonomyEligibilityFact::MarineAnimal => "b_marineanimal",
+                    BehaviorTaxonomyEligibilityFact::SmallPredator => "b_smallpredator",
+                    BehaviorTaxonomyEligibilityFact::MediumPredator => "b_mediumpredator",
+                    BehaviorTaxonomyEligibilityFact::LargePredator => "b_largepredator",
+                    BehaviorTaxonomyEligibilityFact::ExtraLargePredator => "b_xlargepredator",
+                    BehaviorTaxonomyEligibilityFact::MediumPrey => "b_mediumprey",
+                    BehaviorTaxonomyEligibilityFact::Biome => return false,
+                };
+                i32::from(authored_types.contains(&AssetId::from_key(key))) * Q16_ONE
             }
             BehaviorEligibilityFactInput::Condition(
                 BehaviorConditionEligibilityFact::NeedPointsGood,
@@ -288,11 +354,13 @@ impl AnimalCandidateFactsItem<'_, '_> {
                 BehaviorConditionEligibilityFact::NeedPointsBad,
             ) => (self.need_points().1 * Q16_ONE as f32).round() as i32,
             BehaviorEligibilityFactInput::Welfare(BehaviorWelfareEligibilityFact::Lifespan) => {
-                let Some(age) = self.age.filter(|_| ticks_per_day != 0) else {
+                let Some(age) = self.age_q16(tick, ticks_per_day) else {
                     return false;
                 };
-                (age.ticks_at(tick) as f64 * f64::from(Q16_ONE) / f64::from(ticks_per_day)).round()
-                    as i32
+                age
+            }
+            BehaviorEligibilityFactInput::Welfare(BehaviorWelfareEligibilityFact::Breath) => {
+                self.authored_value(AssetId::from_key("breath"))
             }
             BehaviorEligibilityFactInput::Welfare(need) => {
                 let wellness = match need {
@@ -304,6 +372,7 @@ impl AnimalCandidateFactsItem<'_, '_> {
                     BehaviorWelfareEligibilityFact::Social => self.social.0,
                     BehaviorWelfareEligibilityFact::Exercise => self.exercise.0,
                     BehaviorWelfareEligibilityFact::Stimulation => self.stimulation.0,
+                    BehaviorWelfareEligibilityFact::Space => self.environment.0,
                     BehaviorWelfareEligibilityFact::Health => self.health.0,
                     BehaviorWelfareEligibilityFact::Hygiene => self.hygiene.0,
                     BehaviorWelfareEligibilityFact::Reproduction => {
@@ -319,6 +388,16 @@ impl AnimalCandidateFactsItem<'_, '_> {
             _ => return false,
         };
         compare_q16(actual, expected, fact.comparison)
+    }
+
+    fn authored_value(&self, key: AssetId) -> i32 {
+        (self
+            .authored_values
+            .and_then(|values| values.0.get(&key))
+            .copied()
+            .unwrap_or_default()
+            * Q16_ONE as f32)
+            .round() as i32
     }
 }
 

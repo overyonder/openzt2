@@ -13,34 +13,68 @@ use openzt2_zoo_state::terrain::terrain_brush_types::{TerrainBrushKind, TerrainB
 use openzt2_zoo_state::construction::construction_interaction_types::CommitConstruction;
 use openzt2_zoo_state::construction::construction_interaction_types::ConstructionPreview;
 use openzt2_zoo_state::construction::construction_interaction_types::PlacementValidity;
+use openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::ConstructionTool;
 use openzt2_zoo_state::construction::construction_transaction_types::ConstructionFeedbackOrigin;
 use openzt2_zoo_state::construction::construction_transaction_types::EditTransaction;
 use openzt2_zoo_state::construction::construction_transaction_types::PrepareConstruction;
 use openzt2_zoo_state::construction::construction_transaction_types::TransactionState;
 
 #[derive(Component)]
-pub(crate) struct SubmittedPreview<T: Component + Clone>(pub T);
+pub struct SubmittedConstruction {
+    pub source: Entity,
+    pub tool: ConstructionTool,
+    pub preview: ConstructionPreview,
+}
 
-pub(crate) fn capture_confirmed_preview<T: Component + Clone>(
-    mut confirmations: MessageReader<CommitConstruction>,
+#[derive(Component)]
+pub struct SubmittedPreview<T: Component + Clone>(pub T);
+
+#[derive(SystemSet, Clone, Debug, Eq, PartialEq, Hash)]
+pub struct ConstructionSubmissionSet;
+
+pub fn capture_submitted_preview<T: Component + Clone>(
+    submissions: Query<(Entity, &SubmittedConstruction), Added<SubmittedConstruction>>,
     previews: Query<&T>,
     mut commands: Commands,
 ) {
-    for confirmation in confirmations.read() {
-        if let Ok(preview) = previews.get(confirmation.preview) {
+    for (transaction, submission) in submissions {
+        if let Ok(preview) = previews.get(submission.source) {
             commands
-                .entity(confirmation.preview)
-                .try_insert_if_new(SubmittedPreview(preview.clone()));
+                .entity(transaction)
+                .insert(SubmittedPreview(preview.clone()));
         }
     }
 }
 
-pub(crate) fn clear_confirmed_previews<T: Component + Clone>(
-    previews: Query<Entity, With<SubmittedPreview<T>>>,
+pub(super) fn prepare_submitted_construction(
+    submitted: Query<(Entity, &SubmittedConstruction), Added<SubmittedConstruction>>,
+    mut requests: MessageWriter<PrepareConstruction>,
+) {
+    for (transaction, submission) in submitted {
+        requests.write(PrepareConstruction {
+            transaction,
+            preview: submission.source,
+        });
+    }
+}
+
+pub(super) fn clear_submitted_construction(
+    submitted: Query<Entity, With<SubmittedConstruction>>,
     mut commands: Commands,
 ) {
-    for preview in &previews {
-        commands.entity(preview).try_remove::<SubmittedPreview<T>>();
+    for transaction in submitted {
+        commands
+            .entity(transaction)
+            .remove::<SubmittedConstruction>();
+    }
+}
+
+pub fn clear_submitted_preview<T: Component + Clone>(
+    submitted: Query<Entity, With<SubmittedPreview<T>>>,
+    mut commands: Commands,
+) {
+    for transaction in submitted {
+        commands.entity(transaction).remove::<SubmittedPreview<T>>();
     }
 }
 
@@ -50,32 +84,26 @@ pub(crate) fn clear_confirmed_previews<T: Component + Clone>(
 pub(super) fn begin_construction_transaction_from_valid_preview(
     mut commands: Commands,
     mut construction_commit_requests: MessageReader<CommitConstruction>,
+    tool: Res<ConstructionTool>,
     previews: Query<(
         &ConstructionPreview,
         &WorldMember,
         Option<&TerrainBrushPreview>,
-        Option<&SubmittedPreview<ConstructionPreview>>,
     )>,
-    submitted: Query<Entity, With<SubmittedPreview<ConstructionPreview>>>,
     pending_transactions: Query<(), With<ConstructionActive>>,
     mut world_histories: Query<&mut WorldConstructionHistory, With<WorldRoot>>,
-    mut construction_preparation_requests: MessageWriter<PrepareConstruction>,
     primary_windows: Query<&Window, With<PrimaryWindow>>,
 ) {
     if !pending_transactions.is_empty() {
         construction_commit_requests.clear();
         return;
     }
-    let requests = construction_commit_requests
-        .read()
-        .map(|request| request.preview)
-        .collect::<Vec<_>>();
-    for preview_entity in requests.into_iter().chain(&submitted) {
-        let Ok((preview, world_member, terrain_brush, submission)) = previews.get(preview_entity)
-        else {
+    let mut requests = construction_commit_requests.read();
+    for request in requests.by_ref() {
+        let preview_entity = request.preview;
+        let Ok((preview, world_member, terrain_brush)) = previews.get(preview_entity) else {
             continue;
         };
-        let preview = submission.map_or(preview, |submitted| &submitted.0);
         if !matches!(preview.validity, PlacementValidity::Valid { .. }) {
             continue;
         }
@@ -92,6 +120,11 @@ pub(super) fn begin_construction_transaction_from_valid_preview(
                 cost: Money(0),
             },
             Preparing,
+            SubmittedConstruction {
+                source: preview_entity,
+                tool: *tool,
+                preview: preview.clone(),
+            },
             *world_member,
             match terrain_brush.map(|brush| brush.kind) {
                 None => GeneralEconomyTransaction::Build,
@@ -118,11 +151,7 @@ pub(super) fn begin_construction_transaction_from_valid_preview(
                 confirming_pointer_screen_position,
             ));
         }
-        let transaction = transaction.id();
-        construction_preparation_requests.write(PrepareConstruction {
-            transaction,
-            preview: preview_entity,
-        });
         break;
     }
+    requests.for_each(drop);
 }

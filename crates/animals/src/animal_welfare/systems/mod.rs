@@ -129,22 +129,16 @@ pub(crate) fn initialize_animal_needs(
             .map(|need| need.cessation_wellness_threshold.unwrap_or(1000))
             .sum::<u16>()
             / 10;
-        let mut trigger_state = NeedTriggerState::default();
+        let mut trigger_mask = 0;
         for (index, need) in needs.iter().enumerate() {
-            trigger_state.observe(
-                index,
-                initial[index],
-                need.trigger_wellness_threshold,
-                need.cessation_wellness_threshold,
-            );
+            if need.trigger_wellness_threshold.is_some_and(|threshold| initial[index] <= i32::from(threshold) * Q16_ONE) {
+                trigger_mask |= 1 << index;
+            }
         }
         if let (Some(row), Some(value)) = (reproduction_row, reproduction) {
-            trigger_state.observe(
-                REPRODUCTION_TRIGGER_INDEX,
-                value,
-                row.trigger_wellness_threshold,
-                row.cessation_wellness_threshold,
-            );
+            if row.trigger_wellness_threshold.is_some_and(|threshold| value <= i32::from(threshold) * Q16_ONE) {
+                trigger_mask |= 1 << REPRODUCTION_TRIGGER_INDEX;
+            }
             commands.entity(entity).insert(ReproductionNeed(value));
         }
         commands.entity(entity).insert((
@@ -161,7 +155,7 @@ pub(crate) fn initialize_animal_needs(
         commands.entity(entity).insert((
             HygieneNeed(initial[9]),
             BathroomNeed(initial[10]),
-            AnimalNeedLatchBundle::from_saved_mask(trigger_state.0),
+            AnimalNeedLatchBundle::from_saved_mask(trigger_mask),
             suitability,
             AnimalWelfare(value),
             CumulativeNeedPoints::default(),

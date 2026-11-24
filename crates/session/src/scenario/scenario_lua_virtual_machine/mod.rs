@@ -18,46 +18,31 @@ use super::{
         convert_lua_rule_result_to_objective_status,
         install_scenario_game_query_and_command_functions,
     },
+    scenario_lua_snapshot_types::{saved_scenario_action_key, SAVED_SCENARIO_ACTION_ARGUMENTS},
     scenario_lua_types::{
-        ScenarioLuaQueryFacts, ScenarioLuaRuntimeOwner, ScenarioLuaScriptResult,
-        ScenarioLuaVirtualMachine, ScenarioLuaVirtualMachineContexts,
+        ScenarioLuaContext, ScenarioLuaQueryFacts, ScenarioLuaScriptResult,
+        ScenarioLuaVirtualMachine,
     },
 };
 
-impl ScenarioLuaVirtualMachineContexts {
-    pub(crate) fn remove_owner(&mut self, owner: Entity) {
-        self.virtual_machines
-            .remove(&ScenarioLuaRuntimeOwner::Scenario(owner));
-    }
-
-    pub(super) fn clear_finished_challenge_rule_state(
-        &mut self,
-        owner: Entity,
-    ) -> mlua::Result<()> {
-        let Some(context) = self
-            .virtual_machines
-            .get(&ScenarioLuaRuntimeOwner::Scenario(owner))
-        else {
+impl ScenarioLuaContext {
+    pub(super) fn clear_finished_challenge_rule_state(&mut self) -> mlua::Result<()> {
+        let Some(context) = &self.0 else {
             return Ok(());
         };
         let globals = context.lua_virtual_machine.globals();
         globals.set("__openzt2_rule_arguments", Value::Nil)?;
+        globals.set(SAVED_SCENARIO_ACTION_ARGUMENTS, Value::Nil)?;
         if let Some(state) = globals.get::<Option<mlua::Table>>("__openzt2_scenario_state")? {
             state.set("challenge", Value::Nil)?;
         }
-        // Other authored globals, including one-shot challenge eligibility,
-        // survive. Only this rule instance's argument/response lifetime ends.
         Ok(())
     }
 
-    pub(super) fn set_challenge_response(
-        &mut self,
-        owner: Entity,
-        accepted: bool,
-    ) -> mlua::Result<()> {
+    pub(super) fn set_challenge_response(&mut self, accepted: bool) -> mlua::Result<()> {
         let context = self
-            .virtual_machines
-            .get(&ScenarioLuaRuntimeOwner::Scenario(owner))
+            .0
+            .as_ref()
             .ok_or_else(|| mlua::Error::runtime("challenge has no running Lua context"))?;
         let state: mlua::Table = context
             .lua_virtual_machine
@@ -66,27 +51,9 @@ impl ScenarioLuaVirtualMachineContexts {
         state.set("challenge", if accepted { "accept" } else { "decline" })
     }
 
-    pub(super) fn invalidate_changed_scenario_documents_and_lua_scripts(
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn execute(
         &mut self,
-        changed_scenario_document_asset_identifiers: &BTreeSet<
-            bevy::asset::AssetId<WorldScenarioDocumentAsset>,
-        >,
-        changed_lua_script_asset_identifiers: &BTreeSet<bevy::asset::AssetId<LuaScriptAsset>>,
-    ) {
-        self.virtual_machines
-            .retain(|_, scenario_lua_virtual_machine| {
-                scenario_lua_virtual_machine
-                    .scenario_document_asset_identifier
-                    .is_none_or(|id| !changed_scenario_document_asset_identifiers.contains(&id))
-                    && scenario_lua_virtual_machine
-                        .loaded_lua_script_asset_identifiers
-                        .is_disjoint(changed_lua_script_asset_identifiers)
-            });
-    }
-
-    pub(super) fn execute_scenario_lua_script_binding(
-        &mut self,
-        owner: ScenarioLuaRuntimeOwner,
         scenario_document_asset_identifier: Option<
             bevy::asset::AssetId<WorldScenarioDocumentAsset>,
         >,
@@ -94,35 +61,29 @@ impl ScenarioLuaVirtualMachineContexts {
         lua_script_asset_handle: &Handle<LuaScriptAsset>,
         lua_script_assets: &Assets<LuaScriptAsset>,
         lua_script_path_index: &LuaScriptArchivePathIndex,
-        scenario_script_binding: &ScenarioScriptBinding,
-        scenario_lua_query_facts: ScenarioLuaQueryFacts<'_>,
-        authored_arguments: Option<&[&str]>,
+        binding: &ScenarioScriptBinding,
+        facts: ScenarioLuaQueryFacts<'_>,
+        arguments: Option<&[&str]>,
     ) -> mlua::Result<ScenarioLuaScriptResult> {
-        let context =
-            self.virtual_machines
-                .entry(owner)
-                .or_insert_with(|| ScenarioLuaVirtualMachine {
-                    executed_source_paths: Vec::new(),
-                    lua_virtual_machine: Lua::new(),
-                    scenario_document_asset_identifier,
-                    loaded_lua_script_asset_identifiers: BTreeSet::new(),
-                });
-        if context.scenario_document_asset_identifier != scenario_document_asset_identifier {
-            *context = ScenarioLuaVirtualMachine {
-                executed_source_paths: Vec::new(),
-                lua_virtual_machine: Lua::new(),
-                scenario_document_asset_identifier,
-                loaded_lua_script_asset_identifiers: BTreeSet::new(),
-            };
+        if self.0.as_ref().is_some_and(|context| {
+            context.scenario_document_asset_identifier != scenario_document_asset_identifier
+        }) {
+            self.0 = None;
         }
+        let context = self.0.get_or_insert_with(|| ScenarioLuaVirtualMachine {
+            executed_source_paths: Vec::new(),
+            lua_virtual_machine: Lua::new(),
+            scenario_document_asset_identifier,
+            loaded_lua_script_asset_identifiers: BTreeSet::new(),
+        });
         context.execute_scenario_lua_script_binding(
             lua_script_source_path,
             lua_script_asset_handle,
             lua_script_assets,
             lua_script_path_index,
-            scenario_script_binding,
-            scenario_lua_query_facts,
-            authored_arguments,
+            binding,
+            facts,
+            arguments,
         )
     }
 }
@@ -222,6 +183,18 @@ impl ScenarioLuaVirtualMachine {
                 // Success and Failure calls. Authored scripts store fields such as
                 // `data.accept` here across ticks; calling with nil loses that state.
                 let globals = self.lua_virtual_machine.globals();
+                if let Some(arguments) =
+                    globals.get::<Option<mlua::Table>>(SAVED_SCENARIO_ACTION_ARGUMENTS)?
+                {
+                    let key = self
+                        .lua_virtual_machine
+                        .create_string(saved_scenario_action_key(scenario_script_binding).0)?;
+                    if let Some(argument) = arguments.raw_get::<Option<mlua::Table>>(key)? {
+                        return Ok(convert_lua_rule_result_to_objective_status(
+                            scenario_lua_function.call::<Value>(argument)?,
+                        ));
+                    }
+                }
                 let arguments = globals
                     .get::<Option<mlua::Table>>("__openzt2_rule_arguments")?
                     .unwrap_or(self.lua_virtual_machine.create_table()?);
@@ -274,8 +247,7 @@ impl ScenarioLuaVirtualMachine {
 }
 
 pub(super) fn execute_loaded_scenario_lua_script_binding(
-    scenario_lua_virtual_machine_contexts: &mut ScenarioLuaVirtualMachineContexts,
-    owner: Entity,
+    context: &mut ScenarioLuaContext,
     selected_scenario_document: &ScenarioDocument,
     scenario_document_assets: &Assets<WorldScenarioDocumentAsset>,
     lua_script_assets: &Assets<LuaScriptAsset>,
@@ -294,8 +266,7 @@ pub(super) fn execute_loaded_scenario_lua_script_binding(
                 scenario_script_binding.script
             ))
         })?;
-    scenario_lua_virtual_machine_contexts.execute_scenario_lua_script_binding(
-        ScenarioLuaRuntimeOwner::Scenario(owner),
+    context.execute(
         Some(selected_scenario_document.0.id()),
         lua_script_source_path,
         lua_script_asset_handle,

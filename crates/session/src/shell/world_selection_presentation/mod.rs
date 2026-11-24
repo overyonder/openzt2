@@ -1,4 +1,7 @@
-use bevy::prelude::*;
+use bevy::{
+    ecs::{entity::EntityHashSet, relationship::RelationshipTarget},
+    prelude::*,
+};
 use openzt2_game_data::ui_document::{
     action::shell_navigation::UiShellAction, node_property_binding::*,
 };
@@ -9,8 +12,10 @@ use openzt2_game_assets::world_scenario::world_scenario_asset_set_state_and_borr
 use openzt2_game_assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset;
 use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::UiListRow;
 use openzt2_interface_state::ui::authored_ui_action_projection_components::UiShellActions;
-use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentRoot;
+use openzt2_interface_state::ui::authored_ui_node_projection_components::{
+    UiDocumentMembers, UiDocumentOwner,
+};
 use openzt2_interface_state::ui::authored_ui_selection_state::UiSelected;
 use openzt2_ui::authored_globe_presentation_types::UiGlobeBiomeModel;
 use openzt2_ui::authored_globe_presentation_types::UiGlobeMarkerVisual;
@@ -26,21 +31,50 @@ use super::world_selection_presentation_types::{
 
 /// Selects the toggle matching the current catalogue filter.
 pub(super) fn project_selected_world_catalogue_filter_into_authored_location_toggle(
-    filters: Query<&SelectedWorldCatalogueFilter>,
+    filters: Query<Ref<SelectedWorldCatalogueFilter>>,
     documents: Res<Assets<UiDocumentAsset>>,
-    roots: Query<(&UiDocumentRoot, &ChildOf)>,
+    roots: Query<(Ref<UiDocumentRoot>, &ChildOf, Option<&UiDocumentMembers>)>,
+    projected: Query<
+        Entity,
+        (
+            With<UiShellActions>,
+            Or<(
+                Changed<UiShellActions>,
+                Added<UiSelected>,
+                Changed<UiDocumentOwner>,
+            )>,
+        ),
+    >,
     mut action_nodes: Query<
         (&UiShellActions, &UiDocumentOwner, &mut UiSelected),
         Without<WorldChoiceView>,
     >,
 ) {
-    for (actions, document_owner, mut selected) in &mut action_nodes {
+    let mut affected: EntityHashSet = projected.iter().collect();
+    for (root, owner, members) in &roots {
+        if let Some(members) = members.filter(|_| {
+            documents.is_changed()
+                || root.is_changed()
+                || filters
+                    .get(owner.parent())
+                    .is_ok_and(|filter| filter.is_changed())
+        }) {
+            affected.extend(members.iter());
+        }
+    }
+    for entity in affected {
+        let Ok((actions, document_owner, mut selected)) = action_nodes.get_mut(entity) else {
+            continue;
+        };
         let Some((document, filter)) =
-            roots.get(document_owner.0).ok().and_then(|(root, owner)| {
-                documents
-                    .get(&root.document)
-                    .zip(filters.get(owner.parent()).ok())
-            })
+            roots
+                .get(document_owner.0)
+                .ok()
+                .and_then(|(root, owner, _)| {
+                    documents
+                        .get(&root.document)
+                        .zip(filters.get(owner.parent()).ok())
+                })
         else {
             continue;
         };
@@ -49,10 +83,10 @@ pub(super) fn project_selected_world_catalogue_filter_into_authored_location_tog
             .filter_map(|record| match &record.action {
                 UiShellAction::FilterWorldChoicesToLocation { world_location } => {
                     Some(if *world_location == AssetId::default() {
-                        matches!(filter, SelectedWorldCatalogueFilter::All)
+                        matches!(*filter, SelectedWorldCatalogueFilter::All)
                     } else {
                         matches!(
-                            filter,
+                            &*filter,
                             SelectedWorldCatalogueFilter::BiomeLocationGroup(selected)
                                 if selected == world_location
                         )
@@ -61,7 +95,7 @@ pub(super) fn project_selected_world_catalogue_filter_into_authored_location_tog
                 UiShellAction::FilterWorldChoicesToExpansionPack {
                     expansion_pack_identifier,
                 } => Some(matches!(
-                    filter,
+                    &*filter,
                     SelectedWorldCatalogueFilter::ExpansionPack(selected)
                         if selected == expansion_pack_identifier
                 )),
@@ -69,10 +103,8 @@ pub(super) fn project_selected_world_catalogue_filter_into_authored_location_tog
             })
             .next();
         if let Some(matches_selected_filter) = matches_selected_filter {
-            if selected.0 != matches_selected_filter {
-                selected.0 = matches_selected_filter;
-            }
             // Reflecting shell state must not replay the toggle's authored on/off actions.
+            selected.set_if_neq(UiSelected(matches_selected_filter));
         }
     }
 }
@@ -175,6 +207,7 @@ pub(super) fn show_only_selected_secondary_globe_biome_model(
 /// Updates choice highlights and details after the selected world changes.
 pub(super) fn project_selected_world_facts_into_authored_map_selection_controls(
     params: WorldSelectionParams,
+    mut main_mode_cash: super::main_mode_cash::MainModeStartingCash,
 ) {
     let WorldSelectionParams {
         mut commands,
@@ -199,7 +232,9 @@ pub(super) fn project_selected_world_facts_into_authored_map_selection_controls(
         active,
         localizations,
     } = params;
-    if !selection.is_changed()
+    let starting_cash_changed = main_mode_cash.changed();
+    if !starting_cash_changed
+        && !selection.is_changed()
         && !profiles.is_changed()
         && !active_catalogue.is_changed()
         && !catalogues.is_changed()
@@ -251,20 +286,18 @@ pub(super) fn project_selected_world_facts_into_authored_map_selection_controls(
             .unwrap_or("")
     };
     let starting_cash = selected.and_then(|(catalogue, map, scenario)| {
-        scenario
-            .map(|scenario| scenario.starting_cash_cents)
-            .or_else(|| {
-                if selection.mode == Some(WorldSessionMode::Challenge) {
-                    Some(3_000_000)
-                } else {
-                    catalogue
-                        .start(AssetId(map.starting_zoo.0))
-                        .map(|start| start.cash_cents)
-                }
-            })
-            .map(|cash| {
-                format_whole_currency_from_cents(selection.starting_cash_cents.unwrap_or(cash))
-            })
+        let cash = match selection.mode {
+            Some(WorldSessionMode::Challenge) => selection
+                .starting_cash_cents
+                .or_else(|| main_mode_cash.authored_cents()),
+            Some(WorldSessionMode::Campaign) => {
+                scenario.map(|scenario| scenario.starting_cash_cents)
+            }
+            _ => catalogue
+                .start(map.starting_zoo)
+                .map(|start| start.cash_cents),
+        };
+        cash.map(format_whole_currency_from_cents)
     });
     for (binding, mut visibility) in &mut visible_bindings {
         let visible = match binding.0 {

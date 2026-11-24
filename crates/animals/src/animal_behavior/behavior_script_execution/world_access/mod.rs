@@ -1,12 +1,21 @@
 //! World state that authored behavior scripts read and change through
 //! `queryObject` managers and entity tables, such as `CompostPoo.lua`.
 
-use bevy::{ecs::{entity::EntityHashMap, relationship::RelationshipTarget, system::SystemParam}, platform::collections::HashMap, prelude::*};
+use bevy::{ecs::{entity::EntityHashMap, query::QueryData, relationship::RelationshipTarget, system::SystemParam}, platform::collections::HashMap, prelude::*};
 use openzt2_game_assets::source_document::source_document_semantic_name::canonicalize_source_document_record_key;
+use openzt2_game_assets::localization::{
+    localization_asset_types::LocalizationAsset,
+    localization_precedence_index::LocalizationPrecedenceIndex,
+};
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use openzt2_game_data::AssetId;
+use openzt2_game_data::{AssetId, species::NeedKind};
 use openzt2_world_state::world_spawn::world_membership_types::{DefinitionId, WorldMember};
+use openzt2_world_state::world_spawn::{
+    persistent_id_types::PersistentIdAllocator, prefab_presentation_types::PrefabPresentation,
+};
+use openzt2_zoo_state::placement::object_placement_definition_queries::object_placement_prefab_identifier;
+use openzt2_zoo_state::placement::placement_surface_site::PlacementSiteQueries;
 use openzt2_world_state::world_spawn::physical_presentation_state::PhysicalPresentationRequest;
 use openzt2_world_state::world_spawn::world_entity_crating::WorldEntityIsCrated;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorKilledTarget;
@@ -19,6 +28,11 @@ use openzt2_game_assets::species::species_asset_types::{SpeciesAsset, SpeciesAss
 use openzt2_zoo_state::animal_lifecycle::types::{AnimalLifeStage, AnimalSex, SpeciesHandle};
 use openzt2_zoo_state::animal_behavior::animal_lineage::{AnimalFather, AnimalLineage, AnimalMate, AnimalMother};
 use openzt2_zoo_state::animal_health::types::Disease;
+use openzt2_zoo_state::animal_welfare::types::{
+    BathroomNeed, EnvironmentNeed, ExerciseNeed, HealthNeed, Hunger, HygieneNeed, MAX_NEED_Q16,
+    NeedPoints, PrivacyNeed, Q16_ONE, ReproductionNeed, RestNeed, SetAnimalNeed, SocialNeed,
+    StimulationNeed, Thirst,
+};
 use openzt2_zoo_state::maintenance::maintenance_types::CompostPooLevel;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 
@@ -30,9 +44,11 @@ pub(super) enum BehaviorScriptEffect {
     Presentation(PhysicalPresentationRequest),
     Crate(Entity),
     Float(Entity, ScriptFloatAttribute, f32),
+    Need(SetAnimalNeed),
     Income(f64),
     Mate(Entity, Option<Entity>),
     Kinship(Entity, AssetId, Option<Entity>),
+    Token(Entity, AssetId, Option<Entity>),
     Particle(super::script_particles::ScriptParticle),
     Disease(Entity, DiseaseAttribute),
     BirthMotherName(Option<String>),
@@ -59,12 +75,30 @@ struct ScriptKinshipRecipients(Vec<Entity>);
 struct ScriptKinshipRole(AssetId);
 
 #[derive(Component)]
-struct BreedingCenterEndangeredBirths(f32);
+pub struct BreedingCenterEndangeredBirths(pub f32);
+
+pub(super) struct BehaviorScriptPlacement {
+    pub(super) kind: String,
+    pub(super) position: Vec3,
+    pub(super) rotation_degrees: f32,
+    pub(super) ignore_land_collision: bool,
+    pub(super) ignore_water_adjacent: bool,
+}
+
+pub(super) struct ScriptPlacedObject {
+    pub(super) entity: Entity,
+    pub(super) binder: String,
+    pub(super) position: Vec3,
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum ScriptFloatAttribute {
     CompostPoo,
     EndangeredBirths,
+    GoodNeedPoints,
+    BadNeedPoints,
+    AnimalNeed(NeedKind),
+    Authored(AssetId),
 }
 
 impl ScriptFloatAttribute {
@@ -72,9 +106,48 @@ impl ScriptFloatAttribute {
         match name {
             "f_PooLevel" => Some(Self::CompostPoo),
             "f_TotalEndangeredBirths" => Some(Self::EndangeredBirths),
-            _ => None,
+            "f_needPointsGood" => Some(Self::GoodNeedPoints),
+            "f_needPointsBad" => Some(Self::BadNeedPoints),
+            "hunger" => Some(Self::AnimalNeed(NeedKind::Hunger)),
+            "thirst" => Some(Self::AnimalNeed(NeedKind::Thirst)),
+            "rest" => Some(Self::AnimalNeed(NeedKind::Rest)),
+            "privacy" => Some(Self::AnimalNeed(NeedKind::Privacy)),
+            "social" => Some(Self::AnimalNeed(NeedKind::Social)),
+            "exercise" => Some(Self::AnimalNeed(NeedKind::Exercise)),
+            "stimulation" => Some(Self::AnimalNeed(NeedKind::Stimulation)),
+            "environment" => Some(Self::AnimalNeed(NeedKind::Environment)),
+            "health" => Some(Self::AnimalNeed(NeedKind::Health)),
+            "hygiene" => Some(Self::AnimalNeed(NeedKind::Hygiene)),
+            "bathroom" => Some(Self::AnimalNeed(NeedKind::Bathroom)),
+            "reproduction" => Some(Self::AnimalNeed(NeedKind::Reproduction)),
+            _ => name.starts_with("f_").then(|| Self::Authored(
+                AssetId::from_key(&canonicalize_source_document_record_key(name)),
+            )),
         }
     }
+}
+
+#[derive(Component)]
+pub struct ScriptFloatAttributes(pub HashMap<AssetId, f32>);
+
+#[derive(QueryData)]
+struct ScriptNeedFacts {
+    hunger: Option<&'static Hunger>,
+    thirst: Option<&'static Thirst>,
+    rest: Option<&'static RestNeed>,
+    privacy: Option<&'static PrivacyNeed>,
+    social: Option<&'static SocialNeed>,
+    exercise: Option<&'static ExerciseNeed>,
+    stimulation: Option<&'static StimulationNeed>,
+    environment: Option<&'static EnvironmentNeed>,
+    health: Option<&'static HealthNeed>,
+    hygiene: Option<&'static HygieneNeed>,
+    bathroom: Option<&'static BathroomNeed>,
+    reproduction: Option<&'static ReproductionNeed>,
+}
+
+pub(super) fn need_distress(wellness: i32) -> f32 {
+    (MAX_NEED_Q16 - wellness.clamp(0, MAX_NEED_Q16)) as f32 / (10 * Q16_ONE) as f32
 }
 
 /// Structural changes only, visible to later scripts before Commands apply.
@@ -115,6 +188,12 @@ pub(super) enum DiseaseAttribute {
 pub(in crate::animal_behavior) struct BehaviorScriptWorldAccess<'w, 's> {
     definition_assets: Res<'w, Assets<WorldDefinitionAsset>>,
     definitions: Res<'w, WorldDefinitions>,
+    localization: Option<Res<'w, LocalizationPrecedenceIndex>>,
+    localization_assets: Option<Res<'w, Assets<LocalizationAsset>>>,
+    biomes: openzt2_zoo_state::animal_behavior::behavior_candidate_selection::BehaviorTargetBiome<'w, 's>,
+    placement: PlacementSiteQueries<'w, 's>,
+    ground: openzt2_zoo_state::terrain::dry_surface_eligibility::DrySurfaceEligibility<'w, 's>,
+    ids: Query<'w, 's, &'static mut PersistentIdAllocator>,
     objects: Query<
         'w,
         's,
@@ -127,12 +206,17 @@ pub(in crate::animal_behavior) struct BehaviorScriptWorldAccess<'w, 's> {
     >,
     poo_levels: Query<'w, 's, &'static mut CompostPooLevel>,
     endangered_births: Query<'w, 's, &'static mut BreedingCenterEndangeredBirths>,
+    need_points: Query<'w, 's, &'static mut NeedPoints>,
+    script_floats: Query<'w, 's, &'static mut ScriptFloatAttributes>,
+    needs: Query<'w, 's, ScriptNeedFacts, With<openzt2_zoo_state::animal_lifecycle::types::Animal>>,
     killed: Query<'w, 's, &'static BehaviorKilledTarget>,
     mates: Query<'w, 's, &'static AnimalMate>,
     diseases: Query<'w, 's, &'static mut Disease>,
     clock: Single<'w, 's, &'static ZooClock>,
     tokens: Query<'w, 's, &'static BehaviorSelfToken>,
     token_owners: Query<'w, 's, &'static Children>,
+    habitat_members: Query<'w, 's, &'static openzt2_zoo_state::habitat::habitat_types::HabitatMember>,
+    habitats: Query<'w, 's, &'static openzt2_zoo_state::habitat::habitat_types::HabitatSummary>,
     lineage: AnimalLineage<'w, 's>,
     kinship: Query<'w, 's, &'static ScriptKinshipSources>,
     kinship_links: Query<'w, 's, (&'static ScriptKinshipRole, &'static ScriptKinshipRecipient)>,
@@ -160,7 +244,46 @@ impl BehaviorScriptWorldAccess<'_, '_> {
                 .endangered_births
                 .get(entity)
                 .map_or(0.0, |value| value.0),
+            ScriptFloatAttribute::GoodNeedPoints => self.need_points.get(entity).map_or(0.0, |points| points.good),
+            ScriptFloatAttribute::BadNeedPoints => self.need_points.get(entity).map_or(0.0, |points| points.bad),
+            ScriptFloatAttribute::AnimalNeed(need) => self.need(entity, need).map_or(0.0, need_distress),
+            ScriptFloatAttribute::Authored(attribute) => self.script_floats.get(entity).ok()
+                .and_then(|values| values.0.get(&attribute).copied())
+                .or_else(|| self.authored_float(entity, attribute)).unwrap_or_default(),
         }
+    }
+
+    fn need(&self, entity: Entity, kind: NeedKind) -> Option<i32> {
+        let needs = self.needs.get(entity).ok()?;
+        match kind {
+            NeedKind::Hunger => needs.hunger.map(|value| value.0),
+            NeedKind::Thirst => needs.thirst.map(|value| value.0),
+            NeedKind::Rest => needs.rest.map(|value| value.0),
+            NeedKind::Privacy => needs.privacy.map(|value| value.0),
+            NeedKind::Social => needs.social.map(|value| value.0),
+            NeedKind::Exercise => needs.exercise.map(|value| value.0),
+            NeedKind::Stimulation => needs.stimulation.map(|value| value.0),
+            NeedKind::Environment => needs.environment.map(|value| value.0),
+            NeedKind::Health => needs.health.map(|value| value.0),
+            NeedKind::Hygiene => needs.hygiene.map(|value| value.0),
+            NeedKind::Bathroom => needs.bathroom.map(|value| value.0),
+            NeedKind::Reproduction => needs.reproduction.map(|value| value.0),
+        }
+    }
+
+    pub(super) fn request_need(&self, animal: Entity, need: NeedKind, distress: f32) -> Option<SetAnimalNeed> {
+        self.need(animal, need)?;
+        let distress = distress.clamp(0.0, 100.0);
+        let value_q16 = ((1000.0 - distress * 10.0) * Q16_ONE as f32).round() as i32;
+        Some(SetAnimalNeed { animal, need, value_q16 })
+    }
+
+    pub(super) fn authored_float(&self, entity: Entity, attribute: AssetId) -> Option<f32> {
+        let (_, definition, _, _) = self.objects.get(entity).ok()?;
+        let object = self.definitions.get(&self.definition_assets)?.find_object(definition.0)?;
+        object.authored_runtime.numeric_behavior_properties.iter().find_map(|(key, value)| {
+            (*key == attribute).then_some(*value)
+        })
     }
 
     pub(super) fn set_existing_float(
@@ -192,17 +315,89 @@ impl BehaviorScriptWorldAccess<'_, '_> {
                         .set_if_neq(value)
                 })
                 .is_some(),
+            ScriptFloatAttribute::GoodNeedPoints | ScriptFloatAttribute::BadNeedPoints => self.need_points.get_mut(entity).ok().map(|points| {
+                points.map_unchanged(|points| match attribute {
+                    ScriptFloatAttribute::GoodNeedPoints => &mut points.good,
+                    _ => &mut points.bad,
+                }).set_if_neq(value);
+            }).is_some(),
+            ScriptFloatAttribute::AnimalNeed(_) => false,
+            ScriptFloatAttribute::Authored(attribute) => {
+                let Ok(mut values) = self.script_floats.get_mut(entity) else { return false; };
+                if values.0.get(&attribute) != Some(&value) {
+                    values.0.insert(attribute, value);
+                }
+                true
+            }
         }
     }
 
     /// `BFG_GET_ENTITIES`: live world objects of one authored binder type.
-    pub(super) fn entities_of_type(&self, binder_type: &str) -> Vec<Entity> {
+    pub(super) fn entities_of_type(&self, actor: Entity, binder_type: &str) -> Vec<Entity> {
+        let Ok((_, _, _, world)) = self.objects.get(actor) else {
+            return Vec::new();
+        };
         let definition = AssetId::from_key(&canonicalize_source_document_record_key(binder_type));
+        let definitions = self.definitions.get(&self.definition_assets);
         self.objects
             .iter()
-            .filter(|(_, candidate, _, _)| candidate.0 == definition)
+            .filter(|(_, candidate, _, member)| member.root == world.root && (candidate.0 == definition
+                || definitions.and_then(|definitions| definitions.find_object(candidate.0))
+                    .is_some_and(|object| object.behavior_type_identifiers.contains(&definition))))
             .map(|(entity, ..)| entity)
             .collect()
+    }
+
+    pub(super) fn primary_biome(&self, entity: Entity) -> Option<String> {
+        let (_, definition, pose, world) = self.objects.get(entity).ok()?;
+        let definitions = self.definitions.get(&self.definition_assets)?;
+        let biome = definitions.find_object(definition.0)
+            .and_then(|object| object.biomes.first().copied())
+            .or_else(|| self.biomes.at(world.root, pose.translation()))?;
+        if let Some((_, suffix)) = definitions.object_binder_type(definition.0).and_then(|binder| binder.rsplit_once('_')) {
+            if AssetId::from_key(&suffix.to_ascii_lowercase()) == biome {
+                return Some(format!("Biome_{suffix}"));
+            }
+        }
+        let definition = definitions.find_biome(biome)?;
+        self.localization.as_ref()?
+            .borrow_loaded_localization_view(self.localization_assets.as_ref()?)?
+            .find_plain_localized_text(definition.name_key)
+            .map(|name| format!("Biome_{name}"))
+    }
+
+    pub(super) fn place_object(
+        &mut self,
+        commands: &mut Commands,
+        actor: Entity,
+        request: BehaviorScriptPlacement,
+    ) -> Option<ScriptPlacedObject> {
+        let (_, _, _, world) = self.objects.get(actor).ok()?;
+        let definitions = self.definitions.get(&self.definition_assets)?;
+        let kind = AssetId::from_key(&canonicalize_source_document_record_key(&request.kind));
+        let object = definitions.find_object(kind)?;
+        let placeable = definitions.find_placeable(kind)?;
+        let mut surface = placeable.surface_policy;
+        surface.land |= request.ignore_land_collision;
+        if request.ignore_water_adjacent {
+            surface.use_actual_depth_in_water_collision = false;
+        }
+        let mut position = request.position;
+        if position.y == 0.0 {
+            position.y = self.ground.ground_height(world.root, position.xz())?;
+        }
+        self.placement.validate(surface, world.root, None, position).ok()?;
+        let prefab = definitions.scene(object_placement_prefab_identifier(object)?)?;
+        let id = self.ids.get_mut(world.root).ok()?.allocate().ok()?;
+        let pose = Transform::from_translation(position)
+            .with_scale(Vec3::splat(object.prefab_scale))
+            .with_rotation(Quat::from_rotation_y(-request.rotation_degrees.to_radians()));
+        let entity = commands.spawn((*world, DefinitionId(kind), id, pose, Visibility::Inherited, PrefabPresentation::new(prefab))).id();
+        Some(ScriptPlacedObject {
+            entity,
+            binder: definitions.object_binder_type(kind).unwrap_or(&request.kind).to_owned(),
+            position,
+        })
     }
 
     /// The target this execution killed, which scripts may still read.
@@ -275,6 +470,20 @@ impl BehaviorScriptWorldAccess<'_, '_> {
             .any(|token| token.name == name && self.clock.tick < token.expires_at)
     }
 
+    pub(super) fn traversable_area(&self, actor: Entity) -> Option<Entity> {
+        let area = self.habitat_members.get(actor).ok()?.habitat_entity;
+        self.habitats.contains(area).then_some(area)
+    }
+
+    pub(super) fn area_has_feature(&self, area: Entity, feature: &str) -> bool {
+        let Ok(summary) = self.habitats.get(area) else { return false; };
+        if feature.eq_ignore_ascii_case("water") {
+            return summary.water_area_square_metres > 0.0;
+        }
+        let feature = AssetId::from_key(&feature.to_ascii_lowercase());
+        summary.biome_areas_square_metres.iter().any(|(biome, area)| *biome == feature && *area > 0.0)
+    }
+
     /// `BFAI_GET_RELATED_ENTITIES` `child`: the animals whose mother or father
     /// is this entity.
     pub(super) fn related(
@@ -305,8 +514,29 @@ impl BehaviorScriptWorldAccess<'_, '_> {
                 relatives.push(target);
             }
         }
+        let child = AssetId::from_key("child");
+        let mother = AssetId::from_key("mother");
+        let mut parent_edits = EntityHashMap::default();
         for effect in pending {
             if let BehaviorScriptEffect::Kinship(owner, relation, recipient) = *effect {
+                if role == child && is_parent_role(relation) {
+                    let parents = parent_edits.entry(owner).or_insert_with(|| self.lineage.parents(owner));
+                    let was_child = parents.mother == Some(entity) || parents.father == Some(entity);
+                    if relation == mother {
+                        parents.mother = recipient;
+                    } else {
+                        parents.father = recipient;
+                    }
+                    let is_child = parents.mother == Some(entity) || parents.father == Some(entity);
+                    if is_child && !relatives.contains(&owner) {
+                        relatives.push(owner);
+                    } else if was_child && !is_child && !self.kinship_edges(entity, role).any(|(_, target)| target == owner) {
+                        relatives.retain(|target| *target != owner);
+                    }
+                }
+                if is_parent_role(role) && relation == child && recipient.is_none() {
+                    relatives.retain(|target| *target != owner);
+                }
                 if owner != entity || relation != role {
                     continue;
                 }
@@ -389,6 +619,8 @@ impl BehaviorScriptWorldAccess<'_, '_> {
     ) {
         let mut birth_mother_name = None;
         let mut kinship_edits = HashMap::<(Entity, AssetId), Vec<(Entity, Entity)>>::default();
+        let mut parent_edits = HashMap::<(Entity, AssetId), Option<Entity>>::default();
+        let mut authored_floats = EntityHashMap::<ScriptFloatAttributes>::default();
         for effect in effects {
             match effect {
                 BehaviorScriptEffect::Presentation(request) => {
@@ -398,7 +630,20 @@ impl BehaviorScriptWorldAccess<'_, '_> {
                     commands.entity(entity).try_insert(WorldEntityIsCrated);
                 }
                 BehaviorScriptEffect::Particle(particle) => commands.trigger(particle),
+                BehaviorScriptEffect::Need(request) => { commands.write_message(request); }
+                BehaviorScriptEffect::Token(recipient, name, payload) => {
+                    commands.spawn((ChildOf(recipient), BehaviorSelfToken {
+                        name,
+                        available_at: self.clock.tick,
+                        expires_at: u64::MAX,
+                        payload,
+                        retain_on_failure: false,
+                    }));
+                }
                 BehaviorScriptEffect::Kinship(entity, role, target) => {
+                    if is_parent_role(role) {
+                        parent_edits.insert((entity, role), target);
+                    }
                     if role == AssetId::from_key("mother") {
                         if let Some(target) = target {
                             commands.entity(entity).try_insert(AnimalMother(target));
@@ -412,6 +657,14 @@ impl BehaviorScriptWorldAccess<'_, '_> {
                             commands.entity(entity).try_remove::<AnimalFather>();
                         }
                     } else {
+                        if role == AssetId::from_key("child") && let Some(child) = target {
+                            let parents = self.lineage.parents(child);
+                            let mother = parent_edits.get(&(child, AssetId::from_key("mother"))).copied().unwrap_or(parents.mother);
+                            let father = parent_edits.get(&(child, AssetId::from_key("father"))).copied().unwrap_or(parents.father);
+                            if mother == Some(entity) || father == Some(entity) {
+                                continue;
+                            }
+                        }
                         let links = kinship_edits.entry((entity, role)).or_insert_with(|| {
                             self.kinship_edges(entity, role).collect::<Vec<_>>()
                         });
@@ -430,6 +683,27 @@ impl BehaviorScriptWorldAccess<'_, '_> {
                             for (link, _) in links.drain(..) {
                                 commands.entity(link).try_despawn();
                             }
+                            if role == AssetId::from_key("child") {
+                                let mother = AssetId::from_key("mother");
+                                let father = AssetId::from_key("father");
+                                let mut children = self.lineage.children(entity);
+                                for (&(child, _), &parent) in &parent_edits {
+                                    if parent == Some(entity) && !children.contains(&child) {
+                                        children.push(child);
+                                    }
+                                }
+                                for child in children {
+                                    let parents = self.lineage.parents(child);
+                                    if *parent_edits.get(&(child, mother)).unwrap_or(&parents.mother) == Some(entity) {
+                                        commands.entity(child).try_remove::<AnimalMother>();
+                                        parent_edits.insert((child, mother), None);
+                                    }
+                                    if *parent_edits.get(&(child, father)).unwrap_or(&parents.father) == Some(entity) {
+                                        commands.entity(child).try_remove::<AnimalFather>();
+                                        parent_edits.insert((child, father), None);
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -442,6 +716,10 @@ impl BehaviorScriptWorldAccess<'_, '_> {
                             .entity(entity)
                             .try_insert(BreedingCenterEndangeredBirths(value));
                     }
+                    ScriptFloatAttribute::Authored(attribute) => {
+                        authored_floats.entry(entity).or_insert_with(|| ScriptFloatAttributes(HashMap::default())).0.insert(attribute, value);
+                    }
+                    ScriptFloatAttribute::GoodNeedPoints | ScriptFloatAttribute::BadNeedPoints | ScriptFloatAttribute::AnimalNeed(_) => {}
                 },
                 BehaviorScriptEffect::Mate(entity, mate) => {
                     if let Some(mate) = mate {
@@ -503,6 +781,9 @@ impl BehaviorScriptWorldAccess<'_, '_> {
                     });
                 }
             }
+        }
+        for (entity, floats) in authored_floats {
+            commands.entity(entity).try_insert(floats);
         }
     }
 

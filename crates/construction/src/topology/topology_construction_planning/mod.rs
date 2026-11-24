@@ -1,3 +1,4 @@
+use super::elevated_curb_layout::{is_elevated_curb, ElevatedCurbSurfaces};
 use bevy::platform::collections::HashSet;
 use bevy::prelude::*;
 use openzt2_game_data::world_definitions::fences_and_gates::FencePlacementModePolicy;
@@ -39,6 +40,7 @@ pub(super) fn calculate_fence_construction_plan(
     terrain_assets: &Assets<TerrainAsset>,
     terrain_chunks: &Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
     hosts: &GateHostEdges,
+    curb_surfaces: Option<&ElevatedCurbSurfaces>,
 ) -> Result<(Vec<IVec3>, Money, Option<Gate>, Vec<Entity>), PlacementFailure> {
     let (unit_price, gate, segment_length_cm) =
         read_fence_construction_facts(definitions, preview.definition)
@@ -55,23 +57,39 @@ pub(super) fn calculate_fence_construction_plan(
         return Err(PlacementFailure::InvalidTopology);
     }
     let segment_cell_span = segment_length_cm / spacing_cm;
-    let waypoints = calculate_fence_preview_waypoints(
-        preview,
-        i32::from(segment_cell_span),
-        definitions.fence_placement_mode_policy(),
-    )?;
-    let mut cells = vec![waypoints[0]];
-    for leg in waypoints.windows(2) {
-        cells.extend(
-            calculate_heading_quantized_fence_segment_cells_between_endpoints(
-                leg[0],
-                leg[1],
-                segment_cell_span,
-            )?
-            .into_iter()
-            .skip(1),
-        );
-    }
+    let cells = if is_elevated_curb(definitions, preview.definition) {
+        curb_surfaces
+            .and_then(|surfaces| {
+                surfaces.route(
+                    preview.from,
+                    preview.to,
+                    i32::from(segment_cell_span),
+                    grid,
+                    index,
+                    definitions,
+                )
+            })
+            .ok_or(PlacementFailure::NoHeadroom)?
+    } else {
+        let waypoints = calculate_fence_preview_waypoints(
+            preview,
+            i32::from(segment_cell_span),
+            definitions.fence_placement_mode_policy(),
+        )?;
+        let mut cells = vec![waypoints[0]];
+        for leg in waypoints.windows(2) {
+            cells.extend(
+                calculate_heading_quantized_fence_segment_cells_between_endpoints(
+                    leg[0],
+                    leg[1],
+                    segment_cell_span,
+                )?
+                .into_iter()
+                .skip(1),
+            );
+        }
+        cells
+    };
     if cells.len() < 2 {
         return Err(PlacementFailure::InvalidTopology);
     }
@@ -355,7 +373,11 @@ pub(super) fn calculate_path_construction_plan(
         .ok_or(PlacementFailure::InvalidTopology)?;
     let topology_cell_size_cm = definitions.topology_cell_size_cm();
     let cells = if definition.elevated {
-        calculate_adjacent_topology_grid_cells_between_endpoints(preview.from, preview.to)?
+        super::elevated_path_layout::elevated_path_tiles(preview, definition)
+            .ok_or(PlacementFailure::InvalidTopology)?
+            .into_iter()
+            .map(|(cell, _)| cell)
+            .collect()
     } else {
         calculate_ground_path_construction_cells(
             preview.from,

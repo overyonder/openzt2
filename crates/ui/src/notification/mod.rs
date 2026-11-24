@@ -15,8 +15,6 @@ use super::ui_document_asset_load_failure::UiDocumentAssetLoadFailed;
 mod tests;
 
 use super::{
-    authored_ui_node_projection_components::UiDocumentRoot,
-    authored_ui_node_projection_components::{UiDocumentOwner, UiNodeId},
     localized_ui_text_writing::localized_ui_text as localized,
     notification_contracts::{
         NotificationFailure, NotificationMessage, NotificationPresented, NotificationRejected,
@@ -29,10 +27,19 @@ use super::{
 pub(super) struct NotificationProjectionRequested;
 
 #[derive(Component)]
-pub(super) struct NotificationBodyRequested;
+pub(super) struct ProjectedNotificationAlert {
+    pub(super) body: Entity,
+    pub(super) owner: Entity,
+}
 
 #[derive(Component)]
-pub(super) struct PresentedNotification;
+pub(super) struct NotificationAlertShowing {
+    owner: Entity,
+    operation: Entity,
+}
+
+#[derive(Component)]
+pub(super) struct NotificationAlertPresented;
 
 #[derive(Component)]
 struct PendingBirthNotification(String);
@@ -133,105 +140,6 @@ pub(super) fn request_notifications(
     }
 }
 
-pub(super) fn acknowledge_notifications(
-    mut commands: Commands,
-    roots: Query<(Entity, &ChildOf), With<UiDocumentRoot>>,
-    pending: Query<
-        (
-            Entity,
-            Option<&PendingNotification>,
-            Has<NotificationBodyRequested>,
-            Has<PresentedNotification>,
-        ),
-        Or<(With<PendingNotification>, With<PresentedNotification>)>,
-    >,
-    active_localization: Res<LocalizationPrecedenceIndex>,
-    localizations: Res<Assets<LocalizationAsset>>,
-    nodes: Query<(
-        &UiNodeId,
-        &UiDocumentOwner,
-        &InheritedVisibility,
-        Option<&Text>,
-    )>,
-    mut presentation: MessageWriter<
-        super::authored_ui_presentation_action_application::RequestUiPresentationAction,
-    >,
-    mut presented: MessageWriter<NotificationPresented>,
-) {
-    use super::authored_ui_presentation_action_application::RequestUiPresentationAction;
-    use openzt2_game_data::ui_document::action::presentation::UiPresentationAction;
-    let localization = active_localization.borrow_loaded_localization_view(&localizations);
-    let alert = UiDocumentRole::Modal.node_id("Alert Box");
-    let body = UiDocumentRole::Modal.node_id("Alert Text");
-    for (owner, notification, requested, was_presented) in &pending {
-        let root = roots
-            .iter()
-            .find_map(|(root, parent)| (parent.parent() == owner).then_some(root));
-        if was_presented {
-            if root.is_none_or(|root| {
-                nodes.iter().any(|(id, node_owner, visibility, _)| {
-                    node_owner.0 == root && id.id == alert && !visibility.get()
-                })
-            }) {
-                commands.entity(owner).despawn();
-            }
-            continue;
-        }
-        let (Some(root), Some(notification)) = (root, notification) else {
-            continue;
-        };
-        let text = match &notification.message {
-            NotificationMessage::Text(text) => text.as_str(),
-            NotificationMessage::Localized(key) => {
-                let Some(text) = localization.and_then(|view| localized(view, *key)) else {
-                    continue;
-                };
-                text
-            }
-        };
-        if !requested {
-            if !nodes.iter().any(|(id, node_owner, _, value)| {
-                node_owner.0 == root && id.id == body && value.is_some()
-            }) {
-                continue;
-            }
-            for action in [
-                UiPresentationAction::SetTargetNodeTextLiteral {
-                    target_node: body,
-                    text: text.to_owned(),
-                },
-                UiPresentationAction::SetTargetNodeVisible {
-                    target_node: alert,
-                    visible: true,
-                },
-            ] {
-                presentation.write(RequestUiPresentationAction {
-                    document_root: root,
-                    action,
-                });
-            }
-            commands.entity(owner).insert(NotificationBodyRequested);
-            continue;
-        }
-        let visible = nodes.iter().any(|(id, node_owner, visibility, _)| {
-            node_owner.0 == root && id.id == alert && visibility.get()
-        });
-        let populated = nodes.iter().any(|(id, node_owner, _, value)| {
-            node_owner.0 == root && id.id == body && value.is_some_and(|value| value.0 == text)
-        });
-        if !visible || !populated {
-            continue;
-        }
-        presented.write(NotificationPresented {
-            operation: notification.operation,
-        });
-        commands
-            .entity(owner)
-            .insert(PresentedNotification)
-            .remove::<(PendingNotification, NotificationBodyRequested)>();
-    }
-}
-
 pub(super) fn reject_failed_notifications(
     mut commands: Commands,
     mut failures: MessageReader<UiDocumentAssetLoadFailed>,
@@ -247,5 +155,119 @@ pub(super) fn reject_failed_notifications(
             reason: NotificationFailure::ProjectionFailed,
         });
         commands.entity(failure.owner).despawn();
+    }
+}
+
+pub(super) fn populate_projected_notification_alerts(
+    mut commands: Commands,
+    mut unpopulated: Query<
+        (Entity, Ref<ProjectedNotificationAlert>, &mut Visibility),
+        Without<NotificationAlertShowing>,
+    >,
+    pending: Query<&PendingNotification>,
+    active_localization: Res<LocalizationPrecedenceIndex>,
+    localizations: Res<Assets<LocalizationAsset>>,
+    mut texts: Query<&mut Text>,
+    animations: Query<(), With<crate::animation::UiShowHideAnimation>>,
+    mut playback: MessageWriter<crate::animation::UiAnimationPlaybackRequest>,
+    mut activations: MessageWriter<
+        openzt2_interface_state::ui::authored_ui_activation_contracts::UiNodeActivated,
+    >,
+    mut rejected: MessageWriter<NotificationRejected>,
+) {
+    let locale_changed = active_localization.is_changed() || localizations.is_changed();
+    let locale = active_localization.borrow_loaded_localization_view(&localizations);
+    for (alert, projection, mut visibility) in &mut unpopulated {
+        if !projection.is_added() && !locale_changed {
+            continue;
+        }
+        let Ok(notification) = pending.get(projection.owner) else {
+            continue;
+        };
+        let text = match &notification.message {
+            NotificationMessage::Text(text) => text.as_str(),
+            NotificationMessage::Localized(key) => {
+                let Some(locale) = locale else { continue };
+                let Some(text) = localized(locale, *key) else {
+                    rejected.write(NotificationRejected {
+                        operation: notification.operation,
+                        reason: NotificationFailure::MissingLocalization(*key),
+                    });
+                    commands.entity(projection.owner).try_despawn();
+                    continue;
+                };
+                text
+            }
+        };
+        let Ok(body) = texts.get_mut(projection.body) else {
+            rejected.write(NotificationRejected {
+                operation: notification.operation,
+                reason: NotificationFailure::ProjectionFailed,
+            });
+            commands.entity(projection.owner).try_despawn();
+            continue;
+        };
+        body.map_unchanged(|body| &mut body.0)
+            .clone_from_if_neq(text);
+        if animations.contains(alert) {
+            playback.write(crate::animation::UiAnimationPlaybackRequest {
+                entity: alert,
+                operation: crate::animation::UiAnimationPlaybackOperation::Transition(true),
+            });
+        }
+        crate::authored_ui_change_activation_dispatch::apply_visibility_transition(
+            alert,
+            &mut visibility,
+            Visibility::Inherited,
+            true,
+            &mut activations,
+        );
+        commands.entity(alert).insert(NotificationAlertShowing {
+            owner: projection.owner,
+            operation: notification.operation,
+        });
+    }
+}
+
+pub(super) fn report_effectively_visible_notifications(
+    mut commands: Commands,
+    alerts: Query<
+        (
+            Entity,
+            &NotificationAlertShowing,
+            &InheritedVisibility,
+            Has<NotificationAlertPresented>,
+        ),
+        Or<(
+            Added<NotificationAlertShowing>,
+            Changed<InheritedVisibility>,
+        )>,
+    >,
+    mut presented: MessageWriter<NotificationPresented>,
+) {
+    for (alert, notification, visibility, was_presented) in &alerts {
+        match (visibility.get(), was_presented) {
+            (true, false) => {
+                presented.write(NotificationPresented {
+                    operation: notification.operation,
+                });
+                commands.entity(alert).insert(NotificationAlertPresented);
+                commands
+                    .entity(notification.owner)
+                    .remove::<PendingNotification>();
+            }
+            (false, true) => commands.entity(notification.owner).try_despawn(),
+            _ => {}
+        }
+    }
+}
+
+pub(super) fn discard_notification_without_projected_alert(
+    mut commands: Commands,
+    removal: On<Remove, NotificationAlertShowing>,
+    alerts: Query<&NotificationAlertShowing>,
+) {
+    if let Ok(alert) = alerts.get(removal.entity) {
+        commands.entity(alert.owner).try_despawn();
     }
 }

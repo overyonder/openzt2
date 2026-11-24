@@ -6,7 +6,6 @@ use bevy::{
 };
 use openzt2_game_data::audio::VARIANT_LOOPED;
 use openzt2_game_data::AssetId;
-use openzt2_zoo_state::terrain::terrain_water_view_state::TerrainWaterCameraContact;
 
 use openzt2_game_assets::audio::audio_asset_types::{AudioAsset, AudioAssets};
 use openzt2_interface_state::settings::audio_settings_types::AudioSettings;
@@ -174,7 +173,7 @@ pub(super) fn retire_empty_positioned_audio_groups(
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn forward_positioned_audio_cue_playback_requests(
-    camera_contacts: Query<&TerrainWaterCameraContact>,
+    listener: super::spatial_cue_distance::SpatialCueListener,
     mut commands: Commands,
     mut requests: MessageReader<PlayPositionedAudioCue>,
     mut cues: MessageWriter<AdmitAudioCue>,
@@ -197,9 +196,9 @@ pub(super) fn forward_positioned_audio_cue_playback_requests(
         requests.clear();
         return;
     }
-    let contact = camera_contacts.single().ok();
-    let underwater = contact.and_then(|contact| contact.underwater_status);
-    let camera = contact.and_then(|contact| contact.position);
+    let (listener, _) = listener.snapshot();
+    let underwater = listener.underwater;
+    let camera = listener.camera_position;
     let mut active_groups = HashMap::new();
     for (entity, group, member, emitters) in &groups {
         if member.root == root {
@@ -332,6 +331,7 @@ pub(super) fn execute_audio_cue_playback_requests(
     pools: Query<(Entity, &CueVoicePool, Option<&CueVoices>)>,
     owners: Query<Entity, With<NonspatialCueOwner>>,
     environment_gains: Query<&EnvironmentVoiceGain>,
+    soundscapes: Query<(), With<super::audio_environment_types::AudioSoundscape>>,
     playing: Query<&AudioCueSelection>,
     listener: super::spatial_cue_distance::SpatialCueListener,
 ) {
@@ -355,6 +355,23 @@ pub(super) fn execute_audio_cue_playback_requests(
             continue;
         };
         let spatial = cue.emitter.is_some();
+        let looped = cue.force_looped || variant.flags & VARIANT_LOOPED != 0;
+        let emitter_pose = cue.emitter.and_then(|entity| listener.emitter(entity));
+        let mut distance = spatial.then(|| {
+            super::spatial_cue_distance::SpatialCueDistance::from_authored_range(
+                variant.distance,
+                emitter_pose.is_none_or(|(_, water)| water.is_none()),
+                looped,
+            )
+        });
+        let distance_gain = distance.as_mut().map(|policy| {
+            emitter_pose.map_or(0.0, |(position, water)| {
+                listener_pose.gain(policy, position, water, view.mixer())
+            })
+        });
+        if !looped && distance_gain == Some(0.0) {
+            continue;
+        }
         let pool = CueVoicePool::for_cue(usage, spatial);
         let voice_limit = match pool {
             CueVoicePool::Ambient => view.ambient().map_or(10, |policy| policy.voice_limit),
@@ -392,16 +409,8 @@ pub(super) fn execute_audio_cue_playback_requests(
         let Some(clip) = resolved.clip(&asset_server, variant.source_id) else {
             continue;
         };
-        let emitter_pose = cue.emitter.and_then(|entity| listener.emitter(entity));
-        let distance = spatial.then(|| {
-            super::spatial_cue_distance::SpatialCueDistance::from_authored_range(
-                variant.distance,
-                view.mixer(),
-                emitter_pose.is_none_or(|(_, water)| water.is_none()),
-            )
-        });
         let settings = PlaybackSettings {
-            mode: if cue.force_looped || variant.flags & VARIANT_LOOPED != 0 {
+            mode: if looped {
                 PlaybackMode::Loop
             } else {
                 PlaybackMode::Despawn
@@ -409,8 +418,7 @@ pub(super) fn execute_audio_cue_playback_requests(
             volume: Volume::Linear(sample_deterministic_f32_range(variant.gain, cue.selection)),
             speed: sample_deterministic_f32_range(variant.pitch, cue.selection.rotate_left(7)),
             spatial,
-            spatial_scale: distance
-                .map(super::spatial_cue_distance::SpatialCueDistance::panning_scale),
+            spatial_scale: distance.map(|distance| distance.panning_scale(view.mixer())),
             ..default()
         };
         let voice = spawn_audio_player_or_deferred_playback(
@@ -430,10 +438,20 @@ pub(super) fn execute_audio_cue_playback_requests(
                 nonspatial_owner,
                 lifetime_owner: request.lifetime_owner,
                 distance,
-                distance_gain: distance.map(|policy| {
-                    emitter_pose.map_or(0.0, |(position, water)| {
-                        listener_pose.gain(policy, position, water)
-                    })
+                distance_gain,
+                stage_acoustics: (!matches!(
+                    usage,
+                    openzt2_game_data::audio::AudioUsage::Ui
+                        | openzt2_game_data::audio::AudioUsage::Music
+                ))
+                .then(|| {
+                    super::stage_voice_acoustics::StageVoiceAcoustics::new(
+                        &variant.filter_layer,
+                        variant.soften_gain,
+                        cue.emitter,
+                        cue.emitter
+                            .is_some_and(|emitter| soundscapes.contains(emitter)),
+                    )
                 }),
                 environment_gain: request
                     .lifetime_owner

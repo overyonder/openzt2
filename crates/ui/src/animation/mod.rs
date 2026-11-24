@@ -2,21 +2,18 @@ use bevy::prelude::*;
 use openzt2_game_data::ui_document::action::UiTrigger;
 use openzt2_game_data::ui_document::node_presentation::UiNodeAnimationInterpolation;
 use openzt2_interface_state::input::input_types::ActionSource;
+use std::time::Duration;
 
 use super::authored_ui_visual_types::UiVisualLayer;
 use openzt2_interface_state::ui::authored_ui_activation_contracts::UiNodeActivated;
 
 #[derive(Component, Debug, Clone, Copy)]
 pub struct UiShowHideAnimation {
-    pub elapsed_ms: f32,
     pub duration_ms: f32,
     pub exit_rate: f32,
     pub delay_ms: f32,
-    pub delay_remaining_ms: f32,
     pub bob_factor: f32,
     pub interpolation: UiNodeAnimationInterpolation,
-    pub forward: bool,
-    pub running: bool,
     pub base_rect: [f32; 4],
     pub rect_intervals: [Option<[f32; 2]>; 4],
     pub animates_color: bool,
@@ -25,29 +22,137 @@ pub struct UiShowHideAnimation {
     pub end_color: [u8; 4],
 }
 
-impl UiShowHideAnimation {
-    pub fn start_authored_visibility_transition(&mut self, visible: bool) {
-        let reversing = self.running && self.forward != visible;
-        self.forward = visible;
-        if !reversing {
-            self.elapsed_ms = if visible { 0.0 } else { self.duration_ms };
-        }
-        self.delay_remaining_ms = if visible && !reversing {
-            self.delay_ms
+#[derive(Component, Debug, Default, PartialEq, Eq)]
+pub struct UiAnimationDirection(pub bool);
+
+#[derive(Component, Clone)]
+pub struct UiShowHidePlayback {
+    delay: Option<Timer>,
+    progress: Timer,
+}
+
+impl UiShowHidePlayback {
+    pub(super) fn at_elapsed(
+        policy: &UiShowHideAnimation,
+        forward: bool,
+        elapsed_ms: f32,
+        delay_ms: f32,
+    ) -> Self {
+        let duration = duration_from_ms(policy.duration_ms);
+        let elapsed = duration_from_ms(elapsed_ms).min(duration);
+        let mut progress = Timer::new(duration, TimerMode::Once);
+        progress.set_elapsed(if forward {
+            elapsed
         } else {
+            duration.saturating_sub(elapsed)
+        });
+        Self {
+            delay: (delay_ms > 0.0)
+                .then(|| Timer::new(duration_from_ms(delay_ms), TimerMode::Once)),
+            progress,
+        }
+    }
+
+    fn fraction(&self, forward: bool) -> f32 {
+        if forward {
+            self.progress.fraction()
+        } else if self.progress.duration().is_zero() {
             0.0
+        } else {
+            self.progress.remaining_secs() / self.progress.duration().as_secs_f32()
+        }
+    }
+}
+
+fn duration_from_ms(milliseconds: f32) -> Duration {
+    Duration::try_from_secs_f64(f64::from(milliseconds.max(0.0)) * 0.001).unwrap_or(Duration::MAX)
+}
+
+#[derive(Message, Clone, Copy)]
+pub struct UiAnimationPlaybackRequest {
+    pub entity: Entity,
+    pub operation: UiAnimationPlaybackOperation,
+}
+
+#[derive(Clone, Copy)]
+pub enum UiAnimationPlaybackOperation {
+    Transition(bool),
+    Finish,
+    Reset(bool),
+}
+
+pub(super) fn apply_authored_animation_playback_requests(
+    mut commands: Commands,
+    mut requests: MessageReader<UiAnimationPlaybackRequest>,
+    mut nodes: Query<(
+        &UiShowHideAnimation,
+        &mut UiAnimationDirection,
+        Option<&mut UiShowHidePlayback>,
+    )>,
+) {
+    use bevy::ecs::entity::EntityHashMap;
+    let mut by_node = EntityHashMap::<Vec<UiAnimationPlaybackOperation>>::default();
+    for request in requests.read() {
+        by_node
+            .entry(request.entity)
+            .or_default()
+            .push(request.operation);
+    }
+    for (entity, operations) in by_node {
+        let Ok((policy, mut direction, playback)) = nodes.get_mut(entity) else {
+            continue;
         };
-        self.running = true;
+        let mut next = playback.as_deref().cloned();
+        let mut forward = direction.0;
+        for operation in operations {
+            match operation {
+                UiAnimationPlaybackOperation::Transition(show) => {
+                    if let Some(current) = next.as_mut().filter(|_| forward != show) {
+                        let reversed = current
+                            .progress
+                            .duration()
+                            .saturating_sub(current.progress.elapsed());
+                        current.progress.reset();
+                        current.progress.set_elapsed(reversed);
+                        current.delay = None;
+                    } else {
+                        next = Some(UiShowHidePlayback::at_elapsed(
+                            policy,
+                            show,
+                            if show { 0.0 } else { policy.duration_ms },
+                            if show { policy.delay_ms } else { 0.0 },
+                        ));
+                    }
+                    forward = show;
+                }
+                UiAnimationPlaybackOperation::Finish => {
+                    let active = next.get_or_insert_with(|| {
+                        UiShowHidePlayback::at_elapsed(policy, forward, 0.0, 0.0)
+                    });
+                    active.progress.finish();
+                }
+                UiAnimationPlaybackOperation::Reset(next_direction) => {
+                    forward = next_direction;
+                    next = None;
+                }
+            }
+        }
+        direction.set_if_neq(UiAnimationDirection(forward));
+        match (playback, next) {
+            (Some(mut playback), Some(next)) => *playback = next,
+            (None, Some(next)) => {
+                commands.entity(entity).insert(next);
+            }
+            (Some(_), None) => {
+                commands.entity(entity).remove::<UiShowHidePlayback>();
+            }
+            (None, None) => {}
+        }
     }
 }
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct NotifyOnUiAnimationComplete;
-
-#[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct UiAnimationCompleted {
-    pub(crate) entity: Entity,
-}
 
 /// Runtime origin supplied to an authored show/hide animation whose source
 /// rectangle is relative to a moving receiver. Cursor money is inserted under
@@ -56,94 +161,89 @@ pub(crate) struct UiAnimationCompleted {
 #[derive(Component, Debug, Clone, Copy, PartialEq)]
 pub struct UiAnimationOrigin(pub Vec2);
 
-pub(super) fn advance_ui_animations(
+pub(super) fn tick_authored_ui_animations(
+    mut commands: Commands,
     time: Res<Time<Real>>,
     mut nodes: Query<(
         Entity,
-        &mut UiShowHideAnimation,
+        &UiShowHideAnimation,
+        &UiAnimationDirection,
+        &mut UiShowHidePlayback,
         &mut Node,
         &mut Visibility,
-        &Children,
+        Option<&Children>,
         Option<&mut TextColor>,
-        Option<&NotifyOnUiAnimationComplete>,
+        Has<NotifyOnUiAnimationComplete>,
         Option<&UiAnimationOrigin>,
         Has<super::authored_ui_node_projection_components::UiNodeId>,
     )>,
-    mut visual_images: Query<&mut ImageNode, With<UiVisualLayer>>,
-    mut visual_backgrounds: Query<&mut BackgroundColor, (With<UiVisualLayer>, Without<ImageNode>)>,
-    mut completed: MessageWriter<UiAnimationCompleted>,
+    mut images: Query<&mut ImageNode, With<UiVisualLayer>>,
+    mut backgrounds: Query<&mut BackgroundColor, (With<UiVisualLayer>, Without<ImageNode>)>,
     mut activated: MessageWriter<UiNodeActivated>,
 ) {
-    let delta_ms = time.delta_secs() * 1000.0;
     for (
         entity,
-        mut animation,
+        animation,
+        forward,
+        mut playback,
         mut node,
         mut visibility,
         children,
-        text_color,
+        text,
         notify,
         origin,
         authored,
     ) in &mut nodes
     {
-        if !animation.running {
-            continue;
-        }
-        if animation.delay_remaining_ms > 0.0 {
-            animation.delay_remaining_ms = (animation.delay_remaining_ms - delta_ms).max(0.0);
-            continue;
-        }
-        let step_ms = if animation.forward {
-            delta_ms
-        } else {
-            delta_ms * animation.exit_rate
-        };
-        animation.elapsed_ms = if animation.forward {
-            (animation.elapsed_ms + step_ms).min(animation.duration_ms)
-        } else {
-            (animation.elapsed_ms - step_ms).max(0.0)
-        };
-        let linear_amount = if animation.duration_ms == 0.0 {
-            if animation.forward {
-                1.0
-            } else {
-                0.0
+        if let Some(delay) = playback.delay.as_mut() {
+            if delay.tick(time.delta()).is_finished() {
+                playback.delay = None;
             }
+            continue;
+        }
+        let forward = forward.0;
+        let delta = if forward {
+            time.delta()
         } else {
-            animation.elapsed_ms / animation.duration_ms
+            Duration::try_from_secs_f64(
+                time.delta_secs_f64() * f64::from(animation.exit_rate.max(0.0)),
+            )
+            .unwrap_or(Duration::MAX)
         };
+        playback.progress.tick(delta);
+        let linear = playback.fraction(forward);
         let amount = match animation.interpolation {
-            UiNodeAnimationInterpolation::Linear => linear_amount,
+            UiNodeAnimationInterpolation::Linear => linear,
+            UiNodeAnimationInterpolation::Sinusoidal if animation.bob_factor == 0.0 => {
+                (1.0 - (linear * std::f32::consts::PI).cos()) * 0.5
+            }
             UiNodeAnimationInterpolation::Sinusoidal => {
-                if animation.bob_factor == 0.0 {
-                    (1.0 - (linear_amount * std::f32::consts::PI).cos()) * 0.5
-                } else {
-                    let angular_extent = animation.bob_factor * std::f32::consts::FRAC_PI_2;
-                    (angular_extent * linear_amount).sin() / angular_extent.sin()
-                }
+                let extent = animation.bob_factor * std::f32::consts::FRAC_PI_2;
+                (extent * linear).sin() / extent.sin()
             }
         };
-        apply_rect(&mut node, &animation, amount, origin.map(|origin| origin.0));
+        apply_rect(&mut node, animation, amount, origin.map(|origin| origin.0));
         if animation.animates_color {
             let color = lerp_color(animation.start_color, animation.end_color, amount);
             if animation.affects_text_color {
-                if let Some(mut text_color) = text_color {
-                    text_color.0 = color;
+                if let Some(mut text) = text {
+                    text.set_if_neq(TextColor(color));
                 }
             } else {
-                for child in children.iter() {
-                    if let Ok(mut image) = visual_images.get_mut(child) {
-                        image.color = color;
-                    } else if let Ok(mut background) = visual_backgrounds.get_mut(child) {
-                        background.0 = color;
+                for child in children.into_iter().flatten().copied() {
+                    if let Ok(image) = images.get_mut(child) {
+                        image
+                            .map_unchanged(|image| &mut image.color)
+                            .set_if_neq(color);
+                    } else if let Ok(mut background) = backgrounds.get_mut(child) {
+                        background.set_if_neq(BackgroundColor(color));
                     }
                 }
             }
         }
-        if animation.elapsed_ms == 0.0 || animation.elapsed_ms == animation.duration_ms {
-            animation.running = false;
-            if !animation.forward {
+        if playback.progress.is_finished() || playback.progress.elapsed().is_zero() {
+            commands.entity(entity).remove::<UiShowHidePlayback>();
+            if !forward {
                 super::authored_ui_change_activation_dispatch::apply_visibility_transition(
                     entity,
                     &mut visibility,
@@ -152,23 +252,14 @@ pub(super) fn advance_ui_animations(
                     &mut activated,
                 );
             }
-            if notify.is_some() {
-                completed.write(UiAnimationCompleted { entity });
+            if notify {
+                activated.write(UiNodeActivated {
+                    source: ActionSource::System,
+                    node: entity,
+                    trigger: UiTrigger::AnimationCompleted,
+                });
             }
         }
-    }
-}
-
-pub(super) fn dispatch_ui_animation_commands(
-    mut completed: MessageReader<UiAnimationCompleted>,
-    mut activated: MessageWriter<UiNodeActivated>,
-) {
-    for event in completed.read() {
-        activated.write(UiNodeActivated {
-            source: ActionSource::System,
-            node: event.entity,
-            trigger: UiTrigger::AnimationCompleted,
-        });
     }
 }
 
@@ -217,9 +308,16 @@ mod tests {
         let mut application = App::new();
         application
             .init_resource::<Time<Real>>()
-            .add_message::<UiAnimationCompleted>()
             .add_message::<UiNodeActivated>()
-            .add_systems(Update, advance_ui_animations);
+            .add_message::<UiAnimationPlaybackRequest>()
+            .add_systems(
+                Update,
+                (
+                    apply_authored_animation_playback_requests,
+                    tick_authored_ui_animations,
+                )
+                    .chain(),
+            );
         let child = application.world_mut().spawn_empty().id();
         let entity = application
             .world_mut()
@@ -227,15 +325,11 @@ mod tests {
                 Node::default(),
                 Visibility::Inherited,
                 UiShowHideAnimation {
-                    elapsed_ms: 0.0,
                     duration_ms: 500.0,
                     exit_rate: 1.0,
                     delay_ms: 0.0,
-                    delay_remaining_ms: 0.0,
                     bob_factor: 1.3,
                     interpolation: UiNodeAnimationInterpolation::Sinusoidal,
-                    forward: true,
-                    running: true,
                     base_rect: [0.0; 4],
                     rect_intervals: [Some([0.0, 100.0]), None, None, None],
                     animates_color: false,
@@ -246,6 +340,16 @@ mod tests {
             ))
             .add_child(child)
             .id();
+        application
+            .world_mut()
+            .entity_mut(entity)
+            .insert(UiAnimationDirection(true));
+        application
+            .world_mut()
+            .write_message(UiAnimationPlaybackRequest {
+                entity,
+                operation: UiAnimationPlaybackOperation::Transition(true),
+            });
         application
             .world_mut()
             .resource_mut::<Time<Real>>()
@@ -273,12 +377,16 @@ mod tests {
             application.world().get::<Visibility>(entity),
             Some(&Visibility::Inherited)
         );
-        let mut animation = application
+        assert!(application
+            .world()
+            .get::<UiShowHidePlayback>(entity)
+            .is_none());
+        application
             .world_mut()
-            .get_mut::<UiShowHideAnimation>(entity)
-            .unwrap();
-        assert!(animation.forward && !animation.running);
-        animation.start_authored_visibility_transition(false);
+            .write_message(UiAnimationPlaybackRequest {
+                entity,
+                operation: UiAnimationPlaybackOperation::Transition(false),
+            });
         application.update();
         assert_eq!(
             application.world().get::<Visibility>(entity),
@@ -289,15 +397,11 @@ mod tests {
     #[test]
     fn show_hide_rect_animates_negative_position_and_keeps_unanimated_extent() {
         let animation = UiShowHideAnimation {
-            elapsed_ms: 0.0,
             duration_ms: 300.0,
             exit_rate: 1.0,
             delay_ms: 0.0,
-            delay_remaining_ms: 0.0,
             bob_factor: 0.0,
             interpolation: UiNodeAnimationInterpolation::Linear,
-            forward: true,
-            running: true,
             base_rect: [0.0, 540.0, 327.0, 228.0],
             rect_intervals: [Some([-311.0, 0.0]), Some([540.0, 540.0]), None, None],
             animates_color: false,
@@ -322,15 +426,11 @@ mod tests {
     #[test]
     fn moving_receiver_animation_replaces_the_authored_region_offset() {
         let animation = UiShowHideAnimation {
-            elapsed_ms: 400.0,
             duration_ms: 800.0,
             exit_rate: 1.0,
             delay_ms: 0.0,
-            delay_remaining_ms: 0.0,
             bob_factor: 0.0,
             interpolation: UiNodeAnimationInterpolation::Linear,
-            forward: false,
-            running: true,
             base_rect: [-80.0, -30.0, 100.0, 30.0],
             rect_intervals: [Some([0.0, 0.0]), Some([-100.0, 0.0]), None, None],
             animates_color: true,
@@ -350,16 +450,12 @@ mod tests {
 
     #[test]
     fn reversing_a_fade_preserves_its_current_color_and_skips_the_show_delay() {
-        let mut animation = UiShowHideAnimation {
-            elapsed_ms: 4.0,
+        let animation = UiShowHideAnimation {
             duration_ms: 10.0,
             exit_rate: 0.02,
             delay_ms: 50.0,
-            delay_remaining_ms: 0.0,
             bob_factor: 0.0,
             interpolation: UiNodeAnimationInterpolation::Linear,
-            forward: false,
-            running: true,
             base_rect: [0.0; 4],
             rect_intervals: [None; 4],
             animates_color: true,
@@ -367,21 +463,66 @@ mod tests {
             start_color: [255, 197, 78, 255],
             end_color: [255, 255, 201, 255],
         };
-        let before = lerp_color(animation.start_color, animation.end_color, 0.4);
-        animation.start_authored_visibility_transition(true);
-        assert!(animation.forward && animation.running);
-        assert_eq!(animation.delay_remaining_ms, 0.0);
+        let mut application = App::new();
+        application
+            .add_message::<UiAnimationPlaybackRequest>()
+            .add_systems(Update, apply_authored_animation_playback_requests);
+        let playback = UiShowHidePlayback::at_elapsed(&animation, false, 4.0, 0.0);
+        let before = lerp_color(
+            animation.start_color,
+            animation.end_color,
+            playback.fraction(false),
+        );
+        let entity = application
+            .world_mut()
+            .spawn((animation, UiAnimationDirection(false), playback))
+            .id();
+        application
+            .world_mut()
+            .write_message(UiAnimationPlaybackRequest {
+                entity,
+                operation: UiAnimationPlaybackOperation::Transition(true),
+            });
+        application.update();
+        let playback = application
+            .world()
+            .get::<UiShowHidePlayback>(entity)
+            .unwrap();
+        assert!(
+            application
+                .world()
+                .get::<UiAnimationDirection>(entity)
+                .unwrap()
+                .0
+        );
+        assert!(playback.delay.is_none());
         assert_eq!(
             lerp_color(
                 animation.start_color,
                 animation.end_color,
-                animation.elapsed_ms / animation.duration_ms
+                playback.fraction(true)
             ),
             before
         );
-        animation.start_authored_visibility_transition(false);
-        assert!(!animation.forward);
-        assert_eq!(animation.elapsed_ms, 4.0);
+        application
+            .world_mut()
+            .write_message(UiAnimationPlaybackRequest {
+                entity,
+                operation: UiAnimationPlaybackOperation::Transition(false),
+            });
+        application.update();
+        let playback = application
+            .world()
+            .get::<UiShowHidePlayback>(entity)
+            .unwrap();
+        assert!(
+            !application
+                .world()
+                .get::<UiAnimationDirection>(entity)
+                .unwrap()
+                .0
+        );
+        assert_eq!(playback.progress.elapsed(), Duration::from_millis(6));
     }
 }
 

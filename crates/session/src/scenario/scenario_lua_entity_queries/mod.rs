@@ -637,31 +637,10 @@ pub(super) fn create_world_manager<'scope, 'env: 'scope>(
     pending: &'env PendingEntityOperations,
 ) -> mlua::Result<Table> {
     let manager = lua.create_table()?;
-    // Scripts compare this before and after painting. It covers edited chunks, the
-    // only ones whose samples can have changed.
     manager.set(
         "ZT_GET_BIOME_COUNT",
         scope.create_function(move |_, (_, biome): (Table, String)| {
-            let mut count = 0_u64;
-            for (chunk, edited) in queries.edited_terrain.iter() {
-                let Some(asset) = queries.terrain_assets.get(&chunk.asset) else {
-                    continue;
-                };
-                let biomes = &asset.canonical_terrain_grid().biomes;
-                count += edited
-                    .blend_weights
-                    .chunks_exact(16)
-                    .filter(|weights| {
-                        weights
-                            .iter()
-                            .enumerate()
-                            .max_by_key(|(channel, weight)| (**weight, std::cmp::Reverse(*channel)))
-                            .and_then(|(channel, _)| biomes.get(channel))
-                            .is_some_and(|candidate| candidate.name.eq_ignore_ascii_case(&biome))
-                    })
-                    .count() as u64;
-            }
-            Ok(count)
+            Ok(queries.biome_cells.map_or(0, |cells| cells.count(&biome)))
         })?,
     )?;
     manager.set(

@@ -8,7 +8,7 @@ use openzt2_zoo_state::behavior_task_execution_types::running_actions::WhenBehav
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
     RunBehaviorFactModifications, RunningBehaviorInstruction,
 };
-use openzt2_zoo_state::locomotion::locomotion_types::CaffeineMode;
+use openzt2_zoo_state::locomotion::locomotion_types::CaffeineFlags;
 
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_zoo_state::animal_behavior::behavior_entity_role_resolution::resolve_behavior_entity_role_to_live_entity;
@@ -16,9 +16,7 @@ use openzt2_zoo_state::behavior_task_execution_types::running_actions::mark_beha
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
 use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorTaskFailure;
 use openzt2_zoo_state::economy::price_effect::BehaviorPriceEffectContext;
-use openzt2_zoo_state::maintenance::maintenance_types::{
-    AdjustFacilityContainedWaste, FacilityContainedWaste,
-};
+use openzt2_zoo_state::maintenance::maintenance_types::FacilityContainedWaste;
 
 use openzt2_zoo_state::guests::guest_survey_types::GuestSurveyExperience;
 
@@ -28,8 +26,7 @@ pub(super) fn apply_authored_guest_behavior_fact_modifications(
     activation: On<WhenBehaviorAction<RunBehaviorFactModifications>>,
     clock: Single<&ZooClock>,
     price_effect: BehaviorPriceEffectContext,
-    satisfaction: Query<(), With<GuestSatisfaction>>,
-    mut satisfaction_changes: MessageWriter<AdjustGuestSatisfaction>,
+    mut satisfaction: Query<&mut GuestSatisfaction, With<Guest>>,
     mut tasks: Query<
         (
             Entity,
@@ -59,9 +56,8 @@ pub(super) fn apply_authored_guest_behavior_fact_modifications(
     mut viewing_needs: Query<&mut GuestViewingNeed, With<Guest>>,
     mut experiences: Query<&mut GuestSurveyExperience>,
     mut food_purchases: Query<&mut GuestFoodPurchaseCounts>,
-    containers: Query<(), With<FacilityContainedWaste>>,
-    caffeine_modes: Query<&CaffeineMode>,
-    mut trash_changes: MessageWriter<AdjustFacilityContainedWaste>,
+    mut containers: Query<&mut FacilityContainedWaste>,
+    mut caffeine_flags: Query<&mut CaffeineFlags>,
     mut commands: Commands,
 ) {
     for (actor, (task, instruction, running_action), mut random) in
@@ -115,7 +111,7 @@ pub(super) fn apply_authored_guest_behavior_fact_modifications(
                         return containers.contains(subject);
                     }
                     if caffeine {
-                        return needs.contains(subject);
+                        return needs.contains(subject) && caffeine_flags.contains(subject);
                     }
                     needs.contains(subject)
                         && (modification.modified_fact != BehaviorFact::ViewAnimals
@@ -161,37 +157,39 @@ pub(super) fn apply_authored_guest_behavior_fact_modifications(
                 modification.modified_fact,
                 BehaviorFact::CaffeineMode | BehaviorFact::DeCaffeineMode
             ) {
-                let mode = if modification.modified_fact == BehaviorFact::CaffeineMode {
-                    CaffeineMode::Caffeinated
+                let mut flags = caffeine_flags
+                    .get_mut(subject)
+                    .expect("validated guest flags");
+                let mut next = *flags;
+                let enabled = modification.modification_operation
+                    != BehaviorFactModificationOperation::Clear
+                    && authored_delta != 0;
+                if modification.modified_fact == BehaviorFact::CaffeineMode {
+                    next.caffeinated = enabled;
                 } else {
-                    CaffeineMode::Decaffeinated
-                };
-                CaffeineMode::write_authored(
-                    &mut commands.entity(subject),
-                    caffeine_modes.get(subject).ok(),
-                    mode,
-                    modification.modification_operation != BehaviorFactModificationOperation::Clear
-                        && authored_delta != 0,
-                );
+                    next.decaffeinated = enabled;
+                }
+                flags.set_if_neq(next);
                 continue;
             }
-            // Trash.tsk completes with the guest's happiness and the can's
-            // `f_TrashLevel` together; the can's share goes to its owner.
             if modification.modified_fact == BehaviorFact::TrashLevel {
-                trash_changes.write(AdjustFacilityContainedWaste {
-                    facility: subject,
-                    operation: BehaviorFactModificationOperation::Add,
-                    delta_q16: authored_delta,
-                });
+                let container = containers
+                    .get_mut(subject)
+                    .expect("validated trash container");
+                let units = (i64::from(container.contained_waste_units)
+                    + (f64::from(authored_delta) / 65_536.0).round() as i64)
+                    .clamp(0, i64::from(container.contained_waste_capacity_units));
+                container
+                    .map_unchanged(|waste| &mut waste.contained_waste_units)
+                    .set_if_neq(units as u16);
                 continue;
             }
             if modification.modified_fact == BehaviorFact::Happiness {
-                // Source happiness is deprivation: bad-smell +3 and a good
-                // tour -8 in Guest.xml. The satisfaction message is wellness.
-                satisfaction_changes.write(AdjustGuestSatisfaction {
-                    guest: subject,
-                    delta_q16: authored_delta.saturating_neg(),
-                });
+                // Authored deprivation increases as wellness falls.
+                satisfaction
+                    .get_mut(subject)
+                    .expect("validated guest satisfaction")
+                    .add_wellness_q16(authored_delta.saturating_neg().saturating_mul(10));
                 continue;
             }
             match modification.modified_fact {

@@ -1,3 +1,4 @@
+use super::authored_terrain_brush_modes::AuthoredTerrainBrushModes;
 use bevy::prelude::*;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
@@ -27,6 +28,7 @@ pub(super) fn prepare_terrain_sample_deltas_for_construction_transactions(
     mut requests: MessageReader<PrepareConstruction>,
     terrain: Query<&TerrainIndex>,
     assets: Res<Assets<TerrainAsset>>,
+    modes: AuthoredTerrainBrushModes,
     water_regions: openzt2_zoo_state::terrain::terrain_water_presentation_types::TerrainWaterRegionQuery,
     water_membership: Query<
         &openzt2_zoo_state::terrain::terrain_water_presentation_types::TerrainWaterMembershipIndex,
@@ -103,6 +105,20 @@ pub(super) fn prepare_terrain_sample_deltas_for_construction_transactions(
         let dabs = path.map_or(core::slice::from_ref(&fallback_dab), |path| {
             path.0.as_slice()
         });
+        let read_neighbour = |entity, x, z| {
+            let (_, chunk, edited, _) = chunks.get(entity).ok()?;
+            let asset = assets.get(&chunk.asset)?;
+            openzt2_zoo_state::terrain::terrain_sample_grid_queries::read_terrain_sample_height_centimetres(
+                chunk, asset, edited, x, z,
+            )
+        };
+        let smoothing = modes
+            .smooth_samples()
+            .map(|radius_samples| TerrainSmoothing {
+                radius_samples,
+                terrain: index,
+                read_height: &read_neighbour,
+            });
         let mut candidates = Vec::new();
         if index.chunk_span_m > 0.0 {
             let (minimum, maximum) = dabs.iter().fold(
@@ -246,6 +262,7 @@ pub(super) fn prepare_terrain_sample_deltas_for_construction_transactions(
                 preview,
                 dabs,
                 &water_surface_heights_cm,
+                smoothing.as_ref(),
                 water_plan
                     .as_ref()
                     .zip(water_membership.single().ok())
@@ -326,3 +343,4 @@ fn terrain_brush_circle_intersects_chunk_rectangle(
     let closest = center.clamp(min, max);
     closest.distance_squared(center) <= radius * radius
 }
+use super::terrain_brush_sample_mutation::TerrainSmoothing;

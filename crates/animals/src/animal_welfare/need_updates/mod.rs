@@ -19,6 +19,7 @@ use openzt2_world_state::simulation_time::{
     simulation_control_queries::simulation_is_running,
 };
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
+use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_zoo_state::{
     animal_health::types::Dead,
     animal_lifecycle::types::{Animal, SpeciesHandle},
@@ -28,7 +29,7 @@ use openzt2_zoo_state::{
 use super::need_timing_types::NeedAdjustmentCadence;
 use super::{
     calculations::*,
-    need_latch_types::{AnimalNeedLatchBundle, NeedLatch},
+    need_latch_types::NeedLatch,
     systems::need_rank,
 };
 
@@ -94,27 +95,15 @@ fn project_species_need_profiles(
     }
 }
 
-fn restore_animal_need_latches(
-    restored: Query<(Entity, &NeedTriggerState), (With<Animal>, Without<NeedLatch<0>>)>,
-    mut commands: Commands,
-) {
-    for (animal, triggers) in &restored {
-        commands
-            .entity(animal)
-            .insert(AnimalNeedLatchBundle::from_saved_mask(triggers.0))
-            .remove::<NeedTriggerState>();
-    }
-}
-
 #[derive(QueryData)]
 #[query_data(mutable)]
 struct AnimalNeedDecay {
     animal: Entity,
     location: EntityLocation,
     id: &'static PersistentId,
+    member: &'static WorldMember,
     species: &'static SpeciesHandle,
     timer: Option<&'static mut NeedAdjustmentCadence>,
-    restored_timer: Option<&'static AnimalNeedAdjustmentTimer>,
     hunger: (&'static mut Hunger, &'static mut NeedLatch<0>),
     thirst: (&'static mut Thirst, &'static mut NeedLatch<1>),
     rest: (&'static mut RestNeed, &'static mut NeedLatch<2>),
@@ -131,7 +120,7 @@ struct AnimalNeedDecay {
 
 fn decay_due_animal_needs(
     time: Res<Time<Fixed>>,
-    seed: Single<&ZooSeed>,
+    seeds: Query<&ZooSeed>,
     definitions: Res<WorldDefinitions>,
     definition_assets: Res<Assets<WorldDefinitionAsset>>,
     profiles: Res<SpeciesNeedProfiles>,
@@ -147,7 +136,6 @@ fn decay_due_animal_needs(
         return;
     };
     let step = time.timestep();
-    let seed = **seed;
     let mut pending = Parallel::<Vec<(usize, usize, usize, NeedChanged)>>::default();
     animals.par_iter_mut().for_each(|row| {
         let Some(profile) = profiles.rows.get(&row.species.species) else {
@@ -156,21 +144,14 @@ fn decay_due_animal_needs(
         let due = if let Some(mut timer) = row.timer {
             timer.tick(step, policy.delay_steps)
         } else {
-            let mut timer = if let Some(restored) = row.restored_timer {
-                NeedAdjustmentCadence::from_saved_remaining(restored.remaining_ns, restored.random)
-            } else {
-                NeedAdjustmentCadence::from_saved_remaining(
-                    0,
-                    DeterministicRng::from_entity(seed, *row.id, RngDomain::AnimalNeeds),
-                )
-            };
+            let Ok(seed) = seeds.get(row.member.root) else { return; };
+            let mut timer = NeedAdjustmentCadence::from_saved_remaining(
+                0,
+                DeterministicRng::from_entity(*seed, *row.id, RngDomain::AnimalNeeds),
+            );
             let due = timer.tick(step, policy.delay_steps);
             parallel.command_scope(|mut commands| {
-                let mut animal = commands.entity(row.animal);
-                animal.insert(timer);
-                if row.restored_timer.is_some() {
-                    animal.remove::<AnimalNeedAdjustmentTimer>();
-                }
+                commands.entity(row.animal).insert(timer);
             });
             due
         };
@@ -563,10 +544,7 @@ pub(super) fn register_animal_need_updates(app: &mut App) {
             FixedUpdate,
             (
                 project_species_need_profiles,
-                restore_animal_need_latches,
-                decay_due_animal_needs
-                    .after(project_species_need_profiles)
-                    .after(restore_animal_need_latches),
+                decay_due_animal_needs.after(project_species_need_profiles),
             )
                 .in_set(FixedGameSet::Clock)
                 .run_if(in_state(GamePhase::InGame))

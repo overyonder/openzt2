@@ -30,7 +30,9 @@ pub(super) fn execute_audio_stop_requests(
         };
         for &voice in voices {
             if playing.get(voice).is_ok_and(|selection| {
-                selection.emitter == request.emitter && selection.selection == request.selection
+                (selection.emitter == request.emitter
+                    || (selection.emitter.is_none() && request.emitter.is_some()))
+                    && selection.selection == request.selection
             }) {
                 commands.entity(voice).try_despawn();
             }

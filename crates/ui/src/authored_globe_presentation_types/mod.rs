@@ -77,12 +77,16 @@ pub(super) struct GlobeSelectionTurn {
     pub(super) from_pitch: f32,
     pub(super) to_yaw: f32,
     pub(super) to_pitch: f32,
-    pub(super) elapsed_seconds: f32,
-    pub(super) duration_seconds: f32,
+    pub(super) timer: Timer,
 }
 
-#[derive(Component)]
+#[derive(Component, PartialEq, Eq)]
+#[relationship(relationship_target = SelectedMarkerGlobeWorlds)]
 pub(super) struct GlobeSelectedMarker(pub(super) Entity);
+
+#[derive(Component)]
+#[relationship_target(relationship = GlobeSelectedMarker)]
+pub(super) struct SelectedMarkerGlobeWorlds(Vec<Entity>);
 
 #[derive(Component, Debug, Clone)]
 pub(super) struct UiGlobePrefab {

@@ -4,13 +4,14 @@ use bevy::camera::{
     visibility::RenderLayers, Camera3dDepthLoadOp, CameraOutputMode, CameraUpdateSystems, Exposure,
     Hdr, RenderTarget,
 };
+use bevy::ecs::{entity::EntityHashSet, relationship::RelationshipTarget};
 use bevy::pbr::DistanceFog;
 use bevy::prelude::*;
 use bevy::render::view::{Msaa, Tonemapping};
 use openzt2_interface_state::camera::camera_runtime_state_types::ZooCamera;
 use openzt2_world_state::{
     model_render::environment_render_layer::EnvironmentRenderLayer,
-    world_spawn::world_membership_types::WorldMember,
+    world_spawn::world_membership_types::{WorldMember, WorldMembers},
 };
 
 pub(super) const FIRST_ENVIRONMENT_RENDER_LAYER: usize = 64;
@@ -24,18 +25,87 @@ struct EnvironmentWorldCameraState {
     depth: Camera3dDepthLoadOp,
 }
 
+#[derive(Component, PartialEq, Eq, Default)]
+struct EnvironmentWorldLayers(BTreeMap<u16, bool>);
+
+#[derive(Message)]
+struct EnvironmentLayerMembershipChanged(Entity);
+
 pub(super) fn register_inherited_environment_render_layers(app: &mut App) {
-    app.add_systems(
+    app.add_message::<EnvironmentLayerMembershipChanged>()
+    .add_observer(environment_layer_membership_added)
+    .add_observer(environment_layer_membership_discarded)
+    .add_systems(
         PostUpdate,
         (
             route_authored_environment_layers
                 .before(super::model_scene_visibility_and_shadow_projection::publish_model_draw_shadow_policy_sources),
+            project_environment_world_layers.before(synchronize_environment_camera_stack),
             synchronize_environment_camera_stack
                 .before(super::active_model_view_cameras::refresh_active_model_view_cameras)
                 .before(CameraUpdateSystems)
                 .before(TransformSystems::Propagate),
         ),
     );
+}
+
+fn environment_layer_membership_added(
+    inserted: On<Insert<(EnvironmentRenderLayer, WorldMember)>>,
+    layers: Query<&WorldMember, With<EnvironmentRenderLayer>>,
+    mut changed: MessageWriter<EnvironmentLayerMembershipChanged>,
+) {
+    if let Ok(member) = layers.get(inserted.entity) {
+        changed.write(EnvironmentLayerMembershipChanged(member.root));
+    }
+}
+
+fn environment_layer_membership_discarded(
+    discarded: On<Discard<(EnvironmentRenderLayer, WorldMember)>>,
+    layers: Query<&WorldMember, With<EnvironmentRenderLayer>>,
+    mut changed: MessageWriter<EnvironmentLayerMembershipChanged>,
+) {
+    if let Ok(member) = layers.get(discarded.entity) {
+        changed.write(EnvironmentLayerMembershipChanged(member.root));
+    }
+}
+
+fn project_environment_world_layers(
+    mut commands: Commands,
+    mut changed: MessageReader<EnvironmentLayerMembershipChanged>,
+    visible_changes: Query<
+        &WorldMember,
+        (
+            With<EnvironmentRenderLayer>,
+            Or<(Changed<EnvironmentRenderLayer>, Changed<Visibility>)>,
+        ),
+    >,
+    mut worlds: Query<(Option<&WorldMembers>, Option<&mut EnvironmentWorldLayers>)>,
+    authored: Query<(&EnvironmentRenderLayer, &Visibility)>,
+) {
+    let dirty = changed
+        .read()
+        .map(|message| message.0)
+        .chain(visible_changes.iter().map(|member| member.root))
+        .collect::<EntityHashSet>();
+    for world in dirty {
+        let Ok((members, existing)) = worlds.get_mut(world) else {
+            continue;
+        };
+        let mut next = EnvironmentWorldLayers::default();
+        for (layer, visibility) in authored
+            .iter_many(members.into_iter().flat_map(WorldMembers::iter))
+            .matched()
+        {
+            if *visibility != Visibility::Hidden {
+                *next.0.entry(layer.layer).or_insert(false) |= layer.clear_depth_after;
+            }
+        }
+        if let Some(mut existing) = existing {
+            existing.set_if_neq(next);
+        } else {
+            commands.entity(world).insert(next);
+        }
+    }
 }
 
 fn environment_render_mask(layer: u16) -> RenderLayers {
@@ -66,7 +136,9 @@ fn route_authored_environment_layers(
 #[allow(clippy::type_complexity)]
 fn synchronize_environment_camera_stack(
     mut commands: Commands,
-    layers: Query<(&EnvironmentRenderLayer, &WorldMember, &Visibility)>,
+    layers: Query<Ref<EnvironmentWorldLayers>>,
+    mut removed_fog: RemovedComponents<DistanceFog>,
+    mut removed_hdr: RemovedComponents<Hdr>,
     mut world_cameras: Query<
         (
             Entity,
@@ -75,12 +147,12 @@ fn synchronize_environment_camera_stack(
             &mut Camera3d,
             Ref<Projection>,
             Ref<RenderTarget>,
-            &Exposure,
-            &Msaa,
-            Has<Hdr>,
+            Ref<Exposure>,
+            Ref<Msaa>,
+            Option<Ref<Hdr>>,
             Option<Ref<DistanceFog>>,
             Option<&EnvironmentWorldCameraState>,
-            Option<&Children>,
+            Option<Ref<Children>>,
         ),
         (With<ZooCamera>, Without<EnvironmentStackCamera>),
     >,
@@ -99,6 +171,10 @@ fn synchronize_environment_camera_stack(
         Without<ZooCamera>,
     >,
 ) {
+    let emptied = removed_fog
+        .read()
+        .chain(removed_hdr.read())
+        .collect::<EntityHashSet>();
     for (
         world_camera,
         member,
@@ -114,14 +190,24 @@ fn synchronize_environment_camera_stack(
         children,
     ) in &mut world_cameras
     {
-        let mut authored_layers = BTreeMap::new();
-        for (layer, owner, visibility) in &layers {
-            if owner.root == member.root && *visibility != Visibility::Hidden {
-                *authored_layers.entry(layer.layer).or_insert(false) |= layer.clear_depth_after;
-            }
+        let authored = layers.get(member.root).ok();
+        let inputs_changed = view.is_changed()
+            || view_3d.is_changed()
+            || projection.is_changed()
+            || target.is_changed()
+            || exposure.is_changed()
+            || msaa.is_changed()
+            || hdr.as_ref().is_some_and(Ref::is_changed)
+            || fog.as_ref().is_some_and(Ref::is_changed)
+            || children.as_ref().is_some_and(Ref::is_changed)
+            || emptied.contains(&world_camera);
+        if !inputs_changed && !authored.as_ref().is_some_and(Ref::is_changed) {
+            continue;
         }
+        let empty = BTreeMap::new();
+        let authored_layers = authored.as_deref().map_or(&empty, |layers| &layers.0);
         let mut existing = BTreeMap::new();
-        for child in children.into_iter().flatten() {
+        for child in children.as_deref().into_iter().flatten() {
             if let Ok((layer, ..)) = stacked_cameras.get(*child) {
                 existing.insert(layer.0, *child);
             }
@@ -160,7 +246,7 @@ fn synchronize_environment_camera_stack(
             .chain(
                 authored_layers
                     .into_iter()
-                    .map(|(layer, clear)| (Some(layer), clear)),
+                    .map(|(&layer, &clear)| (Some(layer), clear)),
             )
             .enumerate()
         {
@@ -216,9 +302,9 @@ fn synchronize_environment_camera_stack(
                     }
                     _ => {}
                 }
-                if hdr && !child_hdr {
+                if hdr.is_some() && !child_hdr {
                     camera_entity.insert(Hdr);
-                } else if !hdr && child_hdr {
+                } else if hdr.is_none() && child_hdr {
                     camera_entity.remove::<Hdr>();
                 }
             } else {
@@ -246,7 +332,7 @@ fn synchronize_environment_camera_stack(
                     layer.map_or_else(RenderLayers::none, environment_render_mask),
                     ChildOf(world_camera),
                 ));
-                if hdr {
+                if hdr.is_some() {
                     camera_entity.insert(Hdr);
                 }
                 if let Some(fog) = fog.as_ref() {

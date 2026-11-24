@@ -61,10 +61,8 @@ use super::{
     native_crate_snapshot_links::{
         capture_native_crate_links, validate_native_crate_links, NativeCrateSnapshotEntities,
     },
-    original_saved_game_load_preparation::OriginalSavedGameLoadPreparation,
-    pending_snapshot_application_types::PendingSnapshotApplication,
     persistence_failure_message_publication::publish_persistence_failure_for_slot_operation,
-    persistence_slot_filesystem_task_types::PersistenceSlotFilesystemTask,
+    persistence_slot_filesystem_task_types::PersistenceSlotOperation,
     photo_snapshot_capture::{
         capture_sorted_photo_and_challenge_progress_snapshot_records_from_live_world,
         PhotoSnapshotCaptureQueries,
@@ -99,6 +97,7 @@ use super::{
 };
 
 #[derive(Component)]
+#[require(PersistenceSlotOperation)]
 struct SnapshotCaptureRequest {
     profile: AssetId,
     requests: Vec<(SaveWorldSnapshotToSlot, Option<SaveDialogSubmission>)>,
@@ -124,14 +123,7 @@ fn admit_snapshot_capture(
     mut dialog_requests: MessageReader<SaveSnapshotFromDialog>,
     directories: Option<Res<PersistenceFilesystemPaths>>,
     profile: Res<ProfileOptions>,
-    active_operations: Query<
-        (),
-        Or<(
-            With<PersistenceSlotFilesystemTask>,
-            With<PendingSnapshotApplication>,
-            With<OriginalSavedGameLoadPreparation>,
-        )>,
-    >,
+    active_operations: Query<(), With<PersistenceSlotOperation>>,
     mut failures: MessageWriter<WorldSnapshotPersistenceFailed>,
 ) {
     let requests = save_requests

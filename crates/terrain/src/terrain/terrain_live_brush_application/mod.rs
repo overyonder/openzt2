@@ -5,7 +5,9 @@ use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::Ter
 use openzt2_zoo_state::construction::construction_interaction_types::CancelConstruction;
 use openzt2_zoo_state::construction::construction_interaction_types::ConstructionPreview;
 
+use super::authored_terrain_brush_modes::AuthoredTerrainBrushModes;
 use crate::terrain::terrain_brush_sample_mutation::prepare_terrain_chunk_sample_delta_from_brush_dabs;
+use crate::terrain::terrain_brush_sample_mutation::TerrainSmoothing;
 use crate::terrain::terrain_chunk_index_cleanup::TerrainChunkIdLookup;
 use crate::terrain::terrain_edit_application::apply_validated_terrain_edit_delta_and_publish_changed_region;
 use openzt2_zoo_state::terrain::terrain_brush_interaction_state::ActiveTerrainBrush;
@@ -51,6 +53,7 @@ pub(super) fn apply_held_terrain_brush_dabs_and_accumulate_one_draft_edit(
     mut commands: Commands,
     roots: Query<(&TerrainIndex, &TerrainChunkIdLookup)>,
     assets: Res<Assets<TerrainAsset>>,
+    modes: AuthoredTerrainBrushModes,
     mut region_data: ParamSet<(
         TerrainWaterRegionQuery,
         Query<(
@@ -91,6 +94,20 @@ pub(super) fn apply_held_terrain_brush_dabs_and_accumulate_one_draft_edit(
     let Ok((index, chunk_ids)) = roots.get(member.root) else {
         return;
     };
+    let read_neighbour = |entity, x, z| {
+        let (_, chunk, edited, _) = chunks.get(entity).ok()?;
+        let asset = assets.get(&chunk.asset)?;
+        openzt2_zoo_state::terrain::terrain_sample_grid_queries::read_terrain_sample_height_centimetres(
+            chunk, asset, edited, x, z,
+        )
+    };
+    let smoothing = modes
+        .smooth_samples()
+        .map(|radius_samples| TerrainSmoothing {
+            radius_samples,
+            terrain: index,
+            read_height: &read_neighbour,
+        });
     if !(stroke.center.is_finite()
         && stroke.radius_m.is_finite()
         && stroke.radius_m > 0.0
@@ -234,6 +251,7 @@ pub(super) fn apply_held_terrain_brush_dabs_and_accumulate_one_draft_edit(
                 &preview,
                 core::slice::from_ref(&dab),
                 &[water_surface_height_cm],
+                smoothing.as_ref(),
                 water_plan
                     .as_ref()
                     .zip(water_membership.single().ok())

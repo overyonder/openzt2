@@ -12,6 +12,7 @@ use super::guest_simulation_types::GuestDessert;
 use super::guest_simulation_types::GuestEnergy;
 use super::guest_simulation_types::GuestGift;
 use super::guest_simulation_types::GuestHunger;
+use super::guest_simulation_types::{GuestNeedAdjustmentDue, GuestNeedAdjustmentTimer};
 use super::guest_simulation_types::GuestRestroom;
 use super::guest_simulation_types::GuestRng;
 use super::guest_simulation_types::GuestSatisfaction;
@@ -35,15 +36,58 @@ pub(crate) fn apply_guest_satisfaction_adjustments(
 }
 
 #[allow(clippy::type_complexity)]
-pub(crate) fn decay_guest_needs(
+pub(super) fn tick_guest_need_cadences(
     time: Res<Time<Fixed>>,
+    definitions: Res<Assets<WorldDefinitionAsset>>,
+    active_definitions: Res<WorldDefinitions>,
+    mut guests: Query<
+        (Entity, &mut GuestNeedAdjustmentTimer, &mut GuestRng),
+        (
+            With<Guest>,
+            With<GuestArchetype>,
+            With<VisitTime>,
+            With<GuestHunger>,
+            With<GuestThirst>,
+            With<GuestDessert>,
+            With<GuestGift>,
+            With<GuestEnergy>,
+            With<GuestRestroom>,
+            With<GuestSocial>,
+            With<GuestAmusement>,
+            With<GuestSatisfaction>,
+        ),
+    >,
+    mut due: MessageWriter<GuestNeedAdjustmentDue>,
+) {
+    let Some(definitions) = active_definitions.get(&definitions) else {
+        return;
+    };
+    let Some(policy) = definitions
+        .need_adjustment()
+        .filter(|policy| policy.enabled)
+    else {
+        return;
+    };
+    for (entity, mut timer, mut rng) in &mut guests {
+        if openzt2_zoo_state::need_adjustment::tick_need_adjustment(
+            &mut timer.0,
+            time.timestep(),
+            policy.delay_steps,
+            &mut rng.0,
+        ) {
+            due.write(GuestNeedAdjustmentDue(entity));
+        }
+    }
+}
+
+#[allow(clippy::type_complexity)]
+pub(super) fn decay_due_guest_needs(
+    mut due: MessageReader<GuestNeedAdjustmentDue>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     mut guests: Query<
         (
             &GuestArchetype,
-            &mut VisitTime,
-            &mut GuestRng,
             &mut GuestHunger,
             &mut GuestThirst,
             &mut GuestDessert,
@@ -61,37 +105,23 @@ pub(crate) fn decay_guest_needs(
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };
-    let Some(policy) = definitions.need_adjustment() else {
-        return;
-    };
-    if !policy.enabled {
-        return;
-    }
-    let step_ns = u64::try_from(time.timestep().as_nanos()).unwrap_or(u64::MAX);
-    for (
-        archetype,
-        mut visit_time,
-        mut rng,
-        mut hunger,
-        mut thirst,
-        mut dessert,
-        mut gift,
-        mut energy,
-        mut restroom,
-        mut social,
-        mut amusement,
-        viewing_need,
-        mut satisfaction,
-    ) in &mut guests
-    {
-        if !openzt2_zoo_state::need_adjustment::advance_need_adjustment_timer(
-            &mut visit_time.need_adjustment_remaining_ns,
-            step_ns,
-            policy.delay_steps,
-            &mut rng.0,
-        ) {
+    for adjustment in due.read() {
+        let Ok((
+            archetype,
+            mut hunger,
+            mut thirst,
+            mut dessert,
+            mut gift,
+            mut energy,
+            mut restroom,
+            mut social,
+            mut amusement,
+            viewing_need,
+            mut satisfaction,
+        )) = guests.get_mut(adjustment.0)
+        else {
             continue;
-        }
+        };
         let Some((_, definition)) = find_guest_definition(definitions, archetype.0) else {
             continue;
         };

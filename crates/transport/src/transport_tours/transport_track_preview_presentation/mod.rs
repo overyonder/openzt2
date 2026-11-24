@@ -339,14 +339,18 @@ fn spawn_sky_track_preview(
             .unwrap_or_default();
         if line.configure_for_authored_blue_fang_line(texture) {
             line.recreate_uniform_buffers_for_runtime_material(assets.effect_uniform_buffers);
+            let cable = super::transport_track_piece_presentation::authored_rope_curve_points(
+                start,
+                end,
+                presentation,
+            );
             crate::transport_tours::transport_track_piece_presentation::spawn_authored_sky_track_rope(
                     commands,
                     assets.meshes,
                     assets.effect_pass_materials.add(line),
                     root,
                     &preview.transform,
-                    start,
-                    end,
+                    &cable,
                     presentation,
                 );
         }

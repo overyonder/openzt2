@@ -128,7 +128,10 @@ pub(super) fn cancel_donation_interactions_with_missing_subjects_or_acceptors(
             Option<&DonationCandidate>,
             Option<&DonationProgress>,
         ),
-        With<Guest>,
+        (
+            With<Guest>,
+            Or<(With<DonationCandidate>, With<DonationProgress>)>,
+        ),
     >,
     acceptors: Query<(), With<DonationAcceptor>>,
     opportunities: Query<(), With<DonationOpportunity>>,

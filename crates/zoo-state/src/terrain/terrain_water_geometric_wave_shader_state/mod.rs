@@ -347,79 +347,82 @@ impl NativeTerrainWaterGeometricWaveShaderState {
         }
     }
 
+    /// Samples the renderer's registers after the wave channels advance.
+    #[must_use]
+    pub fn wave_registers(&self) -> TerrainWaterWaveRegisters {
+        let channels = self.channels;
+        let amplitude = channels.map(|channel| channel.amplitude * channel.envelope);
+        let steepness = channels.map(NativeTerrainWaterGeometricWaveChannel::native_wave_steepness);
+        let mut displacement = Vec2::ZERO;
+        for ((channel, amplitude), steepness) in channels.into_iter().zip(amplitude).zip(steepness)
+        {
+            displacement += Vec2::new(
+                (amplitude * std::f32::consts::TAU / channel.wavelength * steepness).abs(),
+                amplitude.abs(),
+            );
+        }
+        TerrainWaterWaveRegisters {
+            frequency: Vec4::from_array(
+                channels.map(|channel| std::f32::consts::TAU / channel.wavelength),
+            ),
+            phase: Vec4::from_array(channels.map(|channel| channel.phase)),
+            amplitude: Vec4::from_array(amplitude),
+            position_x: Vec4::from_array(channels.map(|channel| channel.centre_x)),
+            position_y: Vec4::from_array(channels.map(|channel| channel.centre_y)),
+            steepness: Vec4::from_array(steepness),
+            ramp_offset: Vec4::from_array(channels.map(|channel| channel.ramp_offset)),
+            ramp_scale: Vec4::from_array(channels.map(|channel| channel.ramp_distance.recip())),
+            displacement,
+        }
+    }
+}
+
+#[derive(Component, Debug, Clone, Copy, PartialEq)]
+pub struct TerrainWaterWaveRegisters {
+    frequency: Vec4,
+    phase: Vec4,
+    amplitude: Vec4,
+    position_x: Vec4,
+    position_y: Vec4,
+    steepness: Vec4,
+    ramp_offset: Vec4,
+    ramp_scale: Vec4,
+    displacement: Vec2,
+}
+
+impl TerrainWaterWaveRegisters {
     pub fn bind_wave_channels_to_effect_pass(
         &self,
         water_height: f32,
         material: &mut EffectPassMaterial,
     ) {
-        material.bind_float_vector_effect_semantic(
-            "Frequency",
-            Vec4::from_array(
-                self.channels
-                    .map(|channel| std::f32::consts::TAU / channel.wavelength),
-            ),
-        );
-        material.bind_float_vector_effect_semantic(
-            "Phase",
-            Vec4::from_array(self.channels.map(|channel| channel.phase)),
-        );
-        material.bind_float_vector_effect_semantic(
-            "Amplitude",
-            Vec4::from_array(
-                self.channels
-                    .map(|channel| channel.amplitude * channel.envelope),
-            ),
-        );
-        material.bind_float_vector_effect_semantic(
-            "PosX",
-            Vec4::from_array(self.channels.map(|channel| channel.centre_x)),
-        );
-        material.bind_float_vector_effect_semantic(
-            "PosY",
-            Vec4::from_array(self.channels.map(|channel| channel.centre_y)),
-        );
-        material.bind_float_vector_effect_semantic(
-            "K",
-            Vec4::from_array(self.channels.map(|channel| channel.native_wave_steepness())),
-        );
-        material.bind_float_vector_effect_semantic(
-            "DepthOffset",
-            Vec4::new(
-                water_height,
-                water_height,
-                water_height + 0.001,
-                water_height,
-            ),
-        );
-        material.bind_float_vector_effect_semantic("DepthScale", Vec4::new(2.0, 2.0, 2.0, 1.0));
-        material.bind_float_vector_effect_semantic(
-            "RampOffset",
-            Vec4::from_array(self.channels.map(|channel| channel.ramp_offset)),
-        );
-        material.bind_float_vector_effect_semantic(
-            "RampScale",
-            Vec4::from_array(self.channels.map(|channel| channel.ramp_distance.recip())),
-        );
+        let wave = self.particle_wave_surface(water_height);
+        for (semantic, register) in [
+            ("Frequency", wave.frequency),
+            ("Phase", wave.phase),
+            ("Amplitude", wave.amplitude),
+            ("PosX", wave.pos_x),
+            ("PosY", wave.pos_y),
+            ("K", wave.k),
+            ("DepthOffset", wave.depth_offset),
+            ("DepthScale", wave.depth_scale),
+            ("RampOffset", wave.ramp_offset),
+            ("RampScale", wave.ramp_scale),
+        ] {
+            material.bind_float_vector_effect_semantic(semantic, register);
+        }
     }
 
     pub fn particle_wave_surface(&self, water_height: f32) -> ParticleEffectWaveSurface {
         ParticleEffectWaveSurface {
-            frequency: Vec4::from_array(
-                self.channels
-                    .map(|channel| std::f32::consts::TAU / channel.wavelength),
-            ),
-            phase: Vec4::from_array(self.channels.map(|channel| channel.phase)),
-            amplitude: Vec4::from_array(
-                self.channels
-                    .map(|channel| channel.amplitude * channel.envelope),
-            ),
-            pos_x: Vec4::from_array(self.channels.map(|channel| channel.centre_x)),
-            pos_y: Vec4::from_array(self.channels.map(|channel| channel.centre_y)),
-            k: Vec4::from_array(self.channels.map(|channel| channel.native_wave_steepness())),
-            ramp_offset: Vec4::from_array(self.channels.map(|channel| channel.ramp_offset)),
-            ramp_scale: Vec4::from_array(
-                self.channels.map(|channel| channel.ramp_distance.recip()),
-            ),
+            frequency: self.frequency,
+            phase: self.phase,
+            amplitude: self.amplitude,
+            pos_x: self.position_x,
+            pos_y: self.position_y,
+            k: self.steepness,
+            ramp_offset: self.ramp_offset,
+            ramp_scale: self.ramp_scale,
             depth_offset: Vec4::new(
                 water_height,
                 water_height,
@@ -430,26 +433,15 @@ impl NativeTerrainWaterGeometricWaveShaderState {
         }
     }
 
-    /// Bounds the shipped watersurface.h displacement in source XY and Z.
-    /// Its wrapped seventh/sixth-order sine/cosine polynomials stay below
-    /// 1.01/1.22 in magnitude; ramp attenuation is in [0, 1]. Horizontal
-    /// displacement additionally multiplies the original input vertex height.
+    /// The wrapped shader polynomials stay below 1.01 and 1.22 in magnitude.
+    /// Horizontal displacement also multiplies the original vertex height.
     pub fn maximum_horizontal_and_vertical_shader_displacement(
         &self,
         maximum_absolute_input_height: f32,
     ) -> Option<Vec2> {
-        let mut maximum_displacement = Vec2::ZERO;
-        for channel in self.channels {
-            let amplitude = channel.amplitude * channel.envelope;
-            maximum_displacement += Vec2::new(
-                (amplitude * std::f32::consts::TAU / channel.wavelength
-                    * channel.native_wave_steepness())
-                .abs(),
-                amplitude.abs(),
-            );
-        }
-        maximum_displacement *= Vec2::new(1.22 * maximum_absolute_input_height, 1.01);
-        maximum_displacement += Vec2::splat(0.01);
+        let maximum_displacement = self.displacement
+            * Vec2::new(1.22 * maximum_absolute_input_height, 1.01)
+            + Vec2::splat(0.01);
         maximum_displacement
             .is_finite()
             .then_some(maximum_displacement)
@@ -628,6 +620,7 @@ mod geometric_wave_state_tests {
                     assert!(channel.phase.is_finite());
                 }
                 assert!(state
+                    .wave_registers()
                     .maximum_horizontal_and_vertical_shader_displacement(50.0)
                     .is_some());
             }

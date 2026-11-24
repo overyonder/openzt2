@@ -1,4 +1,5 @@
 use openzt2_interface_state::ui::UiSet;
+mod authored_click_catcher_lifetime;
 mod authored_fame_star_presentation;
 mod authored_globe_camera_framing;
 mod authored_globe_interaction;
@@ -61,7 +62,6 @@ mod controller_ui_action_routing;
 pub mod cursor;
 mod drop_list;
 mod focused_or_selected_node_scroll_reveal;
-mod full_canvas_click_catcher;
 mod graph_generated_geometry;
 mod graph_history_series_rendering;
 mod graph_presentation;
@@ -85,7 +85,12 @@ use self::authored_reusable_list_and_table_runtime_types::SetUiListRowCount;
 use self::cursor::SetWaitCursor;
 mod authored_scrollbar;
 
-use bevy::prelude::*;
+use bevy::{
+    ecs::schedule::common_conditions::on_message,
+    picking::events::{PointerDrag, PointerPress},
+    prelude::*,
+};
+use openzt2_interface_state::input::input_types::ActionRequest;
 
 use self::ui_document_lifecycle_contracts::{
     HideUiDocument, InGameUiOwner, ShowUiDocument, ShowUiRole,
@@ -102,6 +107,12 @@ impl Plugin for GameUiPlugin {
     fn build(&self, app: &mut App) {
         cursor::initialize(app);
         picking::initialize(app);
+        projection::register_document_attachment_cleanup(app);
+        app.add_observer(notification::discard_notification_without_projected_alert);
+        app.add_observer(authored_globe_interaction::cancel_turn_when_globe_marker_is_lost);
+        app.add_observer(
+            authored_timed_action_sequence::release_selection_when_timed_sequence_disappears,
+        );
         app.add_systems(PostUpdate,
             authored_ui_source_rectangle_presentation::project_changed_authored_image_source_rectangles
                 .before(bevy::ui::UiSystems::Layout));
@@ -116,7 +127,6 @@ impl Plugin for GameUiPlugin {
                 ),
             ),
         );
-        authored_ui_presentation_action_application::register_presentation_observers(app);
         use openzt2_interface_state::information::entity_selection_types::{
             SelectionChanged, SelectionRequest,
         };
@@ -124,6 +134,7 @@ impl Plugin for GameUiPlugin {
             focused_or_selected_node_scroll_reveal::reveal_in_nearest_authored_scroll_area,
         )
         .add_message::<authored_rail_camera_presentation::RailDeveloperCommand>()
+        .add_message::<authored_rail_camera_presentation::RailWaypointsEdited>()
         .add_message::<SelectionRequest>()
         .add_message::<SelectionChanged>()
         .add_observer(world_subject_selection::clear_world_ui_selection_on_loss_of_inspectability)
@@ -141,6 +152,7 @@ impl Plugin for GameUiPlugin {
             .add_message::<ShowUiRole>()
             .add_message::<ui_document_lifecycle_contracts::AuthoredUiDocumentOperation>()
             .add_message::<HideUiDocument>()
+            .init_resource::<active_authored_ui_context::AuthoredFocusScope>()
             .add_observer(authored_ui_focus_navigation_and_activation::authored_focus_entered)
             .add_observer(authored_ui_focus_navigation_and_activation::authored_focus_left)
             .add_observer(authored_ui_change_activation_dispatch::activate_initial_deselection)
@@ -150,7 +162,9 @@ impl Plugin for GameUiPlugin {
             .add_message::<authored_ui_activation_contracts::UiNodeActivated>()
             .add_message::<authored_ui_activation_contracts::ActivateAuthoredUiTool>()
             .add_message::<authored_ui_presentation_action_application::RequestUiPresentationAction>()
-            .add_message::<animation::UiAnimationCompleted>()
+            .add_message::<animation::UiAnimationPlaybackRequest>()
+            .add_message::<authored_timed_action_sequence::TimedUiPresentationCommitted>()
+            .add_message::<authored_timed_action_sequence::UiSelectionWaitEnded>()
             .add_message::<notification_contracts::ShowNotification>()
             .add_message::<notification_contracts::NotificationPresented>()
             .add_message::<notification_contracts::NotificationRejected>()
@@ -185,29 +199,34 @@ impl Plugin for GameUiPlugin {
                     (
                         projection::ui_document_opening::ingest_ui_document_opening_requests,
                         projection::ui_document_opening::project_ui_documents,
-                        projection::ui_document_opening::apply_ready_ui_document_opening_effects,
                         world_subject_selection::show_information_for_world_ui_selection,
                     ).chain(),
                     graph_presentation::clip_authored_graph_generated_geometry
                         .after(projection::ui_document_opening::project_ui_documents),
                     authored_zoo_message_lists::update_latest_zoo_message_presentation,
-                    main_toolbar::initialize_main_toolbar.after(projection::ui_document_opening::project_ui_documents),
+                    main_toolbar::restore_main_toolbar_toggle_selection
+                        .after(projection::ui_document_opening::project_ui_documents),
                     authored_text_edit_bevy_adaptation::initialize_authored_text_edits_as_bevy_editable_text
                         .after(projection::ui_document_opening::project_ui_documents),
                     (
-                        projection::authored_list_row_projection::record_requested_ui_list_row_counts,
+                        projection::authored_list_row_projection::record_requested_ui_list_row_counts
+                            .run_if(on_message::<SetUiListRowCount>),
                         authored_zoo_message_lists::size_zoo_message_lists
                             .after(authored_zoo_message_lists::update_latest_zoo_message_presentation),
-                        projection::authored_list_row_projection::reconcile_changed_ui_list_row_counts,
-                        projection::authored_list_row_projection::materialize_ready_ui_list_rows,
-                        authored_zoo_message_lists::bind_zoo_message_rows,
-                    ).chain().after(projection::ui_document_opening::project_ui_documents),
+                        projection::authored_list_row_projection::reconcile_changed_ui_list_row_counts
+                            .after(projection::authored_list_row_projection::record_requested_ui_list_row_counts)
+                            .after(authored_zoo_message_lists::size_zoo_message_lists),
+                        projection::authored_list_row_projection::materialize_ready_ui_list_rows
+                            .after(projection::authored_list_row_projection::reconcile_changed_ui_list_row_counts),
+                        authored_zoo_message_lists::bind_zoo_message_rows
+                            .after(projection::authored_list_row_projection::materialize_ready_ui_list_rows),
+                    ).after(projection::ui_document_opening::project_ui_documents),
                     (
                         slider::link_authored_slider_thumbs,
                         authored_ui_canvas_scaling_and_clipping::link_ui_canvas_members,
                         authored_ui_canvas_scaling_and_clipping::project_authored_ui_canvas_viewport_metrics,
-                        authored_ui_canvas_scaling_and_clipping::apply_authored_canvas_layout_corrections,
-                    ).chain().after(projection::authored_list_row_projection::materialize_ready_ui_list_rows),
+                        authored_tree_expansion_and_row_indentation::bind_tree_items_to_containing_rows,
+                    ).after(projection::authored_list_row_projection::materialize_ready_ui_list_rows),
                 )
                     .in_set(UiSet::Projection),
             )
@@ -220,35 +239,48 @@ impl Plugin for GameUiPlugin {
                 (
                     (
                         authored_hotkey_keyboard_activation::activate_projected_authored_hotkeys_from_keyboard_input,
-                        authored_ui_focus_navigation_and_activation::update_active_authored_focus
+                        active_authored_ui_context::resolve_authored_focus_scope
                             .after(authored_pointer_events::activate_authored_pointer_events)
+                            .after(authored_text_edit_bevy_adaptation::discard_pending_edits_and_focus_from_disabled_text_edits),
+                        active_authored_ui_context::project_native_widget_interaction_from_authored_enablement
+                            .before(authored_text_edit_bevy_adaptation::discard_pending_edits_and_focus_from_disabled_text_edits),
+                        authored_ui_focus_navigation_and_activation::update_active_authored_focus
+                            .after(active_authored_ui_context::resolve_authored_focus_scope)
                             .before(slider::adjust_focused_sliders)
                             .before(authored_ui_focus_navigation_and_activation::navigate_authored_ui_focus_from_actions),
                         authored_ui_focus_navigation_and_activation::release_edit_focus_when_pressing_elsewhere
                             .before(authored_pointer_events::activate_authored_pointer_events),
-                        authored_ui_focus_navigation_and_activation::navigate_authored_ui_focus_from_actions,
+                        authored_ui_focus_navigation_and_activation::navigate_authored_ui_focus_from_actions
+                            .run_if(on_message::<ActionRequest>),
                         authored_globe_interaction::interact_with_globe.before(authored_pointer_events::activate_authored_pointer_events),
                         authored_pointer_events::activate_authored_pointer_events,
                         authored_composite_button_activation_forwarding::forward_authored_composite_button_activations_to_projected_child_controls.after(authored_pointer_events::activate_authored_pointer_events),
                         drop_list::toggle_or_close_authored_drop_list_displays_from_activations
                             .after(authored_composite_button_activation_forwarding::forward_authored_composite_button_activations_to_projected_child_controls),
-                        full_canvas_click_catcher::hide_activated_or_elapsed_full_canvas_click_catchers.after(authored_pointer_events::activate_authored_pointer_events),
+                        (
+                            authored_click_catcher_lifetime::dismiss_pressed_click_catchers
+                                .run_if(on_message::<authored_ui_activation_contracts::UiNodeActivated>),
+                            authored_click_catcher_lifetime::synchronize_click_catcher_timers,
+                            authored_click_catcher_lifetime::expire_active_click_catchers,
+                        ).chain().after(authored_pointer_events::activate_authored_pointer_events),
                         slider::apply_slider_bounds,
                         slider::apply_authored_slider_pointer_events
-                            .after(authored_pointer_events::activate_authored_pointer_events),
+                            .after(active_authored_ui_context::resolve_authored_focus_scope)
+                            .run_if(on_message::<PointerPress>.or(on_message::<PointerDrag>)),
                         slider::adjust_focused_sliders
+                            .run_if(on_message::<ActionRequest>)
                             .after(authored_ui_focus_navigation_and_activation::update_active_authored_focus)
                             .before(authored_ui_focus_navigation_and_activation::navigate_authored_ui_focus_from_actions),
-                        slider::project_native_slider_values
-                            .after(slider::apply_slider_bounds)
-                            .after(slider::adjust_focused_sliders),
                         authored_text_edit_bevy_adaptation::discard_pending_edits_and_focus_from_disabled_text_edits,
                     ),
                     (
                         controller_ui_action_routing::route_controller_authored_actions,
                         single_receiver_ui_cancellation::dismiss_one_active_ui_activity_from_cancel_requests
+                            .after(active_authored_ui_context::resolve_authored_focus_scope)
+                            .run_if(on_message::<ActionRequest>)
                             .after(authored_text_edit_bevy_adaptation::discard_pending_edits_and_focus_from_disabled_text_edits),
                         authored_ui_focus_navigation_and_activation::activate_focused_authored_ui_node_from_confirm
+                            .run_if(on_message::<ActionRequest>)
                             .after(authored_ui_focus_navigation_and_activation::navigate_authored_ui_focus_from_actions)
                             .after(authored_pointer_events::activate_authored_pointer_events),
                         authored_toggle_selection_transitions::transition_pressed_authored_toggles
@@ -257,9 +289,7 @@ impl Plugin for GameUiPlugin {
                             .after(authored_pointer_events::activate_authored_pointer_events)
                             .after(authored_toggle_selection_transitions::transition_pressed_authored_toggles),
                         authored_tree_expansion_and_row_indentation::toggle_authored_tree_expansion_from_presses.after(authored_pointer_events::activate_authored_pointer_events),
-                        authored_tree_expansion_and_row_indentation::present_authored_tree_children_from_expansion
-                            .after(authored_tree_expansion_and_row_indentation::toggle_authored_tree_expansion_from_presses),
-                        authored_tree_expansion_and_row_indentation::project_authored_tree_depth_into_containing_row_indentation,
+                        authored_tree_expansion_and_row_indentation::update_tree_row_indentation,
                         authored_ui_change_activation_dispatch::dispatch_authored_value_change_activations
                             .after(slider::apply_slider_bounds)
                             .after(slider::adjust_focused_sliders)
@@ -275,21 +305,27 @@ impl Plugin for GameUiPlugin {
             )
             .add_systems(
                 Update,
-                (cursor::apply_wait_cursor_requests, cursor::present_cursor)
-                    .chain()
-                    .in_set(GameSet::Presentation),
+                (
+                    cursor::apply_wait_cursor_requests.run_if(on_message::<SetWaitCursor>),
+                    cursor::project_cursor_window_scale,
+                    cursor::resolve_requested_window_cursor.after(cursor::apply_wait_cursor_requests).after(cursor::project_cursor_window_scale),
+                    cursor::apply_cached_or_unscaled_window_cursor.after(cursor::resolve_requested_window_cursor),
+                    cursor::synthesize_requested_cursor_image.after(cursor::apply_cached_or_unscaled_window_cursor)
+                        .run_if(on_message::<cursor::SynthesizeCursorImage>),
+                ).in_set(GameSet::Presentation),
             )
             .add_systems(
                 Update,
                 (
-                    animation::advance_ui_animations,
-                    animation::dispatch_ui_animation_commands
-                        .after(animation::advance_ui_animations),
-                    authored_ui_presentation_action_application::route_presentation_actions,
+                    animation::tick_authored_ui_animations,
+                    authored_ui_presentation_action_application::presentation_batch::apply_ordered_presentation_batches
+                        .after(animation::tick_authored_ui_animations),
                     projection::ui_document_opening::apply_authored_ui_document_opening_operations
-                        .after(authored_ui_presentation_action_application::route_presentation_actions),
-                    authored_timed_action_sequence::advance_authored_timed_action_sequences_and_activate_due_proxies
-                        .after(authored_ui_presentation_action_application::route_presentation_actions),
+                        .after(authored_ui_presentation_action_application::presentation_batch::apply_ordered_presentation_batches),
+                    authored_timed_action_sequence::dispatch_due_authored_sequence_steps
+                        .after(authored_ui_presentation_action_application::presentation_batch::apply_ordered_presentation_batches),
+                    authored_timed_action_sequence::acknowledge_settled_scenario_ui_selections
+                        .after(authored_timed_action_sequence::dispatch_due_authored_sequence_steps),
                 )
                     .in_set(UiSet::Commands),
             )
@@ -302,7 +338,14 @@ impl Plugin for GameUiPlugin {
                         authored_wheel_scroll::scroll_captured_authored_list_or_window_from_mouse_wheel,
                         authored_window_interaction::move_authored_windows_from_pointer_drags,
                         authored_drag_gesture::apply_authored_drag_gestures_to_bevy_layout_or_scroll_position,
-                        authored_tooltip_presentation::update_authored_tooltip_presentations,
+                        (
+                            authored_tooltip_presentation::resolve_tooltip_hover_targets,
+                            (
+                                authored_tooltip_presentation::tick_active_tooltip_timers,
+                                authored_tooltip_presentation::project_tooltip_text_from_hover_binding,
+                                authored_tooltip_presentation::position_floating_tooltips,
+                            ),
+                        ).chain(),
                         authored_multi_icon_presentation::present_multi_icons
                             .after(projection::ui_document_opening::project_ui_documents),
                         (authored_fame_star_presentation::create_fame_star_scenes,
@@ -312,10 +355,13 @@ impl Plugin for GameUiPlugin {
                         authored_rail_camera_presentation::hydrate_rail_cameras,
                         authored_rail_camera_presentation::route_rail_developer_hotkeys
                             .after(authored_rail_camera_presentation::hydrate_rail_cameras),
-                        authored_rail_camera_presentation::update_rail_cameras
+                        authored_rail_camera_presentation::apply_rail_developer_edits
                             .after(authored_rail_camera_presentation::route_rail_developer_hotkeys),
-                        authored_rail_camera_presentation::project_rail_lighting
-                            .after(authored_rail_camera_presentation::update_rail_cameras),
+                        authored_rail_camera_presentation::rebuild_edited_rail_clips
+                            .after(authored_rail_camera_presentation::apply_rail_developer_edits)
+                            .run_if(on_message::<authored_rail_camera_presentation::RailWaypointsEdited>),
+                        authored_rail_camera_presentation::synchronize_rail_animation_playback
+                            .after(authored_rail_camera_presentation::apply_rail_developer_edits),
                     ),
                     (
                         authored_globe_scene_presentation::hydrate_globe_models,
@@ -326,14 +372,15 @@ impl Plugin for GameUiPlugin {
                         authored_globe_camera_framing::cache_globe_spheres,
                         authored_globe_camera_framing::frame_globe_cameras
                             .after(authored_globe_camera_framing::cache_globe_spheres),
-                        authored_globe_interaction::target_selected_globe_marker
-                            .after(authored_globe_marker_presentation::present_globe_marker_selection)
-                            .after(authored_globe_marker_presentation::project_globe_markers)
+                        authored_globe_interaction::link_selected_globe_marker_anchors
+                            .after(authored_globe_marker_presentation::project_globe_markers),
+                        authored_globe_interaction::retarget_selected_globe_turns
+                            .after(authored_globe_interaction::link_selected_globe_marker_anchors)
                             .after(authored_globe_camera_framing::frame_globe_cameras),
-                        authored_globe_interaction::turn_globe_to_selection
-                            .after(authored_globe_interaction::target_selected_globe_marker),
+                        authored_globe_interaction::advance_globe_selection_turns
+                            .after(authored_globe_interaction::retarget_selected_globe_turns),
                         authored_globe_interaction::rotate_globe
-                            .after(authored_globe_interaction::turn_globe_to_selection),
+                            .after(authored_globe_interaction::advance_globe_selection_turns),
                         authored_globe_interaction::highlight_hovered_globe_marker
                             .after(authored_globe_interaction::rotate_globe),
                         authored_globe_interaction::play_globe_spin_sound
@@ -346,8 +393,9 @@ impl Plugin for GameUiPlugin {
                 Update,
                 (
                     notification::request_notifications,
-                    notification::acknowledge_notifications
-                        .after(notification::request_notifications),
+                    notification::populate_projected_notification_alerts,
+                    notification::report_effectively_visible_notifications
+                        .after(notification::populate_projected_notification_alerts),
                     notification::reject_failed_notifications
                         .after(notification::request_notifications),
                 )
@@ -355,8 +403,15 @@ impl Plugin for GameUiPlugin {
             )
             .add_systems(
                 Update,
-                authored_ui_layout_participation::synchronize_authored_visibility_with_bevy_layout_participation
+                authored_ui_layout_participation::project_authored_layout_participation
                     .after(UiSet::Notifications)
+                    .in_set(GameSet::Ui),
+            )
+            .add_systems(
+                Update,
+                animation::apply_authored_animation_playback_requests
+                    .after(UiSet::Notifications)
+                    .run_if(on_message::<animation::UiAnimationPlaybackRequest>)
                     .in_set(GameSet::Ui),
             )
             .add_systems(
@@ -365,9 +420,13 @@ impl Plugin for GameUiPlugin {
                     (
                         focused_or_selected_node_scroll_reveal::scroll_nearest_ancestor_to_reveal_focused_or_selected_node,
                         slider::project_slider_thumb_layout,
-                        slider::present_slider_value_labels,
+                        slider::project_authored_values_to_native_sliders,
+                        slider::project_authored_slider_value_labels
+                            .after(slider::bind_authored_slider_value_labels),
+                        slider::bind_authored_slider_value_labels,
                         authored_scrollbar::project_scrollbar_availability,
-                    ).chain().before(bevy::ui::UiSystems::Layout),
+                        authored_ui_canvas_scaling_and_clipping::apply_authored_canvas_layout_corrections,
+                    ).before(bevy::ui::UiSystems::Layout),
                     (
                         authored_ui_canvas_scaling_and_clipping::project_ui_canvas_pixel_transform,
                         authored_ui_canvas_scaling_and_clipping::snap_authored_ui_canvas_descendant_edges_to_physical_pixels,
@@ -375,6 +434,9 @@ impl Plugin for GameUiPlugin {
                     authored_globe_model_bounds::update_instantiated_globe_model_bounds
                         .after(bevy::transform::TransformSystems::Propagate)
                         .after(bevy::camera::visibility::VisibilitySystems::CalculateBounds),
+                    authored_rail_camera_presentation::project_rail_lighting
+                        .after(bevy::app::AnimationSystems)
+                        .before(bevy::transform::TransformSystems::Propagate),
                     authored_globe_camera_framing::update_globe_camera_viewports
                         .after(bevy::ui::UiSystems::PostLayout),
                     // Measured in the same frame as Bevy's text layout, so a
@@ -394,8 +456,7 @@ impl Plugin for GameUiPlugin {
             (
                 authored_visual_layer_draw_order::place_authored_aspect_draws_in_owner_stack_slot,
                 authored_text_physical_glyph_projection::preserve_authored_font_aspect_in_extracted_text_draws,
-            ).chain()
-                .after(bevy::ui_render::RenderUiSystems::ExtractInlineImages),
+            ).after(bevy::ui_render::RenderUiSystems::ExtractInlineImages),
         );
     }
 }

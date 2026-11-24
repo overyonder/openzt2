@@ -104,8 +104,3 @@ pub struct ObjectPlacementPreviewVisualState {
 
 #[derive(Component, Debug, Clone)]
 pub struct ObjectPlacementPrefabSource(pub Handle<ScenePrefabAsset>);
-
-#[derive(Resource, Debug, Default)]
-pub struct ObjectPlacementCellCollectionScratch {
-    pub cells: Vec<IVec2>,
-}

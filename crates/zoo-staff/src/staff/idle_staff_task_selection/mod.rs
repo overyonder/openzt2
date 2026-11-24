@@ -49,7 +49,10 @@ use openzt2_zoo_state::behavior_task_execution_types::{
 };
 use openzt2_zoo_state::habitat::habitat_membership_and_containment::locate_habitat_at_world_position;
 use openzt2_zoo_state::habitat::habitat_types::HabitatIndex;
-use openzt2_zoo_state::locomotion::locomotion_types::{Destination, LocomotionMode, NavAgent};
+use openzt2_zoo_state::locomotion::locomotion_types::{
+    Arrived, Destination, LocomotionMode, NavAgent, NavigateTo, NavigationFailed,
+    NavigationRequestGeneration,
+};
 use openzt2_zoo_state::terrain::dry_surface_eligibility::DrySurfaceEligibility;
 use openzt2_zoo_state::topology::topology_graph_types::TopologyGrid;
 
@@ -119,6 +122,29 @@ pub(crate) fn start_authored_idle_staff_tasks(
             if !task.objects.is_empty() || task.execution.lowered_actions().is_empty() {
                 continue;
             }
+            let subject_can_start = task
+                .candidate_eligibility_requirements
+                .iter()
+                .filter(|requirement| requirement.candidate_role == BehaviorCandidateRole::Subject)
+                .all(|requirement| {
+                    candidate_requirements_are_satisfied(
+                        std::slice::from_ref(requirement),
+                        |_, required| subject_matches(required),
+                        |_, fact| {
+                            satisfies_idle_staff_fact(
+                                world.root,
+                                fact,
+                                position,
+                                position,
+                                mode == Some(&LocomotionMode::Swim),
+                                &surfaces,
+                            )
+                        },
+                    )
+                });
+            if !subject_can_start {
+                continue;
+            }
             for target in idle_task_targets(task, staff, world, &world_objects, |object| {
                 catalogue.find_object(object)
             }) {
@@ -129,7 +155,7 @@ pub(crate) fn start_authored_idle_staff_tasks(
                 let satisfied = candidate_requirements_are_satisfied(
                     &task.candidate_eligibility_requirements,
                     |candidate_role, required| match candidate_role {
-                        BehaviorCandidateRole::Subject => subject_matches(required),
+                        BehaviorCandidateRole::Subject => true,
                         BehaviorCandidateRole::Target => match target {
                             None => required == AssetId::from_key("self"),
                             Some((object, _)) => {
@@ -149,22 +175,17 @@ pub(crate) fn start_authored_idle_staff_tasks(
                         },
                         BehaviorCandidateRole::Object => false,
                     },
-                    |candidate_role, fact| {
-                        let (fact_position, swimming) = match candidate_role {
-                            BehaviorCandidateRole::Subject => {
-                                (position, mode == Some(&LocomotionMode::Swim))
-                            }
-                            BehaviorCandidateRole::Target => (target_position, false),
-                            BehaviorCandidateRole::Object => return false,
-                        };
-                        satisfies_idle_staff_fact(
+                    |candidate_role, fact| match candidate_role {
+                        BehaviorCandidateRole::Subject => true,
+                        BehaviorCandidateRole::Target => satisfies_idle_staff_fact(
                             world.root,
                             fact,
-                            fact_position,
+                            target_position,
                             position,
-                            swimming,
+                            false,
                             &surfaces,
-                        )
+                        ),
+                        BehaviorCandidateRole::Object => false,
                     },
                 );
                 if !satisfied {
@@ -189,11 +210,12 @@ pub(crate) fn start_authored_idle_staff_tasks(
                     ),
                     task.priority.unwrap_or_default(),
                     score,
-                    |upper| random.range_u32(upper),
                 );
             }
         }
-        let Some(((document, declaration, task, target), score)) = ranking.finish(false) else {
+        let Some(((document, declaration, task, target), score)) =
+            ranking.finish(|| random.next_u32())
+        else {
             continue;
         };
         let execution_id = allocate_behavior_execution_id(
@@ -358,7 +380,7 @@ pub(crate) fn interrupt_idle_staff_tasks_for_claimed_jobs(
 }
 
 #[derive(Component)]
-pub(crate) struct PendingStaffExitTankGate {
+pub(super) struct PendingStaffExitTankGate {
     instruction:
         openzt2_zoo_state::behavior_task_execution_types::running_actions::BehaviorInstructionId,
     request_id: u64,
@@ -366,7 +388,7 @@ pub(crate) struct PendingStaffExitTankGate {
 
 /// Chooses an outside endpoint across an actual tank gate. The navigation
 /// owner approaches and traverses that gate before completing this request.
-pub(crate) fn execute_staff_exit_tank_gate_actions(
+pub(super) fn start_staff_exit_tank_gate_actions(
     activation: In<Option<Entity>>,
     mut commands: Commands,
     roots: Query<(&ZooClock, &HabitatIndex, &TopologyGrid)>,
@@ -378,66 +400,41 @@ pub(crate) fn execute_staff_exit_tank_gate_actions(
     )>,
     nodes: Query<&openzt2_zoo_state::topology::topology_graph_types::TopologyNode>,
     surfaces: DrySurfaceEligibility,
-    mut navigation_generations: Query<
-        &mut openzt2_zoo_state::locomotion::locomotion_types::NavigationRequestGeneration,
-    >,
-    mut requests: MessageWriter<openzt2_zoo_state::locomotion::locomotion_types::NavigateTo>,
-    mut arrivals: MessageReader<openzt2_zoo_state::locomotion::locomotion_types::Arrived>,
-    mut failures: MessageReader<openzt2_zoo_state::locomotion::locomotion_types::NavigationFailed>,
+    mut navigation_generations: Query<&mut NavigationRequestGeneration>,
+    mut requests: MessageWriter<NavigateTo>,
     mut actors: Query<
         (
             Entity,
             &GlobalTransform,
             &BehaviorTaskExecutionState,
             &WorldMember,
-            Option<(&RunningBehaviorInstruction, &RunBehaviorExitTankGate)>,
-            Option<&PendingStaffExitTankGate>,
+            &RunningBehaviorInstruction,
+            Option<&mut PendingStaffExitTankGate>,
         ),
-        Without<PendingBehaviorTaskFailure>,
+        (
+            With<RunBehaviorExitTankGate>,
+            Without<PendingBehaviorTaskFailure>,
+        ),
     >,
 ) {
-    let arrived: Vec<_> = arrivals
-        .read()
-        .map(|event| (event.entity, event.request_id))
-        .collect();
-    let failed: Vec<_> = failures
-        .read()
-        .map(|event| (event.entity, event.request_id))
-        .collect();
-    for (actor, transform, task, member, running, exiting) in
+    for (actor, transform, task, member, instruction, exiting) in
         behavior_action_actors(&mut actors, activation.0)
     {
         let Ok((clock, habitats, topology)) = roots.get(member.root) else {
             continue;
         };
-        let Some((instruction, _)) =
-            running.filter(|(instruction, _)| instruction.is_current(task))
-        else {
-            if exiting.is_some() {
-                commands.entity(actor).remove::<PendingStaffExitTankGate>();
-            }
-            continue;
-        };
-        if activation.0.is_none() && !instruction.can_update_after_activation(clock.tick) {
-            continue;
-        }
-        let exiting = exiting.filter(|exiting| exiting.instruction == instruction.id());
-        if task.next_action_tick > clock.tick {
+        if !instruction.is_current(task)
+            || (activation.0.is_none() && !instruction.can_update_after_activation(clock.tick))
+            || task.next_action_tick > clock.tick
+            || exiting
+                .as_ref()
+                .is_some_and(|exiting| exiting.instruction == instruction.id())
+        {
             continue;
         }
         let tank =
             locate_habitat_at_world_position(habitats, transform.translation().xz(), *topology)
                 .filter(|habitat| tanks.contains(*habitat));
-        if let Some(exiting) = exiting {
-            if failed.contains(&(actor, exiting.request_id)) {
-                commands.entity(actor).remove::<PendingStaffExitTankGate>();
-                openzt2_zoo_state::behavior_task_execution_types::running_actions::mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
-            } else if arrived.contains(&(actor, exiting.request_id)) && tank.is_none() {
-                commands.entity(actor).remove::<PendingStaffExitTankGate>();
-                instruction.complete(actor, clock.tick, &mut commands);
-            }
-            continue;
-        }
         let Some(tank) = tank else {
             instruction.complete(actor, clock.tick, &mut commands);
             continue;
@@ -479,18 +476,108 @@ pub(crate) fn execute_staff_exit_tank_gate_actions(
             continue;
         };
         let request_id = generation.advance();
-        requests.write(
-            openzt2_zoo_state::locomotion::locomotion_types::NavigateTo {
-                entity: actor,
-                request_id,
-                destination,
-                arrival_radius_m: 0.1,
-            },
-        );
-        commands.entity(actor).insert(PendingStaffExitTankGate {
+        requests.write(NavigateTo {
+            entity: actor,
+            request_id,
+            destination,
+            arrival_radius_m: 0.1,
+        });
+        let pending = PendingStaffExitTankGate {
             instruction: instruction.id(),
             request_id,
-        });
+        };
+        if let Some(mut exiting) = exiting {
+            *exiting = pending;
+        } else {
+            commands.entity(actor).insert(pending);
+        }
+    }
+}
+
+pub(super) fn retire_inactive_staff_tank_exits(
+    mut commands: Commands,
+    pending: Query<(
+        Entity,
+        &PendingStaffExitTankGate,
+        Option<(
+            &BehaviorTaskExecutionState,
+            &RunningBehaviorInstruction,
+            &RunBehaviorExitTankGate,
+        )>,
+        Has<PendingBehaviorTaskFailure>,
+    )>,
+) {
+    for (actor, exit, instruction, failed) in &pending {
+        if failed
+            || instruction.is_none_or(|(task, instruction, _)| {
+                exit.instruction != instruction.id() || !instruction.is_current(task)
+            })
+        {
+            commands.entity(actor).remove::<PendingStaffExitTankGate>();
+        }
+    }
+}
+
+pub(super) fn settle_staff_tank_exit_navigation(
+    mut commands: Commands,
+    mut arrivals: MessageReader<Arrived>,
+    mut failures: MessageReader<NavigationFailed>,
+    roots: Query<(&ZooClock, &HabitatIndex, &TopologyGrid)>,
+    tanks: Query<(), With<Tank>>,
+    pending: Query<
+        (
+            &PendingStaffExitTankGate,
+            &BehaviorTaskExecutionState,
+            &RunningBehaviorInstruction,
+            &GlobalTransform,
+            &WorldMember,
+        ),
+        (
+            With<RunBehaviorExitTankGate>,
+            Without<PendingBehaviorTaskFailure>,
+        ),
+    >,
+) {
+    let mut settled = bevy::ecs::entity::EntityHashSet::default();
+    let outcomes = failures
+        .read()
+        .map(|event| (event.entity, event.request_id, true))
+        .chain(
+            arrivals
+                .read()
+                .map(|event| (event.entity, event.request_id, false)),
+        );
+    for (actor, request_id, failed) in outcomes {
+        let Ok((exit, task, instruction, transform, member)) = pending.get(actor) else {
+            continue;
+        };
+        if exit.request_id != request_id
+            || exit.instruction != instruction.id()
+            || !instruction.is_current(task)
+            || settled.contains(&actor)
+        {
+            continue;
+        }
+        let Ok((clock, habitats, topology)) = roots.get(member.root) else {
+            continue;
+        };
+        if !instruction.can_update_after_activation(clock.tick)
+            || task.next_action_tick > clock.tick
+        {
+            continue;
+        }
+        let inside_a_tank =
+            locate_habitat_at_world_position(habitats, transform.translation().xz(), *topology)
+                .is_some_and(|habitat| tanks.contains(habitat));
+        if failed || !inside_a_tank {
+            settled.insert(actor);
+            commands.entity(actor).remove::<PendingStaffExitTankGate>();
+            if failed {
+                openzt2_zoo_state::behavior_task_execution_types::running_actions::mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
+            } else {
+                instruction.complete(actor, clock.tick, &mut commands);
+            }
+        }
     }
 }
 

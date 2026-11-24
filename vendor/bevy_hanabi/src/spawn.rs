@@ -9,9 +9,7 @@ use rand_pcg::Pcg32;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::{
-    CompiledParticleEffect, EffectAsset, EffectSimulation, ParticleEffect, SimulationCondition,
-};
+use crate::{EffectAsset, EffectSimulation, ParticleEffect, SimulationCondition};
 
 /// An RNG to be used in the CPU for the particle system engine
 pub(crate) fn new_rng() -> Pcg32 {
@@ -29,6 +27,10 @@ pub(crate) fn new_rng() -> Pcg32 {
 /// An RNG resource
 #[derive(Resource)]
 pub struct Random(pub Pcg32);
+
+/// Marks an effect whose application owns ticking and writing its spawner.
+#[derive(Component)]
+pub struct ExternalEffectSpawner;
 
 /// Utility trait to help implementing [`std::hash::Hash`] for [`CpuValue`] of
 /// floating-point type.
@@ -953,14 +955,17 @@ pub fn tick_spawners(
     time: Res<Time<EffectSimulation>>,
     effects: Res<Assets<EffectAsset>>,
     mut rng: ResMut<Random>,
-    mut query: Query<(
-        Entity,
-        &ParticleEffect,
-        &CompiledParticleEffect,
-        &InheritedVisibility,
-        Option<&crate::EffectDeltaTime>,
-        Option<&mut EffectSpawner>,
-    )>,
+    mut query: Query<
+        (
+            Entity,
+            &ParticleEffect,
+            &crate::ParticleEffectGpuReady,
+            &InheritedVisibility,
+            Option<&crate::EffectDeltaTime>,
+            Option<&mut EffectSpawner>,
+        ),
+        Without<ExternalEffectSpawner>,
+    >,
 ) {
     #[cfg(feature = "trace")]
     let _span = bevy::log::info_span!("tick_spawners").entered();
@@ -968,11 +973,13 @@ pub fn tick_spawners(
 
     let dt = time.delta_secs();
 
-    for (entity, effect, compiled_effect, inherited_visibility, effect_delta, maybe_spawner) in query.iter_mut() {
+    for (entity, effect, ready, inherited_visibility, effect_delta, maybe_spawner) in
+        query.iter_mut()
+    {
         let dt = effect_delta.map_or(dt, |delta| delta.0.max(0.0));
         // Skip effect which are not ready; this prevents ticking the spawner for an
         // effect not ready to consume those spawn commands.
-        let mut can_tick = if compiled_effect.is_ready() {
+        let mut can_tick = if ready.is_ready() {
             true
         } else {
             trace!("[Effect {entity:?}] Not ready; skipped spawner tick.");
@@ -1391,7 +1398,7 @@ mod test {
                             },
                             // Force-ready the effect as those tests don't initialize the render
                             // world (headless), so the effect would never get ready otherwise.
-                            CompiledParticleEffect::default().with_ready_for_tests(),
+                            crate::ParticleEffectGpuReady(true),
                         ))
                         .id()
                 } else {
@@ -1403,7 +1410,7 @@ mod test {
                             },
                             // Force-ready the effect as those tests don't initialize the render
                             // world (headless), so the effect would never get ready otherwise.
-                            CompiledParticleEffect::default().with_ready_for_tests(),
+                            crate::ParticleEffectGpuReady(true),
                         ))
                         .id()
                 };

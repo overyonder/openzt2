@@ -39,8 +39,8 @@ use self::{
     },
     donation_payment_types::{DonationCompleted, DonationRejected, DonationRequest},
     donation_state_hydration::{
-        hydrate_authored_donation_acceptors_and_docking_points,
         initialize_new_donation_acceptors_with_operating_age_and_profit,
+        project_donation_acceptors_and_docking_points,
     },
     zoo_donation_summary_presentation::{
         aggregate_zoo_donations_by_category, project_zoo_donation_summary, ZooDonationSummary,
@@ -63,7 +63,7 @@ impl Plugin for GuestDonationDecisionAndPaymentPlugin {
             .add_systems(
                 Update,
                 (
-                    hydrate_authored_donation_acceptors_and_docking_points,
+                    project_donation_acceptors_and_docking_points,
                     initialize_new_donation_acceptors_with_operating_age_and_profit,
                 )
                     .chain()
@@ -107,13 +107,15 @@ impl Plugin for GuestDonationDecisionAndPaymentPlugin {
             .add_systems(
                 FixedUpdate,
                 (
-                    settle_completed_donation_transactions_and_update_acceptor_totals,
-                    settle_rejected_donation_transactions_and_clear_guest_payment_state,
-                    reject_donation_candidates_after_navigation_failure,
-                    cancel_donation_interactions_with_missing_subjects_or_acceptors,
+                    (
+                        settle_completed_donation_transactions_and_update_acceptor_totals,
+                        settle_rejected_donation_transactions_and_clear_guest_payment_state,
+                        reject_donation_candidates_after_navigation_failure,
+                        cancel_donation_interactions_with_missing_subjects_or_acceptors,
+                    )
+                        .chain(),
                     clear_donation_observations_for_ended_views,
                 )
-                    .chain()
                     .in_set(FixedGameSet::Cleanup),
             );
     }
@@ -128,7 +130,7 @@ pub fn add_donation_payment_test_systems(app: &mut App) {
         .add_systems(
             Update,
             (
-                hydrate_authored_donation_acceptors_and_docking_points,
+                project_donation_acceptors_and_docking_points,
                 initialize_new_donation_acceptors_with_operating_age_and_profit,
                 begin_donation_interactions_after_guests_reach_acceptors,
                 advance_donation_interactions_and_request_completed_payments,

@@ -151,7 +151,7 @@ pub(super) fn project_widget(
             }
             if matches!(node.kind, UiNodeKind::FullscreenButton) {
                 commands.entity(entity).insert(
-                    crate::full_canvas_click_catcher::UiFullCanvasClickCatcher::new(
+                    crate::authored_click_catcher_lifetime::AuthoredClickCatcherLifetime(
                         button.delayed_activation_seconds,
                     ),
                 );
@@ -434,6 +434,7 @@ pub(super) fn project_widget(
             use crate::authored_timed_action_sequence::{
                 UiAuthoredTimedActionSequencePlayback, UiTimedActionDue,
             };
+            let mut steps = Vec::with_capacity(events.len());
             for (index, event) in events.iter().enumerate() {
                 let proxy = commands
                     .spawn((
@@ -443,6 +444,7 @@ pub(super) fn project_widget(
                         UiTimedActionDue(event.due),
                     ))
                     .id();
+                steps.push(proxy);
                 use openzt2_game_data::ui_document::timed_presentation::UiTimedEventAction;
                 match &event.action {
                     UiTimedEventAction::Ui(action) => {
@@ -462,9 +464,14 @@ pub(super) fn project_widget(
                     }
                 }
             }
-            let mut playback = UiAuthoredTimedActionSequencePlayback::default();
-            playback.set_active_and_restart(*starts_active);
-            commands.entity(entity).insert(playback);
+            commands
+                .entity(entity)
+                .insert(UiAuthoredTimedActionSequencePlayback::new(
+                    document_root,
+                    steps.into_boxed_slice(),
+                    events.first().is_some_and(|step| step.due.is_zero()),
+                    *starts_active,
+                ));
         }
         UiWidgetRecord::Tool { tool } => {
             if *tool != AssetId::default() {

@@ -1,14 +1,20 @@
+use super::elevated_curb_layout::{is_elevated_curb, ElevatedCurbSurfaces};
+use super::elevated_path_layout::{ElevatedPathMode, ElevatedPathProfile};
 use super::topology_construction_planning::{
     calculate_ground_path_construction_cells, validate_path_construction_cells,
 };
-use super::topology_construction_preview_types::{
-    terrain_change_cursor, FenceDrawPlan, PathDrawPlan, TopologyPlanVersion,
-};
+use super::topology_construction_preview_types::{FenceDrawPlan, PathDrawPlan};
 use crate::construction::construction_lifecycle::ConstructionActive;
 use bevy::ecs::system::SystemParam;
 use bevy::picking::pointer::{PointerButton, PointerInput};
 use bevy::prelude::*;
 use openzt2_interface_state::input::input_types::MousePointer;
+use openzt2_world_state::world_spawn::selected_world_identity::SelectedWorldIdentity;
+use openzt2_zoo_state::progression::{
+    adoption_and_content_availability_types::ScenarioContentAvailability,
+    catalogue_entry_availability::catalogue_entry_is_available,
+    unlock_types::UnlockedCatalogueDefinitionSet,
+};
 use openzt2_zoo_state::topology::topology_graph_types::FenceSegment;
 
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
@@ -201,9 +207,10 @@ pub(super) fn apply_path_placement_requests_to_construction_previews(
             definition: request.definition,
             from: request.from,
             to: request.to,
+            profile: request.profile,
         };
         if let Ok(mut current) = previews.get_mut(request.preview) {
-            *current = preview;
+            current.set_if_neq(preview);
         } else if let Ok(mut entity) = commands.get_entity(request.preview) {
             entity.insert(preview);
         }
@@ -223,7 +230,15 @@ pub(super) fn drive_selected_topology_placement_pointer_sequence(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     index: Single<&TopologyIndex>,
     cursors: Query<&ConstructionCursor>,
-    roots: Query<Entity, With<WorldRoot>>,
+    roots: Query<
+        (
+            Entity,
+            Option<&SelectedWorldIdentity>,
+            Option<&ScenarioContentAvailability>,
+            Option<&UnlockedCatalogueDefinitionSet>,
+        ),
+        With<WorldRoot>,
+    >,
     previews: Query<
         (Entity, Option<&FencePreview>, Option<&PathPreview>),
         With<ConstructionPreview>,
@@ -232,9 +247,11 @@ pub(super) fn drive_selected_topology_placement_pointer_sequence(
     mut fences: MessageWriter<PlaceFence>,
     mut paths: MessageWriter<PlacePath>,
     mut commits: MessageWriter<CommitConstruction>,
-    (mut anchor_diagnostics, gate_prompt): (
+    (mut anchor_diagnostics, gate_prompt, curb_surfaces, elevated_mode): (
         Option<ResMut<InitialFenceAnchorPressDiagnosticState>>,
         GatePromptQueries,
+        ElevatedCurbSurfaces,
+        ElevatedPathMode,
     ),
 ) {
     let grid = grid.into_inner();
@@ -255,22 +272,60 @@ pub(super) fn drive_selected_topology_placement_pointer_sequence(
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };
-    let definition = match *tool {
-        ConstructionTool::Fence(definition) | ConstructionTool::Path(definition) => definition,
-        _ => return,
-    };
     if !pending_transactions.is_empty() {
         return;
     }
-    let (Ok(cursor), Ok(root)) = (cursors.single(), roots.single()) else {
+    let (Ok(cursor), Ok((root, session, scenario, unlocked))) = (cursors.single(), roots.single())
+    else {
         return;
+    };
+    let definition = match *tool {
+        ConstructionTool::ElevatedCurbPlacement | ConstructionTool::ElevatedPathPlacement => {
+            let Some(unlocked) = unlocked else {
+                return;
+            };
+            let selected =
+                definitions
+                    .catalogue_in_authored_purchase_order()
+                    .find_map(|(index, entry)| {
+                        let id = entry.definition;
+                        let matching = if *tool == ConstructionTool::ElevatedCurbPlacement {
+                            is_elevated_curb(definitions, id)
+                        } else {
+                            definitions.find_path(id).is_some_and(|path| path.elevated)
+                        };
+                        (matching
+                            && catalogue_entry_is_available(
+                                definitions,
+                                index,
+                                entry,
+                                session.map(|session| session.mode),
+                                scenario,
+                                unlocked,
+                            ))
+                        .then_some(id)
+                    });
+            let Some(definition) = selected else {
+                return;
+            };
+            definition
+        }
+        ConstructionTool::Fence(definition) | ConstructionTool::Path(definition) => definition,
+        _ => return,
     };
     if ui_capture.over_ui || !cursor.over_terrain {
         return;
     }
     let mut cell = grid.position_cell(cursor.world);
+    let curb = is_elevated_curb(definitions, definition);
+    if curb {
+        let Some(endpoint) = curb_surfaces.nearest(cursor.world, *grid, index, definitions) else {
+            return;
+        };
+        cell = endpoint;
+    }
     let ground_aligned = match *tool {
-        ConstructionTool::Fence(_) => true,
+        ConstructionTool::Fence(_) => !curb,
         ConstructionTool::Path(definition) => definitions
             .find_path(definition)
             .is_some_and(|path| !path.elevated),
@@ -279,6 +334,22 @@ pub(super) fn drive_selected_topology_placement_pointer_sequence(
     if ground_aligned {
         cell.z = 0;
     }
+    let path_definition = definitions
+        .find_path(definition)
+        .filter(|definition| definition.elevated);
+    let elevation = |base_m| {
+        Some(ElevatedPathProfile::new(
+            base_m,
+            path_definition?,
+            definitions.topology_cell_size_cm(),
+            elevated_mode.clearance_cm()?,
+            &policy,
+        ))
+    };
+    if path_definition.is_some() && elevated_mode.clearance_cm().is_none() {
+        return;
+    }
+
     let gate = matches!(*tool, ConstructionTool::Fence(definition)
         if fence_definition_is_gate(definitions, definition));
     let Ok((preview, fence, path)) = previews.single() else {
@@ -308,12 +379,12 @@ pub(super) fn drive_selected_topology_placement_pointer_sequence(
                 WorldMember { root },
             ));
             match *tool {
-                ConstructionTool::Fence(_) => {
+                ConstructionTool::Fence(_) | ConstructionTool::ElevatedCurbPlacement => {
                     entity.insert(FencePreview {
                         definition,
                         from: cell,
                         to: cell,
-                        shape: if gate {
+                        shape: if gate || curb {
                             FencePlacementShape::Freeform
                         } else {
                             policy.fence_shape
@@ -321,11 +392,12 @@ pub(super) fn drive_selected_topology_placement_pointer_sequence(
                         heading_eighth_turns: policy.fence_heading_eighth_turns,
                     });
                 }
-                ConstructionTool::Path(_) => {
+                ConstructionTool::Path(_) | ConstructionTool::ElevatedPathPlacement => {
                     entity.insert(PathPreview {
                         definition,
                         from: cell,
                         to: cell,
+                        profile: elevation(cursor.world.y),
                     });
                 }
                 _ => {}
@@ -362,12 +434,20 @@ pub(super) fn drive_selected_topology_placement_pointer_sequence(
             commits.write(CommitConstruction { preview });
         }
     } else if let Some(path) = path {
-        if !ui_capture.over_ui && path.to != cell && (ground_aligned || primary_pressed) {
+        let profile = elevation(
+            path.profile
+                .map_or(path.from.z as f32, |profile| profile.reference_m()),
+        );
+        if !ui_capture.over_ui
+            && (path.to != cell || path.profile != profile)
+            && (ground_aligned || primary_pressed || primary_just_released || policy.is_changed())
+        {
             paths.write(PlacePath {
                 preview,
                 definition,
                 from: path.from,
                 to: cell,
+                profile,
             });
         }
         if !ui_capture.over_ui
@@ -615,13 +695,17 @@ pub(super) fn restart_fence_preview_from_committed_endpoint(
     )>,
 ) {
     let grid = grid.into_inner();
-    let ConstructionTool::Fence(definition) = *tool else {
-        committed.clear();
-        return;
-    };
     let Ok((preview, mut construction, mut fence, mut transform)) = previews.single_mut() else {
         committed.clear();
         return;
+    };
+    let definition = match *tool {
+        ConstructionTool::Fence(definition) => definition,
+        ConstructionTool::ElevatedCurbPlacement => fence.definition,
+        _ => {
+            committed.clear();
+            return;
+        }
     };
     // A closed shape is complete; the next one starts from a new anchor.
     if fence.shape != FencePlacementShape::Freeform {
@@ -663,9 +747,8 @@ pub(super) fn evaluate_topology_construction_preview_validity(
     terrain: Single<Ref<TerrainIndex>>,
     terrain_assets: Res<Assets<TerrainAsset>>,
     mut changes: MessageReader<openzt2_zoo_state::terrain::terrain_edit_types::TerrainChanged>,
-    terrain_messages: Res<Messages<openzt2_zoo_state::terrain::terrain_edit_types::TerrainChanged>>,
     terrain_chunks: Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
-    gate_hosts: GateHostEdges,
+    (gate_hosts, curb_surfaces): (GateHostEdges, ElevatedCurbSurfaces),
     mut previews: Query<
         (
             Entity,
@@ -681,17 +764,6 @@ pub(super) fn evaluate_topology_construction_preview_validity(
     let grid = grid.into_inner();
     let index = index.into_inner();
     let terrain = terrain.into_inner();
-    let version = TopologyPlanVersion {
-        revisions: [
-            grid.last_changed(),
-            index.last_changed(),
-            active_definitions.last_changed(),
-            definitions.last_changed(),
-            terrain.last_changed(),
-            terrain_assets.last_changed(),
-        ],
-        terrain_changes: terrain_change_cursor(&terrain_messages),
-    };
     let terrain_changed = changes.read().count() != 0;
     let dirty = terrain_changed
         || grid.is_changed()
@@ -717,17 +789,8 @@ pub(super) fn evaluate_topology_construction_preview_validity(
             }
             let gate = fence_definition_is_gate(definitions, fence.definition);
             let result = if gate {
-                calculate_gate_replacement_plan(&fence, &index, definitions, &gate_hosts).map(
-                    |(host, cost)| {
-                        (
-                            vec![fence.from, fence.to],
-                            cost,
-                            Some(host),
-                            None,
-                            Vec::new(),
-                        )
-                    },
-                )
+                calculate_gate_replacement_plan(&fence, &index, definitions, &gate_hosts)
+                    .map(|(host, cost)| (vec![fence.from, fence.to], cost, Some(host)))
             } else {
                 calculate_fence_construction_plan(
                     &fence,
@@ -738,25 +801,16 @@ pub(super) fn evaluate_topology_construction_preview_validity(
                     &terrain_assets,
                     &terrain_chunks,
                     &gate_hosts,
+                    Some(&curb_surfaces),
                 )
-                .map(|(cells, cost, gate, broken)| (cells, cost, None, gate, broken))
+                .map(|(cells, cost, ..)| (cells, cost, None))
             };
             let (plan, validity) = match result {
-                Ok((cells, cost, replaced, gate, broken)) => (
-                    FenceDrawPlan {
-                        input: *fence,
-                        version,
-                        quote: Some((cost, gate, broken)),
-                        cells,
-                        replaced,
-                    },
-                    validity(Ok(cost)),
-                ),
+                Ok((cells, cost, replaced)) => {
+                    (FenceDrawPlan { cells, replaced }, validity(Ok(cost)))
+                }
                 Err(reason) => (
                     FenceDrawPlan {
-                        input: *fence,
-                        version,
-                        quote: None,
                         cells: Vec::new(),
                         replaced: None,
                     },
@@ -773,7 +827,7 @@ pub(super) fn evaluate_topology_construction_preview_validity(
             if !dirty && !path.is_changed() && path_plan.is_some() {
                 continue;
             }
-            let (cells, approved, next) = if let Some(definition) = definitions
+            let (cells, next) = if let Some(definition) = definitions
                 .find_path(path.definition)
                 .filter(|path| !path.elevated)
             {
@@ -796,11 +850,11 @@ pub(super) fn evaluate_topology_construction_preview_validity(
                             &terrain_chunks,
                         );
                         match result {
-                            Ok((approved, cost)) => (cells, approved, validity(Ok(cost))),
-                            Err(reason) => (cells, Vec::new(), validity(Err(reason))),
+                            Ok((_, cost)) => (cells, validity(Ok(cost))),
+                            Err(reason) => (cells, validity(Err(reason))),
                         }
                     }
-                    Err(reason) => (Vec::new(), Vec::new(), validity(Err(reason))),
+                    Err(reason) => (Vec::new(), validity(Err(reason))),
                 }
             } else {
                 let result = calculate_path_construction_plan(
@@ -813,15 +867,12 @@ pub(super) fn evaluate_topology_construction_preview_validity(
                     &terrain_chunks,
                 );
                 match result {
-                    Ok((cells, cost)) => (cells.clone(), cells, validity(Ok(cost))),
-                    Err(reason) => (Vec::new(), Vec::new(), validity(Err(reason))),
+                    Ok((cells, cost)) => (cells, validity(Ok(cost))),
+                    Err(reason) => (Vec::new(), validity(Err(reason))),
                 }
             };
             let plan = PathDrawPlan {
-                input: *path,
-                version,
                 cells,
-                approved,
                 validity: next,
             };
             if let Some(mut existing) = path_plan {

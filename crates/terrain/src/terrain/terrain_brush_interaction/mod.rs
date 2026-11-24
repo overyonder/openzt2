@@ -14,6 +14,7 @@ use openzt2_zoo_state::construction::construction_tool_and_placement_policy_type
 use openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::ConstructionTool;
 use openzt2_zoo_state::economy::money_types::Money;
 
+use super::authored_terrain_brush_modes::AuthoredTerrainBrushModes;
 use openzt2_zoo_state::terrain::terrain_brush_interaction_state::ActiveTerrainBrush;
 use openzt2_zoo_state::terrain::terrain_brush_interaction_state::PendingTerrainBrushCommit;
 use openzt2_zoo_state::terrain::terrain_brush_types::TerrainBrushFalloff;
@@ -35,6 +36,7 @@ pub(super) fn update_terrain_brush_preview_and_commit_completed_pointer_strokes(
     mut commands: Commands,
     tool: Res<ConstructionTool>,
     policy: Res<ConstructionPlacementPolicy>,
+    modes: AuthoredTerrainBrushModes,
     time: Res<Time>,
     pointer: MousePointer,
     mut pointer_inputs: MessageReader<PointerInput>,
@@ -77,11 +79,7 @@ pub(super) fn update_terrain_brush_preview_and_commit_completed_pointer_strokes(
     let Ok(index) = terrain.get(root) else {
         return;
     };
-    let Some(strength_per_s) = policy.selected_terrain_brush_strength_metres_per_second(*tool)
-    else {
-        return;
-    };
-    let Some(radius_m) = policy.selected_terrain_brush_radius_metres(*tool) else {
+    let Some((radius_m, strength_per_s)) = modes.brush_dimensions_and_speed(kind, &policy) else {
         return;
     };
     let paint_trees = policy.biome_paint_trees && matches!(kind, TerrainBrushKind::Paint { .. });
@@ -134,14 +132,6 @@ pub(super) fn update_terrain_brush_preview_and_commit_completed_pointer_strokes(
         return;
     }
 
-    brush.center = cursor.world.xz();
-    brush.radius_m = radius_m;
-    brush.strength_per_s = strength_per_s;
-    brush.falloff = falloff;
-    brush.paint_trees = paint_trees;
-    brush.paint_foliage = paint_foliage;
-    brush.paint_rocks = paint_rocks;
-    brush.automatic_placement_variation = policy.biome_automatic_placement_variation;
     preview
         .map_unchanged(|preview| &mut preview.transform.translation)
         .set_if_neq(cursor.world);
@@ -184,7 +174,19 @@ pub(super) fn update_terrain_brush_preview_and_commit_completed_pointer_strokes(
         }
         (None, kind) => kind,
     };
-    brush.kind = kind;
+    let seconds = brush.seconds;
+    brush.set_if_neq(TerrainBrushPreview {
+        center: cursor.world.xz(),
+        radius_m,
+        strength_per_s,
+        seconds,
+        kind,
+        falloff,
+        paint_trees,
+        paint_foliage,
+        paint_rocks,
+        automatic_placement_variation: policy.biome_automatic_placement_variation,
+    });
     let is_active = active.is_some() || began;
     if began {
         commands.entity(entity).insert(ActiveTerrainBrush { kind });

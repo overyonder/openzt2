@@ -18,7 +18,7 @@ use super::{
     },
     scenario_lua_command_publication::ScenarioLuaOutputs,
     scenario_lua_query_fact_collection::ScenarioLuaQueryFactSources,
-    scenario_lua_types::ScenarioLuaVirtualMachineContexts,
+    scenario_lua_types::ScenarioLuaContext,
     scenario_lua_virtual_machine::execute_loaded_scenario_lua_script_binding,
 };
 
@@ -45,7 +45,7 @@ pub(super) fn evaluate_challenge_manager_and_validate_one_picked_challenge(
     scenario_assets: Res<Assets<WorldScenarioDocumentAsset>>,
     scripts: Res<Assets<LuaScriptAsset>>,
     script_index: Res<LuaScriptArchivePathIndex>,
-    mut runtime: NonSendMut<ScenarioLuaVirtualMachineContexts>,
+    mut runtime: Query<&mut ScenarioLuaContext>,
     (fact_sources, direct): (
         ScenarioLuaQueryFactSources,
         super::scenario_lua_entity_commands::ScenarioLuaDirectAccess,
@@ -181,26 +181,37 @@ pub(super) fn evaluate_challenge_manager_and_validate_one_picked_challenge(
     let owner = contexts
         .iter()
         .find(|(_, candidate, member)| candidate.0 == binding.scenario && member.root == root)
-        .map(|(entity, _, _)| entity)
-        .unwrap_or_else(|| {
-            commands
-                .spawn((
-                    openzt2_world_state::world_spawn::world_membership_types::WorldMember { root },
-                    super::challenge_offer_types::ScenarioChallengeLuaCandidate(binding.scenario),
-                    ScenarioDocument(handle.clone()),
-                ))
-                .id()
-        });
-    match execute_loaded_scenario_lua_script_binding(
-        &mut runtime,
-        owner,
-        &ScenarioDocument(handle),
-        &scenario_assets,
-        &scripts,
-        &script_index,
-        &binding,
-        queries,
-    ) {
+        .map(|(entity, _, _)| entity);
+    let source = ScenarioDocument(handle);
+    let execute = |context: &mut ScenarioLuaContext| {
+        execute_loaded_scenario_lua_script_binding(
+            context,
+            &source,
+            &scenario_assets,
+            &scripts,
+            &script_index,
+            &binding,
+            queries,
+        )
+    };
+    let result = if let Some(mut context) = owner.and_then(|entity| runtime.get_mut(entity).ok()) {
+        execute(&mut context)
+    } else {
+        let mut context = ScenarioLuaContext::default();
+        let result = execute(&mut context);
+        if let Some(entity) = owner {
+            commands.entity(entity).insert(context);
+        } else {
+            commands.spawn((
+                openzt2_world_state::world_spawn::world_membership_types::WorldMember { root },
+                super::challenge_offer_types::ScenarioChallengeLuaCandidate(binding.scenario),
+                source,
+                context,
+            ));
+        }
+        result
+    };
+    match result {
         Ok(result) => {
             if let Some(error) = &result.failure {
                 error!(script = %binding.script, %error, "challenge validation Lua call failed");

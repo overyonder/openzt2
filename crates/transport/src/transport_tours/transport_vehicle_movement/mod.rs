@@ -15,7 +15,6 @@ use openzt2_zoo_state::transport_tours::transport_circuit_types::CircuitDirectio
 use openzt2_zoo_state::transport_tours::transport_circuit_types::CircuitMember;
 use openzt2_zoo_state::transport_tours::transport_circuit_types::CircuitRunning;
 use openzt2_zoo_state::transport_tours::transport_circuit_types::TransportCircuit;
-use openzt2_zoo_state::transport_tours::transport_topology_types::TrackSegment;
 use openzt2_zoo_state::transport_tours::transport_topology_types::TransportStation;
 use openzt2_zoo_state::transport_tours::transport_vehicle_types::StationDestination;
 use openzt2_zoo_state::transport_tours::transport_vehicle_types::{RoutePosition, VehicleOnTrack};
@@ -40,8 +39,7 @@ pub(super) fn advance_transport_vehicles_along_canonical_track_segments(
         Option<&DirectLocomotion>,
         &mut TransportVehicleArrival,
     )>,
-    track_segments: Query<(Entity, TrackRoute, &CircuitMember)>,
-    track_travel_distances: Query<&TrackTravelDistances, With<TrackSegment>>,
+    track_segments: Query<(Entity, TrackRoute, &CircuitMember, &TrackTravelDistances)>,
     transport_stations: Query<(), With<TransportStation>>,
     entity_parents: Query<&ChildOf>,
     transport_circuits: Query<(
@@ -73,16 +71,14 @@ pub(super) fn advance_transport_vehicles_along_canonical_track_segments(
                 vehicle_velocity.set_if_neq(Velocity(Vec3::ZERO));
                 return;
             }
-            let Ok((_, track_segment, track_circuit_member)) = track_segments.get(current_track.0)
+            let Ok((_, track_segment, track_circuit_member, distances)) =
+                track_segments.get(current_track.0)
             else {
                 return;
             };
             if track_circuit_member.0 != circuit_member.0 {
                 return;
             }
-            let Ok(distances) = track_travel_distances.get(current_track.0) else {
-                return;
-            };
             let authored_reverse_direction =
                 matches!(circuit_direction, Some(CircuitDirection::Reverse));
             let requested_throttle = direct_locomotion.map_or(1.0, |direct_locomotion| {
@@ -107,7 +103,7 @@ pub(super) fn advance_transport_vehicles_along_canonical_track_segments(
             let mut candidate_route_position = *route_position;
             let reached_segment_endpoint = step_transport_route_position(
                 &mut candidate_route_position,
-                track_segment.length,
+                distances.travel_length(track_segment.geometry),
                 requested_travel_distance,
                 moving_in_reverse,
             );
@@ -172,7 +168,7 @@ pub(super) fn advance_transport_vehicles_along_canonical_track_segments(
                         track_segments
                             .get(entity)
                             .ok()
-                            .filter(|(_, _, circuit)| circuit.0 == circuit_member.0)
+                            .filter(|(_, _, circuit, _)| circuit.0 == circuit_member.0)
                     })
             } else {
                 incidence
@@ -181,17 +177,17 @@ pub(super) fn advance_transport_vehicles_along_canonical_track_segments(
                         track_segments
                             .get(entity)
                             .ok()
-                            .filter(|(_, _, circuit)| circuit.0 == circuit_member.0)
+                            .filter(|(_, _, circuit, _)| circuit.0 == circuit_member.0)
                     })
             };
-            if let Some((next_segment_entity, next_track_segment, _)) = next {
+            if let Some((next_segment_entity, next_track_segment, _, next_distances)) = next {
                 commands.command_scope(|mut commands| {
                     commands
                         .entity(vehicle_entity)
                         .insert(VehicleOnTrack(next_segment_entity));
                 });
                 route_position.distance = if moving_in_reverse {
-                    next_track_segment.length
+                    next_distances.travel_length(next_track_segment.geometry)
                 } else {
                     0.0
                 };

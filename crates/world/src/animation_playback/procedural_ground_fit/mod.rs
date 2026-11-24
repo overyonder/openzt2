@@ -1,4 +1,11 @@
-use bevy::{ecs::system::SystemParam, prelude::*, transform::helper::TransformHelper};
+use bevy::{
+    ecs::{
+        entity::{EntityHashMap, EntityHashSet},
+        system::SystemParam,
+    },
+    platform::collections::HashMap,
+    prelude::*,
+};
 use openzt2_game_assets::{
     animation::animation_set_asset_types::{AnimationClipSourceAsset, AnimationSetAsset},
     world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
@@ -26,6 +33,7 @@ use openzt2_zoo_state::{
     locomotion::locomotion_types::{LocomotionMode, SwimLayer},
     terrain::dry_surface_eligibility::DrySurfaceEligibility,
 };
+use std::cell::RefCell;
 
 use super::authored_binder_rig_binding::BoundAnimationBinderRig;
 
@@ -33,7 +41,7 @@ use super::authored_binder_rig_binding::BoundAnimationBinderRig;
 pub(super) struct GroundFitPose {
     offsets: Vec<JointPoseOffset>,
     correction: Vec3,
-    height_offset_disabled_seconds: Option<f32>,
+    height_offset_delay: Option<Timer>,
     spine: SpineBendPose,
 }
 
@@ -43,12 +51,81 @@ struct JointPoseOffset {
     rotation: Quat,
 }
 
-#[derive(Default)]
 struct SpineBendPose {
     sample: Option<Vec3>,
     previous_sample: Option<Vec3>,
-    sample_elapsed: f32,
+    sample_timer: Timer,
     curve: Vec3,
+}
+
+impl Default for SpineBendPose {
+    fn default() -> Self {
+        Self {
+            sample: None,
+            previous_sample: None,
+            sample_timer: Timer::from_seconds(0.25, TimerMode::Once),
+            curve: Vec3::ZERO,
+        }
+    }
+}
+
+#[derive(Component)]
+pub(super) struct GroundFitJointIndex {
+    named: HashMap<AssetId, Entity>,
+    root: Option<Entity>,
+}
+
+pub(super) fn index_ground_fit_joints(
+    mut commands: Commands,
+    mut controllers: Query<
+        (
+            Entity,
+            Ref<AnimationRigJoints>,
+            Option<&mut GroundFitJointIndex>,
+        ),
+        With<GroundFitPose>,
+    >,
+    targets: Query<(&AnimationJointTarget, Option<&ChildOf>)>,
+    reparented: Query<&AnimationJointTarget, Changed<ChildOf>>,
+    mut detached: RemovedComponents<ChildOf>,
+) {
+    let affected = reparented
+        .iter()
+        .chain(
+            detached
+                .read()
+                .filter_map(|entity| targets.get(entity).ok().map(|(target, _)| target)),
+        )
+        .map(|target| target.animation_playback_controller_entity)
+        .collect::<EntityHashSet>();
+    for (controller, joints, existing) in &mut controllers {
+        if existing.is_some() && !joints.is_changed() && !affected.contains(&controller) {
+            continue;
+        }
+        let entities = joints.joints().iter().copied().collect::<EntityHashSet>();
+        let mut index = GroundFitJointIndex {
+            named: HashMap::new(),
+            root: None,
+        };
+        for &entity in joints.joints() {
+            if let Ok((target, parent)) = targets.get(entity) {
+                index
+                    .named
+                    .entry(target.authored_joint_id)
+                    .or_insert(entity);
+                if index.root.is_none()
+                    && parent.is_none_or(|parent| !entities.contains(&parent.parent()))
+                {
+                    index.root = Some(entity);
+                }
+            }
+        }
+        if let Some(mut existing) = existing {
+            *existing = index;
+        } else {
+            commands.entity(controller).insert(index);
+        }
+    }
 }
 
 pub(super) fn clear_procedural_ground_fit_pose(
@@ -81,7 +158,7 @@ pub(super) struct GroundFitController {
     options: Option<&'static ActiveAnimationClipOptions>,
     clip: Option<&'static RetainedAnimationClipSource>,
     binding: &'static BoundAnimationBinderRig,
-    joints: &'static AnimationRigJoints,
+    joints: &'static GroundFitJointIndex,
     pose: &'static mut GroundFitPose,
 }
 
@@ -92,16 +169,16 @@ pub(super) fn apply_procedural_ground_fit_pose(
     terrain: DrySurfaceEligibility,
     locomotion: Query<(&LocomotionMode, Option<&SwimLayer>)>,
     members: Query<&WorldMember>,
-    joints: Query<(&AnimationJointTarget, Option<&ChildOf>)>,
-    mut transforms: ParamSet<(TransformHelper, Query<&mut Transform>)>,
+    mut transforms: ParamSet<(Query<(&Transform, Option<&ChildOf>)>, Query<&mut Transform>)>,
 ) {
-    for mut controller in &mut controllers {
+    let locals = transforms.p0();
+    controllers.par_iter_mut().for_each(|mut controller| {
         let Some(rig) = controller
             .binding
             .source
             .and_then(|source| source.get(&assets.rigs))
         else {
-            continue;
+            return;
         };
         let enabled = controller
             .options
@@ -119,32 +196,27 @@ pub(super) fn apply_procedural_ground_fit_pose(
                 )
             })
             .map(|clip| &clip.playback_policy);
-        let lookup = |key| find_rig_joint(controller.joints, &joints, key);
+        let lookup = |key| controller.joints.named.get(&key).copied();
         let mut pose = controller.pose.reborrow();
         {
-            let snapshot = transforms.p0();
-            let position = |entity| {
-                snapshot
-                    .compute_global_transform(entity)
-                    .ok()
-                    .map(|pose| pose.translation())
-            };
-            let Some(actor) = snapshot
-                .compute_global_transform(controller.owner.gameplay_entity)
-                .ok()
-            else {
-                continue;
+            let snapshots = RefCell::new(EntityHashMap::new());
+            let world_pose =
+                |entity| sample_ground_fit_world_pose(entity, &locals, &mut snapshots.borrow_mut());
+            // Fit and bend share the unmodified animation pose.
+            let position = |entity| world_pose(entity).map(|pose| pose.translation());
+            let Some(actor) = world_pose(controller.owner.gameplay_entity) else {
+                return;
             };
             let gameplay = controller.owner.gameplay_entity;
             let swim = locomotion.get(gameplay).ok().and_then(|(mode, layer)| {
                 (*mode == LocomotionMode::Swim).then(|| layer.copied().unwrap_or_default())
             });
             let local_parent = |joint| {
-                joints
+                locals
                     .get(joint)
                     .ok()
                     .and_then(|(_, parent)| parent)
-                    .and_then(|parent| snapshot.compute_global_transform(parent.parent()).ok())
+                    .and_then(|parent| world_pose(parent.parent()))
             };
             let root = controller
                 .clip
@@ -159,16 +231,7 @@ pub(super) fn apply_procedural_ground_fit_pose(
                         &root.joint_asset_key.to_ascii_lowercase(),
                     ))
                 })
-                .or_else(|| {
-                    controller.joints.joints().iter().copied().find(|&joint| {
-                        joints.get(joint).is_ok_and(|(_, parent)| {
-                            parent.is_none_or(|parent| {
-                                !controller.joints.joints().contains(&parent.parent())
-                            })
-                        })
-                    })
-                });
-
+                .or(controller.joints.root);
             let quadruped = rig.quadruped_ground_fit.as_ref();
             let biped = rig.biped_ground_fit.as_ref();
             let selected = match (quadruped, biped) {
@@ -233,26 +296,38 @@ pub(super) fn apply_procedural_ground_fit_pose(
                 );
             }
         }
-        let mut locals = transforms.p1();
-        for offset in &pose.offsets {
+    });
+    let mut locals = transforms.p1();
+    for controller in &controllers {
+        for offset in &controller.pose.offsets {
             if let Ok(mut joint) = locals.get_mut(offset.joint) {
-                joint.translation += offset.translation;
-                joint.rotation = offset.rotation * joint.rotation;
+                let next = Transform {
+                    translation: joint.translation + offset.translation,
+                    rotation: offset.rotation * joint.rotation,
+                    scale: joint.scale,
+                };
+                joint.set_if_neq(next);
             }
         }
     }
 }
 
-fn find_rig_joint(
-    rig: &AnimationRigJoints,
-    joints: &Query<(&AnimationJointTarget, Option<&ChildOf>)>,
-    name: AssetId,
-) -> Option<Entity> {
-    rig.joints().iter().copied().find(|&joint| {
-        joints
-            .get(joint)
-            .is_ok_and(|(target, _)| target.authored_joint_id == name)
-    })
+fn sample_ground_fit_world_pose(
+    entity: Entity,
+    locals: &Query<(&Transform, Option<&ChildOf>)>,
+    snapshots: &mut EntityHashMap<GlobalTransform>,
+) -> Option<GlobalTransform> {
+    if let Some(&pose) = snapshots.get(&entity) {
+        return Some(pose);
+    }
+    let (local, parent) = locals.get(entity).ok()?;
+    let pose = if let Some(parent) = parent {
+        sample_ground_fit_world_pose(parent.parent(), locals, snapshots)?.mul_transform(*local)
+    } else {
+        GlobalTransform::from(*local)
+    };
+    snapshots.insert(entity, pose);
+    Some(pose)
 }
 
 #[allow(
@@ -359,15 +434,19 @@ fn fit_ground_support(
         return;
     };
     requested.x = height - center.y;
-    let countdown = pose
-        .height_offset_disabled_seconds
-        .get_or_insert(rig.height_offset_disabled_seconds);
-    *countdown = if tilt_off {
-        0.5
+    let delay = pose.height_offset_delay.get_or_insert_with(|| {
+        Timer::new(
+            visual_fit_duration(rig.height_offset_disabled_seconds),
+            TimerMode::Once,
+        )
+    });
+    if tilt_off {
+        delay.set_duration(visual_fit_duration(0.5));
+        delay.reset();
     } else {
-        (*countdown - delta).max(0.0)
-    };
-    if *countdown == 0.0 {
+        delay.tick(visual_fit_duration(delta));
+    }
+    if delay.is_finished() {
         requested.x += rig.height_offset * rig.height_offset_scale;
     }
     if let Some((back, front)) = support {
@@ -524,14 +603,17 @@ fn fit_spine_bend(
     delta: f32,
     pose: &mut GroundFitPose,
 ) {
-    const SAMPLE_SECONDS: f32 = 0.25;
     let now = actor.translation();
     let forward = (actor.rotation() * Vec3::Z).with_y(0.0).normalize_or_zero();
     let bend = &mut pose.spine;
-    bend.sample_elapsed += delta;
-    if bend.sample.is_none() || bend.sample_elapsed >= SAMPLE_SECONDS {
+    if bend
+        .sample_timer
+        .tick(visual_fit_duration(delta))
+        .is_finished()
+        || bend.sample.is_none()
+    {
         bend.previous_sample = bend.sample.replace(now);
-        bend.sample_elapsed = 0.0;
+        bend.sample_timer.reset();
     }
     let Some(previous) = bend.previous_sample else {
         return;
@@ -593,4 +675,8 @@ fn fit_spine_bend(
             );
         }
     }
+}
+
+fn visual_fit_duration(seconds: f32) -> std::time::Duration {
+    std::time::Duration::try_from_secs_f32(seconds).unwrap_or_default()
 }

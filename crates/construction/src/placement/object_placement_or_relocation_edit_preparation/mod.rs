@@ -1,12 +1,18 @@
-use super::object_placement_preview_validation::ObjectPlacementFit;
-use crate::construction::construction_transaction_preparation::SubmittedPreview;
+use super::{
+    object_placement_preview_permission_projection::ObjectPlacementHeadroomQueries,
+    placement_model_headroom::PlacementModelHeadroom,
+};
+use crate::construction::construction_transaction_preparation::{
+    SubmittedConstruction, SubmittedPreview,
+};
 use bevy::prelude::*;
+use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
+use openzt2_game_data::world_definitions::object_placement::PlacementConstraints;
 use openzt2_zoo_state::placement::object_placement_geometry::ScenePlacementFootprints;
 
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
-use openzt2_zoo_state::construction::construction_interaction_types::ConstructionPreview;
 use openzt2_zoo_state::construction::construction_interaction_types::PlacementFailure;
 use openzt2_zoo_state::construction::construction_interaction_types::PlacementValidity;
 use openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::ConstructionTool;
@@ -53,16 +59,13 @@ use openzt2_zoo_state::topology::topology_edit_types::TopologyEditPrepared;
 pub(super) fn prepare_object_placement_or_relocation_edit(
     mut commands: Commands,
     mut requests: MessageReader<PrepareConstruction>,
-    tool: Res<ConstructionTool>,
     previews: Query<(
-        &ConstructionPreview,
+        &SubmittedConstruction,
         &WorldMember,
-        Option<&ObjectPlacementPreviewPermissionFacts>,
-        Option<&HabitatMember>,
-        Option<&PlacedObjectRelocationSource>,
-        &ObjectPlacementPrefabSource,
-        Option<&SubmittedPreview<ConstructionPreview>>,
-        Option<&SubmittedPreview<ObjectPlacementFit>>,
+        Option<&SubmittedPreview<ObjectPlacementPreviewPermissionFacts>>,
+        Option<&SubmittedPreview<HabitatMember>>,
+        Option<&SubmittedPreview<PlacedObjectRelocationSource>>,
+        Option<&SubmittedPreview<ObjectPlacementPrefabSource>>,
     )>,
     relocating: Query<
         (
@@ -76,12 +79,9 @@ pub(super) fn prepare_object_placement_or_relocation_edit(
     placed: Query<StompablePlacedObject>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
-    terrain_indexes: Query<Ref<TerrainIndex>>,
+    terrain_indexes: Query<&TerrainIndex>,
     terrain_assets: Res<Assets<TerrainAsset>>,
-    (chunks, mut terrain_changes): (
-        Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
-        MessageReader<openzt2_zoo_state::terrain::terrain_edit_types::TerrainChanged>,
-    ),
+    chunks: Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
     (placement, ground_paths, footprints): (
         PlacedObjectFootprintQueries,
         GroundPathPlacementStomp,
@@ -94,24 +94,31 @@ pub(super) fn prepare_object_placement_or_relocation_edit(
         MessageWriter<TopologyEditPrepared>,
     ),
     mut rejected: MessageWriter<ObjectPlacementEditPreparationRejected>,
+    (headroom, models, prefabs): (
+        ObjectPlacementHeadroomQueries,
+        PlacementModelHeadroom,
+        Res<Assets<ScenePrefabAsset>>,
+    ),
 ) {
-    let ConstructionTool::Place(active_definition) = *tool else {
-        return;
-    };
     let catalogue = active_definitions.get(&definitions);
-    let terrain_changed = terrain_changes.read().count() != 0;
-    let authored_inputs_changed = terrain_assets.is_changed()
-        || definitions.is_changed()
-        || active_definitions.is_changed()
-        || footprints.is_changed();
     for request in requests.read() {
-        let Ok((preview, member, permission, habitat, relocation, prefab, submitted, fit)) =
-            previews.get(request.preview)
+        let Ok((submission, member, permission, habitat, relocation, prefab)) =
+            previews.get(request.transaction)
         else {
+            continue;
+        };
+        let ConstructionTool::Place(active_definition) = submission.tool else {
+            continue;
+        };
+        let preview = &submission.preview;
+        let permission = permission.map(|value| &value.0);
+        let habitat = habitat.map(|value| value.0.habitat_entity);
+        let relocation = relocation.map(|value| &value.0);
+        let Some(prefab) = prefab.map(|value| &value.0) else {
             reject_object_placement_edit_preparation(
                 &mut rejected,
                 request.transaction,
-                PlacementFailure::InvalidTopology,
+                PlacementFailure::Locked,
             );
             continue;
         };
@@ -122,22 +129,6 @@ pub(super) fn prepare_object_placement_or_relocation_edit(
                 PlacementFailure::OutsideMap,
             );
             continue;
-        };
-        let pose_changed =
-            submitted.is_some_and(|submitted| submitted.0.transform != preview.transform);
-        let preview = submitted.map_or(preview, |submitted| &submitted.0);
-        let fit = fit
-            .map(|fit| &fit.0)
-            .filter(|fit| fit.transform == preview.transform);
-        let permission = if pose_changed {
-            fit.map(|fit| &fit.permission).or(permission)
-        } else {
-            permission
-        };
-        let habitat = if pose_changed {
-            fit.and_then(|fit| fit.habitat)
-        } else {
-            habitat.map(|member| member.habitat_entity)
         };
         let Some(catalogue) = catalogue else {
             reject_object_placement_edit_preparation(
@@ -192,74 +183,99 @@ pub(super) fn prepare_object_placement_or_relocation_edit(
         };
         let geometry = footprints.resolve(definition, Some(&prefab.0));
         let terrain = |position: Vec2| {
-            let entity = terrain_chunk_at(&terrain_index, position)?;
+            let entity = terrain_chunk_at(terrain_index, position)?;
             let (chunk, edited) = chunks.get(entity).ok()?;
             let asset = terrain_assets.get(&chunk.asset)?;
             sample_terrain(chunk, asset, edited, position)
         };
         let path_overlaps = ground_paths.overlaps(member.root, definition, catalogue);
-        let (cells, cost) = if let Some(fit) = fit.filter(|fit| {
-            !terrain_changed
-                && !authored_inputs_changed
-                && !terrain_index.is_changed()
-                && !placement.index_changed(member.root)
-                && !ground_paths.topology_changed(member.root)
-                && fit.permission == *permission
-                && fit.habitat == habitat
-        }) {
-            (fit.cells.clone(), fit.cost)
-        } else {
-            let validity = validate_object_placement_footprint_cells(
-                geometry,
-                geometry.cells(turns),
-                &preview.transform,
-                terrain,
-                |cell| {
-                    path_overlaps.prevents_placement(cell)
-                        || object_stomp_prevents_placement_at_cell(
-                            cell,
-                            definition,
-                            catalogue,
-                            member.root,
-                            &placement,
-                            &placed,
-                            |entity| Some(entity) == relocation.map(|source| source.0),
-                        )
-                },
-                ObjectPlacementAuthoritativeFacts {
-                    habitat,
-                    unlocked: permission.unlocked,
-                    affordable: permission.affordable,
-                    topology_valid: permission.topology_valid,
-                    headroom_valid: permission.headroom_valid,
-                    surface_valid: permission.surface_valid,
+        let Some(cells) = collect_occupied_placement_cells_for_transform(
+            geometry,
+            &preview.transform,
+            &mut scratch,
+        ) else {
+            reject_object_placement_edit_preparation(
+                &mut rejected,
+                request.transaction,
+                PlacementFailure::InvalidTopology,
+            );
+            continue;
+        };
+        let Some(clearance) =
+            models.clearance(definition, prefabs.get(&prefab.0), &preview.transform)
+        else {
+            reject_object_placement_edit_preparation(
+                &mut rejected,
+                request.transaction,
+                PlacementFailure::NoHeadroom,
+            );
+            continue;
+        };
+        let y = preview.transform.translation.y;
+        let flattening = definition
+            .constraints
+            .contains_all(PlacementConstraints::FLATTEN_TERRAIN_TO_PLACEMENT_HEIGHT)
+            && (f32::from(i16::MIN)..=f32::from(i16::MAX)).contains(&(y * 100.0));
+        if clearance > f32::EPSILON
+            && cells.iter().any(|cell| {
+                let ray = Vec3::new(cell.x as f32, y + 0.01, cell.y as f32);
+                headroom
+                    .cast_occupied_cell_headroom_ray(
+                        ray,
+                        clearance,
+                        submission.source,
+                        relocation.map(|source| source.0),
+                        flattening.then_some(member.root),
+                        None,
+                    )
+                    .is_some()
+            })
+        {
+            reject_object_placement_edit_preparation(
+                &mut rejected,
+                request.transaction,
+                PlacementFailure::NoHeadroom,
+            );
+            continue;
+        }
+        let validity = validate_object_placement_footprint_cells(
+            geometry,
+            geometry.cells(turns),
+            &preview.transform,
+            terrain,
+            |cell| {
+                path_overlaps.prevents_placement(cell)
+                    || object_stomp_prevents_placement_at_cell(
+                        cell,
+                        definition,
+                        catalogue,
+                        member.root,
+                        &placement,
+                        &placed,
+                        |entity| Some(entity) == relocation.map(|source| source.0),
+                    )
+            },
+            ObjectPlacementAuthoritativeFacts {
+                habitat,
+                unlocked: permission.unlocked,
+                affordable: permission.affordable,
+                topology_valid: permission.topology_valid,
+                headroom_valid: true,
+                surface_valid: permission.surface_valid,
+            },
+        );
+        let PlacementValidity::Valid { cost } = validity else {
+            reject_object_placement_edit_preparation(
+                &mut rejected,
+                request.transaction,
+                match validity {
+                    PlacementValidity::Invalid(reason) => reason,
+                    _ => PlacementFailure::InvalidTopology,
                 },
             );
-            let PlacementValidity::Valid { cost } = validity else {
-                reject_object_placement_edit_preparation(
-                    &mut rejected,
-                    request.transaction,
-                    match validity {
-                        PlacementValidity::Invalid(reason) => reason,
-                        _ => PlacementFailure::InvalidTopology,
-                    },
-                );
-                continue;
-            };
-            let Some(cells) = collect_occupied_placement_cells_for_transform(
-                geometry,
-                &preview.transform,
-                &mut scratch,
-            ) else {
-                reject_object_placement_edit_preparation(
-                    &mut rejected,
-                    request.transaction,
-                    PlacementFailure::InvalidTopology,
-                );
-                continue;
-            };
-            (cells.to_vec(), cost)
+            continue;
         };
+        let cells = cells.to_vec();
         let (id, previous_transform, previous_cells, mutation, applied_entity, cost) =
             if let Some(source) = relocation {
                 let Ok((id, placeable, transform, occupancy)) = relocating.get(source.0) else {

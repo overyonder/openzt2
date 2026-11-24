@@ -2,59 +2,42 @@ use bevy::prelude::*;
 
 use crate::terrain::terrain_change_tracking_types::TerrainDirtyFlags;
 use crate::terrain::terrain_change_tracking_types::{TerrainDirtyRegion, TerrainRenderPending};
-use openzt2_zoo_state::terrain::terrain_edit_data_types::TerrainSample;
+use openzt2_zoo_state::terrain::terrain_edit_data_types::TerrainEditDelta;
 
-pub(super) fn determine_terrain_dirty_flags_from_changed_samples(
-    terrain_samples_before_change: &[TerrainSample],
-    terrain_samples_after_change: &[TerrainSample],
-) -> TerrainDirtyFlags {
-    terrain_samples_before_change
-        .iter()
-        .zip(terrain_samples_after_change)
-        .fold(
-            TerrainDirtyFlags::default(),
-            |mut changed_terrain_properties, (sample_before_change, sample_after_change)| {
-                if sample_before_change.height_cm != sample_after_change.height_cm {
-                    changed_terrain_properties |= TerrainDirtyFlags::HEIGHT;
-                }
-                if sample_before_change.blend != sample_after_change.blend
-                    || sample_before_change.ground_cover != sample_after_change.ground_cover
-                {
-                    changed_terrain_properties |= TerrainDirtyFlags::SURFACE;
-                }
-                if sample_before_change.water_style != sample_after_change.water_style
-                    || sample_before_change.water_biome_channel
-                        != sample_after_change.water_biome_channel
-                    || sample_before_change.water_cm != sample_after_change.water_cm
-                    || sample_before_change.water_affiliation
-                        != sample_after_change.water_affiliation
-                {
-                    changed_terrain_properties |= TerrainDirtyFlags::WATER;
-                }
-                changed_terrain_properties
-            },
-        )
-}
-
-/// Inclusive bounds of the samples that differ between `before` and `after`,
-/// which cover the row-major rectangle from `min` to `max`.
-pub(super) fn changed_terrain_sample_bounds(
-    before: &[TerrainSample],
-    after: &[TerrainSample],
-    min: UVec2,
-    max: UVec2,
-) -> Option<(UVec2, UVec2)> {
-    let width = (max.x - min.x + 1) as usize;
-    before
-        .iter()
-        .zip(after)
-        .enumerate()
-        .filter(|(_, (before, after))| before != after)
-        .map(|(index, _)| min + UVec2::new((index % width) as u32, (index / width) as u32))
-        .fold(None, |bounds, sample| match bounds {
-            None => Some((sample, sample)),
-            Some((low, high)) => Some((low.min(sample), high.max(sample))),
-        })
+pub(super) fn summarize_terrain_edit_sample_changes(
+    delta: &TerrainEditDelta,
+) -> TerrainDirtyRegion {
+    let width = (delta.max.x - delta.min.x + 1) as usize;
+    let mut min = UVec2::MAX;
+    let mut max = UVec2::ZERO;
+    let mut flags = TerrainDirtyFlags::default();
+    for (index, (before, after)) in delta.before.iter().zip(delta.after.iter()).enumerate() {
+        let mut changed = TerrainDirtyFlags::default();
+        if before.height_cm != after.height_cm {
+            changed |= TerrainDirtyFlags::HEIGHT;
+        }
+        if before.blend != after.blend || before.ground_cover != after.ground_cover {
+            changed |= TerrainDirtyFlags::SURFACE;
+        }
+        if before.water_style != after.water_style
+            || before.water_biome_channel != after.water_biome_channel
+            || before.water_cm != after.water_cm
+            || before.water_affiliation != after.water_affiliation
+        {
+            changed |= TerrainDirtyFlags::WATER;
+        }
+        if !changed.is_empty() {
+            let point = delta.min + UVec2::new((index % width) as u32, (index / width) as u32);
+            min = min.min(point);
+            max = max.max(point);
+            flags |= changed;
+        }
+    }
+    if flags.is_empty() {
+        min = delta.min;
+        max = delta.max;
+    }
+    TerrainDirtyRegion { min, max, flags }
 }
 
 #[derive(Message)]

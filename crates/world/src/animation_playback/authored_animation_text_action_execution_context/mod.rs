@@ -7,7 +7,6 @@ use openzt2_world_state::animation_graph::animation_graph_playback_message_types
 use openzt2_world_state::animation_graph::animation_graph_playback_state_types::AnimationGraphEnabled;
 use openzt2_zoo_state::audio::audio_playback_message_types::PlayAudioCue;
 
-use openzt2_world_state::animation_playback::animation_event_message_types::AnimationTraversalTransitionRequested;
 use openzt2_world_state::animation_playback::animation_event_message_types::{
     AnimationAiCommandRequested, AnimationWhapRequested,
 };
@@ -59,5 +58,4 @@ pub(super) struct AuthoredAnimationControlTextActionExecutionContext<'w, 's> {
     pub(super) decal_cycles: Query<'w, 's, &'static mut super::authored_decal_texture_cycles::DecalCyclePlayback>,
     pub(super) whap_requests: MessageWriter<'w, AnimationWhapRequested>,
     pub(super) animation_node_messages: MessageWriter<'w, AnimationGraphNodePlaybackRequest>,
-    pub(super) traversal_messages: MessageWriter<'w, AnimationTraversalTransitionRequested>,
 }

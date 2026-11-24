@@ -20,7 +20,7 @@ use super::{
         ScenarioChallengeOfferState, ScenarioChallengeRuleContext,
     },
     scenario_instantiation::spawn_authored_challenge_objectives,
-    scenario_lua_types::ScenarioLuaVirtualMachineContexts,
+    scenario_lua_types::ScenarioLuaContext,
 };
 
 pub(super) fn create_challenge_offers_requested_by_scenario_scripts(
@@ -31,7 +31,7 @@ pub(super) fn create_challenge_offers_requested_by_scenario_scripts(
     contexts: Query<(Entity, &ScenarioChallengeLuaCandidate, &WorldMember)>,
     scenarios: Res<WorldScenarios>,
     assets: Res<Assets<WorldScenarioDocumentAsset>>,
-    mut runtime: NonSendMut<ScenarioLuaVirtualMachineContexts>,
+    mut runtime: Query<&mut ScenarioLuaContext>,
 ) {
     let Ok((root, clock, mut allocator)) = roots.single_mut() else {
         return;
@@ -87,7 +87,9 @@ pub(super) fn create_challenge_offers_requested_by_scenario_scripts(
                     ))
                     .id()
             });
-        if let Err(error) = runtime.clear_finished_challenge_rule_state(owner) {
+        if let Err(error) = runtime.get_mut(owner).map_or(Ok(()), |mut context| {
+            context.clear_finished_challenge_rule_state()
+        }) {
             error!(%error, "new challenge could not initialize its rule state");
             continue;
         }
@@ -117,7 +119,7 @@ pub(super) fn create_challenge_offers_requested_by_scenario_scripts(
             root,
             offer,
             record.id,
-            &asset.document,
+            asset,
             clock.tick,
         ) {
             commands.entity(offer).despawn();
@@ -131,7 +133,7 @@ pub(super) fn create_challenge_offers_requested_by_scenario_scripts(
 pub(super) fn validate_and_apply_requested_challenge_responses(
     mut requests: MessageReader<RespondToScenarioChallengeRequest>,
     clocks: Query<&ZooClock>,
-    mut runtime: NonSendMut<ScenarioLuaVirtualMachineContexts>,
+    mut runtime: Query<&mut ScenarioLuaContext>,
     mut offers: Query<(
         &mut ScenarioChallengeOffer,
         &ScenarioChallengeRuleContext,
@@ -154,7 +156,11 @@ pub(super) fn validate_and_apply_requested_challenge_responses(
                 Some(ScenarioChallengeAcceptanceRejectionReason::Expired)
             }
             Ok((mut offer, owner, _)) => {
-                match runtime.set_challenge_response(owner.0, request.accept) {
+                let response = runtime
+                    .get_mut(owner.0)
+                    .map_err(|_| mlua::Error::runtime("challenge has no running Lua context"))
+                    .and_then(|mut context| context.set_challenge_response(request.accept));
+                match response {
                     Ok(()) => {
                         offer.state = if request.accept {
                             ScenarioChallengeOfferState::Active

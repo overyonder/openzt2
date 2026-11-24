@@ -45,11 +45,16 @@ pub(super) fn register(app: &mut App) {
     use openzt2_game_assets::application_lifecycle::GamePhase;
     use openzt2_world_state::application_schedule::FixedGameSet;
     use openzt2_zoo_state::behavior_task_execution_types::running_actions::BehaviorStepFixedSet;
-    app.add_systems(FixedUpdate, (
-        discard_cancelled_food_prop_attachments,
+    app.add_observer(cancel_removed_food_prop_instruction)
+        .add_observer(cancel_disabled_food_prop_instruction)
+        .add_observer(cancel_food_props_when_source_leaves)
+        .add_observer(cancel_food_props_when_source_is_crated)
+        .add_observer(link_food_prop_to_source)
+        .add_observer(unlink_food_prop_from_source)
+        .add_systems(FixedUpdate, (
+        discard_retargeted_food_prop_attachments,
         update_waiting_behavior_actors.pipe(execute_food_prop_attachments),
-    )
-        .chain()
+    ).chain()
         .before(super::BehaviorObjectAttachmentSet)
         .in_set(BehaviorStepFixedSet::Think)
         .run_if(in_state(GamePhase::InGame)))
@@ -60,41 +65,104 @@ pub(super) fn register(app: &mut App) {
             .run_if(in_state(GamePhase::InGame)));
 }
 
-fn discard_cancelled_food_prop_attachments(
+fn discard_retargeted_food_prop_attachments(
     mut commands: Commands,
-    actors: Query<(
-        Entity,
-        &HeldFoodPropAttachment,
-        Option<&HeldFoodProp>,
-        Option<(&BehaviorTaskExecutionState, &RunningBehaviorInstruction)>,
-        Has<PendingBehaviorTaskFailure>,
-        Has<Dead>,
-        Has<Frozen>,
-        Has<Tranquilized>,
-        Has<WorldEntityIsCrated>,
-    )>,
-    targets: Query<(), (With<WorldMember>, Without<WorldEntityIsCrated>)>,
+    actors: Query<(Entity, &HeldFoodPropAttachment, Option<&HeldFoodProp>, &BehaviorTaskExecutionState, &RunningBehaviorInstruction),
+        Changed<BehaviorTaskExecutionState>>,
 ) {
-    for (actor, pending, prop, task, failing, dead, frozen, tranquilized, crated) in &actors {
-        if !failing
-            && !dead
-            && !frozen
-            && !tranquilized
-            && !crated
-            && task.is_some_and(|(task, step)| pending.origin.owns(task, step))
-            && pending
-                .origin
-                .target
-                .is_some_and(|target| targets.contains(target))
-        {
-            continue;
+    for (actor, pending, prop, task, step) in &actors {
+        if !pending.origin.owns(task, step) {
+            cancel_food_prop(actor, prop, &mut commands);
         }
-        if let Some(prop) = prop {
-            commands.entity(*prop.collection()).try_despawn();
+    }
+}
+
+fn cancel_food_prop(actor: Entity, prop: Option<&HeldFoodProp>, commands: &mut Commands) {
+    if let Some(prop) = prop {
+        commands.entity(*prop.collection()).try_despawn();
+    }
+    commands.entity(actor).try_remove::<HeldFoodPropAttachment>();
+}
+
+fn cancel_removed_food_prop_instruction(
+    removed: On<Remove<(RunBehaviorAttachObject, BehaviorTaskExecutionState)>>,
+    actors: Query<Option<&HeldFoodProp>, With<HeldFoodPropAttachment>>,
+    mut commands: Commands,
+) {
+    if let Ok(prop) = actors.get(removed.entity) {
+        cancel_food_prop(removed.entity, prop, &mut commands);
+    }
+}
+
+fn cancel_disabled_food_prop_instruction(
+    added: On<Add<(PendingBehaviorTaskFailure, Dead, Frozen, Tranquilized, WorldEntityIsCrated)>>,
+    actors: Query<(Option<&HeldFoodProp>, Has<PendingBehaviorTaskFailure>), With<HeldFoodPropAttachment>>,
+    mut commands: Commands,
+) {
+    if let Ok((prop, failing)) = actors.get(added.entity) {
+        cancel_food_prop(added.entity, prop, &mut commands);
+        if !failing {
+            mark_behavior_task_for_failure_and_stop_navigation(added.entity, &mut commands);
         }
-        commands.entity(actor).remove::<HeldFoodPropAttachment>();
-        if task.is_some_and(|(task, step)| pending.origin.owns(task, step)) {
-            mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
+    }
+}
+
+#[derive(Component)]
+#[relationship(relationship_target = FoodPropsUsingSource)]
+struct FoodPropSource(Entity);
+
+#[derive(Component)]
+#[relationship_target(relationship = FoodPropSource)]
+struct FoodPropsUsingSource(Vec<Entity>);
+
+fn link_food_prop_to_source(
+    added: On<Add<HeldFoodPropAttachment>>,
+    pending: Query<&HeldFoodPropAttachment>,
+    mut commands: Commands,
+) {
+    if let Some(target) = pending.get(added.entity).ok().and_then(|pending| pending.origin.target) {
+        commands.entity(added.entity).try_insert(FoodPropSource(target));
+    }
+}
+
+fn unlink_food_prop_from_source(
+    removed: On<Remove<HeldFoodPropAttachment>>,
+    mut commands: Commands,
+) {
+    commands.entity(removed.entity).try_remove::<FoodPropSource>();
+}
+
+fn cancel_food_props_when_source_leaves(
+    removed: On<Remove<WorldMember>>,
+    sources: Query<&FoodPropsUsingSource>,
+    actors: Query<Option<&HeldFoodProp>, With<HeldFoodPropAttachment>>,
+    mut commands: Commands,
+) {
+    if let Ok(source) = sources.get(removed.entity) {
+        cancel_food_props_for_source(source, &actors, &mut commands);
+    }
+}
+
+fn cancel_food_props_when_source_is_crated(
+    added: On<Add<WorldEntityIsCrated>>,
+    sources: Query<&FoodPropsUsingSource>,
+    actors: Query<Option<&HeldFoodProp>, With<HeldFoodPropAttachment>>,
+    mut commands: Commands,
+) {
+    if let Ok(source) = sources.get(added.entity) {
+        cancel_food_props_for_source(source, &actors, &mut commands);
+    }
+}
+
+fn cancel_food_props_for_source(
+    source: &FoodPropsUsingSource,
+    actors: &Query<Option<&HeldFoodProp>, With<HeldFoodPropAttachment>>,
+    commands: &mut Commands,
+) {
+    for actor in source.iter() {
+        if let Ok(prop) = actors.get(actor) {
+            cancel_food_prop(actor, prop, commands);
+            mark_behavior_task_for_failure_and_stop_navigation(actor, commands);
         }
     }
 }
@@ -188,6 +256,7 @@ fn execute_food_prop_attachments(
             Option<&SpeciesHandle>,
             Option<&StaffRole>,
             Option<&GuestArchetype>,
+            Has<WaitingForAttachmentDefinitions>,
         ),
         (
             Without<PendingBehaviorTaskFailure>,
@@ -203,6 +272,7 @@ fn execute_food_prop_attachments(
     nodes: super::super::behavior_named_nodes::NamedNodeTransforms,
 ) {
     let settled = prefab_events.settled();
+    let definitions_changed = prefab_events.definitions_changed(&assets.definitions);
     let Some(definitions) = assets.definitions.get(&assets.definition_assets) else {
         return;
     };
@@ -211,13 +281,22 @@ fn execute_food_prop_attachments(
         (mut task, instruction, running_action),
         actor_definition,
         world,
-        pending,
+        mut pending,
         prop,
         species,
         staff,
         guest,
+        waiting,
     ) in behavior_action_actors(&mut actors, activation.0)
     {
+        if let Some(pending) = pending.as_mut() {
+            if !pending.origin.prefab_settled && let Some(prefab) = &pending.origin.prefab {
+                if !settled.contains(&prefab.id()) {
+                    continue;
+                }
+                pending.origin.prefab_settled = true;
+            }
+        }
         if activation.0.is_none() && !instruction.can_update_after_activation(clock.tick) {
             continue;
         }
@@ -229,6 +308,9 @@ fn execute_food_prop_attachments(
         }
         let action = &running_action.0;
         if !action.attaches_target_held_prop() {
+            continue;
+        }
+        if waiting && activation.0.is_none() && !definitions_changed {
             continue;
         }
         if let Some(pending) = pending
@@ -299,17 +381,6 @@ fn execute_food_prop_attachments(
             }
             continue;
         }
-        if activation.0.is_none()
-            && pending.as_ref().is_some_and(|pending| {
-                pending
-                    .origin
-                    .prefab
-                    .as_ref()
-                    .is_some_and(|prefab| !settled.contains(&prefab.id()))
-            })
-        {
-            continue;
-        }
         let Some(target) = task.target else {
             mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
             continue;
@@ -321,9 +392,7 @@ fn execute_food_prop_attachments(
             .and_then(|(id, _)| definitions.find_object(id.0))
             .and_then(|source| source.container_quantity)
         else {
-            if assets.definitions.is_complete() {
-                mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
-            }
+            wait_for_attachment_definition(actor, waiting, &assets.definitions, &mut commands);
             continue;
         };
         let mut state = HeldFoodPropAttachment {
@@ -342,9 +411,7 @@ fn execute_food_prop_attachments(
         }
         if let Some(prop) = source.held_prop {
             let Some(object) = definitions.find_object(prop) else {
-                if assets.definitions.is_complete() {
-                    mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
-                }
+                wait_for_attachment_definition(actor, waiting, &assets.definitions, &mut commands);
                 continue;
             };
             let Some((slot, place)) =
@@ -377,11 +444,12 @@ fn execute_food_prop_attachments(
                 .and_then(|pending| pending.origin.prefab.clone())
                 .or_else(|| definitions.scene(object.prefab))
             else {
-                if assets.definitions.is_complete() {
-                    mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
-                }
+                wait_for_attachment_definition(actor, waiting, &assets.definitions, &mut commands);
                 continue;
             };
+            if waiting {
+                commands.entity(actor).try_remove::<WaitingForAttachmentDefinitions>();
+            }
             state.origin.prefab = Some(handle.clone());
             let Some(prefab) = assets.prefabs.get(&handle) else {
                 if matches!(
@@ -437,6 +505,9 @@ fn execute_food_prop_attachments(
                 }),
             );
             continue;
+        }
+        if waiting {
+            commands.entity(actor).try_remove::<WaitingForAttachmentDefinitions>();
         }
         if let Some(animation) = &action.animation {
             state.origin.request_id = Some(

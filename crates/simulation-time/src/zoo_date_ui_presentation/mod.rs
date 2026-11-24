@@ -1,42 +1,47 @@
 use bevy::prelude::*;
-use openzt2_game_data::ui_document::node_property_binding::UiTextPropertyBindingSource;
 use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 
 use openzt2_game_assets::localization::{
     localization_asset_types::LocalizationAsset,
     localization_precedence_index::LocalizationPrecedenceIndex,
 };
-use openzt2_ui::authored_ui_text_content_binding::UiTextBinding;
 
-use super::simulation_clock_types::ZooCalendar;
+use super::simulation_clock_types::{UiZooDateText, ZooCalendar};
 
-/// Updates the date field when the calendar changes, reusing its string allocation.
-pub(super) fn project_authoritative_zoo_calendar_into_authored_zoo_date_text(
+pub(super) fn zoo_date_inputs_changed(
+    calendars: Query<(), (With<WorldRoot>, Changed<ZooCalendar>)>,
+    dates: Query<
+        (),
+        (
+            With<UiZooDateText>,
+            With<Text>,
+            Or<(Changed<UiZooDateText>, Added<Text>)>,
+        ),
+    >,
+    localization: Option<Res<LocalizationPrecedenceIndex>>,
+) -> bool {
+    !calendars.is_empty()
+        || !dates.is_empty()
+        || localization.is_some_and(|index| index.is_changed())
+}
+
+pub(super) fn project_localized_zoo_date(
     roots: Query<Ref<ZooCalendar>, With<WorldRoot>>,
-    active_localization_assets: Option<Res<LocalizationPrecedenceIndex>>,
+    localization: Option<Res<LocalizationPrecedenceIndex>>,
     localization_assets: Res<Assets<LocalizationAsset>>,
-    mut ui_text_bindings: Query<(Ref<UiTextBinding>, &mut Text)>,
+    mut dates: Query<(Ref<UiZooDateText>, &mut Text)>,
 ) {
-    let Ok(zoo_calendar) = roots.single() else {
+    let (Ok(calendar), Some(localization)) = (roots.single(), localization) else {
         return;
     };
-    let Some(active_localization) = active_localization_assets
-        .as_deref()
-        .and_then(|sources| sources.borrow_loaded_localization_view(&localization_assets))
-    else {
+    let refresh_all = calendar.is_changed() || localization.is_changed();
+    let Some(view) = localization.borrow_loaded_localization_view(&localization_assets) else {
         return;
     };
-    for (ui_text_binding, mut text) in &mut ui_text_bindings {
-        if !matches!(ui_text_binding.0, UiTextPropertyBindingSource::ZooDate)
-            || (!zoo_calendar.is_changed() && !ui_text_binding.is_added())
-        {
-            continue;
+    for (date, mut text) in &mut dates {
+        if refresh_all || date.is_changed() || text.is_added() {
+            text.0.clear();
+            let _ = view.write_localized_month_and_year(calendar.month, calendar.year, &mut text.0);
         }
-        text.0.clear();
-        let _ = active_localization.write_localized_month_and_year(
-            zoo_calendar.month,
-            zoo_calendar.year,
-            &mut text.0,
-        );
     }
 }

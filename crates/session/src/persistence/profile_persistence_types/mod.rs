@@ -36,6 +36,9 @@ pub(super) struct ProfileFilesystemTask(
 #[derive(Component, Debug, Clone, Copy)]
 pub(super) struct ProfileFilesystemTaskContext(pub(super) Option<AssetId>);
 
+#[derive(Component)]
+pub(super) struct PendingProfileSettingsWrite(pub(super) AssetId);
+
 pub(super) enum ProfileFilesystemTaskCompletion {
     IndexLoaded {
         entries: Vec<ProfileRecord>,

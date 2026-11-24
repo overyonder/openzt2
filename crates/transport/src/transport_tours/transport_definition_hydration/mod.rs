@@ -8,7 +8,7 @@ use openzt2_zoo_state::locomotion::locomotion_types::LocomotionMode;
 use openzt2_zoo_state::locomotion::locomotion_types::Velocity;
 use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 
-use crate::transport_tours::transport_fact_validation::transport_track_segment_is_valid;
+use crate::transport_tours::transport_route_position_calculations::TrackTravelDistances;
 use openzt2_zoo_state::transport_tours::tour_scoring_types::StationRatingPermille;
 use openzt2_zoo_state::transport_tours::tour_scoring_types::TourViewable;
 use openzt2_zoo_state::transport_tours::transport_circuit_types::CircuitDirection;
@@ -24,91 +24,123 @@ use openzt2_zoo_state::transport_tours::transport_vehicle_types::StationDestinat
 use openzt2_zoo_state::transport_tours::transport_vehicle_types::TransportVehicle;
 use openzt2_zoo_state::transport_tours::transport_vehicle_types::{RoutePosition, VehicleOnTrack};
 
-#[derive(Component)]
-pub(super) struct TransportDefinitionResolved;
-
-/// Projects resolved catalogue facts onto the ordinary entities that own them.
-/// Topology is deliberately not copied: construction supplies `CircuitMember`
-/// and `TrackSegment` entity relations when a route is joined.
 pub(super) fn hydrate_transport_entities_from_authored_world_definitions(
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,
-    unresolved_transport_entities: Query<
-        (Entity, &DefinitionId),
+    mut entities: Query<
         (
-            Without<TransportDefinitionResolved>,
-            Without<TransportCircuit>,
-            Without<TransportTrackJunction>,
+            Entity,
+            Ref<DefinitionId>,
+            Option<&Children>,
+            Option<&mut TransportStation>,
+            Has<StationRatingPermille>,
+            Option<&mut TrackProfile>,
+            Option<&mut TransportVehicle>,
+            Option<&mut TourViewable>,
         ),
+        (Without<TransportCircuit>, Without<TransportTrackJunction>),
     >,
+    mut exits: Query<&mut Transform, With<TransportStationExit>>,
     mut commands: Commands,
 ) {
-    let Some(world_definitions) = active_world_definitions.get(&world_definition_assets) else {
+    let Some(definitions) = active_world_definitions.get(&world_definition_assets) else {
         return;
     };
-    for (entity, definition_identifier) in &unresolved_transport_entities {
-        let station_definition = world_definitions.stations().find(|definition| {
-            AssetId(definition.object.0) == definition_identifier.0
-                || AssetId(definition.id.0) == definition_identifier.0
-        });
-        if let Some(station_definition) = station_definition {
-            commands.entity(entity).insert((
-                TransportStation {
-                    definition: AssetId(station_definition.id.0),
-                    capacity: station_definition.capacity,
-                },
-                StationRatingPermille::default(),
-            ));
-            for [x, z, heading] in station_definition.passenger_exits.into_iter().flatten() {
-                commands.spawn((
-                    openzt2_zoo_state::transport_tours::transport_rider_types::TransportStationExit,
-                    ChildOf(entity),
-                    Transform::from_xyz(x, 0.0, z)
-                        .with_rotation(Quat::from_rotation_y(heading.to_radians())),
+    let catalogue_changed =
+        active_world_definitions.is_changed() || world_definition_assets.is_changed();
+    let mut tour_views = None;
+    for (entity, source, children, station, rating, track, vehicle, viewable) in &mut entities {
+        if !source.is_changed() && !catalogue_changed {
+            continue;
+        }
+        if let Some(definition) = definitions.find_station(source.0) {
+            let value = TransportStation {
+                definition: AssetId(definition.id.0),
+                capacity: definition.capacity,
+            };
+            if let Some(mut station) = station {
+                station.set_if_neq(value);
+            } else {
+                commands.entity(entity).insert(value);
+            }
+            if !rating {
+                commands
+                    .entity(entity)
+                    .insert(StationRatingPermille::default());
+            }
+            let mut existing = children
+                .into_iter()
+                .flat_map(|children| children.iter())
+                .filter(|child| exits.contains(*child))
+                .collect::<Vec<_>>()
+                .into_iter();
+            for [x, z, heading] in definition.passenger_exits.into_iter().flatten() {
+                let pose = Transform::from_xyz(x, 0.0, z)
+                    .with_rotation(Quat::from_rotation_y(heading.to_radians()));
+                if let Some(exit) = existing.next() {
+                    if let Ok(mut transform) = exits.get_mut(exit) {
+                        transform.set_if_neq(pose);
+                    }
+                } else {
+                    commands.spawn((TransportStationExit, ChildOf(entity), pose));
+                }
+            }
+            for unused in existing {
+                commands.entity(unused).try_despawn();
+            }
+        }
+        if let Some(definition) = definitions.find_track(source.0) {
+            let value = TrackProfile {
+                definition: AssetId(definition.id.0),
+                kind: definition.kind,
+                maximum_grade_permille: definition.max_grade_permille,
+            };
+            if let Some(mut track) = track {
+                track.set_if_neq(value);
+            } else {
+                commands.entity(entity).insert(value);
+            }
+        }
+        if let Some(definition) = definitions.find_vehicle(source.0) {
+            let value = TransportVehicle {
+                definition: AssetId(definition.id.0),
+                seats: definition.seats,
+                maximum_speed_metres_per_second: definition.maximum_speed_metres_per_second,
+            };
+            if let Some(mut vehicle) = vehicle {
+                vehicle.set_if_neq(value);
+            } else {
+                commands.entity(entity).insert((
+                    value,
+                    LocomotionMode::Vehicle,
+                    Velocity::default(),
                 ));
             }
         }
-
-        let track_definition = world_definitions.tracks().find(|definition| {
-            AssetId(definition.object.0) == definition_identifier.0
-                || AssetId(definition.id.0) == definition_identifier.0
+        let views = tour_views.get_or_insert_with(|| {
+            let mut views = bevy::platform::collections::HashMap::<AssetId, AssetId>::default();
+            for view in definitions.tour_views() {
+                views
+                    .entry(AssetId(view.subject.0))
+                    .or_insert(AssetId(view.id.0));
+                views
+                    .entry(AssetId(view.id.0))
+                    .or_insert(AssetId(view.id.0));
+            }
+            views
         });
-        if let Some(track_definition) = track_definition {
-            commands.entity(entity).insert(TrackProfile {
-                definition: AssetId(track_definition.id.0),
-                kind: track_definition.kind,
-                maximum_grade_permille: track_definition.max_grade_permille,
-            });
+        match (viewable, views.get(&source.0)) {
+            (Some(mut viewable), Some(&definition)) => {
+                viewable.set_if_neq(TourViewable { definition });
+            }
+            (None, Some(&definition)) => {
+                commands.entity(entity).insert(TourViewable { definition });
+            }
+            (Some(_), None) => {
+                commands.entity(entity).remove::<TourViewable>();
+            }
+            (None, None) => {}
         }
-
-        let vehicle_definition = world_definitions.vehicles().find(|definition| {
-            AssetId(definition.object.0) == definition_identifier.0
-                || AssetId(definition.id.0) == definition_identifier.0
-        });
-        if let Some(vehicle_definition) = vehicle_definition {
-            commands.entity(entity).insert((
-                TransportVehicle {
-                    definition: AssetId(vehicle_definition.id.0),
-                    seats: vehicle_definition.seats,
-
-                    maximum_speed_metres_per_second: vehicle_definition
-                        .maximum_speed_metres_per_second,
-                },
-                LocomotionMode::Vehicle,
-                Velocity::default(),
-            ));
-        }
-
-        let tour_view_definition = world_definitions.tour_views().find(|definition| {
-            AssetId(definition.subject.0) == definition_identifier.0
-                || AssetId(definition.id.0) == definition_identifier.0
-        });
-        if let Some(tour_view_definition) = tour_view_definition {
-            commands.entity(entity).insert(TourViewable {
-                definition: AssetId(tour_view_definition.id.0),
-            });
-        }
-        commands.entity(entity).insert(TransportDefinitionResolved);
     }
 }
 
@@ -119,25 +151,37 @@ pub(super) fn hydrate_transport_entities_from_authored_world_definitions(
 /// complete edge remains inert instead of receiving a synthetic route.
 pub(super) fn initialize_transport_vehicle_routes_from_first_stable_circuit_edge(
     mut transport_vehicles: Query<
-        (Entity, &CircuitMember, &mut Transform),
-        (With<TransportVehicle>, Without<RoutePosition>),
+        (
+            Entity,
+            Ref<CircuitMember>,
+            Ref<TransportVehicle>,
+            &mut Transform,
+        ),
+        Without<RoutePosition>,
     >,
     transport_circuits: Query<(Option<&CircuitDirection>, &CircuitMembers), With<TransportCircuit>>,
-    track_segments: Query<(Entity, TrackRoute, &CircuitMember)>,
+    track_segments: Query<(Entity, TrackRoute, &TrackTravelDistances)>,
+    changed_routes: Query<&CircuitMember, Changed<TrackTravelDistances>>,
     stations: Query<(), With<TransportStation>>,
     mut commands: Commands,
 ) {
-    for (vehicle_entity, circuit_member, mut vehicle_transform) in &mut transport_vehicles {
+    let changed_circuits: bevy::ecs::entity::EntityHashSet =
+        changed_routes.iter().map(|member| member.0).collect();
+    for (vehicle_entity, circuit_member, vehicle, mut vehicle_transform) in &mut transport_vehicles
+    {
+        if !vehicle.is_added()
+            && !circuit_member.is_changed()
+            && !changed_circuits.contains(&circuit_member.0)
+        {
+            continue;
+        }
         let Ok((direction, members)) = transport_circuits.get(circuit_member.0) else {
             continue;
         };
         let circuit_runs_in_reverse = matches!(direction, Some(CircuitDirection::Reverse));
-        let Some((track_segment_entity, track_segment, _)) = track_segments
+        let Some((track_segment_entity, track_segment, distances)) = track_segments
             .iter_many(members.iter())
             .filter_map(Result::ok)
-            .filter(|(_, track_segment, _)| {
-                transport_track_segment_is_valid(track_segment.geometry)
-            })
             // A bought vehicle is created at the station, so it starts on
             // the edge leaving one; entity order alone picked any edge.
             .min_by_key(|(entity, track_segment, _)| {
@@ -152,15 +196,12 @@ pub(super) fn initialize_transport_vehicle_routes_from_first_stable_circuit_edge
             continue;
         };
         let initial_distance = if circuit_runs_in_reverse {
-            track_segment.length
+            distances.travel_length(track_segment.geometry)
         } else {
             0.0
         };
-        let initial_position = if circuit_runs_in_reverse {
-            track_segment.to_position
-        } else {
-            track_segment.from_position
-        };
+        let (initial_position, _) =
+            distances.translation_and_tangent(track_segment.geometry, initial_distance);
         let first_destination = if circuit_runs_in_reverse {
             track_segment.from()
         } else {
@@ -188,11 +229,17 @@ pub(super) fn request_reopening_saved_transport_circuits(
             With<TransportVehicle>,
         )>,
     >,
+    pending_cables: Query<(&TrackProfile, Has<TrackTravelDistances>), With<TrackSegment>>,
     mut open: MessageWriter<OpenCircuitRequest>,
     mut commands: Commands,
 ) {
     for (circuit, membership) in &circuits {
-        if membership.iter().all(|member| members.contains(member)) {
+        if membership.iter().all(|member| {
+            members.contains(member)
+                && pending_cables.get(member).map_or(true, |(profile, ready)| {
+                    profile.kind != TransportationTrackKind::Sky || ready
+                })
+        }) {
             open.write(OpenCircuitRequest {
                 circuit,
                 open: true,
@@ -214,8 +261,9 @@ mod tests {
         from_position: Vec3,
         to: Entity,
         to_position: Vec3,
-    ) -> (TrackStart, TrackEnd, TrackSegment) {
+    ) -> (TrackStart, TrackEnd, TrackSegment, TrackTravelDistances) {
         let points: Box<[Vec3]> = Box::new([from_position, to_position]);
+        let (distances, length) = TrackTravelDistances::calculate(&points).unwrap();
         (
             TrackStart(from),
             TrackEnd(to),
@@ -229,8 +277,9 @@ mod tests {
                 to_position,
                 path_points: points.clone(),
                 travel_path_points: points,
-                length: from_position.distance(to_position),
+                length,
             },
+            distances,
         )
     }
 
@@ -300,9 +349,16 @@ pub(super) fn materialize_restored_transport_prefabs(
     prefabs: Res<Assets<openzt2_game_assets::scene_prefab::ScenePrefabAsset>>,
     models: Res<Assets<bevy::gltf::Gltf>>,
     server: Res<AssetServer>,
+    mut prefab_events: MessageReader<
+        AssetEvent<openzt2_game_assets::scene_prefab::ScenePrefabAsset>,
+    >,
+    mut prefab_failures: MessageReader<
+        bevy::asset::AssetLoadFailedEvent<openzt2_game_assets::scene_prefab::ScenePrefabAsset>,
+    >,
+    mut model_events: MessageReader<AssetEvent<bevy::gltf::Gltf>>,
     pending: Query<(
         Entity,
-        &openzt2_zoo_state::transport_tours::transport_topology_types::RestoredTransportPrefab,
+        Ref<openzt2_zoo_state::transport_tours::transport_topology_types::RestoredTransportPrefab>,
         &openzt2_world_state::world_spawn::persistent_id_types::PersistentId,
         &openzt2_world_state::world_spawn::world_membership_types::WorldMember,
         &DefinitionId,
@@ -310,7 +366,29 @@ pub(super) fn materialize_restored_transport_prefabs(
         Has<TransportVehicle>,
     )>,
 ) {
+    let changed_prefabs = prefab_events
+        .read()
+        .filter_map(|event| match event {
+            AssetEvent::Added { id }
+            | AssetEvent::Modified { id }
+            | AssetEvent::LoadedWithDependencies { id } => Some(*id),
+            _ => None,
+        })
+        .chain(prefab_failures.read().map(|failure| failure.id))
+        .collect::<bevy::platform::collections::HashSet<_>>();
+    let models_changed = model_events.read().any(|event| {
+        matches!(
+            event,
+            AssetEvent::Added { .. }
+                | AssetEvent::Modified { .. }
+                | AssetEvent::LoadedWithDependencies { .. }
+        )
+    });
+    model_events.clear();
     for (entity, prefab, id, world, definition, pose, vehicle) in &pending {
+        if !prefab.is_changed() && !models_changed && !changed_prefabs.contains(&prefab.0.id()) {
+            continue;
+        }
         if matches!(
             server.get_load_state(prefab.0.id()),
             Some(bevy::asset::LoadState::Failed(_))

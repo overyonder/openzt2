@@ -34,7 +34,7 @@ fn forward_route_position_clamps_at_track_segment_end() {
     ));
     assert_eq!(route_position.distance, 10.0);
     assert_eq!(
-        TrackTravelDistances::from_validated_segment(&track_segment)
+        TrackTravelDistances::from_segment_snapshot(&track_segment)
             .unwrap()
             .translation_and_tangent(&track_segment, route_position.distance)
             .0,
@@ -54,7 +54,7 @@ fn reverse_route_position_preserves_progress_and_clamps_at_track_segment_start()
     ));
     assert_eq!(route_position.distance, 2.5);
     assert_eq!(
-        TrackTravelDistances::from_validated_segment(&track_segment)
+        TrackTravelDistances::from_segment_snapshot(&track_segment)
             .unwrap()
             .translation_and_tangent(&track_segment, route_position.distance)
             .0,
@@ -67,4 +67,18 @@ fn reverse_route_position_preserves_progress_and_clamps_at_track_segment_start()
         true,
     ));
     assert_eq!(route_position.distance, 0.0);
+}
+
+#[test]
+fn sky_travel_uses_the_cable_endpoints_and_droop() {
+    let construction = ten_metre_test_track_segment();
+    let start = Vec3::Y * 6.0;
+    let middle = Vec3::new(5.0, 5.0, 0.0);
+    let end = Vec3::new(10.0, 6.0, 0.0);
+    let travel = TrackTravelDistances::from_sky_cable(vec![start, middle, end]).unwrap();
+    let length = travel.travel_length(&construction);
+    for (distance, expected) in [(0.0, start), (length * 0.5, middle), (length, end)] {
+        let (position, _) = travel.translation_and_tangent(&construction, distance);
+        assert!(position.abs_diff_eq(expected, 1e-5));
+    }
 }

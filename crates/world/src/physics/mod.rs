@@ -2,6 +2,7 @@ pub(crate) mod authored_water_surface_impact_projection;
 pub mod collider_hydration;
 pub(crate) mod fitting_surface_operations;
 pub(crate) mod interaction_execution;
+mod behavior_fall_execution;
 pub(crate) mod interaction_types;
 mod water_surface_disturbance_projection;
 
@@ -36,6 +37,7 @@ pub struct ZooPhysicsPlugin;
 impl Plugin for ZooPhysicsPlugin {
     fn build(&self, app: &mut App) {
         app.add_observer(interaction_execution::release_behavior_object_into_world)
+            .add_observer(behavior_fall_execution::start_authored_fall)
             .add_message::<ApplyPhysicsImpulseRequest>()
             .add_message::<PhysicsInteractionFailure>()
             .add_systems(

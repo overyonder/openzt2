@@ -52,6 +52,7 @@ fn sale_application(refund_percent: f32) -> (App, Entity, [Entity; 2], Entity, E
         .add_message::<TransportTrackConnectionRejected>()
         .add_message::<TransportTrackDisconnectionApplied>()
         .add_message::<TransportStationAssignmentRejected>()
+        .add_message::<crate::transport_tours::transport_track_piece_presentation::DiscardedTrackJointEndpoints>()
         .add_systems(
             Update,
             (

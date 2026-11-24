@@ -63,28 +63,27 @@ fn shore_candidates_respect_water_clearance_capabilities_and_terrain_changes() {
 }
 
 #[test]
-fn clearing_one_caffeine_mode_keeps_the_other() {
-    let mut world = World::new();
-    let actor = world.spawn_empty().id();
-    let mut write = |mode, enabled| {
-        let current = world.get::<CaffeineMode>(actor).copied();
-        let mut commands = world.commands();
-        CaffeineMode::write_authored(&mut commands.entity(actor), current.as_ref(), mode, enabled);
-        world.flush();
-        world.get::<CaffeineMode>(actor).copied()
+fn caffeine_flags_use_both_authored_factors_in_order() {
+    let mut flags = CaffeineFlags {
+        caffeinated: true,
+        decaffeinated: true,
     };
+    let factors = CaffeineFactors {
+        caffeinated: 1.0e30,
+        decaffeinated: 1.0e30,
+    };
+    assert!(flags.apply_to_rate(1.0e30, factors).is_infinite());
+
+    flags.caffeinated = false;
     assert_eq!(
-        write(CaffeineMode::Caffeinated, true),
-        Some(CaffeineMode::Caffeinated)
+        flags.apply_to_rate(
+            12.0,
+            CaffeineFactors {
+                caffeinated: 3.0,
+                decaffeinated: 6.0,
+            },
+        ),
+        2.0,
     );
-    assert_eq!(
-        write(CaffeineMode::Decaffeinated, false),
-        Some(CaffeineMode::Caffeinated)
-    );
-    assert_eq!(write(CaffeineMode::Caffeinated, false), None);
-    assert_eq!(CaffeineMode::speed_factor(None), 1.0);
-    assert_eq!(
-        CaffeineMode::speed_factor(Some(&CaffeineMode::Decaffeinated)),
-        1.0 / 3.0
-    );
+    assert_eq!(flags.apply_to_rate(12.0, CaffeineFactors::default()), 12.0);
 }

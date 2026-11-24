@@ -12,7 +12,37 @@ use openzt2_game_assets::material::runtime::effect_pass_gpu_data::FIXED_FUNCTION
 use openzt2_zoo_state::environment::environment_presentation_types::EnvironmentTerrainAmbientLight;
 use openzt2_zoo_state::terrain::terrain_chunk_presentation_types::TERRAIN_RENDER_LAYER;
 
-pub(super) fn update_fixed_function_world_light_buffer(
+#[derive(Component, PartialEq)]
+pub(super) struct FixedFunctionWorldLightRegisters(D3d9FixedFunctionWorldLightContexts);
+
+impl Default for FixedFunctionWorldLightRegisters {
+    fn default() -> Self {
+        Self(D3d9FixedFunctionWorldLightContexts {
+            values: [D3d9FixedFunctionWorldLightRegisters::default();
+                FIXED_FUNCTION_WORLD_LIGHT_CONTEXT_COUNT],
+        })
+    }
+}
+
+pub(super) fn upload_fixed_function_world_light_registers(
+    registers: Single<Ref<FixedFunctionWorldLightRegisters>>,
+    mut assets: MessageReader<AssetEvent<ShaderBuffer>>,
+    mut buffers: ResMut<Assets<ShaderBuffer>>,
+) {
+    let recreated = assets.read().any(|event| {
+        matches!(*event,
+            AssetEvent::Added { id } if id == FIXED_FUNCTION_WORLD_LIGHT_BUFFER.id()
+        )
+    });
+    if !registers.is_changed() && !recreated {
+        return;
+    }
+    if let Some(mut buffer) = buffers.get_mut(FIXED_FUNCTION_WORLD_LIGHT_BUFFER.id()) {
+        registers.0.write_shader_buffer(&mut buffer);
+    }
+}
+
+pub(super) fn project_fixed_function_world_light_registers(
     graphics: Res<GraphicsSettings>,
     ambient_light: Res<GlobalAmbientLight>,
     terrain_ambient: Res<EnvironmentTerrainAmbientLight>,
@@ -38,8 +68,7 @@ pub(super) fn update_fixed_function_world_light_buffer(
     mut removed_light_visibility: RemovedComponents<ViewVisibility>,
     mut removed_layers: RemovedComponents<RenderLayers>,
     mut removed_specular_colors: RemovedComponents<EnvironmentSpecularLightColor>,
-    mut buffers: ResMut<Assets<ShaderBuffer>>,
-    mut previous_contexts: Local<Option<D3d9FixedFunctionWorldLightContexts>>,
+    mut published: Single<&mut FixedFunctionWorldLightRegisters>,
 ) {
     let removed_inputs = (removed_cameras.read().count() != 0)
         | (removed_camera_components.read().count() != 0)
@@ -63,7 +92,7 @@ pub(super) fn update_fixed_function_world_light_buffer(
             .count()
             != 0)
         | (removed_specular_colors.read().count() != 0);
-    if previous_contexts.is_some()
+    if !published.is_added()
         && !removed_inputs
         && !ambient_light.is_changed()
         && !terrain_ambient.is_changed()
@@ -152,11 +181,5 @@ pub(super) fn update_fixed_function_world_light_buffer(
     for (registers, count) in contexts.values.iter_mut().zip(directional_counts) {
         registers.ambient_color_and_directional_light_count.w = count as f32;
     }
-    if previous_contexts.as_ref() == Some(&contexts) {
-        return;
-    }
-    if let Some(mut buffer) = buffers.get_mut(FIXED_FUNCTION_WORLD_LIGHT_BUFFER.id()) {
-        contexts.write_shader_buffer(&mut buffer);
-        *previous_contexts = Some(contexts);
-    }
+    published.set_if_neq(FixedFunctionWorldLightRegisters(contexts));
 }

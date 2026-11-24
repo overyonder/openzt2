@@ -410,6 +410,8 @@ pub struct RenderContext<'a> {
     pub needs_normal: bool,
     /// The particle needs access to its data in the fragment shader.
     pub needs_particle_fragment: bool,
+    /// The modifier uses the view's fog uniforms.
+    pub(crate) needs_view_fog: bool,
     /// Counter for unique variable names.
     var_counter: u32,
     /// Cache of evaluated expressions.
@@ -441,6 +443,7 @@ impl<'a> RenderContext<'a> {
             needs_uv: false,
             needs_normal: false,
             needs_particle_fragment: false,
+            needs_view_fog: false,
             var_counter: 0,
             expr_cache: Default::default(),
             is_attribute_pointer: false,
@@ -474,6 +477,11 @@ impl<'a> RenderContext<'a> {
     /// shader.
     pub fn set_needs_particle_fragment(&mut self) {
         self.needs_particle_fragment = true;
+    }
+
+    /// Make the view's linear fog available as `particle_view_fog`.
+    pub fn set_needs_view_fog(&mut self) {
+        self.needs_view_fog = true;
     }
 
     /// Add a color gradient.

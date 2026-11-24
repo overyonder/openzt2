@@ -6,8 +6,8 @@ use super::guest_arrival_calculations::guest_arrival_position;
 use super::guest_definition_queries::guest_need_rows;
 use super::guest_arrival_calculations::guest_spawn_probability;
 use super::guest_arrival_calculations::random_unit;
-use arrayvec::ArrayVec;
 use bevy::ecs::system::SystemParam;
+use bevy::platform::collections::HashSet;
 use bevy::prelude::*;
 use openzt2_game_data::world_definitions::guest_simulation_definitions::GuestNeedDefinition;
 use openzt2_game_data::AssetId;
@@ -193,7 +193,7 @@ pub(crate) struct GuestArrivalParams<'w, 's> {
             &'static Visibility,
         ),
     >,
-    seen_species: Local<'s, ArrayVec<AssetId, 512>>,
+    seen_species: Local<'s, HashSet<AssetId>>,
     commands: Commands<'w, 's>,
     navigate: MessageWriter<'w, NavigateTo>,
     failed: MessageWriter<'w, GuestArrivalFailed>,
@@ -278,23 +278,19 @@ pub(crate) fn spawn_arriving_guests(params: GuestArrivalParams) {
         state.next_tick = clock.tick.saturating_add(interval.max(1));
     }
     let population = guests.iter().filter(|guest| guest.root == root).count() as u32;
-    seen_species.clear();
-    for (animal, member) in &animals {
-        if member.root != root {
-            continue;
-        }
-        if !seen_species.contains(&animal.species) && !seen_species.is_full() {
-            seen_species.push(animal.species);
-        }
-    }
-    seen_species.sort_unstable_by(|a, b| a.0.cmp(&b.0));
     let cap = policy.maximum_guests_at_fame(fame.half_stars);
     let scheduled_count = if scheduled_due && policy.enabled && population < cap && {
+        seen_species.clear();
+        seen_species.extend(
+            animals
+                .iter()
+                .filter_map(|(animal, member)| (member.root == root).then_some(animal.species)),
+        );
         let probability = guest_spawn_probability(
             policy,
             fame.half_stars,
             admission.adult.0,
-            seen_species.len() as u32,
+            u32::try_from(seen_species.len()).unwrap_or(u32::MAX),
         );
         random_unit(&mut state.rng) < probability
     } {

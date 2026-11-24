@@ -1,5 +1,8 @@
+use super::audio_player_spawning::AudioCueSelection;
 use super::audio_request_lanes::{ProducedAudioRequest, SOUNDSCAPE_SETUP, SOUNDSCAPE_TIMER};
-use super::world_audio_soundscape_membership::SoundscapeInputChanges;
+use super::audio_stage_playback_projection::{BiomeAmbienceMix, EnvironmentVoiceGain};
+use super::world_audio_soundscape_membership::{SoundscapeInputChanges, WorldAudioSoundscapes};
+use bevy::ecs::relationship::RelationshipTarget;
 use bevy::prelude::*;
 
 use openzt2_game_assets::audio::audio_asset_types::{AudioAsset, AudioAssets};
@@ -7,8 +10,7 @@ use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_zoo_state::audio::audio_environment_types::WorldAudioPreset;
 
 use super::{
-    audio_environment_types::AudioSoundscape,
-    audio_playback_message_types::{PlayAudioCue, StopAudioCue},
+    audio_environment_types::AudioSoundscape, audio_playback_message_types::PlayAudioCue,
     deterministic_audio_sampling::sample_deterministic_f32_range,
 };
 
@@ -17,6 +19,9 @@ pub(super) struct SoundscapeCueSchedule {
     delay: Timer,
     selection: u64,
 }
+
+#[derive(Component)]
+pub(super) struct ActiveBiomeAmbience;
 
 fn select_weighted_soundscape_cue(
     cues: &[openzt2_game_data::audio::AudioSoundscapeCue],
@@ -50,7 +55,12 @@ pub(super) fn project_changed_audio_soundscapes_into_playback_and_schedules(
         &AudioSoundscape,
         &WorldMember,
         Option<&mut SoundscapeCueSchedule>,
+        Option<&Children>,
+        Has<ActiveBiomeAmbience>,
     )>,
+    changed_worlds: Query<(&BiomeAmbienceMix, &WorldAudioSoundscapes), Changed<BiomeAmbienceMix>>,
+    stages: Query<&BiomeAmbienceMix>,
+    voices: Query<&AudioCueSelection>,
     presets: Query<&WorldAudioPreset>,
     mut changes: SoundscapeInputChanges,
     mut requests: MessageWriter<ProducedAudioRequest<SOUNDSCAPE_SETUP>>,
@@ -64,14 +74,38 @@ pub(super) fn project_changed_audio_soundscapes_into_playback_and_schedules(
     if audio_assets_changed {
         candidates.extend(soundscapes.iter().map(|(entity, ..)| entity));
     }
-    let mut pending = soundscapes.iter_many_mut(candidates).matched();
-    while let Some((soundscape_owner, selected_soundscape, member, schedule)) = pending.fetch_next()
-    {
-        let preset = presets.get(member.root).ok();
-        requests.write(ProducedAudioRequest::Stop(StopAudioCue {
-            emitter: Some(soundscape_owner),
-            selection: selected_soundscape.selection,
+    for (mix, owners) in &changed_worlds {
+        candidates.extend(owners.iter().filter(|&owner| {
+            soundscapes
+                .get(owner)
+                .is_ok_and(|(_, _, _, _, _, active)| active != mix.active)
         }));
+    }
+    let mut pending = soundscapes.iter_many_mut(candidates).matched();
+    while let Some((owner, selected_soundscape, member, schedule, children, active)) =
+        pending.fetch_next()
+    {
+        if let Some(children) = children {
+            for voice in children
+                .iter()
+                .filter(|&voice| voices.get(voice).is_ok_and(|voice| voice.emitter.is_none()))
+            {
+                commands.entity(voice).try_despawn();
+            }
+        }
+        if stages.get(member.root).is_ok_and(|stage| !stage.active) {
+            if active {
+                commands.entity(owner).try_remove::<ActiveBiomeAmbience>();
+            }
+            if schedule.is_some() {
+                commands.entity(owner).try_remove::<SoundscapeCueSchedule>();
+            }
+            continue;
+        }
+        if !active {
+            commands.entity(owner).try_insert(ActiveBiomeAmbience);
+        }
+        let preset = presets.get(member.root).ok();
         let soundscape = match preset {
             Some(preset) => audio_assets
                 .get(&preset.0)
@@ -80,20 +114,21 @@ pub(super) fn project_changed_audio_soundscapes_into_playback_and_schedules(
         };
         let Some(soundscape) = soundscape else {
             if schedule.is_some() {
-                commands
-                    .entity(soundscape_owner)
-                    .remove::<SoundscapeCueSchedule>();
+                commands.entity(owner).remove::<SoundscapeCueSchedule>();
             }
             continue;
         };
         if let Some(loop_cue) = soundscape.loop_cue {
-            requests.write(ProducedAudioRequest::Play(PlayAudioCue {
-                cue: loop_cue,
-                emitter: Some(soundscape_owner),
-                selection: selected_soundscape.selection,
-                priority: 48,
-                force_looped: true,
-            }));
+            requests.write(ProducedAudioRequest::PlayOwned(
+                PlayAudioCue {
+                    cue: loop_cue,
+                    emitter: None,
+                    selection: selected_soundscape.selection,
+                    priority: 48,
+                    force_looped: true,
+                },
+                owner,
+            ));
         }
         if select_weighted_soundscape_cue(
             &soundscape.cues,
@@ -112,13 +147,11 @@ pub(super) fn project_changed_audio_soundscapes_into_playback_and_schedules(
             if let Some(mut schedule) = schedule {
                 *schedule = next;
             } else {
-                commands.entity(soundscape_owner).insert(next);
+                commands.entity(owner).insert(next);
             }
         } else {
             if schedule.is_some() {
-                commands
-                    .entity(soundscape_owner)
-                    .remove::<SoundscapeCueSchedule>();
+                commands.entity(owner).remove::<SoundscapeCueSchedule>();
             }
         }
     }
@@ -135,6 +168,7 @@ pub(super) fn advance_audio_soundscape_cue_schedules(
         &mut SoundscapeCueSchedule,
     )>,
     presets: Query<&WorldAudioPreset>,
+    stages: Query<&BiomeAmbienceMix>,
     mut requests: MessageWriter<ProducedAudioRequest<SOUNDSCAPE_TIMER>>,
 ) {
     let audio_asset_view = audio_asset_index.get(&audio_assets);
@@ -144,7 +178,11 @@ pub(super) fn advance_audio_soundscape_cue_schedules(
         .map_or(1.0, |policy| policy.probability)
         .clamp(0.0, 1.0);
     for (soundscape_owner, selected_soundscape, member, mut schedule) in &mut soundscapes {
-        if !schedule.delay.tick(time.delta()).is_finished() {
+        if stages
+            .get(member.root)
+            .is_ok_and(|stage| !stage.schedules_cues)
+            || !schedule.delay.tick(time.delta()).is_finished()
+        {
             continue;
         }
         let soundscape = match presets.get(member.root) {
@@ -166,13 +204,16 @@ pub(super) fn advance_audio_soundscape_cue_schedules(
         if sample_deterministic_f32_range([0.0, 1.0], schedule.selection.rotate_left(41))
             <= playback_probability
         {
-            requests.write(ProducedAudioRequest::Play(PlayAudioCue {
-                cue: cue.cue,
-                emitter: Some(soundscape_owner),
-                selection: schedule.selection,
-                priority: 24,
-                force_looped: false,
-            }));
+            requests.write(ProducedAudioRequest::PlayOwned(
+                PlayAudioCue {
+                    cue: cue.cue,
+                    emitter: None,
+                    selection: schedule.selection,
+                    priority: 24,
+                    force_looped: false,
+                },
+                soundscape_owner,
+            ));
         }
         schedule.selection = schedule
             .selection
@@ -250,7 +291,7 @@ mod tests {
             .resource_mut::<Messages<ProducedAudioRequest<SOUNDSCAPE_SETUP>>>()
             .drain()
             .filter_map(|request| match request {
-                ProducedAudioRequest::Play(cue) => Some(cue),
+                ProducedAudioRequest::PlayOwned(cue, target) if target == owner => Some(cue),
                 _ => None,
             })
             .collect::<Vec<_>>();
@@ -266,7 +307,7 @@ mod tests {
             .resource_mut::<Messages<ProducedAudioRequest<SOUNDSCAPE_TIMER>>>()
             .drain()
             .filter_map(|request| match request {
-                ProducedAudioRequest::Play(cue) => Some(cue),
+                ProducedAudioRequest::PlayOwned(cue, target) if target == owner => Some(cue),
                 _ => None,
             })
             .collect::<Vec<_>>();
@@ -278,5 +319,31 @@ mod tests {
             .remove::<WorldAudioPreset>();
         app.update();
         assert!(app.world().get::<SoundscapeCueSchedule>(owner).is_none());
+    }
+}
+
+pub(super) fn project_biome_ambience_mix_to_soundscapes(
+    mut commands: Commands,
+    changed_worlds: Query<&WorldAudioSoundscapes, Changed<BiomeAmbienceMix>>,
+    added_soundscapes: Query<Entity, Added<AudioSoundscape>>,
+    mix: Query<&BiomeAmbienceMix>,
+    mut soundscapes: Query<
+        (Entity, &WorldMember, Option<&mut EnvironmentVoiceGain>),
+        With<AudioSoundscape>,
+    >,
+) {
+    let changed = changed_worlds
+        .iter()
+        .flat_map(WorldAudioSoundscapes::iter)
+        .chain(added_soundscapes.iter())
+        .collect::<bevy::ecs::entity::EntityHashSet>();
+    let mut soundscapes = soundscapes.iter_many_mut(changed).matched();
+    while let Some((entity, member, current)) = soundscapes.fetch_next() {
+        let gain = EnvironmentVoiceGain(mix.get(member.root).map_or(1.0, |mix| mix.gain));
+        if let Some(mut current) = current {
+            current.set_if_neq(gain);
+        } else {
+            commands.entity(entity).try_insert(gain);
+        }
     }
 }

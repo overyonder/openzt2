@@ -9,7 +9,7 @@ use openzt2_zoo_state::economy::general_economy_types::{
 
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
-    complete_behavior_refill, RunningBehaviorEconomyTransaction, RunningBehaviorInstruction,
+    RunningBehaviorEconomyTransaction, RunningBehaviorInstruction, complete_behavior_refill,
 };
 
 use super::{
@@ -105,9 +105,27 @@ fn transaction_accounts_are_same(left_account: Account, right_account: Account) 
     }
 }
 
+#[derive(Resource, Default)]
+pub(super) struct AccountRequestCursor(bevy::ecs::message::MessageCursor<TransactionRequest>);
+
+#[derive(Component)]
+pub(super) struct AccountSettlementDomain<const PLAYER: bool>;
+
+#[derive(Message)]
+pub(super) struct RecordedAccountMovement<const PLAYER: bool> {
+    pub(super) root: Entity,
+    pub(super) kind: TransactionKind,
+    pub(super) subject: Option<Entity>,
+    pub(super) zoo_delta: Money,
+    pub(super) named_payment: Option<(Entity, openzt2_game_data::AssetId)>,
+}
+
+// Requests emitted between the simulation and construction boundaries are
+// consumed at the latter boundary without traversing the earlier batch again.
 pub(super) fn stage_requested_account_transactions<const PLAYER: bool>(
     mut commands: Commands,
-    mut requests: MessageReader<TransactionRequest>,
+    requests: Res<Messages<TransactionRequest>>,
+    mut cursor: ResMut<AccountRequestCursor>,
     player_operations: Query<
         (),
         Or<(
@@ -117,22 +135,30 @@ pub(super) fn stage_requested_account_transactions<const PLAYER: bool>(
     >,
     settlements: Query<(), With<TransactionSettlement>>,
 ) {
-    for (request, message) in requests.read_with_id() {
-        let player_operation = matches!(
+    let mut accepted = bevy::ecs::entity::EntityHashSet::default();
+    for (request, message) in cursor.0.read_with_id(&requests) {
+        if settlements.contains(request.operation) || !accepted.insert(request.operation) {
+            continue;
+        }
+        let player = matches!(
             request.kind,
             TransactionKind::Construction
                 | TransactionKind::Research
                 | TransactionKind::AnimalAdoption
         ) || player_operations.contains(request.operation);
-        if player_operation == PLAYER && !settlements.contains(request.operation) {
-            commands.entity(request.operation).try_insert_if_new((
-                AwaitingAccountSettlement,
-                TransactionSettlement::Pending {
-                    request: *request,
-                    sequence: message.id,
-                    player_operation,
-                },
-            ));
+        let pending = (
+            AwaitingAccountSettlement,
+            TransactionSettlement::Pending {
+                request: *request,
+                sequence: message.id,
+                player_operation: player,
+            },
+        );
+        let mut operation = commands.entity(request.operation);
+        if player {
+            operation.try_insert_if_new((pending, AccountSettlementDomain::<true>));
+        } else {
+            operation.try_insert_if_new((pending, AccountSettlementDomain::<false>));
         }
     }
 }
@@ -153,6 +179,7 @@ pub(super) fn settle_requested_account_transactions<const PLAYER: bool>(
     mut wallets: Query<&mut Wallet>,
     mut completed_transactions: MessageWriter<TransactionCompleted>,
     mut rejected_transactions: MessageWriter<TransactionRejected>,
+    mut recorded_movements: MessageWriter<RecordedAccountMovement<PLAYER>>,
     mut transaction_operations: Query<
         (
             Entity,
@@ -161,7 +188,10 @@ pub(super) fn settle_requested_account_transactions<const PLAYER: bool>(
             Option<&StagedBehaviorRefill>,
             Option<&GeneralEconomyTransaction>,
         ),
-        With<AwaitingAccountSettlement>,
+        (
+            With<AwaitingAccountSettlement>,
+            With<AccountSettlementDomain<PLAYER>>,
+        ),
     >,
     behavior_tasks: Query<
         (
@@ -176,11 +206,7 @@ pub(super) fn settle_requested_account_transactions<const PLAYER: bool>(
     let mut pending = transaction_operations
         .iter()
         .filter_map(|(operation, state, ..)| match *state {
-            TransactionSettlement::Pending {
-                sequence,
-                player_operation,
-                ..
-            } if player_operation == PLAYER => Some((sequence, operation)),
+            TransactionSettlement::Pending { sequence, .. } => Some((sequence, operation)),
             _ => None,
         })
         .collect::<Vec<_>>();
@@ -260,17 +286,18 @@ pub(super) fn settle_requested_account_transactions<const PLAYER: bool>(
                 credit_account_balance,
             )?;
 
+            let zoo_delta = match (request.debit, request.credit) {
+                (Account::Zoo, Account::Zoo) => Some(Money::ZERO),
+                (Account::Zoo, _) => Money::ZERO.checked_sub(request.amount),
+                (_, Account::Zoo) => Some(request.amount),
+                _ => None,
+            };
             let general_cash_change = if provenance.is_some()
                 && general_ledger
                     .as_deref()
                     .is_some_and(|ledger| ledger.cash().is_some())
             {
-                let delta = match (request.debit, request.credit) {
-                    (Account::Zoo, Account::Zoo) => 0,
-                    (Account::Zoo, _) => -request.amount.0,
-                    (_, Account::Zoo) => request.amount.0,
-                    _ => 0,
-                };
+                let delta = zoo_delta.unwrap_or_default().0;
                 general_ledger
                     .as_deref()
                     .and_then(|ledger| ledger.cash_after_transaction(delta))
@@ -331,6 +358,16 @@ pub(super) fn settle_requested_account_transactions<const PLAYER: bool>(
                     }
                 }
             }
+            if let Some(zoo_delta) = zoo_delta {
+                recorded_movements.write(RecordedAccountMovement {
+                    root,
+                    kind: request.kind,
+                    subject: request.subject,
+                    zoo_delta,
+                    named_payment: behavior_payment
+                        .map(|owner| (owner.facility, owner.transaction)),
+                });
+            }
             Ok::<Entity, TransactionRejection>(root)
         })();
 
@@ -340,7 +377,7 @@ pub(super) fn settle_requested_account_transactions<const PLAYER: bool>(
         };
         commands
             .entity(operation)
-            .try_remove::<AwaitingAccountSettlement>();
+            .try_remove::<(AwaitingAccountSettlement, AccountSettlementDomain<PLAYER>)>();
         match settlement {
             Ok(_) => {
                 completed_transactions.write(TransactionCompleted {

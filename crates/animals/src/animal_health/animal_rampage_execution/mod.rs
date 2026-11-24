@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use openzt2_game_assets::species::species_asset_types::{SpeciesAsset, SpeciesAssets};
 use openzt2_game_data::species::SpeciesVariantFlags;
+use openzt2_interface_state::camera::camera_runtime_state_types::ZooCamera;
 use openzt2_world_state::world_spawn::world_entity_crating::WorldEntityIsCrated;
 use openzt2_world_state::world_spawn::world_membership_types::{WorldMember, WorldRoot};
 use openzt2_zoo_state::animal_behavior::behavior_random_stream_state::BehaviorRandomStream;
@@ -19,8 +20,13 @@ struct RampageStartCheck(Timer);
 #[derive(Component)]
 struct RampageTimeRemaining(Timer);
 
-#[derive(Component)]
-struct RampageMusicPlaying(openzt2_game_data::AssetId);
+#[derive(Component, PartialEq)]
+pub struct RampageAudioMix {
+    pub loop_cue: openzt2_game_data::AssetId,
+    pub loop_selection: u64,
+    pub loop_gain: f32,
+    pub other_sound_gain: f32,
+}
 
 fn rampage_duration(seconds: f32) -> Duration {
     Duration::try_from_secs_f32(seconds).unwrap_or_default()
@@ -65,8 +71,10 @@ pub(super) fn register_rampage_timers(app: &mut App) {
 
 fn project_rampage_music(
     policy: ActiveRampagePolicy,
-    active: Query<&WorldMember, (With<Rampaging>, Without<Dead>)>,
-    mut worlds: Query<(Entity, Option<&mut RampageMusicPlaying>), With<WorldRoot>>,
+    time: Res<Time<Real>>,
+    active: Query<(&WorldMember, &GlobalTransform), (With<Rampaging>, Without<Dead>)>,
+    cameras: Query<(&WorldMember, &Camera, &GlobalTransform), With<ZooCamera>>,
+    mut worlds: Query<(Entity, Option<&mut RampageAudioMix>), With<WorldRoot>>,
     mut commands: Commands,
     mut play: MessageWriter<PlayAudioCue>,
     mut stop: MessageWriter<StopAudioCue>,
@@ -74,47 +82,69 @@ fn project_rampage_music(
     let Some(policy) = policy.get() else {
         return;
     };
-    let active = active
+    let listeners = cameras
         .iter()
-        .map(|member| member.root)
-        .collect::<bevy::ecs::entity::EntityHashSet>();
+        .filter(|(_, camera, _)| camera.is_active)
+        .map(|(member, _, pose)| (member.root, pose.translation()))
+        .collect::<bevy::ecs::entity::EntityHashMap<_>>();
+    let mut distances = bevy::ecs::entity::EntityHashMap::<f32>::default();
+    for (member, pose) in &active {
+        let distance = listeners.get(&member.root).map_or(f32::INFINITY, |listener| {
+            pose.translation().distance_squared(*listener)
+        });
+        let nearest = distances.entry(member.root).or_insert(f32::INFINITY);
+        *nearest = nearest.min(distance);
+    }
     for (root, playing) in &mut worlds {
         let selection = root.to_bits();
-        if active.contains(&root) {
-            if playing
-                .as_ref()
-                .is_some_and(|playing| playing.0 == policy.music)
-            {
-                continue;
+        if let Some(&nearest) = distances.get(&root) {
+            let same_cue = playing.as_ref().is_some_and(|playing| playing.loop_cue == policy.music);
+            if !same_cue {
+                if playing.is_some() {
+                    stop.write(StopAudioCue { emitter: None, selection });
+                }
+                if policy.music != openzt2_game_data::AssetId::default() {
+                    play.write(PlayAudioCue {
+                        cue: policy.music,
+                        emitter: None,
+                        selection,
+                        priority: 192,
+                        force_looped: true,
+                    });
+                }
             }
-            if playing.is_some() {
-                stop.write(StopAudioCue {
-                    emitter: None,
-                    selection,
-                });
-            }
-            if policy.music != openzt2_game_data::AssetId::default() {
-                play.write(PlayAudioCue {
-                    cue: policy.music,
-                    emitter: None,
-                    selection,
-                    priority: 192,
-                    force_looped: true,
-                });
-            }
-            if let Some(mut playing) = playing {
-                playing.0 = policy.music;
+            let distance = (nearest.sqrt() - policy.full_gain_distance_m).max(0.0);
+            let target = if distance < policy.distance_span_m {
+                (1.0 - distance / policy.distance_span_m).powi(2)
             } else {
-                commands
-                    .entity(root)
-                    .insert(RampageMusicPlaying(policy.music));
+                0.0
+            };
+            let loop_gain = if policy.fade_seconds > 0.0 && same_cue {
+                let current = playing.as_ref().map_or(0.0, |playing| playing.loop_gain);
+                let step = time.delta_secs() / policy.fade_seconds;
+                current + (target - current).clamp(-step, step)
+            } else if policy.fade_seconds == 0.0 {
+                target
+            } else {
+                0.0
+            };
+            let mix = RampageAudioMix {
+                loop_cue: policy.music,
+                loop_selection: selection,
+                loop_gain,
+                other_sound_gain: policy.ducking_gain,
+            };
+            if let Some(mut playing) = playing {
+                playing.set_if_neq(mix);
+            } else {
+                commands.entity(root).insert(mix);
             }
         } else if playing.is_some() {
             stop.write(StopAudioCue {
                 emitter: None,
                 selection,
             });
-            commands.entity(root).remove::<RampageMusicPlaying>();
+            commands.entity(root).remove::<RampageAudioMix>();
             if policy.end_music != openzt2_game_data::AssetId::default() {
                 play.write(PlayAudioCue {
                     cue: policy.end_music,
@@ -130,7 +160,7 @@ fn project_rampage_music(
 
 fn stop_music_when_zoo_closes(
     removed: On<Remove<WorldRoot>>,
-    playing: Query<(), With<RampageMusicPlaying>>,
+    playing: Query<(), With<RampageAudioMix>>,
     mut stop: MessageWriter<StopAudioCue>,
 ) {
     if playing.contains(removed.entity) {

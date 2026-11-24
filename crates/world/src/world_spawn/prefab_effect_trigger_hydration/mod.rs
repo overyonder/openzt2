@@ -47,11 +47,27 @@ pub(super) fn spawn_prefab_effect_triggers(
 
 pub(super) fn hydrate_prefab_effect_triggers(
     mut commands: Commands,
-    triggers: Query<(Entity, &PrefabEffectTrigger, &WorldMember), Without<PrefabEffectHydrated>>,
+    triggers: Query<
+        (Entity, Ref<PrefabEffectTrigger>, &WorldMember),
+        Without<PrefabEffectHydrated>,
+    >,
     effects: Res<Assets<ParticleEffectDocumentAsset>>,
+    mut asset_events: MessageReader<AssetEvent<ParticleEffectDocumentAsset>>,
     mut spawn: MessageWriter<SpawnCompleteParticleEffectDocument>,
 ) {
+    let ready_assets = asset_events
+        .read()
+        .filter_map(|event| match *event {
+            AssetEvent::Added { id }
+            | AssetEvent::Modified { id }
+            | AssetEvent::LoadedWithDependencies { id } => Some(id),
+            _ => None,
+        })
+        .collect::<bevy::platform::collections::HashSet<_>>();
     for (entity, trigger, _) in &triggers {
+        if !trigger.is_changed() && !ready_assets.contains(&trigger.handle.id()) {
+            continue;
+        }
         if effects.get(&trigger.handle).is_none() {
             continue;
         }

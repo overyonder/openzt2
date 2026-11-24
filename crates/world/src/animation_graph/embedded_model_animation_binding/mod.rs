@@ -104,7 +104,7 @@ pub(super) fn refresh_embedded_model_animation_bindings(
             {
                 continue;
             }
-            if let Some(clip) = set.animation_clips.first() {
+            if let Some(clip) = set.animation_clips().first() {
                 controller
                     .animation_clip_asset_key
                     .clone_from(&clip.animation_clip_asset_key);
@@ -118,7 +118,7 @@ pub(super) fn refresh_embedded_model_animation_bindings(
                     ModelAnimationAssetLibrary,
                 )>();
             }
-        } else if resolved && !set.animation_clips.is_empty() {
+        } else if resolved && !set.animation_clips().is_empty() {
             commands
                 .entity(entity)
                 .try_remove::<ModelAnimationAttachmentResolved>()

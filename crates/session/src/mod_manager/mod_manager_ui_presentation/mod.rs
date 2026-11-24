@@ -388,16 +388,33 @@ pub(super) fn synchronize_mod_manager_visibility_and_reload_input_blocking(
 
 pub(super) fn present_asset_archive_checkbox_interaction_state(
     reloads: Query<(), With<AssetArchiveReloadOperation>>,
-    mut archive_checkboxes: Query<
-        (&DirectlyHovered, Has<Pressed>, &mut BackgroundColor),
-        With<AssetArchiveEnabledStateCheckbox>,
-    >,
+    reloads_started: Query<(), Added<AssetArchiveReloadOperation>>,
+    mut reloads_finished: RemovedComponents<AssetArchiveReloadOperation>,
+    mut released: RemovedComponents<Pressed>,
+    mut archive_checkboxes: Query<(
+        Entity,
+        Ref<AssetArchiveEnabledStateCheckbox>,
+        Ref<DirectlyHovered>,
+        Option<Ref<Pressed>>,
+        &mut BackgroundColor,
+    )>,
 ) {
-    for (hovered, pressed, mut background) in &mut archive_checkboxes {
-        let color = if !reloads.is_empty() {
+    let reload_changed = reloads_finished.read().count() != 0 || !reloads_started.is_empty();
+    let released: bevy::ecs::entity::EntityHashSet = released.read().collect();
+    let blocked = !reloads.is_empty();
+    for (entity, checkbox, hovered, pressed, mut background) in &mut archive_checkboxes {
+        if !(reload_changed
+            || checkbox.is_changed()
+            || hovered.is_changed()
+            || pressed.as_ref().is_some_and(DetectChanges::is_added)
+            || released.contains(&entity))
+        {
+            continue;
+        }
+        let color = if blocked {
             Color::srgb(0.08, 0.08, 0.10)
         } else {
-            match (hovered.get(), pressed) {
+            match (hovered.get(), pressed.is_some()) {
                 (_, true) => Color::srgb(0.32, 0.32, 0.38),
                 (true, false) => Color::srgb(0.24, 0.24, 0.30),
                 (false, false) => Color::srgb(0.14, 0.14, 0.17),
@@ -409,11 +426,25 @@ pub(super) fn present_asset_archive_checkbox_interaction_state(
 
 pub(super) fn synchronize_mod_manager_archive_checkbox_labels(
     asset_archives: Res<AssetArchives>,
-    archive_checkboxes: Query<(&AssetArchiveEnabledStateCheckbox, &Children)>,
+    archive_checkboxes: Query<(Ref<AssetArchiveEnabledStateCheckbox>, Ref<Children>)>,
     mut archive_checkbox_labels: Query<&mut Text>,
 ) {
+    let archives_changed = asset_archives.is_changed();
+    if !archives_changed
+        && !archive_checkboxes
+            .iter()
+            .any(|(checkbox, children)| checkbox.is_changed() || children.is_changed())
+    {
+        return;
+    }
     let archive_statuses = asset_archives.enabled_archive_statuses();
     for (archive_checkbox, archive_checkbox_children) in &archive_checkboxes {
+        if !archives_changed
+            && !archive_checkbox.is_changed()
+            && !archive_checkbox_children.is_changed()
+        {
+            continue;
+        }
         let Some(archive_status) = archive_statuses.get(archive_checkbox.archive_status_index)
         else {
             continue;

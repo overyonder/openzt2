@@ -1,8 +1,6 @@
 use bevy::prelude::*;
-use openzt2_game_data::{
-    world_scenario::{ScenarioDefinitionRecord, WorldScenarioDocument},
-    AssetId,
-};
+use openzt2_game_assets::world_scenario::authored_world_scenario_state::AuthoredWorldScenarioState;
+use openzt2_game_data::{world_scenario::ScenarioDefinitionRecord, AssetId};
 
 use openzt2_game_assets::world_scenario::world_scenario_asset_set_state_and_borrowing_queries::WorldScenarios;
 use openzt2_game_assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset;
@@ -56,6 +54,9 @@ pub(super) fn instantiate_selected_scenario_and_authored_objectives(
         let Some(scenario) = view.scenario(world.scenario) else {
             continue;
         };
+        let Some(asset) = assets.get(&handle) else {
+            continue;
+        };
 
         commands.entity(root).insert((
             ScenarioDocument(handle),
@@ -74,6 +75,7 @@ pub(super) fn instantiate_selected_scenario_and_authored_objectives(
             scenario.id,
             scenario,
             clock.tick,
+            &asset.authored,
         );
     }
 }
@@ -95,6 +97,7 @@ pub(super) fn initialize_scenario_challenge_random_number_generator(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn spawn_authored_scenario_objectives(
     commands: &mut Commands,
     allocator: &mut PersistentIdAllocator,
@@ -103,6 +106,7 @@ fn spawn_authored_scenario_objectives(
     scenario_id: AssetId,
     scenario: &ScenarioDefinitionRecord,
     started_tick: u64,
+    authored: &AuthoredWorldScenarioState,
 ) {
     let mut spawned = Vec::with_capacity(scenario.objectives.len());
     for (index, record) in scenario.objectives.iter().enumerate() {
@@ -161,6 +165,7 @@ fn spawn_authored_scenario_objectives(
         owner,
         &scenario.objective_groups,
         Default::default(),
+        authored,
     );
 }
 
@@ -170,10 +175,10 @@ pub(crate) fn spawn_authored_challenge_objectives(
     root: Entity,
     owner: Entity,
     scenario_id: AssetId,
-    catalog: &WorldScenarioDocument,
+    asset: &WorldScenarioDocumentAsset,
     started_tick: u64,
 ) -> bool {
-    let Some(scenario) = catalog.find_scenario_record(scenario_id) else {
+    let Some(scenario) = asset.document.find_scenario_record(scenario_id) else {
         return false;
     };
     spawn_authored_scenario_objectives(
@@ -184,6 +189,7 @@ pub(crate) fn spawn_authored_challenge_objectives(
         scenario_id,
         scenario,
         started_tick,
+        &asset.authored,
     );
     true
 }

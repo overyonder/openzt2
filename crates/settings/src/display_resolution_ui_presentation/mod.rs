@@ -23,33 +23,36 @@ use super::{
 use openzt2_interface_state::ui::authored_ui_activation_contracts::UiNodeActivated;
 use openzt2_ui::authored_ui_text_content_binding::UiTextBinding;
 
-pub(super) fn synchronize_supported_display_resolutions_from_primary_monitor(
-    changed: Query<(), Or<(Added<Monitor>, Changed<Monitor>)>>,
-    monitors: Query<(&Monitor, Option<&PrimaryMonitor>)>,
+pub(super) fn refresh_supported_display_resolutions(
+    changed: Query<(), Or<(Changed<Monitor>, Added<PrimaryMonitor>)>>,
+    mut removed_monitors: RemovedComponents<Monitor>,
+    mut removed_primary_markers: RemovedComponents<PrimaryMonitor>,
+    monitors: Query<(&Monitor, Has<PrimaryMonitor>)>,
     mut supported: ResMut<SupportedDisplayResolutions>,
 ) {
-    if changed.is_empty() {
+    let monitor_removed = !removed_monitors.is_empty();
+    let primary_marker_removed = !removed_primary_markers.is_empty();
+    removed_monitors.clear();
+    removed_primary_markers.clear();
+    if !monitor_removed && !primary_marker_removed && changed.is_empty() {
         return;
     }
+
     let selected = monitors
         .iter()
-        .find_map(|(monitor, primary)| primary.is_some().then_some(monitor))
+        .find_map(|(monitor, primary)| primary.then_some(monitor))
         .or_else(|| monitors.iter().next().map(|(monitor, _)| monitor));
-    let mut resolutions = selected.map_or_else(Vec::new, |monitor| {
-        monitor
-            .video_modes
-            .iter()
-            .map(|mode| DisplayResolution {
-                width: mode.physical_size.x,
-                height: mode.physical_size.y,
-            })
-            .collect::<Vec<_>>()
-    });
+    let mut resolutions: Vec<_> = selected
+        .into_iter()
+        .flat_map(|monitor| &monitor.video_modes)
+        .map(|mode| DisplayResolution {
+            width: mode.physical_size.x,
+            height: mode.physical_size.y,
+        })
+        .collect();
     resolutions.sort_unstable();
     resolutions.dedup();
-    if supported.0 != resolutions {
-        supported.0 = resolutions;
-    }
+    supported.set_if_neq(SupportedDisplayResolutions(resolutions));
 }
 
 /// Requests one authored `ResolutionEntry` row per renderer mode. Asset loading

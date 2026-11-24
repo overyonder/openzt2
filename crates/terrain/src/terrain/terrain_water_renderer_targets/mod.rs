@@ -4,6 +4,7 @@ use bevy::camera::RenderTarget;
 use bevy::prelude::*;
 use bevy::render::render_resource::TextureFormat;
 use bevy::render::storage::ShaderBuffer;
+use bevy::time::Stopwatch;
 use openzt2_game_assets::graphics_settings_types::GraphicsSettings;
 use openzt2_game_assets::material::material_asset_types::MaterialAsset;
 use openzt2_game_assets::material::runtime::effect_pass_gpu_data::EffectPassMaterial;
@@ -40,6 +41,9 @@ pub(super) struct WorldWaterCaptureRigs(Vec<Entity>);
 
 #[derive(Component)]
 pub(super) struct WaterCaptureRefreshPending;
+
+#[derive(Component, Default)]
+pub(super) struct WaterCaptureAge(pub(super) Stopwatch);
 
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(super) fn initialize_authored_terrain_water_renderer_targets(
@@ -134,6 +138,7 @@ pub(super) fn initialize_authored_terrain_water_renderer_targets(
     let rig = commands
         .spawn((
             WaterCaptureRigOf(world),
+            WaterCaptureAge::default(),
             Transform::IDENTITY,
             Visibility::Inherited,
         ))
@@ -249,14 +254,20 @@ fn spawn_water_scene_render_target_camera(
 /// samples the scene. Keep them across camera moves and visibility changes.
 pub(super) fn reconcile_water_material_render_views(
     mut commands: Commands,
-    targets: Query<&Children, With<AuthoredTerrainWaterRendererTargets>>,
+    targets: Query<Ref<Children>, With<AuthoredTerrainWaterRendererTargets>>,
     captures: Query<(Entity, &TerrainWaterCaptureRole)>,
     passes: Query<&TerrainWaterSurfacePassKind>,
+    changed_passes: Query<(), Changed<TerrainWaterSurfacePassKind>>,
+    mut removed_passes: RemovedComponents<TerrainWaterSurfacePassKind>,
     views: Query<(), With<EffectPassMaterialRenderView>>,
 ) {
+    let removed_pass = removed_passes.read().count() > 0;
     let Ok(children) = targets.single() else {
         return;
     };
+    if !children.is_changed() && changed_passes.is_empty() && !removed_pass {
+        return;
+    }
     let needs_capture = passes.iter().any(|pass| !pass.uses_stitch_geometry());
     for (camera, role) in captures.iter_many(children.iter()).flatten() {
         let render_layer = match role {

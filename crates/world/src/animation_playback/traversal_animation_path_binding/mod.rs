@@ -19,13 +19,15 @@ pub(super) fn bind_authored_traversal_animation_paths(
     mut removed: RemovedComponents<PrefabTraversalAnimationManifests>,
     mut ready: MessageReader<AssetEvent<AnimationSetAsset>>,
     mut failed: MessageReader<bevy::asset::AssetLoadFailedEvent<AnimationSetAsset>>,
+    mut clips_ready: MessageReader<AssetEvent<AnimationClipSourceAsset>>,
+    mut clips_failed: MessageReader<AssetLoadFailedEvent<AnimationClipSourceAsset>>,
 
     sources: Res<Assets<AnimationClipSourceAsset>>,
     clip_loading: AnimationClipSources,
     binders: Query<(
         Entity,
         Ref<PrefabTraversalAnimationManifests>,
-        Option<&PendingTraversalClips>,
+        Option<Ref<PendingTraversalClips>>,
     )>,
 ) {
     let changed_sets = ready
@@ -35,6 +37,14 @@ pub(super) fn bind_authored_traversal_animation_paths(
             _ => None,
         })
         .chain(failed.read().map(|event| event.id))
+        .collect::<bevy::platform::collections::HashSet<_>>();
+    let changed_clips = clips_ready
+        .read()
+        .filter_map(|event| match *event {
+            AssetEvent::Added { id } | AssetEvent::LoadedWithDependencies { id } => Some(id),
+            _ => None,
+        })
+        .chain(clips_failed.read().map(|failure| failure.id))
         .collect::<bevy::platform::collections::HashSet<_>>();
     for binder in removed.read() {
         if !binders.contains(binder) {
@@ -68,28 +78,26 @@ pub(super) fn bind_authored_traversal_animation_paths(
                     commands.entity(child).try_despawn();
                 }
             }
-        }
-        let waiting_for_manifest = manifests.0.iter().any(|manifest| {
-            !sets.contains(manifest.id())
-                && !matches!(
-                    server.load_state(manifest.id()),
-                    bevy::asset::LoadState::Failed(_)
-                )
-        });
-        if waiting_for_manifest {
-            if needs_rebind && pending.is_some() {
-                commands
-                    .entity(binder)
-                    .try_remove::<PendingTraversalClips>();
+            let waiting_for_manifest = manifests.0.iter().any(|manifest| {
+                !sets.contains(manifest.id())
+                    && !matches!(
+                        server.load_state(manifest.id()),
+                        bevy::asset::LoadState::Failed(_)
+                    )
+            });
+            if waiting_for_manifest {
+                if pending.is_some() {
+                    commands
+                        .entity(binder)
+                        .try_remove::<PendingTraversalClips>();
+                }
+                continue;
             }
-            continue;
-        }
-        if needs_rebind {
             let manifests = manifests.0.iter().filter_map(|manifest| sets.get(manifest));
             let clips = manifests
                 .flat_map(|manifest| {
                     manifest
-                        .animation_clip_source_references
+                        .animation_clip_source_references()
                         .iter()
                         .filter_map(|reference| {
                             let key = &reference.animation_clip_asset_key;
@@ -105,6 +113,14 @@ pub(super) fn bind_authored_traversal_animation_paths(
         let Some(pending) = pending else {
             continue;
         };
+        if !pending.is_added()
+            && !pending
+                .0
+                .iter()
+                .any(|(_, source)| changed_clips.contains(&source.id()))
+        {
+            continue;
+        }
         if pending
             .0
             .iter()

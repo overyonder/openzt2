@@ -146,7 +146,7 @@ fn fall_release_requests_the_authored_airborne_loop() {
         object,
         world: root,
         pose: Transform::from_translation(Vec3::Y),
-        motion: BehaviorWorldReleaseMotion::Fall,
+        motion: BehaviorWorldReleaseMotion::Fall { speed_mps: 0.0 },
     });
     let requests = world.resource::<Messages<AnimationClipPlaybackRequest>>();
     let mut cursor = requests.get_cursor();

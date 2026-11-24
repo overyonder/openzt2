@@ -11,7 +11,7 @@ use openzt2_game_data::AssetId;
 
 use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
-use openzt2_world_state::animation_playback::model_joint_attachment_binding::PendingModelJointAttachment;
+use openzt2_world_state::animation_playback::model_joint_attachment_binding::ModelJointAttachment;
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabPresentation;
 use openzt2_world_state::world_spawn::prefab_texture_replacements::PrefabTextureReplacements;
 
@@ -117,7 +117,7 @@ pub fn attach_staff_presentation_variant(
             Visibility::Inherited,
             ChildOf(staff),
             PrefabPresentation::new(prefab),
-            PendingModelJointAttachment::new(staff, &head.joint),
+            ModelJointAttachment::new(staff, &head.joint),
             StaffAttachedHead,
         ));
     }

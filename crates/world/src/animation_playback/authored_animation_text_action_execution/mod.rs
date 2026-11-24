@@ -188,6 +188,14 @@ impl<const REAL_TIME: bool> AuthoredAnimationTextActionExecutionContext<'_, '_, 
                     .get_mut(animation_playback_controller_entity)
                 {
                     cycles.set_enabled_from_key(*enabled);
+                    if cycles.is_advancing() {
+                        self.animation_control_text_action_execution
+                            .commands
+                            .entity(animation_playback_controller_entity)
+                            .try_insert_if_new(
+                                super::authored_decal_texture_cycles::DecalCyclesAdvancing,
+                            );
+                    }
                 }
             }
             AuthoredAnimationTextAction::GoToDockControllerNode(node) => {
@@ -197,6 +205,14 @@ impl<const REAL_TIME: bool> AuthoredAnimationTextActionExecutionContext<'_, '_, 
                     .get_mut(animation_playback_controller_entity)
                 {
                     cycles.set_stop_from_key(*node);
+                    if cycles.is_advancing() {
+                        self.animation_control_text_action_execution
+                            .commands
+                            .entity(animation_playback_controller_entity)
+                            .try_insert_if_new(
+                                super::authored_decal_texture_cycles::DecalCyclesAdvancing,
+                            );
+                    }
                 }
             }
             AuthoredAnimationTextAction::SetAnimationPlaybackSpeed {
@@ -212,7 +228,7 @@ impl<const REAL_TIME: bool> AuthoredAnimationTextActionExecutionContext<'_, '_, 
                 animation_graph_node_asset_key,
             } => self
                 .animation_control_text_action_execution
-                .request_authored_animation_traversal_transition(
+                .request_authored_animation_graph_node(
                     animation_playback_controller_entity,
                     animation_graph_node_asset_key,
                 ),

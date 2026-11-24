@@ -60,8 +60,6 @@ pub(super) fn select_world_from_activated_choice_view(
     }
 }
 
-const DEFAULT_CHALLENGE_STARTING_CASH_CENTS: i64 = 3_000_000;
-
 /// Clears the old world selection when switching play modes.
 pub(super) fn select_requested_play_mode_and_enter_map_selection(
     mut selections: MessageReader<SelectWorldSessionMode>,
@@ -71,10 +69,7 @@ pub(super) fn select_requested_play_mode_and_enter_map_selection(
     for SelectWorldSessionMode(mode) in selections.read() {
         selection.mode = Some(*mode);
         selection.scenario = None;
-        selection.starting_cash_cents = match mode {
-            WorldSessionMode::Challenge => Some(DEFAULT_CHALLENGE_STARTING_CASH_CENTS),
-            _ => None,
-        };
+        selection.starting_cash_cents = None;
         next_phase.set(GamePhase::MapSelection);
     }
 }
@@ -103,6 +98,7 @@ pub(super) fn begin_loading_selected_world(
     profiles: Res<ProfileIndex>,
     active_scenarios: Res<WorldScenarios>,
     scenarios: Res<Assets<WorldScenarioDocumentAsset>>,
+    main_mode_cash: super::main_mode_cash::MainModeStartingCash,
     mut next_phase: ResMut<NextState<GamePhase>>,
     mut begin_load: MessageWriter<BeginWorldLoad>,
     profile_variables: Res<
@@ -152,7 +148,12 @@ pub(super) fn begin_loading_selected_world(
             scenario,
             mode,
             profile,
-            starting_cash_cents: selection.starting_cash_cents,
+            starting_cash_cents: match mode {
+                WorldSessionMode::Challenge => selection
+                    .starting_cash_cents
+                    .or_else(|| main_mode_cash.authored_cents()),
+                _ => selection.starting_cash_cents,
+            },
         });
         next_phase.set(GamePhase::Loading);
     }

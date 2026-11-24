@@ -7,7 +7,12 @@ use super::super::persistence_failure_types::{
     WorldSnapshotPersistenceFailure, WorldSnapshotPersistenceOperation,
 };
 
+/// Present from slot-operation admission until the operation entity is retired.
+#[derive(Component, Default)]
+pub(in crate::persistence) struct PersistenceSlotOperation;
+
 #[derive(Component)]
+#[require(PersistenceSlotOperation)]
 pub(in crate::persistence) struct PersistenceSlotFilesystemTask {
     pub(in crate::persistence) filesystem_task:
         Task<std::io::Result<PersistenceSlotFilesystemTaskCompletion>>,

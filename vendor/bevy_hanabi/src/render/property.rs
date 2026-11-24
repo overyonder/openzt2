@@ -5,11 +5,14 @@ use std::{
 
 use bevy::{
     asset::{AssetId, Handle},
-    ecs::{lifecycle::Remove, observer::On, query::Without, system::Commands, world::Mut},
+    ecs::{lifecycle::Remove, observer::On, system::Commands},
     image::Image,
     log::{error, trace},
     platform::collections::{hash_map::EntryRef, HashMap},
-    prelude::{Component, Entity, Query, Res, ResMut, Resource},
+    prelude::{
+        Changed, Component, DetectChanges, Entity, Has, Or, Query, Ref, Res, ResMut, Resource,
+        With, Without,
+    },
     render::{
         render_asset::RenderAssets,
         render_resource::{
@@ -685,50 +688,53 @@ impl PropertyCache {
         texture_layout: &TextureLayout,
     ) {
         for with_prefix_sum in [false, true] {
-            // Get the base layout that we will clone and modify
-            let base_key = BindGroupLayoutKey::base(with_prefix_sum);
-            let mut bgl = self.bind_group_layout_descs.get(&base_key).unwrap().clone();
-
-            // Make a layout for the given binding size and texture layout if
-            // needed
             let key = BindGroupLayoutKey {
                 binding_byte_size: properties_min_binding_size,
                 with_prefix_sum,
                 texture_layout: texture_layout.clone(), // TODO - Q: Equivalent<K> to avoid clone
             };
-            self.bind_group_layout_descs.entry(key).or_insert_with(|| {
-                let label = format!(
-                    "hanabi:bgl:property_size{}_tex{}",
-                    properties_min_binding_size,
-                    texture_layout.layout.len(),
-                );
-                trace!(
-                    "Create new property bind group layout '{}' for binding size {} bytes with {} textures.",
-                    label,
-                    properties_min_binding_size,
-                    texture_layout.layout.len(),
-                );
-                bgl.label = label.into();
+            if self.bind_group_layout_descs.contains_key(&key) {
+                continue;
+            }
+            let base_key = BindGroupLayoutKey::base(with_prefix_sum);
+            let mut bgl = self.bind_group_layout_descs.get(&base_key).unwrap().clone();
+            let label = format!(
+                "hanabi:bgl:property_size{}_tex{}",
+                properties_min_binding_size,
+                texture_layout.layout.len(),
+            );
+            trace!(
+                "Create new property bind group layout '{}' for binding size {} bytes with {} textures.",
+                label,
+                properties_min_binding_size,
+                texture_layout.layout.len(),
+            );
+            bgl.label = label.into();
 
-                // Append the Properties array binding
-                if properties_min_binding_size > 0 {
-                    bgl.entries.push(
-                        storage_buffer_read_only_sized(false, Some(NonZeroU64::new(properties_min_binding_size as u64).unwrap()))
-                            .build(3, ShaderStages::COMPUTE | ShaderStages::VERTEX | ShaderStages::FRAGMENT),
-                    );
-                }
-
-                // Append the texture bindings, if any
-                texture_layout.append_layout_bindings(4, &mut bgl.entries);
-
-                trace!(
-                    "-> created bind group layout desc for size {} with {} textures: {:?}",
-                    properties_min_binding_size,
-                    texture_layout.layout.len(),
-                    bgl,
+            // Append the Properties array binding
+            if properties_min_binding_size > 0 {
+                bgl.entries.push(
+                    storage_buffer_read_only_sized(
+                        false,
+                        Some(NonZeroU64::new(properties_min_binding_size as u64).unwrap()),
+                    )
+                    .build(
+                        3,
+                        ShaderStages::COMPUTE | ShaderStages::VERTEX | ShaderStages::FRAGMENT,
+                    ),
                 );
-                bgl
-            });
+            }
+
+            // Append the texture bindings, if any
+            texture_layout.append_layout_bindings(4, &mut bgl.entries);
+
+            trace!(
+                "-> created bind group layout desc for size {} with {} textures: {:?}",
+                properties_min_binding_size,
+                texture_layout.layout.len(),
+                bgl,
+            );
+            self.bind_group_layout_descs.insert(key, bgl);
         }
     }
 
@@ -1091,124 +1097,73 @@ impl PropertyBindGroups {
     }
 }
 
-fn upload_properties(
-    extracted_properties: &ExtractedProperties,
-    cached_effect_properties: &CachedEffectProperties,
-    mut property_cache: Mut<'_, PropertyCache>,
-) {
-    if let Some(property_data) = &extracted_properties.property_data {
-        let size = cached_effect_properties
-            .property_layout
-            .min_binding_size()
-            .get() as u32;
-        trace!(
-            "Properties changed; (re-)uploading to GPU... New data: {} bytes. Capacity: {} bytes.",
-            property_data.len(),
-            size,
-        );
-        if property_data.len() <= size as usize {
-            let property_buffer = property_cache.buffers_mut()
-                [cached_effect_properties.buffer_index as usize]
-                .as_mut()
-                .unwrap();
-            property_buffer.write(cached_effect_properties.array_index * size, property_data);
-        } else {
-            error!(
-                "Cannot upload properties: existing property slice in property buffer #{} is too small ({} bytes) for the new data ({} bytes).",
-                cached_effect_properties.buffer_index,
-                size,
-                property_data.len()
-            );
-        }
-    }
-}
-
-/// Allocate GPU resources to store an effect's properties.
-///
-/// This insert or updates the [`CachedEffectProperties`] component with the
-/// allocation details.
+/// Allocate and upload properties when the extracted values or layout change.
 pub(crate) fn allocate_properties(
     mut commands: Commands,
     mut property_cache: ResMut<PropertyCache>,
-    mut q_effects: Query<(
-        Entity,
-        &ExtractedEffect,
-        &ExtractedProperties,
-        Option<&mut CachedEffectProperties>,
-    )>,
-    q_noprop_effects: Query<&ExtractedEffect, Without<ExtractedProperties>>,
+    mut bind_groups: ResMut<PropertyBindGroups>,
+    mut effects: Query<
+        (
+            Entity,
+            &ExtractedEffect,
+            Ref<ExtractedProperties>,
+            Option<&mut CachedEffectProperties>,
+        ),
+        Or<(
+            Changed<ExtractedEffect>,
+            Changed<ExtractedProperties>,
+            Without<CachedEffectProperties>,
+        )>,
+    >,
+    effects_without_properties: Query<
+        (Entity, &ExtractedEffect, Has<CachedEffectProperties>),
+        (
+            Without<ExtractedProperties>,
+            Or<(Changed<ExtractedEffect>, With<CachedEffectProperties>)>,
+        ),
+    >,
 ) {
-    #[cfg(feature = "trace")]
-    let _span = bevy::log::info_span!("allocate_properties").entered();
-    trace!("allocate_properties");
-
-    for (entity, extracted_effect, extracted_properties, maybe_cached_effect_properties) in
-        &mut q_effects
-    {
-        if let Some(mut cached_effect_properties) = maybe_cached_effect_properties {
-            // Note: Technically we should compare the entire layout, but in
-            // practice the allocation only cares about the size of
-            // the layout to store all properties, and not about the
-            // actual layout itself (where each property is). So to reduce
-            // updates and maximize the chance of reuse, compare the allocation
-            // size only.
-            if cached_effect_properties.property_layout.min_binding_size()
-                != extracted_properties.property_layout.min_binding_size()
-            {
-                // Free the old allocations. We're sure there's one because the
-                // component exists.
-                // TODO - handle SlabState return value to invalidate property
-                // bind groups!!
-                if let Err(err) = property_cache.free(cached_effect_properties.as_ref()) {
-                    error!("Error while freeing cached properties for effect {entity:?}: {err:?}");
+    for (entity, effect, properties, cached) in &mut effects {
+        let layout = &properties.property_layout;
+        let size = layout.min_binding_size().get() as u32;
+        let (buffer_index, array_index) = if let Some(mut cached) = cached {
+            if cached.property_layout.min_binding_size().get() as u32 != size {
+                match property_cache.free(&cached) {
+                    Ok(SlabState::Used) => {}
+                    Ok(_) => bind_groups
+                        .property_bind_groups
+                        .retain(|key, _| key.buffer_index != cached.buffer_index),
+                    Err(error) => error!("Failed to deallocate properties of {entity}: {error:?}"),
                 }
-
-                // If the layout is not empty, which means we need to store at
-                // least one property, then allocate a new
-                // storate. Otherwise remove the component.
-                if extracted_properties.property_layout.is_empty() {
-                    commands.entity(entity).remove::<CachedEffectProperties>();
-                } else {
-                    *cached_effect_properties = property_cache.allocate(
-                        &extracted_properties.property_layout,
-                        &extracted_effect.texture_layout,
-                    );
+                *cached = property_cache.allocate(layout, &effect.texture_layout);
+            } else {
+                property_cache.ensure_layout_exists(layout, &effect.texture_layout);
+                if !properties.is_changed() {
+                    continue;
+                }
+                if cached.property_layout != *layout {
+                    cached.property_layout = layout.clone();
                 }
             }
-
-            // Re-upload new properties
-            if !extracted_properties.property_layout.is_empty() {
-                debug_assert_eq!(
-                    extracted_properties.property_layout,
-                    cached_effect_properties.property_layout
-                );
-                upload_properties(
-                    extracted_properties,
-                    cached_effect_properties.as_ref(),
-                    property_cache.reborrow(),
-                );
-            }
+            (cached.buffer_index, cached.array_index)
         } else {
-            let cached_effect_properties = property_cache.allocate(
-                &extracted_properties.property_layout,
-                &extracted_effect.texture_layout,
-            );
-            trace!("First-time properties, allocated a new CachedEffectProperties : {cached_effect_properties:?}");
-            upload_properties(
-                extracted_properties,
-                &cached_effect_properties,
-                property_cache.reborrow(),
-            );
-            commands.entity(entity).insert(cached_effect_properties);
-        }
+            let cached = property_cache.allocate(layout, &effect.texture_layout);
+            let allocation = (cached.buffer_index, cached.array_index);
+            commands.entity(entity).insert(cached);
+            allocation
+        };
+        let buffer = property_cache.buffers_mut()[buffer_index as usize]
+            .as_mut()
+            .unwrap();
+        buffer.write(array_index * size, &properties.property_data);
     }
 
-    // For no-property bind groups, just ensure the layout exists because we
-    // will need it when creating the pipelines.
-    let empty_propert_layout = PropertyLayout::default();
-    for extracted_effect in &q_noprop_effects {
-        property_cache
-            .ensure_layout_exists(&empty_propert_layout, &extracted_effect.texture_layout);
+    let empty_layout = PropertyLayout::default();
+    for (entity, effect, has_cached_properties) in &effects_without_properties {
+        property_cache.ensure_layout_exists(&empty_layout, &effect.texture_layout);
+        if has_cached_properties {
+            commands.entity(entity).remove::<CachedEffectProperties>();
+        }
     }
 }
 

@@ -328,6 +328,58 @@ pub(super) struct NaturalWaterTargets<'w, 's> {
 }
 
 impl NaturalWaterTargets<'_, '_> {
+    pub(super) fn distance_to_shore_within(
+        &self,
+        world: Entity,
+        point: Vec2,
+        radius: f32,
+    ) -> Option<f32> {
+        let index = self.terrain.indexes.get(world).ok()?;
+        if index.chunk_span_m <= 0.0 || !radius.is_finite() || radius < 0.0 {
+            return None;
+        }
+        let margin = self
+            .search_margins
+            .get(world)
+            .map_or(0.0, |margin| margin.0);
+        let extent = radius + margin;
+        let [min, max] = [-extent, extent].map(|offset| {
+            ((point + Vec2::splat(offset) - index.origin) / index.chunk_span_m)
+                .floor()
+                .as_ivec2()
+        });
+        let width = i64::from(max.x) - i64::from(min.x) + 1;
+        let height = i64::from(max.y) - i64::from(min.y) + 1;
+        let map = |chunk| {
+            self.chunk_targets
+                .get(chunk)
+                .ok()
+                .into_iter()
+                .flat_map(|targets| targets.into_inner().shores.iter())
+                .filter(|target| target.world == world)
+                .map(|target| target.target.water.xz().distance_squared(point))
+                .filter(|&squared| squared <= radius * radius)
+                .reduce(f32::min)
+        };
+        if width.saturating_mul(height) > index.chunks.len() as i64 {
+            index
+                .chunks
+                .iter()
+                .filter(|(coordinate, _)| {
+                    coordinate.cmpge(min).all() && coordinate.cmple(max).all()
+                })
+                .filter_map(|(_, &chunk)| map(chunk))
+                .reduce(f32::min)
+                .map(f32::sqrt)
+        } else {
+            (min.x..=max.x)
+                .flat_map(|x| (min.y..=max.y).map(move |z| IVec2::new(x, z)))
+                .filter_map(|cell| index.chunks.get(&cell).and_then(|&chunk| map(chunk)))
+                .reduce(f32::min)
+                .map(f32::sqrt)
+        }
+    }
+
     pub(super) fn collect_water(
         &self,
         world: Entity,

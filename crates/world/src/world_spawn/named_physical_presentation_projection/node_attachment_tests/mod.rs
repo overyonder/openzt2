@@ -33,7 +33,14 @@ fn spawn_holder(world: &mut World, owner: Entity, node: &str) -> Entity {
 #[test]
 fn holder_moves_onto_the_prefab_node_with_its_authored_name() {
     let mut application = App::new();
-    application.add_systems(Update, attach_named_presentations_to_model_nodes);
+    application.add_systems(
+        Update,
+        (
+            crate::world_spawn::prefab_socket_index::project_prefab_socket_indexes,
+            attach_named_presentations_to_model_nodes,
+        )
+            .chain(),
+    );
     let world = application.world_mut();
     let (owner, node) = spawn_owner_with_node(world, "link_fire01");
     let holder = spawn_holder(world, owner, "Link_Fire01");
@@ -53,7 +60,14 @@ fn holder_moves_onto_the_prefab_node_with_its_authored_name() {
 #[test]
 fn holder_follows_an_animated_joint_with_its_name() {
     let mut application = App::new();
-    application.add_systems(Update, attach_named_presentations_to_model_nodes);
+    application.add_systems(
+        Update,
+        (
+            crate::world_spawn::prefab_socket_index::project_prefab_socket_indexes,
+            attach_named_presentations_to_model_nodes,
+        )
+            .chain(),
+    );
     let world = application.world_mut();
     let (owner, _) = spawn_owner_with_node(world, "link_fire01");
     let joint = world
@@ -75,7 +89,14 @@ fn holder_follows_an_animated_joint_with_its_name() {
 #[test]
 fn holder_waits_for_a_node_from_a_model_that_loads_later() {
     let mut application = App::new();
-    application.add_systems(Update, attach_named_presentations_to_model_nodes);
+    application.add_systems(
+        Update,
+        (
+            crate::world_spawn::prefab_socket_index::project_prefab_socket_indexes,
+            attach_named_presentations_to_model_nodes,
+        )
+            .chain(),
+    );
     let world = application.world_mut();
     let (owner, counter) = spawn_owner_with_node(world, "link_counter");
     let holder = spawn_holder(world, owner, "Link_Smokestack");

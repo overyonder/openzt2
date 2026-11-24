@@ -36,9 +36,12 @@ struct RedoButtonEnabled(bool);
 pub(super) struct RedoButtonCheckbox;
 
 #[derive(Component)]
-struct RedoButton {
-    undo: Entity,
-}
+#[relationship(relationship_target = RedoButtons)]
+struct RedoButton(Entity);
+
+#[derive(Component)]
+#[relationship_target(relationship = RedoButton, linked_spawn)]
+struct RedoButtons(Vec<Entity>);
 
 impl Plugin for RedoButtonPlugin {
     fn build(&self, app: &mut App) {
@@ -118,7 +121,7 @@ fn attach(
         }
         commands.spawn((
             Name::new("Redo"),
-            RedoButton { undo },
+            RedoButton(undo),
             ChildOf(parent.parent()),
             ZIndex(z.0 + 1),
             bevy::ui_widgets::Button,
@@ -137,41 +140,80 @@ fn attach(
 }
 
 fn update(
-    mut commands: Commands,
     enabled: Res<RedoButtonEnabled>,
     history: ConstructionHistory,
     pending_edits: Query<(), With<ConstructionActive>>,
-    undo_controls: Query<(&Node, &Visibility), Without<RedoButton>>,
+    undo_controls: Query<(Ref<Node>, Ref<Visibility>, Ref<ZIndex>), Without<RedoButton>>,
     mut buttons: Query<(
         Entity,
-        &RedoButton,
-        &DirectlyHovered,
-        Has<Pressed>,
+        Ref<RedoButton>,
+        Ref<DirectlyHovered>,
+        Option<Ref<Pressed>>,
         &mut Node,
         &mut Visibility,
         &mut ImageNode,
         &mut UiInteractionEnabled,
+        &mut ZIndex,
     )>,
+    active_changed: Query<(), Added<ConstructionActive>>,
+    changed_edits: Query<
+        (),
+        Changed<openzt2_zoo_state::construction::construction_transaction_types::EditTransaction>,
+    >,
+    mut finished_edits: RemovedComponents<ConstructionActive>,
+    mut removed_edits: RemovedComponents<
+        openzt2_zoo_state::construction::construction_transaction_types::EditTransaction,
+    >,
+    mut released: RemovedComponents<Pressed>,
 ) {
-    let available =
-        pending_edits.is_empty() && history.next(ConstructionEditDirection::Redo).is_some();
-    for (entity, button, hovered, pressed, mut node, mut visibility, mut image, mut interactive) in
-        &mut buttons
+    let finished = finished_edits.read().count() != 0;
+    let edits_removed = removed_edits.read().count() != 0;
+    let availability_changed =
+        finished || edits_removed || !active_changed.is_empty() || !changed_edits.is_empty();
+    let released: bevy::ecs::entity::EntityHashSet = released.read().collect();
+    let mut available = None;
+    for (
+        entity,
+        button,
+        hovered,
+        pressed,
+        mut node,
+        mut visibility,
+        mut image,
+        mut interactive,
+        mut stack,
+    ) in &mut buttons
     {
-        let Ok((undo_layout, undo_visibility)) = undo_controls.get(button.undo) else {
-            commands.entity(entity).despawn();
+        let Ok((undo_layout, undo_visibility, z)) = undo_controls.get(button.0) else {
             continue;
         };
-        if *node != *undo_layout {
-            *node = undo_layout.clone();
+        if (button.is_changed() || undo_layout.is_changed()) && *node != *undo_layout {
+            (*node).clone_from(&undo_layout);
         }
-        visibility.set_if_neq(if enabled.0 {
-            *undo_visibility
-        } else {
-            Visibility::Hidden
+        if button.is_changed() || z.is_changed() {
+            stack.set_if_neq(ZIndex(z.0 + 1));
+        }
+        if button.is_changed() || enabled.is_changed() || undo_visibility.is_changed() {
+            visibility.set_if_neq(if enabled.0 {
+                *undo_visibility
+            } else {
+                Visibility::Hidden
+            });
+        }
+        if !(button.is_changed()
+            || enabled.is_changed()
+            || availability_changed
+            || hovered.is_changed()
+            || pressed.as_ref().is_some_and(DetectChanges::is_added)
+            || released.contains(&entity))
+        {
+            continue;
+        }
+        let available = *available.get_or_insert_with(|| {
+            pending_edits.is_empty() && history.next(ConstructionEditDirection::Redo).is_some()
         });
         interactive.set_if_neq(UiInteractionEnabled(available && enabled.0));
-        let x = match (available, hovered.get(), pressed) {
+        let x = match (available, hovered.get(), pressed.is_some()) {
             (false, _, _) => 64.0,
             (true, false, false) => 0.0,
             (true, true, false) => 128.0,

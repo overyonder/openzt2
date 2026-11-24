@@ -9,33 +9,36 @@ use openzt2_world_state::game_session_types::WorldSessionMode;
 
 use openzt2_interface_state::shell::shell_selection_types::GlobeMarker;
 use openzt2_interface_state::shell::shell_selection_types::ShellScreen;
-use openzt2_interface_state::shell::shell_selection_types::ShellSelection;
 use openzt2_interface_state::shell::shell_selection_types::WorldChoice;
 
 pub(super) fn hydrate_launchable_world_choices_from_active_scenario_catalogue(
     mut commands: Commands,
-    selection: Res<ShellSelection>,
     active_catalogue: Res<WorldScenarios>,
     catalogues: Res<Assets<WorldScenarioDocumentAsset>>,
+    mut catalogue_events: MessageReader<AssetEvent<WorldScenarioDocumentAsset>>,
     screens: Query<(Entity, Ref<ShellScreen>, Option<&Children>)>,
     existing_choices: Query<(&WorldChoice, &GlobeMarker)>,
 ) {
-    if !active_catalogue.is_changed()
-        && !catalogues.is_changed()
-        && !selection.is_changed()
-        && screens.iter().all(|(_, screen, _)| !screen.is_added())
-    {
-        return;
-    }
-    let Some(mode) = selection.mode else { return };
+    let documents_changed = catalogue_events
+        .read()
+        .filter(|event| {
+            matches!(
+                event,
+                AssetEvent::Added { .. } | AssetEvent::Modified { .. } | AssetEvent::Removed { .. }
+            )
+        })
+        .count()
+        != 0;
+    let catalogue_changed = active_catalogue.is_changed() || documents_changed;
     let Some(catalogue) = active_catalogue.get(&catalogues) else {
         return;
     };
     for (owner, screen, children) in &screens {
-        if !matches!(
-            *screen,
-            ShellScreen::Globe { .. } | ShellScreen::MapSelect { .. }
-        ) {
+        let mode = match *screen {
+            ShellScreen::Globe { mode } | ShellScreen::MapSelect { mode } => mode,
+            _ => continue,
+        };
+        if !catalogue_changed && !screen.is_changed() {
             continue;
         }
         let choices = match mode {

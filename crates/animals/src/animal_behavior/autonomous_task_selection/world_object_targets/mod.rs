@@ -6,6 +6,7 @@ use bevy::{
     prelude::*,
 };
 use openzt2_game_data::{
+    AssetId,
     behavior::eligibility::{
         BehaviorCandidateEligibilityFact, BehaviorCandidateEligibilityRequirements,
         BehaviorCandidateRole, BehaviorConditionEligibilityFact, BehaviorEligibilityFactInput,
@@ -13,7 +14,6 @@ use openzt2_game_data::{
         BehaviorEntityStateEligibilityFact, BehaviorSpatialEligibilityFact,
     },
     world_definitions::world_objects::{WorldObjectContainerContent, WorldObjectDefinition},
-    AssetId,
 };
 use openzt2_world_state::world_spawn::world_entity_crating::WorldEntityIsCrated;
 use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
@@ -95,11 +95,13 @@ pub(crate) struct WorldObjectTargetFacts {
     pub(super) world: &'static WorldMember,
     food: Option<&'static FoodContainer>,
     drink: Option<&'static DrinkContainer>,
+    authored_values: Option<&'static crate::animal_behavior::ScriptFloatAttributes>,
+    velocity: Option<&'static openzt2_zoo_state::locomotion::locomotion_types::Velocity>,
     attacked: Has<openzt2_zoo_state::guests::guest_simulation_types::GuestAttacked>,
 }
 
 /// Location facts about one target, read only when a qualifier needs them.
-pub(super) struct WorldObjectTargetLocation<OnLand: Fn() -> Option<bool>> {
+pub(super) struct WorldObjectTargetLocation<'a, OnLand, Spatial> {
     /// The target stands in the habitat that restricts the animal.
     pub(super) in_habitat: bool,
     pub(super) on_land: OnLand,
@@ -107,6 +109,8 @@ pub(super) struct WorldObjectTargetLocation<OnLand: Fn() -> Option<bool>> {
     pub(super) distance: f32,
     /// The target's `f_BuildingStrength`, if it can be destroyed.
     pub(super) building_strength: Option<u16>,
+    pub(super) definition: &'a WorldObjectDefinition,
+    pub(super) spatial: Spatial,
 }
 
 impl WorldObjectTargetFactsItem<'_, '_> {
@@ -141,7 +145,11 @@ impl WorldObjectTargetFactsItem<'_, '_> {
     pub(super) fn satisfies(
         &self,
         fact: &BehaviorCandidateEligibilityFact,
-        location: &WorldObjectTargetLocation<impl Fn() -> Option<bool>>,
+        location: &WorldObjectTargetLocation<
+            '_,
+            impl Fn() -> Option<bool>,
+            impl Fn(BehaviorSpatialEligibilityFact, i32) -> Option<f32>,
+        >,
     ) -> bool {
         let BehaviorEligibilityFactValue::Q16(expected) = fact.expected_value else {
             return false;
@@ -180,6 +188,71 @@ impl WorldObjectTargetFactsItem<'_, '_> {
             BehaviorEligibilityFactInput::Spatial(BehaviorSpatialEligibilityFact::InSight) => {
                 return location.distance < expected as f32 / 65_536.0;
             }
+            BehaviorEligibilityFactInput::Spatial(BehaviorSpatialEligibilityFact::NotInSight) => {
+                return location.distance >= expected as f32 / 65_536.0;
+            }
+            BehaviorEligibilityFactInput::Spatial(
+                kind @ (BehaviorSpatialEligibilityFact::WaterDepth
+                | BehaviorSpatialEligibilityFact::DepthAboveBottom
+                | BehaviorSpatialEligibilityFact::DepthBelowSurface
+                | BehaviorSpatialEligibilityFact::ShoreDistance),
+            ) => {
+                let Some(value) = (location.spatial)(kind, expected) else {
+                    return false;
+                };
+                (value * 65_536.0).round() as i32
+            }
+            BehaviorEligibilityFactInput::State(BehaviorEntityStateEligibilityFact::Moving) => {
+                truth(
+                    self.velocity
+                        .is_some_and(|velocity| velocity.0.length_squared() > 0.0),
+                )
+            }
+            BehaviorEligibilityFactInput::State(BehaviorEntityStateEligibilityFact::Electric) => {
+                truth(
+                    location
+                        .definition
+                        .behavior_type_identifiers
+                        .contains(&AssetId::from_key("b_electric")),
+                )
+            }
+            BehaviorEligibilityFactInput::Condition(
+                BehaviorConditionEligibilityFact::ProvidesCover,
+            ) => truth(
+                location
+                    .definition
+                    .behavior_type_identifiers
+                    .contains(&AssetId::from_key("b_providescover")),
+            ),
+            BehaviorEligibilityFactInput::Condition(
+                condition @ (BehaviorConditionEligibilityFact::ConstructionLevel
+                | BehaviorConditionEligibilityFact::Damage
+                | BehaviorConditionEligibilityFact::BoneLevel),
+            ) => {
+                let property = AssetId::from_key(match condition {
+                    BehaviorConditionEligibilityFact::ConstructionLevel => "f_constructionlevel",
+                    BehaviorConditionEligibilityFact::Damage => "f_damage",
+                    BehaviorConditionEligibilityFact::BoneLevel => "f_bonelevel",
+                    _ => unreachable!(),
+                });
+                let values = &location
+                    .definition
+                    .authored_runtime
+                    .numeric_behavior_properties;
+                let Some(value) = self
+                    .authored_values
+                    .and_then(|values| values.0.get(&property).copied())
+                    .or_else(|| {
+                        values
+                            .binary_search_by_key(&property, |(key, _)| *key)
+                            .ok()
+                            .map(|index| values[index].1)
+                    })
+                else {
+                    return false;
+                };
+                (value * 65_536.0).round() as i32
+            }
             BehaviorEligibilityFactInput::Condition(
                 BehaviorConditionEligibilityFact::BuildingStrength,
             ) => {
@@ -201,14 +274,25 @@ fn can_evaluate_world_object_fact(fact: &BehaviorCandidateEligibilityFact) -> bo
             BehaviorEligibilityFactInput::Condition(
                 BehaviorConditionEligibilityFact::FoodLevel
                     | BehaviorConditionEligibilityFact::BuildingStrength
+                    | BehaviorConditionEligibilityFact::ProvidesCover
+                    | BehaviorConditionEligibilityFact::ConstructionLevel
+                    | BehaviorConditionEligibilityFact::Damage
+                    | BehaviorConditionEligibilityFact::BoneLevel
             ) | BehaviorEligibilityFactInput::Spatial(
                 BehaviorSpatialEligibilityFact::SupportedSurface
                     | BehaviorSpatialEligibilityFact::OnLand
                     | BehaviorSpatialEligibilityFact::InWater
                     | BehaviorSpatialEligibilityFact::InSight
+                    | BehaviorSpatialEligibilityFact::NotInSight
+                    | BehaviorSpatialEligibilityFact::WaterDepth
+                    | BehaviorSpatialEligibilityFact::DepthAboveBottom
+                    | BehaviorSpatialEligibilityFact::DepthBelowSurface
+                    | BehaviorSpatialEligibilityFact::ShoreDistance
             ) | BehaviorEligibilityFactInput::State(
                 BehaviorEntityStateEligibilityFact::InHabitat
                     | BehaviorEntityStateEligibilityFact::Attacked
+                    | BehaviorEntityStateEligibilityFact::Electric
+                    | BehaviorEntityStateEligibilityFact::Moving
             )
         )
 }

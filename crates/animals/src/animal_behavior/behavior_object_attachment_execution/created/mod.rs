@@ -6,6 +6,7 @@ use super::admission::{DetachAdmission, DetachMembershipRequest};
 use openzt2_zoo_state::animal_behavior::interaction_container_membership::requests::InteractionContainerAdmissionRequest;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
+use openzt2_world_state::world_spawn::prefab_source_asset_handle::PrefabSourceAssetHandle;
 use openzt2_world::world_spawn::prefab_world_instance_spawning::hydrate_loaded_scene_prefab_into_world_instance_root;
 use openzt2_game_data::world_definitions::world_objects::WorldObjectDetachDestination;
 
@@ -13,6 +14,20 @@ use openzt2_game_data::world_definitions::world_objects::WorldObjectDetachDestin
 pub(super) struct PendingDetachCreatedObject {
     prefab: Option<Handle<ScenePrefabAsset>>,
     settled: bool,
+}
+
+#[derive(Component)]
+struct HideDetachCreatedInventory;
+
+pub(super) fn hide_hydrated_inventory(
+    hydrated: On<Add<PrefabSourceAssetHandle>>,
+    mut inventory: Query<&mut Visibility, With<HideDetachCreatedInventory>>,
+    mut commands: Commands,
+) {
+    if let Ok(mut visibility) = inventory.get_mut(hydrated.entity) {
+        visibility.set_if_neq(Visibility::Hidden);
+        commands.entity(hydrated.entity).try_remove::<HideDetachCreatedInventory>();
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -95,6 +110,8 @@ pub(super) fn hydrate_detach_created_objects(
             &WorldMember,
             &PersistentId,
             &GlobalTransform,
+            Option<&mut Transform>,
+            Option<&mut Visibility>,
             Option<&mut ContainedObject>,
             Option<&BehaviorWorldReleaseMotion>,
         ),
@@ -106,7 +123,7 @@ pub(super) fn hydrate_detach_created_objects(
     let Some(definitions) = assets.definitions.get(&assets.definition_assets) else {
         return;
     };
-    for (pending_entity, mut loading, definition, world, id, transform, contained, motion) in
+    for (pending_entity, mut loading, definition, world, id, pose, transform, visibility, contained, motion) in
         &mut pending
     {
         if let Some(prefab) = loading.prefab.as_ref() {
@@ -131,7 +148,7 @@ pub(super) fn hydrate_detach_created_objects(
                     .mul_transform(contained.relative_transform)
                     .compute_transform()
             } else {
-                transform.compute_transform()
+                pose.compute_transform()
             };
         let Some(object) = definitions.find_object(definition.0) else {
             if assets.definitions.is_complete() {
@@ -181,7 +198,12 @@ pub(super) fn hydrate_detach_created_objects(
             None
         };
         let scale = Transform::from_scale(Vec3::splat(object.prefab_scale));
+        let instance_transform = instance_transform.mul_transform(scale);
+        let hide_inventory = policy.is_some_and(|policy| policy.hides_contents);
         if let Some((prefab_handle, prefab)) = presentation.as_ref() {
+            if hide_inventory {
+                commands.entity(pending_entity).insert(HideDetachCreatedInventory);
+            }
             hydrate_loaded_scene_prefab_into_world_instance_root(
                 &mut commands,
                 pending_entity,
@@ -190,24 +212,25 @@ pub(super) fn hydrate_detach_created_objects(
                 world.root,
                 object.id,
                 *id,
-                instance_transform.mul_transform(scale),
+                instance_transform,
                 true,
                 None,
                 RigidBody::Kinematic,
             );
         } else {
-            commands.entity(pending_entity).insert((
-                Inspectable {
-                    definition: object.id,
-                },
-                instance_transform.mul_transform(scale),
-                Visibility::Inherited,
-            ));
-        }
-        // Hide the inventory root only; descendants retain authored visibility
-        // so a later release can reveal the same hydrated hierarchy.
-        if policy.is_some_and(|policy| policy.hides_contents) {
-            commands.entity(pending_entity).insert(Visibility::Hidden);
+            let mut entity = commands.entity(pending_entity);
+            entity.insert(Inspectable { definition: object.id });
+            if let Some(mut transform) = transform {
+                transform.set_if_neq(instance_transform);
+            } else {
+                entity.insert(instance_transform);
+            }
+            let displayed = if hide_inventory { Visibility::Hidden } else { Visibility::Inherited };
+            if let Some(mut visibility) = visibility {
+                visibility.set_if_neq(displayed);
+            } else {
+                entity.insert(displayed);
+            }
         }
         if let Some(mut contained) = contained {
             let transform = contained

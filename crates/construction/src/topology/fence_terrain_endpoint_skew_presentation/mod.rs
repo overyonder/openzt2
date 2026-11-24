@@ -1,8 +1,18 @@
 //! Terrain endpoint fitting for the source-authored fence skew component.
 
-use super::path_presentation_neighborhood::cells_for_region;
+use super::{
+    elevated_curb_layout::{is_elevated_curb, ElevatedCurbSurfaces},
+    fence_construction_preview_presentation::FencePreviewSegmentOf,
+    path_presentation_neighborhood::cells_for_region,
+    topology_construction_preview_types::FencePreview,
+};
 use bevy::diagnostic::FrameCount;
 use bevy::prelude::*;
+use openzt2_game_assets::world_definitions::{
+    world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions,
+    world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
+};
+use openzt2_zoo_state::topology::topology_graph_types::FenceSegment;
 use openzt2_zoo_state::topology::topology_graph_types::TopologyIndex;
 
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
@@ -36,6 +46,14 @@ pub(super) fn fit_fence_presentations_to_terrain_endpoint_heights(
     frame: Option<Res<FrameCount>>,
     mut endpoint_fitting_reports: Option<ResMut<FenceEndpointFittingReports>>,
     mut fitting_history: FenceTerrainFittingObservation,
+    (active_definitions, definition_assets, curb_surfaces, permanent, temporary, previews): (
+        Res<WorldDefinitions>,
+        Res<Assets<WorldDefinitionAsset>>,
+        ElevatedCurbSurfaces,
+        Query<FenceSegment>,
+        Query<&FencePreviewSegmentOf>,
+        Query<&FencePreview>,
+    ),
     mut fences: Query<(
         Entity,
         Ref<FenceTerrainEndpointPresentationCells>,
@@ -59,6 +77,7 @@ pub(super) fn fit_fence_presentations_to_terrain_endpoint_heights(
         Without<FenceTerrainEndpointPresentationCells>,
     >,
 ) {
+    let definitions = active_definitions.get(&definition_assets);
     let terrain_index = terrain_index.into_inner();
     let grid = grid.into_inner();
     let topology = topology.map(Single::into_inner);
@@ -176,15 +195,35 @@ pub(super) fn fit_fence_presentations_to_terrain_endpoint_heights(
                 status: "fitting attempted but not completed",
             });
         }
-        let Some(first_height_m) = sample_terrain_height_at_world_position(
-            first_world_xz,
-            &terrain_index,
-            &terrain_assets,
-            &terrain_chunks,
-            attempt
-                .as_mut()
-                .map(|attempt| (&fitting_history, attempt, 0)),
-        ) else {
+        let definition = permanent
+            .get(entity)
+            .map(|segment| segment.definition)
+            .ok()
+            .or_else(|| {
+                previews
+                    .get(temporary.get(entity).ok()?.0)
+                    .ok()
+                    .map(|preview| preview.definition)
+            });
+        let curb = definitions
+            .zip(definition)
+            .filter(|&(definitions, id)| is_elevated_curb(definitions, id))
+            .and_then(|(definitions, _)| Some((definitions, topology?)));
+        let mut sample = |cell, point, endpoint| {
+            if let Some((definitions, index)) = curb {
+                return curb_surfaces.height(cell, *grid, index, definitions);
+            }
+            sample_terrain_height_at_world_position(
+                point,
+                &terrain_index,
+                &terrain_assets,
+                &terrain_chunks,
+                attempt
+                    .as_mut()
+                    .map(|attempt| (&fitting_history, attempt, endpoint)),
+            )
+        };
+        let Some(first_height_m) = sample(endpoint_cells.first, first_world_xz, 0) else {
             fitting_history.finish_owner(
                 attempt,
                 "first endpoint sample unavailable",
@@ -194,15 +233,7 @@ pub(super) fn fit_fence_presentations_to_terrain_endpoint_heights(
             );
             continue;
         };
-        let Some(second_height_m) = sample_terrain_height_at_world_position(
-            second_world_xz,
-            &terrain_index,
-            &terrain_assets,
-            &terrain_chunks,
-            attempt
-                .as_mut()
-                .map(|attempt| (&fitting_history, attempt, 1)),
-        ) else {
+        let Some(second_height_m) = sample(endpoint_cells.second, second_world_xz, 1) else {
             fitting_history.finish_owner(
                 attempt,
                 "second endpoint sample unavailable",

@@ -1,4 +1,6 @@
-use bevy::prelude::*;
+use bevy::{ecs::{entity::EntityHashSet, entity_disabling::Disabled, system::SystemParam}, prelude::*};
+use openzt2_zoo_state::aquatic::aquatic_simulation_types::WaterFilter;
+use openzt2_zoo_state::economy::facility_economy_types::MaintenanceScheduleIndex;
 use openzt2_game_data::world_definitions::staff_management::StaffJobKind;
 use openzt2_game_data::world_definitions::staff_management::StaffRequestControllerDefinition;
 use openzt2_game_data::world_definitions::staff_management::StaffRequestThresholdValue;
@@ -180,10 +182,25 @@ pub(super) fn bind_staff_request_rows_on_definition_change(
     mut asset_events: MessageReader<AssetEvent<WorldDefinitionAsset>>,
     all_entities: Query<Entity, With<DefinitionId>>,
     changed_entities: Query<Entity, Changed<DefinitionId>>,
+    mut removed_definitions: RemovedComponents<DefinitionId>,
+    orphaned: Query<&StaffRequestRuntimeBinding, Without<DefinitionId>>,
     mut entities: Query<(&DefinitionId, Option<&mut StaffRequestRuntimeBinding>)>,
     jobs: Query<(Entity, &StaffJob, Option<&StaffJobRouting>)>,
     mut cancellations: MessageWriter<CancelStaffJobRequest>,
 ) {
+    for entity in removed_definitions.read() {
+        let Ok(binding) = orphaned.get(entity) else {
+            continue;
+        };
+        for state in &binding.rows {
+            if let Some(key) = state.job_key(entity) {
+                cancel_staff_jobs(key, Some(key.routing), &jobs, &mut cancellations);
+            }
+        }
+        commands
+            .entity(entity)
+            .remove::<StaffRequestRuntimeBinding>();
+    }
     let assets_changed = asset_events
         .read()
         .filter(|event| {
@@ -227,9 +244,9 @@ pub(super) fn bind_staff_request_rows_on_definition_change(
         let Ok((definition, binding)) = entities.get_mut(entity) else {
             continue;
         };
-        let Some(rows) = definitions.staff_request_rows(definition.0) else {
-            continue;
-        };
+        let rows = definitions
+            .staff_request_rows(definition.0)
+            .unwrap_or_default();
         let previous = binding
             .as_deref()
             .map_or(&[][..], |binding| binding.rows.as_slice());
@@ -271,11 +288,87 @@ pub(super) fn bind_staff_request_rows_on_definition_change(
     }
 }
 
-/// Evaluates authored container and animal care controllers against their
-/// live owners. Unsupported attributes remain unsampled.
+#[derive(SystemParam)]
+pub(super) struct RemovedStaffRequestFacts<'w, 's> {
+    food: RemovedComponents<'w, 's, FoodContainer>,
+    drink: RemovedComponents<'w, 's, DrinkContainer>,
+    waste: RemovedComponents<'w, 's, FacilityContainedWaste>,
+    litter: RemovedComponents<'w, 's, LooseLitterWaste>,
+    animal_waste: RemovedComponents<'w, 's, AnimalHabitatWaste>,
+    filter: RemovedComponents<'w, 's, WaterFilter>,
+    schedule: RemovedComponents<'w, 's, MaintenanceScheduleIndex>,
+    hunger: RemovedComponents<'w, 's, Hunger>,
+    thirst: RemovedComponents<'w, 's, Thirst>,
+    health: RemovedComponents<'w, 's, HealthNeed>,
+    hygiene: RemovedComponents<'w, 's, HygieneNeed>,
+    stimulation: RemovedComponents<'w, 's, StimulationNeed>,
+    animal: RemovedComponents<'w, 's, Animal>,
+    escaped: RemovedComponents<'w, 's, Escaped>,
+    disease: RemovedComponents<'w, 's, Disease>,
+    dead: RemovedComponents<'w, 's, Dead>,
+    crated: RemovedComponents<'w, 's, WorldEntityIsCrated>,
+    disabled: RemovedComponents<'w, 's, Disabled>,
+}
+
+impl RemovedStaffRequestFacts<'_, '_> {
+    fn read(&mut self) -> impl Iterator<Item = Entity> + '_ {
+        self.food
+            .read()
+            .chain(self.drink.read())
+            .chain(self.waste.read())
+            .chain(self.litter.read())
+            .chain(self.animal_waste.read())
+            .chain(self.filter.read())
+            .chain(self.schedule.read())
+            .chain(self.hunger.read())
+            .chain(self.thirst.read())
+            .chain(self.health.read())
+            .chain(self.hygiene.read())
+            .chain(self.stimulation.read())
+            .chain(self.animal.read())
+            .chain(self.escaped.read())
+            .chain(self.disease.read())
+            .chain(self.dead.read())
+            .chain(self.crated.read())
+            .chain(self.disabled.read())
+    }
+}
+
+/// Samples bound controllers when their live inputs or their definitions change.
+#[allow(clippy::type_complexity)]
 pub(super) fn evaluate_staff_request_rows(
     active_world_definitions: Res<WorldDefinitions>,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
+    mut asset_events: MessageReader<AssetEvent<WorldDefinitionAsset>>,
+    changed_facts: Query<
+        Entity,
+        (
+            With<StaffRequestRuntimeBinding>,
+            Or<(
+                Changed<StaffRequestRuntimeBinding>,
+                Changed<FoodContainer>,
+                Changed<DrinkContainer>,
+                Changed<FacilityContainedWaste>,
+                Changed<LooseLitterWaste>,
+                Changed<AnimalHabitatWaste>,
+                Changed<WaterFilter>,
+                Changed<MaintenanceScheduleIndex>,
+                Changed<Hunger>,
+                Changed<Thirst>,
+                Changed<HealthNeed>,
+                Changed<HygieneNeed>,
+                Changed<StimulationNeed>,
+                Or<(
+                    Added<Animal>,
+                    Added<Escaped>,
+                    Added<Disease>,
+                    Added<Dead>,
+                    Added<WorldEntityIsCrated>,
+                )>,
+            )>,
+        ),
+    >,
+    mut removed_facts: RemovedStaffRequestFacts,
     mut entities: Query<(
         Entity,
         &DefinitionId,
@@ -285,8 +378,8 @@ pub(super) fn evaluate_staff_request_rows(
         Option<&FacilityContainedWaste>,
         Option<&LooseLitterWaste>,
         Option<&AnimalHabitatWaste>,
-        Option<&openzt2_zoo_state::aquatic::aquatic_simulation_types::WaterFilter>,
-        Option<&openzt2_zoo_state::economy::facility_economy_types::MaintenanceScheduleIndex>,
+        Option<&WaterFilter>,
+        Option<&MaintenanceScheduleIndex>,
     )>,
     animal_needs: Query<
         AnimalRequestFacts,
@@ -296,22 +389,44 @@ pub(super) fn evaluate_staff_request_rows(
     mut requests: MessageWriter<StaffJobRequest>,
     mut cancellations: MessageWriter<CancelStaffJobRequest>,
 ) {
+    let assets_changed = asset_events.read().fold(false, |changed, event| {
+        changed
+            | matches!(
+                event,
+                AssetEvent::Added { .. } | AssetEvent::Modified { .. } | AssetEvent::Removed { .. }
+            )
+    });
+    let refresh_all = active_world_definitions.is_changed() || assets_changed;
     let Some(definitions) = active_world_definitions.get(&world_definition_assets) else {
         return;
     };
-    for (
-        entity,
-        definition,
-        mut binding,
-        food,
-        drink,
-        waste,
-        litter,
-        animal_waste,
-        filter,
-        schedule,
-    ) in &mut entities
-    {
+    let removed = removed_facts.read();
+    let candidates: Vec<Entity> = if refresh_all {
+        entities.iter().map(|(entity, ..)| entity).collect()
+    } else {
+        let mut seen = EntityHashSet::default();
+        changed_facts
+            .iter()
+            .chain(removed)
+            .filter(|&entity| seen.insert(entity))
+            .collect()
+    };
+    for candidate in candidates {
+        let Ok((
+            entity,
+            definition,
+            mut binding,
+            food,
+            drink,
+            waste,
+            litter,
+            animal_waste,
+            filter,
+            schedule,
+        )) = entities.get_mut(candidate)
+        else {
+            continue;
+        };
         let Some(rows) = definitions.staff_request_rows(definition.0) else {
             continue;
         };
@@ -320,7 +435,7 @@ pub(super) fn evaluate_staff_request_rows(
             (Some(food), None) => Some(food.amount_q16),
             (None, Some(drink)) => Some(drink.amount_q16),
         };
-        for state in &mut binding.rows {
+        for state in &mut binding.bypass_change_detection().rows {
             let Some(row) = rows.get(state.row_index) else {
                 continue;
             };

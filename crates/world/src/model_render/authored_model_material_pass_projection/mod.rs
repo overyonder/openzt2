@@ -9,7 +9,7 @@ use bevy::light::NotShadowCaster;
 use bevy::light::NotShadowReceiver;
 use bevy::mesh::morph::MeshMorphWeights;
 use bevy::mesh::skinning::SkinnedMesh;
-use bevy::platform::collections::HashSet;
+use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 use openzt2_game_assets::graphics_settings_types::GraphicsSettings;
 use openzt2_game_assets::material::material_asset_types::MaterialAsset;
@@ -43,7 +43,7 @@ pub(super) fn initialize_model_geometry_texture_coordinate_clocks(
 }
 
 #[derive(Component)]
-pub(super) struct AdditionalAuthoredModelMaterialPass;
+pub(super) struct AdditionalAuthoredModelMaterialPass(usize);
 
 #[derive(Component)]
 pub(super) struct AuthoredModelStandardMaterial {
@@ -53,29 +53,32 @@ pub(super) struct AuthoredModelStandardMaterial {
 
 pub(super) fn project_authored_model_material_passes(
     mut commands: Commands,
-    primitives: Query<(
-        Entity,
-        Ref<GltfMaterialName>,
-        &Mesh3d,
-        Option<Ref<ModelMaterialInputOwner<ModelExpanded>>>,
-        Option<&RenderLayers>,
-        Has<NotShadowCaster>,
-        Has<NotShadowReceiver>,
-        Option<&SkinnedMesh>,
-        Option<&MeshMorphWeights>,
-        Option<&ProjectedModelDrawShadowPolicy>,
-        Option<&MeshMaterial3d<StandardMaterial>>,
-        Option<&AuthoredModelStandardMaterial>,
-        Option<&PrefabPrimitiveMaterial>,
-        Has<AuthoredModelEffectMaterial>,
-    )>,
+    mut primitives: Query<
+        (
+            Entity,
+            Ref<GltfMaterialName>,
+            &Mesh3d,
+            Option<Ref<ModelMaterialInputOwner<ModelExpanded>>>,
+            Option<&RenderLayers>,
+            Has<NotShadowCaster>,
+            Has<NotShadowReceiver>,
+            Option<&SkinnedMesh>,
+            Option<&MeshMorphWeights>,
+            Option<&ProjectedModelDrawShadowPolicy>,
+            Option<&MeshMaterial3d<StandardMaterial>>,
+            Option<&AuthoredModelStandardMaterial>,
+            Option<&mut PrefabPrimitiveMaterial>,
+            Has<AuthoredModelEffectMaterial>,
+        ),
+        Without<AdditionalAuthoredModelMaterialPass>,
+    >,
     roots: Query<(
         Ref<PrefabMaterialOverrides>,
         Option<Ref<PrefabClothingTextures>>,
     )>,
     children: Query<&Children>,
     parents: Query<&ChildOf>,
-    additional_passes: Query<(), With<AdditionalAuthoredModelMaterialPass>>,
+    additional_passes: Query<&AdditionalAuthoredModelMaterialPass>,
     mut material_events: MessageReader<AssetEvent<MaterialAsset>>,
     mut pass_events: MessageReader<AssetEvent<EffectPassMaterial>>,
     mut removed_clothing: RemovedComponents<PrefabClothingTextures>,
@@ -84,8 +87,12 @@ pub(super) fn project_authored_model_material_passes(
     material_assets: Res<Assets<MaterialAsset>>,
     graphics_settings: Res<GraphicsSettings>,
     draw_materials: Res<Assets<EffectPassMaterial>>,
-    mut visibility: Query<&mut Visibility, With<GltfMaterialName>>,
-    mut authored_effects: Query<&mut AuthoredModelEffectMaterial>,
+    (mut visibility, mut authored_effects, mut orderings, mut extra_meshes): (
+        Query<&mut Visibility, With<GltfMaterialName>>,
+        Query<&mut AuthoredModelEffectMaterial>,
+        Query<&mut AuthoredEffectTechniquePassSubmissionOrder>,
+        Query<&mut Mesh3d, With<AdditionalAuthoredModelMaterialPass>>,
+    ),
 ) {
     let changed_materials = material_events
         .read()
@@ -127,7 +134,7 @@ pub(super) fn project_authored_model_material_passes(
         authored_standard,
         previous_material,
         has_effect_binding,
-    ) in &primitives
+    ) in &mut primitives
     {
         let root = owner.as_ref().and_then(|owner| roots.get(owner.0).ok());
         let source_changed = name.is_changed()
@@ -145,6 +152,26 @@ pub(super) fn project_authored_model_material_passes(
             && !graphics_settings.is_changed()
             && changed_materials.is_empty()
             && changed_passes.is_empty()
+        {
+            continue;
+        }
+        if !source_changed
+            && !graphics_settings.is_changed()
+            && previous_material
+                .as_ref()
+                .is_some_and(|material| !changed_materials.contains(&material.0.id()))
+            && !std::iter::once(entity)
+                .chain(
+                    children
+                        .get(entity)
+                        .into_iter()
+                        .flat_map(|children| children.iter()),
+                )
+                .any(|draw| {
+                    authored_effects
+                        .get(draw)
+                        .is_ok_and(|effect| changed_passes.contains(&effect.template.id()))
+                })
         {
             continue;
         }
@@ -206,16 +233,30 @@ pub(super) fn project_authored_model_material_passes(
             continue;
         }
 
-        despawn_authored_material_pass_children(
-            &mut commands,
-            entity,
-            &children,
-            &additional_passes,
-        );
-        commands
-            .entity(entity)
-            .insert(PrefabPrimitiveMaterial(handle.clone()));
+        let mut retained_passes = children
+            .get(entity)
+            .into_iter()
+            .flat_map(|children| children.iter())
+            .filter_map(|child| {
+                additional_passes
+                    .get(child)
+                    .ok()
+                    .map(|pass| (pass.0, child))
+            })
+            .collect::<HashMap<_, _>>();
+        if let Some(previous_material) = previous_material {
+            previous_material
+                .map_unchanged(|material| &mut material.0)
+                .set_if_neq(handle.clone());
+        } else {
+            commands
+                .entity(entity)
+                .insert(PrefabPrimitiveMaterial(handle.clone()));
+        }
         if passes.is_empty() {
+            for child in retained_passes.into_values() {
+                commands.entity(child).try_despawn();
+            }
             if let Ok(mut visibility) = visibility.get_mut(entity) {
                 visibility.set_if_neq(Visibility::Hidden);
             }
@@ -271,7 +312,27 @@ pub(super) fn project_authored_model_material_passes(
                 } else {
                     target.insert(authored);
                 }
-                target.insert(ordering);
+                if let Ok(mut current) = orderings.get_mut(entity) {
+                    if current.hierarchy_order() != ordering.hierarchy_order() {
+                        *current = current.with_source_hierarchy_order(owner_parent, owner_index);
+                    }
+                } else {
+                    target.insert(ordering);
+                }
+                continue;
+            }
+            if let Some(child) = retained_passes.remove(&pass_index) {
+                if let Ok(mut current) = authored_effects.get_mut(child) {
+                    current.set_if_neq(authored);
+                }
+                if let Ok(mut current) = orderings.get_mut(child) {
+                    if current.hierarchy_order() != ordering.hierarchy_order() {
+                        *current = current.with_source_hierarchy_order(owner_parent, owner_index);
+                    }
+                }
+                if let Ok(mut current) = extra_meshes.get_mut(child) {
+                    current.set_if_neq(mesh.clone());
+                }
                 continue;
             }
             let mut additional_pass = commands.spawn((
@@ -281,7 +342,7 @@ pub(super) fn project_authored_model_material_passes(
                 Transform::IDENTITY,
                 Visibility::Inherited,
                 ChildOf(entity),
-                AdditionalAuthoredModelMaterialPass,
+                AdditionalAuthoredModelMaterialPass(pass_index),
                 ordering,
             ));
             if let Some(layers) = layers {
@@ -303,6 +364,9 @@ pub(super) fn project_authored_model_material_passes(
                 additional_pass.insert(*shadow_projection);
             }
         }
+        for child in retained_passes.into_values() {
+            commands.entity(child).try_despawn();
+        }
     }
 }
 
@@ -310,7 +374,7 @@ fn despawn_authored_material_pass_children(
     commands: &mut Commands,
     primitive: Entity,
     children: &Query<&Children>,
-    additional_passes: &Query<(), With<AdditionalAuthoredModelMaterialPass>>,
+    additional_passes: &Query<&AdditionalAuthoredModelMaterialPass>,
 ) {
     for child in children
         .get(primitive)

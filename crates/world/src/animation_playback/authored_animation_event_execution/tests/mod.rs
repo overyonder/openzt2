@@ -15,9 +15,7 @@ fn reverse_playback_reverses_timestamps_and_preserves_same_time_order() {
             }]),
         }
     });
-    let interval = AnimationPlaybackInterval::<false> {
-        controller: Entity::PLACEHOLDER,
-        generation: 0,
+    let interval = AnimationPlaybackInterval {
         from: 0.04,
         to: 0.0,
         cycle_start: 0.0,

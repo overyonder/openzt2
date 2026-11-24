@@ -110,6 +110,7 @@ pub(in crate::persistence) struct BehaviorSnapshotEntityData {
     pub(super) instruction: Option<&'static openzt2_zoo_state::behavior_task_execution_types::running_actions::RunningBehaviorInstruction>,
     pub(super) pending_behavior_move_completion: Option<&'static openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorMoveCompletion>,
     pub(super) pending_behavior_pursuit: Option<&'static openzt2_zoo_state::animal_behavior::behavior_pursuit_types::PendingBehaviorPursuit>,
+    pub(super) behavior_pursuit_poll: Option<&'static openzt2_zoo_state::animal_behavior::behavior_pursuit_types::BehaviorPursuitPoll>,
     pub(super) pending_behavior_transaction: Option<&'static openzt2_zoo_state::behavior_task_execution_types::running_actions::RunningBehaviorEconomyTransaction>,
     pub(super) pending_behavior_task_failure: Option<&'static openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorTaskFailure>,
     pub(super) persistent_id: Option<&'static PersistentId>,

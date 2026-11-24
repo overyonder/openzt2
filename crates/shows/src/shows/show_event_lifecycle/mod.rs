@@ -7,7 +7,7 @@ use openzt2_game_assets::{
         world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
     },
 };
-use openzt2_game_data::{behavior::action::watch_show::ShowEventScoring, AssetId};
+use openzt2_game_data::{AssetId, behavior::action::watch_show::ShowEventScoring};
 use openzt2_world_state::{
     simulation_time::simulation_clock_types::ZooClock,
     world_spawn::world_membership_types::WorldMember,
@@ -19,8 +19,8 @@ use openzt2_zoo_state::{
     },
     animal_lifecycle::types::{Animal, SpeciesHandle},
     behavior_task_execution_types::{
-        running_actions::{RunBehaviorWatchShow, RunningBehaviorInstruction, SelectedBehaviorSet},
         BehaviorTaskExecutionPhase, BehaviorTaskExecutionState, PendingBehaviorTaskFailure,
+        running_actions::{RunBehaviorWatchShow, RunningBehaviorInstruction, SelectedBehaviorSet},
     },
     guests::{
         guest_simulation_types::{GuestArchetype, GuestFavouriteAnimal, GuestRng},
@@ -53,6 +53,9 @@ pub(crate) struct ShowEventWindow {
     expires: Option<u64>,
     trick: AssetId,
 }
+
+#[derive(Component)]
+pub(super) struct ReleasedShowEvent;
 
 pub(super) fn schedule_authored_animal_show_events(
     mut commands: Commands,
@@ -160,6 +163,77 @@ pub(super) fn schedule_authored_animal_show_events(
     }
 }
 
+pub(super) fn update_authored_show_event_windows(
+    mut commands: Commands,
+    clock: Single<&ZooClock>,
+    definitions: Res<WorldDefinitions>,
+    assets: Res<Assets<WorldDefinitionAsset>>,
+    events: Query<(
+        Entity,
+        &WorldMember,
+        &AuthoredAnimalShowEvent,
+        &ShowEventWindow,
+        &ShowEventForRun,
+        Has<ReleasedShowEvent>,
+    )>,
+    performers: Query<(&WorldMember, Option<&BehaviorTaskExecutionState>), With<Animal>>,
+    interruptions: Query<(), Or<(With<PendingBehaviorTaskFailure>, With<PendingBehaviorSet>)>>,
+    shows: Query<&RunningShow>,
+) {
+    if definitions.get(&assets).is_none() {
+        return;
+    }
+    for (entity, world, event, window, run, released) in &events {
+        let live = performers
+            .get(event.performer)
+            .is_ok_and(|(performer_world, task)| {
+                performer_world.root == world.root
+                    && (!event.policy.expire_with_task
+                        || (!interruptions.contains(event.performer)
+                            && task.is_some_and(|task| {
+                                task.execution_id == event.execution_id
+                                    && task.phase != BehaviorTaskExecutionPhase::Failure
+                            })))
+            });
+        let now_released = clock.tick >= window.release;
+        if !live
+            || window.expires.is_some_and(|expiry| clock.tick > expiry)
+            || now_released
+                && shows
+                    .get(run.0)
+                    .is_ok_and(|show| show.phase == ShowPhase::BetweenShows)
+        {
+            commands.entity(entity).try_despawn();
+        } else if now_released && !released {
+            commands.entity(entity).insert(ReleasedShowEvent);
+        }
+    }
+}
+
+pub(super) fn discard_delivered_event_when_its_window_retires(
+    retired: On<Remove<ReleasedShowEvent>>,
+    events: Query<&ShowEventForRun>,
+    shows: Query<&RunningShowOnStage>,
+    audiences: Query<&StageShowAudience>,
+    mut history: Query<&mut GuestShowExperience>,
+) {
+    let Some(audience) = events
+        .get(retired.entity)
+        .ok()
+        .and_then(|event| shows.get(event.0).ok())
+        .and_then(|stage| audiences.get(stage.0).ok())
+    else {
+        return;
+    };
+    for guest in audience.iter() {
+        if let Ok(mut experience) = history.get_mut(guest) {
+            if experience.delivered_events.contains(&retired.entity) {
+                experience.delivered_events.remove(&retired.entity);
+            }
+        }
+    }
+}
+
 pub(super) fn dispatch_released_animal_show_events(
     mut commands: Commands,
     clock: Single<&ZooClock>,
@@ -167,23 +241,9 @@ pub(super) fn dispatch_released_animal_show_events(
     assets: Res<Assets<WorldDefinitionAsset>>,
     behavior_documents: Res<Assets<BehaviorDocumentAsset>>,
     behavior_index: Res<LoadedBehaviorDocumentCollection>,
-    events: Query<(
-        Entity,
-        &WorldMember,
-        &AuthoredAnimalShowEvent,
-        &ShowEventWindow,
-        &ShowEventForRun,
-    )>,
-    performers: Query<
-        (
-            &WorldMember,
-            Option<&BehaviorTaskExecutionState>,
-            Option<&SpeciesHandle>,
-        ),
-        With<Animal>,
-    >,
-    interruptions: Query<(), Or<(With<PendingBehaviorTaskFailure>, With<PendingBehaviorSet>)>>,
-    shows: Query<(&RunningShowOnStage, &RunningShow)>,
+    events: Query<(&AuthoredAnimalShowEvent, &ShowEventWindow), With<ReleasedShowEvent>>,
+    performers: Query<&SpeciesHandle, With<Animal>>,
+    shows: Query<(Entity, &RunningShowOnStage, &RunningShow, &RunShowEvents)>,
     audiences: Query<&StageShowAudience>,
     mut guests: Query<(
         &GuestWatchingStage,
@@ -201,39 +261,15 @@ pub(super) fn dispatch_released_animal_show_events(
         return;
     };
     let behavior = behavior_index.create_declaration_index_view(&behavior_documents);
-    let mut released = std::collections::BTreeMap::<Entity, Vec<Entity>>::new();
-    for (entity, world, event, window, run) in &events {
-        let Ok((performer_world, task, _)) = performers.get(event.performer) else {
-            commands.entity(entity).try_despawn();
-            continue;
-        };
-        let interrupted = event.policy.expire_with_task
-            && (interruptions.contains(event.performer)
-                || task.is_none_or(|task| {
-                    task.execution_id != event.execution_id
-                        || task.phase == BehaviorTaskExecutionPhase::Failure
-                }));
-        if world.root != performer_world.root
-            || interrupted
-            || window.expires.is_some_and(|expiry| clock.tick > expiry)
-        {
-            commands.entity(entity).try_despawn();
-            continue;
-        }
-        if clock.tick >= window.release {
-            released.entry(run.0).or_default().push(entity);
-        }
-    }
-    for (show_entity, released) in released {
-        let Ok((stage, show)) = shows.get(show_entity) else {
-            continue;
-        };
-        if show.phase == ShowPhase::BetweenShows {
-            for entity in released {
-                commands.entity(entity).try_despawn();
-            }
-            continue;
-        }
+    let mut ready = shows
+        .iter()
+        .filter(|(_, _, show, related)| {
+            show.phase != ShowPhase::BetweenShows
+                && related.iter().any(|event| events.contains(event))
+        })
+        .collect::<Vec<_>>();
+    ready.sort_unstable_by_key(|(entity, ..)| *entity);
+    for (show_entity, stage, show, released) in ready {
         let stage = stage.0;
         let quality = (show.stars * 65_536.0).round() as i32;
         if let Ok(audience) = audiences.get(stage) {
@@ -266,9 +302,9 @@ pub(super) fn dispatch_released_animal_show_events(
                     .find(|rule| rule.event == AssetId::from_key("defaultevent"));
                 let candidate = released
                     .iter()
-                    .filter(|entity| !history.delivered_events.contains(*entity))
-                    .filter_map(|&entity| {
-                        let (_, _, event, window, _) = events.get(entity).ok()?;
+                    .filter(|entity| !history.delivered_events.contains(entity))
+                    .filter_map(|entity| {
+                        let (event, window) = events.get(entity).ok()?;
                         let rule = policies
                             .iter()
                             .find(|rule| rule.event == event.policy.name)
@@ -295,7 +331,7 @@ pub(super) fn dispatch_released_animal_show_events(
                 let species = performers
                     .get(event.performer)
                     .ok()
-                    .and_then(|(_, _, species)| species.map(|species| species.species));
+                    .map(|species| species.species);
                 let favourite = species.is_some_and(|species| favorite.0 == Some(species));
                 history.saw_favourite |= favourite;
                 let previous = history.reactions.entry(event.policy.name).or_default();
@@ -342,10 +378,10 @@ pub(super) fn dispatch_released_animal_show_events(
                 );
             }
         }
-        for entity in released {
+        for entity in released.iter() {
             if events
                 .get(entity)
-                .is_ok_and(|(_, _, _, window, _)| window.expires.is_none())
+                .is_ok_and(|(_, window)| window.expires.is_none())
             {
                 commands.entity(entity).try_despawn();
             }

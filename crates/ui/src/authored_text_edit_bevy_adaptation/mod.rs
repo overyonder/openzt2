@@ -59,13 +59,12 @@ pub(super) fn initialize_authored_text_edits_as_bevy_editable_text(
             Option<&Text>,
             &mut Node,
             &UiNodeId,
-            &UiInteractionEnabled,
             Option<&UiFocusable>,
         ),
         (Added<UiTextEditPolicy>, Without<EditableText>),
     >,
 ) {
-    for (entity, policy, text, mut node, node_id, enabled, focusable) in &mut edits {
+    for (entity, policy, text, mut node, node_id, focusable) in &mut edits {
         let mut editable = EditableText::new(text.map_or("", |text| text.0.as_str()));
         editable.max_characters = (policy.maximum_character_count != 0)
             .then_some(policy.maximum_character_count as usize);
@@ -99,10 +98,7 @@ pub(super) fn initialize_authored_text_edits_as_bevy_editable_text(
         // projected document an automatically focused text field.
         if focusable.is_none() {
             entity_commands.insert((
-                UiFocusable {
-                    order: node_id.index,
-                    enabled: enabled.0,
-                },
+                UiFocusable,
                 TabIndex(i32::try_from(node_id.index).unwrap_or(i32::MAX)),
             ));
         }
@@ -121,6 +117,7 @@ pub(super) fn initialize_authored_text_edits_as_bevy_editable_text(
 /// with UI's canonical interaction gate before pending edits are applied.
 pub(super) fn discard_pending_edits_and_focus_from_disabled_text_edits(
     mut input_focus: ResMut<InputFocus>,
+    context: super::active_authored_ui_context::ActiveAuthoredUiContext,
     mut edits: Query<
         (
             Entity,
@@ -132,11 +129,12 @@ pub(super) fn discard_pending_edits_and_focus_from_disabled_text_edits(
             Changed<UiInteractionEnabled>,
             Changed<InheritedVisibility>,
             Changed<EditableText>,
+            Added<bevy::ui::InteractionDisabled>,
         )>,
     >,
 ) {
     for (entity, enabled, visibility, mut edit) in &mut edits {
-        if !enabled.0 || !visibility.get() {
+        if !enabled.0 || !visibility.get() || !context.enabled(entity) {
             edit.pending_edits.clear();
             edit.pending_paste = None;
             if input_focus.get() == Some(entity) {
@@ -152,10 +150,11 @@ pub(super) fn discard_pending_edits_and_focus_from_disabled_text_edits(
 pub(super) fn dispatch_authored_change_activation_after_bevy_text_edit(
     change: On<bevy::text::TextEditChange>,
     edits: Query<&UiInteractionEnabled, With<UiTextEditPolicy>>,
+    context: super::active_authored_ui_context::ActiveAuthoredUiContext,
     mut activated: MessageWriter<UiNodeActivated>,
 ) {
     let node = change.event_target();
-    if !edits.get(node).is_ok_and(|enabled| enabled.0) {
+    if !edits.contains(node) || !context.visible_and_enabled(node) {
         return;
     }
     activated.write(UiNodeActivated {

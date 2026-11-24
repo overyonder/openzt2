@@ -99,18 +99,22 @@ pub(super) fn watch_animals_for_current_view_actions(
         let viewing = viewing.filter(|viewing| {
             viewing.area == task.target() && viewing.task_execution_id == Some(task.execution_id)
         });
+        let nearest_visible_animal = || {
+            animals
+                .iter()
+                .filter(|(animal, ..)| in_view(*animal))
+                .min_by(|(_, left, ..), (_, right, ..)| {
+                    left.translation()
+                        .xz()
+                        .distance_squared(origin)
+                        .total_cmp(&right.translation().xz().distance_squared(origin))
+                })
+                .map(|(animal, ..)| animal)
+        };
         match viewing {
             None => {
-                let nearest = animals
-                    .iter()
-                    .filter(|(animal, ..)| in_view(*animal))
-                    .min_by(|(_, left, ..), (_, right, ..)| {
-                        left.translation()
-                            .xz()
-                            .distance_squared(origin)
-                            .total_cmp(&right.translation().xz().distance_squared(origin))
-                    });
-                let (Some((subject, ..)), GuestPhase::Visiting) = (nearest, phase) else {
+                let (Some(subject), GuestPhase::Visiting) = (nearest_visible_animal(), phase)
+                else {
                     mark_behavior_task_for_failure_and_stop_navigation(guest, &mut commands);
                     continue;
                 };
@@ -127,7 +131,18 @@ pub(super) fn watch_animals_for_current_view_actions(
                     meter.remaining -= time.delta_secs() * definition.view_meter_decay_per_second;
                     completed
                 });
-                if watched || !in_view(viewing.subject) {
+                let subject_visible = in_view(viewing.subject);
+                if !watched && !subject_visible && action.retarget == Some(true) {
+                    if let Some(subject) = nearest_visible_animal() {
+                        commands.entity(guest).insert(Viewing {
+                            subject,
+                            started_tick: clock.tick,
+                            ..*viewing
+                        });
+                        continue;
+                    }
+                }
+                if watched || !subject_visible {
                     commands
                         .entity(guest)
                         .remove::<(Viewing, BehaviorViewingProgress)>();

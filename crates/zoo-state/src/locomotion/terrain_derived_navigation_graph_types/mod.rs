@@ -1,6 +1,6 @@
 use crate::locomotion::locomotion_types::NavFlags;
 use bevy::prelude::*;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Pathfinding graph derived from the selected terrain grid and refreshed
 /// from authoritative terrain samples after edits.
@@ -13,25 +13,38 @@ pub struct TerrainDerivedNavigationGraph {
     pub navigation_nodes: Box<[TerrainDerivedNavigationGraphNode]>,
     pub(super) terrain_neighbors: Box<[[u32; 4]]>,
     pub(super) terrain_centres_xz: Box<[[i32; 2]]>,
-    pub(super) path_surfaces: Vec<NavigationPathSurface>,
+
     pub(super) path_surface_edges: BTreeMap<u32, Vec<TerrainDerivedNavigationGraphEdge>>,
-    pub(super) path_surfaces_by_cell: BTreeMap<[u32; 2], Vec<u32>>,
-    pub(super) ground_path_nodes: Vec<u32>,
+    pub(super) path_surfaces: Vec<Option<NavigationPathSurface>>,
+    pub(super) available_path_slots: BTreeSet<usize>,
+    pub(super) elevated_path_nodes: BTreeMap<Entity, u32>,
+    pub(super) path_surfaces_by_cell: BTreeMap<[u32; 2], BTreeMap<Entity, u32>>,
+    pub(super) path_nodes_by_edge: BTreeMap<PathEdgeKey, BTreeSet<u32>>,
+    pub(super) ground_cells_by_path: BTreeMap<Entity, Box<[u32]>>,
+    pub(super) ground_path_count_by_node: BTreeMap<u32, usize>,
 }
 
 /// Geometry projected from a path entity into the navigation graph.
 #[derive(Debug, Clone, PartialEq)]
 pub struct NavigationPathSurface {
     pub(super) entity: Entity,
-    pub(super) transform: GlobalTransform,
-    pub(super) width_m: f32,
-    pub(super) height_cm: [i16; 5],
+    pub(super) centre: Vec3,
+    pub(super) corners: [Vec3; 4],
     pub(super) node: TerrainDerivedNavigationGraphNode,
 }
 
+pub(super) type PathEdgeKey = ([i32; 3], [i32; 3]);
+
+#[derive(Component, Debug, Clone, PartialEq)]
+pub enum NavigationPathGeometry {
+    Ground(NavigationPathSurface),
+    Elevated(NavigationPathSurface),
+}
+
+#[derive(Default)]
 pub struct NavigationPathSurfaceChanges {
-    pub ground: bool,
-    pub elevated: bool,
+    pub ground_nodes: BTreeSet<u32>,
+    pub elevated_nodes: BTreeSet<u32>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

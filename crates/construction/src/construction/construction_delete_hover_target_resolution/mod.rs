@@ -1,3 +1,4 @@
+use super::transport_spatial_picking::TransportSpatialPicking;
 use bevy::camera::primitives::Aabb;
 use bevy::ecs::system::SystemParam;
 use bevy::picking::mesh_picking::ray_cast::{RayCastBackfaces, SimplifiedMesh};
@@ -40,9 +41,9 @@ pub(super) struct DeleteTargetChanges<'w, 's> {
         's,
         Entity,
         (
-            With<Aabb>,
-            Or<(With<Mesh3d>, With<Mesh2d>, With<SimplifiedMesh>)>,
+            With<ConstructionPickableMesh>,
             Or<(
+                Changed<ConstructionPickableMesh>,
                 Changed<Aabb>,
                 Changed<GlobalTransform>,
                 Changed<ChildOf>,
@@ -78,23 +79,117 @@ pub(super) struct DeleteTargetChanges<'w, 's> {
 #[derive(Message)]
 pub(super) struct ConstructionPickableDiscarded;
 
-pub(super) fn notify_discarded_placeable_pick_mesh(
-    discarded: On<
-        Discard<(
-            ChildOf,
-            Mesh3d,
-            Mesh2d,
-            SimplifiedMesh,
-            Aabb,
-            RayCastBackfaces,
-        )>,
-    >,
+#[derive(Component, PartialEq)]
+pub(super) struct ConstructionPickableMesh(Entity);
+
+#[derive(Message)]
+pub(super) struct ConstructionPickableMeshChanged {
+    entity: Entity,
+    descendants: bool,
+}
+
+pub(super) fn notify_added_placeable_pick_mesh(
+    inserted: On<Insert<(Mesh3d, Mesh2d, SimplifiedMesh, Aabb)>>,
     parents: Query<&ChildOf>,
     placeables: Query<(), With<PlacedObjectDefinitionReference>>,
-    mut changed: MessageWriter<ConstructionPickableDiscarded>,
+    mut changed: MessageWriter<ConstructionPickableMeshChanged>,
+) {
+    if placeable_ancestor(inserted.entity, &parents, &placeables).is_some() {
+        changed.write(ConstructionPickableMeshChanged {
+            entity: inserted.entity,
+            descendants: false,
+        });
+    }
+}
+
+pub(super) fn notify_changed_placeable_pick_hierarchy(
+    inserted: On<Insert<(ChildOf, PlacedObjectDefinitionReference)>>,
+    parents: Query<&ChildOf>,
+    placeables: Query<(), With<PlacedObjectDefinitionReference>>,
+    mut changed: MessageWriter<ConstructionPickableMeshChanged>,
+) {
+    if placeable_ancestor(inserted.entity, &parents, &placeables).is_some() {
+        changed.write(ConstructionPickableMeshChanged {
+            entity: inserted.entity,
+            descendants: true,
+        });
+    }
+}
+
+pub(super) fn notify_discarded_placeable_pick_mesh(
+    discarded: On<Discard<(Mesh3d, Mesh2d, SimplifiedMesh, Aabb, RayCastBackfaces)>>,
+    pickable: Query<(), With<ConstructionPickableMesh>>,
+    mut changed: MessageWriter<ConstructionPickableMeshChanged>,
+    mut invalidated: MessageWriter<ConstructionPickableDiscarded>,
+) {
+    if pickable.contains(discarded.entity) {
+        invalidated.write(ConstructionPickableDiscarded);
+        changed.write(ConstructionPickableMeshChanged {
+            entity: discarded.entity,
+            descendants: false,
+        });
+    }
+}
+
+pub(super) fn notify_discarded_placeable_pick_hierarchy(
+    discarded: On<Discard<(ChildOf, PlacedObjectDefinitionReference)>>,
+    parents: Query<&ChildOf>,
+    placeables: Query<(), With<PlacedObjectDefinitionReference>>,
+    mut changed: MessageWriter<ConstructionPickableMeshChanged>,
+    mut invalidated: MessageWriter<ConstructionPickableDiscarded>,
 ) {
     if placeable_ancestor(discarded.entity, &parents, &placeables).is_some() {
-        changed.write(ConstructionPickableDiscarded);
+        invalidated.write(ConstructionPickableDiscarded);
+        changed.write(ConstructionPickableMeshChanged {
+            entity: discarded.entity,
+            descendants: true,
+        });
+    }
+}
+
+pub(super) fn bind_construction_pickable_meshes(
+    mut changes: MessageReader<ConstructionPickableMeshChanged>,
+    children: Query<&Children>,
+    parents: Query<&ChildOf>,
+    placeables: Query<(), With<PlacedObjectDefinitionReference>>,
+    geometry: Query<
+        (),
+        (
+            With<Aabb>,
+            Or<(With<Mesh3d>, With<Mesh2d>, With<SimplifiedMesh>)>,
+        ),
+    >,
+    mut meshes: Query<&mut ConstructionPickableMesh>,
+    mut commands: Commands,
+) {
+    let mut dirty = bevy::ecs::entity::EntityHashSet::default();
+    for change in changes.read() {
+        dirty.insert(change.entity);
+        if change.descendants {
+            dirty.extend(children.iter_descendants(change.entity));
+        }
+    }
+    for entity in dirty {
+        let owner = geometry
+            .contains(entity)
+            .then(|| placeable_ancestor(entity, &parents, &placeables))
+            .flatten();
+        match (owner, meshes.get_mut(entity)) {
+            (Some(owner), Ok(mut mesh)) => {
+                mesh.set_if_neq(ConstructionPickableMesh(owner));
+            }
+            (Some(owner), Err(_)) => {
+                commands
+                    .entity(entity)
+                    .try_insert(ConstructionPickableMesh(owner));
+            }
+            (None, Ok(_)) => {
+                commands
+                    .entity(entity)
+                    .try_remove::<ConstructionPickableMesh>();
+            }
+            (None, Err(_)) => {}
+        }
     }
 }
 
@@ -123,8 +218,7 @@ pub(super) fn update_delete_hover_target(
     mut commands: Commands,
     tool: Res<ConstructionTool>,
     mut mesh_ray_cast: MeshRayCast,
-    parents: Query<&ChildOf>,
-    placeables: Query<(), With<PlacedObjectDefinitionReference>>,
+    pickable_meshes: Query<&ConstructionPickableMesh>,
     mut cursors: Query<(
         Entity,
         Ref<ConstructionCursor>,
@@ -144,7 +238,7 @@ pub(super) fn update_delete_hover_target(
         TrackIncidence,
         TransportPickBounds,
     ),
-    mut changes: DeleteTargetChanges,
+    (mut changes, spatial): (DeleteTargetChanges, TransportSpatialPicking),
 ) {
     let removed = !changes.discarded.is_empty();
     changes.discarded.clear();
@@ -168,10 +262,7 @@ pub(super) fn update_delete_hover_target(
                 && changes.routes.is_empty()
                 && changes.towers.is_empty()
                 && changes.placeables.is_empty()
-                && !changes
-                    .meshes
-                    .iter()
-                    .any(|entity| placeable_ancestor(entity, &parents, &placeables).is_some())))
+                && changes.meshes.is_empty()))
     {
         return;
     }
@@ -180,13 +271,12 @@ pub(super) fn update_delete_hover_target(
         .flatten()
         .and_then(|ray| {
             // Against meshes, as selection is: trees and plants have no colliders.
-            let filter = |entity| placeable_ancestor(entity, &parents, &placeables).is_some();
+            let filter = |entity| pickable_meshes.contains(entity);
             mesh_ray_cast
                 .cast_ray(ray, &MeshRayCastSettings::default().with_filter(&filter))
                 .first()
-                .map(|(hit, _)| *hit)
+                .and_then(|(hit, _)| pickable_meshes.get(*hit).ok().map(|mesh| mesh.0))
         })
-        .and_then(|hit| placeable_ancestor(hit, &parents, &placeables))
         .or_else(|| {
             (*tool == ConstructionTool::Delete && cursor.over_terrain)
                 .then(|| {
@@ -200,8 +290,11 @@ pub(super) fn update_delete_hover_target(
                 .then_some(ray.0)
                 .flatten()
                 .and_then(|ray| {
+                    let mut candidates = bevy::ecs::entity::EntityHashSet::default();
+                    spatial.extend_along_ray(member.root, ray, 3.0, &mut candidates);
                     nearest_sky_tower(
                         ray,
+                        candidates,
                         &sky_towers,
                         &sky_routes,
                         &track_incidence,
@@ -212,7 +305,15 @@ pub(super) fn update_delete_hover_target(
         })
         .or_else(|| {
             (*tool == ConstructionTool::Delete && cursor.over_terrain)
-                .then(|| nearest_track_piece(cursor.world.xz(), &track_pieces, &routes, &sales))
+                .then(|| {
+                    nearest_track_piece(
+                        cursor.world.xz(),
+                        spatial.nearby(member.root, cursor.world.xz(), 8.0),
+                        &track_pieces,
+                        &routes,
+                        &sales,
+                    )
+                })
                 .flatten()
         });
     match (previous, target) {
@@ -260,6 +361,7 @@ fn nearest_fence(point: Vec2, topology: &TopologyIndex, grid: TopologyGrid) -> O
 /// whose span the sale can remove.
 fn nearest_sky_tower(
     ray: Ray3d,
+    candidates: bevy::ecs::entity::EntityHashSet,
     towers: &Query<(Entity, &GlobalTransform), With<TransportTrackJunction>>,
     routes: &Query<&TrackProfile, With<TrackSegment>>,
     incidence: &TrackIncidence,
@@ -267,7 +369,8 @@ fn nearest_sky_tower(
     sales: &TransportTrackSaleQueries,
 ) -> Option<Entity> {
     towers
-        .iter()
+        .iter_many(candidates)
+        .filter_map(Result::ok)
         .filter_map(|(entity, _)| {
             let distance = bounds.hit_distance(entity, ray)?;
             incidence
@@ -286,12 +389,14 @@ fn nearest_sky_tower(
 
 fn nearest_track_piece(
     point: Vec2,
+    candidates: bevy::ecs::entity::EntityHashSet,
     pieces: &Query<(Entity, &TransportTrackConstructionPiece)>,
     routes: &Query<&TrackSegment>,
     sales: &TransportTrackSaleQueries,
 ) -> Option<Entity> {
     pieces
-        .iter()
+        .iter_many(candidates)
+        .filter_map(Result::ok)
         .filter_map(|(entity, piece)| {
             let route = routes.get(piece.route_segment).ok()?;
             let index = usize::from(piece.piece_index);

@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Component)]
 #[relationship(relationship_target = StageShowAudience)]
+#[require(GuestShowExperience)]
 pub(super) struct GuestWatchingStage {
     #[relationship]
     pub(super) stage: Entity,

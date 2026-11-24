@@ -42,7 +42,7 @@ pub(super) struct FenceConstructionPreviewPresentationSegment {
 
 #[derive(Component)]
 #[relationship(relationship_target = FencePreviewSegments)]
-pub(super) struct FencePreviewSegmentOf(Entity);
+pub(super) struct FencePreviewSegmentOf(pub(super) Entity);
 
 #[derive(Component)]
 #[relationship_target(relationship = FencePreviewSegmentOf, linked_spawn)]

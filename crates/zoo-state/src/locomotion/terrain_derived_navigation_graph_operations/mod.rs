@@ -18,8 +18,7 @@ impl TerrainDerivedNavigationGraph {
         self.navigation_nodes
             .get(navigation_node as usize)
             .or_else(|| {
-                self.path_surfaces
-                    .get((navigation_node as usize).checked_sub(self.navigation_nodes.len())?)
+                self.path_surface_at_node(navigation_node)
                     .map(|surface| &surface.node)
             })
     }
@@ -84,7 +83,7 @@ impl TerrainDerivedNavigationGraph {
                 self.path_surfaces_by_cell
                     .get(&cell)
                     .into_iter()
-                    .flatten()
+                    .flat_map(std::collections::BTreeMap::values)
                     .copied()
                     .filter(move |node| {
                         self.calculate_terrain_cell_for_navigation_node(*node) == Some(cell)
@@ -119,11 +118,8 @@ impl TerrainDerivedNavigationGraph {
         &self,
         navigation_node: u32,
     ) -> Option<[i32; 3]> {
-        if let Some(surface) = (navigation_node as usize)
-            .checked_sub(self.navigation_nodes.len())
-            .and_then(|index| self.path_surfaces.get(index))
-        {
-            let position = surface.centre();
+        if let Some(surface) = self.path_surface_at_node(navigation_node) {
+            let position = surface.centre;
             return Some(
                 position
                     .to_array()
@@ -175,11 +171,8 @@ impl TerrainDerivedNavigationGraph {
         &self,
         navigation_node: u32,
     ) -> Option<[u32; 2]> {
-        if let Some(surface) = (navigation_node as usize)
-            .checked_sub(self.navigation_nodes.len())
-            .and_then(|index| self.path_surfaces.get(index))
-        {
-            return self.terrain_cell_at_world_position(surface.centre());
+        if let Some(surface) = self.path_surface_at_node(navigation_node) {
+            return self.terrain_cell_at_world_position(surface.centre);
         }
         let terrain_cells_per_tile = u32::from(self.terrain_cells_per_tile);
         let navigation_nodes_per_tile = terrain_cells_per_tile.checked_pow(2)?;

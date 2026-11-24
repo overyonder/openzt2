@@ -50,13 +50,31 @@ pub(super) fn request_sky_tower_rider_navigation_to_authored_endpoint(
 
 pub(super) fn hydrate_sky_tower_endpoints(
     mut commands: Commands,
-    towers: Query<(Entity, &SkyTowerHeight, &Transform), Added<SkyTowerHeight>>,
+    towers: Query<
+        (Entity, &SkyTowerHeight, &GlobalTransform, Option<&Children>),
+        Changed<SkyTowerHeight>,
+    >,
+    mut endpoints: Query<(&SkyTowerEndpoint, &mut Transform)>,
 ) {
-    for (tower, height, transform) in &towers {
+    for (tower, height, transform, children) in &towers {
         for (end, local) in [
             (SkyTowerEndpoint::Lower, Vec3::ZERO),
             (SkyTowerEndpoint::Upper, Vec3::Y * height.0),
         ] {
+            if let Some(endpoint) = children
+                .into_iter()
+                .flat_map(|children| children.iter())
+                .find(|&child| {
+                    endpoints
+                        .get(child)
+                        .is_ok_and(|(endpoint, _)| *endpoint == end)
+                })
+            {
+                if let Ok((_, mut pose)) = endpoints.get_mut(endpoint) {
+                    pose.set_if_neq(Transform::from_translation(local));
+                }
+                continue;
+            }
             commands.spawn((
                 end,
                 Transform::from_translation(local),

@@ -14,6 +14,7 @@ pub(super) struct EnvironmentVoiceGain(pub(super) f32);
 
 #[derive(Component)]
 pub(super) struct StageAmbiencePlayback {
+    uses_biome: bool,
     stage: AssetId,
     flags: u8,
     owner: Option<Entity>,
@@ -26,6 +27,21 @@ pub(super) struct StageAmbienceCrossfade {
     incoming: Option<Entity>,
     outgoing_gain: f32,
     incoming_stage: AssetId,
+    biome_from: f32,
+    biome_to: f32,
+}
+
+impl StageAmbienceCrossfade {
+    pub(super) fn outside_voice_gain(&self) -> f32 {
+        1.0 - self.timer.fraction()
+    }
+}
+
+#[derive(Component, Clone, Copy, PartialEq)]
+pub(super) struct BiomeAmbienceMix {
+    pub(super) gain: f32,
+    pub(super) schedules_cues: bool,
+    pub(super) active: bool,
 }
 
 #[derive(Component)]
@@ -43,6 +59,7 @@ pub(super) fn select_listener_stage_ambience(
         &ListenerAudioEnvironment,
         Option<&mut StageAmbiencePlayback>,
         Option<&mut StageAmbienceCrossfade>,
+        Option<&mut BiomeAmbienceMix>,
     )>,
     gains: Query<&EnvironmentVoiceGain>,
     mut requests: MessageWriter<ProducedAudioRequest<WATER_STAGE>>,
@@ -63,7 +80,7 @@ pub(super) fn select_listener_stage_ambience(
         })
         .unwrap_or_default();
     let mut worlds = worlds.iter_many_mut(candidates).matched();
-    while let Some((world, environment, playback, transition)) = worlds.fetch_next() {
+    while let Some((world, environment, playback, transition, biome_mix)) = worlds.fetch_next() {
         let stage = view.stage(environment.stage);
         let flags = stage.map_or(0, |stage| stage.flags);
         if !refresh
@@ -75,8 +92,29 @@ pub(super) fn select_listener_stage_ambience(
         }
         let outgoing = playback.as_ref().and_then(|playback| playback.owner);
         let previous_flags = playback.as_ref().map_or(0, |playback| playback.flags);
-        let keep_ambience = flags & STAGE_KEEP_AMBIENCE != 0;
+        let default_stage = environment.stage == AssetId::from_key("audio-stage:default");
+        let keep_ambience = !default_stage && flags & STAGE_KEEP_AMBIENCE != 0;
+        let used_biome = playback.as_ref().is_none_or(|playback| playback.uses_biome);
+        let uses_biome = if keep_ambience {
+            used_biome
+        } else {
+            default_stage
+        };
         let fades = !duration.is_zero() && (previous_flags | flags) & STAGE_INDOOR_OCCLUSION != 0;
+        let biome_from = biome_mix.as_ref().map_or(1.0, |mix| mix.gain);
+        let biome_to = if uses_biome { 1.0 } else { 0.0 };
+        if !keep_ambience || biome_mix.is_none() {
+            let next = BiomeAmbienceMix {
+                gain: if fades { biome_from } else { biome_to },
+                schedules_cues: uses_biome && (!fades || biome_from == biome_to),
+                active: uses_biome || (fades && biome_from > 0.0),
+            };
+            if let Some(mut mix) = biome_mix {
+                mix.set_if_neq(next);
+            } else {
+                commands.entity(world).try_insert(next);
+            }
+        }
         let mut owner = outgoing;
         if !keep_ambience {
             if let Some(previous) = transition
@@ -111,6 +149,8 @@ pub(super) fn select_listener_stage_ambience(
                         .and_then(|owner| gains.get(owner).ok())
                         .map_or(1.0, |gain| gain.0),
                     incoming_stage: environment.stage,
+                    biome_from,
+                    biome_to,
                 };
                 if let Some(mut transition) = transition {
                     *transition = next;
@@ -127,6 +167,7 @@ pub(super) fn select_listener_stage_ambience(
             }
         }
         let next = StageAmbiencePlayback {
+            uses_biome,
             stage: environment.stage,
             flags,
             owner,
@@ -144,12 +185,18 @@ pub(super) fn advance_listener_stage_crossfades(
     time: Res<Time>,
     assets: Res<Assets<AudioAsset>>,
     catalogue: Res<AudioAssets>,
-    mut transitions: Query<(Entity, &mut StageAmbienceCrossfade)>,
+    mut transitions: Query<(Entity, &mut StageAmbienceCrossfade, &mut BiomeAmbienceMix)>,
     mut gains: Query<&mut EnvironmentVoiceGain>,
     mut requests: MessageWriter<ProducedAudioRequest<WATER_STAGE>>,
 ) {
-    for (root, mut transition) in &mut transitions {
+    for (root, mut transition, mut biome) in &mut transitions {
         let fraction = transition.timer.tick(time.delta()).fraction();
+        biome.set_if_neq(BiomeAmbienceMix {
+            gain: transition.biome_from + (transition.biome_to - transition.biome_from) * fraction,
+            schedules_cues: transition.biome_to == 1.0 && transition.timer.is_finished(),
+            active: transition.biome_to > 0.0
+                || (transition.biome_from > 0.0 && !transition.timer.is_finished()),
+        });
         if let Some(mut outgoing) = transition
             .outgoing
             .and_then(|entity| gains.get_mut(entity).ok())

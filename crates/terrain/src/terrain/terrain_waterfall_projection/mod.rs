@@ -1,3 +1,4 @@
+use super::terrain_water_renderer_targets::WaterCaptureAge;
 use crate::terrain::{
     terrain_change_tracking_types::TerrainDirty,
     terrain_water_mesh_construction::{
@@ -24,7 +25,6 @@ use openzt2_zoo_state::terrain::{
     terrain_chunk_presentation_types::TerrainRenderChunk,
     terrain_chunk_types::{EditedTerrainSamples, TerrainChunk},
     terrain_water_presentation_types::{TerrainWaterMembershipIndex, TerrainWaterRegionQuery},
-    terrain_water_renderer_types::AuthoredTerrainWaterRendererTargets,
 };
 
 #[derive(Component)]
@@ -163,7 +163,7 @@ pub(super) fn publish_terrain_waterfall_draws(
     mut materials: ResMut<Assets<EffectPassMaterial>>,
     mut buffers: ResMut<Assets<ShaderBuffer>>,
     mut meshes: ResMut<Assets<Mesh>>,
-    renderer: Query<&AuthoredTerrainWaterRendererTargets>,
+    renderer: Query<&WaterCaptureAge>,
     chunks: Query<
         (
             Entity,
@@ -237,7 +237,7 @@ pub(super) fn publish_terrain_waterfall_draws(
             &mut buffers,
             &mut meshes,
             Some(&templates),
-            renderer.elapsed_seconds,
+            renderer.0.elapsed_secs(),
             entity,
             geometry.0.clone(),
             &mut draws,

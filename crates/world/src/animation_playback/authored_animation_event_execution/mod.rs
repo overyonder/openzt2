@@ -1,48 +1,8 @@
-use bevy::prelude::*;
-use openzt2_game_assets::animation::animation_set_asset_types::{
-    AnimationClipSourceAsset, AnimationTimelineKey,
-};
-use openzt2_world_state::animation_playback::animation_playback_controller_types::{
-    AnimationPlaybackController, RetainedAnimationClipSource,
-};
-
-use super::authored_animation_text_action_execution_context::AuthoredAnimationTextActionExecutionContext;
 use super::player_clock_lanes::AnimationPlaybackInterval;
+use openzt2_game_assets::animation::animation_set_asset_types::AnimationTimelineKey;
 
-pub(super) fn execute_crossed_authored_animation_events<const REAL_TIME: bool>(
-    mut intervals: MessageReader<AnimationPlaybackInterval<REAL_TIME>>,
-    sources: Res<Assets<AnimationClipSourceAsset>>,
-    mut controllers: Query<(
-        &mut AnimationPlaybackController,
-        &RetainedAnimationClipSource,
-    )>,
-    mut actions: AuthoredAnimationTextActionExecutionContext<REAL_TIME>,
-) {
-    for step in intervals.read() {
-        let Ok((mut controller, source)) = controllers.get_mut(step.controller) else {
-            continue;
-        };
-        if controller.playback_generation != step.generation {
-            continue;
-        }
-        let Some(source) = sources.get(&source.0) else {
-            continue;
-        };
-        visit_interval(step, &source.timeline, &mut |key| {
-            for command in &key.commands {
-                actions.execute_one_crossed_authored_animation_text_command(
-                    step.controller,
-                    &mut controller,
-                    key.milliseconds,
-                    command,
-                );
-            }
-        });
-    }
-}
-
-fn visit_interval<const REAL_TIME: bool>(
-    step: &AnimationPlaybackInterval<REAL_TIME>,
+pub(super) fn visit_interval(
+    step: &AnimationPlaybackInterval,
     keys: &[AnimationTimelineKey],
     visit: &mut impl FnMut(&AnimationTimelineKey),
 ) {

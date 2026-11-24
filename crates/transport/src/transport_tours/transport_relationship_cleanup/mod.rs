@@ -3,7 +3,7 @@ use bevy::prelude::*;
 use openzt2_zoo_state::{
     locomotion::locomotion_types::LocomotionMode,
     transport_tours::{
-        tour_scoring_types::{TourObservationCadence, TourObservationMemory, TourScore},
+        tour_scoring_types::{TourObservationMemory, TourScore},
         transport_circuit_types::{CircuitMember, CircuitMembers, TransportCircuit},
         transport_rider_types::*,
         transport_topology_types::{TrackEnd, TrackSegment, TrackStart, TransportStation},
@@ -189,7 +189,7 @@ fn return_rider_to_ground(
         TransportSeatRider,
         TourScore,
         TourObservationMemory,
-        TourObservationCadence,
+        super::tour_view_scoring::TourObservationDwell,
         PlayerRidingSeatIndex,
     )>();
 }

@@ -4,7 +4,6 @@ use openzt2_game_data::AssetId;
 use openzt2_zoo_state::guests::guest_simulation_types::Guest;
 
 use crate::transport_tours::transport_relationship_cleanup;
-use openzt2_zoo_state::transport_tours::tour_scoring_types::TourObservationCadence;
 use openzt2_zoo_state::transport_tours::tour_scoring_types::TourObservationMemory;
 use openzt2_zoo_state::transport_tours::tour_scoring_types::TourScore;
 use openzt2_zoo_state::transport_tours::transport_rider_types::TransportRider;
@@ -43,7 +42,7 @@ fn removing_transport_vehicle_clears_every_rider_relationship() {
             ),
             TourScore::default(),
             TourObservationMemory::default(),
-            TourObservationCadence::default(),
+            TourObservationDwell::default(),
         ))
         .id();
     application.update();

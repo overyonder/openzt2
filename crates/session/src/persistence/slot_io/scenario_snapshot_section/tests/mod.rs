@@ -45,7 +45,6 @@ fn initialize_world() -> (World, Entity, AssetId, [AssetId; 2]) {
     scenarios.index_test_document(handle.clone(), &document);
     world.insert_resource(assets);
     world.insert_resource(scenarios);
-    world.insert_non_send(ScenarioLuaVirtualMachineContexts::default());
     let root = world
         .spawn((
             WorldRoot {

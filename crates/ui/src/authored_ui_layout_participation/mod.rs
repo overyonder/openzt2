@@ -1,7 +1,8 @@
-use bevy::prelude::*;
+use bevy::{ecs::entity::EntityHashSet, prelude::*};
 use openzt2_interface_state::immersive_modes::immersive_mode_state_types::{
     ActiveImmersiveMode, ImmersiveHudSuppression, ImmersiveMode,
 };
+use openzt2_interface_state::ui::authored_ui_node_projection_components::UiEdgePanSurface;
 
 #[derive(Component)]
 pub(super) struct UiOverheadOnly;
@@ -32,28 +33,69 @@ impl UiAuthoredLayoutDisplay {
     }
 }
 
-/// Keeps source show/hide semantics on Bevy's layout boundary.
-///
-/// `Visibility::Hidden` alone only suppresses rendering; Taffy would still
-/// measure every closed source window and every descendant. The authored
-/// display mode is interaction state for the projected node, while Bevy's
-/// `Node` remains the sole live layout owner.
-pub(super) fn synchronize_authored_visibility_with_bevy_layout_participation(
-    mut nodes: Query<
+#[allow(clippy::type_complexity)]
+pub(super) fn project_authored_layout_participation(
+    mut nodes: Query<(
+        &Visibility,
+        &UiAuthoredLayoutDisplay,
+        Option<&ChildOf>,
+        Has<UiAuthoredTreeHeader>,
+        Has<UiOverheadOnly>,
+        Option<&UiEdgePanSurface>,
+        &mut Node,
+    )>,
+    changed_nodes: Query<
+        Entity,
         (
-            &Visibility,
-            &UiAuthoredLayoutDisplay,
-            Option<&ChildOf>,
-            Has<UiAuthoredTreeHeader>,
-            Has<UiOverheadOnly>,
-            &mut Node,
+            With<UiAuthoredLayoutDisplay>,
+            Or<(
+                Changed<Visibility>,
+                Changed<UiAuthoredLayoutDisplay>,
+                Changed<ChildOf>,
+                Added<Node>,
+                Added<UiOverheadOnly>,
+                Added<UiAuthoredTreeHeader>,
+                Changed<UiEdgePanSurface>,
+            )>,
         ),
-        Or<(Changed<Visibility>, With<UiOverheadOnly>)>,
     >,
+    mut detached: RemovedComponents<ChildOf>,
+    changed_trees: Query<&Children, (With<UiAuthoredTreeItem>, Changed<UiAuthoredTreeExpansion>)>,
+    mut removed_trees: RemovedComponents<UiAuthoredTreeExpansion>,
+    children: Query<&Children>,
     trees: Query<&UiAuthoredTreeExpansion, With<UiAuthoredTreeItem>>,
+    overhead_nodes: Query<Entity, With<UiOverheadOnly>>,
     suppression: Query<(), With<ImmersiveHudSuppression>>,
+    changed_suppression: Query<
+        (),
+        Or<(Added<ImmersiveHudSuppression>, Changed<ActiveImmersiveMode>)>,
+    >,
     modes: Query<&ActiveImmersiveMode>,
+    mut removed_suppression: RemovedComponents<ImmersiveHudSuppression>,
+    mut removed_modes: RemovedComponents<ActiveImmersiveMode>,
 ) {
+    let mut dirty = EntityHashSet::default();
+    dirty.extend(changed_nodes.iter());
+    dirty.extend(detached.read().filter(|entity| nodes.contains(*entity)));
+    for children in &changed_trees {
+        dirty.extend(children.iter());
+    }
+    for tree in removed_trees.read() {
+        if let Ok(children) = children.get(tree) {
+            dirty.extend(children.iter());
+        }
+    }
+    if !changed_suppression.is_empty()
+        || !removed_suppression.is_empty()
+        || !removed_modes.is_empty()
+    {
+        dirty.extend(overhead_nodes.iter());
+    }
+    removed_suppression.clear();
+    removed_modes.clear();
+    if dirty.is_empty() {
+        return;
+    }
     let suppress_hud = !suppression.is_empty()
         || modes.iter().any(|active| {
             matches!(
@@ -61,23 +103,28 @@ pub(super) fn synchronize_authored_visibility_with_bevy_layout_participation(
                 ImmersiveMode::FirstPerson | ImmersiveMode::SuperStaff
             )
         });
-    for (visibility, authored, parent, header, overhead_only, mut node) in &mut nodes {
-        let collapsed_tree_content = !header
+    for entity in dirty {
+        let Ok((visibility, authored, parent, header, overhead_only, edge_pan, node)) =
+            nodes.get_mut(entity)
+        else {
+            continue;
+        };
+        let collapsed = !header
             && parent.is_some_and(|parent| {
                 trees
                     .get(parent.parent())
                     .is_ok_and(|expanded| !expanded.is_expanded())
             });
-        let display = if matches!(visibility, Visibility::Hidden)
-            || collapsed_tree_content
+        let display = if *visibility == Visibility::Hidden
+            || collapsed
             || overhead_only && suppress_hud
+            || edge_pan.is_some_and(|surface| !surface.0)
         {
             Display::None
         } else {
             authored.authored_display()
         };
-        if node.display != display {
-            node.display = display;
-        }
+        node.map_unchanged(|node| &mut node.display)
+            .set_if_neq(display);
     }
 }

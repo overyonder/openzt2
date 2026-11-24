@@ -60,7 +60,7 @@ impl FromWorld for ParticleDistanceSortPipeline {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable, ShaderType)]
+#[derive(Clone, Copy, PartialEq, Pod, Zeroable, ShaderType)]
 struct DistanceSortParameters {
     world_from_particle: Mat4,
     camera_position: Vec4,
@@ -74,6 +74,14 @@ pub(super) struct ViewParticleSort {
     slab: SlabId,
     metadata: BufferTableId,
     parameters: DistanceSortParameters,
+    uniforms_dirty: bool,
+    compute: Option<DistanceSortComputeBinding>,
+}
+
+struct DistanceSortComputeBinding {
+    buffers: [BufferId; 3],
+    uniforms: Buffer,
+    bindings: BindGroup,
 }
 
 impl ViewParticleSort {
@@ -85,30 +93,13 @@ impl ViewParticleSort {
         draw: &EffectDrawBatch,
         previous: Option<Self>,
     ) -> Option<Self> {
-        let state = batch.effect_data.first()?;
+        let state = batch.effect_data.get(draw.effect_index)?;
         let capacity = batch.capacity.checked_next_power_of_two()?;
         let position = batch.particle_layout.byte_offset(Attribute::POSITION)? / 4;
         let size = u64::from(capacity) * 8;
         if size > u64::from(device.limits().max_storage_buffer_binding_size) {
             return None;
         }
-        let (indices, render_binding) =
-            if let Some(previous) = previous.filter(|previous| previous.indices.size() == size) {
-                (previous.indices, previous.render_binding)
-            } else {
-                let indices = device.create_buffer(&BufferDescriptor {
-                    label: Some("hanabi:distance_sort:indices"),
-                    size,
-                    usage: BufferUsages::STORAGE,
-                    mapped_at_creation: false,
-                });
-                let binding = device.create_bind_group(
-                    "hanabi:bg:distance_sort:draw",
-                    &pipeline.render_layout,
-                    &BindGroupEntries::single(indices.as_entire_binding()),
-                );
-                (indices, binding)
-            };
         let world_from_particle = if batch
             .layout_flags
             .contains(LayoutFlags::LOCAL_SPACE_SIMULATION)
@@ -117,22 +108,44 @@ impl ViewParticleSort {
         } else {
             Mat4::IDENTITY
         };
+        let parameters = DistanceSortParameters {
+            world_from_particle,
+            camera_position: view.world_from_view.translation().extend(0.0),
+            particle_offsets: UVec4::new(
+                state.slab_offset,
+                batch.particle_layout.min_binding_size32().get() / 4,
+                position,
+                0,
+            ),
+            sort_offsets: UVec4::new(0, capacity, 0, 0),
+        };
+        if let Some(mut previous) = previous.filter(|previous| previous.indices.size() == size) {
+            previous.uniforms_dirty |=
+                previous.parameters != parameters || previous.metadata != state.metadata_table_id;
+            previous.parameters = parameters;
+            previous.metadata = state.metadata_table_id;
+            previous.slab = batch.slab_id;
+            return Some(previous);
+        }
+        let indices = device.create_buffer(&BufferDescriptor {
+            label: Some("hanabi:distance_sort:indices"),
+            size,
+            usage: BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        });
+        let render_binding = device.create_bind_group(
+            "hanabi:bg:distance_sort:draw",
+            &pipeline.render_layout,
+            &BindGroupEntries::single(indices.as_entire_binding()),
+        );
         Some(Self {
             indices,
             render_binding,
             slab: batch.slab_id,
             metadata: state.metadata_table_id,
-            parameters: DistanceSortParameters {
-                world_from_particle,
-                camera_position: view.world_from_view.translation().extend(0.0),
-                particle_offsets: UVec4::new(
-                    state.slab_offset,
-                    batch.particle_layout.min_binding_size32().get() / 4,
-                    position,
-                    0,
-                ),
-                sort_offsets: UVec4::new(0, capacity, 0, 0),
-            },
+            parameters,
+            uniforms_dirty: true,
+            compute: None,
         })
     }
 }
@@ -140,11 +153,12 @@ impl ViewParticleSort {
 pub(super) fn sort_particles_for_views(
     mut context: RenderContext,
     device: Res<RenderDevice>,
+    queue: Res<RenderQueue>,
     pipeline_cache: Res<PipelineCache>,
     pipeline: Res<ParticleDistanceSortPipeline>,
-    draws: Res<AuthoredParticleDrawQueue>,
+    mut views: Query<&mut ParticleViewDraws, With<ExtractedView>>,
     effect_cache: Res<EffectCache>,
-    effects: Res<EffectsMeta>,
+    metadata_buffer: Res<ParticleEffectMetadataBuffer>,
 ) {
     let Some(fill) = pipeline_cache.get_compute_pipeline(pipeline.fill) else {
         return;
@@ -152,76 +166,110 @@ pub(super) fn sort_particles_for_views(
     let Some(sort) = pipeline_cache.get_compute_pipeline(pipeline.sort) else {
         return;
     };
-    let Some(metadata) = effects.effect_metadata_buffer.buffer() else {
+    let Some(metadata) = metadata_buffer.0.buffer() else {
         return;
     };
-    let layout = pipeline_cache.get_bind_group_layout(&pipeline.layout);
     let alignment = device.limits().min_uniform_buffer_offset_alignment as usize;
     let stride = std::mem::size_of::<DistanceSortParameters>().next_multiple_of(alignment);
-    for draw in draws.views.values().filter_map(|draw| draw.sort.as_ref()) {
-        let Some(slab) = effect_cache.get_slab(&draw.slab) else {
-            continue;
-        };
-        let mut params = draw.parameters;
-        let metadata_word =
-            draw.metadata.0 * (effects.effect_metadata_buffer.aligned_size() as u32 / 4);
-        params.particle_offsets[3] =
-            metadata_word + (std::mem::offset_of!(GpuEffectMetadata, alive_count) as u32 / 4);
-        params.sort_offsets[0] = metadata_word
-            + (std::mem::offset_of!(GpuEffectMetadata, indirect_write_index) as u32 / 4);
-
-        let mut data = Vec::new();
-        let mut append_parameters = |params: &DistanceSortParameters| {
-            let offset = data.len();
-            data.resize(offset + stride, 0);
-            let bytes = bytemuck::bytes_of(params);
-            data[offset..offset + bytes.len()].copy_from_slice(bytes);
-        };
-        append_parameters(&params);
-        let capacity = params.sort_offsets[1];
-        for stage in 1..=capacity.ilog2() {
-            params.sort_offsets[2] = 1 << stage;
-            for step in (0..stage).rev() {
-                params.sort_offsets[3] = 1 << step;
-                append_parameters(&params);
+    for mut view in &mut views {
+        for draw in view
+            .authored
+            .values_mut()
+            .filter_map(|draw| draw.sort.as_mut())
+        {
+            let Some(slab) = effect_cache.get_slab(&draw.slab) else {
+                continue;
+            };
+            let capacity = draw.parameters.sort_offsets[1];
+            let stages = capacity.ilog2() as usize;
+            let uniform_count = 1 + stages * (stages + 1) / 2;
+            let buffer_ids = [
+                slab.particle_buffer().id(),
+                slab.indirect_index_buffer().id(),
+                metadata.id(),
+            ];
+            if draw
+                .compute
+                .as_ref()
+                .is_none_or(|compute| compute.buffers != buffer_ids)
+            {
+                let uniforms = draw.compute.take().map_or_else(
+                    || {
+                        device.create_buffer(&BufferDescriptor {
+                            label: Some("hanabi:distance_sort:parameters"),
+                            size: (stride * uniform_count) as u64,
+                            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+                            mapped_at_creation: false,
+                        })
+                    },
+                    |compute| compute.uniforms,
+                );
+                let layout = pipeline_cache.get_bind_group_layout(&pipeline.layout);
+                let bindings = device.create_bind_group(
+                    "hanabi:bg:distance_sort:compute",
+                    &layout,
+                    &BindGroupEntries::sequential((
+                        slab.as_entire_binding_particle(),
+                        slab.as_entire_binding_indirect(),
+                        metadata.as_entire_binding(),
+                        draw.indices.as_entire_binding(),
+                        BufferBinding {
+                            buffer: &uniforms,
+                            offset: 0,
+                            size: Some(DistanceSortParameters::min_size()),
+                        },
+                    )),
+                );
+                draw.compute = Some(DistanceSortComputeBinding {
+                    buffers: buffer_ids,
+                    uniforms,
+                    bindings,
+                });
             }
-        }
-        let uniforms = device.create_buffer_with_data(&BufferInitDescriptor {
-            label: Some("hanabi:distance_sort:parameters"),
-            contents: &data,
-            usage: BufferUsages::UNIFORM,
-        });
-        let bindings = device.create_bind_group(
-            "hanabi:bg:distance_sort:compute",
-            &layout,
-            &BindGroupEntries::sequential((
-                slab.as_entire_binding_particle(),
-                slab.as_entire_binding_indirect(),
-                metadata.as_entire_binding(),
-                draw.indices.as_entire_binding(),
-                BufferBinding {
-                    buffer: &uniforms,
-                    offset: 0,
-                    size: Some(DistanceSortParameters::min_size()),
-                },
-            )),
-        );
-        let mut pass = context
-            .command_encoder()
-            .begin_compute_pass(&ComputePassDescriptor {
-                label: Some("hanabi:distance_sort"),
-                ..default()
-            });
-        let workgroups = capacity.div_ceil(64);
-        let workgroups_x = workgroups.min(device.limits().max_compute_workgroups_per_dimension);
-        let workgroups_y = workgroups.div_ceil(workgroups_x);
-        pass.set_pipeline(fill);
-        pass.set_bind_group(0, &bindings, &[0]);
-        pass.dispatch_workgroups(workgroups_x, workgroups_y, 1);
-        pass.set_pipeline(sort);
-        for offset in (stride..data.len()).step_by(stride) {
-            pass.set_bind_group(0, &bindings, &[offset as u32]);
+            let compute = draw.compute.as_ref().unwrap();
+            if draw.uniforms_dirty {
+                let mut params = draw.parameters;
+                let metadata_word = draw.metadata.0 * (metadata_buffer.0.aligned_size() as u32 / 4);
+                params.particle_offsets[3] = metadata_word
+                    + (std::mem::offset_of!(GpuEffectMetadata, alive_count) as u32 / 4);
+                params.sort_offsets[0] = metadata_word
+                    + (std::mem::offset_of!(GpuEffectMetadata, indirect_write_index) as u32 / 4);
+
+                let mut data = Vec::with_capacity(stride * uniform_count);
+                let mut append_parameters = |params: &DistanceSortParameters| {
+                    let offset = data.len();
+                    data.resize(offset + stride, 0);
+                    let bytes = bytemuck::bytes_of(params);
+                    data[offset..offset + bytes.len()].copy_from_slice(bytes);
+                };
+                append_parameters(&params);
+                for stage in 1..=capacity.ilog2() {
+                    params.sort_offsets[2] = 1 << stage;
+                    for step in (0..stage).rev() {
+                        params.sort_offsets[3] = 1 << step;
+                        append_parameters(&params);
+                    }
+                }
+                queue.write_buffer(&compute.uniforms, 0, &data);
+                draw.uniforms_dirty = false;
+            }
+            let mut pass = context
+                .command_encoder()
+                .begin_compute_pass(&ComputePassDescriptor {
+                    label: Some("hanabi:distance_sort"),
+                    ..default()
+                });
+            let workgroups = capacity.div_ceil(64);
+            let workgroups_x = workgroups.min(device.limits().max_compute_workgroups_per_dimension);
+            let workgroups_y = workgroups.div_ceil(workgroups_x);
+            pass.set_pipeline(fill);
+            pass.set_bind_group(0, &compute.bindings, &[0]);
             pass.dispatch_workgroups(workgroups_x, workgroups_y, 1);
+            pass.set_pipeline(sort);
+            for index in 1..uniform_count {
+                pass.set_bind_group(0, &compute.bindings, &[(index * stride) as u32]);
+                pass.dispatch_workgroups(workgroups_x, workgroups_y, 1);
+            }
         }
     }
 }

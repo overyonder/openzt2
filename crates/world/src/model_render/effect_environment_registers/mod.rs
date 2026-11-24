@@ -13,6 +13,27 @@ use openzt2_zoo_state::environment::environment_state_types::{
     AuthoredWindShaderPresentationState, WorldEnvironment,
 };
 
+#[derive(Component, Default, PartialEq)]
+pub(super) struct ProgrammableEnvironmentRegisters(EffectEnvironmentRegisters);
+
+pub(super) fn upload_programmable_environment_registers(
+    registers: Single<Ref<ProgrammableEnvironmentRegisters>>,
+    mut assets: MessageReader<AssetEvent<ShaderBuffer>>,
+    mut buffers: ResMut<Assets<ShaderBuffer>>,
+) {
+    let recreated = assets.read().any(|event| {
+        matches!(*event,
+            AssetEvent::Added { id } if id == EFFECT_ENVIRONMENT_REGISTER_BUFFER.id()
+        )
+    });
+    if !registers.is_changed() && !recreated {
+        return;
+    }
+    if let Some(mut buffer) = buffers.get_mut(EFFECT_ENVIRONMENT_REGISTER_BUFFER.id()) {
+        registers.0.write_shader_buffer(&mut buffer);
+    }
+}
+
 /// The shipped `lightFromRig` lights by `dot(-direction, normal)`: each
 /// direction is the way its light travels, unlike the fixed-function registers.
 pub(super) fn light_rig<'a>(
@@ -50,7 +71,7 @@ fn source_from_world(direction: Vec4) -> Vec4 {
     Vec4::new(direction.x, -direction.z, direction.y, direction.w)
 }
 
-pub(super) fn write_effect_environment_registers(
+pub(super) fn project_effect_environment_registers(
     ambient_light: Res<GlobalAmbientLight>,
     directional_lights: Query<(
         Ref<DirectionalLight>,
@@ -75,8 +96,7 @@ pub(super) fn write_effect_environment_registers(
     mut removed_cameras: RemovedComponents<ZooCamera>,
     mut removed_winds: RemovedComponents<AuthoredWindShaderPresentationState>,
     mut removed_environments: RemovedComponents<WorldEnvironment>,
-    mut previous: Local<Option<EffectEnvironmentRegisters>>,
-    mut buffers: ResMut<Assets<ShaderBuffer>>,
+    mut published: Single<&mut ProgrammableEnvironmentRegisters>,
 ) {
     let removed_light_inputs = (removed_lights.read().count() != 0)
         | (removed_directional_lights
@@ -103,8 +123,8 @@ pub(super) fn write_effect_environment_registers(
     let removed_wind_inputs =
         (removed_winds.read().count() != 0) | (removed_environments.read().count() != 0);
 
-    let mut registers = previous.unwrap_or_default();
-    if previous.is_none()
+    let mut registers = published.0;
+    if published.is_added()
         || removed_light_inputs
         || ambient_light.is_changed()
         || directional_lights
@@ -133,7 +153,7 @@ pub(super) fn write_effect_environment_registers(
             *direction = source_from_world(*direction);
         }
     }
-    if previous.is_none()
+    if published.is_added()
         || removed_fog_inputs
         || fogs
             .iter()
@@ -151,19 +171,15 @@ pub(super) fn write_effect_environment_registers(
     }
     if let Some(wind) = wind {
         let (wind, environment) = wind.into_inner();
-        if previous.is_none() || removed_wind_inputs || wind.is_changed() || environment.is_added()
+        if published.is_added()
+            || removed_wind_inputs
+            || wind.is_changed()
+            || environment.is_added()
         {
             registers.wind = wind.shader_registers();
         }
     } else {
         registers.wind = [Vec4::ZERO; 7];
     }
-    if previous.as_ref() == Some(&registers) {
-        return;
-    }
-    let Some(mut buffer) = buffers.get_mut(EFFECT_ENVIRONMENT_REGISTER_BUFFER.id()) else {
-        return;
-    };
-    registers.write_shader_buffer(&mut buffer);
-    *previous = Some(registers);
+    published.set_if_neq(ProgrammableEnvironmentRegisters(registers));
 }

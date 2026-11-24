@@ -4,8 +4,8 @@ use openzt2_game_assets::world_definitions::{
     world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
 };
 use openzt2_game_data::{
-    world_definitions::animal_shows_and_training::{TrickDefinition, TrickLevel},
     AssetId,
+    world_definitions::animal_shows_and_training::{TrickDefinition, TrickLevel},
 };
 use openzt2_world_state::{
     simulation_time::simulation_clock_types::ZooClock,
@@ -148,19 +148,14 @@ pub(super) fn performance_level<'a>(
         .filter(|level| level.can_perform)
 }
 
-pub(super) fn release_tokens_from_completed_trick_slots(
+pub(super) fn release_tokens_when_running_show_trick_is_removed(
+    removed: On<Remove<RunningShowTrick>>,
+    runs: Query<&ShowTrickTokens>,
     mut commands: Commands,
-    runs: Query<(Option<&RunningShowTrick>, &ShowTrickTokens)>,
-    tokens: Query<&ScheduledTrickToken>,
 ) {
-    for (current, associated_tokens) in &runs {
-        for token in associated_tokens.iter() {
-            if tokens
-                .get(token)
-                .is_ok_and(|token| current.is_none_or(|trick| trick.slot != token.slot))
-            {
-                commands.entity(token).try_despawn();
-            }
+    if let Ok(tokens) = runs.get(removed.entity) {
+        for token in tokens.iter() {
+            commands.entity(token).try_despawn();
         }
     }
 }

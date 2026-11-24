@@ -48,6 +48,104 @@ pub(super) struct UiSliderValuePresentation {
     pub(super) percent_suffix: bool,
 }
 
+#[derive(Component, PartialEq, Eq)]
+#[relationship(relationship_target = SliderValueLabels)]
+pub(super) struct SliderValueLabelFor(Entity);
+
+#[derive(Component)]
+#[relationship_target(relationship = SliderValueLabelFor)]
+pub(super) struct SliderValueLabels(Vec<Entity>);
+
+#[allow(clippy::type_complexity)]
+pub(super) fn bind_authored_slider_value_labels(
+    mut commands: Commands,
+    changed_labels: Query<
+        Entity,
+        (
+            With<UiNodeId>,
+            Or<(
+                Added<Text>,
+                Changed<UiNodeId>,
+                Changed<ChildOf>,
+                Added<crate::authored_ui_text_content_binding::UiTextBinding>,
+            )>,
+        ),
+    >,
+    changed_sliders: Query<Entity, Changed<UiSliderValuePresentation>>,
+    mut unbound_sliders: RemovedComponents<SliderValueLabels>,
+    mut unbound_text: RemovedComponents<crate::authored_ui_text_content_binding::UiTextBinding>,
+    parents: Query<&ChildOf>,
+    children: Query<&Children>,
+    labels: Query<
+        &UiNodeId,
+        (
+            With<Text>,
+            Without<crate::authored_ui_text_content_binding::UiTextBinding>,
+        ),
+    >,
+    sliders: Query<(&UiSliderValuePresentation, Option<&SliderValueLabels>)>,
+) {
+    let mut dirty = bevy::ecs::entity::EntityHashSet::default();
+    dirty.extend(changed_sliders.iter());
+    dirty.extend(unbound_sliders.read());
+    for label in changed_labels.iter().chain(unbound_text.read()) {
+        dirty.extend(
+            parents
+                .iter_ancestors::<ChildOf>(label)
+                .filter(|node| sliders.contains(*node)),
+        );
+    }
+    for slider in dirty {
+        let Ok((policy, current)) = sliders.get(slider) else {
+            continue;
+        };
+        let desired = children
+            .iter_descendants::<Children>(slider)
+            .find(|node| labels.get(*node).is_ok_and(|id| id.id == policy.label));
+        let old = current.and_then(|labels| labels.iter().next());
+        if old == desired {
+            continue;
+        }
+        if let Some(old) = old {
+            commands.entity(old).try_remove::<SliderValueLabelFor>();
+        }
+        if let Some(label) = desired {
+            commands.entity(label).insert(SliderValueLabelFor(slider));
+        }
+    }
+}
+
+pub(super) fn project_authored_slider_value_labels(
+    sliders: Query<(
+        Ref<UiSliderValuePresentation>,
+        Ref<UiValue>,
+        Ref<SliderValueLabels>,
+    )>,
+    mut texts: Query<&mut Text, Without<crate::authored_ui_text_content_binding::UiTextBinding>>,
+) {
+    for (policy, value, labels) in &sliders {
+        if !(policy.is_changed() || value.is_changed() || labels.is_changed()) {
+            continue;
+        }
+        let width = usize::from(policy.minimum_width);
+        let mut formatted = if policy.decimal_places == 0 {
+            format!("{:width$}", value.0)
+        } else {
+            let precision = usize::from(policy.decimal_places);
+            format!("{:width$.precision$}", value.0 as f64)
+        };
+        if policy.percent_suffix {
+            formatted.push('%');
+        }
+        for label in labels.iter() {
+            if let Ok(text) = texts.get_mut(label) {
+                text.map_unchanged(|text| &mut text.0)
+                    .clone_from_if_neq(&formatted);
+            }
+        }
+    }
+}
+
 fn ordered_bounds(minimum: i64, maximum: i64) -> (i64, i64) {
     (minimum.min(maximum), minimum.max(maximum))
 }
@@ -172,54 +270,6 @@ fn value_from_point(
     Some(clamp_and_step(value, policy, minimum, maximum))
 }
 
-/// Formats the slider value using the authored width, precision and percent suffix.
-/// A label bound to game state, such as the starting cash money text, keeps
-/// its binding's formatted value.
-pub(super) fn present_slider_value_labels(
-    sliders: Query<(Entity, &UiSliderValuePresentation, &UiValue)>,
-    children: Query<&Children>,
-    mut labels: Query<
-        (Entity, &UiNodeId, &mut Text),
-        Without<crate::authored_ui_text_content_binding::UiTextBinding>,
-    >,
-) {
-    for (slider, presentation, value) in &sliders {
-        // Search only this slider's own subtree for its label.
-        let Some(label) = children.iter_descendants(slider).find(|candidate| {
-            labels
-                .get(*candidate)
-                .is_ok_and(|(_, id, _)| id.id == presentation.label)
-        }) else {
-            continue;
-        };
-        let Ok((_, _, mut text)) = labels.get_mut(label) else {
-            continue;
-        };
-        let number = if presentation.decimal_places == 0 {
-            format!(
-                "{:width$}",
-                value.0,
-                width = usize::from(presentation.minimum_width)
-            )
-        } else {
-            format!(
-                "{:width$.precision$}",
-                value.0 as f64,
-                width = usize::from(presentation.minimum_width),
-                precision = usize::from(presentation.decimal_places)
-            )
-        };
-        let next = if presentation.percent_suffix {
-            format!("{number}%")
-        } else {
-            number
-        };
-        if text.0 != next {
-            text.0 = next;
-        }
-    }
-}
-
 /// The thumb's layout and inherited transform are still authored. Its slider
 /// supplies only the translation along the authored centre interval.
 #[derive(Component)]
@@ -275,17 +325,76 @@ pub(super) fn apply_slider_bounds(
     }
 }
 
+pub(super) fn project_authored_values_to_native_sliders(
+    mut commands: Commands,
+    sliders: Query<
+        (
+            Entity,
+            &UiSliderPolicy,
+            &UiMinimum,
+            &UiMaximum,
+            &UiValue,
+            &SliderValue,
+            &SliderRange,
+            &SliderStep,
+        ),
+        (
+            With<Slider>,
+            Or<(
+                Changed<UiValue>,
+                Changed<UiMinimum>,
+                Changed<UiMaximum>,
+                Changed<UiSliderPolicy>,
+            )>,
+        ),
+    >,
+) {
+    for (entity, policy, low, high, value, native, range, step) in &sliders {
+        let (low, high) = ordered_bounds(low.0, high.0);
+        let value = SliderValue(value.0 as f32);
+        let limit = SliderRange::new(low as f32, high as f32);
+        let increment = SliderStep(slider_step(policy) as f32);
+        // Bevy's slider components are immutable and their insertion hooks
+        // notify the thumb when the native configuration changes.
+        let mut slider = commands.entity(entity);
+        if range != &limit {
+            slider.insert(limit);
+        }
+        if native != &value {
+            slider.insert(value);
+        }
+        if step != &increment {
+            slider.insert(increment);
+        }
+    }
+}
+
+pub(super) fn accept_slider_value(
+    slider: Entity,
+    value: &mut Mut<UiValue>,
+    next: i64,
+    edits: &mut MessageWriter<UiSliderValueChanged>,
+) {
+    if value.set_if_neq(UiValue(next)) {
+        edits.write(UiSliderValueChanged {
+            slider,
+            value: next,
+        });
+    }
+}
+
 pub(super) fn adjust_focused_sliders(
     mut actions: MessageReader<ActionRequest>,
     focus: Res<InputFocus>,
     context: crate::active_authored_ui_context::ActiveAuthoredUiContext,
+    scope: Res<crate::active_authored_ui_context::AuthoredFocusScope>,
     sliders: Query<(&UiSliderPolicy, Option<&ScrollsViewport>, Has<Slider>)>,
     mut slider_input: MessageWriter<UiSliderValueChanged>,
     mut values: Query<(&UiMinimum, &UiMaximum, &mut UiValue)>,
     mut scrolls: Query<(&ComputedNode, &mut ScrollPosition)>,
 ) {
-    let root = context.active_scope();
-    let modal = context.top_modal();
+    let root = scope.document;
+    let modal = scope.modal;
     for request in actions.read() {
         let Some((focused, _)) = focus
             .get()
@@ -333,54 +442,7 @@ pub(super) fn adjust_focused_sliders(
             );
         } else if let Ok((minimum, maximum, mut value)) = values.get_mut(focused) {
             let next = stepped_value(value.0, direction, policy, minimum.0, maximum.0);
-            if value.set_if_neq(UiValue(next)) {
-                slider_input.write(UiSliderValueChanged {
-                    slider: focused,
-                    value: next,
-                });
-            }
-        }
-    }
-}
-
-pub(super) fn project_native_slider_values(
-    mut commands: Commands,
-    sliders: Query<
-        (
-            Entity,
-            &UiSliderPolicy,
-            &UiMinimum,
-            &UiMaximum,
-            &UiValue,
-            &SliderValue,
-            &SliderRange,
-            &SliderStep,
-        ),
-        (
-            With<Slider>,
-            Or<(
-                Changed<UiValue>,
-                Changed<UiMinimum>,
-                Changed<UiMaximum>,
-                Changed<UiSliderPolicy>,
-            )>,
-        ),
-    >,
-) {
-    for (entity, policy, low, high, value, native_value, range, step) in &sliders {
-        let (low, high) = ordered_bounds(low.0, high.0);
-        let value = SliderValue(value.0 as f32);
-        let native_range = SliderRange::new(low as f32, high as f32);
-        let native_step = SliderStep(slider_step(policy) as f32);
-        let mut entity = commands.entity(entity);
-        if native_value != &value {
-            entity.insert(value);
-        }
-        if range != &native_range {
-            entity.insert(native_range);
-        }
-        if step != &native_step {
-            entity.insert(native_step);
+            accept_slider_value(focused, &mut value, next, &mut slider_input);
         }
     }
 }
@@ -388,13 +450,16 @@ pub(super) fn project_native_slider_values(
 pub(super) fn apply_native_slider_value(
     event: On<ValueChange<f32>>,
     context: crate::active_authored_ui_context::ActiveAuthoredUiContext,
+    modal: Option<
+        Res<openzt2_interface_state::ui::input_frame_capture_types::AuthoredModalInputCapture>,
+    >,
     mut slider_input: MessageWriter<UiSliderValueChanged>,
     mut values: Query<(&UiSliderPolicy, &UiMinimum, &UiMaximum, &mut UiValue), With<Slider>>,
 ) {
     let node = event.source;
     if !context.visible_and_enabled(node)
-        || context
-            .top_modal()
+        || modal
+            .and_then(|modal| modal.0)
             .is_some_and(|modal| !context.is_in_modal(node, modal))
     {
         return;
@@ -403,12 +468,7 @@ pub(super) fn apply_native_slider_value(
         return;
     };
     let next = clamp_and_step(f64::from(event.value), policy, minimum.0, maximum.0);
-    if value.set_if_neq(UiValue(next)) {
-        slider_input.write(UiSliderValueChanged {
-            slider: node,
-            value: next,
-        });
-    }
+    accept_slider_value(node, &mut value, next, &mut slider_input);
 }
 
 pub(super) fn apply_authored_slider_pointer_events(
@@ -416,6 +476,7 @@ pub(super) fn apply_authored_slider_pointer_events(
     mut drags: MessageReader<PointerDrag>,
     mut pointer_capture: ResMut<PointerCaptureMap>,
     context: crate::active_authored_ui_context::ActiveAuthoredUiContext,
+    scope: Res<crate::active_authored_ui_context::AuthoredFocusScope>,
     parents: Query<&ChildOf>,
     windows: Query<&Window, With<PrimaryWindow>>,
     geometry: Query<(&ComputedNode, &UiGlobalTransform)>,
@@ -433,7 +494,7 @@ pub(super) fn apply_authored_slider_pointer_events(
     mut values: Query<(&UiMinimum, &UiMaximum, &mut UiValue)>,
     mut scrolls: Query<(&ComputedNode, &mut ScrollPosition)>,
 ) {
-    let modal = context.top_modal();
+    let modal = scope.modal;
     let factor = windows.single().map_or(1.0, Window::scale_factor);
     let presses = presses
         .read()
@@ -517,12 +578,7 @@ pub(super) fn apply_authored_slider_pointer_events(
                 minimum.0,
                 maximum.0,
             ) {
-                if value.set_if_neq(UiValue(next)) {
-                    slider_input.write(UiSliderValueChanged {
-                        slider: slider,
-                        value: next,
-                    });
-                }
+                accept_slider_value(slider, &mut value, next, &mut slider_input);
             }
         }
     }

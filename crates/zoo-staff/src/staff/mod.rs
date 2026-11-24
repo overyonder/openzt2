@@ -14,7 +14,6 @@ mod staff_assignment_interaction;
 mod staff_behavior_capability_projection;
 use openzt2_zoo_state::staff::staff_assignment_types;
 pub(crate) mod staff_behavior_fact_completion_execution;
-mod staff_behavior_terminal_target_termination_acknowledgement;
 use openzt2_zoo_state::staff::staff_employment_types;
 mod staff_facility_operation_job_execution;
 mod staff_firing_lifecycle;
@@ -58,9 +57,10 @@ impl Plugin for StaffPlugin {
         use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
             activated_behavior_actor, update_waiting_behavior_actors,
         };
-        app.add_observer(activated_behavior_actor::<openzt2_zoo_state::behavior_task_execution_types::running_actions::RunBehaviorExitTankGate>.pipe(idle_staff_task_selection::execute_staff_exit_tank_gate_actions));
+        app.add_observer(activated_behavior_actor::<openzt2_zoo_state::behavior_task_execution_types::running_actions::RunBehaviorExitTankGate>.pipe(idle_staff_task_selection::start_staff_exit_tank_gate_actions));
 
         app.add_observer(staff_assignment_cleanup::release_staff_restrictions_when_target_leaves_world)
+            .register_required_components::<staff_employment_types::Staff, staff_wage_lifecycle::LastRequestedWage>()
             .init_resource::<staff_job_eligibility::StaffTasksByRequestToken>()
             .add_message::<StaffJobRequest>()
             .add_message::<BeginStaffHirePlacement>()
@@ -73,7 +73,6 @@ impl Plugin for StaffPlugin {
             .add_message::<CancelStaffJobRequest>()
             .add_message::<SetStaffWorkerDutyAssignment>()
             .add_observer(authored_disease_cure_execution::apply_authored_disease_cures_for_live_staff_claims)
-            .add_observer(staff_behavior_terminal_target_termination_acknowledgement::acknowledge_staff_target_termination_owned_by_terminal_maintenance_systems)
             .add_systems(
                 Update,
                 (
@@ -141,7 +140,14 @@ impl Plugin for StaffPlugin {
             .add_systems(
                 FixedUpdate,
                 (
-                    update_waiting_behavior_actors.pipe(idle_staff_task_selection::execute_staff_exit_tank_gate_actions),
+                    idle_staff_task_selection::retire_inactive_staff_tank_exits,
+                    idle_staff_task_selection::settle_staff_tank_exit_navigation
+                        .run_if(on_message::<openzt2_zoo_state::locomotion::locomotion_types::Arrived>
+                            .or(on_message::<openzt2_zoo_state::locomotion::locomotion_types::NavigationFailed>)),
+                    update_waiting_behavior_actors
+                        .pipe(idle_staff_task_selection::start_staff_exit_tank_gate_actions)
+                        .after(idle_staff_task_selection::retire_inactive_staff_tank_exits)
+                        .after(idle_staff_task_selection::settle_staff_tank_exit_navigation),
                     staff_behavior_fact_completion_execution::acknowledge_staff_job_completion_fact_actions_owned_by_terminal_domain_systems,
                 ).in_set(BehaviorStepFixedSet::Think),
             )
@@ -170,7 +176,8 @@ impl Plugin for StaffPlugin {
             )
             .add_systems(
                 FixedUpdate,
-                staff_wage_lifecycle::request_staff_wage_payments_on_first_day_of_month
+                staff_wage_lifecycle::request_monthly_wages
+                    .run_if(on_message::<openzt2_world_state::simulation_time::simulation_clock_types::ZooDayAdvanced>)
                     .in_set(FixedGameSet::Economy),
             )
             .add_systems(

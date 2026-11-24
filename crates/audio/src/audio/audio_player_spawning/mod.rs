@@ -1,4 +1,5 @@
 use super::spatial_cue_distance::SpatialCueDistance;
+use super::stage_voice_acoustics::{PendingStageVoice, StageVoiceAcoustics};
 use bevy::{
     audio::{AudioPlayer, AudioSource, PlaybackSettings, Volume},
     prelude::*,
@@ -66,6 +67,7 @@ pub(super) struct AudioVoiceAdmission {
     pub(super) distance: Option<SpatialCueDistance>,
     pub(super) distance_gain: Option<f32>,
     pub(super) environment_gain: Option<f32>,
+    pub(super) stage_acoustics: Option<StageVoiceAcoustics>,
 }
 
 #[derive(Component)]
@@ -91,8 +93,15 @@ pub(super) fn calculate_mixed_audio_gain(
     } else {
         settings.two_dimensional_effect_volume_percent
     };
-    source_gain * f32::from(settings.master_volume_percent) * f32::from(category_volume_percent)
-        / 10_000.0
+    let gain = source_gain
+        * f32::from(settings.master_volume_percent)
+        * f32::from(category_volume_percent)
+        / 10_000.0;
+    if spatial {
+        gain.max(0.0).powf(5.0 / 3.0)
+    } else {
+        gain
+    }
 }
 
 pub(super) fn spawn_audio_player_or_deferred_playback(
@@ -129,12 +138,18 @@ pub(super) fn spawn_audio_player_or_deferred_playback(
             playback_entity.insert(NonspatialCueVoiceOf(owner));
         }
     }
+    let uses_stage_acoustics = admission.stage_acoustics.is_some();
+    if let Some(acoustics) = admission.stage_acoustics {
+        playback_entity.insert(acoustics);
+    }
     if delay_seconds > 0.0 {
         playback_entity.insert(DeferredAudioPlayback {
             timer: Timer::from_seconds(delay_seconds, TimerMode::Once),
             clip,
             settings: playback_settings,
         });
+    } else if uses_stage_acoustics {
+        playback_entity.insert((PendingStageVoice(clip), playback_settings));
     } else {
         playback_entity.insert((AudioPlayer(clip), playback_settings));
     }

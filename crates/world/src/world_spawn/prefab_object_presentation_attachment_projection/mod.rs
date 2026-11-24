@@ -1,3 +1,4 @@
+use super::prefab_socket_index::PrefabSocketIndex;
 use bevy::prelude::*;
 use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
@@ -64,18 +65,36 @@ pub(super) fn project_pending_physical_presentation_children(
             Entity,
             &ObjectPhysicalPresentationControllerOf,
             &PhysicalPresentationControllerDefinition,
-            &SelectedPhysicalPresentationState,
+            Ref<SelectedPhysicalPresentationState>,
+            Ref<PendingPhysicalPresentationChild>,
             Option<&ActivePhysicalPresentationChild>,
         ),
         With<PendingPhysicalPresentationChild>,
     >,
-    children: Query<&Children>,
-    attachment_ids: Query<&PrefabAuthoredAttachmentIdentifier>,
+    sockets: Query<Ref<PrefabSocketIndex>>,
+    mut prefab_events: MessageReader<AssetEvent<ScenePrefabAsset>>,
 ) {
     let Some(definitions) = active_definitions.get(&definition_assets) else {
         return;
     };
-    for (controller, owner, identity, selected, active) in &pending {
+    let assets_changed = prefab_events.read().any(|event| {
+        matches!(
+            event,
+            AssetEvent::Added { .. }
+                | AssetEvent::Modified { .. }
+                | AssetEvent::LoadedWithDependencies { .. }
+        )
+    });
+    for (controller, owner, identity, selected, pending, active) in &pending {
+        let index = sockets.get(owner.0).ok();
+        if !assets_changed
+            && !active_definitions.is_changed()
+            && !pending.is_added()
+            && !selected.is_changed()
+            && !index.as_ref().is_some_and(Ref::is_changed)
+        {
+            continue;
+        }
         if let Some(state_index) = selected.0 {
             let Some(attachment) = definitions
                 .find_object(identity.object)
@@ -88,13 +107,7 @@ pub(super) fn project_pending_physical_presentation_children(
             else {
                 continue;
             };
-            let Some(parent) = children
-                .iter_descendants_depth_first(owner.0)
-                .find(|&entity| {
-                    attachment_ids
-                        .get(entity)
-                        .is_ok_and(|id| id.0 == attachment.parent_attachment)
-                })
+            let Some(parent) = index.and_then(|index| index.authored(attachment.parent_attachment))
             else {
                 continue;
             };

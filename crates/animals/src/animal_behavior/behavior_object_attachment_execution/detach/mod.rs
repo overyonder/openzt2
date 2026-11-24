@@ -37,7 +37,7 @@ pub(super) fn detach_slot_objects(
 
 /// Applies `rule`, or the rule the item was attached with, to one item.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn detach_object(
+pub(in crate::animal_behavior) fn detach_object(
     holder: Entity,
     item: Entity,
     rule: Option<AssetId>,

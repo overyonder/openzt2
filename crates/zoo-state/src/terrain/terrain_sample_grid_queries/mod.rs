@@ -154,6 +154,15 @@ pub fn authored_terrain_sample_water_height_metres(
 ) -> Option<f32> {
     let index = authored_terrain_sample_index(chunk, asset, x, z)?;
     let sample = asset.canonical_terrain_grid().samples.get(index)?;
+    authored_water_height_for_sample(asset, index, sample, height)
+}
+
+pub(super) fn authored_water_height_for_sample(
+    asset: &TerrainAsset,
+    index: usize,
+    sample: &openzt2_game_data::terrain::TerrainSample,
+    height: f32,
+) -> Option<f32> {
     if sample.water_depth == TerrainWaterDepth::Dry {
         return None;
     }

@@ -50,14 +50,12 @@ pub(super) fn create_challenge_ui_root<'scope, 'env: 'scope>(
             ),
         ],
     )?;
-    let photo_challenge_layout = create_photo_challenge_layout(lua)?;
     let root = lua.create_table()?;
     root.set(
         "UI_GET_CHILD",
         scope.create_function(move |_, (_, name): (Table, String)| match name.as_str() {
             "challenge layout" => Ok(offer_panel.clone()),
             "instant challenge layout" => Ok(instant_panel.clone()),
-            "photo challenges layout" => Ok(photo_challenge_layout.clone()),
             "challenge text" => Ok(offer_text.clone()),
             _ => Err(mlua::Error::runtime(format!(
                 "scenario UI surface {name} is unsupported"
@@ -65,30 +63,6 @@ pub(super) fn create_challenge_ui_root<'scope, 'env: 'scope>(
         })?,
     )?;
     Ok(root)
-}
-
-/// `setchallengeactive` shows, and `resetchallengeover` hides, the Photo mode
-/// decline button for the active challenge. Photo mode projects its whole
-/// `photo challenges layout` hidden while it has no selected photo challenge,
-/// so these calls change nothing that the player can see.
-fn create_photo_challenge_layout(lua: &Lua) -> mlua::Result<Table> {
-    let decline = lua.create_table()?;
-    decline.set("UI_SHOW", lua.create_function(|_, _: Table| Ok(()))?)?;
-    decline.set("UI_HIDE", lua.create_function(|_, _: Table| Ok(()))?)?;
-    let layout = lua.create_table()?;
-    layout.set(
-        "UI_GET_CHILD",
-        lua.create_function(move |_, (_, name): (Table, String)| {
-            if name == "decline" {
-                Ok(decline.clone())
-            } else {
-                Err(mlua::Error::runtime(format!(
-                    "photo challenge UI child {name} is unsupported"
-                )))
-            }
-        })?,
-    )?;
-    Ok(layout)
 }
 
 fn create_challenge_ui_panel<'scope, 'env: 'scope>(

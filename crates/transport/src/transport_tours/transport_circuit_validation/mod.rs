@@ -8,8 +8,8 @@ use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and
 use crate::transport_tours::topology::calculate_authored_transport_station_endpoint_world_position;
 use crate::transport_tours::transport_fact_validation::authored_transport_track_piece_chain_is_valid;
 use crate::transport_tours::transport_fact_validation::transport_station_capacity_is_valid;
-use crate::transport_tours::transport_fact_validation::transport_track_segment_is_valid;
 use crate::transport_tours::transport_fact_validation::transport_vehicle_capacity_and_speed_are_valid;
+use crate::transport_tours::transport_route_position_calculations::TrackTravelDistances;
 use openzt2_zoo_state::transport_tours::transport_circuit_types::OpenCircuitRequest;
 use openzt2_zoo_state::transport_tours::transport_circuit_types::TransportCircuit;
 use openzt2_zoo_state::transport_tours::transport_circuit_types::{CircuitMember, CircuitMembers};
@@ -25,6 +25,7 @@ fn transport_circuit_is_valid_for_opening(
     endpoint_transforms: &Query<&GlobalTransform>,
     members: &CircuitMembers,
     incidence: &TrackIncidence,
+    valid_routes: &Query<(), With<TrackTravelDistances>>,
     transport_circuit_members: &Query<(
         Entity,
         &CircuitMember,
@@ -102,9 +103,7 @@ fn transport_circuit_is_valid_for_opening(
             else {
                 return false;
             };
-            if track_segment.from() == track_segment.to()
-                || !transport_track_segment_is_valid(track_segment.geometry)
-            {
+            if track_segment.from() == track_segment.to() || !valid_routes.contains(entity) {
                 return false;
             }
             let Ok((_, start_circuit_member, _, start_station, start_junction, _)) =
@@ -260,6 +259,7 @@ pub(super) fn close_changed_transport_circuits_and_apply_open_requests(
     )>,
     endpoint_transforms: Query<&GlobalTransform>,
     incidence: TrackIncidence,
+    valid_routes: Query<(), With<TrackTravelDistances>>,
 ) {
     let Some(world_definitions) = active_world_definitions.get(&world_definition_assets) else {
         return;
@@ -284,6 +284,7 @@ pub(super) fn close_changed_transport_circuits_and_apply_open_requests(
                     &endpoint_transforms,
                     members,
                     &incidence,
+                    &valid_routes,
                     &transport_circuit_members,
                 )
             });

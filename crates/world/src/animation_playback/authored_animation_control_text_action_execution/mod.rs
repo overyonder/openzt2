@@ -4,7 +4,6 @@ use openzt2_world_state::animation_graph::animation_graph_playback_message_types
 use openzt2_world_state::animation_graph::animation_graph_playback_state_types::AnimationGraphEnabled;
 
 use crate::animation_playback::authored_animation_text_action_execution_context::AuthoredAnimationControlTextActionExecutionContext;
-use openzt2_world_state::animation_playback::animation_event_message_types::AnimationTraversalTransitionRequested;
 use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackController;
 use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackRepetitionPolicy;
 
@@ -74,18 +73,6 @@ impl AuthoredAnimationControlTextActionExecutionContext<'_, '_> {
                 .entity(animation_playback_controller_entity)
                 .try_insert(enabled);
         }
-    }
-
-    pub(super) fn request_authored_animation_traversal_transition(
-        &mut self,
-        animation_playback_controller_entity: Entity,
-        animation_graph_node_asset_key: &str,
-    ) {
-        self.traversal_messages
-            .write(AnimationTraversalTransitionRequested {
-                animation_playback_controller_entity,
-                animation_graph_node_asset_key: animation_graph_node_asset_key.to_owned(),
-            });
     }
 }
 

@@ -24,7 +24,8 @@ fn translating_turns_continue_across_forward_and_reverse_loop_boundaries(
         ),
     );
     let mut motion = ConsumedLocomotionRootMotion::new(0, Affine3A::IDENTITY);
-    motion.sample_interval(&clip, "ROOT", 0.75..0.25, 1, 0.0..1.0);
+    let cycle = LocomotionRootMotionCycle::from_clip(&clip, "ROOT", 0.0..1.0);
+    motion.sample_interval(&clip, &cycle, 0.75..0.25, 1);
     // After crossing the corner, the next half metre points toward -Z.
     assert!(motion
         .translation()
@@ -32,7 +33,7 @@ fn translating_turns_continue_across_forward_and_reverse_loop_boundaries(
     assert!(motion
         .rotation()
         .abs_diff_eq(Quat::from_rotation_y(std::f32::consts::FRAC_PI_4), 1e-5));
-    motion.sample_interval(&clip, "root", 0.25..0.75, -1, 0.0..1.0);
+    motion.sample_interval(&clip, &cycle, 0.25..0.75, -1);
     assert!(motion
         .translation()
         .abs_diff_eq(Vec3::new(-0.5, 0.0, -0.5), 1e-5));
@@ -40,7 +41,7 @@ fn translating_turns_continue_across_forward_and_reverse_loop_boundaries(
         .rotation()
         .abs_diff_eq(Quat::from_rotation_y(-std::f32::consts::FRAC_PI_4), 1e-5));
     // Two complete quarter-turn cycles end at (2, 0, -2), facing backward.
-    motion.sample_interval(&clip, "root", 0.0..0.0, 2, 0.0..1.0);
+    motion.sample_interval(&clip, &cycle, 0.0..0.0, 2);
     assert!(motion
         .translation()
         .abs_diff_eq(Vec3::new(2.0, 0.0, -2.0), 1e-5));

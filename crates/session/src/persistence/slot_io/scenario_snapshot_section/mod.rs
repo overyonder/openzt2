@@ -5,7 +5,7 @@ use super::super::{
 };
 use crate::scenario::{
     challenge_offer_types::*, scenario_lua_snapshot_types::ScenarioLuaSavedState,
-    scenario_lua_types::ScenarioLuaVirtualMachineContexts,
+    scenario_lua_types::ScenarioLuaContext,
 };
 use bevy::{
     ecs::{relationship::RelationshipTarget, system::SystemParam},
@@ -129,7 +129,7 @@ pub(in crate::persistence) struct ScenarioSnapshotCapture<'w, 's> {
         Option<&'static ScenarioScriptTiming>,
     )>,
     assets: Option<Res<'w, Assets<WorldScenarioDocumentAsset>>>,
-    runtime: Option<NonSend<'w, ScenarioLuaVirtualMachineContexts>>,
+    runtime: Query<'w, 's, &'static ScenarioLuaContext>,
     ui: crate::scenario::scenario_lua_ui::ScenarioUiSnapshotCapture<'w, 's>,
 }
 
@@ -150,9 +150,8 @@ pub(super) fn capture(
     let saved_lua = |owner| {
         parameters
             .runtime
-            .as_deref()
-            .ok_or(Failure::CorruptSnapshotSection)?
-            .capture_saved_scenario_state(owner)
+            .get(owner)
+            .map_or(Ok(None), ScenarioLuaContext::capture_saved_state)
             .map_err(|error| {
                 warn!(%error, "cannot persist scenario Lua data");
                 Failure::CorruptSnapshotSection
@@ -458,7 +457,6 @@ pub(in crate::persistence) struct ScenarioSnapshotApplication<'w, 's> {
     assets: Option<Res<'w, Assets<WorldScenarioDocumentAsset>>>,
     scripts: Option<Res<'w, Assets<LuaScriptAsset>>>,
     script_index: Option<Res<'w, LuaScriptArchivePathIndex>>,
-    runtime: Option<NonSendMut<'w, ScenarioLuaVirtualMachineContexts>>,
     existing_groups: Query<'w, 's, &'static ScenarioObjectiveGroups>,
     existing: Query<
         'w,
@@ -477,20 +475,14 @@ pub(super) struct PreparedScenarioSnapshot {
     snapshot: ScenarioSnapshot,
     campaign: Option<PreparedScenarioRules>,
     offer: Option<PreparedScenarioRules>,
-    candidates: BTreeMap<
-        AssetId,
-        (
-            Handle<WorldScenarioDocumentAsset>,
-            crate::scenario::scenario_lua_snapshot::PreparedScenarioLuaRuntime,
-        ),
-    >,
+    candidates: BTreeMap<AssetId, (Handle<WorldScenarioDocumentAsset>, ScenarioLuaContext)>,
 }
 
 struct PreparedScenarioRules {
     document: Handle<WorldScenarioDocumentAsset>,
     objectives: Vec<(u32, Vec<AssetId>)>,
     groups: Vec<openzt2_game_data::world_scenario::ScenarioObjectiveGroupRecord>,
-    runtime: Option<crate::scenario::scenario_lua_snapshot::PreparedScenarioLuaRuntime>,
+    runtime: Option<ScenarioLuaContext>,
 }
 
 pub(super) fn prepare(
@@ -609,11 +601,8 @@ fn prepare_runtime(
     saved: &ScenarioLuaSavedState,
     document: &Handle<WorldScenarioDocumentAsset>,
     parameters: &ScenarioSnapshotApplication,
-) -> Result<crate::scenario::scenario_lua_snapshot::PreparedScenarioLuaRuntime, Failure> {
-    if parameters.runtime.is_none() {
-        return Err(Failure::CorruptSnapshotSection);
-    }
-    ScenarioLuaVirtualMachineContexts::prepare_saved_scenario_state(
+) -> Result<ScenarioLuaContext, Failure> {
+    ScenarioLuaContext::prepare_saved_state(
         saved,
         document.id(),
         parameters
@@ -657,10 +646,15 @@ pub(super) fn apply(
         }
     }
     let snapshot = prepared.snapshot;
+    let read_authored = |document: &Handle<WorldScenarioDocumentAsset>| {
+        parameters
+            .assets
+            .as_deref()
+            .and_then(|assets| assets.get(document))
+            .map(|asset| &asset.authored)
+            .ok_or(Failure::UnknownAssetIdentifier)
+    };
     if let Some(campaign) = prepared.campaign {
-        if let Some(runtime) = parameters.runtime.as_deref_mut() {
-            runtime.remove_owner(root);
-        }
         spawn_restored_objectives(
             commands,
             root,
@@ -669,6 +663,7 @@ pub(super) fn apply(
             &snapshot.objectives,
             &campaign.objectives,
             &campaign.groups,
+            read_authored(&campaign.document)?,
         );
         commands.entity(root).insert((
             ScenarioDocument(campaign.document),
@@ -687,13 +682,9 @@ pub(super) fn apply(
         } else {
             commands.entity(root).remove::<ScenarioScriptTiming>();
         }
-        if let Some(runtime) = campaign.runtime {
-            parameters
-                .runtime
-                .as_deref_mut()
-                .ok_or(Failure::CorruptSnapshotSection)?
-                .install_saved_scenario_state(root, runtime);
-        }
+        commands
+            .entity(root)
+            .insert(campaign.runtime.unwrap_or_default());
     }
     if let Some(challenge) = snapshot.challenge {
         let mut world = commands.entity(root);
@@ -717,16 +708,13 @@ pub(super) fn apply(
                     WorldMember { root },
                     ScenarioChallengeLuaCandidate(id),
                     ScenarioDocument(document),
+                    runtime,
                 ))
                 .id();
-            parameters
-                .runtime
-                .as_deref_mut()
-                .ok_or(Failure::CorruptSnapshotSection)?
-                .install_saved_scenario_state(entity, runtime);
             contexts.insert(id, entity);
         }
         if let Some((saved, prepared)) = challenge.offer.zip(prepared.offer) {
+            let authored = read_authored(&prepared.document)?;
             let context = contexts.get(&saved.definition).copied().unwrap_or_else(|| {
                 commands
                     .spawn((
@@ -778,6 +766,7 @@ pub(super) fn apply(
                 &saved.objectives,
                 &prepared.objectives,
                 &prepared.groups,
+                authored,
             );
         }
     }
@@ -785,6 +774,7 @@ pub(super) fn apply(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn spawn_restored_objectives(
     commands: &mut Commands,
     root: Entity,
@@ -793,6 +783,7 @@ fn spawn_restored_objectives(
     objectives: &[ScenarioObjectiveSnapshot],
     authored: &[(u32, Vec<AssetId>)],
     groups: &[openzt2_game_data::world_scenario::ScenarioObjectiveGroupRecord],
+    policies: &openzt2_game_assets::world_scenario::authored_world_scenario_state::AuthoredWorldScenarioState,
 ) {
     let mut entities = BTreeMap::new();
     let mut statuses = BTreeMap::new();
@@ -833,7 +824,7 @@ fn spawn_restored_objectives(
         }
     }
     crate::scenario::scenario_group_completion::spawn_scenario_objective_groups(
-        commands, owner, groups, statuses,
+        commands, owner, groups, statuses, policies,
     );
 }
 

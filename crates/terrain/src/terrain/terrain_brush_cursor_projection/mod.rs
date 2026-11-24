@@ -1,12 +1,9 @@
 use bevy::camera::visibility::RenderLayers;
 use bevy::prelude::*;
-use openzt2_game_data::terrain::TerrainWaterDepth;
 
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
-use openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::BiomeSurface;
 use openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::ConstructionPlacementPolicy;
 
-use openzt2_zoo_state::terrain::terrain_brush_types::TerrainBrushKind;
 use openzt2_zoo_state::terrain::terrain_brush_types::TerrainBrushPreview;
 use openzt2_zoo_state::terrain::terrain_chunk_presentation_types::TERRAIN_RENDER_LAYER;
 use openzt2_zoo_state::terrain::terrain_chunk_types::EditedTerrainSamples;
@@ -14,17 +11,19 @@ use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainChunk;
 use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainIndex;
 use openzt2_zoo_state::terrain::terrain_fitted_surface_mesh_construction::construct_square_surface_mesh_fitted_to_canonical_terrain_samples;
 
+use super::authored_terrain_brush_modes::AuthoredTerrainBrushModes;
 use super::terrain_change_tracking_types::{TerrainDirtyFlags, TerrainRenderPending};
 
-#[derive(Component, Clone, Copy, PartialEq)]
+#[derive(Component, Clone, PartialEq)]
 pub(super) struct TerrainBrushCursorShape {
     radius_metres: f32,
-    texture: Option<&'static str>,
+    texture: Option<Handle<Image>>,
 }
 
 pub(super) fn resolve_terrain_brush_cursor_shape(
     mut commands: Commands,
     policy: Res<ConstructionPlacementPolicy>,
+    modes: AuthoredTerrainBrushModes,
     mut previews: Query<(
         Entity,
         Ref<TerrainBrushPreview>,
@@ -32,12 +31,12 @@ pub(super) fn resolve_terrain_brush_cursor_shape(
     )>,
 ) {
     for (entity, preview, shape) in &mut previews {
-        if shape.is_some() && !preview.is_changed() && !policy.is_changed() {
+        if shape.is_some() && !preview.is_changed() && !policy.is_changed() && !modes.is_changed() {
             continue;
         }
         let next = TerrainBrushCursorShape {
             radius_metres: preview.radius_m,
-            texture: terrain_brush_cursor_texture_path(preview.kind, policy.biome_surface),
+            texture: modes.cursor(preview.kind, &policy).cloned(),
         };
         if let Some(mut shape) = shape {
             shape.set_if_neq(next);
@@ -51,7 +50,6 @@ pub(super) fn resolve_terrain_brush_cursor_shape(
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(super) fn project_terrain_brush_cursor_onto_terrain_surfaces(
     mut commands: Commands,
-    asset_server: Res<AssetServer>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     terrain_assets: Res<Assets<TerrainAsset>>,
@@ -84,7 +82,7 @@ pub(super) fn project_terrain_brush_cursor_onto_terrain_surfaces(
         })
         .collect();
     for (entity, shape, transform, mesh, material) in &previews {
-        let Some(cursor_texture_path) = shape.texture else {
+        let Some(cursor_texture) = shape.texture.as_ref() else {
             if let Some(mesh) = mesh {
                 meshes.remove(&mesh.0);
             }
@@ -117,10 +115,9 @@ pub(super) fn project_terrain_brush_cursor_onto_terrain_surfaces(
         let Some(fitted_mesh) = fitted_mesh else {
             continue;
         };
-        let cursor_texture = asset_server.load(cursor_texture_path);
         if let Some(material) = material {
             if let Some(mut material) = materials.get_mut(&material.0) {
-                if material.base_color_texture.as_ref() != Some(&cursor_texture) {
+                if material.base_color_texture.as_ref() != Some(cursor_texture) {
                     material.base_color_texture = Some(cursor_texture.clone());
                 }
             }
@@ -133,7 +130,7 @@ pub(super) fn project_terrain_brush_cursor_onto_terrain_surfaces(
             commands.entity(entity).insert((
                 Mesh3d(meshes.add(fitted_mesh)),
                 MeshMaterial3d(materials.add(StandardMaterial {
-                    base_color_texture: Some(cursor_texture),
+                    base_color_texture: Some(cursor_texture.clone()),
                     alpha_mode: AlphaMode::Blend,
                     depth_bias: 1.0,
                     unlit: true,
@@ -142,30 +139,5 @@ pub(super) fn project_terrain_brush_cursor_onto_terrain_surfaces(
                 RenderLayers::layer(TERRAIN_RENDER_LAYER),
             ));
         }
-    }
-}
-
-fn terrain_brush_cursor_texture_path(
-    kind: TerrainBrushKind,
-    biome_surface: BiomeSurface,
-) -> Option<&'static str> {
-    match kind {
-        TerrainBrushKind::Raise => Some("UI/cursor_texture/hill.dds"),
-        TerrainBrushKind::Lower => Some("UI/cursor_texture/valley.dds"),
-        TerrainBrushKind::Smooth => Some("UI/cursor_texture/smooth.dds"),
-        TerrainBrushKind::Flatten { .. } => Some("UI/cursor_texture/flatten.dds"),
-        TerrainBrushKind::PaintWater { depth, .. } => match depth {
-            TerrainWaterDepth::Deep => Some("UI/cursor_texture/deepwater.dds"),
-            TerrainWaterDepth::Shallow => Some("UI/cursor_texture/shallowwater.dds"),
-            TerrainWaterDepth::Dry => None,
-        },
-        TerrainBrushKind::Paint { .. } => match biome_surface {
-            BiomeSurface::Ground => Some("UI/cursor_texture/ground.dds"),
-            BiomeSurface::MixedGround => Some("UI/cursor_texture/mix.dds"),
-            BiomeSurface::GroundCover => Some("UI/cursor_texture/ground-cover.dds"),
-            BiomeSurface::FoliageMix => Some("UI/cursor_texture/sparse.dds"),
-            BiomeSurface::DeepWater | BiomeSurface::ShallowWater => None,
-        },
-        TerrainBrushKind::AddWater | TerrainBrushKind::RemoveWater => None,
     }
 }

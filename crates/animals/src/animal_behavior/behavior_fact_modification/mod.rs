@@ -12,8 +12,8 @@ use openzt2_game_data::behavior::action::modification::{
 use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_zoo_state::animal_behavior::animal_lineage::{AnimalMate, PregnancyFather};
-use openzt2_zoo_state::animal_health::types::{Escaped, FreezeAnimal, Rampaging};
 use openzt2_zoo_state::animal_health::types::ThawAnimal;
+use openzt2_zoo_state::animal_health::types::{Escaped, FreezeAnimal, Rampaging};
 use openzt2_zoo_state::animal_lifecycle::types::Animal;
 use openzt2_zoo_state::animal_lifecycle::types::Pregnancy;
 use openzt2_zoo_state::animal_welfare::types::AdjustBathroom;
@@ -27,9 +27,9 @@ use openzt2_zoo_state::animal_welfare::types::AdjustRest;
 use openzt2_zoo_state::animal_welfare::types::AdjustSocial;
 use openzt2_zoo_state::animal_welfare::types::AdjustStimulation;
 use openzt2_zoo_state::animal_welfare::types::AdjustThirst;
-use openzt2_zoo_state::feeding::container_quantity::apply_authored_container_quantity_write;
 use openzt2_zoo_state::feeding::container_quantity::DrinkContainer;
 use openzt2_zoo_state::feeding::container_quantity::FoodContainer;
+use openzt2_zoo_state::feeding::container_quantity::apply_authored_container_quantity_write;
 use openzt2_zoo_state::staff::staff_employment_types::Staff;
 
 use openzt2_zoo_state::guests::guest_simulation_types::{
@@ -82,9 +82,24 @@ pub(super) struct MaintenanceFacts<'w, 's> {
     filters: Query<'w, 's, &'static mut WaterFilter>,
     trash: Query<'w, 's, &'static FacilityContainedWaste>,
     trash_changes: MessageWriter<'w, AdjustFacilityContainedWaste>,
+    object_ids: Query<'w, 's, &'static openzt2_world_state::world_spawn::world_membership_types::DefinitionId>,
+    object_facts: Query<'w, 's, &'static mut super::ScriptFloatAttributes>,
+    definitions: Option<Res<'w, openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions>>,
+    assets: Option<Res<'w, Assets<openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset>>>,
 }
 
 impl MaintenanceFacts<'_, '_> {
+    fn initial_object_fact(&self, object: Entity, key: openzt2_game_data::AssetId) -> Option<f32> {
+        let definition = self.object_ids.get(object).ok()?;
+        let definitions = self.definitions.as_ref()?.get(self.assets.as_ref()?)?;
+        let values = &definitions
+            .find_object(definition.0)?
+            .authored_runtime
+            .numeric_behavior_properties;
+        let index = values.binary_search_by_key(&key, |(id, _)| *id).ok()?;
+        Some(values[index].1)
+    }
+
     fn tank(&self, recipient: Entity) -> Option<Entity> {
         let tank = if let Ok(site) = self.sites.get(recipient) {
             site.tank
@@ -173,6 +188,13 @@ pub(super) fn apply_supported_current_behavior_fact_modifications(
                 return false;
             };
             let scalar_supported = price_effect.sample(modification.modification_value, task.target, |_| 0).is_some();
+            if let Some(key) = authored_float_key(modification.modified_fact) {
+                return scalar_supported && (if modification.modified_fact == BehaviorFact::Breath {
+                    animals.contains(affected_entity)
+                } else {
+                    maintenance.initial_object_fact(affected_entity, key).is_some()
+                });
+            }
             match modification.modified_fact {
                 BehaviorFact::WaterDirtiness => return scalar_supported && maintenance.tank(affected_entity).is_some(),
                 BehaviorFact::FilterDirtiness => return scalar_supported && maintenance.filters.contains(affected_entity),
@@ -215,6 +237,8 @@ pub(super) fn apply_supported_current_behavior_fact_modifications(
             continue;
         }
         let mut new_caffeine_flags = bevy::ecs::entity::EntityHashMap::<CaffeineFlags>::default();
+        let mut new_authored_floats =
+            bevy::ecs::entity::EntityHashMap::<super::ScriptFloatAttributes>::default();
         for modification in modifications {
             let animal = resolve_behavior_entity_role_to_live_entity(
                 modification.affected_entity_role,
@@ -236,6 +260,34 @@ pub(super) fn apply_supported_current_behavior_fact_modifications(
                     })
                     .expect("scalar context was validated before application")
             };
+            if let Some(key) = authored_float_key(modification.modified_fact) {
+                let initial = maintenance
+                    .initial_object_fact(animal, key)
+                    .unwrap_or_default();
+                let updated = |current: f32| {
+                    if modification.modification_operation
+                        == BehaviorFactModificationOperation::Clear
+                    {
+                        0.0
+                    } else {
+                        (current + value_q16 as f32 / 65_536.0).clamp(0.0, 100.0)
+                    }
+                };
+                if let Ok(mut values) = maintenance.object_facts.get_mut(animal) {
+                    let current = values.0.get(&key).copied().unwrap_or(initial);
+                    let next = updated(current);
+                    if current != next {
+                        values.0.insert(key, next);
+                    }
+                } else {
+                    let values = new_authored_floats
+                        .entry(animal)
+                        .or_insert_with(|| super::ScriptFloatAttributes(Default::default()));
+                    let current = values.0.entry(key).or_insert(initial);
+                    *current = updated(*current);
+                }
+                continue;
+            }
             // Authored needs measure deprivation on 0..100; welfare messages
             // adjust wellness on 0..1000, as in species need initialization.
             let wellness_delta_q16 = value_q16.saturating_mul(-10);
@@ -403,7 +455,8 @@ pub(super) fn apply_supported_current_behavior_fact_modifications(
                 }
                 BehaviorFact::CaffeineMode | BehaviorFact::DeCaffeineMode => {
                     let active = modification.modification_operation
-                        != BehaviorFactModificationOperation::Clear && value_q16 != 0;
+                        != BehaviorFactModificationOperation::Clear
+                        && value_q16 != 0;
                     let flag: fn(&mut CaffeineFlags) -> &mut bool =
                         if modification.modified_fact == BehaviorFact::CaffeineMode {
                             |flags| &mut flags.caffeinated
@@ -442,11 +495,14 @@ pub(super) fn apply_supported_current_behavior_fact_modifications(
                 }
                 BehaviorFact::Escaped | BehaviorFact::Rampage => {
                     let active = modification.modification_operation
-                        != BehaviorFactModificationOperation::Clear && value_q16 != 0;
+                        != BehaviorFactModificationOperation::Clear
+                        && value_q16 != 0;
                     let mut affected = commands.entity(animal);
                     match (modification.modified_fact, active) {
                         (BehaviorFact::Escaped, true) => {
-                            affected.insert_if_new(Escaped { since_tick: clock.tick });
+                            affected.insert_if_new(Escaped {
+                                since_tick: clock.tick,
+                            });
                         }
                         (BehaviorFact::Escaped, false) => {
                             affected.remove::<Escaped>();
@@ -470,8 +526,21 @@ pub(super) fn apply_supported_current_behavior_fact_modifications(
                 commands.entity(animal).try_insert(flags);
             }
         }
+        for (entity, values) in new_authored_floats {
+            commands.entity(entity).try_insert(values);
+        }
         instruction.complete(entity, clock.tick, &mut commands);
     }
+}
+
+fn authored_float_key(fact: BehaviorFact) -> Option<openzt2_game_data::AssetId> {
+    let name = match fact {
+        BehaviorFact::Breath => "breath",
+        BehaviorFact::Construction => "f_constructionlevel",
+        BehaviorFact::Damage => "f_damage",
+        _ => return None,
+    };
+    Some(openzt2_game_data::AssetId::from_key(name))
 }
 
 fn behavior_fact_modification_has_runtime_owner(

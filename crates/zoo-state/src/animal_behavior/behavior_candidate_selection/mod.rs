@@ -1,7 +1,7 @@
 //! Shared candidate ranking over borrowed canonical task records and live facts.
 
 use crate::terrain::terrain_chunk_types::{EditedTerrainSamples, TerrainChunk, TerrainIndex};
-use crate::terrain::terrain_world_sampling::{sample_authored_terrain, terrain_chunk_at};
+use crate::terrain::terrain_world_sampling::{sample_terrain_biome, terrain_chunk_at};
 use bevy::{ecs::system::SystemParam, prelude::*};
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use openzt2_game_data::{
@@ -27,153 +27,84 @@ impl BehaviorTargetBiome<'_, '_> {
             .get(terrain_chunk_at(self.terrain.get(root).ok()?, point)?)
             .ok()?;
         let asset = self.assets.get(&chunk.asset)?;
-        sample_authored_terrain(chunk, asset, edits, point)?
-            .biome
-            .map(|biome| biome.id)
+        sample_terrain_biome(chunk, asset, edits, point).map(|biome| biome.id)
     }
 }
 
-/// Ranks candidates by priority and score, retaining tied winners.
+struct ScoredBehaviorCandidate<T> {
+    entry: T,
+    priority: f32,
+    score: f32,
+}
+
 pub struct BehaviorCandidateRanking<T> {
     minimum_score: f32,
-    selected: Option<(T, f32)>,
-    sole_candidate: Option<(T, f32)>,
-    candidate_count: usize,
-    best_priority: f32,
-    best_score: f32,
-    tied_candidates: u32,
+    candidates: Vec<ScoredBehaviorCandidate<T>>,
 }
 
 impl<T: Copy> BehaviorCandidateRanking<T> {
-    pub fn new(minimum_score: f32) -> Self {
+    pub const fn new(minimum_score: f32) -> Self {
         Self {
             minimum_score,
-            selected: None,
-            sole_candidate: None,
-            candidate_count: 0,
-            best_priority: f32::NEG_INFINITY,
-            best_score: f32::NEG_INFINITY,
-            tied_candidates: 0,
+            candidates: Vec::new(),
         }
     }
 
-    pub fn consider(
-        &mut self,
-        candidate: T,
-        priority: f32,
-        score: f32,
-        mut random: impl FnMut(u32) -> Option<u32>,
-    ) {
-        self.candidate_count += 1;
-        self.sole_candidate = Some((candidate, score));
-        if score <= self.minimum_score {
-            return;
+    pub fn consider(&mut self, entry: T, priority: f32, score: f32) {
+        self.candidates.push(ScoredBehaviorCandidate {
+            entry,
+            priority,
+            score,
+        });
+    }
+
+    pub fn finish(mut self, random: impl FnOnce() -> u32) -> Option<(T, f32)> {
+        if self.candidates.len() <= 1 {
+            return self
+                .candidates
+                .first()
+                .map(|candidate| (candidate.entry, candidate.score));
         }
-        if priority < self.best_priority
-            || (priority == self.best_priority && score < self.best_score)
-        {
-            return;
-        }
-        if priority > self.best_priority || score > self.best_score {
-            self.best_priority = priority;
-            self.best_score = score;
-            self.tied_candidates = 1;
-        } else {
-            self.tied_candidates = self.tied_candidates.saturating_add(1);
-            if random(self.tied_candidates) != Some(0) {
-                return;
+        self.candidates.sort_by(|left, right| {
+            right
+                .priority
+                .total_cmp(&left.priority)
+                .then_with(|| right.score.total_cmp(&left.score))
+        });
+        let mut priority = self.candidates[0].priority;
+        let mut best_score = 0.0_f32;
+        let mut retained_in_group = false;
+        let mut retained_higher_priority = false;
+        self.candidates.retain(|candidate| {
+            // The first entry at a new priority survives the group transition.
+            if candidate.priority != priority {
+                retained_higher_priority |= retained_in_group;
+                priority = candidate.priority;
+                best_score = 0.0;
+                return true;
             }
-        }
-        self.selected = Some((candidate, score));
-    }
-
-    pub fn finish(self, allow_single_candidate_promotion: bool) -> Option<(T, f32)> {
-        if allow_single_candidate_promotion && self.candidate_count == 1 {
-            self.sole_candidate
+            if retained_higher_priority
+                || candidate.score < best_score
+                || candidate.score <= self.minimum_score
+                || candidate.score <= 0.0
+            {
+                return false;
+            }
+            retained_in_group = true;
+            best_score = best_score.max(candidate.score);
+            true
+        });
+        let first = self.candidates.first()?;
+        let winner = if self
+            .candidates
+            .get(1)
+            .is_some_and(|next| first.score == next.score)
+        {
+            &self.candidates[random() as usize % self.candidates.len()]
         } else {
-            self.selected
-        }
-    }
-}
-
-/// Ranks an animal's candidates: each task keeps its best target, as
-/// [`BehaviorCandidateRanking`] does, and among the tasks of the highest
-/// priority one is drawn with a chance in proportion to its score. A task
-/// that always outscores another, as an elephant's `Lie` outscores its
-/// `Sleep`, then no longer shuts it out.
-pub struct WeightedBehaviorTaskRanking<K, T> {
-    minimum_score: f32,
-    /// The task whose candidates are being considered, and its best one.
-    current: Option<(K, BehaviorCandidateRanking<T>, f32)>,
-    selected: Option<(T, f32)>,
-    best_priority: f32,
-    total_score: f32,
-}
-
-impl<K: PartialEq + Copy, T: Copy> WeightedBehaviorTaskRanking<K, T> {
-    pub fn new(minimum_score: f32) -> Self {
-        Self {
-            minimum_score,
-            current: None,
-            selected: None,
-            best_priority: f32::NEG_INFINITY,
-            total_score: 0.0,
-        }
-    }
-
-    /// Considers one candidate of `task`; a task's candidates come together.
-    pub fn consider(
-        &mut self,
-        task: K,
-        candidate: T,
-        priority: f32,
-        score: f32,
-        mut random: impl FnMut(u32) -> Option<u32>,
-    ) {
-        if self
-            .current
-            .as_ref()
-            .is_none_or(|(current, ..)| *current != task)
-        {
-            self.draw(&mut random);
-            self.current = Some((
-                task,
-                BehaviorCandidateRanking::new(self.minimum_score),
-                priority,
-            ));
-        }
-        if let Some((_, best, _)) = &mut self.current {
-            best.consider(candidate, priority, score, &mut random);
-        }
-    }
-
-    /// Enters the finished task's best candidate into the draw.
-    fn draw(&mut self, random: &mut impl FnMut(u32) -> Option<u32>) {
-        let Some((_, best, priority)) = self.current.take() else {
-            return;
+            first
         };
-        let Some((candidate, score)) = best.finish(false) else {
-            return;
-        };
-        if priority < self.best_priority {
-            return;
-        }
-        if priority > self.best_priority {
-            self.best_priority = priority;
-            self.total_score = 0.0;
-        }
-        self.total_score += score;
-        const SCALE: u32 = 1 << 24;
-        if random(SCALE)
-            .is_some_and(|sample| (sample as f32) < score / self.total_score * SCALE as f32)
-        {
-            self.selected = Some((candidate, score));
-        }
-    }
-
-    pub fn finish(mut self, mut random: impl FnMut(u32) -> Option<u32>) -> Option<(T, f32)> {
-        self.draw(&mut random);
-        self.selected
+        Some((winner.entry, winner.score))
     }
 }
 
@@ -452,33 +383,36 @@ mod need_point_threshold_tests {
 }
 
 #[cfg(test)]
-mod weighted_ranking_tests {
-    use super::WeightedBehaviorTaskRanking;
+mod candidate_ranking_tests {
+    use super::BehaviorCandidateRanking;
 
     #[test]
-    fn tasks_of_the_top_priority_are_drawn_in_proportion_to_their_scores() {
-        let mut state = 1_u64;
-        let mut random = |upper: u32| {
-            state = state
-                .wrapping_mul(6364136223846793005)
-                .wrapping_add(1442695040888963407);
-            Some(((state >> 33) as u32) % upper)
-        };
-        let mut wins = [0_u32; 3];
-        for _ in 0..10_000 {
-            let mut ranking = WeightedBehaviorTaskRanking::new(0.0);
-            // Lie with two targets, the better one 40; Sleep 35; a
-            // lower-priority task that never runs.
-            ranking.consider("lie", 0, 0.0, 20.0, &mut random);
-            ranking.consider("lie", 0, 0.0, 40.0, &mut random);
-            ranking.consider("sleep", 1, 0.0, 35.0, &mut random);
-            ranking.consider("idle", 2, -1.0, 500.0, &mut random);
-            let (winner, _) = ranking.finish(&mut random).unwrap();
-            wins[winner] += 1;
-        }
-        // 40 / 75 and 35 / 75.
-        assert!((5_000..5_700).contains(&wins[0]), "{wins:?}");
-        assert!((4_300..5_000).contains(&wins[1]), "{wins:?}");
-        assert_eq!(wins[2], 0);
+    fn score_difference_does_not_consume_a_draw() {
+        let mut ranking = BehaviorCandidateRanking::new(0.0);
+        ranking.consider("sleep", 0.0, 35.0);
+        ranking.consider("lie", 0.0, 40.0);
+        assert_eq!(
+            ranking.finish(|| panic!("unexpected draw")),
+            Some(("lie", 40.0))
+        );
+    }
+
+    #[test]
+    fn a_sole_candidate_skips_the_minimum_and_the_draw() {
+        let mut ranking = BehaviorCandidateRanking::new(10.0);
+        ranking.consider("single", 0.0, 1.0);
+        assert_eq!(
+            ranking.finish(|| panic!("unexpected draw")),
+            Some(("single", 1.0))
+        );
+    }
+
+    #[test]
+    fn the_tied_branch_samples_the_remaining_candidates() {
+        let mut ranking = BehaviorCandidateRanking::new(0.0);
+        ranking.consider("first", 0.0, 40.0);
+        ranking.consider("pruned", 0.0, 20.0);
+        ranking.consider("second", 0.0, 40.0);
+        assert_eq!(ranking.finish(|| 3), Some(("second", 40.0)));
     }
 }

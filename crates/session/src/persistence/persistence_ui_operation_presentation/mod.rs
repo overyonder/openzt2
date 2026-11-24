@@ -25,32 +25,31 @@ use super::{
         ReturnToMainMenuAfterSave, SaveDialogSnapshotSaved,
     },
     slot_io::{
-        original_saved_game_load_preparation::OriginalSavedGameLoadPreparation,
-        pending_snapshot_application_types::PendingSnapshotApplication,
-        persistence_slot_filesystem_task_types::PersistenceSlotFilesystemTask,
+        persistence_slot_filesystem_task_types::PersistenceSlotOperation,
         save_slot_catalogue_load_execution::SaveSlotCatalogueFilesystemRead,
     },
 };
 
-pub(super) fn project_outstanding_world_snapshot_operations_onto_ui_wait_cursor(
+pub(super) fn update_wait_cursor_when_snapshot_operations_change(
     operations: Query<
         (),
         (
-            Or<(
-                With<PersistenceSlotFilesystemTask>,
-                With<PendingSnapshotApplication>,
-                With<OriginalSavedGameLoadPreparation>,
-            )>,
+            With<PersistenceSlotOperation>,
             Without<SaveSlotCatalogueFilesystemRead>,
         ),
     >,
-    mut previous: Local<bool>,
+    added: Query<
+        (),
+        (
+            Added<PersistenceSlotOperation>,
+            Without<SaveSlotCatalogueFilesystemRead>,
+        ),
+    >,
+    mut removed: RemovedComponents<PersistenceSlotOperation>,
     mut cursor: MessageWriter<SetWaitCursor>,
 ) {
-    let waiting = !operations.is_empty();
-    if *previous != waiting {
-        *previous = waiting;
-        cursor.write(SetWaitCursor(waiting));
+    if removed.read().count() != 0 || !added.is_empty() {
+        cursor.write(SetWaitCursor(!operations.is_empty()));
     }
 }
 

@@ -4,6 +4,7 @@ use openzt2_game_assets::graphics_settings_types::ReplaceGraphicsSettingsRequest
 
 use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 use openzt2_interface_state::camera::camera_runtime_state_types::ZooCamera;
+use openzt2_interface_state::persistence::profile_types::ProfileSelected;
 use openzt2_world_state::application_schedule::GameSet;
 use openzt2_zoo_state::environment::environment_presentation_types::EnvironmentLight;
 
@@ -135,10 +136,13 @@ fn accepted_values_map_to_actual_bevy_components() {
 #[test]
 fn the_startup_default_waits_for_the_profile_display_settings() {
     let mut app = App::new();
-    app.init_resource::<DisplaySettings>().add_systems(
-        Update,
-        super::display_settings_application::apply_accepted_display_settings_to_primary_window,
-    );
+    app.init_resource::<DisplaySettings>()
+        .init_resource::<super::display_settings_application::AcceptedDisplaySettingsReady>()
+        .add_message::<ProfileSelected>()
+        .add_systems(
+            Update,
+            super::display_settings_application::apply_ready_display_settings_to_primary_window,
+        );
     let window = app
         .world_mut()
         .spawn((Window::default(), PrimaryWindow))
@@ -149,7 +153,9 @@ fn the_startup_default_waits_for_the_profile_display_settings() {
         Some(bevy::window::WindowMode::Windowed)
     ));
 
-    *app.world_mut().resource_mut::<DisplaySettings>() = DisplaySettings::default();
+    app.world_mut().write_message(ProfileSelected {
+        selected_profile_identifier: default(),
+    });
     app.update();
     assert!(matches!(
         app.world().get::<Window>(window).map(|window| window.mode),

@@ -15,7 +15,9 @@ use openzt2_world_state::{
 use openzt2_zoo_state::animal_lifecycle::types::AnimalVariant;
 
 use super::{
-    authored_decal_texture_cycles::{AnimationDecalFrames, DecalCyclePlayback},
+    authored_decal_texture_cycles::{
+        AnimationDecalFrames, DecalCyclePlayback, DecalCyclesAdvancing,
+    },
     procedural_ground_fit::GroundFitPose,
 };
 
@@ -34,28 +36,28 @@ impl AnimationBinderRigSource {
     }
 }
 
-#[derive(Component)]
+#[derive(Component, PartialEq, Eq)]
 pub(super) struct BoundAnimationBinderRig {
-    definition: AssetId,
-    binder: AssetId,
     pub(super) source: Option<AnimationBinderRigSource>,
 }
 
-pub(super) fn bind_authored_animation_binder_rigs(
+pub(super) fn bind_authored_animation_binder_rigs<Lane: Component>(
     mut commands: Commands,
     catalogue: Res<WorldDefinitions>,
     server: Res<AssetServer>,
     assets: Res<Assets<WorldDefinitionAsset>>,
-    owners: Query<(Option<&DefinitionId>, Option<&AnimalVariant>)>,
+    owners: Query<(Option<Ref<DefinitionId>>, Option<Ref<AnimalVariant>>)>,
+    mut changed_documents: MessageReader<AssetEvent<WorldDefinitionAsset>>,
     mut controllers: Query<
         (
             Entity,
-            &AnimationPresentationOwner,
-            Option<&AnimationPresentationBinder>,
+            Ref<AnimationPresentationOwner>,
+            Option<Ref<AnimationPresentationBinder>>,
             Option<&mut BoundAnimationBinderRig>,
             Has<GroundFitPose>,
+            Option<&mut DecalCyclePlayback>,
         ),
-        With<AnimationPlaybackController>,
+        (With<AnimationPlaybackController>, With<Lane>),
     >,
 ) {
     if !catalogue.is_complete() {
@@ -63,11 +65,29 @@ pub(super) fn bind_authored_animation_binder_rigs(
     }
     let main_object = AssetId::from_key("mainobj");
     let definitions = catalogue.get(&assets);
+    let changed_documents = changed_documents
+        .read()
+        .filter_map(|event| match *event {
+            AssetEvent::Modified { id } | AssetEvent::Removed { id } => Some(id),
+            _ => None,
+        })
+        .collect::<bevy::platform::collections::HashSet<_>>();
     let mut rig_sources = None;
-    for (entity, owner, binder, binding, has_pose) in &mut controllers {
+    for (entity, owner, binder, binding, has_pose, decal_playback) in &mut controllers {
         let Ok((definition, variant)) = owners.get(owner.gameplay_entity) else {
             continue;
         };
+        let inputs_changed = owner.is_changed()
+            || definition.as_ref().is_some_and(Ref::is_changed)
+            || variant.as_ref().is_some_and(Ref::is_changed)
+            || binder.as_ref().is_some_and(Ref::is_changed);
+        let source_changed = binding
+            .as_ref()
+            .and_then(|binding| binding.source)
+            .is_some_and(|source| changed_documents.contains(&source.asset));
+        if binding.is_some() && !catalogue.is_changed() && !inputs_changed && !source_changed {
+            continue;
+        }
         let Some(definition) = variant
             .map(|variant| variant.0)
             .or_else(|| definition.map(|id| id.0))
@@ -75,17 +95,6 @@ pub(super) fn bind_authored_animation_binder_rigs(
             continue;
         };
         let binder = binder.map_or(main_object, |binder| binder.0);
-        if binding.as_ref().is_some_and(|bound| {
-            bound.definition == definition
-                && bound.binder == binder
-                && bound.source.is_none_or(|source| {
-                    source
-                        .get(&assets)
-                        .is_some_and(|rig| rig.definition == definition && rig.binder == binder)
-                })
-        }) {
-            continue;
-        }
         let sources =
             rig_sources.get_or_insert_with(|| {
                 assets
@@ -103,14 +112,17 @@ pub(super) fn bind_authored_animation_binder_rigs(
                     .collect::<HashMap<_, _>>()
             });
         let source = sources.get(&(definition, binder)).copied();
-        let next = BoundAnimationBinderRig {
-            definition,
-            binder,
-            source,
-        };
+        if !source_changed
+            && binding
+                .as_ref()
+                .is_some_and(|binding| binding.source == source)
+        {
+            continue;
+        }
+        let next = BoundAnimationBinderRig { source };
         let mut controller = commands.entity(entity);
         if let Some(mut binding) = binding {
-            *binding = next;
+            binding.set_if_neq(next);
         } else {
             controller.try_insert(next);
         }
@@ -126,9 +138,13 @@ pub(super) fn bind_authored_animation_binder_rigs(
         }
         let decals = rig.map_or(&[][..], |rig| rig.decal_cycles.as_slice());
         if decals.is_empty() {
-            controller.try_remove::<(DecalCyclePlayback, AnimationDecalFrames)>();
+            controller.try_remove::<(
+                DecalCyclePlayback,
+                AnimationDecalFrames,
+                DecalCyclesAdvancing,
+            )>();
         } else {
-            controller.try_insert(DecalCyclePlayback::new(decals, |path| {
+            let playback = DecalCyclePlayback::new(decals, |path| {
                 definitions
                     .and_then(|definitions| {
                         definitions.texture_image(AssetId::from_virtual_path(path))
@@ -138,7 +154,17 @@ pub(super) fn bind_authored_animation_binder_rigs(
                             path,
                         ))
                     })
-            }));
+            });
+            if playback.is_advancing() {
+                controller.try_insert(DecalCyclesAdvancing);
+            } else {
+                controller.try_remove::<DecalCyclesAdvancing>();
+            }
+            if let Some(mut current) = decal_playback {
+                *current = playback;
+            } else {
+                controller.try_insert(playback);
+            }
         }
     }
 }

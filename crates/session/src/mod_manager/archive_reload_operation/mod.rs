@@ -1,9 +1,10 @@
 use std::collections::BTreeMap;
 
 use bevy::{
-    asset::{
-        LoadState, RecursiveDependencyLoadState, UntypedAssetId, UntypedAssetLoadFailedEvent,
-        UntypedHandle,
+    asset::{UntypedAssetId, UntypedAssetLoadFailedEvent, UntypedHandle},
+    ecs::{
+        system::{Deferred, SystemBuffer, SystemMeta},
+        world::DeferredWorld,
     },
     prelude::*,
 };
@@ -45,9 +46,23 @@ pub(super) struct AssetArchiveReloadOperation {
 
 struct ExpectedAssetReload {
     _handle: UntypedHandle,
-    // The previous value can remain loaded until the source watcher starts the new load.
-    observed_replacement: bool,
-    observed_loading: bool,
+    published: bool,
+}
+
+#[derive(Message)]
+struct ArchiveReloadAssetNotice {
+    operation: Entity,
+    asset: UntypedAssetId,
+    ready: bool,
+}
+
+#[derive(Default)]
+struct ArchiveReloadAssetNotices(Vec<ArchiveReloadAssetNotice>);
+
+impl SystemBuffer for ArchiveReloadAssetNotices {
+    fn queue(&mut self, _: &SystemMeta, mut world: DeferredWorld<'_>) {
+        let _ = world.write_message_batch(self.0.drain(..));
+    }
 }
 
 impl AssetArchiveReloadOperation {
@@ -64,14 +79,13 @@ impl AssetArchiveReloadOperation {
             .entry(handle.id())
             .or_insert(ExpectedAssetReload {
                 _handle: handle,
-                observed_replacement: false,
-                observed_loading: false,
+                published: false,
             });
     }
 }
 
 pub(super) fn register_archive_reload_tracking(app: &mut App) {
-    app.add_systems(
+    app.add_message::<ArchiveReloadAssetNotice>().add_systems(
         Update,
         finish_archive_reload
             .after(openzt2_interface_state::ui::UiSet::Interaction)
@@ -99,6 +113,7 @@ pub(super) fn register_archive_reload_tracking(app: &mut App) {
         InteractiveTextureMetadataAsset,
         LocalizationAsset,
         LuaScriptAsset,
+        crate::shell::main_mode_cash::MainModeCash,
         MaterialAsset,
         ParticleEffectDocumentAsset,
         PathPlacementHighlightAsset,
@@ -112,63 +127,76 @@ pub(super) fn register_archive_reload_tracking(app: &mut App) {
 
 fn observe_reloaded_assets<A: Asset>(
     events: Option<MessageReader<AssetEvent<A>>>,
-    mut operations: Query<&mut AssetArchiveReloadOperation>,
+    operations: Query<(Entity, &AssetArchiveReloadOperation)>,
+    mut notices: Deferred<ArchiveReloadAssetNotices>,
 ) {
     let Some(mut events) = events else {
         return;
     };
-    let Ok(mut operation) = operations.single_mut() else {
+    let Ok((operation, reload)) = operations.single() else {
         events.clear();
         return;
     };
-    for event in events.read() {
-        let id = match event {
-            AssetEvent::Added { id } | AssetEvent::Modified { id } => id.untyped(),
-            _ => continue,
+    notices.0.extend(events.read().filter_map(|event| {
+        let (asset, ready) = match event {
+            AssetEvent::Added { id } | AssetEvent::Modified { id } => (id.untyped(), false),
+            AssetEvent::LoadedWithDependencies { id } => (id.untyped(), true),
+            _ => return None,
         };
-        if let Some(expected) = operation.pending.get_mut(&id) {
-            expected.observed_replacement = true;
-        }
-    }
+        reload
+            .pending
+            .contains_key(&asset)
+            .then_some(ArchiveReloadAssetNotice {
+                operation,
+                asset,
+                ready,
+            })
+    }));
 }
 
 fn finish_archive_reload(
     mut commands: Commands,
     mut operations: Query<(Entity, &mut AssetArchiveReloadOperation)>,
+    mut notices: MessageReader<ArchiveReloadAssetNotice>,
     mut failures: MessageReader<UntypedAssetLoadFailedEvent>,
     time: Res<Time<Real>>,
     server: Res<AssetServer>,
     mut menu: MessageWriter<ReturnToMainMenu>,
 ) {
     let Ok((entity, mut operation)) = operations.single_mut() else {
+        notices.clear();
         failures.clear();
         return;
     };
+    for notice in notices.read().filter(|notice| notice.operation == entity) {
+        if notice.ready {
+            operation.pending.remove(&notice.asset);
+        } else if let Some(asset) = operation.pending.get_mut(&notice.asset) {
+            asset.published = true;
+            if server
+                .recursive_dependency_load_state(notice.asset)
+                .is_failed()
+            {
+                operation.pending.remove(&notice.asset);
+                operation.failed = true;
+            }
+        }
+    }
+    let mut dependency_failed = false;
     for failure in failures.read() {
+        dependency_failed = true;
         if operation.pending.remove(&failure.id).is_some() {
             operation.failed = true;
             warn!(path = %failure.path, error = %failure.error, "archive asset reload failed");
         }
     }
-    let mut dependency_failed = false;
-    operation.pending.retain(|id, expected| {
-        let Some((asset, _, dependencies)) = server.get_load_states(*id) else {
-            return true;
-        };
-        expected.observed_loading |= asset.is_loading();
-        if !expected.observed_replacement && !expected.observed_loading {
-            return true;
-        }
-        match (asset, dependencies) {
-            (LoadState::Loaded, RecursiveDependencyLoadState::Loaded) => false,
-            (LoadState::Failed(_), _) | (_, RecursiveDependencyLoadState::Failed(_)) => {
-                dependency_failed = true;
-                false
-            }
-            _ => true,
-        }
-    });
-    operation.failed |= dependency_failed;
+    if dependency_failed {
+        let pending_before_failures = operation.pending.len();
+        operation.pending.retain(|id, asset| {
+            !asset.published || !server.recursive_dependency_load_state(*id).is_failed()
+        });
+        operation.failed |= operation.pending.len() != pending_before_failures;
+    }
     if !operation.pending.is_empty() && !operation.stalled.tick(time.delta()).is_finished() {
         return;
     }

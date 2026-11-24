@@ -1,6 +1,7 @@
 use bevy::prelude::*;
-use openzt2_game_data::animation::animation_set::AuthoredAnimationGraphEdge;
-use openzt2_game_data::animation::animation_set::AuthoredAnimationGraphNode;
+use openzt2_game_data::animation::animation_set::{
+    AuthoredAnimationGraphEdge, AuthoredAnimationGraphNode,
+};
 
 use crate::animation_playback::animation_playback_controller_types::AnimationPlaybackController;
 use crate::animation_playback::animation_playback_controller_types::AnimationPlaybackRepetitionPolicy;
@@ -8,144 +9,129 @@ use openzt2_game_assets::animation::animation_set_asset_types::AnimationSetAsset
 
 use crate::animation_graph::animation_graph_playback_message_types::AnimationGraphNodePlaybackRequestRejectionReason;
 use crate::animation_graph::animation_graph_playback_state_types::AnimationGraphBlend;
-use crate::animation_graph::animation_graph_playback_state_types::AnimationGraphPlaybackState;
 use crate::animation_graph::animation_graph_playback_state_types::AnimationGraphTransition;
+use crate::animation_graph::animation_graph_playback_state_types::{
+    AnimationGraphPlaybackState, AnimationGraphRoute, AnimationGraphRouteStep,
+};
 use crate::animation_graph::authored_animation_graph_edge_blend_duration_interpretation::interpret_authored_animation_graph_edge_blend_duration_milliseconds;
 
-pub fn begin_requested_animation_graph_node_transition(
-    animation_set_asset: &AnimationSetAsset,
+/// Shortest directed route through the asset's ordered outgoing edge index.
+pub fn resolve_animation_graph_route<'a>(
+    node_count: usize,
+    outgoing_edges: impl Fn(u32) -> &'a [(u32, usize)],
+    source: u32,
+    target: u32,
+) -> Option<AnimationGraphRoute> {
+    if source as usize >= node_count || target as usize >= node_count {
+        return None;
+    }
+    let mut entered_by = vec![None; node_count];
+    let mut queue = std::collections::VecDeque::from([source]);
+    while let Some(current) = queue.pop_front() {
+        if current == target {
+            break;
+        }
+        for &(next, edge_index) in outgoing_edges(current) {
+            let Some(entry) = entered_by.get_mut(next as usize) else {
+                continue;
+            };
+            if next != source && entry.is_none() {
+                *entry = Some(AnimationGraphRouteStep {
+                    source_node: current,
+                    target_node: next,
+                    edge_index,
+                });
+                queue.push_back(next);
+            }
+        }
+    }
+    let mut steps = std::collections::VecDeque::new();
+    let mut current = target;
+    while current != source {
+        let step = entered_by[current as usize]?;
+        steps.push_front(step);
+        current = step.source_node;
+    }
+    Some(AnimationGraphRoute {
+        source_node: source,
+        target_node: target,
+        steps,
+    })
+}
+
+pub fn begin_resolved_animation_graph_route(
+    asset: &AnimationSetAsset,
     clip_ready: impl Fn(&str) -> bool + Copy,
-    target_animation_graph_node_index: u32,
-    animation_playback_controller: &mut AnimationPlaybackController,
-    animation_graph_playback_state: &mut AnimationGraphPlaybackState,
-    blend_duration_override_milliseconds: Option<u32>,
-    enters_immediately: bool,
+    mut route: AnimationGraphRoute,
+    controller: &mut AnimationPlaybackController,
+    state: &mut AnimationGraphPlaybackState,
+    blend_override_ms: Option<u32>,
 ) -> Result<(), AnimationGraphNodePlaybackRequestRejectionReason> {
-    if enters_immediately
-        || target_animation_graph_node_index
-            == animation_graph_playback_state.current_animation_graph_node_index
-    {
+    use AnimationGraphNodePlaybackRequestRejectionReason::{
+        ActiveTransitionNotInterruptible, MissingAnimationAsset, MissingAuthoredGraphEdge,
+    };
+    if route.source_node != state.current_animation_graph_node_index {
+        return Err(MissingAuthoredGraphEdge);
+    }
+    if route.target_node == route.source_node {
         return enter_animation_graph_node_playback(
-            animation_set_asset,
+            asset,
             clip_ready,
-            target_animation_graph_node_index,
-            animation_playback_controller,
-            animation_graph_playback_state,
-            blend_duration_override_milliseconds.unwrap_or_default(),
+            route.target_node,
+            controller,
+            state,
+            blend_override_ms.unwrap_or_default(),
         );
     }
-    if animation_graph_playback_state
-        .active_animation_graph_transition
-        .is_some()
-    {
-        return Err(
-            AnimationGraphNodePlaybackRequestRejectionReason::ActiveTransitionNotInterruptible,
-        );
+    if state.active_animation_graph_transition.is_some() {
+        return Err(ActiveTransitionNotInterruptible);
     }
-    let mut route = find_animation_graph_transition_route(
-        animation_set_asset,
-        animation_graph_playback_state.current_animation_graph_node_index,
-        target_animation_graph_node_index,
-    )
-    .ok_or(AnimationGraphNodePlaybackRequestRejectionReason::MissingAuthoredGraphEdge)?;
-    // A missing transition clip must not turn an authored edge into a teleport.
-    let mut source = animation_graph_playback_state.current_animation_graph_node_index;
-    for target in &route {
-        let edge =
-            find_authored_animation_graph_edge_between_nodes(animation_set_asset, source, *target)
-                .ok_or(
-                    AnimationGraphNodePlaybackRequestRejectionReason::MissingAuthoredGraphEdge,
-                )?;
+    let mut source = route.source_node;
+    for &step in &route.steps {
+        let (edge, target) =
+            resolve_route_step(asset, source, step).ok_or(MissingAuthoredGraphEdge)?;
         if (!edge.transition_animation_clip_asset_keys.is_empty()
             && !edge
                 .transition_animation_clip_asset_keys
                 .iter()
                 .any(|clip| clip_ready(clip)))
-            || select_preferred_animation_clip_from_graph_node(
-                animation_set_asset,
-                clip_ready,
-                &animation_set_asset.animation_graph_nodes[*target as usize],
-            )
-            .is_none()
+            || select_preferred_animation_clip_from_graph_node(asset, clip_ready, target).is_none()
         {
-            return Err(AnimationGraphNodePlaybackRequestRejectionReason::MissingAnimationAsset);
+            return Err(MissingAnimationAsset);
         }
-        source = *target;
+        source = step.target_node;
     }
-    let next = route
-        .pop_front()
-        .ok_or(AnimationGraphNodePlaybackRequestRejectionReason::MissingAuthoredGraphEdge)?;
-    let authored_animation_graph_edge = find_authored_animation_graph_edge_between_nodes(
-        animation_set_asset,
-        animation_graph_playback_state.current_animation_graph_node_index,
-        next,
-    )
-    .ok_or(AnimationGraphNodePlaybackRequestRejectionReason::MissingAuthoredGraphEdge)?;
+    if source != route.target_node {
+        return Err(MissingAuthoredGraphEdge);
+    }
+    let first = route.steps.pop_front().ok_or(MissingAuthoredGraphEdge)?;
     begin_authored_animation_graph_edge_transition(
-        animation_set_asset,
+        asset,
         clip_ready,
-        authored_animation_graph_edge,
-        animation_playback_controller,
-        animation_graph_playback_state,
-        blend_duration_override_milliseconds,
+        first,
+        controller,
+        state,
+        blend_override_ms,
     )?;
-    animation_graph_playback_state.remaining_transition_nodes = route;
-    animation_graph_playback_state.route_owner = None;
-    continue_animation_graph_transition_route(
-        animation_set_asset,
-        clip_ready,
-        animation_playback_controller,
-        animation_graph_playback_state,
-    )
+    state.remaining_transition_steps = route.steps;
+    state.route_owner = None;
+    continue_animation_graph_transition_route(asset, clip_ready, controller, state)
 }
 
-/// Shortest authored directed route, excluding the starting node.
-pub fn find_animation_graph_transition_route(
+fn resolve_route_step(
     asset: &AnimationSetAsset,
-    source: u32,
-    target: u32,
-) -> Option<std::collections::VecDeque<u32>> {
-    let count = asset.animation_graph_nodes.len();
-    if source as usize >= count || target as usize >= count {
+    current: u32,
+    step: AnimationGraphRouteStep,
+) -> Option<(&AuthoredAnimationGraphEdge, &AuthoredAnimationGraphNode)> {
+    if step.source_node != current {
         return None;
     }
-    let mut predecessors = vec![None; count];
-    let mut queue = std::collections::VecDeque::from([source]);
-    predecessors[source as usize] = Some(source);
-    while let Some(current) = queue.pop_front() {
-        if current == target {
-            break;
-        }
-        for edge in &asset.animation_graph_edges {
-            if edge.source_animation_graph_node_asset_key
-                != asset.animation_graph_nodes[current as usize].animation_graph_node_asset_key
-            {
-                continue;
-            }
-            let Some(next) = asset
-                .animation_graph_nodes
-                .iter()
-                .position(|node| {
-                    node.animation_graph_node_asset_key
-                        == edge.target_animation_graph_node_asset_key
-                })
-                .and_then(|index| u32::try_from(index).ok())
-            else {
-                continue;
-            };
-            if predecessors[next as usize].is_none() {
-                predecessors[next as usize] = Some(current);
-                queue.push_back(next);
-            }
-        }
-    }
-    let mut route = std::collections::VecDeque::new();
-    let mut current = target;
-    while current != source {
-        route.push_front(current);
-        current = predecessors[current as usize]?;
-    }
-    Some(route)
+    let source = asset.animation_graph_nodes.get(current as usize)?;
+    let target = asset.animation_graph_nodes.get(step.target_node as usize)?;
+    let edge = asset.animation_graph_edges.get(step.edge_index)?;
+    (source.animation_graph_node_asset_key == edge.source_animation_graph_node_asset_key
+        && target.animation_graph_node_asset_key == edge.target_animation_graph_node_asset_key)
+        .then_some((edge, target))
 }
 
 pub fn continue_animation_graph_transition_route(
@@ -155,20 +141,14 @@ pub fn continue_animation_graph_transition_route(
     state: &mut AnimationGraphPlaybackState,
 ) -> Result<(), AnimationGraphNodePlaybackRequestRejectionReason> {
     while state.active_animation_graph_transition.is_none() {
-        let Some(next) = state.remaining_transition_nodes.pop_front() else {
+        let Some(step) = state.remaining_transition_steps.pop_front() else {
             break;
         };
-        let edge = find_authored_animation_graph_edge_between_nodes(
-            asset,
-            state.current_animation_graph_node_index,
-            next,
-        )
-        .ok_or(AnimationGraphNodePlaybackRequestRejectionReason::MissingAuthoredGraphEdge)?;
-        let remaining = std::mem::take(&mut state.remaining_transition_nodes);
+        let remaining = std::mem::take(&mut state.remaining_transition_steps);
         begin_authored_animation_graph_edge_transition(
-            asset, clip_ready, edge, controller, state, None,
+            asset, clip_ready, step, controller, state, None,
         )?;
-        state.remaining_transition_nodes = remaining;
+        state.remaining_transition_steps = remaining;
     }
     Ok(())
 }
@@ -176,20 +156,18 @@ pub fn continue_animation_graph_transition_route(
 fn begin_authored_animation_graph_edge_transition(
     animation_set_asset: &AnimationSetAsset,
     clip_ready: impl Fn(&str) -> bool + Copy,
-    authored_animation_graph_edge: &AuthoredAnimationGraphEdge,
+    step: AnimationGraphRouteStep,
     animation_playback_controller: &mut AnimationPlaybackController,
     animation_graph_playback_state: &mut AnimationGraphPlaybackState,
     blend_duration_override_milliseconds: Option<u32>,
 ) -> Result<(), AnimationGraphNodePlaybackRequestRejectionReason> {
-    let target_animation_graph_node_index = animation_set_asset
-        .animation_graph_nodes
-        .iter()
-        .position(|animation_graph_node| {
-            animation_graph_node.animation_graph_node_asset_key
-                == authored_animation_graph_edge.target_animation_graph_node_asset_key
-        })
-        .and_then(|index| u32::try_from(index).ok())
-        .ok_or(AnimationGraphNodePlaybackRequestRejectionReason::UnknownAnimationGraphNode)?;
+    let (authored_animation_graph_edge, _) = resolve_route_step(
+        animation_set_asset,
+        animation_graph_playback_state.current_animation_graph_node_index,
+        step,
+    )
+    .ok_or(AnimationGraphNodePlaybackRequestRejectionReason::MissingAuthoredGraphEdge)?;
+    let target_animation_graph_node_index = step.target_node;
     let blend_duration_milliseconds = blend_duration_override_milliseconds.unwrap_or(u32::from(
         interpret_authored_animation_graph_edge_blend_duration_milliseconds(
             &authored_animation_graph_edge.authored_animation_attributes,
@@ -262,7 +240,7 @@ pub fn enter_animation_graph_node_playback(
     animation_graph_playback_state.current_animation_graph_node_index = animation_graph_node_index;
     animation_graph_playback_state.active_animation_graph_transition = None;
     animation_graph_playback_state
-        .remaining_transition_nodes
+        .remaining_transition_steps
         .clear();
     animation_graph_playback_state.route_owner = None;
     Ok(())
@@ -301,30 +279,4 @@ pub fn select_preferred_animation_clip_from_graph_node(
         })
         .or_else(|| clips().next())
         .cloned()
-}
-
-fn find_authored_animation_graph_edge_between_nodes(
-    animation_set_asset: &AnimationSetAsset,
-    source_animation_graph_node_index: u32,
-    target_animation_graph_node_index: u32,
-) -> Option<&AuthoredAnimationGraphEdge> {
-    let source_animation_graph_node_asset_key = animation_set_asset
-        .animation_graph_nodes
-        .get(source_animation_graph_node_index as usize)?
-        .animation_graph_node_asset_key
-        .as_str();
-    let target_animation_graph_node_asset_key = animation_set_asset
-        .animation_graph_nodes
-        .get(target_animation_graph_node_index as usize)?
-        .animation_graph_node_asset_key
-        .as_str();
-    animation_set_asset
-        .animation_graph_edges
-        .iter()
-        .find(|authored_animation_graph_edge| {
-            authored_animation_graph_edge.source_animation_graph_node_asset_key
-                == source_animation_graph_node_asset_key
-                && authored_animation_graph_edge.target_animation_graph_node_asset_key
-                    == target_animation_graph_node_asset_key
-        })
 }

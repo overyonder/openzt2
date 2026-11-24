@@ -5,7 +5,6 @@ pub mod physical_presentation_state;
 pub mod prefab_ambient_light_contribution;
 pub mod prefab_authored_attachment_identifier;
 pub mod prefab_authored_billboard_orientation_mode;
-pub mod prefab_authored_rotation_cycle_advancement;
 pub mod prefab_fixed_function_world_lighting_policy;
 pub mod prefab_model_level_of_detail_visibility_range;
 pub mod prefab_model_readiness;

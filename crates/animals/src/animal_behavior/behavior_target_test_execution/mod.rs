@@ -41,7 +41,7 @@ pub(super) fn find_target_and_enter_success_or_failure_behavior_set(
         Option<&StaffRole>,
         Option<&GuestArchetype>,
     )>,
-    positions: Query<(Entity, Option<&DefinitionId>, &GlobalTransform)>,
+    positions: Query<(Entity, Option<&DefinitionId>, &GlobalTransform), With<WorldMember>>,
     fences: Query<(Entity, &FenceEdge, &GlobalTransform)>,
     worlds: Query<&WorldMember>,
     spatial: super::behavior_spatial_candidates::BehaviorSpatialCandidates,
@@ -85,8 +85,6 @@ pub(super) fn find_target_and_enter_success_or_failure_behavior_set(
         };
         let mut bounded_candidates = Vec::new();
         let bounded = action.target_radius_cm != 0
-            && (action.target_test_kind == BehaviorTargetTestKind::Fence
-                || action.target_definition_asset_id.is_some())
             && origin
                 .zip(worlds.get(entity).ok())
                 .is_some_and(|(origin, world)| {

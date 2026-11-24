@@ -1,5 +1,5 @@
-use super::super::authored_ui_presentation_action_application::RequestUiPresentationAction;
 use super::*;
+use openzt2_interface_state::ui::authored_ui_activation_contracts::UiNodeActivated;
 
 #[test]
 fn plain_notification_survives_projection_latency_without_localization() {
@@ -10,10 +10,16 @@ fn plain_notification_survives_projection_latency_without_localization() {
         .add_message::<ShowUiRole>()
         .add_message::<NotificationRejected>()
         .add_message::<NotificationPresented>()
-        .add_message::<RequestUiPresentationAction>()
+        .add_message::<UiNodeActivated>()
+        .add_message::<crate::animation::UiAnimationPlaybackRequest>()
         .add_systems(
             Update,
-            (request_notifications, acknowledge_notifications).chain(),
+            (
+                request_notifications,
+                populate_projected_notification_alerts,
+                report_effectively_visible_notifications,
+            )
+                .chain(),
         );
     let operation = app.world_mut().spawn_empty().id();
     app.world_mut().write_message(ShowNotification {
@@ -38,61 +44,39 @@ fn plain_notification_survives_projection_latency_without_localization() {
         .world()
         .resource::<Messages<NotificationPresented>>()
         .is_empty());
-    let root = app
-        .world_mut()
-        .spawn((
-            UiDocumentRoot {
-                document: Handle::default(),
-            },
-            ChildOf(owner),
-        ))
-        .id();
+    let root = app.world_mut().spawn((ChildOf(owner),)).id();
     let alert = app
         .world_mut()
         .spawn((
-            UiNodeId {
-                index: 0,
-                id: UiDocumentRole::Modal.node_id("Alert Box"),
-            },
-            UiDocumentOwner(root),
+            Visibility::Hidden,
             ChildOf(root),
             InheritedVisibility::HIDDEN,
         ))
         .id();
     let body = app
         .world_mut()
-        .spawn((
-            UiNodeId {
-                index: 1,
-                id: UiDocumentRole::Modal.node_id("Alert Text"),
-            },
-            UiDocumentOwner(root),
-            ChildOf(root),
-            InheritedVisibility::HIDDEN,
-            Text::new(""),
-        ))
+        .spawn((ChildOf(root), InheritedVisibility::HIDDEN, Text::new("")))
         .id();
+    app.world_mut()
+        .entity_mut(alert)
+        .insert(ProjectedNotificationAlert { owner, body });
     app.update();
-    assert!(app
-        .world()
-        .get::<NotificationBodyRequested>(owner)
-        .is_some());
+    assert!(app.world().get::<NotificationAlertShowing>(alert).is_some());
     assert!(app
         .world()
         .resource::<Messages<NotificationPresented>>()
         .is_empty());
-    let actions = app
-        .world_mut()
-        .resource_mut::<Messages<RequestUiPresentationAction>>()
-        .drain()
-        .collect::<Vec<_>>();
-    assert_eq!(actions.len(), 2);
-    assert!(actions.iter().all(|action| action.document_root == root));
+    assert_eq!(
+        app.world().get::<Text>(body).unwrap().0,
+        "The selected save could not be read."
+    );
+    assert_eq!(
+        *app.world().get::<Visibility>(alert).unwrap(),
+        Visibility::Inherited
+    );
     app.world_mut()
         .entity_mut(alert)
         .insert(InheritedVisibility::VISIBLE);
-    app.world_mut().get_mut::<Text>(body).unwrap().0 =
-        "The selected save could not be read.".into();
     app.update();
     let presented = app
         .world_mut()

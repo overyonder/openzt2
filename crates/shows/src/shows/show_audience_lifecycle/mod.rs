@@ -20,8 +20,8 @@ use openzt2_zoo_state::{
         behavior_token_types::{BehaviorSelfToken, ClaimedBehaviorSelfToken},
     },
     behavior_task_execution_types::{
-        running_actions::{RunBehaviorWatchShow, RunningBehaviorInstruction},
         BehaviorTaskExecutionState, PendingBehaviorTaskFailure,
+        running_actions::{RunBehaviorWatchShow, RunningBehaviorInstruction},
     },
     economy::{
         authored_transaction_amount::authored_currency_to_money,
@@ -29,7 +29,7 @@ use openzt2_zoo_state::{
         service_types::ServiceReservation,
     },
     guests::guest_simulation_types::{Guest, GuestPhase, GuestRng},
-    locomotion::locomotion_types::Destination,
+    locomotion::locomotion_types::{Destination, SpatialGrid, SpatialGridMembership},
     shows::{
         running_show_types::{
             GuestShowNeed, RunningShow, RunningShowFromRow, RunningShowOnStage, ShowPhase,
@@ -59,6 +59,8 @@ pub(super) fn invite_guests_to_starting_shows(
     definitions: Res<WorldDefinitions>,
     assets: Res<Assets<WorldDefinitionAsset>>,
     clock: Single<&ZooClock>,
+    grids: Query<&SpatialGrid>,
+    spatial_membership: SpatialGridMembership,
     mut commands: Commands,
 ) {
     if runs.is_empty() {
@@ -111,8 +113,32 @@ pub(super) fn invite_guests_to_starting_shows(
                     .map(|band| band.guest_count[1])
             })
             .unwrap_or(definition.audience_capacity);
+        let Ok(grid) = grids.get(world.root) else {
+            continue;
+        };
+        let Some(centre) = grid
+            .cell_of(pose.translation().xz())
+            .and_then(|cell| grid.cell_xy(cell))
+        else {
+            continue;
+        };
+        let cell_radius = (radius / f64::from(grid.cell_size_m)).ceil() as u32;
+        let min = UVec2::new(
+            centre.x.saturating_sub(cell_radius),
+            centre.y.saturating_sub(cell_radius),
+        );
+        let max = UVec2::new(
+            centre.x.saturating_add(cell_radius).min(grid.width - 1),
+            centre.y.saturating_add(cell_radius).min(grid.height - 1),
+        );
+        let nearby_members = &spatial_membership;
+        let nearby_entities = (min.y..=max.y).flat_map(|y| {
+            (min.x..=max.x)
+                .flat_map(move |x| nearby_members.members(world.root, y * grid.width + x))
+        });
         let mut nearby = guests
-            .iter()
+            .iter_many(nearby_entities)
+            .filter_map(Result::ok)
             .filter_map(|(guest, phase, member, position, children, need)| {
                 if *phase != GuestPhase::Visiting
                     || world.root != member.root
@@ -165,7 +191,6 @@ pub(super) fn bind_ready_show_watch_actions(
             &WorldMember,
             &BehaviorTaskExecutionState,
             &RunningBehaviorInstruction,
-            Has<GuestShowExperience>,
         ),
         (
             With<Guest>,
@@ -195,7 +220,7 @@ pub(super) fn bind_ready_show_watch_actions(
     targets: Query<(&WorldMember, Option<&Children>), Without<ShowStage>>,
     viewing_locations: Query<&ShowViewingLocationOf>,
 ) {
-    for (guest, phase, world, task, instruction, has_history) in
+    for (guest, phase, world, task, instruction) in
         behavior_action_actors(&mut watching, activation.0)
     {
         if activation.0.is_none() && !instruction.can_update_after_activation(clock.tick) {
@@ -250,16 +275,21 @@ pub(super) fn bind_ready_show_watch_actions(
             openzt2_zoo_state::behavior_task_execution_types::running_actions::mark_behavior_task_for_failure_and_stop_navigation(guest, &mut commands);
             continue;
         };
-        let mut guest_commands = commands.entity(guest);
-        guest_commands.insert(GuestWatchingStage {
+        commands.entity(guest).insert(GuestWatchingStage {
             stage,
             location: Some(location),
             instruction: Some(instruction.id()),
         });
-        if !has_history {
-            guest_commands.insert(GuestShowExperience::default());
-        }
     }
+}
+
+pub(super) fn discard_experience_when_guest_stops_watching(
+    removed: On<Remove<GuestWatchingStage>>,
+    mut commands: Commands,
+) {
+    commands
+        .entity(removed.entity)
+        .try_remove::<GuestShowExperience>();
 }
 
 pub(super) fn retire_interrupted_show_watch_actions(
@@ -318,6 +348,7 @@ pub(super) fn clear_completed_show_watch_action(
 
 pub(super) fn complete_watch_actions_after_show(
     mut finished: MessageReader<ShowRunFinished>,
+    mut cancelled: MessageReader<super::running_show_schedule::ShowRunCancelled>,
     audiences: Query<&StageShowAudience>,
     mut guests: Query<
         (
@@ -350,8 +381,24 @@ pub(super) fn complete_watch_actions_after_show(
             (u128::from(nanos) * u128::from(definitions.timing().fixed_hz)).div_ceil(1_000_000_000);
         u64::try_from(ticks).ok()
     });
-    for show in finished.read() {
-        let Ok(audience) = audiences.get(show.stage) else {
+    let outcomes = finished
+        .read()
+        .map(|show| {
+            let score = runs.get(show.show).ok().map(|run| {
+                (
+                    u16::try_from(run.completed_tricks).unwrap_or(u16::MAX),
+                    run.trick_score,
+                )
+            });
+            (show.stage, show.show, score, score.is_some())
+        })
+        .chain(
+            cancelled
+                .read()
+                .map(|show| (show.stage, show.show, None, true)),
+        );
+    for (stage, show, score, can_reward) in outcomes {
+        let Ok(audience) = audiences.get(stage) else {
             continue;
         };
         for guest in audience.iter() {
@@ -363,16 +410,10 @@ pub(super) fn complete_watch_actions_after_show(
             if watch.instruction != Some(instruction.id()) {
                 continue;
             }
-            if let (Some(rewards), Some(timeout), Ok(run)) =
-                (reward_policy, timeout, runs.get(show.show))
-            {
-                let favourite = experience.show == Some(show.show) && experience.saw_favourite;
-                let (dollars, need_update) = rewards.audience_feedback(
-                    u16::try_from(run.completed_tricks).unwrap_or(u16::MAX),
-                    run.trick_score,
-                    favourite,
-                    || random.0.next_u32(),
-                );
+            if let (Some(rewards), Some(timeout), true) = (reward_policy, timeout, can_reward) {
+                let favourite = experience.show == Some(show) && experience.saw_favourite;
+                let (dollars, need_update) =
+                    rewards.audience_feedback(score, favourite, || random.0.next_u32());
                 if let Some(mut need) = need {
                     need.adjust(-need_update);
                 }
@@ -385,11 +426,11 @@ pub(super) fn complete_watch_actions_after_show(
                             name: AssetId::from_key("t_donationshow"),
                             available_at: clock.tick,
                             expires_at: clock.tick.saturating_add(timeout),
-                            payload: Some(show.stage),
+                            payload: Some(stage),
                             retain_on_failure: false,
                         },
                         ExperienceDonation {
-                            subject: show.stage,
+                            subject: stage,
                             amount,
                             submitted: false,
                         },

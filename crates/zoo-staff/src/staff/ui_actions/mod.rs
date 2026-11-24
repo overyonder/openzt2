@@ -25,6 +25,8 @@ pub(super) fn route_staff_assignment_selection_and_firing_ui_actions(
     roots: Query<&UiDocumentRoot>,
     selected: WorldUiSelection,
     staff: Query<(), With<Staff>>,
+    mut keepers: Query<&mut KeeperAssignmentSelection>,
+    mut trainers: Query<&mut TrainerAssignmentSelection>,
     mut firing: MessageWriter<FireStaffRequest>,
 ) {
     for activation in activations.read() {
@@ -44,16 +46,24 @@ pub(super) fn route_staff_assignment_selection_and_firing_ui_actions(
             match &record.action {
                 UiStaffAction::SetKeeperAssignmentSelection { assignment_index } => {
                     if let Some(target) = selected.subject() {
-                        commands.entity(target).insert(KeeperAssignmentSelection(
-                            u32::try_from(*assignment_index).ok(),
-                        ));
+                        let selection =
+                            KeeperAssignmentSelection(u32::try_from(*assignment_index).ok());
+                        if let Ok(mut existing) = keepers.get_mut(target) {
+                            existing.set_if_neq(selection);
+                        } else {
+                            commands.entity(target).insert(selection);
+                        }
                     }
                 }
                 UiStaffAction::SetTrainerAssignmentSelection { assignment_index } => {
                     if let Some(target) = selected.subject() {
-                        commands.entity(target).insert(TrainerAssignmentSelection(
-                            u32::try_from(*assignment_index).ok(),
-                        ));
+                        let selection =
+                            TrainerAssignmentSelection(u32::try_from(*assignment_index).ok());
+                        if let Ok(mut existing) = trainers.get_mut(target) {
+                            existing.set_if_neq(selection);
+                        } else {
+                            commands.entity(target).insert(selection);
+                        }
                     }
                 }
                 UiStaffAction::FireSelectedStaff => {

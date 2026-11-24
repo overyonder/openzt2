@@ -1,8 +1,12 @@
 mod invalidation;
+use crate::terrain::water_regions::authored_membership::TerrainWaterMembershipChanged;
 use bevy::camera::visibility::RenderLayers;
-use bevy::ecs::{entity::EntityHashMap, relationship::RelationshipTarget};
+use bevy::ecs::{
+    entity::{EntityHashMap, EntityHashSet},
+    relationship::RelationshipTarget,
+};
 use bevy::mesh::skinning::SkinnedMesh;
-use bevy::platform::collections::HashSet;
+use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 use bevy::render::storage::ShaderBuffer;
 use bevy::transform::helper::TransformHelper;
@@ -295,6 +299,54 @@ fn local_bound(
 #[derive(Component, PartialEq)]
 pub(in crate::terrain) struct SceneCausticWorldBound(Option<PrefabBoundingSphere>);
 
+const CAUSTIC_SPATIAL_BIN_METRES: f32 = 16.0;
+
+#[derive(Component, Default)]
+pub(in crate::terrain) struct SceneCausticSpatialIndex {
+    root_bins: EntityHashMap<IVec2>,
+    by_bin: HashMap<IVec2, EntityHashSet>,
+}
+
+impl SceneCausticSpatialIndex {
+    fn coordinates(point: Vec2) -> IVec2 {
+        (point / CAUSTIC_SPATIAL_BIN_METRES).floor().as_ivec2()
+    }
+
+    fn remove_root(&mut self, root: Entity) {
+        if let Some(previous) = self.root_bins.remove(&root) {
+            if let bevy::platform::collections::hash_map::Entry::Occupied(mut bin) =
+                self.by_bin.entry(previous)
+            {
+                bin.get_mut().remove(&root);
+                if bin.get().is_empty() {
+                    bin.remove();
+                }
+            }
+        }
+    }
+
+    fn update_root(&mut self, root: Entity, point: Option<Vec2>) {
+        let next = point.map(Self::coordinates);
+        if next == self.root_bins.get(&root).copied() {
+            return;
+        }
+        self.remove_root(root);
+        if let Some(bin) = next {
+            self.root_bins.insert(root, bin);
+            self.by_bin.entry(bin).or_default().insert(root);
+        }
+    }
+}
+
+pub(in crate::terrain) fn unindex_discarded_caustic_world_bound(
+    discarded: On<Discard<SceneCausticWorldBound>>,
+    mut index: Query<&mut SceneCausticSpatialIndex>,
+) {
+    if let Ok(mut index) = index.single_mut() {
+        index.remove_root(discarded.entity);
+    }
+}
+
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(in crate::terrain) fn project_scene_caustic_targets(
     mut commands: Commands,
@@ -313,11 +365,17 @@ pub(in crate::terrain) fn project_scene_caustic_targets(
     terrains: Res<Assets<TerrainAsset>>,
     parents: Query<&'static ChildOf>,
     mut changes: BoundChanges,
-    mut water: WaterChanges,
+    (mut water, mut membership_changes, mut spatial, mut removed_sources): (
+        WaterChanges,
+        MessageReader<TerrainWaterMembershipChanged>,
+        Query<&mut SceneCausticSpatialIndex>,
+        RemovedComponents<SceneWaterBoundSource>,
+    ),
     dependencies: BoundDependencies,
     targets: Query<Entity, With<TerrainWaterCausticSceneTarget>>,
     mut world_bounds: Query<(Entity, &mut SceneCausticWorldBound)>,
 ) {
+    let mut spatial = spatial.single_mut().ok();
     let mut dirty = HashSet::new();
     changes.collect(&dependencies, &mut dirty);
     dirty.extend(changes.policies.iter());
@@ -374,6 +432,10 @@ pub(in crate::terrain) fn project_scene_caustic_targets(
                     context.world_transform(root)?.to_matrix(),
                 ))
             });
+        if let Some(spatial) = spatial.as_deref_mut() {
+            let point = sphere.map(|bound| Vec3::from_array(bound.center).xz());
+            spatial.update_root(root, point);
+        }
         dependencies.replace(&mut commands, root, context.inputs.into_inner());
         if let Ok((_, mut bound)) = world_bounds.get_mut(root) {
             bound.set_if_neq(SceneCausticWorldBound(sphere));
@@ -383,19 +445,59 @@ pub(in crate::terrain) fn project_scene_caustic_targets(
         }
         membership.insert(root);
     }
-    let removed_index = changes.gone_index.read().count() != 0;
+    let mut rebuild = changes.gone_index.read().count() != 0;
+    membership.extend(removed_sources.read());
     for region in water.regions() {
         if let Ok(users) = dependencies.water.get(region) {
             membership.extend(users.iter());
         }
     }
-    let changed_terrain = water
+    rebuild |= water
         .terrain
         .read()
         .filter_map(changed_asset)
         .any(|id| indexes.iter().any(|index| index.terrain() == id));
-    if removed_index || changed_terrain || indexes.iter().any(|index| index.is_changed()) {
+    let mut published = HashSet::new();
+    let mut affected_bins = HashSet::new();
+    for change in membership_changes.read() {
+        published.insert(change.terrain);
+        if let Some(regions) = &change.regions {
+            for owner in regions {
+                if let Ok(users) = dependencies.water.get(*owner) {
+                    membership.extend(users.iter());
+                }
+            }
+        }
+        let (Some(points), Some(asset)) = (&change.points, terrains.get(change.terrain)) else {
+            rebuild = true;
+            continue;
+        };
+        let spacing = asset.canonical_terrain_grid().units.cell_size_metres;
+        let tile_span = spacing * 4.0;
+        for &point in points {
+            // Shared samples affect both bordering tiles. A point probe can
+            // also select the opposing side of an adjacent tile.
+            let tile = (point / 4).as_vec2();
+            let source_min = (tile - Vec2::splat(2.0)) * tile_span;
+            let source_max = (tile + Vec2::splat(2.0)) * tile_span;
+            let min = SceneCausticSpatialIndex::coordinates(Vec2::new(source_min.x, -source_max.y));
+            let max = SceneCausticSpatialIndex::coordinates(Vec2::new(source_max.x, -source_min.y));
+            for y in min.y..=max.y {
+                affected_bins.extend((min.x..=max.x).map(|x| IVec2::new(x, y)));
+            }
+        }
+    }
+    rebuild |= indexes
+        .iter()
+        .any(|index| index.is_changed() && !published.contains(&index.terrain()));
+    if rebuild || (spatial.is_none() && !affected_bins.is_empty()) {
         membership.extend(world_bounds.iter().map(|(root, _)| root));
+    } else if let Some(spatial) = spatial {
+        for bin in affected_bins {
+            if let Some(roots) = spatial.by_bin.get(&bin) {
+                membership.extend(roots.iter().copied());
+            }
+        }
     }
     for root in membership {
         let Ok((_, _, old)) = roots.get_mut(root) else {
@@ -463,11 +565,20 @@ pub(in crate::terrain) fn project_scene_caustic_passes(
     policies: Query<(), With<PrefabCausticPolicy>>,
     parents: Query<&ChildOf>,
     mut changes: PassChanges,
-    (mut asset_dependencies, root_primitives, primitive_roots, draws): (
+    (
+        mut asset_dependencies,
+        root_primitives,
+        primitive_roots,
+        draws,
+        draws_by_water,
+        bounds_by_water,
+    ): (
         Query<(Entity, &mut SceneCausticMaterialDependencies)>,
         Query<&SceneCausticPrimitives>,
         Query<&SceneCausticPhysicalRoot>,
         Query<(), With<TerrainWaterCausticScenePass>>,
+        Query<&SceneCausticWaterDraws>,
+        Query<&SceneWaterBoundUsers>,
     ),
     regions: TerrainWaterRegionQuery,
     terrains: Res<Assets<TerrainAsset>>,
@@ -544,10 +655,17 @@ pub(in crate::terrain) fn project_scene_caustic_passes(
             dirty.insert(source);
         }
     }
-    let changed_regions: HashSet<_> = changes.water.regions().collect();
-    if !changed_regions.is_empty() {
-        for (root, target) in &targets {
-            if changed_regions.contains(&target.water_owner) {
+    for owner in changes.water.regions() {
+        if let Ok(draws) = draws_by_water.get(owner) {
+            dirty.extend(
+                parents
+                    .iter_many(draws.iter())
+                    .flatten()
+                    .map(ChildOf::parent),
+            );
+        }
+        if let Ok(bounds) = bounds_by_water.get(owner) {
+            for root in bounds.iter().filter(|root| targets.contains(*root)) {
                 if let Ok(primitives) = root_primitives.get(root) {
                     dirty.extend(primitives.iter());
                 }

@@ -1,5 +1,5 @@
 use bevy::{
-    prelude::{Commands, MessageReader, MessageWriter, Or, Query, Res, With},
+    prelude::{Commands, MessageReader, MessageWriter, Query, Res, With},
     tasks::IoTaskPool,
 };
 
@@ -14,12 +14,9 @@ use super::super::{
     },
     persistence_filesystem_paths::PersistenceFilesystemPaths,
 };
-use super::{
-    pending_snapshot_application_types::PendingSnapshotApplication,
-    persistence_slot_filesystem_task_types::{
-        PersistenceSlotFilesystemOperationContext, PersistenceSlotFilesystemTask,
-        PersistenceSlotFilesystemTaskCompletion,
-    },
+use super::persistence_slot_filesystem_task_types::{
+    PersistenceSlotFilesystemOperationContext, PersistenceSlotFilesystemTask,
+    PersistenceSlotFilesystemTaskCompletion, PersistenceSlotOperation,
 };
 
 pub(in super::super) fn begin_deleting_requested_save_slot_snapshot_file(
@@ -27,14 +24,7 @@ pub(in super::super) fn begin_deleting_requested_save_slot_snapshot_file(
     mut delete_requests: MessageReader<DeleteWorldSnapshotFromSlot>,
     persistence_filesystem_paths: Option<Res<PersistenceFilesystemPaths>>,
     profile_options: Res<ProfileOptions>,
-    active_persistence_operations: Query<
-        (),
-        Or<(
-            With<PersistenceSlotFilesystemTask>,
-            With<PendingSnapshotApplication>,
-            With<super::original_saved_game_load_preparation::OriginalSavedGameLoadPreparation>,
-        )>,
-    >,
+    active_persistence_operations: Query<(), With<PersistenceSlotOperation>>,
     mut persistence_failures: MessageWriter<WorldSnapshotPersistenceFailed>,
 ) {
     let mut accepted_delete_request = false;

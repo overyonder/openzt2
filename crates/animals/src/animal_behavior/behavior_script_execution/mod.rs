@@ -32,10 +32,12 @@ use std::{
 
 pub(super) mod script_particles;
 mod world_access;
+pub use world_access::{BreedingCenterEndangeredBirths, ScriptFloatAttributes};
 pub(super) use world_access::remove_settled_behavior_script_transactions;
 use world_access::{
+    BehaviorScriptPlacement, ScriptPlacedObject,
     BehaviorScriptEffect, BehaviorScriptStructuralEdits, BehaviorScriptWorldAccess,
-    DiseaseAttribute, ScriptFloatAttribute,
+    DiseaseAttribute, ScriptFloatAttribute, need_distress,
 };
 
 #[derive(Default)]
@@ -133,6 +135,10 @@ pub(super) fn execute_authored_behavior_script_actions(
         let execution_id = task.execution_id;
         let script_world = RefCell::new(&mut world);
         let world_view = &script_world;
+        let script_commands = RefCell::new(&mut commands);
+        let command_queue = &script_commands;
+        let placed_objects = RefCell::new(Vec::<ScriptPlacedObject>::new());
+        let placed = &placed_objects;
         let result = vm.lua.scope(|scope| -> mlua::Result<Option<String>> {
             install_lua_script_dependency_loading_functions(
                 &vm.lua,
@@ -142,6 +148,15 @@ pub(super) fn execute_authored_behavior_script_actions(
                 &vm.loaded,
                 &path_stack,
             )?;
+            vm.lua.globals().set("loadComponent", scope.create_function(|lua, value: Table| {
+                let kind = value.get::<String>("_xml")?;
+                if !kind.eq_ignore_ascii_case("BFAIToken") {
+                    return Ok(None);
+                }
+                let token = lua.create_table()?;
+                token.set("Name", value.get::<String>("Name")?)?;
+                Ok(Some(token))
+            })?)?;
             for name in ["LUALOG", "SYSERROR", "BFLOG"] {
                 vm.lua.globals().set(
                     name,
@@ -164,8 +179,9 @@ pub(super) fn execute_authored_behavior_script_actions(
                                         let found = lua.create_table()?;
                                         for (index, entity) in world_view
                                             .borrow()
-                                            .entities_of_type(&binder_type)
+                                            .entities_of_type(actor, &binder_type)
                                             .into_iter()
+                                            .chain(placed.borrow().iter().filter(|object| object.binder.eq_ignore_ascii_case(&binder_type)).map(|object| object.entity))
                                             .enumerate()
                                         {
                                             let row = lua.create_table()?;
@@ -189,6 +205,21 @@ pub(super) fn execute_authored_behavior_script_actions(
                             )?;
                         }
                         "ZTWorldMgr" => {
+                            manager.set("ZT_PLACEOBJECT", scope.create_function(move |_, (_manager, request): (Table, Table)| {
+                                let request = BehaviorScriptPlacement {
+                                    kind: request.get("placementobject")?,
+                                    position: Vec3::new(request.get("x")?, request.get("z")?, request.get("y")?),
+                                    rotation_degrees: request.get::<Option<f32>>("r")?.unwrap_or_default(),
+                                    ignore_land_collision: request.get::<Option<bool>>("ignoreLandCollision")?.unwrap_or_default(),
+                                    ignore_water_adjacent: request.get::<Option<bool>>("ignoreWaterAdjacent")?.unwrap_or_default(),
+                                };
+                                if let Some(object) = world_view.borrow_mut().place_object(&mut command_queue.borrow_mut(), actor, request) {
+                                    placed.borrow_mut().push(object);
+                                    Ok(true)
+                                } else {
+                                    Ok(false)
+                                }
+                            })?)?;
                             manager.set(
                                 "ZT_SET_BIRTH_MOTHER_NAME",
                                 scope.create_function(move |_, arguments: mlua::MultiValue| {
@@ -247,6 +278,7 @@ pub(super) fn execute_authored_behavior_script_actions(
                     let entity = reference.borrow::<BehaviorScriptEntityReference>()?.0;
                     if !entities.contains(entity)
                         && !world_view.borrow().can_resolve(actor, execution_id, entity)
+                        && !placed.borrow().iter().any(|object| object.entity == entity)
                     {
                         return Ok(None);
                     }
@@ -262,6 +294,7 @@ pub(super) fn execute_authored_behavior_script_actions(
                             let position = world_view
                                 .borrow()
                                 .position(actor, execution_id, entity)
+                                .or_else(|| placed.borrow().iter().find(|object| object.entity == entity).map(|object| object.position))
                                 .ok_or_else(|| mlua::Error::runtime("entity has no position"))?;
                             // Native positions are ground x/y with height in z.
                             let table = lua.create_table()?;
@@ -278,6 +311,7 @@ pub(super) fn execute_authored_behavior_script_actions(
                             world_view
                                 .borrow()
                                 .binder_type(actor, execution_id, entity)
+                                .or_else(|| placed.borrow().iter().find(|object| object.entity == entity).map(|object| object.binder.clone()))
                                 .ok_or_else(|| mlua::Error::runtime("entity has no binder type"))
                         })?,
                     )?;
@@ -285,12 +319,9 @@ pub(super) fn execute_authored_behavior_script_actions(
                         "BFG_GET_ATTR_FLOAT",
                         scope.create_function(move |_, (subject, name): (Table, String)| {
                             let entity = subject_entity(&subject)?;
-                            let attribute =
-                                ScriptFloatAttribute::from_name(&name).ok_or_else(|| {
-                                    mlua::Error::runtime(format!(
-                                        "unmapped behavior float attribute {name}"
-                                    ))
-                                })?;
+                            let Some(attribute) = ScriptFloatAttribute::from_name(&name) else {
+                                return Ok(0.0);
+                            };
                             Ok(effects
                                 .borrow()
                                 .iter()
@@ -301,6 +332,7 @@ pub(super) fn execute_authored_behavior_script_actions(
                                     {
                                         Some(value)
                                     }
+                                    BehaviorScriptEffect::Need(ref request) if request.animal == entity && attribute == ScriptFloatAttribute::AnimalNeed(request.need) => Some(need_distress(request.value_q16)),
                                     _ => None,
                                 })
                                 .unwrap_or_else(|| world_view.borrow().float(entity, attribute)))
@@ -308,10 +340,17 @@ pub(super) fn execute_authored_behavior_script_actions(
                     )?;
                     table.set(
                         "BFG_SET_ATTR_FLOAT",
-                        scope.create_function(move |_, (subject, value): (Table, Table)| {
+                        scope.create_function(move |lua, (subject, value, level): (Table, mlua::Value, Option<f32>)| {
                             let entity = subject_entity(&subject)?;
-                            let name: String = value.get(1)?;
-                            let level: f32 = value.get(2)?;
+                            let (name, level) = if let mlua::Value::Table(value) = value {
+                                if value.contains_key("name")? {
+                                    (value.get::<String>("name")?, value.get::<f32>("value")?)
+                                } else {
+                                    (value.get::<String>(1)?, value.get::<f32>(2)?)
+                                }
+                            } else {
+                                (lua.unpack::<String>(value)?, level.ok_or_else(|| mlua::Error::runtime("missing float value"))?)
+                            };
                             let attribute = ScriptFloatAttribute::from_name(&name)
                                 .filter(|_| level.is_finite())
                                 .ok_or_else(|| {
@@ -319,15 +358,65 @@ pub(super) fn execute_authored_behavior_script_actions(
                                         "invalid behavior float attribute {name}"
                                     ))
                                 })?;
+                            if let ScriptFloatAttribute::AnimalNeed(need) = attribute {
+                                let request = world_view.borrow().request_need(entity, need, level);
+                                if let Some(request) = request {
+                                    effects.borrow_mut().push(BehaviorScriptEffect::Need(request));
+                                    return Ok(true);
+                                }
+                                return Ok(false);
+                            }
+                            if let ScriptFloatAttribute::Authored(attribute) = attribute
+                                && world_view.borrow().authored_float(entity, attribute).is_none()
+                            {
+                                return Ok(false);
+                            }
                             if !world_view
                                 .borrow_mut()
                                 .set_existing_float(entity, attribute, level)
                             {
+                                if matches!(attribute, ScriptFloatAttribute::GoodNeedPoints | ScriptFloatAttribute::BadNeedPoints) {
+                                    return Ok(false);
+                                }
                                 effects
                                     .borrow_mut()
                                     .push(BehaviorScriptEffect::Float(entity, attribute, level));
                             }
-                            Ok(())
+                            Ok(true)
+                        })?,
+                    )?;
+                    table.set(
+                        "BFG_GET_PRIMARY_BIOME",
+                        scope.create_function(move |_, subject: Table| {
+                            Ok(world_view.borrow().primary_biome(subject_entity(&subject)?).unwrap_or_default())
+                        })?,
+                    )?;
+                    table.set(
+                        "BFG_GET_TRAVERSABLE_AREA",
+                        scope.create_function(move |lua, subject: Table| {
+                            let Some(area) = world_view.borrow().traversable_area(subject_entity(&subject)?) else {
+                                return Ok(None);
+                            };
+                            let result = lua.create_table()?;
+                            result.set("area", lua.create_userdata(BehaviorScriptEntityReference(area))?)?;
+                            result.set("BFG_TA_HAS_BIOME_FEATURE", scope.create_function(move |_, (_subject, value): (Table, mlua::Value)| {
+                                let feature = match value {
+                                    mlua::Value::Table(value) => value.get::<String>("featureName")?,
+                                    mlua::Value::String(value) => value.to_string_lossy(),
+                                    _ => return Ok(false),
+                                };
+                                Ok(world_view.borrow().area_has_feature(area, &feature))
+                            })?)?;
+                            Ok(Some(result))
+                        })?,
+                    )?;
+                    table.set(
+                        "BFG_SEND_TOKEN",
+                        scope.create_function(move |_, (subject, token): (Table, Table)| {
+                            let entity = subject_entity(&subject)?;
+                            let name: String = token.get("Name")?;
+                            effects.borrow_mut().push(BehaviorScriptEffect::Token(entity, AssetId::from_key(&name.to_ascii_lowercase()), None));
+                            Ok(true)
                         })?,
                     )?;
                     table.set(
@@ -367,7 +456,12 @@ pub(super) fn execute_authored_behavior_script_actions(
                                     }
                                     // `canreproduce.lua`: pregnancy tokens and young children.
                                     "BFAI_HAS_TOKEN" => Ok(mlua::Value::Boolean(
-                                        world_view.borrow().has_token(entity, &text()?),
+                                        {
+                                            let name = text()?;
+                                            let key = AssetId::from_key(&name.to_ascii_lowercase());
+                                            effects.borrow().iter().any(|effect| matches!(effect, BehaviorScriptEffect::Token(target, token, _) if *target == entity && *token == key))
+                                                || world_view.borrow().has_token(entity, &name)
+                                        },
                                     )),
                                     // `justgavebirth.lua`: parents, mates and children.
                                     "BFAI_GET_RELATED_ENTITY" => {

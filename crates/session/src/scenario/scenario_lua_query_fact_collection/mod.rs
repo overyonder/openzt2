@@ -51,8 +51,7 @@ pub(super) struct ScenarioLuaQueryFactSources<'w, 's> {
     photo_challenges: ScenarioLuaPhotoChallengeQuery<'w, 's>,
     fence_edges: super::scenario_lua_types::ScenarioLuaFenceEdgeQuery<'w, 's>,
     path_tiles: super::scenario_lua_types::ScenarioLuaPathTileQuery<'w, 's>,
-    edited_terrain: super::scenario_lua_types::ScenarioLuaEditedTerrainQuery<'w, 's>,
-    terrain_assets: Res<'w, Assets<openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset>>,
+    biome_cells: Query<'w, 's, &'static super::scenario_biome_cell_counts::WorldBiomeCellCounts>,
     ui_nodes: super::scenario_lua_types::ScenarioLuaUiNodeQuery<'w, 's>,
     ui_roots: super::scenario_lua_types::ScenarioLuaUiRootQuery<'w, 's>,
     ui_documents: Res<'w, Assets<openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset>>,
@@ -89,8 +88,6 @@ impl ScenarioLuaQueryFactSources<'_, '_> {
         let photo_challenges: &'a ScenarioLuaPhotoChallengeQuery<'a, 'a> = &self.photo_challenges;
         let path_tiles: &'a super::scenario_lua_types::ScenarioLuaPathTileQuery<'a, 'a> =
             &self.path_tiles;
-        let edited_terrain: &'a super::scenario_lua_types::ScenarioLuaEditedTerrainQuery<'a, 'a> =
-            &self.edited_terrain;
         let fence_edges: &'a super::scenario_lua_types::ScenarioLuaFenceEdgeQuery<'a, 'a> =
             &self.fence_edges;
         let tanks: &'a super::scenario_lua_types::ScenarioLuaTankQuery<'a, 'a> = &self.tanks;
@@ -137,8 +134,7 @@ impl ScenarioLuaQueryFactSources<'_, '_> {
             selected_entity: self.selected_entity.subject(),
             fence_edges,
             path_tiles,
-            edited_terrain,
-            terrain_assets: &self.terrain_assets,
+            biome_cells: selected.and_then(|(root, ..)| self.biome_cells.get(root).ok()),
             ui_nodes,
             ui_roots,
             ui_documents: &self.ui_documents,

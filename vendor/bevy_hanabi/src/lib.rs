@@ -202,6 +202,7 @@ pub mod modifier;
 mod plugin;
 pub mod properties;
 mod render;
+mod render_feedback;
 mod spawn;
 mod time;
 
@@ -210,7 +211,7 @@ mod test_utils;
 
 pub use asset::{
     AlphaMode, DefaultMesh, EffectAsset, EffectAssetDeserializer, EffectAssetLoader,
-    EffectAssetSerializer, EffectParent, MotionIntegration, SimulationCondition,
+    EffectAssetSerializer, EffectChildren, EffectParent, MotionIntegration, SimulationCondition,
 };
 pub use attributes::*;
 pub use gradient::{Gradient, GradientKey};
@@ -220,7 +221,10 @@ pub use plugin::{EffectSystems, HanabiPlugin};
 pub use properties::*;
 pub use render::authored_draw::{EffectRenderPass, EffectRenderPassState, EffectRenderPasses};
 pub use render::{DebugSettings, LayoutFlags, ShaderCache};
-pub use spawn::{tick_spawners, CpuValue, EffectSpawner, Random, SpawnerSettings};
+pub use render_feedback::{ParticleAliveCount, ParticleEffectGpuReady};
+pub use spawn::{
+    tick_spawners, CpuValue, EffectSpawner, ExternalEffectSpawner, Random, SpawnerSettings,
+};
 pub use time::{EffectSimulation, EffectSimulationTime};
 use wgpu::{
     BindGroupLayoutEntry, BindingType, SamplerBindingType, ShaderStages, TextureDescriptor,
@@ -624,6 +628,27 @@ pub struct HanabiMainCamera;
 #[extract_app(bevy::render::RenderApp)]
 pub struct EffectVisibilityClass;
 
+/// Linear fog available to render modifiers in a single view.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Component,
+    PartialEq,
+    ExtractComponent,
+    bevy::render::render_resource::ShaderType,
+)]
+#[extract_app(bevy::render::RenderApp)]
+#[extract_component_filter(Changed<ParticleViewFog>)]
+pub struct ParticleViewFog {
+    /// Start, reciprocal width, and end of the fog depth interval.
+    pub depth_range: Vec4,
+    /// World-space depth plane.
+    pub depth_plane: Vec4,
+    /// Fog colour in the modifier's colour space.
+    pub colour: Vec4,
+}
+
 /// Particle-based visual effect instance.
 ///
 /// The particle effect component represents a single instance of a visual
@@ -688,6 +713,8 @@ pub struct EffectVisibilityClass;
 #[reflect(Component)]
 #[require(
     CompiledParticleEffect,
+    ParticleEffectGpuReady,
+    EffectPrngState,
     Transform,
     Visibility,
     VisibilityClass,
@@ -704,6 +731,9 @@ pub struct ParticleEffect {
     /// `None`, and the instance uses the same PRNG seed as its [`EffectAsset`].
     pub prng_seed: Option<u32>,
 }
+
+#[derive(Component, Default)]
+struct EffectPrngState(u32);
 
 impl ParticleEffect {
     /// Create a new particle effect instance from an existing asset.
@@ -1119,8 +1149,14 @@ pub struct EffectMesh(pub Handle<Mesh>);
 pub struct EffectDeltaTime(pub f32);
 
 /// Multiplies the authored render size for one effect instance.
-#[derive(Component, Clone, Copy, Debug)]
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
 pub struct EffectParticleSizeScale(pub f32);
+
+impl Default for EffectParticleSizeScale {
+    fn default() -> Self {
+        Self(1.0)
+    }
+}
 
 /// Explicit local-space initialization for a CPU-requested particle.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1139,47 +1175,6 @@ pub struct ParticleSpawnBatch {
     pub points: Vec<ParticleSpawnPoint>,
     /// Submission identifier used to match GPU particle-count readbacks.
     pub submission: u32,
-}
-
-/// Opt-in, asynchronous GPU live-particle count. No value is available before
-/// the first completed readback. The latest sample can precede the current frame.
-#[derive(Component, Clone, Debug, Default)]
-pub struct ParticleAliveCount {
-    value: std::sync::Arc<ParticleCountReadback>,
-}
-
-#[derive(Debug, Default)]
-struct ParticleCountReadback {
-    sample: std::sync::atomic::AtomicU64,
-    sampled: std::sync::atomic::AtomicBool,
-    pending: std::sync::atomic::AtomicBool,
-    drain_sample: std::sync::atomic::AtomicU64,
-}
-
-impl PartialEq for ParticleAliveCount {
-    fn eq(&self, other: &Self) -> bool {
-        std::sync::Arc::ptr_eq(&self.value, &other.value)
-    }
-}
-
-impl ParticleAliveCount {
-    /// Whether this submission has no living particles or queued GPU births.
-    pub fn is_drained_after(&self, submission: u32) -> bool {
-        self.value
-            .drain_sample
-            .load(std::sync::atomic::Ordering::Acquire)
-            == u64::from(submission) + 1
-    }
-
-    /// Returns the live count when the latest readback matches this submission.
-    pub fn sampled_count_after(&self, submission: u32) -> Option<u32> {
-        use std::sync::atomic::Ordering;
-        if !self.value.sampled.load(Ordering::Acquire) {
-            return None;
-        }
-        let value = self.value.sample.load(Ordering::Acquire);
-        ((value >> 32) as u32 == submission).then_some(value as u32)
-    }
 }
 
 /// Effect shaders.
@@ -1445,8 +1440,20 @@ fn append_spawn_events_{0}(base_child_index: u32, particle_index: u32, count: u3
     }}
 
     let capacity = arrayLength(&event_buffer_{0}.spawn_events);
-    let base = min(u32(atomicAdd(&child_info_buffer.rows[base_child_index + {0}].event_count, i32(count))), capacity);
-    let capped_count = min(count, capacity - base);
+    let event_count = &child_info_buffer.rows[base_child_index + {0}].event_count;
+    var base = u32(atomicLoad(event_count));
+    var capped_count = 0u;
+    loop {{
+        if (base >= capacity) {{
+            return;
+        }}
+        capped_count = min(count, capacity - base);
+        let reservation = atomicCompareExchangeWeak(event_count, i32(base), i32(base + capped_count));
+        if (reservation.exchanged) {{
+            break;
+        }}
+        base = u32(reservation.old_value);
+    }}
     for (var i = 0u; i < capped_count; i += 1u) {{
         event_buffer_{0}.spawn_events[base + i].particle_index = particle_index;
     }}
@@ -1660,6 +1667,9 @@ fn append_spawn_events_{0}(base_child_index: u32, particle_index: u32, count: u3
             if render_context.needs_particle_fragment {
                 layout_flags |= LayoutFlags::NEEDS_PARTICLE_FRAGMENT;
             }
+            if render_context.needs_view_fog {
+                layout_flags |= LayoutFlags::NEEDS_VIEW_FOG;
+            }
 
             let alpha_cutoff_code = if let AlphaMode::Mask(cutoff) = &asset.alpha_mode {
                 render_context.eval(&module, *cutoff).unwrap_or_else(|err| {
@@ -1841,10 +1851,10 @@ fn append_spawn_events_{0}(base_child_index: u32, particle_index: u32, count: u3
 pub struct CompiledParticleEffect {
     /// Handle to the underlying asset.
     asset: Handle<EffectAsset>,
-    /// Parent effect, if any.
-    parent: Option<Entity>,
-    /// Child effects.
-    children: Vec<Entity>,
+    event_binding_count: u32,
+    uses_parent_layout: bool,
+    particle_layout: ParticleLayout,
+    property_layout: PropertyLayout,
     /// Cached simulation condition, to avoid having to query the asset each
     /// time we need it.
     simulation_condition: SimulationCondition,
@@ -1858,46 +1868,27 @@ pub struct CompiledParticleEffect {
     layout_flags: LayoutFlags,
     /// Alpha mode.
     alpha_mode: AlphaMode,
-    /// Particle layout of the parent effect, if any.
-    parent_particle_layout: Option<ParticleLayout>,
-    /// PRNG seed.
-    prng_seed: u32,
-    /// Ready state reported by the render world.
-    is_ready: bool,
 }
 
 impl Default for CompiledParticleEffect {
     fn default() -> Self {
         Self {
             asset: default(),
-            parent: None,
-            children: vec![],
+            event_binding_count: 0,
+            uses_parent_layout: false,
+            particle_layout: ParticleLayout::default(),
+            property_layout: PropertyLayout::default(),
             simulation_condition: SimulationCondition::default(),
             mesh: None,
             effect_shader: None,
             textures: vec![],
             layout_flags: LayoutFlags::NONE,
             alpha_mode: default(),
-            parent_particle_layout: None,
-            prng_seed: 0,
-            is_ready: false,
         }
     }
 }
 
 impl CompiledParticleEffect {
-    /// Check if the effect is ready.
-    #[inline(always)]
-    pub fn is_ready(&self) -> bool {
-        self.is_ready
-    }
-
-    #[cfg(test)]
-    pub(crate) fn with_ready_for_tests(mut self) -> Self {
-        self.is_ready = true;
-        self
-    }
-
     /// Clear the compiled data from this component.
     pub(crate) fn clear(&mut self) {
         self.asset = Handle::default();
@@ -1908,21 +1899,18 @@ impl CompiledParticleEffect {
     /// Update the compiled effect from its asset and instance.
     pub(crate) fn update(
         &mut self,
-        rebuild: bool,
         instance: &ParticleEffect,
         material: Option<&EffectMaterial>,
         mesh: Option<&EffectMesh>,
         asset: &EffectAsset,
-        parent_entity: Option<Entity>,
-        child_entities: Vec<Entity>,
+        num_event_bindings: u32,
         parent_layout: Option<ParticleLayout>,
         asset_server: &AssetServer,
         shaders: &mut ResMut<Assets<Shader>>,
         shader_cache: &mut ResMut<ShaderCache>,
     ) {
         trace!(
-            "Updating (rebuild:{}) compiled particle effect '{}' ({:?})",
-            rebuild,
+            "Updating compiled particle effect '{}' ({:?})",
             asset.name,
             instance.handle,
         );
@@ -1941,30 +1929,15 @@ impl CompiledParticleEffect {
         // or may not have changed.
         self.asset = instance.handle.clone();
         self.simulation_condition = asset.simulation_condition;
-        self.prng_seed = instance.prng_seed.unwrap_or(asset.prng_seed);
 
-        // Check if the instance changed. If so, rebuild some data from this
-        // compiled effect based on the new data of the effect instance.
-        if rebuild {
-            // Clear the compiled effect if the effect instance changed. We
-            // could try to get smarter here, only invalidate what
-            // changed, but for now just wipe everything and rebuild
-            // from scratch all three shaders together.
-            self.is_ready = false;
-            self.effect_shader = None;
-        }
+        self.effect_shader = None;
+        self.event_binding_count = num_event_bindings;
+        self.uses_parent_layout = parent_layout.is_some();
 
-        // If the shaders are already compiled, there's nothing more to do
-        if self.effect_shader.is_some() {
-            return;
-        }
-
-        self.parent = parent_entity;
-        self.children = child_entities;
-
-        let num_event_bindings = self.children.len() as u32;
-        let shader_source = match EffectShaderSources::generate(
+        let particle_layout = asset.particle_layout();
+        let shader_source = match EffectShaderSources::generate_for_layout(
             asset,
+            particle_layout.clone(),
             parent_layout.as_ref(),
             num_event_bindings,
         ) {
@@ -1979,8 +1952,9 @@ impl CompiledParticleEffect {
         };
 
         self.layout_flags = shader_source.layout_flags;
+        self.particle_layout = particle_layout;
+        self.property_layout = asset.property_layout();
         self.alpha_mode = asset.alpha_mode;
-        self.parent_particle_layout = parent_layout;
         trace!(
             "Compiled effect sources: layout_flags={:?} alpha_mode={:?}",
             self.layout_flags,
@@ -2028,7 +2002,7 @@ impl CompiledParticleEffect {
             self.mesh = asset
                 .mesh
                 .as_ref()
-                .map(|path: &bevy::asset::AssetPath<'_>| asset_server.load::<Mesh>(path));
+                .map(|path| asset_server.load::<Mesh>(path.clone_owned()));
         }
 
         self.textures = material.map(|mat| &mat.images).cloned().unwrap_or_default();
@@ -2195,166 +2169,89 @@ impl ShaderCode for Gradient<Vec4> {
 fn compile_effects(
     asset_server: Res<AssetServer>,
     effects: Res<Assets<EffectAsset>>,
+    mut events: MessageReader<AssetEvent<EffectAsset>>,
     mut shaders: ResMut<Assets<Shader>>,
     mut shader_cache: ResMut<ShaderCache>,
-    mut q_effects: Query<(
-        Entity,
+    particle_effects: Query<Ref<ParticleEffect>>,
+    mut compiled_effects: Query<(
         Ref<ParticleEffect>,
         Option<Ref<EffectMaterial>>,
         Option<Ref<EffectMesh>>,
         Option<Ref<EffectParent>>,
-        Option<&Children>,
+        Option<&EffectChildren>,
         &mut CompiledParticleEffect,
+        &mut ParticleEffectGpuReady,
+        &mut EffectPrngState,
     )>,
 ) {
-    trace!("compile_effects: {} effect(s)", q_effects.iter().len());
-
-    // Loop over all existing effects and collect the valid ones. We do a
-    // separate pass because we can't borrow mutably while doing a double
-    // lookup on the query. This map is used to lookup valid parents, and
-    // filter out effects with a declared parent but unresolved parent
-    // asset.
-    let particle_layouts_and_parents: HashMap<Entity, (ParticleLayout, Option<Entity>)> = q_effects
-        .iter()
-        .filter_map(|(entity, effect, _, _, parent, _, _)| {
-            effects
-                .get(&effect.handle)
-                .map(|asset| (entity, (asset.particle_layout(), parent.map(|p| p.entity))))
+    let modified_assets: HashSet<_> = events
+        .read()
+        .filter_map(|event| match *event {
+            AssetEvent::Modified { id } => Some(id),
+            _ => None,
         })
         .collect();
-
-    let mut children: HashMap<Entity, Vec<Entity>> = HashMap::default();
-    for (child, (_, parent)) in &particle_layouts_and_parents {
-        if let Some(parent) = parent {
-            children.entry(*parent).or_default().push(*child);
-        }
-    }
-    for (entity, _, _, _, _, hierarchy, _) in &q_effects {
-        let Some(collision_children) = children.get_mut(&entity) else {
-            continue;
-        };
-        let Some(hierarchy) = hierarchy else {
-            collision_children.sort_unstable();
-            continue;
-        };
-        let mut authored_order: Vec<_> = hierarchy
-            .iter()
-            .filter(|child| {
-                particle_layouts_and_parents
-                    .get(child)
-                    .is_some_and(|(_, parent)| *parent == Some(entity))
-            })
-            .collect();
-        if authored_order.len() < collision_children.len() {
-            collision_children.retain(|child| !authored_order.contains(child));
-            collision_children.sort_unstable();
-            authored_order.append(collision_children);
-        }
-        *collision_children = authored_order;
-    }
-
-    // Loop over all existing effects to update them, including invisible ones
-    for (
-        asset,
-        entity,
-        effect,
-        material,
-        mesh,
-        parent_entity,
-        parent_layout,
-        mut compiled_effect,
-    ) in q_effects.iter_mut().filter_map(
-        |(entity, effect, material, mesh, parent, _, compiled_effect)| {
-            // Check if asset is available, otherwise silently ignore as we
-            // can't check for changes, and conceptually it makes no
-            // sense to render a particle effect whose
-            // asset was unloaded.
-            let asset = effects.get(&effect.handle)?;
-
-            // Same for the parent asset, if any.
-            let (parent_entity, parent_layout) = if let Some(parent) = &parent {
-                let Some((parent_layout, _)) = particle_layouts_and_parents.get(&parent.entity)
-                else {
-                    // There's a parent declared, but not found. Skip the
-                    // current asset.
-                    return None;
-                };
-                // Declared parent with found parent asset, child asset is
-                // valid.
-                (Some(parent.entity), Some(parent_layout.clone()))
-            } else {
-                // No declared parent, asset is valid.
-                (None, None)
-            };
-
-            Some((
-                asset,
-                entity,
-                effect,
-                material,
-                mesh,
-                parent_entity,
-                parent_layout,
-                compiled_effect,
-            ))
-        },
-    ) {
-        let child_entities = children
-            .get_mut(&entity)
-            .map(std::mem::take)
-            .unwrap_or_default();
-
-        // If the ParticleEffect didn't change, and the compiled one is for the
-        // correct asset, then there's nothing to do.
-        let material_changed = material.as_ref().is_some_and(|r| r.is_changed());
-        let need_rebuild = effect.is_changed()
-            || material_changed
-            || mesh.as_ref().is_some_and(|mesh| mesh.is_changed())
-            || compiled_effect.children != child_entities
-            || compiled_effect.parent != parent_entity
-            || compiled_effect.parent_particle_layout != parent_layout;
-        if need_rebuild || (compiled_effect.asset != effect.handle) {
-            if need_rebuild {
-                debug!("Invalidating the compiled cache for effect on entity {:?} due to changes in the ParticleEffect component. If you see this message too much, then performance might be affected. Find why the change detection of the ParticleEffect is triggered.", entity);
+    for (effect, material, mesh, parent, children, mut compiled, mut ready, mut prng) in
+        &mut compiled_effects
+    {
+        let parent_effect = parent
+            .as_ref()
+            .and_then(|parent| particle_effects.get(parent.entity).ok());
+        let parent_asset = parent_effect
+            .as_ref()
+            .and_then(|parent| effects.get(&parent.handle));
+        let Some(asset) = effects
+            .get(&effect.handle)
+            .filter(|_| parent.is_none() || parent_asset.is_some())
+        else {
+            if compiled.asset != Handle::default() {
+                compiled.clear();
             }
-
-            compiled_effect.update(
-                need_rebuild,
+            ready.set_if_neq(ParticleEffectGpuReady(false));
+            continue;
+        };
+        let event_binding_count = children.map_or(0, |children| children.len() as u32);
+        if compiled.asset != effect.handle
+            || effect.is_changed()
+            || modified_assets.contains(&effect.handle.id())
+            || material.as_ref().is_some_and(DetectChanges::is_changed)
+            || mesh.as_ref().is_some_and(DetectChanges::is_changed)
+            || parent.as_ref().is_some_and(DetectChanges::is_changed)
+            || parent_effect.as_ref().is_some_and(|parent| {
+                parent.is_changed() || modified_assets.contains(&parent.handle.id())
+            })
+            || compiled.uses_parent_layout != parent_asset.is_some()
+            || compiled.event_binding_count != event_binding_count
+        {
+            ready.set_if_neq(ParticleEffectGpuReady(false));
+            prng.0 = effect.prng_seed.unwrap_or(asset.prng_seed);
+            compiled.update(
                 &effect,
-                material.map(|r| r.into_inner()),
-                mesh.map(|r| r.into_inner()),
+                material.as_deref(),
+                mesh.as_deref(),
                 asset,
-                parent_entity,
-                child_entities,
-                parent_layout,
+                event_binding_count,
+                parent_asset.map(EffectAsset::particle_layout),
                 &asset_server,
                 &mut shaders,
                 &mut shader_cache,
             );
         } else {
-            // Update the PRNG seed. Unfortunately at the minute the "seed"
-            // (which really is the internal PRNG state rather) is
-            // not cached on GPU, and is re-uploaded each frame, so
-            // if it's not changed every frame then there's no
-            // randomness anymore, because the uses of the previous frame
-            // are "forgotten".
-            let mut rng = rand::rngs::StdRng::seed_from_u64(compiled_effect.prng_seed as u64);
-            compiled_effect.prng_seed = rng.random();
+            // The simulation reuses the uploaded PRNG state for the duration of a frame.
+            let mut rng = rand::rngs::StdRng::seed_from_u64(prng.0 as u64);
+            prng.0 = rng.random();
         }
     }
+}
 
-    // Clear removed effects, to allow them to be released by the asset server
-    for (_, effect, _, _, parent, _, mut compiled_effect) in q_effects.iter_mut() {
-        // If the effect has no asset, clear its compilation
-        if effects.get(&effect.handle).is_none() {
-            compiled_effect.clear();
-        }
-
-        // If the effect has a parent, and that parent has no asset, also clear
-        // the child's compilation.
-        if let Some(parent) = parent {
-            if particle_layouts_and_parents.get(&parent.entity).is_none() {
-                compiled_effect.clear();
+fn update_effect_collision_slots(
+    parents: Query<&EffectChildren, Changed<EffectChildren>>,
+    mut slots: Query<&mut asset::EffectCollisionSlot>,
+) {
+    for children in &parents {
+        for (index, entity) in children.iter().enumerate() {
+            if let Ok(mut slot) = slots.get_mut(entity) {
+                slot.set_if_neq(asset::EffectCollisionSlot(index as u32));
             }
         }
     }
@@ -2375,7 +2272,14 @@ fn compile_effects(
 /// compiling an effect, don't spawn it.
 fn update_properties_from_asset(
     assets: Res<Assets<EffectAsset>>,
-    mut q_effects: Query<(Ref<ParticleEffect>, &mut EffectProperties), Changed<ParticleEffect>>,
+    mut q_effects: Query<
+        (Ref<ParticleEffect>, &mut EffectProperties),
+        Or<(
+            Changed<ParticleEffect>,
+            AssetChanged<ParticleEffect>,
+            Added<EffectProperties>,
+        )>,
+    >,
 ) {
     #[cfg(feature = "trace")]
     let _span = bevy::log::info_span!("update_properties_from_asset").entered();

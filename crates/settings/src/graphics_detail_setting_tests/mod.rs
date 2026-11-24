@@ -3,21 +3,13 @@ use openzt2_game_assets::{
     graphics_settings_presets::{GraphicsDetailPreset, GraphicsSettingsPresets},
     graphics_settings_types::{GraphicsEffectQuality, GraphicsSettings, ThreeLevelGraphicsDetail},
 };
-use openzt2_game_data::ui_document::action::UiTrigger;
-
-use openzt2_interface_state::{
-    input::input_types::ActionSource,
-    ui::{
-        authored_ui_activation_contracts::UiNodeActivated,
-        authored_ui_node_projection_components::UiValue,
-    },
-};
+use openzt2_interface_state::ui::authored_ui_node_projection_components::UiSliderValueChanged;
 
 use super::{
     graphics_detail_setting_types::GraphicsDetailSetting,
     graphics_detail_setting_ui_presentation::{
-        copy_changed_graphics_detail_slider_levels_into_settings_draft,
-        graphics_detail_setting_level, set_graphics_detail_setting_level,
+        apply_accepted_graphics_detail_slider_edits_to_draft, graphics_detail_setting_level,
+        set_graphics_detail_setting_level,
     },
     options_screen_settings_draft_types::OptionsScreenDisplayGraphicsAndOnlineMessageDraft,
 };
@@ -70,10 +62,8 @@ fn every_slider_reproduces_the_source_presets_and_has_a_label_per_level() {
 #[test]
 fn moving_a_slider_changes_only_the_draft() {
     let mut app = App::new();
-    app.add_message::<UiNodeActivated>().add_systems(
-        Update,
-        copy_changed_graphics_detail_slider_levels_into_settings_draft,
-    );
+    app.add_message::<UiSliderValueChanged>()
+        .add_systems(Update, apply_accepted_graphics_detail_slider_edits_to_draft);
     let initial_graphics = GraphicsSettings {
         view_distance: ThreeLevelGraphicsDetail::Medium,
         ..default()
@@ -87,17 +77,10 @@ fn moving_a_slider_changes_only_the_draft() {
         .id();
     let slider = app
         .world_mut()
-        .spawn((
-            GraphicsDetailSetting::ViewDistance,
-            UiValue(2),
-            ChildOf(owner),
-        ))
+        .spawn((GraphicsDetailSetting::ViewDistance, ChildOf(owner)))
         .id();
-    app.world_mut().write_message(UiNodeActivated {
-        source: ActionSource::System,
-        node: slider,
-        trigger: UiTrigger::Change,
-    });
+    app.world_mut()
+        .write_message(UiSliderValueChanged { slider, value: 2 });
     app.update();
 
     let draft = app

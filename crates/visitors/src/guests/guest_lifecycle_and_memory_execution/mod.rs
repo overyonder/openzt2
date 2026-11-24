@@ -10,27 +10,18 @@ use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_world_state::world_spawn::zoo_entrance_anchor_synchronization::ZooEntrance;
 use super::guest_arrival_calculations::displaced_from_entrance_gate;
 use openzt2_zoo_state::locomotion::locomotion_types::{EntranceNavigationConnection, SpatialGrid};
-use super::guest_simulation_calculations::should_leave;
 use super::guest_simulation_types::DeparturePending;
 use super::guest_simulation_types::Guest;
 use super::guest_simulation_types::GuestArchetype;
 use super::guest_simulation_types::GuestDeparted;
-use super::guest_simulation_types::GuestDeparturePoints;
 use super::guest_simulation_types::GuestDestination;
 use super::guest_simulation_types::GuestEducation;
-use super::guest_simulation_types::GuestEnergy;
-use super::guest_simulation_types::GuestHunger;
 use super::guest_simulation_types::GuestMemories;
 use super::guest_simulation_types::GuestNavigationRequest;
 use super::guest_simulation_types::GuestPhase;
 use super::guest_simulation_types::GuestReachedEntrance;
-use super::guest_simulation_types::GuestRestroom;
 use super::guest_simulation_types::GuestSatisfaction;
-use super::guest_simulation_types::GuestThirst;
-use super::guest_simulation_types::GuestViewingTarget;
-use super::guest_simulation_types::Viewing;
 use super::guest_simulation_types::VisitTime;
-use openzt2_zoo_state::behavior_task_execution_types::running_actions::mark_behavior_task_for_failure_and_stop_navigation;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
 use super::guest_definition_queries::find_guest_definition;
 use super::guest_definition_queries::find_reaction;
@@ -44,15 +35,10 @@ pub(crate) fn advance_guest_lifecycle(
         (
             Entity,
             &GuestArchetype,
-            &mut GuestPhase,
+            &GuestPhase,
             &mut VisitTime,
             &GuestSatisfaction,
             &GuestEducation,
-            &GuestHunger,
-            &GuestThirst,
-            &GuestEnergy,
-            &GuestRestroom,
-            &GuestDeparturePoints,
             Option<&GuestDestination>,
         ),
         With<Guest>,
@@ -78,7 +64,7 @@ pub(crate) fn advance_guest_lifecycle(
         return;
     };
     for arrival in arrived.read() {
-        let Ok((guest, _, phase, _, satisfaction, education, _, _, _, _, _, destination)) =
+        let Ok((guest, _, phase, _, satisfaction, education, destination)) =
             guests.get_mut(arrival.entity)
         else {
             continue;
@@ -118,48 +104,12 @@ pub(crate) fn advance_guest_lifecycle(
         }
     }
 
-    for (
-        guest,
-        archetype,
-        mut phase,
-        mut visit,
-        satisfaction,
-        _,
-        hunger,
-        thirst,
-        energy,
-        restroom,
-        departure_points,
-        destination,
-    ) in &mut guests
-    {
+    for (guest, archetype, phase, mut visit, _, _, destination) in &mut guests {
         if *phase == GuestPhase::Arriving {
             continue;
         }
         if *phase == GuestPhase::Visiting {
             visit.elapsed_ticks = visit.elapsed_ticks.saturating_add(1);
-            if should_leave(
-                departure_points.0,
-                satisfaction.0,
-                hunger.value,
-                thirst.value,
-                energy.value,
-                restroom.value,
-            ) {
-                info!(target: "openzt2_gameplay_journey", ?guest,
-                    satisfaction = satisfaction.0, hunger = hunger.value,
-                    thirst = thirst.value, energy = energy.value,
-                    restroom = restroom.value, departure_points_q16 = departure_points.0,
-                    visit_ticks = visit.elapsed_ticks,
-                    "guest leaving after needs evaluation");
-                *phase = GuestPhase::Leaving;
-                commands
-                    .entity(guest)
-                    .remove::<(GuestDestination, Viewing, GuestViewingTarget)>();
-                if tasks.contains(guest) {
-                    mark_behavior_task_for_failure_and_stop_navigation(guest, &mut commands);
-                }
-            }
         }
         if *phase != GuestPhase::Leaving
             // Let the task owner finish its failure branch before installing
@@ -189,13 +139,16 @@ pub(crate) fn advance_guest_lifecycle(
             continue;
         };
         let request_id = generation.advance();
-        commands.entity(guest).insert((
-            GuestDestination {
-                entity: entrance_entity,
-                purpose: GuestVisitPurpose::Exit,
-            },
-            GuestNavigationRequest(Some(request_id)),
-        ));
+        let request = GuestNavigationRequest(Some(request_id));
+        if let Ok(mut existing) = requests.get_mut(guest) {
+            existing.set_if_neq(request);
+        } else {
+            commands.entity(guest).insert(request);
+        }
+        commands.entity(guest).insert(GuestDestination {
+            entity: entrance_entity,
+            purpose: GuestVisitPurpose::Exit,
+        });
         if grid.width != 0 && grid.height != 0 && grid.cell_of(exit.xz()).is_none() {
             commands.entity(guest).insert(EntranceNavigationConnection {
                 request_id,

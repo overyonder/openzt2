@@ -24,14 +24,8 @@ fn food_prop_attach_and_detach_keys_share_one_request_and_cancel_with_the_task()
     app.add_message::<AnimationObjectCommand>()
         .add_message::<AnimationCompleted>()
         .add_message::<AnimationClipPlaybackRequestRejected>()
-        .add_systems(
-            Update,
-            (
-                receive_food_prop_animation_events,
-                discard_cancelled_food_prop_attachments,
-            )
-                .chain(),
-        );
+        .add_observer(cancel_removed_food_prop_instruction)
+        .add_systems(Update, receive_food_prop_animation_events);
     let root = app.world_mut().spawn_empty().id();
     let source = app.world_mut().spawn(WorldMember { root }).id();
     let actor = app.world_mut().spawn_empty().id();

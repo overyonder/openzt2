@@ -69,9 +69,13 @@ impl Plugin for ShowsPlugin {
             .add_message::<BeginScheduledShowTrick>()
             .add_message::<ScheduledShowTrickScored>()
             .add_message::<ShowRunFinished>()
+            .add_message::<running_show_schedule::ShowRunCancelled>()
             .add_message::<ShowAudienceReaction>()
             .add_observer(show_audience_lifecycle::clear_completed_show_watch_action)
+            .add_observer(show_audience_lifecycle::discard_experience_when_guest_stops_watching)
+            .add_observer(show_event_lifecycle::discard_delivered_event_when_its_window_retires)
             .add_observer(show_trick_props::remove_completed_prop)
+            .add_observer(scheduled_trick_execution::release_tokens_when_running_show_trick_is_removed)
             .add_message::<CommitShowPlatformUpgradeEdit>()
             .add_message::<ShowPlatformUpgradeEditAcknowledged>()
             .add_message::<RestoreShowPlatformUpgrade>()
@@ -125,7 +129,6 @@ impl Plugin for ShowsPlugin {
             .add_systems(
                 FixedUpdate,
                 show_stage_identification_and_hydration::hydrate_show_stages_from_active_world_definitions
-                    .run_if(show_stage_identification_and_hydration::show_stage_definitions_are_available)
                     .in_set(FixedGameSet::Act)
                     .run_if(in_state(GamePhase::InGame)),
             )
@@ -158,8 +161,6 @@ impl Plugin for ShowsPlugin {
                         .after(running_show_schedule::start_next_stage_show_or_break),
                     scheduled_trick_execution::start_scheduled_tricks_with_authored_outcome_tokens
                         .after(show_trick_props::load_scheduled_prop_prefabs),
-                    scheduled_trick_execution::release_tokens_from_completed_trick_slots
-                        .after(running_show_schedule::advance_running_stage_shows),
                     show_viewing_locations::refresh_stage_viewing_locations
                         .after(running_show_schedule::start_next_stage_show_or_break),
                     show_audience_lifecycle::invite_guests_to_starting_shows
@@ -167,9 +168,11 @@ impl Plugin for ShowsPlugin {
                     show_scoring::smooth_finished_show_scores
                         .after(running_show_schedule::advance_running_stage_shows),
                     show_event_lifecycle::dispatch_released_animal_show_events
-                        .after(show_event_lifecycle::schedule_authored_animal_show_events)
+                        .after(show_event_lifecycle::update_authored_show_event_windows)
                         .after(show_scoring::apply_authored_trick_outcome_scores)
                         .after(show_audience_lifecycle::retire_interrupted_show_watch_actions),
+                    show_event_lifecycle::update_authored_show_event_windows
+                        .after(show_event_lifecycle::schedule_authored_animal_show_events),
                     show_audience_lifecycle::complete_watch_actions_after_show
                         .after(running_show_schedule::advance_running_stage_shows),
                 )

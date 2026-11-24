@@ -60,7 +60,7 @@ pub(crate) fn complete_animation_graph_transitions_after_animation_clip_completi
                 owner.playback_generation == animation_playback_controller.playback_generation
             });
             let remaining =
-                std::mem::take(&mut animation_graph_playback_state.remaining_transition_nodes);
+                std::mem::take(&mut animation_graph_playback_state.remaining_transition_steps);
             let _ = enter_animation_graph_node_playback(
                 animation_set_asset,
                 |key| clip_sources.get(animation_set_asset, key).is_some(),
@@ -69,7 +69,7 @@ pub(crate) fn complete_animation_graph_transitions_after_animation_clip_completi
                 &mut animation_graph_playback_state,
                 0,
             );
-            animation_graph_playback_state.remaining_transition_nodes = remaining;
+            animation_graph_playback_state.remaining_transition_steps = remaining;
             let _ = openzt2_world_state::animation_graph::animation_graph_transition_operations::continue_animation_graph_transition_route(
                 animation_set_asset, |key| clip_sources.get(animation_set_asset, key).is_some(), &mut animation_playback_controller, &mut animation_graph_playback_state,
             );

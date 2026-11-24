@@ -3,9 +3,8 @@ use openzt2_game_data::world_definitions::simulation_time::{
 };
 
 use super::{
-    simulation_clock_types::{ZooCalendar, ZooClock},
+    simulation_clock_types::{ZooCalendar, ZooClock, ZooDayCadence},
     zoo_calendar_calculation::calculate_zoo_calendar_for_absolute_day,
-    zoo_clock_advancement::advance_zoo_clock_by_one_tick,
 };
 
 const TEST_SIMULATION_CALENDAR_POLICY: SimulationCalendarPolicy = SimulationCalendarPolicy {
@@ -18,18 +17,14 @@ const TEST_SIMULATION_CALENDAR_POLICY: SimulationCalendarPolicy = SimulationCale
 
 #[test]
 fn tick_day_deadline_and_calendar_boundaries_are_exact() {
-    let mut zoo_clock = ZooClock {
-        fractional_tick: Default::default(),
-        tick: 58,
-        absolute_day: 58,
-        tick_in_day: 9,
-    };
-    assert!(advance_zoo_clock_by_one_tick(&mut zoo_clock, 10));
+    let cadence = ZooDayCadence::new(std::time::Duration::from_secs(1), 8_640.0).unwrap();
+    let zoo_clock = cadence.clock_at(589, Default::default()).unwrap();
+    let mut zoo_clock = cadence.next_clock(zoo_clock).unwrap();
     assert_eq!(
         zoo_clock,
         ZooClock {
             fractional_tick: Default::default(),
-            tick: 59,
+            tick: 590,
             absolute_day: 59,
             tick_in_day: 0,
         }
@@ -47,7 +42,7 @@ fn tick_day_deadline_and_calendar_boundaries_are_exact() {
     );
     let tick_deadline = zoo_clock.tick + 25;
     for _ in 0..25 {
-        assert!(advance_zoo_clock_by_one_tick(&mut zoo_clock, 10));
+        zoo_clock = cadence.next_clock(zoo_clock).unwrap();
     }
     assert_eq!(zoo_clock.tick, tick_deadline);
 }
@@ -84,21 +79,38 @@ fn gregorian_calendar_policy_handles_century_and_four_hundred_year_rules() {
 fn fractional_clock_phase_survives_tick_and_day_advancement() {
     use openzt2_world_state::simulation_time::simulation_clock_types::ZooClockFraction;
     let phase = ZooClockFraction::from_ratio(1, 10).unwrap();
-    let mut clock = ZooClock {
+    let clock = ZooClock {
         tick: 2399,
         absolute_day: 0,
         tick_in_day: 2399,
         fractional_tick: phase,
     };
-    assert!(advance_zoo_clock_by_one_tick(&mut clock, 2400));
+    let cadence = ZooDayCadence::new(std::time::Duration::from_millis(10), 3_600.0).unwrap();
+    let clock = cadence.next_clock(clock).unwrap();
     assert_eq!(
         (clock.tick, clock.absolute_day, clock.tick_in_day),
         (2400, 1, 0)
     );
     assert_eq!(clock.fractional_tick, phase);
-    assert!(advance_zoo_clock_by_one_tick(&mut clock, 2400));
+    let clock = cadence.next_clock(clock).unwrap();
     assert_eq!(clock.fractional_tick, phase);
     assert!(ZooClockFraction::from_ratio(1, 0).is_none());
     assert!(ZooClockFraction::from_ratio(1, 1).is_none());
     assert_eq!(ZooClockFraction::from_ratio(2, 20), Some(phase));
+}
+
+#[test]
+fn fractional_day_length_preserves_the_rollover_remainder() -> Result<(), &'static str> {
+    let cadence = ZooDayCadence::new(std::time::Duration::from_millis(17), 3_600.0)
+        .ok_or("authored 17 ms cadence")?;
+    let day = |tick| {
+        cadence
+            .clock_at(tick, Default::default())
+            .map(|clock| clock.absolute_day)
+    };
+    assert_eq!(day(1411), Some(0));
+    assert_eq!(day(1412), Some(1));
+    assert_eq!(day(7058), Some(4));
+    assert_eq!(day(7059), Some(5));
+    Ok(())
 }

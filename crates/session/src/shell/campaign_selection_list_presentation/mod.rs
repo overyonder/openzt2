@@ -12,6 +12,7 @@ use openzt2_game_assets::world_scenario::world_scenario_document_asset_and_depen
 use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::SetUiListRowCount;
 use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::UiListPolicy;
 use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::UiListRow;
+use openzt2_interface_state::ui::authored_ui_interaction_enabled_state::UiInteractionEnabled;
 use openzt2_interface_state::ui::authored_ui_selection_state::UiSelected;
 use openzt2_world_state::game_session_types::WorldSessionMode;
 
@@ -72,15 +73,16 @@ pub(super) fn project_campaign_and_scenario_records_into_authored_list_rows(
         Entity,
         Ref<UiListRow>,
         &ChildOf,
-        Option<&CampaignChoice>,
+        Option<&mut CampaignChoice>,
         Option<&WorldChoiceView>,
+        Option<&mut UiSelected>,
+        Option<&mut UiInteractionEnabled>,
         &mut Visibility,
     )>,
     mut selection: ResMut<ShellSelection>,
     children: Query<&Children>,
     mut texts: Query<&mut Text>,
     choices: Query<(Entity, Ref<WorldChoice>)>,
-    selected_campaign: Query<(&CampaignChoice, Ref<UiSelected>)>,
     mut removed_choices: RemovedComponents<WorldChoice>,
     active: Option<Res<LocalizationPrecedenceIndex>>,
     localizations: Res<Assets<LocalizationAsset>>,
@@ -101,9 +103,16 @@ pub(super) fn project_campaign_and_scenario_records_into_authored_list_rows(
     else {
         return;
     };
-    let selected_campaign_id = selected_campaign
-        .iter()
-        .find_map(|(campaign, selected)| selected.0.then_some(campaign.0));
+    let mut selected_campaign_id = None;
+    let mut campaign_selection_changed = false;
+    for (_, _, _, campaign, _, selected, _, _) in &mut rows {
+        if let (Some(campaign), Some(selected)) = (campaign, selected) {
+            if selected.0 && selected_campaign_id.is_none() {
+                selected_campaign_id = Some(campaign.0);
+            }
+            campaign_selection_changed |= selected.is_changed();
+        }
+    }
     let active_campaign = selected_campaign_id
         .filter(|id| catalogue.campaign(*id).is_some())
         .or_else(|| catalogue.campaigns().next().map(|campaign| campaign.id));
@@ -114,11 +123,9 @@ pub(super) fn project_campaign_and_scenario_records_into_authored_list_rows(
         || profile_variables.is_changed()
         || selection.is_changed()
         || choices_removed
-        || selected_campaign
-            .iter()
-            .any(|(_, selected)| selected.is_changed())
+        || campaign_selection_changed
         || choices.iter().any(|(_, choice)| choice.is_changed());
-    if !refresh_rows && !rows.iter().any(|(_, row, ..)| row.is_added()) {
+    if !refresh_rows && !rows.iter().any(|(_, row, ..)| row.is_changed()) {
         return;
     }
     let campaigns = catalogue.campaigns().collect::<Vec<_>>();
@@ -145,8 +152,18 @@ pub(super) fn project_campaign_and_scenario_records_into_authored_list_rows(
             }
         }
     }
-    for (entity, row, parent, current_campaign, current_scenario, mut visibility) in &mut rows {
-        if !refresh_rows && !row.is_added() {
+    for (
+        entity,
+        row,
+        parent,
+        current_campaign,
+        current_scenario,
+        selected,
+        enabled,
+        mut visibility,
+    ) in &mut rows
+    {
+        if !refresh_rows && !row.is_changed() {
             continue;
         }
         let Ok(policy) = lists.get(parent.parent()) else {
@@ -162,15 +179,19 @@ pub(super) fn project_campaign_and_scenario_records_into_authored_list_rows(
                     continue;
                 };
                 visibility.set_if_neq(Visibility::Inherited);
-                if current_campaign.is_none_or(|current| current.0 != campaign.id) {
-                    commands.entity(entity).insert((
-                        CampaignChoice(campaign.id),
-                        UiSelected(Some(campaign.id) == active_campaign),
-                    ));
-                } else if selected_campaign_id != active_campaign {
-                    commands
-                        .entity(entity)
-                        .insert(UiSelected(Some(campaign.id) == active_campaign));
+                let rebound = if let Some(mut current) = current_campaign {
+                    current.set_if_neq(CampaignChoice(campaign.id))
+                } else {
+                    commands.entity(entity).insert(CampaignChoice(campaign.id));
+                    true
+                };
+                if rebound || selected_campaign_id != active_campaign {
+                    let next = UiSelected(Some(campaign.id) == active_campaign);
+                    if let Some(mut selected) = selected {
+                        selected.set_if_neq(next);
+                    } else {
+                        commands.entity(entity).insert(next);
+                    }
                 }
                 replace_text_in_list_row_and_descendants(
                     entity,
@@ -192,9 +213,15 @@ pub(super) fn project_campaign_and_scenario_records_into_authored_list_rows(
                     commands.entity(entity).remove::<WorldChoiceView>();
                     continue;
                 };
-                commands.entity(entity).insert(openzt2_interface_state::ui::authored_ui_interaction_enabled_state::UiInteractionEnabled(
-                    profile_variables.scenario_state(scenario) != openzt2_game_data::world_scenario::CampaignScenarioState::Locked,
-                ));
+                let next_enabled = UiInteractionEnabled(
+                    profile_variables.scenario_state(scenario)
+                        != openzt2_game_data::world_scenario::CampaignScenarioState::Locked,
+                );
+                if let Some(mut enabled) = enabled {
+                    enabled.set_if_neq(next_enabled);
+                } else {
+                    commands.entity(entity).insert(next_enabled);
+                }
                 let Some(&source) = choice_entities.get(&scenario.id) else {
                     visibility.set_if_neq(Visibility::Hidden);
                     commands.entity(entity).remove::<WorldChoiceView>();
@@ -202,10 +229,13 @@ pub(super) fn project_campaign_and_scenario_records_into_authored_list_rows(
                 };
                 visibility.set_if_neq(Visibility::Inherited);
                 if current_scenario.is_none_or(|current| current.0 != source) {
-                    commands.entity(entity).insert((
-                        WorldChoiceView(source),
-                        UiSelected(selection.scenario == Some(scenario.id)),
-                    ));
+                    commands.entity(entity).insert(WorldChoiceView(source));
+                    let next = UiSelected(selection.scenario == Some(scenario.id));
+                    if let Some(mut selected) = selected {
+                        selected.set_if_neq(next);
+                    } else {
+                        commands.entity(entity).insert(next);
+                    }
                 }
                 replace_text_in_list_row_and_descendants(
                     entity,

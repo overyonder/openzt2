@@ -18,11 +18,17 @@ use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabModel;
 use openzt2_zoo_state::animal_lifecycle::types::SelectedAnimalPresentationModel;
 
 #[derive(Component)]
-pub(super) struct InitialAnimationSource(Handle<AnimationClipSourceAsset>);
+pub(super) struct InitialAnimationSelection {
+    set: Handle<AnimationSetAsset>,
+    library: Box<[Handle<AnimationSetAsset>]>,
+    clip: String,
+    source: Handle<AnimationClipSourceAsset>,
+}
 
 pub(super) fn attach_loaded_animation_set_assets_to_animation_subject_entities(
     mut commands: Commands,
     animation_set_assets: Res<Assets<AnimationSetAsset>>,
+    asset_server: Res<AssetServer>,
     clip_sources: AnimationClipSources,
     presentation_owners: Query<&AnimationPresentationOwner>,
     parents: Query<&ChildOf>,
@@ -32,8 +38,8 @@ pub(super) fn attach_loaded_animation_set_assets_to_animation_subject_entities(
             Option<&PrefabModel>,
             Option<&SelectedAnimalPresentationModel>,
             Option<&ChildOf>,
-            &PendingModelAnimationAssets,
-            Option<&InitialAnimationSource>,
+            Ref<PendingModelAnimationAssets>,
+            Option<&InitialAnimationSelection>,
             Has<ModelExpanded>,
         ),
         (
@@ -56,79 +62,83 @@ pub(super) fn attach_loaded_animation_set_assets_to_animation_subject_entities(
         if prefab_model.is_some() && !expanded {
             continue;
         }
-        let pending_model_animation_set_asset_handles = pending_model_animation_assets
-            .pending_model_animation_set_asset_handles
-            .clone();
-        let Some(_) = pending_model_animation_set_asset_handles.first() else {
-            commands
-                .entity(animation_subject_entity)
-                .try_insert(ModelAnimationAttachmentResolved)
-                .try_remove::<PendingModelAnimationAssets>();
-            continue;
+        let handles = &pending_model_animation_assets.pending_model_animation_set_asset_handles;
+        let (
+            initial_animation_set_asset_handle,
+            loaded_model_animation_set_asset_handles,
+            initial_animation_clip_asset_key,
+        ) = if let Some(initial) =
+            initial_source.filter(|_| !pending_model_animation_assets.is_changed())
+        {
+            if clip_sources.failed(&initial.source) {
+                finish_animation_asset_attachment(&mut commands, animation_subject_entity);
+                continue;
+            }
+            if !clip_sources.resolved(&initial.source) {
+                continue;
+            }
+            (
+                initial.set.clone(),
+                initial.library.clone(),
+                initial.clip.clone(),
+            )
+        } else {
+            if handles.iter().any(|handle| {
+                !animation_set_assets.contains(handle.id())
+                    && !matches!(
+                        asset_server.load_state(handle.id()),
+                        bevy::asset::LoadState::Failed(_)
+                    )
+            }) {
+                continue;
+            }
+            let matching = handles
+                .iter()
+                .filter_map(|handle| {
+                    let set = animation_set_assets.get(handle)?;
+                    let model = prefab_model
+                        .map(|model| model.model)
+                        .or_else(|| animal_model.map(|model| model.model));
+                    let matches = set.model_asset_path.is_empty()
+                        || model.is_none_or(|model| {
+                            openzt2_game_data::AssetId::from_virtual_path(
+                                &AssetPath::new(&set.model_asset_path).key(),
+                            ) == model
+                        })
+                        || prefab_model.is_some_and(|model| {
+                            set.model_asset_path.eq_ignore_ascii_case(&model.model_path)
+                        });
+                    matches.then_some((handle, set))
+                })
+                .collect::<Vec<_>>();
+            let explicit = pending_model_animation_assets
+                .requested_initial_animation_clip_asset_key
+                .as_deref();
+            let selected = explicit
+                .and_then(|key| {
+                    matching.iter().find_map(|&(handle, set)| {
+                        resolve_initial_animation_clip(set, key).map(|clip| (handle, clip))
+                    })
+                })
+                .or_else(|| {
+                    matching.iter().find_map(|&(handle, set)| {
+                        select_initial_animation_clip_asset_key(set).map(|clip| (handle, clip))
+                    })
+                });
+            let Some((set, clip)) = selected else {
+                finish_animation_asset_attachment(&mut commands, animation_subject_entity);
+                continue;
+            };
+            let library = matching
+                .into_iter()
+                .map(|(handle, _)| handle.clone())
+                .collect::<Box<[_]>>();
+            (set.clone(), library, clip)
         };
-        assert_eq!(
-            pending_model_animation_set_asset_handles.len(),
-            1,
-            "a prefab model must reference exactly one model-specific animation set"
-        );
-        let initial_animation_set_asset_handle =
-            pending_model_animation_set_asset_handles[0].clone();
-        let loaded_model_animation_set_asset_handles =
-            vec![initial_animation_set_asset_handle.clone()].into_boxed_slice();
         let Some(initial_animation_set_asset) =
             animation_set_assets.get(&initial_animation_set_asset_handle)
         else {
             continue;
-        };
-        let subject_model = prefab_model
-            .map(|model| model.model)
-            .or_else(|| animal_model.map(|model| model.model));
-        assert!(
-            initial_animation_set_asset.model_asset_path.is_empty()
-                || subject_model.is_none_or(|model| openzt2_game_data::AssetId::from_virtual_path(
-                    &AssetPath::new(&initial_animation_set_asset.model_asset_path).key(),
-                ) == model)
-                // Archive paths are case-insensitive: manifests store them
-                // lowercased while prefabs keep the authored casing.
-                || prefab_model.is_some_and(|model| initial_animation_set_asset
-                    .model_asset_path
-                    .eq_ignore_ascii_case(&model.model_path)),
-            "model-specific animation set {:?} does not belong to its prefab model {:?}",
-            initial_animation_set_asset.model_asset_path,
-            prefab_model.map(|model| &model.model_path),
-        );
-        let initial_animation_clip_asset_key = match pending_model_animation_assets
-            .requested_initial_animation_clip_asset_key
-            .clone()
-            .and_then(|key| {
-                resolve_animation_clip_or_graph_node_asset_key(initial_animation_set_asset, &key)
-                    .or_else(|| {
-                        initial_animation_set_asset
-                            .animation_clips
-                            .iter()
-                            .map(|clip| &clip.animation_clip_asset_key)
-                            .chain(
-                                initial_animation_set_asset
-                                    .animation_clip_source_references
-                                    .iter()
-                                    .map(|reference| &reference.animation_clip_asset_key),
-                            )
-                            .find(|clip| clip.eq_ignore_ascii_case(&key))
-                            .cloned()
-                    })
-            })
-            .map_or_else(
-                || select_initial_animation_clip_asset_key(initial_animation_set_asset),
-                Some,
-            ) {
-            Some(animation_clip_asset_key) => animation_clip_asset_key,
-            None => {
-                commands
-                    .entity(animation_subject_entity)
-                    .try_insert(ModelAnimationAttachmentResolved)
-                    .try_remove::<PendingModelAnimationAssets>();
-                continue;
-            }
         };
         if clip_sources
             .get(
@@ -137,26 +147,21 @@ pub(super) fn attach_loaded_animation_set_assets_to_animation_subject_entities(
             )
             .is_none()
         {
-            let source = initial_source.map(|source| source.0.clone()).or_else(|| {
-                clip_sources.request(
-                    initial_animation_set_asset,
-                    &initial_animation_clip_asset_key,
-                )
-            });
-            match source {
-                Some(source) if !clip_sources.failed(&source) => {
-                    if initial_source.is_none() {
-                        commands
-                            .entity(animation_subject_entity)
-                            .try_insert(InitialAnimationSource(source));
-                    }
-                }
-                _ => {
-                    commands
-                        .entity(animation_subject_entity)
-                        .try_insert(ModelAnimationAttachmentResolved)
-                        .try_remove::<(PendingModelAnimationAssets, InitialAnimationSource)>();
-                }
+            let source = clip_sources.request(
+                initial_animation_set_asset,
+                &initial_animation_clip_asset_key,
+            );
+            if let Some(source) = source.filter(|source| !clip_sources.failed(source)) {
+                commands
+                    .entity(animation_subject_entity)
+                    .try_insert(InitialAnimationSelection {
+                        set: initial_animation_set_asset_handle,
+                        library: loaded_model_animation_set_asset_handles,
+                        clip: initial_animation_clip_asset_key,
+                        source,
+                    });
+            } else {
+                finish_animation_asset_attachment(&mut commands, animation_subject_entity);
             }
             continue;
         }
@@ -219,29 +224,35 @@ pub(super) fn attach_loaded_animation_set_assets_to_animation_subject_entities(
             animation_subject_commands.try_insert(openzt2_world_state::animation_playback::animation_playback_controller_types::RetainedAnimationClipSource(source));
         }
         animation_subject_commands
-            .try_remove::<(PendingModelAnimationAssets, InitialAnimationSource)>();
+            .try_remove::<(PendingModelAnimationAssets, InitialAnimationSelection)>();
     }
 }
 
-/// An actor without an authored initial clip should stand idle. The first
-/// authored clip or graph node can be anything: the staff sets start with
-/// `ClimbDown_2Stand`, which lowers the skeleton root underground.
+fn finish_animation_asset_attachment(commands: &mut Commands, entity: Entity) {
+    commands
+        .entity(entity)
+        .try_insert(ModelAnimationAttachmentResolved)
+        .try_remove::<(PendingModelAnimationAssets, InitialAnimationSelection)>();
+}
+
+fn resolve_initial_animation_clip(set: &AnimationSetAsset, key: &str) -> Option<String> {
+    resolve_animation_clip_or_graph_node_asset_key(set, key).or_else(|| {
+        set.animation_clips()
+            .iter()
+            .map(|clip| &clip.animation_clip_asset_key)
+            .chain(
+                set.animation_clip_source_references()
+                    .iter()
+                    .map(|clip| &clip.animation_clip_asset_key),
+            )
+            .find(|clip| clip.eq_ignore_ascii_case(key))
+            .cloned()
+    })
+}
+
 fn select_initial_animation_clip_asset_key(
     animation_set_asset: &AnimationSetAsset,
 ) -> Option<String> {
-    let clip_asset_keys = animation_set_asset
-        .animation_clips
-        .iter()
-        .map(|clip| clip.animation_clip_asset_key.as_str())
-        .chain(
-            animation_set_asset
-                .animation_clip_source_references
-                .iter()
-                .map(|reference| reference.animation_clip_asset_key.as_str()),
-        );
-    if let Some(idle) = preferred_idle_animation_clip_asset_key(clip_asset_keys) {
-        return Some(idle.to_owned());
-    }
     animation_set_asset
         .animation_graph_order
         .first()
@@ -257,12 +268,12 @@ fn select_initial_animation_clip_asset_key(
         .map_or_else(
             || {
                 animation_set_asset
-                    .animation_clips
+                    .animation_clips()
                     .first()
                     .map(|animation_clip| animation_clip.animation_clip_asset_key.clone())
                     .or_else(|| {
                         animation_set_asset
-                            .animation_clip_source_references
+                            .animation_clip_source_references()
                             .first()
                             .map(|animation_clip_source_reference| {
                                 animation_clip_source_reference
@@ -278,49 +289,4 @@ fn select_initial_animation_clip_asset_key(
                 )
             },
         )
-}
-
-/// `Stand_Idle` when the set has one, otherwise any `*_Idle` clip.
-fn preferred_idle_animation_clip_asset_key<'a>(
-    clip_asset_keys: impl Iterator<Item = &'a str>,
-) -> Option<&'a str> {
-    let clip_asset_keys = clip_asset_keys.collect::<Vec<_>>();
-    clip_asset_keys
-        .iter()
-        .find(|key| key.eq_ignore_ascii_case("Stand_Idle"))
-        .or_else(|| {
-            clip_asset_keys
-                .iter()
-                .find(|key| key.to_ascii_lowercase().ends_with("_idle"))
-        })
-        .copied()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::preferred_idle_animation_clip_asset_key;
-
-    #[test]
-    fn initial_clip_prefers_standing_idle_over_authored_order() {
-        let staff = [
-            "ClimbDown_2Stand",
-            "SitBench_Idle",
-            "Stand_Idle",
-            "Walk_Ahead",
-        ];
-        assert_eq!(
-            preferred_idle_animation_clip_asset_key(staff.into_iter()),
-            Some("Stand_Idle")
-        );
-        let sitting = ["ClimbDown_2Stand", "SitBench_Idle"];
-        assert_eq!(
-            preferred_idle_animation_clip_asset_key(sitting.into_iter()),
-            Some("SitBench_Idle")
-        );
-        let no_idle = ["ClimbDown_2Stand", "Walk_Ahead"];
-        assert_eq!(
-            preferred_idle_animation_clip_asset_key(no_idle.into_iter()),
-            None
-        );
-    }
 }

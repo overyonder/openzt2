@@ -23,6 +23,7 @@ use openzt2_zoo_state::construction::construction_tool_and_placement_policy_type
 use openzt2_zoo_state::construction::construction_transaction_types::EditApplication;
 use openzt2_zoo_state::construction::construction_transaction_types::PrepareConstruction;
 
+use crate::terrain::authored_terrain_brush_modes::{TerrainBrushMode, TerrainBrushModeHandles};
 use crate::terrain::terrain_brush_interaction::update_terrain_brush_preview_and_commit_completed_pointer_strokes;
 use crate::terrain::terrain_edit_application::apply_committed_terrain_sample_deltas_and_publish_changed_regions;
 use crate::terrain::terrain_edit_preparation::prepare_terrain_sample_deltas_for_construction_transactions;
@@ -123,6 +124,7 @@ fn flatten_offsets_hold_the_press_height_through_drag_commit_undo_and_redo() {
     ] {
         let mut app = App::new();
         app.init_resource::<Assets<TerrainAsset>>()
+            .init_resource::<Assets<TerrainBrushMode>>()
             .init_resource::<Time>()
             .init_resource::<PointerMap>()
         .add_message::<PointerInput>()
@@ -159,6 +161,21 @@ fn flatten_offsets_hold_the_press_height_through_drag_commit_undo_and_redo() {
                 )
                     .chain(),
             );
+        let deformation = app
+            .world_mut()
+            .resource_mut::<Assets<TerrainBrushMode>>()
+            .add(TerrainBrushMode::Deformation {
+                speeds: [5.0, 5.0, 0.0, 2.0],
+                width: [1.0, 8.0],
+                initial: 5.0,
+                increment: 0.5,
+                smooth_samples: 3,
+                cursors: [None, None, None, None],
+            });
+        app.insert_resource(TerrainBrushModeHandles {
+            deformation,
+            paint: Handle::default(),
+        });
         app.world_mut().spawn(PointerId::Mouse);
         let asset = app
             .world_mut()

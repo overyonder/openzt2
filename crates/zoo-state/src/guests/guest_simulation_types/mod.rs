@@ -16,6 +16,7 @@ use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdError;
     super::guest_survey_types::GuestSurveyExperience,
     crate::progression::fame_types::GuestSpeciesFameViews,
     GuestFoodPurchaseCounts,
+    GuestNeedAdjustmentTimer,
     crate::donations::donation_guest_decision_types::GuestDonationMeters
 )]
 pub struct Guest;
@@ -120,9 +121,13 @@ pub struct GuestDeparturePoints(pub i32);
 #[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct VisitTime {
     pub elapsed_ticks: u64,
-    /// Fixed-clock nanoseconds until the next authored need adjustment.
-    pub need_adjustment_remaining_ns: u64,
 }
+
+#[derive(Component, Debug, Clone, Default)]
+pub struct GuestNeedAdjustmentTimer(pub Timer);
+
+#[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GuestNeedAdjustmentDue(pub Entity);
 
 /// Terminal lifecycle handoff. Cleanup owners observe `GuestDeparted` and
 /// release their relationships before the guest entity is actually despawned.

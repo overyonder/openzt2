@@ -1,6 +1,8 @@
+use super::elevated_path_layout::ElevatedPathSurfaceEdits;
 use bevy::prelude::*;
 use openzt2_game_data::AssetId;
 use openzt2_zoo_state::aquatic::aquatic_simulation_types::TankWallTopHeight;
+use openzt2_zoo_state::topology::topology_graph_types::TileSurface;
 use openzt2_zoo_state::topology::topology_graph_types::{
     FenceSegment, FencesEndingHere, FencesStartingHere, IncomingPortals,
 };
@@ -75,7 +77,7 @@ pub(super) fn prepare_topology_deletion_transaction(
         Option<&IncomingPortals>,
     )>,
     wall_tops: Query<&TankWallTopHeight>,
-    poses: Query<&GlobalTransform>,
+    (poses, surfaces): (Query<&GlobalTransform>, Query<&TileSurface>),
     mut prepared: MessageWriter<TopologyEditPrepared>,
     mut rejected: MessageWriter<TopologyEditPreparationRejected>,
 ) {
@@ -246,6 +248,23 @@ pub(super) fn prepare_topology_deletion_transaction(
             );
             continue;
         };
+        if path.is_some_and(|path| {
+            definitions
+                .find_path(path.definition)
+                .is_some_and(|definition| definition.elevated)
+        }) {
+            let Ok(surface) = surfaces.get(request.target) else {
+                write_topology_edit_preparation_rejection(
+                    request.transaction,
+                    PlacementFailure::InvalidTopology,
+                    &mut rejected,
+                );
+                continue;
+            };
+            commands
+                .entity(request.transaction)
+                .insert(ElevatedPathSurfaceEdits(vec![(*id, *surface)]));
+        }
         commands.entity(request.transaction).insert(TopologyEdit {
             created: Box::new([]),
             removed: removed.into_boxed_slice(),

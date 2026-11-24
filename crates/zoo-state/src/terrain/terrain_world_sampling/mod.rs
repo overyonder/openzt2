@@ -7,11 +7,12 @@ use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::Ter
 use crate::terrain::terrain_chunk_types::EditedTerrainSamples;
 use crate::terrain::terrain_chunk_types::TerrainChunk;
 use crate::terrain::terrain_chunk_types::TerrainIndex;
-use crate::terrain::terrain_sample_grid_queries::authored_terrain_sample_water_height_metres;
 use crate::terrain::terrain_sample_grid_queries::calculate_row_major_terrain_sample_index;
-use crate::terrain::terrain_sample_grid_queries::read_authored_terrain_sample;
 use crate::terrain::terrain_sample_grid_queries::terrain_cell_uses_alternate_triangle_diagonal;
 use crate::terrain::terrain_sample_grid_queries::terrain_sample_height_metres;
+use crate::terrain::terrain_sample_grid_queries::{
+    authored_terrain_sample_index, authored_water_height_for_sample,
+};
 use crate::terrain::terrain_world_sampling_types::AuthoredTerrainPoint;
 use crate::terrain::terrain_world_sampling_types::TerrainBiomePoint;
 use crate::terrain::terrain_world_sampling_types::TerrainPoint;
@@ -28,18 +29,27 @@ pub fn terrain_chunk_at(index: &TerrainIndex, world: Vec2) -> Option<Entity> {
 }
 
 pub fn terrain_cell_indices(chunk: &TerrainChunk, world: Vec2) -> Option<UVec2> {
-    let grid = (world - chunk.origin) / chunk.spacing_m;
+    Some(cell_at_grid_position(
+        chunk.side,
+        terrain_grid_position(chunk, world)?,
+    ))
+}
+
+fn terrain_grid_position(chunk: &TerrainChunk, world: Vec2) -> Option<Vec2> {
     let max = f32::from(chunk.side.checked_sub(1)?);
-    (chunk.spacing_m > 0.0
+    let grid = (world - chunk.origin) / chunk.spacing_m;
+    (max > 0.0
+        && chunk.spacing_m > 0.0
         && grid.is_finite()
         && grid.cmpge(Vec2::ZERO).all()
         && grid.cmple(Vec2::splat(max)).all())
-    .then(|| {
-        UVec2::new(
-            (grid.x.floor() as u32).min(chunk.side as u32 - 2),
-            (grid.y.floor() as u32).min(chunk.side as u32 - 2),
-        )
-    })
+    .then_some(grid)
+}
+
+fn cell_at_grid_position(side: u16, grid: Vec2) -> UVec2 {
+    grid.floor()
+        .as_uvec2()
+        .min(UVec2::splat(u32::from(side) - 2))
 }
 
 #[allow(clippy::many_single_char_names)] // Compact corner notation makes the two triangle normals directly comparable.
@@ -57,195 +67,6 @@ pub fn terrain_cell_averaged_normal(
     let [first, second] = terrain_triangle_gradients([a, b, c, d], chunk.spacing_m, alternate);
     let normal = (first + second).normalize_or_zero();
     (normal != Vec3::ZERO).then_some(normal)
-}
-
-pub fn sample_terrain(
-    chunk: &TerrainChunk,
-    asset: &TerrainAsset,
-    edited: Option<&EditedTerrainSamples>,
-    world: Vec2,
-) -> Option<TerrainPoint> {
-    let cell = terrain_cell_indices(chunk, world)?;
-    let grid = (world - chunk.origin) / chunk.spacing_m;
-    let x = cell.x as usize;
-    let z = cell.y as usize;
-    let tx = grid.x - x as f32;
-    let tz = grid.y - z as f32;
-    let h = |x, z| terrain_sample_height_metres(chunk, asset, edited, x, z);
-    let (h00, h10, h01, h11) = (h(x, z)?, h(x + 1, z)?, h(x, z + 1)?, h(x + 1, z + 1)?);
-    let alternate = terrain_cell_uses_alternate_triangle_diagonal(chunk, asset, cell)?;
-    let (height_m, normal) = triangles(h00, h10, h01, h11, chunk.spacing_m, tx, tz, alternate);
-    let nx = if tx < 0.5 { x } else { x + 1 };
-    let nz = if tz < 0.5 { z } else { z + 1 };
-    let local = calculate_row_major_terrain_sample_index(chunk.side, nx, nz)?;
-    let source = read_authored_terrain_sample(chunk, asset, nx, nz)?;
-    let surface = edited
-        .and_then(|value| dominant_edited_terrain_biome_channel(value, local))
-        .unwrap_or(u32::from(source.biome_index));
-    let water_height_m = if let Some(edited) = edited {
-        (edited.water_styles.get(local).copied()? != 0)
-            .then_some(f32::from(*edited.water_cm.get(local)?) * 0.01)
-            .filter(|water| *water > height_m)
-    } else {
-        authored_terrain_sample_water_height_metres(chunk, asset, nx, nz, height_m)
-    };
-    Some(TerrainPoint {
-        height_m,
-        water_height_m,
-        surface,
-        normal,
-    })
-}
-
-/// Lowest and highest vertices of the same triangle used by `sample_terrain`.
-pub fn sample_terrain_triangle_height_bounds(
-    chunk: &TerrainChunk,
-    asset: &TerrainAsset,
-    edited: Option<&EditedTerrainSamples>,
-    world: Vec2,
-) -> Option<[f32; 2]> {
-    let cell = terrain_cell_indices(chunk, world)?;
-    let local = (world - chunk.origin) / chunk.spacing_m - cell.as_vec2();
-    let x = cell.x as usize;
-    let z = cell.y as usize;
-    let height = |x, z| terrain_sample_height_metres(chunk, asset, edited, x, z);
-    let [a, b, c, d] = [
-        height(x, z)?,
-        height(x + 1, z)?,
-        height(x, z + 1)?,
-        height(x + 1, z + 1)?,
-    ];
-    let vertices = if terrain_cell_uses_alternate_triangle_diagonal(chunk, asset, cell)? {
-        if local.x + local.y <= 1.0 {
-            [a, b, c]
-        } else {
-            [d, c, b]
-        }
-    } else if local.x <= local.y {
-        [a, c, d]
-    } else {
-        [a, b, d]
-    };
-    Some([
-        vertices.into_iter().fold(f32::INFINITY, f32::min),
-        vertices.into_iter().fold(f32::NEG_INFINITY, f32::max),
-    ])
-}
-
-/// The terrain under a world position, with the water biome channel and
-/// style of the nearest sample when water covers it.
-pub fn sample_terrain_water(
-    chunk: &TerrainChunk,
-    asset: &TerrainAsset,
-    edited: Option<&EditedTerrainSamples>,
-    world: Vec2,
-) -> Option<(TerrainPoint, Option<(u8, u16)>)> {
-    let geometry = sample_terrain(chunk, asset, edited, world)?;
-    let (local, source) = nearest_terrain_sample(chunk, asset, world)?;
-    let water_biome_channel = edited
-        .and_then(|edited| edited.water_biome_channels.get(local).copied())
-        .unwrap_or(source.biome_index);
-    let water_biome = asset
-        .canonical_terrain_grid()
-        .biomes
-        .get(usize::from(water_biome_channel))?;
-    let water_style = edited
-        .and_then(|edited| edited.water_styles.get(local).copied())
-        .unwrap_or(match source.water_depth {
-            TerrainWaterDepth::Dry => 0,
-            TerrainWaterDepth::Shallow => 1,
-            TerrainWaterDepth::Deep => 2,
-        });
-    let water = geometry
-        .water_height_m
-        .and(water_biome.water_presentation.as_ref())
-        .map(|_| (water_biome_channel, water_style));
-    Some((geometry, water))
-}
-
-fn nearest_terrain_sample<'a>(
-    chunk: &TerrainChunk,
-    asset: &'a TerrainAsset,
-    world: Vec2,
-) -> Option<(usize, &'a openzt2_game_data::terrain::TerrainSample)> {
-    let grid = ((world - chunk.origin) / chunk.spacing_m)
-        .round()
-        .clamp(Vec2::ZERO, Vec2::splat(f32::from(chunk.side - 1)));
-    let local =
-        calculate_row_major_terrain_sample_index(chunk.side, grid.x as usize, grid.y as usize)?;
-    let source = read_authored_terrain_sample(chunk, asset, grid.x as usize, grid.y as usize)?;
-    Some((local, source))
-}
-
-pub fn sample_authored_terrain(
-    chunk: &TerrainChunk,
-    asset: &TerrainAsset,
-    edited: Option<&EditedTerrainSamples>,
-    world: Vec2,
-) -> Option<AuthoredTerrainPoint> {
-    let (geometry, water) = sample_terrain_water(chunk, asset, edited, world)?;
-    let (local, source) = nearest_terrain_sample(chunk, asset, world)?;
-    let (channel, weight, biome_id) = edited
-        .and_then(|edited| {
-            let weights = edited.blend_weights.get(local * 16..(local + 1) * 16)?;
-            let (channel, weight) = weights
-                .iter()
-                .copied()
-                .enumerate()
-                .max_by_key(|(channel, weight)| (*weight, std::cmp::Reverse(*channel)))?;
-            Some((
-                channel as u8,
-                weight,
-                AssetId::from_key(&asset.canonical_terrain_grid().biomes.get(channel)?.name),
-            ))
-        })
-        .unwrap_or((
-            source.biome_index,
-            u8::MAX,
-            AssetId::from_key(
-                &asset
-                    .canonical_terrain_grid()
-                    .biomes
-                    .get(usize::from(source.biome_index))?
-                    .name,
-            ),
-        ));
-    let water = water.and_then(|(biome_channel, style)| {
-        let water_biome = asset
-            .canonical_terrain_grid()
-            .biomes
-            .get(usize::from(biome_channel))?;
-        let water_presentation = water_biome.water_presentation.as_ref()?;
-        Some(TerrainWaterPoint {
-            biome_channel,
-            style,
-            id: AssetId::from_key(&format!("{}/water/{style}", water_biome.name)),
-            appearance: AssetId::from_key(&water_presentation.texture_animations[0].texture),
-            flags: 0,
-        })
-    });
-    Some(AuthoredTerrainPoint {
-        geometry,
-        biome: Some(TerrainBiomePoint {
-            id: biome_id,
-            channel,
-            weight,
-        }),
-        water,
-    })
-}
-
-fn dominant_edited_terrain_biome_channel(
-    edited_terrain_samples: &EditedTerrainSamples,
-    terrain_sample_index: usize,
-) -> Option<u32> {
-    edited_terrain_samples
-        .blend_weights
-        .get(terrain_sample_index * 16..(terrain_sample_index + 1) * 16)?
-        .iter()
-        .enumerate()
-        .max_by_key(|(channel, weight)| (**weight, std::cmp::Reverse(*channel)))
-        .map(|(channel, _)| channel as u32)
 }
 
 /// Upward triangle gradients in world-XZ corner order (00, 10, 01, 11).
@@ -279,39 +100,229 @@ pub fn minimum_terrain_triangle_normal_y(
     (first != Vec3::ZERO && second != Vec3::ZERO).then_some(first.y.min(second.y))
 }
 
-#[allow(clippy::many_single_char_names)] // These are the standard bilinear cell corner and local-coordinate names.
-fn triangles(
-    a: f32,
-    b: f32,
-    c: f32,
-    d: f32,
-    spacing: f32,
-    x: f32,
-    z: f32,
-    alternate: bool,
-) -> (f32, Vec3) {
-    let gradients = terrain_triangle_gradients([a, b, c, d], spacing, alternate);
-    if alternate {
-        if x + z <= 1.0 {
-            (
-                a + (b - a) * x + (c - a) * z,
-                gradients[0].normalize_or_zero(),
-            )
+pub fn sample_terrain(
+    chunk: &TerrainChunk,
+    asset: &TerrainAsset,
+    edited: Option<&EditedTerrainSamples>,
+    world: Vec2,
+) -> Option<TerrainPoint> {
+    Some(sample_terrain_surface(chunk, asset, edited, world)?.geometry)
+}
+
+pub struct TerrainSurfaceSample {
+    pub geometry: TerrainPoint,
+    triangle_vertices: [f32; 3],
+}
+
+impl TerrainSurfaceSample {
+    pub fn depth_bounds(&self, water_height: f32) -> [f32; 2] {
+        let [first, second, third] = self.triangle_vertices;
+        [
+            (water_height - first.max(second).max(third)).max(0.0),
+            (water_height - first.min(second).min(third)).max(0.0),
+        ]
+    }
+}
+
+pub fn sample_terrain_surface(
+    chunk: &TerrainChunk,
+    asset: &TerrainAsset,
+    edited: Option<&EditedTerrainSamples>,
+    world: Vec2,
+) -> Option<TerrainSurfaceSample> {
+    let point = nearest_terrain_sample(chunk, asset, edited, world)?;
+    sample_terrain_with_source(chunk, asset, edited, &point)
+}
+
+pub fn sample_terrain_biome(
+    chunk: &TerrainChunk,
+    asset: &TerrainAsset,
+    edited: Option<&EditedTerrainSamples>,
+    world: Vec2,
+) -> Option<TerrainBiomePoint> {
+    let point = nearest_terrain_sample(chunk, asset, edited, world)?;
+    terrain_biome(asset, &point)
+}
+
+/// The terrain under a position and the nearest sample's visible water style.
+pub fn sample_terrain_water(
+    chunk: &TerrainChunk,
+    asset: &TerrainAsset,
+    edited: Option<&EditedTerrainSamples>,
+    world: Vec2,
+) -> Option<(TerrainPoint, Option<(u8, u16)>)> {
+    let point = nearest_terrain_sample(chunk, asset, edited, world)?;
+    let geometry = sample_terrain_with_source(chunk, asset, edited, &point)?.geometry;
+    let (channel, style) = water_style(edited, &point);
+    let biome = asset
+        .canonical_terrain_grid()
+        .biomes
+        .get(usize::from(channel))?;
+    let water = geometry
+        .water_height_m
+        .and(biome.water_presentation.as_ref())
+        .map(|_| (channel, style));
+    Some((geometry, water))
+}
+
+pub fn sample_authored_terrain(
+    chunk: &TerrainChunk,
+    asset: &TerrainAsset,
+    edited: Option<&EditedTerrainSamples>,
+    world: Vec2,
+) -> Option<AuthoredTerrainPoint> {
+    let point = nearest_terrain_sample(chunk, asset, edited, world)?;
+    let geometry = sample_terrain_with_source(chunk, asset, edited, &point)?.geometry;
+    let (biome_channel, style) = water_style(edited, &point);
+    let water_biome = asset
+        .canonical_terrain_grid()
+        .biomes
+        .get(usize::from(biome_channel))?;
+    let water = geometry
+        .water_height_m
+        .and(water_biome.water_presentation.as_ref())
+        .map(|presentation| TerrainWaterPoint {
+            biome_channel,
+            style,
+            id: AssetId::from_key(&format!("{}/water/{style}", water_biome.name)),
+            appearance: AssetId::from_key(&presentation.texture_animations[0].texture),
+            flags: 0,
+        });
+    // The inherited biome remains the fallback for an invalid edited channel.
+    Some(AuthoredTerrainPoint {
+        geometry,
+        biome: Some(terrain_biome(asset, &point)?),
+        water,
+    })
+}
+
+struct NearestTerrainSample<'a> {
+    grid: Vec2,
+    local_index: usize,
+    source_index: usize,
+    source: &'a openzt2_game_data::terrain::TerrainSample,
+    edited_biome: Option<(u8, u8)>,
+}
+
+fn nearest_terrain_sample<'a>(
+    chunk: &TerrainChunk,
+    asset: &'a TerrainAsset,
+    edited: Option<&EditedTerrainSamples>,
+    world: Vec2,
+) -> Option<NearestTerrainSample<'a>> {
+    let grid = terrain_grid_position(chunk, world)?;
+    let [x, z] = grid
+        .round()
+        .as_uvec2()
+        .to_array()
+        .map(|coordinate| coordinate as usize);
+    let local_index = calculate_row_major_terrain_sample_index(chunk.side, x, z)?;
+    let source_index = authored_terrain_sample_index(chunk, asset, x, z)?;
+    let source = asset.canonical_terrain_grid().samples.get(source_index)?;
+    let edited_biome = edited.and_then(|edits| {
+        edits
+            .blend_weights
+            .get(local_index * 16..(local_index + 1) * 16)?
+            .iter()
+            .copied()
+            .enumerate()
+            .max_by_key(|&(channel, weight)| (weight, std::cmp::Reverse(channel)))
+            .map(|(channel, weight)| (channel as u8, weight))
+    });
+    Some(NearestTerrainSample {
+        grid,
+        local_index,
+        source_index,
+        source,
+        edited_biome,
+    })
+}
+
+fn terrain_biome(
+    asset: &TerrainAsset,
+    point: &NearestTerrainSample<'_>,
+) -> Option<TerrainBiomePoint> {
+    let biomes = &asset.canonical_terrain_grid().biomes;
+    let inherited = biomes.get(usize::from(point.source.biome_index))?;
+    let (channel, weight, biome) = point
+        .edited_biome
+        .and_then(|(channel, weight)| Some((channel, weight, biomes.get(usize::from(channel))?)))
+        .unwrap_or((point.source.biome_index, u8::MAX, inherited));
+    Some(TerrainBiomePoint {
+        id: AssetId::from_key(&biome.name),
+        channel,
+        weight,
+    })
+}
+
+fn water_style(
+    edited: Option<&EditedTerrainSamples>,
+    point: &NearestTerrainSample<'_>,
+) -> (u8, u16) {
+    let channel = edited
+        .and_then(|edits| edits.water_biome_channels.get(point.local_index).copied())
+        .unwrap_or(point.source.biome_index);
+    let style = edited
+        .and_then(|edits| edits.water_styles.get(point.local_index).copied())
+        .unwrap_or(match point.source.water_depth {
+            TerrainWaterDepth::Dry => 0,
+            TerrainWaterDepth::Shallow => 1,
+            TerrainWaterDepth::Deep => 2,
+        });
+    (channel, style)
+}
+
+fn sample_terrain_with_source(
+    chunk: &TerrainChunk,
+    asset: &TerrainAsset,
+    edited: Option<&EditedTerrainSamples>,
+    point: &NearestTerrainSample<'_>,
+) -> Option<TerrainSurfaceSample> {
+    let cell = cell_at_grid_position(chunk.side, point.grid);
+    let local = point.grid - cell.as_vec2();
+    let x = cell.x as usize;
+    let z = cell.y as usize;
+    let sample_height = |x, z| terrain_sample_height_metres(chunk, asset, edited, x, z);
+    let [a, b, c, d] = [
+        sample_height(x, z)?,
+        sample_height(x + 1, z)?,
+        sample_height(x, z + 1)?,
+        sample_height(x + 1, z + 1)?,
+    ];
+    let alternate = terrain_cell_uses_alternate_triangle_diagonal(chunk, asset, cell)?;
+    let [first, second] = terrain_triangle_gradients([a, b, c, d], chunk.spacing_m, alternate);
+    let (height_m, gradient, triangle_vertices) = if alternate {
+        if local.x + local.y <= 1.0 {
+            (a + (b - a) * local.x + (c - a) * local.y, first, [a, b, c])
         } else {
             (
-                d + (c - d) * (1.0 - x) + (b - d) * (1.0 - z),
-                gradients[1].normalize_or_zero(),
+                d + (c - d) * (1.0 - local.x) + (b - d) * (1.0 - local.y),
+                second,
+                [d, c, b],
             )
         }
-    } else if x <= z {
-        (
-            a + (c - a) * z + (d - c) * x,
-            gradients[0].normalize_or_zero(),
-        )
+    } else if local.x <= local.y {
+        (a + (c - a) * local.y + (d - c) * local.x, first, [a, c, d])
     } else {
-        (
-            a + (b - a) * x + (d - b) * z,
-            gradients[1].normalize_or_zero(),
-        )
-    }
+        (a + (b - a) * local.x + (d - b) * local.y, second, [a, b, d])
+    };
+    let water_height_m = if let Some(edited) = edited {
+        (*edited.water_styles.get(point.local_index)? != 0)
+            .then_some(f32::from(*edited.water_cm.get(point.local_index)?) * 0.01)
+            .filter(|water| *water > height_m)
+    } else {
+        authored_water_height_for_sample(asset, point.source_index, point.source, height_m)
+    };
+    let surface = point
+        .edited_biome
+        .map_or(point.source.biome_index, |(channel, _)| channel);
+    Some(TerrainSurfaceSample {
+        geometry: TerrainPoint {
+            height_m,
+            water_height_m,
+            surface: u32::from(surface),
+            normal: gradient.normalize_or_zero(),
+        },
+        triangle_vertices,
+    })
 }

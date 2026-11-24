@@ -11,78 +11,60 @@ pub struct CarriedPrefabPresentation {
     pub local_transform: Transform,
 }
 
-/// Pending scene-local lookup; retains only the instance and joint identity.
+/// A socket binding persists for the lifetime of the attachment.
 #[derive(Component)]
-pub struct PendingModelJointAttachment {
-    instance: Entity,
+pub struct ModelJointAttachment {
+    pub instance: Entity,
     joint: AnimationTargetId,
 }
 
-impl PendingModelJointAttachment {
-    pub fn report_unresolved_binding(
-        &self,
-        attachment: Entity,
-        children: &Query<&Children>,
-        names: &Query<&Name>,
-        parents: &Query<&ChildOf>,
-        models: &Query<(
-            &crate::world_spawn::prefab_presentation_types::PrefabModel,
-            &InheritedVisibility,
-        )>,
-        server: &AssetServer,
-    ) {
-        let mut matching_joints = 0;
-        for candidate in children.iter_descendants_depth_first::<Children>(self.instance) {
-            if let Ok((model, visibility)) = models.get(candidate) {
-                error!(target: "openzt2_map_load_suite", ?attachment, ?candidate,
-                    model = model.model_path.as_ref(), visible = visibility.get(),
-                    load_state = ?model.handle.as_ref().map(|handle| server.get_load_states(handle.id())),
-                    "unresolved joint instance model");
-            }
-            let Ok(name) = names.get(candidate) else {
-                continue;
-            };
-            if AnimationTargetId::from_name(name) != self.joint {
-                continue;
-            }
-            matching_joints += 1;
-            let creates_cycle = candidate == attachment
-                || parents
-                    .iter_ancestors::<ChildOf>(candidate)
-                    .any(|ancestor| ancestor == attachment);
-            error!(target: "openzt2_map_load_suite", ?attachment, ?candidate, joint = name.as_str(), creates_cycle,
-                "unresolved model joint candidate");
-        }
-        error!(target: "openzt2_map_load_suite", ?attachment, instance = ?self.instance, joint = ?self.joint,
-            matching_joints, "unresolved model joint binding");
-    }
-
+impl ModelJointAttachment {
     pub fn new(instance: Entity, joint: &str) -> Self {
         Self {
             instance,
             joint: AnimationTargetId::from_name(&Name::new(joint.to_owned())),
         }
     }
-}
 
-impl PendingModelJointAttachment {
-    pub fn find_joint(
+    pub fn resolve(
         &self,
         attachment: Entity,
-        children: &Query<&Children>,
-        names: &Query<&Name>,
+        joints: &ModelInstanceJoints,
         parents: &Query<&ChildOf>,
     ) -> Option<Entity> {
-        children
-            .iter_descendants_depth_first::<Children>(self.instance)
-            .find(|candidate| {
-                *candidate != attachment
-                    && names
-                        .get(*candidate)
-                        .is_ok_and(|name| AnimationTargetId::from_name(name) == self.joint)
-                    && !parents
-                        .iter_ancestors::<ChildOf>(*candidate)
-                        .any(|ancestor| ancestor == attachment)
+        joints
+            .0
+            .get(&self.joint)?
+            .iter()
+            .copied()
+            .find(|&candidate| {
+                candidate != attachment
+                    && parents.contains(candidate)
+                    && parents
+                        .iter_ancestors::<ChildOf>(candidate)
+                        .all(|ancestor| ancestor != attachment)
             })
+    }
+}
+
+/// Name lookup built in depth-first order when the instance hierarchy changes.
+#[derive(Component, Debug, Default, PartialEq, Eq)]
+pub struct ModelInstanceJoints(
+    bevy::platform::collections::HashMap<AnimationTargetId, Vec<Entity>>,
+);
+
+impl ModelInstanceJoints {
+    pub fn from_depth_first_names<'a>(
+        descendants: impl IntoIterator<Item = (Entity, &'a Name)>,
+    ) -> Self {
+        let mut joints = Self::default();
+        for (entity, name) in descendants {
+            joints
+                .0
+                .entry(AnimationTargetId::from_name(name))
+                .or_default()
+                .push(entity);
+        }
+        joints
     }
 }

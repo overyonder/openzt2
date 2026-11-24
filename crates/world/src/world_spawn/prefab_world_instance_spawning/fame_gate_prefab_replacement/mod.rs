@@ -53,6 +53,16 @@ pub(super) fn register_fame_gate_prefab_replacement(app: &mut App) {
                     .run_if(on_message::<FameGateAppearanceRequested>),
                 replace_loaded_fame_gate_prefabs
                     .run_if(any_match_filter::<(With<PendingFameGatePrefab>, Allow<Disabled>)>)
+                    .run_if(
+                        any_match_filter::<(Changed<PendingFameGatePrefab>, Allow<Disabled>)>
+                            .or_eager(on_message::<AssetEvent<ScenePrefabAsset>>)
+                            .or_eager(on_message::<AssetEvent<Gltf>>)
+                            .or_eager(on_message::<AssetLoadFailedEvent<ScenePrefabAsset>>)
+                            .or_eager(on_message::<AssetLoadFailedEvent<Gltf>>)
+                            .or_eager(|mut released: RemovedComponents<ModelExpanded>| {
+                                released.read().count() != 0
+                            }),
+                    )
                     .before(initialize_authored_physical_presentation_controllers)
                     .before(hydrate_required_named_physical_presentations)
                     .before(synchronize_zoo_entrance_anchor_after_transform_changes),

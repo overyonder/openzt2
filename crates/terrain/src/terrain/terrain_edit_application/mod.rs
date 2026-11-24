@@ -6,10 +6,8 @@ use openzt2_zoo_state::construction::construction_transaction_types::EditApplica
 
 use crate::terrain::terrain_change_tracking_types::TerrainDirty;
 use crate::terrain::terrain_change_tracking_types::TerrainDirtyFlags;
-use crate::terrain::terrain_change_tracking_types::TerrainDirtyRegion;
 use crate::terrain::terrain_chunk_index_cleanup::TerrainChunkIdLookup;
-use crate::terrain::terrain_sample_change_calculations::changed_terrain_sample_bounds;
-use crate::terrain::terrain_sample_change_calculations::determine_terrain_dirty_flags_from_changed_samples;
+use crate::terrain::terrain_sample_change_calculations::summarize_terrain_edit_sample_changes;
 use crate::terrain::terrain_sample_change_calculations::TerrainRenderInvalidated;
 use openzt2_zoo_state::terrain::terrain_chunk_identity_type::TerrainChunkId;
 use openzt2_zoo_state::terrain::terrain_chunk_types::EditedTerrainSamples;
@@ -302,10 +300,8 @@ pub(super) fn apply_validated_terrain_edit_delta_and_publish_changed_region(
     } else {
         &delta.before
     };
-    let flags = determine_terrain_dirty_flags_from_changed_samples(&delta.before, &delta.after);
-    let (changed_min, changed_max) =
-        changed_terrain_sample_bounds(&delta.before, &delta.after, delta.min, delta.max)
-            .unwrap_or((delta.min, delta.max));
+    let region = summarize_terrain_edit_sample_changes(delta);
+    let flags = region.flags;
     if let Some(mut overlay) = existing {
         apply_terrain_sample_rectangle(&mut overlay, chunk.side, delta.min, delta.max, samples);
     } else {
@@ -316,11 +312,7 @@ pub(super) fn apply_validated_terrain_edit_delta_and_publish_changed_region(
     }
     render_changed.write(TerrainRenderInvalidated {
         chunk: entity,
-        region: TerrainDirtyRegion {
-            min: changed_min,
-            max: changed_max,
-            flags,
-        },
+        region,
     });
     changed.write(TerrainChanged {
         transaction,

@@ -54,7 +54,7 @@ use super::{
 };
 
 use super::guest_simulation_types::{
-    Guest, GuestArchetype, GuestDestination, GuestPhase, GuestRng, Viewing,
+    Guest, GuestArchetype, GuestDeparturePoints, GuestDestination, GuestPhase, GuestRng, Viewing,
 };
 use target_index::{GuestTarget, GuestTargetIndex};
 
@@ -84,6 +84,7 @@ pub(super) fn select_idle_guest_tasks(
             &mut GuestRng,
             GuestTaskNeedFacts,
             &GuestNeedTriggers,
+            Option<&GuestDeparturePoints>,
             Option<&GuestShowNeed>,
             &GlobalTransform,
             &WorldMember,
@@ -195,6 +196,7 @@ pub(super) fn select_idle_guest_tasks(
         mut random,
         need_facts,
         triggers,
+        departure_points,
         show_need,
         transform,
         world,
@@ -314,6 +316,12 @@ pub(super) fn select_idle_guest_tasks(
             else {
                 continue;
             };
+            let leaves_zoo = task.scores.iter().any(|score| matches!(
+                score, openzt2_game_data::behavior::score::BehaviorScore::LeaveZooPressure
+            ));
+            if leaves_zoo && !departure_points.is_some_and(|points| points.0 <= 0) {
+                continue;
+            }
             if cooldowns
                 .as_deref()
                 .is_some_and(|cooldowns| cooldowns.is_cooling(task.id))
@@ -425,7 +433,7 @@ pub(super) fn select_idle_guest_tasks(
                     }
                     return;
                 }
-                let score = score_supported_behavior_task(
+                let score = if leaves_zoo { Some(1_000_000_000.0) } else { score_supported_behavior_task(
                     task,
                     policy.outside_range_need_value,
                     transform.translation().distance(target_position),
@@ -436,7 +444,7 @@ pub(super) fn select_idle_guest_tasks(
                             random.0.range_u32(upper).unwrap_or_default()
                         })
                     },
-                );
+                ) };
                 if diagnostics && target_definition.is_some() {
                     let needs = task
                         .scores
@@ -467,7 +475,6 @@ pub(super) fn select_idle_guest_tasks(
                     ),
                     task.priority.unwrap_or_default(),
                     score,
-                    |upper| random.0.range_u32(upper),
                 );
             };
             if task.sensor_tag == Some(watch_sensor) {
@@ -687,7 +694,7 @@ pub(super) fn select_idle_guest_tasks(
                 }
             }
         }
-        let Some(((document, declaration, task, target, object), score)) = ranking.finish(true)
+        let Some(((document, declaration, task, target, object), score)) = ranking.finish(|| random.0.next_u32())
         else {
             debug!(?guest, "idle guest found no task scoring above the minimum");
             continue;

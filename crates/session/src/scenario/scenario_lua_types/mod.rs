@@ -1,6 +1,6 @@
 use bevy::{picking::hover::DirectlyHovered, prelude::Entity};
 use openzt2_game_data::AssetId;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use mlua::Lua;
 
@@ -74,8 +74,7 @@ pub(super) struct ScenarioLuaQueryFacts<'a> {
     pub(super) selected_entity: Option<bevy::prelude::Entity>,
     pub(super) fence_edges: &'a ScenarioLuaFenceEdgeQuery<'a, 'a>,
     pub(super) path_tiles: &'a ScenarioLuaPathTileQuery<'a, 'a>,
-    pub(super) edited_terrain: &'a ScenarioLuaEditedTerrainQuery<'a, 'a>,
-    pub(super) terrain_assets: &'a bevy::prelude::Assets<openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset>,
+    pub(super) biome_cells: Option<&'a super::scenario_biome_cell_counts::WorldBiomeCellCounts>,
     pub(super) ui_nodes: &'a ScenarioLuaUiNodeQuery<'a, 'a>,
     pub(super) ui_roots: &'a ScenarioLuaUiRootQuery<'a, 'a>,
     pub(super) ui_documents: &'a bevy::prelude::Assets<openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset>,
@@ -114,16 +113,6 @@ pub(super) type ScenarioLuaPathTileQuery<'w, 's> = bevy::prelude::Query<
     (
         bevy::prelude::Entity,
         &'static openzt2_zoo_state::topology::topology_graph_types::PathTile,
-    ),
->;
-
-/// Terrain chunks the player has painted or sculpted.
-pub(super) type ScenarioLuaEditedTerrainQuery<'w, 's> = bevy::prelude::Query<
-    'w,
-    's,
-    (
-        &'static openzt2_zoo_state::terrain::terrain_chunk_types::TerrainChunk,
-        &'static openzt2_zoo_state::terrain::terrain_chunk_types::EditedTerrainSamples,
     ),
 >;
 
@@ -176,16 +165,8 @@ pub(super) type ScenarioLuaLiveEntityQuery<'w, 's> = bevy::prelude::Query<
     ),
 >;
 
-#[derive(Default)]
-pub(crate) struct ScenarioLuaVirtualMachineContexts {
-    pub(super) virtual_machines: BTreeMap<ScenarioLuaRuntimeOwner, ScenarioLuaVirtualMachine>,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub(super) enum ScenarioLuaRuntimeOwner {
-    Scenario(Entity),
-    NamedUi(AssetId),
-}
+#[derive(bevy::prelude::Component, Default)]
+pub(crate) struct ScenarioLuaContext(pub(super) Option<ScenarioLuaVirtualMachine>);
 
 pub(super) struct ScenarioLuaVirtualMachine {
     pub(super) executed_source_paths: Vec<String>,

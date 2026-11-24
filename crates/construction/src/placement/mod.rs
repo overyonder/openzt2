@@ -1,8 +1,13 @@
 //! Authored object placement over loaded definitions and precise ECS indexes.
+use crate::construction::construction_transaction_preparation::{
+    capture_submitted_preview, clear_submitted_preview, ConstructionSubmissionSet,
+};
 
 use bevy::ecs::schedule::common_conditions::any_with_component;
 mod behavior_target_placement_application;
 mod biome_automatic_object_placement_edit_preparation;
+pub use biome_automatic_object_placement_edit_preparation::BiomeAutomaticPlacementRanges;
+mod biome_brush_policy;
 mod ground_path_placement_stomp;
 mod object_placement_edit_application;
 mod object_placement_edit_direction;
@@ -16,10 +21,9 @@ mod object_placement_request_routing;
 mod placed_object_creation_edit_application;
 mod placed_object_destruction;
 mod placed_object_footprint_occupancy_index_synchronization;
-mod placed_object_relocation_edit_application;
-mod placed_object_removal_edit_application;
 mod placed_object_removal_edit_preparation;
 mod placed_object_terrain_support_reconciliation;
+mod placement_model_headroom;
 mod scene_placement_footprint_indexing;
 pub(crate) mod stomped_object_edit_preparation;
 
@@ -74,10 +78,35 @@ impl Plugin for ObjectPlacementPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             FixedUpdate,
-            crate::placement::behavior_target_placement_application::apply_behavior_target_placements
+            (
+                crate::placement::behavior_target_placement_application::apply_behavior_target_placements,
+                crate::placement::behavior_target_placement_application::put_down_behavior_target_placements,
+            )
                 .in_set(FixedGameSet::Act)
                 .before(FixedConstructionSet::Apply)
                 .run_if(in_state(GamePhase::InGame)),
+        );
+        app.init_asset::<biome_brush_policy::BiomeBrushPolicy>()
+            .init_asset_loader::<biome_brush_policy::BiomeBrushPolicyLoader>()
+            .add_systems(Startup, biome_brush_policy::load_biome_brush_policy);
+        app.add_systems(
+            Update,
+            biome_automatic_object_placement_edit_preparation::begin_biome_object_drag
+                .after(GameSet::Intent)
+                .before(ConstructionSubmissionSet),
+        )
+        .add_systems(
+            Update,
+            biome_automatic_object_placement_edit_preparation::capture_biome_object_drag
+                .in_set(ConstructionSubmissionSet),
+        )
+        .add_systems(
+            FixedUpdate,
+            clear_submitted_preview::<
+                biome_automatic_object_placement_edit_preparation::BiomeObjectDrag,
+            >
+                .after(FixedConstructionSet::Prepare)
+                .before(FixedConstructionSet::Apply),
         );
         app.add_message::<openzt2_zoo_state::placement::placement_transaction_types::DestroyPlacedObject>()
             .add_systems(
@@ -148,15 +177,17 @@ impl Plugin for ObjectPlacementPlugin {
                     evaluate_dirty_object_placement_previews.after(mark_changed_object_placement_previews_dirty),
                     route_valid_object_placement_requests_to_construction.after(evaluate_dirty_object_placement_previews),
                     rebuild_object_placement_preview_footprint_and_grid_decals
-                        .after(evaluate_dirty_object_placement_previews)
+                        .after(synchronize_object_placement_preview_with_construction_cursor)
                         .after(hydrate_object_placement_preview_prefab_render_tree)
                         .after(hydrate_object_placement_preview_materials_from_ui_document),
                     (
                         crate::placement::object_placement_preview_presentation::pulse_object_placement_entrance_arrows
                             .after(rebuild_object_placement_preview_footprint_and_grid_decals),
+                        object_placement_preview_presentation::resolve_placement_preview_tint
+                            .after(evaluate_dirty_object_placement_previews),
                         project_object_placement_validity_onto_preview_model_tint
-                            .after(evaluate_dirty_object_placement_previews)
-                            .after(hydrate_object_placement_preview_prefab_render_tree),
+                            .after(object_placement_preview_presentation::resolve_placement_preview_tint)
+                            .after(rebuild_object_placement_preview_footprint_and_grid_decals),
                         crate::placement::object_placement_preview_presentation::hide_alpha_blended_meshes_of_object_placement_previews
                             .after(hydrate_object_placement_preview_prefab_render_tree),
                         animate_object_placement_preview_presentation_toward_authoritative_transform
@@ -178,12 +209,22 @@ impl Plugin for ObjectPlacementPlugin {
                     .after(scene_placement_footprint_indexing::index_scene_placement_footprints),
             )
             .add_systems(
-                PostUpdate,
-                crate::construction::capture_confirmed_preview::<object_placement_preview_validation::ObjectPlacementFit>,
+                Update,
+                (
+                    capture_submitted_preview::<openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementPrefabSource>,
+                    capture_submitted_preview::<openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementPreviewPermissionFacts>,
+                    capture_submitted_preview::<openzt2_zoo_state::placement::placement_transaction_types::PlacedObjectRelocationSource>,
+                    capture_submitted_preview::<openzt2_zoo_state::habitat::habitat_types::HabitatMember>,
+                ).in_set(ConstructionSubmissionSet),
             )
             .add_systems(
                 FixedUpdate,
-                crate::construction::clear_confirmed_previews::<object_placement_preview_validation::ObjectPlacementFit>
+                (
+                    clear_submitted_preview::<openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementPrefabSource>,
+                    clear_submitted_preview::<openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementPreviewPermissionFacts>,
+                    clear_submitted_preview::<openzt2_zoo_state::placement::placement_transaction_types::PlacedObjectRelocationSource>,
+                    clear_submitted_preview::<openzt2_zoo_state::habitat::habitat_types::HabitatMember>,
+                )
                     .after(FixedConstructionSet::Prepare)
                     .before(FixedConstructionSet::Apply),
             )

@@ -2,6 +2,8 @@
 
 use avian3d::prelude::*;
 use bevy::gltf::Gltf;
+use bevy::gltf::GltfMesh;
+use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use openzt2_game_data::scene_prefab::{
     PrefabColliderSource, ScenePrefabColliderLayerFlags, ScenePrefabEntityFlags,
@@ -144,24 +146,85 @@ pub(super) struct PendingModelCollider {
     primitive: usize,
 }
 
+#[derive(Default)]
+pub(super) struct ModelColliderShapes {
+    primitives: HashMap<AssetId<Gltf>, Vec<AssetId<Mesh>>>,
+    shapes: HashMap<AssetId<Mesh>, Option<Collider>>,
+}
+
 pub(super) fn replace_loaded_model_collider_requests_with_avian_triangle_meshes(
     mut commands: Commands,
-    pending: Query<(Entity, &PendingModelCollider, Has<RigidBody>)>,
+    pending: Query<(Entity, Ref<PendingModelCollider>, Has<RigidBody>)>,
     models: Res<Assets<Gltf>>,
-    gltf_meshes: Res<Assets<bevy::gltf::GltfMesh>>,
+    gltf_meshes: Res<Assets<GltfMesh>>,
     meshes: Res<Assets<Mesh>>,
+    mut model_events: MessageReader<AssetEvent<Gltf>>,
+    mut gltf_mesh_events: MessageReader<AssetEvent<GltfMesh>>,
+    mut mesh_events: MessageReader<AssetEvent<Mesh>>,
+    mut cache: Local<ModelColliderShapes>,
 ) {
+    let mut assets_changed = gltf_mesh_events.read().count() != 0;
+    if assets_changed {
+        cache.primitives.clear();
+    }
+    for event in model_events.read() {
+        match *event {
+            AssetEvent::Added { .. } | AssetEvent::LoadedWithDependencies { .. } => {
+                assets_changed = true;
+            }
+            AssetEvent::Modified { id } | AssetEvent::Removed { id } => {
+                cache.primitives.remove(&id);
+                assets_changed = true;
+            }
+            AssetEvent::Unused { .. } => {}
+        }
+    }
+    for event in mesh_events.read() {
+        match *event {
+            AssetEvent::Added { .. } => {
+                assets_changed = true;
+            }
+            AssetEvent::Modified { id } | AssetEvent::Removed { id } => {
+                cache.shapes.remove(&id);
+                assets_changed = true;
+            }
+            _ => {}
+        }
+    }
     for (entity, pending, on_body) in &pending {
+        if !assets_changed && !pending.is_changed() {
+            continue;
+        }
         let Some(model) = models.get(&pending.model) else {
             continue;
         };
-        let Some(mesh) = loaded_gltf_model_mesh_asset_handles(model, &gltf_meshes)
-            .nth(pending.primitive)
-            .and_then(|handle| meshes.get(handle))
-        else {
+        if !model
+            .meshes
+            .iter()
+            .all(|handle| gltf_meshes.contains(handle.id()))
+        {
+            continue;
+        }
+        let primitives = cache
+            .primitives
+            .entry(pending.model.id())
+            .or_insert_with(|| {
+                loaded_gltf_model_mesh_asset_handles(model, &gltf_meshes)
+                    .map(Handle::id)
+                    .collect()
+            });
+        let Some(id) = primitives.get(pending.primitive).copied() else {
             continue;
         };
-        let Some(collider) = Collider::trimesh_from_mesh(mesh) else {
+        let Some(mesh) = meshes.get(id) else {
+            continue;
+        };
+        let Some(collider) = cache
+            .shapes
+            .entry(id)
+            .or_insert_with(|| Collider::trimesh_from_mesh(mesh))
+            .clone()
+        else {
             if on_body {
                 commands.entity(entity).remove::<(
                     PendingModelCollider,

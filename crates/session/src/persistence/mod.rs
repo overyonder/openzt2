@@ -7,6 +7,7 @@ mod durable_filesystem_operations;
 #[cfg(test)]
 mod durable_filesystem_operations_tests;
 mod generated_photo_file_persistence;
+mod html_export_result_opening;
 mod initial_profile_activation;
 mod overview_map_html_and_jpeg_export;
 pub mod persistence_failure_types;
@@ -114,9 +115,8 @@ impl Plugin for PersistencePlugin {
             .add_message::<ChallengePhotoJpegCopyPersisted>()
             .add_message::<ChallengePhotoJpegCopyPersistenceFailed>()
             .add_message::<openzt2_interface_state::photos::photo_album_types::ExportPhotoAlbum>()
-            .add_message::<photo_album_html_and_bmp_export::PhotoAlbumHtmlAndBmpExported>()
+            .add_message::<html_export_result_opening::HtmlExportWritten>()
             .add_message::<photo_album_html_and_bmp_export::PhotoAlbumHtmlAndBmpExportFailed>()
-            .add_message::<overview_map_html_and_jpeg_export::OverviewMapHtmlAndJpegExported>()
             .add_message::<overview_map_html_and_jpeg_export::OverviewMapHtmlAndJpegExportFailed>()
             .add_message::<screenshot_export::FullFrameScreenshotBmpExported>()
             .add_message::<screenshot_export::FullFrameScreenshotBmpExportFailed>()
@@ -137,7 +137,13 @@ impl Plugin for PersistencePlugin {
                 Update,
                 (
                     slot_io::original_saved_game_catalogue_execution::begin_original_saved_game_catalogue_loading,
-                    slot_io::original_saved_game_catalogue_execution::complete_original_saved_game_catalogue_loading,
+                    slot_io::original_saved_game_catalogue_execution::complete_original_saved_game_catalogue_loading
+                        .before(profile_filesystem_task_completion_application::apply_completed_profile_filesystem_tasks_to_canonical_profile_state),
+                ).chain(),
+            )
+            .add_systems(
+                Update,
+                (
                     profile_request_execution::begin_loading_profile_index,
                     profile_request_execution::begin_creating_requested_profiles,
                     profile_request_execution::begin_selecting_requested_profiles.after(GameSet::Intent),
@@ -154,7 +160,8 @@ impl Plugin for PersistencePlugin {
                         .after(openzt2_interface_state::ui::UiSet::Interaction),
                     save_slot_catalogue_ui_presentation::project_original_save_delete_control_state,
                     save_slot_catalogue_ui_presentation::load_save_slot_from_submitted_row,
-                    save_slot_catalogue_ui_presentation::request_save_slot_catalogue_list_row_count_updates,
+                    save_slot_catalogue_ui_presentation::request_save_slot_catalogue_list_row_count_updates
+                        .after_ignore_deferred(slot_io::original_saved_game_catalogue_execution::complete_original_saved_game_catalogue_loading),
                     save_slot_catalogue_ui_presentation::project_save_slot_catalogue_records_onto_saved_game_list_rows,
                 )
                     .chain(),
@@ -170,6 +177,9 @@ impl Plugin for PersistencePlugin {
                         .after(openzt2_interface_state::ui::UiSet::DomainProjection),
                     overview_map_html_and_jpeg_export::capture_overview_export_projection,
                     overview_map_html_and_jpeg_export::complete_overview_map_html_and_jpeg_exports,
+                    html_export_result_opening::open_written_html_exports
+                        .after(overview_map_html_and_jpeg_export::complete_overview_map_html_and_jpeg_exports)
+                        .after(photo_album_html_and_bmp_export::complete_photo_album_html_and_bmp_exports),
                     (
                         screenshot_export::begin_full_frame_screenshot_bmp_exports,
                         screenshot_export::complete_full_frame_screenshot_bmp_exports,
@@ -209,7 +219,7 @@ impl Plugin for PersistencePlugin {
             .add_systems(
                 Update,
                 (
-                    persistence_ui_operation_presentation::project_outstanding_world_snapshot_operations_onto_ui_wait_cursor
+                    persistence_ui_operation_presentation::update_wait_cursor_when_snapshot_operations_change
                         .before(GameSet::Presentation),
                     persistence_ui_operation_presentation::present_original_saved_game_failures
                         .before(openzt2_interface_state::ui::UiSet::Notifications),
@@ -218,7 +228,7 @@ impl Plugin for PersistencePlugin {
                             .after(openzt2_interface_state::ui::UiSet::Projection),
                         persistence_ui_operation_presentation::close_save_dialogs_after_world_snapshot_save
                             .before(openzt2_interface_state::ui::UiSet::Commands),
-                    ).chain(),
+                    ),
                 )
                     .after(slot_io::filesystem_task_completion_application::apply_completed_persistence_slot_filesystem_tasks),
             )

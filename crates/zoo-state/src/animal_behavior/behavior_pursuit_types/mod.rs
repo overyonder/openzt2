@@ -1,5 +1,7 @@
 //! Progress of one running `BFBehPursuit` action.
 
+use std::time::Duration;
+
 use bevy::prelude::*;
 
 use crate::behavior_task_execution_types::running_actions::{
@@ -9,13 +11,35 @@ use crate::behavior_task_execution_types::BehaviorTaskExecutionState;
 
 /// Present from the pursuit's first update until it completes, fails or its
 /// task frame is left.
-#[derive(Component, Debug, Clone)]
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PendingBehaviorPursuit {
     pub instruction: BehaviorInstructionId,
-    /// Counts down by fixed-step seconds; a negative value runs the authored
-    /// poll. It starts at zero, so the first update polls.
-    pub poll_remaining_seconds: f32,
     pub leg: BehaviorPursuitLeg,
+}
+
+#[derive(Component, Debug)]
+pub struct BehaviorPursuitPoll(Timer);
+
+impl BehaviorPursuitPoll {
+    pub fn from_remaining_seconds(seconds: f32) -> Self {
+        let remaining = Duration::try_from_secs_f32(seconds.max(0.0)).unwrap_or(Duration::MAX);
+        // Authored polling waits until the remaining interval is strictly negative.
+        Self(Timer::new(
+            remaining.saturating_add(Duration::from_nanos(1)),
+            TimerMode::Once,
+        ))
+    }
+
+    pub fn remaining_seconds(&self) -> f32 {
+        self.0
+            .remaining()
+            .saturating_sub(Duration::from_nanos(1))
+            .as_secs_f32()
+    }
+
+    pub fn is_due(&mut self, delta: Duration) -> bool {
+        !delta.is_zero() && self.0.tick(delta).is_finished()
+    }
 }
 
 /// Locomotion settles direct requests in the step they are made: the agent's

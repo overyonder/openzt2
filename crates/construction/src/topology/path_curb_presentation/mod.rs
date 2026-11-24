@@ -1,3 +1,5 @@
+use super::path_curb_patterns::{PathCurbPatternAsset, PathCurbPatterns};
+use bevy::platform::collections::HashMap;
 use bevy::platform::collections::HashSet;
 use bevy::prelude::*;
 use openzt2_game_data::AssetId;
@@ -76,9 +78,13 @@ pub(super) fn invalidate_path_curb_presentations_after_topology_or_terrain_chang
     terrain_chunks: Query<&TerrainChunk>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
-    paths: Query<Option<&Children>, With<PathTile>>,
+    paths: Query<(Entity, Option<&Children>), With<PathTile>>,
     curb_roots: Query<(), With<PathCurbRoot>>,
     mut discarded_segments: MessageReader<DiscardedPathCurbSegment>,
+    (pattern_asset, mut pattern_events): (
+        Res<PathCurbPatternAsset>,
+        MessageReader<AssetEvent<PathCurbPatterns>>,
+    ),
     index: Single<&TopologyIndex>,
     grid: Single<&TopologyGrid>,
 ) {
@@ -93,6 +99,16 @@ pub(super) fn invalidate_path_curb_presentations_after_topology_or_terrain_chang
         return;
     };
     let mut affected = bevy::ecs::entity::EntityHashSet::new();
+    if pattern_events
+        .read()
+        .filter(|event| {
+            event.is_modified(pattern_asset.0.id()) || event.is_removed(pattern_asset.0.id())
+        })
+        .count()
+        != 0
+    {
+        affected.extend(paths.iter().map(|(entity, _)| entity));
+    }
     let radius = IVec2::splat(curb_neighborhood_radius(definitions));
     for change in changed.read() {
         let cell = change.0.xy();
@@ -107,7 +123,7 @@ pub(super) fn invalidate_path_curb_presentations_after_topology_or_terrain_chang
         affected.extend(index.paths_within(min, max));
     }
     for entity in affected {
-        if let Ok(children) = paths.get(entity) {
+        if let Ok((_, children)) = paths.get(entity) {
             for child in children.into_iter().flat_map(|children| children.iter()) {
                 if curb_roots.contains(child) {
                     commands.entity(child).try_despawn();
@@ -140,7 +156,11 @@ pub(super) fn hydrate_authored_path_curb_prefab_presentations(
         Without<EmptyPathCurbPresentation>,
     >,
     curb_roots: Query<(), With<PathCurbRoot>>,
+    (patterns, pattern_asset): (Res<Assets<PathCurbPatterns>>, Res<PathCurbPatternAsset>),
 ) {
+    let Some(patterns) = patterns.get(&pattern_asset.0) else {
+        return;
+    };
     let grid = grid.into_inner();
     let terrain_index = terrain_index.into_inner();
     let index = index.into_inner();
@@ -176,71 +196,142 @@ pub(super) fn hydrate_authored_path_curb_prefab_presentations(
             width_cells,
         })
     };
-    for (entity, tile, transform, _) in dirty_paths {
-        let Some(path) = path_row((entity, tile)).filter(|path| {
-            path.curb != AssetId::default() && index.paths.get(&path.cell) == Some(&entity)
-        }) else {
-            commands.entity(entity).insert(EmptyPathCurbPresentation);
+    let ready = dirty_paths
+        .filter_map(|(entity, tile, transform, _)| {
+            let Some(path) = path_row((entity, tile)).filter(|path| {
+                path.curb != AssetId::default() && index.paths.get(&path.cell) == Some(&entity)
+            }) else {
+                commands.entity(entity).insert(EmptyPathCurbPresentation);
+                return None;
+            };
+            Some((path, transform))
+        })
+        .collect::<Vec<_>>();
+    let neighbourhood: bevy::ecs::entity::EntityHashSet = ready
+        .iter()
+        .flat_map(|(path, _)| {
+            let centre = path.centre_cell.xy();
+            index.paths_within(centre - radius, centre + radius)
+        })
+        .collect();
+    let mut neighbours: Vec<_> = neighbourhood
+        .into_iter()
+        .filter_map(|entity| path_row((entity, paths.get(entity).ok()?)))
+        .collect();
+    neighbours.sort_unstable_by_key(|row| (row.cell.to_array(), row.owner.to_bits()));
+    let triangles: HashSet<_> = neighbours
+        .iter()
+        .flat_map(|path| ground_path_tile_triangles(path.cell, path.centre_cell, path.width_cells))
+        .collect();
+    let mut connected_curb_boundary_segments = neighbours
+        .iter()
+        .flat_map(|path| {
+            ground_path_tile_triangles(path.cell, path.centre_cell, path.width_cells)
+                .flat_map(|triangle| {
+                    ground_path_triangle_curb_boundary(&triangles, path.centre_cell, triangle)
+                })
+                .map(
+                    |(first_cell, second_cell)| GroundPathConnectedCurbBoundarySegment {
+                        owner: path.owner,
+                        curb: path.curb,
+                        first_cell,
+                        second_cell,
+                    },
+                )
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    let mut by_edge = HashMap::new();
+    let key = |curb, [a, b]: [IVec3; 2]| {
+        (
+            curb,
+            openzt2_zoo_state::topology::topology_graph_types::EdgeKey::new(a, b),
+        )
+    };
+    for (index, segment) in connected_curb_boundary_segments.iter().enumerate() {
+        by_edge.insert(
+            key(segment.curb, [segment.first_cell, segment.second_cell]),
+            index,
+        );
+    }
+    let mut authored_partners = HashMap::new();
+    let mut matched_centres = HashSet::new();
+    for owner in &neighbours {
+        if owner.curb == AssetId::default()
+            || !matched_centres.insert((owner.centre_cell, owner.width_cells, owner.curb))
+        {
+            continue;
+        }
+        for direction in [0, 2, 4, 6] {
+            let Some(edges) = patterns.pair(
+                owner.centre_cell,
+                direction,
+                owner.width_cells / 2,
+                |cell| triangles.contains(&cell),
+            ) else {
+                continue;
+            };
+            let [a, b] = edges.map(|edge| {
+                *by_edge.entry(key(owner.curb, edge)).or_insert_with(|| {
+                    let index = connected_curb_boundary_segments.len();
+                    connected_curb_boundary_segments.push(GroundPathConnectedCurbBoundarySegment {
+                        owner: owner.owner,
+                        curb: owner.curb,
+                        first_cell: edge[0],
+                        second_cell: edge[1],
+                    });
+                    index
+                })
+            });
+            let [first, second] = edges;
+            if let Some(corner) = first.into_iter().find(|point| second.contains(point)) {
+                let outside_a = if first[0] == corner {
+                    first[1]
+                } else {
+                    first[0]
+                };
+                let outside_b = if second[0] == corner {
+                    second[1]
+                } else {
+                    second[0]
+                };
+                authored_partners.insert(a, (outside_a, corner, outside_b));
+                authored_partners.insert(b, (outside_b, corner, outside_a));
+            }
+        }
+    }
+    let curve_edges = connected_curb_boundary_segments
+        .iter()
+        .map(|segment| (segment.curb, segment.first_cell, segment.second_cell))
+        .collect::<Vec<_>>();
+    let curve_partners = select_reciprocal_fence_curve_partners(&curve_edges);
+    let mut segments_by_owner = bevy::ecs::entity::EntityHashMap::<Vec<_>>::default();
+    for (index, segment) in connected_curb_boundary_segments.into_iter().enumerate() {
+        let Some(curb) = definitions.find_fence(segment.curb) else {
             continue;
         };
-        let Some(curb_definition) = definitions.find_fence(path.curb) else {
-            continue;
-        };
-        let centre = path.centre_cell.xy();
-        let neighbours = index
-            .paths_within(centre - radius, centre + radius)
-            .filter_map(|entity| path_row((entity, paths.get(entity).ok()?)))
-            .filter(|row| row.cell.z == path.cell.z)
-            .collect::<Vec<_>>();
-        let triangles: HashSet<_> = neighbours
-            .iter()
-            .flat_map(|path| {
-                ground_path_tile_triangles(path.cell, path.centre_cell, path.width_cells)
-            })
-            .collect();
-        let connected_curb_boundary_segments = neighbours
-            .iter()
-            .flat_map(|path| {
-                ground_path_tile_triangles(path.cell, path.centre_cell, path.width_cells)
-                    .flat_map(|triangle| {
-                        ground_path_triangle_curb_boundary(&triangles, path.centre_cell, triangle)
-                    })
-                    .map(
-                        |(first_cell, second_cell)| GroundPathConnectedCurbBoundarySegment {
-                            owner: path.owner,
-                            curb: path.curb,
-                            first_cell,
-                            second_cell,
-                        },
-                    )
-                    .collect::<Vec<_>>()
-            })
-            .collect::<Vec<_>>();
-        let curve_edges = connected_curb_boundary_segments
-            .iter()
-            .map(|segment| (segment.curb, segment.first_cell, segment.second_cell))
-            .collect::<Vec<_>>();
-        let curve_partners = select_reciprocal_fence_curve_partners(&curve_edges);
-        let selected_segments = connected_curb_boundary_segments
-            .iter()
-            .enumerate()
-            .filter(|(_, segment)| segment.owner == entity)
-            .map(|(index, segment)| {
-                let (first, second, next) = curve_partners[index].map_or(
-                    (segment.first_cell, segment.second_cell, None),
-                    |(first, second, next)| (first, second, Some(next)),
-                );
-                let prefab = select_authored_fence_segment_prefab_for_adjacent_topology(
-                    curb_definition,
-                    first,
-                    second,
-                    next,
-                );
-                (first, second, prefab)
-            })
-            .filter(|(_, _, prefab)| prefab.asset != AssetId::default())
-            .map(|(first, second, prefab)| (first, second, prefab.asset, prefab.mirror_source_y))
-            .collect::<Vec<_>>();
+        let partner = authored_partners
+            .get(&index)
+            .copied()
+            .or(curve_partners[index]);
+        let (first, second, next) = partner.map_or(
+            (segment.first_cell, segment.second_cell, None),
+            |(first, second, next)| (first, second, Some(next)),
+        );
+        let prefab =
+            select_authored_fence_segment_prefab_for_adjacent_topology(curb, first, second, next);
+        if prefab.asset != AssetId::default() {
+            segments_by_owner.entry(segment.owner).or_default().push((
+                first,
+                second,
+                prefab.asset,
+                prefab.mirror_source_y,
+            ));
+        }
+    }
+    for (path, transform) in ready {
+        let entity = path.owner;
+        let selected_segments = segments_by_owner.remove(&entity).unwrap_or_default();
         // Prefab presentation keeps strong handles throughout
         // asynchronous loading and renders each segment once it is ready.
         // Looking up Assets here and dropping an unready handle cancels the

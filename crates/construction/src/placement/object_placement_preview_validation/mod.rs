@@ -26,9 +26,7 @@ use super::stomped_object_edit_preparation::{
 };
 use crate::placement::ground_path_placement_stomp::GroundPathPlacementStomp;
 use openzt2_zoo_state::economy::money_types::Money;
-use openzt2_zoo_state::placement::object_placement_definition_queries::{
-    collect_occupied_placement_cells_for_transform, resolve_object_placeable_definition,
-};
+use openzt2_zoo_state::placement::object_placement_definition_queries::resolve_object_placeable_definition;
 use openzt2_zoo_state::placement::object_placement_validation::calculate_authored_object_placement_eighth_turns;
 use openzt2_zoo_state::placement::object_placement_validation::validate_object_placement_footprint_cells;
 use openzt2_zoo_state::placement::object_placement_validation::ObjectPlacementAuthoritativeFacts;
@@ -39,15 +37,6 @@ use openzt2_zoo_state::placement::placement_transaction_types::PlacedObjectReloc
 
 #[derive(Component)]
 pub(super) struct ObjectPlacementPreviewDirty;
-
-#[derive(Component, Clone, PartialEq)]
-pub(super) struct ObjectPlacementFit {
-    pub transform: Transform,
-    pub cost: Money,
-    pub cells: Vec<IVec2>,
-    pub permission: ObjectPlacementPreviewPermissionFacts,
-    pub habitat: Option<Entity>,
-}
 
 // Asset reloads and terrain edits must invalidate previews even if the pointer
 // and the projected boolean permission facts did not change.
@@ -128,7 +117,6 @@ pub(super) fn evaluate_dirty_object_placement_previews(
             Option<&ObjectPlacementPreviewPermissionFacts>,
             Option<&PlacedObjectRelocationSource>,
             Option<&ObjectPlacementPrefabSource>,
-            Option<&mut ObjectPlacementFit>,
         ),
         (
             With<ObjectPlacementPreviewDirty>,
@@ -139,8 +127,7 @@ pub(super) fn evaluate_dirty_object_placement_previews(
     let Some(catalogue) = active_definitions.get(&definitions) else {
         return;
     };
-    for (entity, mut preview, member, permission, relocation, prefab, existing_fit) in &mut previews
-    {
+    for (entity, mut preview, member, permission, relocation, prefab) in &mut previews {
         let Ok(terrain_index) = terrain_indexes.get(member.root) else {
             continue;
         };
@@ -188,6 +175,13 @@ pub(super) fn evaluate_dirty_object_placement_previews(
             .get(entity)
             .ok()
             .map(|member| member.habitat_entity);
+        if !permission.headroom_valid {
+            let invalid = PlacementValidity::Invalid(PlacementFailure::NoHeadroom);
+            if preview.validity != invalid {
+                preview.validity = invalid;
+            }
+            continue;
+        }
         let validity = validate_object_placement_footprint_cells(
             geometry,
             geometry.cells(turns),
@@ -221,25 +215,6 @@ pub(super) fn evaluate_dirty_object_placement_previews(
             }
             validity => validity,
         };
-        if let PlacementValidity::Valid { cost } = validity {
-            let mut cells = Vec::new();
-            if collect_occupied_placement_cells_for_transform(geometry, &transform, &mut cells)
-                .is_some()
-            {
-                let fit = ObjectPlacementFit {
-                    transform,
-                    cost,
-                    cells,
-                    permission: *permission,
-                    habitat,
-                };
-                if let Some(mut existing_fit) = existing_fit {
-                    existing_fit.set_if_neq(fit);
-                } else {
-                    commands.entity(entity).insert(fit);
-                }
-            }
-        }
         if preview.validity != validity {
             if let PlacementValidity::Invalid(failure) = validity {
                 debug!(?failure, definition = ?definition_id, "object placement preview invalid");

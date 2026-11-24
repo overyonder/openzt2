@@ -235,12 +235,17 @@ pub(in crate::persistence) fn restore_pending_snapshots() -> ScheduleConfigs<Sch
                 .run_if(any_with_component::<RestoreRuntimeContinuation>),
         )
             .chain(),
-        continuation::resume_snapshot_actors
-            .run_if(any_with_component::<ResumeSnapshotActors>)
+        (
+            continuation::resume_snapshot_actors
+                .run_if(any_with_component::<ResumeSnapshotActors>),
+            super::behavior_snapshot_application::state_application::bind_restored_behavior_instruction_state
+                .run_if(any_with_component::<super::behavior_snapshot_application::state_application::RestoredBehaviorInstructionState>),
+        )
+            .chain()
             .after(continuation::runtime_continuation_is_restored),
         finish_snapshot_restore
             .after(baseline::retire_world_once_saved_assets_are_ready)
-            .after(continuation::resume_snapshot_actors),
+            .after(super::behavior_snapshot_application::state_application::bind_restored_behavior_instruction_state),
     )
         .into_configs()
 }

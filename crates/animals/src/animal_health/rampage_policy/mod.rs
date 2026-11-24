@@ -25,6 +25,10 @@ pub(super) struct RampagePolicy {
     pub(super) cooldown: f32,
     pub(super) music: openzt2_game_data::AssetId,
     pub(super) end_music: openzt2_game_data::AssetId,
+    pub(super) ducking_gain: f32,
+    pub(super) distance_span_m: f32,
+    pub(super) full_gain_distance_m: f32,
+    pub(super) fade_seconds: f32,
 }
 
 #[derive(Resource)]
@@ -81,6 +85,13 @@ pub(super) fn parse_rampage_policy(bytes: &[u8]) -> io::Result<RampagePolicy> {
                 openzt2_game_data::AssetId::from_key(&name.trim().to_ascii_lowercase())
             })
     };
+    let audio_number = |name, default| {
+        if root.attribute_named_any(&[name]).is_some() {
+            number(name)
+        } else {
+            Ok(default)
+        }
+    };
     Ok(RampagePolicy {
         check_interval: number("updateInterval")?,
         good_point_limit: number("maxGoodPoints")?,
@@ -93,6 +104,10 @@ pub(super) fn parse_rampage_policy(bytes: &[u8]) -> io::Result<RampagePolicy> {
         cooldown: number("rampageInterval")?,
         music: cue("rampageMusic"),
         end_music: cue("rampageEndMusic"),
+        ducking_gain: audio_number("soundAdjustmentFactor", 0.5)?,
+        distance_span_m: audio_number("maxDistToHearRampage", 18.0)?,
+        full_gain_distance_m: audio_number("distanceForMaxRampageVolume", 6.0)?,
+        fade_seconds: audio_number("rampageSoundInterpScalar", 0.8)?,
     })
 }
 

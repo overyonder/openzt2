@@ -213,7 +213,7 @@ fn hydrate_world_instance_prefab_rows(
                 transform.rotation,
             );
         }
-        if let Some(light) = row.lights.first() {
+        for light in &row.lights {
             let color = Color::srgb(
                 light.color_srgb[0],
                 light.color_srgb[1],
@@ -254,7 +254,7 @@ fn hydrate_world_instance_prefab_rows(
     for (entity, row) in document.entities.iter().enumerate() {
         if let Some(joint) = &row.model_joint_binding {
             commands.entity(entities[entity]).insert(
-                openzt2_world_state::animation_playback::model_joint_attachment_binding::PendingModelJointAttachment::new(entities[0], joint),
+                openzt2_world_state::animation_playback::model_joint_attachment_binding::ModelJointAttachment::new(entities[0], joint),
             );
         }
         for lod in &row.lods {

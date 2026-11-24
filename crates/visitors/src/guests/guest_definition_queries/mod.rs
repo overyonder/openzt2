@@ -28,32 +28,13 @@ pub(super) fn find_guest_definition<'a>(
 pub(super) fn guest_need_rows<'a>(
     definition: &'a GuestDefinition,
 ) -> Option<[&'a GuestNeedDefinition; 8]> {
-    let needs = &definition.needs;
+    let mut ordered = [None; 8];
+    for need in &definition.needs {
+        ordered[need.kind as usize].get_or_insert(need);
+    }
+    let [hunger, thirst, dessert, gift, energy, restroom, social, amusement] = ordered;
     Some([
-        needs
-            .iter()
-            .find(|need| matches!(&need.kind, GuestNeedKind::Hunger))?,
-        needs
-            .iter()
-            .find(|need| matches!(&need.kind, GuestNeedKind::Thirst))?,
-        needs
-            .iter()
-            .find(|need| matches!(&need.kind, GuestNeedKind::Dessert))?,
-        needs
-            .iter()
-            .find(|need| matches!(&need.kind, GuestNeedKind::Gift))?,
-        needs
-            .iter()
-            .find(|need| matches!(&need.kind, GuestNeedKind::Energy))?,
-        needs
-            .iter()
-            .find(|need| matches!(&need.kind, GuestNeedKind::Restroom))?,
-        needs
-            .iter()
-            .find(|need| matches!(&need.kind, GuestNeedKind::Social))?,
-        needs
-            .iter()
-            .find(|need| matches!(&need.kind, GuestNeedKind::Amusement))?,
+        hunger?, thirst?, dessert?, gift?, energy?, restroom?, social?, amusement?,
     ])
 }
 

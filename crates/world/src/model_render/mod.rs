@@ -36,11 +36,12 @@ use authored_model_material_pass_projection::{
     initialize_model_geometry_texture_coordinate_clocks, project_authored_model_material_passes,
 };
 use gltf_model_scene_instantiation::{
-    bind_prefab_model_scene_ownership_on_ready, instantiate_visible_gltf_model_scenes,
-    retire_hidden_prefab_model_assets,
+    instantiate_visible_gltf_model_scenes, request_scene_retirement_on_removal,
+    retire_despawned_prefab_scene_instances, retire_hidden_prefab_model_assets,
+    RetirePrefabSceneInstance,
 };
 use prefab_ambient_light_projection::project_prefab_ambient_light_contributions;
-use prefab_fixed_function_world_lighting_projection::update_fixed_function_world_light_buffer;
+use prefab_fixed_function_world_lighting_projection::project_fixed_function_world_light_registers;
 use prefab_model_billboard_orientation::orient_prefab_model_billboards_toward_active_camera_on_matching_render_layers;
 use prefab_model_level_of_detail_projection::project_prefab_model_level_of_detail_visibility;
 use prefab_model_tint_projection::project_model_tints_onto_standard_materials;
@@ -61,7 +62,12 @@ impl Plugin for ModelRenderPlugin {
             AuthoredEffectTechniquePassSubmissionOrder,
             RenderApp,
         >::extract_visible());
-        app.add_observer(bind_prefab_model_scene_ownership_on_ready);
+        app.add_message::<RetirePrefabSceneInstance>()
+            .add_observer(request_scene_retirement_on_removal);
+        app.world_mut().spawn((
+            effect_environment_registers::ProgrammableEnvironmentRegisters::default(),
+            prefab_fixed_function_world_lighting_projection::FixedFunctionWorldLightRegisters::default(),
+        ));
         let render_app = app.sub_app_mut(RenderApp);
         render_app
             .remove_systems_in_set(
@@ -97,12 +103,17 @@ impl Plugin for ModelRenderPlugin {
             (
                 project_prefab_ambient_light_contributions
                     .after(VisibilitySystems::VisibilityPropagate),
-                update_fixed_function_world_light_buffer
+                project_fixed_function_world_light_registers
                     .after(project_prefab_ambient_light_contributions)
                     .after(VisibilitySystems::MarkNewlyHiddenEntitiesInvisible),
-                effect_environment_registers::write_effect_environment_registers
+                effect_environment_registers::project_effect_environment_registers
+                    .after(project_prefab_ambient_light_contributions)
                     .after(TransformSystems::Propagate)
                     .after(VisibilitySystems::MarkNewlyHiddenEntitiesInvisible),
+                effect_environment_registers::upload_programmable_environment_registers
+                    .after(effect_environment_registers::project_effect_environment_registers),
+                prefab_fixed_function_world_lighting_projection::upload_fixed_function_world_light_registers
+                    .after(project_fixed_function_world_light_registers),
                 crate::model_render::authored_effect_technique_pass_submission_order::project_authored_effect_opaque_base_pass_order
                     .after(ModelRenderPresentationSet::SourceMaterials),
             ),
@@ -110,7 +121,9 @@ impl Plugin for ModelRenderPlugin {
         app.add_systems(
             PostUpdate,
             (
-                initialize_model_geometry_texture_coordinate_clocks.before(project_authored_model_material_passes),
+                initialize_model_geometry_texture_coordinate_clocks.before(
+                    openzt2_game_assets::material::runtime::texture_coordinate_animation::TextureCoordinateAnimationSet,
+                ),
                 prefab_render_lod_tier_projection::project_prefab_render_lod_tier
                     .in_set(ModelRenderPresentationSet::LevelOfDetail),
                 project_prefab_model_level_of_detail_visibility
@@ -123,6 +136,10 @@ impl Plugin for ModelRenderPlugin {
                     .after(VisibilitySystems::VisibilityPropagate)
                     .after_ignore_deferred(instantiate_visible_gltf_model_scenes)
                     .before(VisibilitySystems::CheckVisibility),
+                retire_despawned_prefab_scene_instances
+                    .after(retire_hidden_prefab_model_assets)
+                    .before(VisibilitySystems::CheckVisibility)
+                    .run_if(on_message::<RetirePrefabSceneInstance>),
                 mirrored_model_primitive_winding::project_mirrored_and_tinted_model_primitive_meshes
                     .after(bevy::app::AnimationSystems)
                     .after(project_authored_model_material_passes)

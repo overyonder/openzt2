@@ -2,6 +2,7 @@ mod animal_activity_immobilization_execution;
 mod animal_escape_state_execution;
 mod animal_health_staff_job_request_generation;
 mod animal_rampage_execution;
+pub use animal_rampage_execution::RampageAudioMix;
 mod animal_tranquilization_and_capture_execution;
 mod disease_hint_ui_action_routing;
 pub(crate) mod disease_mortality_execution;

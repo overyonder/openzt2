@@ -8,6 +8,9 @@ use super::authored_binder_rig_binding::BoundAnimationBinderRig;
 #[derive(Component)]
 pub(super) struct DecalCyclePlayback(Box<[DecalCycleCursor]>);
 
+#[derive(Component)]
+pub(super) struct DecalCyclesAdvancing;
+
 struct DecalCycleCursor {
     images: Box<[Handle<Image>]>,
     enabled: bool,
@@ -15,10 +18,16 @@ struct DecalCycleCursor {
     stop_at: Option<usize>,
     resume: bool,
     exhausted: bool,
-    wait_seconds: f32,
+    dwell: Timer,
 }
 
 impl DecalCyclePlayback {
+    pub(super) fn is_advancing(&self) -> bool {
+        self.0
+            .iter()
+            .any(|cursor| cursor.resume && !cursor.exhausted)
+    }
+
     pub(super) fn new(
         cycles: &[DecalTextureCycle],
         mut load_image: impl FnMut(&str) -> Handle<Image>,
@@ -37,7 +46,7 @@ impl DecalCyclePlayback {
                     stop_at: cycle.stop_at,
                     resume: !cycle.frozen,
                     exhausted: false,
-                    wait_seconds: 0.0,
+                    dwell: Timer::new(std::time::Duration::ZERO, TimerMode::Once),
                 })
                 .collect::<Box<[_]>>(),
         )
@@ -49,7 +58,8 @@ impl DecalCyclePlayback {
             if enabled {
                 cursor.resume = true;
                 cursor.stop_at = None;
-                cursor.wait_seconds = 0.0;
+                cursor.dwell.set_duration(std::time::Duration::ZERO);
+                cursor.dwell.reset();
             }
         }
     }
@@ -58,7 +68,8 @@ impl DecalCyclePlayback {
         if let Some(cursor) = self.0.first_mut() {
             cursor.stop_at = usize::try_from(step).ok();
             cursor.resume = step != -2;
-            cursor.wait_seconds = 0.0;
+            cursor.dwell.set_duration(std::time::Duration::ZERO);
+            cursor.dwell.reset();
         }
     }
 }
@@ -79,12 +90,15 @@ pub(super) fn advance_authored_decal_texture_cycles(
     time: Res<Time<Fixed>>,
     mut random: ResMut<NativeVisualRandomStream>,
     assets: Res<Assets<WorldDefinitionAsset>>,
-    mut controllers: Query<(
-        Entity,
-        &BoundAnimationBinderRig,
-        &mut DecalCyclePlayback,
-        Option<&mut AnimationDecalFrames>,
-    )>,
+    mut controllers: Query<
+        (
+            Entity,
+            &BoundAnimationBinderRig,
+            &mut DecalCyclePlayback,
+            Option<&mut AnimationDecalFrames>,
+        ),
+        With<DecalCyclesAdvancing>,
+    >,
 ) {
     for (entity, bound, mut playback, frames) in &mut controllers {
         let Some(rig) = bound.source.and_then(|source| source.get(&assets)) else {
@@ -95,8 +109,7 @@ pub(super) fn advance_authored_decal_texture_cycles(
             if !cursor.resume || cursor.exhausted {
                 continue;
             }
-            cursor.wait_seconds -= time.delta_secs();
-            if cursor.wait_seconds > 0.0 {
+            if !cursor.dwell.tick(time.delta()).is_finished() {
                 continue;
             }
             let next = cursor.current.map_or(0, |step| step + 1);
@@ -113,13 +126,20 @@ pub(super) fn advance_authored_decal_texture_cycles(
             };
             changed |= cursor.current != Some(index);
             cursor.current = Some(index);
-            cursor.wait_seconds = step.hold_seconds;
+            let mut dwell = step.hold_seconds;
             if step.variance_seconds > 0.0 {
-                cursor.wait_seconds += (random.unit_f32() - 0.5) * step.variance_seconds;
+                dwell += (random.unit_f32() - 0.5) * step.variance_seconds;
             }
+            cursor
+                .dwell
+                .set_duration(std::time::Duration::try_from_secs_f32(dwell).unwrap_or_default());
+            cursor.dwell.reset();
             if cursor.stop_at == Some(index) {
                 cursor.resume = false;
             }
+        }
+        if !playback.is_advancing() {
+            commands.entity(entity).remove::<DecalCyclesAdvancing>();
         }
         if !changed {
             continue;

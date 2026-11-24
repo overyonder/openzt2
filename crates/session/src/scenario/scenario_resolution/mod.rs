@@ -3,8 +3,10 @@ use bevy::prelude::*;
 use bevy::ecs::relationship::RelationshipTarget;
 use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 
-use openzt2_zoo_state::scenario::scenario_objective_types::ScenarioObjectiveStatus;
-use openzt2_zoo_state::scenario::scenario_objective_types::ScenarioObjectives;
+use openzt2_zoo_state::scenario::scenario_objective_types::{
+    ScenarioObjectiveGroup, ScenarioObjectiveGroupOf, ScenarioObjectiveGroups, ScenarioObjectiveOf,
+    ScenarioObjectiveStatus, ScenarioObjectives,
+};
 use openzt2_zoo_state::scenario::scenario_session_types::ActiveScenarioSession;
 use openzt2_zoo_state::scenario::scenario_session_types::PendingScenarioTerminalResult;
 use openzt2_zoo_state::scenario::scenario_session_types::ScenarioSessionState;
@@ -14,40 +16,77 @@ use super::{
     challenge_offer_types::{
         ScenarioChallengeOffer, ScenarioChallengeOfferState, ScenarioChallengeRuleContext,
     },
-    scenario_lua_types::ScenarioLuaVirtualMachineContexts,
+    scenario_group_completion::ScenarioCompletionGroup,
+    scenario_lua_types::ScenarioLuaContext,
 };
 
 pub(super) fn queue_completed_scenarios_for_terminal_resolution(
     mut commands: Commands,
     active: Query<
-        (Entity, &ActiveScenarioSession, &ScenarioObjectives),
+        (
+            Entity,
+            &ActiveScenarioSession,
+            &ScenarioObjectives,
+            Option<&ScenarioObjectiveGroups>,
+        ),
         Without<PendingScenarioTerminalResult>,
     >,
     offers: Query<
-        (Entity, &ScenarioChallengeOffer, &ScenarioObjectives),
+        (
+            Entity,
+            Ref<ScenarioChallengeOffer>,
+            &ScenarioObjectives,
+            Option<&ScenarioObjectiveGroups>,
+        ),
         Without<PendingScenarioTerminalResult>,
     >,
     objectives: Query<&ScenarioObjectiveStatus>,
+    groups: Query<&ScenarioObjectiveGroup, With<ScenarioCompletionGroup>>,
+    changed_objectives: Query<&ScenarioObjectiveOf, Changed<ScenarioObjectiveStatus>>,
+    changed_groups: Query<&ScenarioObjectiveGroupOf, Changed<ScenarioObjectiveGroup>>,
 ) {
+    let changed: bevy::ecs::entity::EntityHashSet = changed_objectives
+        .iter()
+        .map(|owner| owner.0)
+        .chain(changed_groups.iter().map(|owner| owner.0))
+        .collect();
     let owners = active
         .iter()
-        .filter_map(|(entity, session, members)| {
-            (session.state == ScenarioSessionState::Running).then_some((
-                entity,
-                session.definition,
-                members,
-                false,
-            ))
+        .filter_map(|(entity, session, members, groups)| {
+            (session.state == ScenarioSessionState::Running && changed.contains(&entity))
+                .then_some((entity, session.definition, members, groups, false))
         })
-        .chain(offers.iter().map(|(entity, offer, members)| {
-            (
-                entity,
-                offer.definition,
-                members,
-                offer.state == ScenarioChallengeOfferState::Declined,
-            )
-        }));
-    for (owner, scenario, members, declined) in owners {
+        .chain(
+            offers
+                .iter()
+                .filter_map(|(entity, offer, members, groups)| {
+                    (offer.is_changed() || changed.contains(&entity)).then_some((
+                        entity,
+                        offer.definition,
+                        members,
+                        groups,
+                        offer.state == ScenarioChallengeOfferState::Declined,
+                    ))
+                }),
+        );
+    for (owner, scenario, members, authored_groups, declined) in owners {
+        if let Some(authored_groups) = authored_groups {
+            let Some(group) = authored_groups
+                .iter()
+                .find_map(|group| groups.get(group).ok())
+            else {
+                continue;
+            };
+            let state = match group.status {
+                ScenarioObjectiveStatus::Satisfied => ScenarioSessionState::Won,
+                ScenarioObjectiveStatus::Failed => ScenarioSessionState::Lost,
+                ScenarioObjectiveStatus::Active | ScenarioObjectiveStatus::Inactive => continue,
+            };
+            commands
+                .entity(owner)
+                .insert(PendingScenarioTerminalResult { scenario, state });
+            continue;
+        }
         let mut states = objectives.iter_many(members.iter()).flatten().peekable();
         if states.peek().is_none() {
             continue;
@@ -88,7 +127,7 @@ pub(super) fn apply_terminal_scenario_results_and_remove_completed_challenges(
     terminals: Query<(Entity, &PendingScenarioTerminalResult)>,
     offers: Query<&ScenarioChallengeRuleContext, With<ScenarioChallengeOffer>>,
     mut results: MessageWriter<ScenarioTerminalResult>,
-    mut runtime: NonSendMut<ScenarioLuaVirtualMachineContexts>,
+    mut runtime: Query<&mut ScenarioLuaContext>,
     mut profile_variables: ResMut<
         openzt2_zoo_state::progression::profile_scenario_variables::ProfileScenarioVariables,
     >,
@@ -124,7 +163,9 @@ pub(super) fn apply_terminal_scenario_results_and_remove_completed_challenges(
                 .entity(entity)
                 .remove::<PendingScenarioTerminalResult>();
         } else if let Ok(context) = offers.get(entity) {
-            if let Err(error) = runtime.clear_finished_challenge_rule_state(context.0) {
+            if let Err(error) = runtime.get_mut(context.0).map_or(Ok(()), |mut context| {
+                context.clear_finished_challenge_rule_state()
+            }) {
                 error!(%error, "completed challenge could not release its rule state");
             }
             commands.entity(entity).despawn();

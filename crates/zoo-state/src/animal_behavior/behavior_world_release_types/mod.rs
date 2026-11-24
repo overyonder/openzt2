@@ -3,7 +3,7 @@ use bevy::prelude::*;
 #[derive(Component, Clone, Copy)]
 pub enum BehaviorWorldReleaseMotion {
     Drop,
-    Fall,
+    Fall { speed_mps: f32 },
 }
 
 /// Optional animation keys authored on the released subject's definition.

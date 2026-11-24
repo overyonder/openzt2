@@ -11,7 +11,7 @@ use openzt2_game_assets::{
 };
 use openzt2_game_data::{
     ui_document::{
-        action::UiTrigger, node_property_binding::UiTextPropertyBindingSource,
+        node_property_binding::UiTextPropertyBindingSource,
         widget_live_collection::UiWidgetLiveCollectionSource,
     },
     AssetId,
@@ -20,9 +20,8 @@ use openzt2_ui::authored_ui_text_content_binding::UiTextBinding;
 
 use openzt2_interface_state::ui::{
     authored_reusable_list_and_table_runtime_types::{SetUiListRowCount, UiListPolicy, UiListRow},
-    authored_ui_activation_contracts::UiNodeActivated,
     authored_ui_integer_range_components::UiMaximum,
-    authored_ui_node_projection_components::{UiNodeId, UiValue},
+    authored_ui_node_projection_components::{UiNodeId, UiSliderValueChanged, UiValue},
 };
 
 use super::{
@@ -165,13 +164,11 @@ pub(super) const fn set_graphics_detail_setting_level(
 }
 
 pub(super) fn set_authored_graphics_detail_setting_list_row_count(
-    lists: Query<(Entity, Ref<UiListPolicy>)>,
+    lists: Query<(Entity, &UiListPolicy), Added<UiListPolicy>>,
     mut row_counts: MessageWriter<SetUiListRowCount>,
 ) {
     for (list, policy) in &lists {
-        if policy.source == UiWidgetLiveCollectionSource::GraphicsDetailSettings
-            && policy.is_added()
-        {
+        if policy.source == UiWidgetLiveCollectionSource::GraphicsDetailSettings {
             row_counts.write(SetUiListRowCount {
                 list,
                 count: u16::try_from(GraphicsDetailSetting::ALL.len()).unwrap_or(u16::MAX),
@@ -237,7 +234,7 @@ pub(super) fn project_drafted_graphics_detail_settings_into_authored_rows(
                 .filter(|(id, ..)| id.id == slider_node)
             {
                 maximum.set_if_neq(UiMaximum(level_keys.len() as i64 - 1));
-                value.bypass_change_detection().0 = i64::from(level);
+                value.set_if_neq(UiValue(i64::from(level)));
                 if let Some(mut current) = current {
                     current.set_if_neq(setting);
                 } else {
@@ -258,35 +255,28 @@ pub(super) fn project_drafted_graphics_detail_settings_into_authored_rows(
     }
 }
 
-/// Keeps slider changes local to the options draft, like the presets. The
-/// accepted settings change only when the authored accept action runs.
-pub(super) fn copy_changed_graphics_detail_slider_levels_into_settings_draft(
-    mut activations: MessageReader<UiNodeActivated>,
-    sliders: Query<(&GraphicsDetailSetting, &UiValue)>,
+pub(super) fn apply_accepted_graphics_detail_slider_edits_to_draft(
+    mut edits: MessageReader<UiSliderValueChanged>,
+    sliders: Query<&GraphicsDetailSetting>,
     mut drafts: Query<&mut OptionsScreenDisplayGraphicsAndOnlineMessageDraft>,
     parents: Query<&ChildOf>,
 ) {
-    for activation in activations.read() {
-        if activation.trigger != UiTrigger::Change {
-            continue;
-        }
-        let Ok((&setting, value)) = sliders.get(activation.node) else {
+    for edit in edits.read() {
+        let (Ok(&setting), Ok(level)) = (sliders.get(edit.slider), u8::try_from(edit.value)) else {
             continue;
         };
         let Some(owner) = parents
-            .iter_ancestors::<ChildOf>(activation.node)
-            .find(|entity| drafts.contains(*entity))
+            .iter_ancestors::<ChildOf>(edit.slider)
+            .find(|owner| drafts.contains(*owner))
         else {
             continue;
         };
         let Ok(mut draft) = drafts.get_mut(owner) else {
             continue;
         };
-        let level = u8::try_from(value.0).unwrap_or(0);
-        if graphics_detail_setting_level(setting, &draft.graphics) == level {
-            continue;
+        if graphics_detail_setting_level(setting, &draft.graphics) != level {
+            set_graphics_detail_setting_level(setting, level, &mut draft.graphics);
+            draft.dirty_graphics = true;
         }
-        set_graphics_detail_setting_level(setting, level, &mut draft.graphics);
-        draft.dirty_graphics = true;
     }
 }

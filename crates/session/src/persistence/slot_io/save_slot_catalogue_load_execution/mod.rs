@@ -1,5 +1,5 @@
 use bevy::{
-    prelude::{Commands, Component, MessageReader, MessageWriter, Or, Query, Res, With},
+    prelude::{Commands, Component, MessageReader, MessageWriter, Query, Res, With},
     tasks::IoTaskPool,
 };
 
@@ -23,11 +23,10 @@ use super::super::{
     snapshot_container_types::WorldSnapshotSectionKind,
 };
 use super::{
-    pending_snapshot_application_types::PendingSnapshotApplication,
     persistence_failure_message_publication::publish_persistence_failure_for_slot_operation,
     persistence_slot_filesystem_task_types::{
         PersistenceSlotFilesystemOperationContext, PersistenceSlotFilesystemTask,
-        PersistenceSlotFilesystemTaskCompletion,
+        PersistenceSlotFilesystemTaskCompletion, PersistenceSlotOperation,
     },
     world_snapshot_section_encoding::decode_and_validate_world_snapshot_section,
 };
@@ -41,14 +40,7 @@ pub(in super::super) fn begin_loading_save_slot_catalogue_for_active_profile(
     mut selected_profiles: MessageReader<ProfileSelected>,
     persistence_filesystem_paths: Option<Res<PersistenceFilesystemPaths>>,
     profile_options: Res<ProfileOptions>,
-    active_persistence_operations: Query<
-        (),
-        Or<(
-            With<PersistenceSlotFilesystemTask>,
-            With<PendingSnapshotApplication>,
-            With<super::original_saved_game_load_preparation::OriginalSavedGameLoadPreparation>,
-        )>,
-    >,
+    active_persistence_operations: Query<(), With<PersistenceSlotOperation>>,
     mut persistence_failures: MessageWriter<WorldSnapshotPersistenceFailed>,
 ) {
     let catalogue_load_requested =

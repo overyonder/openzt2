@@ -1,4 +1,4 @@
-use bevy::prelude::*;
+use bevy::{ecs::system::SystemParam, prelude::*};
 use openzt2_game_assets::{
     behavior::behavior_asset_types::{BehaviorDocumentAsset, LoadedBehaviorDocumentCollection},
     world_definitions::{
@@ -22,12 +22,12 @@ use openzt2_zoo_state::{
     animal_health::types::Dead,
     animal_lifecycle::types::SpeciesHandle,
     behavior_task_execution_types::{
-        running_actions::{
-            activated_behavior_actor, behavior_action_actors, update_waiting_behavior_actors,
-            BehaviorStepFixedSet, BehaviorTaskReplaced, RunBehaviorStaffTrainAnimal,
-            RunningBehaviorInstruction, SelectedBehaviorSet,
-        },
         BehaviorTaskExecutionState, BehaviorTaskReturnFrame, PendingBehaviorTaskFailure,
+        running_actions::{
+            BehaviorStepFixedSet, BehaviorTaskReplaced, RunBehaviorStaffTrainAnimal,
+            RunningBehaviorInstruction, SelectedBehaviorSet, TrainerEnabledTricks,
+            activated_behavior_actor, behavior_action_actors, update_waiting_behavior_actors,
+        },
     },
     shows::performer_training::PerformerTraining,
     staff::{
@@ -57,6 +57,7 @@ struct AnimalTrainingSession {
     origin: BehaviorTaskReturnFrame,
     animal: Entity,
     platform: Option<Entity>,
+    prop: Option<Entity>,
     trick: AssetId,
     phase: TrainingPhase,
 }
@@ -104,6 +105,8 @@ fn train_animal(
     members: InteractionContainerMemberships,
     tokens: Query<&BehaviorSelfToken>,
     mut commands: Commands,
+    enabled: Query<&TrainerEnabledTricks>,
+    mut prop_placement: TrainingPropPlacement,
 ) {
     let (Some(view), Some(declarations)) = (
         definitions.get(&assets),
@@ -130,14 +133,30 @@ fn train_animal(
             mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
             continue;
         };
+        let enabled = enabled.get(actor).ok();
+        let eligible_trick = |trick: &openzt2_game_data::world_definitions::animal_shows_and_training::TrickDefinition| {
+            trick.species.contains(&species.species) && trick.levels.iter().any(|level| level.staff_can_train)
+                && enabled.is_none_or(|enabled| enabled.0.contains(&trick.id))
+                && trick.prerequisite.is_none_or(|prerequisite| {
+                    proficiency.get(animal).ok().is_some_and(|training| {
+                        training.proficiency(prerequisite.trick) >= prerequisite.minimum_score
+                    })
+                })
+        };
         let Some(trick) = state
             .as_deref()
             .and_then(|state| view.find_trick(state.trick))
+            .filter(|trick| eligible_trick(trick))
             .or_else(|| {
-                let assignment = assignment?.0?;
-                view.tricks().find(|trick| {
-                    trick.display_order == assignment && trick.species.contains(&species.species)
-                })
+                let selected = assignment.and_then(|assignment| assignment.0);
+                view.tricks()
+                    .filter(|trick| {
+                        eligible_trick(trick)
+                            && (enabled.is_some() || selected == Some(trick.display_order))
+                    })
+                    .min_by_key(|trick| {
+                        (selected != Some(trick.display_order), trick.display_order)
+                    })
             })
         else {
             mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
@@ -185,6 +204,30 @@ fn train_animal(
                 (action.go_to_platform, TrainingPhase::Prepare)
             }
             Some(TrainingPhase::Prepare) => {
+                let Some(session) = state.as_deref_mut() else {
+                    continue;
+                };
+                if session.prop.is_none() && trick.target != AssetId::default() {
+                    match prop_placement.spawn(
+                        view,
+                        trick.target,
+                        actor,
+                        animal,
+                        world.root,
+                        pose,
+                        &mut commands,
+                    ) {
+                        TrainingProp::Ready(prop) => session.prop = Some(prop),
+                        TrainingProp::Loading => continue,
+                        TrainingProp::Unavailable => {
+                            mark_behavior_task_for_failure_and_stop_navigation(
+                                actor,
+                                &mut commands,
+                            );
+                            continue;
+                        }
+                    }
+                }
                 if task.target != Some(animal) {
                     task.target = Some(animal);
                     task.interaction_slot = None;
@@ -230,7 +273,10 @@ fn train_animal(
                     .saturating_add(seconds_to_ticks(action.trick_timeout));
                 let token = issue_training_token(
                     animal,
-                    actor,
+                    state
+                        .as_deref()
+                        .and_then(|state| state.prop)
+                        .unwrap_or(actor),
                     outcomes.success,
                     clock.tick,
                     until,
@@ -280,6 +326,23 @@ fn train_animal(
             }
             Some(TrainingPhase::Reward) => (action.cleanup, TrainingPhase::Cleanup),
             Some(TrainingPhase::Cleanup) => {
+                if let Some(next) = enabled.and_then(|_| {
+                    view.tricks()
+                        .filter(|candidate| {
+                            candidate.display_order > trick.display_order
+                                && eligible_trick(candidate)
+                        })
+                        .min_by_key(|candidate| candidate.display_order)
+                }) {
+                    if let Some(state) = state.as_deref_mut() {
+                        if let Some(prop) = state.prop.take() {
+                            commands.entity(prop).try_despawn();
+                        }
+                        state.trick = next.id;
+                        state.phase = TrainingPhase::Prepare;
+                        continue;
+                    }
+                }
                 if let Some(state) = state.as_deref() {
                     cancel_training_session(actor, state, &members, &mut commands);
                 }
@@ -295,6 +358,7 @@ fn train_animal(
                 origin: current,
                 animal,
                 platform: set_target.flatten(),
+                prop: None,
                 trick: trick.id,
                 phase: next.1,
             });
@@ -374,6 +438,9 @@ fn cancel_training_session(
     memberships: &InteractionContainerMemberships,
     commands: &mut Commands,
 ) {
+    if let Some(prop) = state.prop {
+        commands.entity(prop).try_despawn();
+    }
     if let TrainingPhase::WaitForTrick { token, .. } | TrainingPhase::WaitForAnimal { token, .. } =
         state.phase
     {
@@ -386,5 +453,165 @@ fn cancel_training_session(
         .is_some_and(|platform| memberships.actor_slot(platform, actor).is_some())
     {
         actor_commands.try_remove::<InteractionContainerMember>();
+    }
+}
+
+enum TrainingProp {
+    Ready(Entity),
+    Loading,
+    Unavailable,
+}
+
+#[derive(SystemParam)]
+struct TrainingPropPlacement<'w, 's> {
+    prefabs: Res<'w, Assets<openzt2_game_assets::scene_prefab::ScenePrefabAsset>>,
+    models: Res<'w, Assets<bevy::gltf::Gltf>>,
+    ids: Query<
+        'w,
+        's,
+        &'static mut openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator,
+    >,
+    habitats: Query<'w, 's, &'static openzt2_zoo_state::habitat::habitat_types::HabitatMember>,
+    tanks: Query<
+        'w,
+        's,
+        (
+            &'static openzt2_zoo_state::habitat::habitat_types::HabitatRegion,
+            &'static openzt2_zoo_state::aquatic::aquatic_simulation_types::TankGeometry,
+        ),
+    >,
+    grids: Query<'w, 's, &'static openzt2_zoo_state::topology::topology_graph_types::TopologyGrid>,
+    terrain: openzt2_zoo_state::terrain::dry_surface_eligibility::DrySurfaceEligibility<'w, 's>,
+    occupied: openzt2_zoo_state::placement::placement_occupancy_index::PlacedObjectFootprintQueries<
+        'w,
+        's,
+    >,
+}
+
+impl TrainingPropPlacement<'_, '_> {
+    #[allow(clippy::too_many_arguments)]
+    fn spawn(
+        &mut self,
+        view: openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView<'_>,
+        target: AssetId,
+        trainer: Entity,
+        animal: Entity,
+        root: Entity,
+        relative_to: &GlobalTransform,
+        commands: &mut Commands,
+    ) -> TrainingProp {
+        use openzt2_world::world_spawn::prefab_world_instance_spawning::spawn_loaded_scene_prefab_as_world_instance;
+        use openzt2_zoo_state::animal_behavior::behavior_token_types::BehaviorTrickPropOrigin;
+        let Some(object) = view.find_object(target).or_else(|| {
+            view.objects()
+                .find(|object| object.behavior_type_identifiers.contains(&target))
+        }) else {
+            return TrainingProp::Unavailable;
+        };
+        let Some(handle) = view.scene(object.prefab) else {
+            return if view.has_pending_assets() {
+                TrainingProp::Loading
+            } else {
+                TrainingProp::Unavailable
+            };
+        };
+        let Some(prefab) = self.prefabs.get(&handle) else {
+            return TrainingProp::Loading;
+        };
+        if openzt2_world_state::world_spawn::prefab_model_readiness::first_missing_prefab_collider_model_asset_id(prefab, &self.models).is_some() {
+            return TrainingProp::Loading;
+        }
+        let Ok(grid) = self.grids.get(root) else {
+            return TrainingProp::Unavailable;
+        };
+        let habitat = self.habitats.get(animal).ok();
+        let tank = habitat.and_then(|habitat| self.tanks.get(habitat.habitat_entity).ok());
+        let distance = object
+            .authored_runtime
+            .numeric_behavior_properties
+            .iter()
+            .find_map(|(id, value)| (*id == AssetId::from_key("f_propdistance")).then_some(*value))
+            .unwrap_or(grid.spacing_m);
+        let preferred = relative_to.translation() + relative_to.forward().as_vec3() * distance;
+        let clear = |point: Vec2| {
+            self.occupied
+                .entities_occupying_cell(
+                    root,
+                    grid.position_cell(Vec3::new(point.x, 0.0, point.y))
+                        .truncate(),
+                )
+                .all(|placed| placed == trainer || placed == animal)
+        };
+        let projected = if let Some((region, tank)) = tank {
+            let placement = view.find_placeable(object.id);
+            let depth = tank.depth();
+            if placement.is_some_and(|placement| {
+                let surface = placement.surface_policy;
+                (surface.minimum_depth_metres >= 0.0 && depth < surface.minimum_depth_metres)
+                    || (surface.maximum_depth_metres >= 0.0 && depth > surface.maximum_depth_metres)
+            }) {
+                return TrainingProp::Unavailable;
+            }
+            let height = object.terrain_fit_water_offset_m.map_or(
+                tank.floor_height + object.terrain_fit_height_offset_m,
+                |height| tank.water_height + height,
+            );
+            region
+                .topology_cells
+                .iter()
+                .map(|cell| grid.origin + (cell.as_vec2() + Vec2::splat(0.5)) * grid.spacing_m)
+                .filter(|point| clear(*point))
+                .min_by(|left, right| {
+                    left.distance_squared(preferred.xz())
+                        .total_cmp(&right.distance_squared(preferred.xz()))
+                })
+                .map(|point| Vec3::new(point.x, height, point.y))
+        } else {
+            let point = preferred.xz();
+            self.terrain
+                .ground_height(root, point)
+                .filter(|_| clear(point))
+                .map(|height| {
+                    Vec3::new(
+                        point.x,
+                        height + object.terrain_fit_height_offset_m,
+                        point.y,
+                    )
+                })
+        };
+        let Some(position) = projected else {
+            return TrainingProp::Unavailable;
+        };
+        let Ok(mut ids) = self.ids.get_mut(root) else {
+            return TrainingProp::Unavailable;
+        };
+        let Ok(id) = ids.allocate() else {
+            return TrainingProp::Unavailable;
+        };
+        let yaw = relative_to.rotation().to_euler(EulerRot::YXZ).0;
+        let pose = Transform::from_translation(position)
+            .with_rotation(Quat::from_rotation_y(
+                yaw + object.authored_runtime.prop_rotation_offset_radians,
+            ))
+            .with_scale(Vec3::splat(object.prefab_scale));
+        let prop = spawn_loaded_scene_prefab_as_world_instance(
+            commands,
+            prefab,
+            handle,
+            root,
+            object.id,
+            id,
+            pose,
+            true,
+            None,
+            avian3d::prelude::RigidBody::Static,
+        );
+        commands
+            .entity(prop)
+            .insert(BehaviorTrickPropOrigin(position));
+        if let Some(habitat) = habitat {
+            commands.entity(prop).insert(*habitat);
+        }
+        TrainingProp::Ready(prop)
     }
 }

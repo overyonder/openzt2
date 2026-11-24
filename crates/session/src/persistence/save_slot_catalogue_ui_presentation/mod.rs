@@ -56,11 +56,14 @@ pub(super) fn request_save_slot_catalogue_list_row_count_updates(
 pub(super) fn project_save_slot_catalogue_records_onto_saved_game_list_rows(
     mut commands: Commands,
     save_slot_catalogue: Res<SaveSlotCatalogue>,
-    ui_list_rows: Query<(
+    mut ui_list_rows: Query<(
         Entity,
         Ref<UiListRow>,
         Ref<ChildOf>,
-        Option<&SavedGameSource>,
+        Option<&mut SavedGameSource>,
+        Option<&mut Visibility>,
+        Option<&mut UiSelected>,
+        Option<&mut UiValue>,
     )>,
     ui_lists: Query<(&UiListPolicy, &UiDocumentOwner)>,
     roots: Query<&UiDocumentRoot>,
@@ -68,9 +71,8 @@ pub(super) fn project_save_slot_catalogue_records_onto_saved_game_list_rows(
     ui_node_children: Query<&Children>,
     mut ui_text_nodes: Query<&mut Text>,
 ) {
-    for (ui_list_row_entity, ui_list_row, parent, current_value) in &ui_list_rows {
-        if !save_slot_catalogue.is_changed() && !ui_list_row.is_added() && !ui_list_row.is_changed()
-        {
+    for (entity, row, parent, current, visibility, selected, value) in &mut ui_list_rows {
+        if !save_slot_catalogue.is_changed() && !row.is_changed() && !parent.is_changed() {
             continue;
         }
         if !ui_lists
@@ -79,7 +81,7 @@ pub(super) fn project_save_slot_catalogue_records_onto_saved_game_list_rows(
         {
             continue;
         }
-        let index = usize::from(ui_list_row.index);
+        let index = usize::from(row.index);
         let record = save_slot_catalogue
             .save_slot_records
             .get(index)
@@ -107,30 +109,46 @@ pub(super) fn project_save_slot_catalogue_records_onto_saved_game_list_rows(
                     original.last_saved_unix_timestamp_milliseconds,
                 ))
             });
+        let visible = if record.is_some() {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+        if let Some(mut visibility) = visibility {
+            visibility.set_if_neq(visible);
+        } else {
+            commands.entity(entity).insert(visible);
+        }
         let Some((source, name, timestamp)) = record else {
             commands
-                .entity(ui_list_row_entity)
-                .remove::<(UiValue, SavedGameSource)>()
-                .insert(Visibility::Hidden);
+                .entity(entity)
+                .remove::<(SavedGameSource, UiValue)>();
             continue;
         };
-        if current_value != Some(&source) {
-            commands
-                .entity(ui_list_row_entity)
-                .insert(UiSelected(false));
+        let rebound = if let Some(mut current) = current {
+            current.set_if_neq(source)
+        } else {
+            commands.entity(entity).insert(source);
+            true
+        };
+        if rebound {
+            if let Some(mut selected) = selected {
+                selected.set_if_neq(UiSelected(false));
+            } else {
+                commands.entity(entity).insert(UiSelected(false));
+            }
         }
-        commands
-            .entity(ui_list_row_entity)
-            .insert((source, Visibility::Inherited));
-        match source {
-            SavedGameSource::Native(slot) => {
-                commands
-                    .entity(ui_list_row_entity)
-                    .insert(UiValue(i64::from(slot.0)));
+        match (source, value) {
+            (SavedGameSource::Native(slot), Some(mut value)) => {
+                value.set_if_neq(UiValue(i64::from(slot.0)));
             }
-            SavedGameSource::Original(_) => {
-                commands.entity(ui_list_row_entity).remove::<UiValue>();
+            (SavedGameSource::Native(slot), None) => {
+                commands.entity(entity).insert(UiValue(i64::from(slot.0)));
             }
+            (SavedGameSource::Original(_), Some(_)) => {
+                commands.entity(entity).remove::<UiValue>();
+            }
+            (SavedGameSource::Original(_), None) => {}
         }
         let saved_at = i64::try_from(timestamp)
             .ok()
@@ -138,53 +156,15 @@ pub(super) fn project_save_slot_catalogue_records_onto_saved_game_list_rows(
             .map(|timestamp| timestamp.format("%Y-%m-%d %H:%M UTC").to_string());
         let save_slot_row_label =
             saved_at.map_or_else(|| name.clone(), |saved_at| format!("{name} | {saved_at}"));
-        apply_save_slot_identifier_and_label_to_ui_row_descendants(
-            &mut commands,
-            ui_list_row_entity,
-            source,
-            &save_slot_row_label,
-            &ui_node_children,
-            &mut ui_text_nodes,
-        );
-    }
-}
-
-fn apply_save_slot_identifier_and_label_to_ui_row_descendants(
-    commands: &mut Commands,
-    ui_node_entity: Entity,
-    source: SavedGameSource,
-    save_slot_row_label: &str,
-    ui_node_children: &Query<&Children>,
-    ui_text_nodes: &mut Query<&mut Text>,
-) {
-    if let Ok(mut text) = ui_text_nodes.get_mut(ui_node_entity) {
-        if text.0 != save_slot_row_label {
-            text.0 = save_slot_row_label.to_owned();
-        }
-    }
-    let Ok(child_ui_nodes) = ui_node_children.get(ui_node_entity) else {
-        return;
-    };
-    for child_ui_node in child_ui_nodes.iter() {
-        commands.entity(child_ui_node).insert(source);
-        match source {
-            SavedGameSource::Native(slot) => {
-                commands
-                    .entity(child_ui_node)
-                    .insert(UiValue(i64::from(slot.0)));
-            }
-            SavedGameSource::Original(_) => {
-                commands.entity(child_ui_node).remove::<UiValue>();
+        for node in
+            std::iter::once(entity).chain(ui_node_children.iter_descendants::<Children>(entity))
+        {
+            if let Ok(mut text) = ui_text_nodes.get_mut(node) {
+                if text.0 != save_slot_row_label {
+                    text.0.clone_from(&save_slot_row_label);
+                }
             }
         }
-        apply_save_slot_identifier_and_label_to_ui_row_descendants(
-            commands,
-            child_ui_node,
-            source,
-            save_slot_row_label,
-            ui_node_children,
-            ui_text_nodes,
-        );
     }
 }
 
@@ -207,6 +187,7 @@ pub(super) fn load_save_slot_from_submitted_row(
     mut activations: MessageReader<UiNodeActivated>,
     rows: Query<(&ChildOf, &SavedGameSource), With<UiListRow>>,
     lists: Query<&UiListPolicy>,
+    parents: Query<&ChildOf>,
     mut loads: MessageWriter<LoadWorldSnapshotFromSlot>,
     mut original_loads: MessageWriter<LoadOriginalSavedGame>,
 ) {
@@ -214,15 +195,17 @@ pub(super) fn load_save_slot_from_submitted_row(
         if activation.trigger != UiTrigger::Submit {
             continue;
         }
-        let Ok((parent, value)) = rows.get(activation.node) else {
+        let Some(value) = std::iter::once(activation.node)
+            .chain(parents.iter_ancestors::<ChildOf>(activation.node))
+            .find_map(|entity| {
+                let (parent, value) = rows.get(entity).ok()?;
+                (lists.get(parent.parent()).ok()?.source
+                    == UiWidgetLiveCollectionSource::SavedGameSlots)
+                    .then_some(value)
+            })
+        else {
             continue;
         };
-        if !lists
-            .get(parent.parent())
-            .is_ok_and(|policy| policy.source == UiWidgetLiveCollectionSource::SavedGameSlots)
-        {
-            continue;
-        }
         match *value {
             SavedGameSource::Native(slot) => {
                 loads.write(LoadWorldSnapshotFromSlot {

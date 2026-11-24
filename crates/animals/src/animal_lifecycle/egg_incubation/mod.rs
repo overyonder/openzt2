@@ -33,7 +33,6 @@ use openzt2_zoo_state::{
             score_supported_behavior_task,
         },
         behavior_random_stream_state::BehaviorRandomStream,
-        egg_incubation::EggIncubation,
     },
     behavior_task_execution_types::{
         BehaviorTaskExecutionPhase, BehaviorTaskExecutionState, BehaviorTaskGeneration,
@@ -59,7 +58,6 @@ pub(super) struct LiveEggPolicy {
     member: &'static WorldMember,
     id: &'static PersistentId,
     incubating: Option<&'static mut EggIncubationState>,
-    restored: Option<&'static EggIncubation>,
     has_random: Has<BehaviorRandomStream>,
     policy: Option<&'static mut AuthoredEgg>,
 }
@@ -78,7 +76,6 @@ pub(super) fn initialize_live_eggs(
                 Changed<DefinitionId>,
                 Changed<WorldMember>,
                 Added<PersistentId>,
-                Added<EggIncubation>,
             )>,
         >,
     )>,
@@ -107,31 +104,12 @@ pub(super) fn initialize_live_eggs(
         } else {
             commands.insert(AuthoredEgg(authored));
         }
-        match (egg.incubating, egg.restored) {
-            (Some(mut incubation), Some(restored)) => {
-                *incubation = EggIncubationState::from_saved_remaining(
-                    restored.amount,
-                    restored.remaining_ns,
-                    restored.random,
-                );
-                commands.remove::<EggIncubation>();
-            }
-            (None, Some(restored)) => {
-                commands.insert(EggIncubationState::from_saved_remaining(
-                    restored.amount,
-                    restored.remaining_ns,
-                    restored.random,
-                ));
-                commands.remove::<EggIncubation>();
-            }
-            (None, None) => {
-                commands.insert(EggIncubationState::from_saved_remaining(
-                    authored.initial_incubation,
-                    0,
-                    DeterministicRng::from_entity(*seed, *egg.id, RngDomain::AnimalNeeds),
-                ));
-            }
-            (Some(_), None) => {}
+        if egg.incubating.is_none() {
+            commands.insert(EggIncubationState::from_saved_remaining(
+                authored.initial_incubation,
+                0,
+                DeterministicRng::from_entity(*seed, *egg.id, RngDomain::AnimalNeeds),
+            ));
         }
         if !egg.has_random {
             commands.insert(BehaviorRandomStream(DeterministicRng::from_entity(

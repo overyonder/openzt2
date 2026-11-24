@@ -39,7 +39,10 @@ use candidate_facts::{
     AnimalCandidateFacts, AnimalCandidateFactsItem, animal_subject_type_can_match,
 };
 use openzt2_game_data::{
-    behavior::{document::BehaviorTask, eligibility::BehaviorCandidateRole},
+    behavior::{document::BehaviorTask, eligibility::{
+        BehaviorCandidateEligibilityFact, BehaviorCandidateRole, BehaviorConditionEligibilityFact,
+        BehaviorEligibilityFactInput, BehaviorEligibilityFactValue,
+    }},
     AssetId,
 };
 use task_cooldowns::{AnimalTaskCooldowns, RunningDelayedAnimalTask};
@@ -103,12 +106,16 @@ pub(super) fn select_idle_animal_tasks(
     world_objects: WorldObjectTargetSources,
     target_types: BehaviorTargetTypeMemberships,
     shores: super::natural_water_targets::NaturalWaterTargets,
-    (tokens, token_owners): (
+    (tokens, token_owners, memberships): (
         Query<(Entity, &BehaviorSelfToken), Without<ClaimedBehaviorSelfToken>>,
         Query<&Children>,
+        openzt2_zoo_state::animal_behavior::interaction_container_membership::InteractionContainerMemberships,
     ),
     animal_targets: animal_targets::AnimalTargetSources,
     biomes: openzt2_zoo_state::animal_behavior::behavior_candidate_selection::BehaviorTargetBiome,
+    token_facts: Query<
+        &openzt2_zoo_state::animal_behavior::behavior_token_types::BehaviorTokenFacts,
+    >,
     commands: ParallelCommands,
 ) {
     let authored_tasks_changed = documents.is_changed()
@@ -195,6 +202,51 @@ pub(super) fn select_idle_animal_tasks(
             .filter(|(_, token)| clock.tick >= token.available_at && clock.tick < token.expires_at)
             .collect();
         let ticks_per_day = definitions.timing().ticks_per_day;
+        let held_items = memberships.members_of_container(animal).collect::<Vec<_>>();
+        let slot_of = |object| {
+            let (_, slot) = memberships.container_for_member(object)?;
+            definitions.find_object(variant.id).or_else(|| definitions.find_object(definition.id))?
+                .interaction_slots.get(slot).map(|slot| slot.reservation_tag)
+        };
+        let object_type = |object: Option<Entity>, required| {
+            let Some(object) = object else { return false; };
+            if let Ok((_, token)) = tokens.get(object) { return token.name == required; }
+            if let Ok((_, object)) = animal_targets.animals.get(object) {
+                return species.find_variant_with_species(object.variant_id()).is_some_and(|(_, variant)| {
+                    object.matches_type(required, &variant.behavior_subject_type_identifiers)
+                });
+            }
+            world_objects.objects.get(object).ok().is_some_and(|object| {
+                definitions.find_object(object.definition.0).is_some_and(|definition| object.matches_type(required, definition))
+            })
+        };
+        let object_fact = |object: Option<Entity>, fact: &BehaviorCandidateEligibilityFact| {
+            let Some(object) = object else { return false; };
+            if let (BehaviorEligibilityFactInput::Condition(BehaviorConditionEligibilityFact::ObjectContainer),
+                BehaviorEligibilityFactValue::Symbol(required)) = (fact.fact_input, fact.expected_value)
+            {
+                return slot_of(object) == Some(required);
+            }
+            if let Ok(facts) = token_facts.get(object) { return facts.satisfies(fact); }
+            if let Ok((_, object_facts)) = animal_targets.animals.get(object) {
+                return species.find_variant_with_species(object_facts.variant_id()).is_some_and(|(_, variant)| {
+                    animal_targets.target_satisfies(animal, &facts, object, &object_facts, fact,
+                        clock.tick, ticks_per_day, clock.tick_in_day, &variant.behavior_subject_type_identifiers)
+                });
+            }
+            world_objects.objects.get(object).ok().is_some_and(|object| {
+                let Some(definition) = definitions.find_object(object.definition.0) else { return false; };
+                let position = object.transform.translation();
+                object.satisfies(fact, &WorldObjectTargetLocation {
+                    in_habitat: animal_habitat == world_objects.habitat_at(facts.world.root, position),
+                    on_land: || world_objects.terrain_surfaces.on_land_at_position(facts.world.root, position),
+                    distance: facts.transform.translation().distance(position),
+                    building_strength: definition.destruction.as_ref().and_then(|rule| rule.strength),
+                    definition,
+                    spatial: |kind, expected| animal_targets.spatial_value_at(facts.world.root, position, kind, expected),
+                })
+            })
+        };
         for (document, declaration) in declarations.iter() {
             let declaration = *declaration;
             let Some(task) = assets
@@ -203,7 +255,7 @@ pub(super) fn select_idle_animal_tasks(
             else {
                 continue;
             };
-            if !subject_can_consider_task(task, &facts, authored_types, clock.tick, ticks_per_day) {
+            if !subject_can_consider_task(task, &facts, authored_types, &animal_targets, &clock, ticks_per_day) {
                 cooldowns.disarm(task.id);
                 continue;
             }
@@ -226,24 +278,28 @@ pub(super) fn select_idle_animal_tasks(
                 debug!(?animal, task = %task.name, id = ?task.id, "animal task cooling down");
                 continue;
             }
+            let from_token = task.targets.len() == 1 && task.targets[0].eq_ignore_ascii_case("fromtoken");
+            let objects_for = |target| {
+                std::iter::once(None).filter(move |_| task.objects.is_empty() && !from_token)
+                    .chain(held_tokens.iter().filter(move |(_, token)| {
+                        if from_token { token.payload == Some(target) }
+                        else { !task.objects.is_empty() }
+                    }).map(|(token, _)| Some(*token)))
+                    .chain(held_items.iter().copied().filter(move |_| !task.objects.is_empty() && !from_token).map(Some))
+            };
             if task.targets.len() == 1 && task.targets[0] == "self" {
-                let object_candidates = std::iter::once(None)
-                    .filter(|_| task.objects.is_empty())
-                    .chain(held_tokens.iter().copied().map(Some).filter(|_| !task.objects.is_empty()));
-                for object in object_candidates {
+                for object in objects_for(animal) {
                     if !candidate_requirements_are_satisfied(
                         &task.candidate_eligibility_requirements,
                         |role, required| match role {
                             BehaviorCandidateRole::Subject => true,
                             BehaviorCandidateRole::Target => required == AssetId::from_key("self"),
-                            BehaviorCandidateRole::Object => {
-                                object.is_some_and(|(_, token)| token.name == required)
-                            }
+                            BehaviorCandidateRole::Object => object_type(object, required),
                         },
                         |role, fact| match role {
                             BehaviorCandidateRole::Subject => true,
-                            BehaviorCandidateRole::Target => facts.satisfies(fact, clock.tick, ticks_per_day),
-                            BehaviorCandidateRole::Object => false,
+                            BehaviorCandidateRole::Target => animal_targets.spatial_satisfies(&facts, fact, clock.tick_in_day, ticks_per_day).unwrap_or_else(|| facts.satisfies(fact, clock.tick, ticks_per_day, authored_types)),
+                            BehaviorCandidateRole::Object => object_fact(object, fact),
                         },
                     ) {
                         trace!(?animal, task = %task.name, "animal self task qualifiers refused");
@@ -252,6 +308,7 @@ pub(super) fn select_idle_animal_tasks(
                     let Some(score) = scoring::score_animal_task(
                         task,
                         &facts,
+                        (clock.tick, ticks_per_day),
                         policy.outside_range_need_value,
                         0.0,
                         || None,
@@ -269,7 +326,7 @@ pub(super) fn select_idle_animal_tasks(
                             declaration,
                             task,
                             animal,
-                            object.map(|(entity, _)| entity),
+                            object,
                             None,
                         ),
                         task.priority.unwrap_or_default(),
@@ -278,8 +335,6 @@ pub(super) fn select_idle_animal_tasks(
                 }
                 continue;
             }
-            let from_token =
-                task.targets.len() == 1 && task.targets[0].eq_ignore_ascii_case("fromtoken");
             if from_token {
                 candidates.clear();
                 candidates.extend(held_tokens.iter().filter_map(|(_, token)| token.payload));
@@ -300,12 +355,7 @@ pub(super) fn select_idle_animal_tasks(
                     continue;
                 };
                 let target_types = &target_variant.behavior_subject_type_identifiers;
-                let objects = std::iter::once(None)
-                    .filter(|_| task.objects.is_empty() && !from_token)
-                    .chain(held_tokens.iter().copied()
-                        .filter(|(_, token)| (!task.objects.is_empty() || from_token) && (!from_token || token.payload == Some(target)))
-                        .map(Some));
-                for object in objects {
+                for object in objects_for(target) {
                 if !candidate_requirements_are_satisfied(
                     &task.candidate_eligibility_requirements,
                     |role, required| match role {
@@ -317,9 +367,7 @@ pub(super) fn select_idle_animal_tasks(
                                 target_facts.matches_type(required, target_types)
                             }
                         }
-                        BehaviorCandidateRole::Object => {
-                            object.is_some_and(|(_, token)| token.name == required)
-                        }
+                        BehaviorCandidateRole::Object => object_type(object, required),
                     },
                     |role, fact| match role {
                         BehaviorCandidateRole::Subject => true,
@@ -331,8 +379,10 @@ pub(super) fn select_idle_animal_tasks(
                             fact,
                             clock.tick,
                             ticks_per_day,
+                            clock.tick_in_day,
+                            target_types,
                         ),
-                        BehaviorCandidateRole::Object => false,
+                        BehaviorCandidateRole::Object => object_fact(object, fact),
                     },
                 ) {
                     continue;
@@ -344,6 +394,7 @@ pub(super) fn select_idle_animal_tasks(
                 let Some(score) = scoring::score_animal_task(
                     task,
                     &facts,
+                    (clock.tick, ticks_per_day),
                     policy.outside_range_need_value,
                     distance,
                     || biomes.at(facts.world.root, target_facts.transform.translation()),
@@ -360,16 +411,13 @@ pub(super) fn select_idle_animal_tasks(
                         declaration,
                         task,
                         target,
-                        object.map(|(entity, _)| entity),
+                        object,
                         None,
                     ),
                     task.priority.unwrap_or_default(),
                     score,
                 );
             }
-            }
-            if !task.objects.is_empty() && !from_token {
-                continue;
             }
             if task.targets.len() == 1
                 && (task.targets[0].eq_ignore_ascii_case("shore")
@@ -420,6 +468,7 @@ pub(super) fn select_idle_animal_tasks(
                     );
                 }
                 for shore in shore_candidates.iter().copied() {
+                    for object in objects_for(shore.region) {
                     let distance = facts
                         .transform
                         .translation()
@@ -437,7 +486,7 @@ pub(super) fn select_idle_animal_tasks(
                                         "shore"
                                     })
                             }
-                            BehaviorCandidateRole::Object => false,
+                            BehaviorCandidateRole::Object => object_type(object, required),
                         },
                         |role, fact| match role {
                             BehaviorCandidateRole::Subject => true,
@@ -461,7 +510,7 @@ pub(super) fn select_idle_animal_tasks(
                                     _ => false,
                                 }
                             }
-                            BehaviorCandidateRole::Object => false,
+                            BehaviorCandidateRole::Object => object_fact(object, fact),
                         },
                     ) {
                         continue;
@@ -469,6 +518,7 @@ pub(super) fn select_idle_animal_tasks(
                     let Some(score) = scoring::score_animal_task(
                         task,
                         &facts,
+                        (clock.tick, ticks_per_day),
                         policy.outside_range_need_value,
                         distance,
                         || biomes.at(facts.world.root, shore.water),
@@ -478,10 +528,11 @@ pub(super) fn select_idle_animal_tasks(
                     };
                     considered_candidates += 1;
                     ranking.consider(
-                        (document, declaration, task, shore.region, None, Some(shore)),
+                        (document, declaration, task, shore.region, object, Some(shore)),
                         task.priority.unwrap_or_default(),
                         score,
                     );
+                    }
                 }
                 continue;
             }
@@ -505,6 +556,7 @@ pub(super) fn select_idle_animal_tasks(
                     .into_iter()
                     .flat_map(|habitat| world_objects.habitat_boundaries.fences(habitat));
                 for fence in boundary {
+                    for selected_object in objects_for(fence) {
                     let Ok((edge, transform)) = world_objects.fences.get(fence) else {
                         continue;
                     };
@@ -533,14 +585,14 @@ pub(super) fn select_idle_animal_tasks(
                             BehaviorCandidateRole::Target => {
                                 object.id == required || object.behavior_type_identifiers.contains(&required)
                             }
-                            BehaviorCandidateRole::Object => false,
+                            BehaviorCandidateRole::Object => object_type(selected_object, required),
                         },
                         |role, fact| match role {
                             BehaviorCandidateRole::Subject => true,
                             BehaviorCandidateRole::Target => {
                                 fence_satisfies(fact, definition.strength, electric, distance)
                             }
-                            BehaviorCandidateRole::Object => false,
+                            BehaviorCandidateRole::Object => object_fact(selected_object, fact),
                         },
                     ) || target_retry_delays.rejects(animal, fence)
                     {
@@ -551,6 +603,7 @@ pub(super) fn select_idle_animal_tasks(
                     let Some(score) = scoring::score_animal_task(
                         task,
                         &facts,
+                        (clock.tick, ticks_per_day),
                         policy.outside_range_need_value,
                         distance,
                         || biomes.at(facts.world.root, position),
@@ -563,10 +616,11 @@ pub(super) fn select_idle_animal_tasks(
                     debug!(?animal, task = %task.name, ?fence, score, "animal fence task scored");
                     considered_candidates += 1;
                     ranking.consider(
-                        (document, declaration, task, fence, None, None),
+                        (document, declaration, task, fence, selected_object, None),
                         task.priority.unwrap_or_default(),
                         score,
                     );
+                    }
                 }
             }
             if !from_token {
@@ -611,25 +665,22 @@ pub(super) fn select_idle_animal_tasks(
                         .destruction
                         .as_ref()
                         .and_then(|destruction| destruction.strength),
+                    definition: object,
+                    spatial: |kind, expected| animal_targets.spatial_value_at(facts.world.root, target_position, kind, expected),
                 };
-                let tokens = std::iter::once(None).filter(|_| !from_token).chain(
-                    held_tokens.iter().copied()
-                        .filter(|(_, token)| from_token && token.payload == Some(candidate))
-                        .map(Some),
-                );
-                for token in tokens {
+                for selected_object in objects_for(candidate) {
                 if !candidate_requirements_are_satisfied(
                     &task.candidate_eligibility_requirements,
                     |role, required| match role {
                         BehaviorCandidateRole::Subject => true,
                         BehaviorCandidateRole::Target if from_token => required == AssetId::from_key("fromtoken"),
                         BehaviorCandidateRole::Target => target.matches_type(required, object),
-                        BehaviorCandidateRole::Object => token.is_some_and(|(_, token)| token.name == required),
+                        BehaviorCandidateRole::Object => object_type(selected_object, required),
                     },
                     |role, fact| match role {
                         BehaviorCandidateRole::Subject => true,
                         BehaviorCandidateRole::Target => target.satisfies(fact, &location),
-                        BehaviorCandidateRole::Object => false,
+                        BehaviorCandidateRole::Object => object_fact(selected_object, fact),
                     },
                 ) {
                     if bevy::log::tracing::enabled!(bevy::log::Level::DEBUG) {
@@ -661,6 +712,7 @@ pub(super) fn select_idle_animal_tasks(
                 let Some(score) = scoring::score_animal_task(
                     task,
                     &facts,
+                    (clock.tick, ticks_per_day),
                     policy.outside_range_need_value,
                     distance,
                     || biomes.at(facts.world.root, target_position),
@@ -676,7 +728,7 @@ pub(super) fn select_idle_animal_tasks(
                     minimum_score = policy.minimum_score,
                     "animal task target scored");
                 ranking.consider(
-                    (document, declaration, task, target.entity, token.map(|(entity, _)| entity), None),
+                    (document, declaration, task, target.entity, selected_object, None),
                     task.priority.unwrap_or_default(),
                     score,
                 );
@@ -724,6 +776,7 @@ pub(super) fn start_selected_idle_animal_tasks(
     clock: Single<&ZooClock>,
     pending_starts: Query<(Entity, &PendingAnimalTaskStart)>,
     mut idle_animals: Query<Option<&mut BehaviorTaskGeneration>, IdleAnimalTaskFilter>,
+    tokens: Query<(), With<BehaviorSelfToken>>,
     mut commands: Commands,
 ) {
     for (animal, pending) in &pending_starts {
@@ -743,7 +796,7 @@ pub(super) fn start_selected_idle_animal_tasks(
             delay_ticks,
         } = *pending;
         let execution_id = allocate_behavior_execution_id(animal, generation, &mut commands);
-        if let Some(token) = object {
+        if let Some(token) = object.filter(|token| tokens.contains(*token)) {
             commands
                 .entity(token)
                 .insert(ClaimedBehaviorSelfToken { execution_id });
@@ -821,7 +874,8 @@ fn subject_can_consider_task(
     task: &BehaviorTask,
     facts: &AnimalCandidateFactsItem<'_, '_>,
     authored_types: &[AssetId],
-    tick: u64,
+    targets: &animal_targets::AnimalTargetSources,
+    clock: &ZooClock,
     ticks_per_day: u32,
 ) -> bool {
     // Prune subject mismatches before scanning world targets, while retaining
@@ -831,7 +885,14 @@ fn subject_can_consider_task(
         |role, required| {
             role != BehaviorCandidateRole::Subject || facts.matches_type(required, authored_types)
         },
-        |role, fact| role != BehaviorCandidateRole::Subject || facts.satisfies(fact, tick, ticks_per_day),
+        |role, fact| {
+            role != BehaviorCandidateRole::Subject
+                || targets
+                    .spatial_satisfies(facts, fact, clock.tick_in_day, ticks_per_day)
+                    .unwrap_or_else(|| {
+                        facts.satisfies(fact, clock.tick, ticks_per_day, authored_types)
+                    })
+        },
     )
 }
 

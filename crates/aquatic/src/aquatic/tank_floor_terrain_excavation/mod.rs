@@ -203,34 +203,31 @@ pub(super) fn excavate_changed_tank_floors(
         }
     }
     if !deltas.is_empty() {
-        commands.spawn((
-            WorldMember { root },
-            TankFloorExcavation,
-            TerrainEdit {
-                deltas,
-                water_regions: Vec::new(),
-            },
-        ));
+        let transaction = commands
+            .spawn((
+                WorldMember { root },
+                TankFloorExcavation,
+                TerrainEdit {
+                    deltas,
+                    water_regions: Vec::new(),
+                },
+            ))
+            .id();
+        commands.trigger(CommitTerrainEdit {
+            transaction,
+            application: EditApplication::InitialCommit,
+        });
     }
 }
 
-/// Commits new floor excavations and drops them once the terrain answers.
-pub(super) fn commit_tank_floor_excavations(
+pub(super) fn retire_applied_tank_floor_excavations(
     mut commands: Commands,
-    added: Query<Entity, Added<TankFloorExcavation>>,
     excavations: Query<(), With<TankFloorExcavation>>,
     mut acknowledged: MessageReader<TerrainEditAcknowledged>,
-    mut commits: MessageWriter<CommitTerrainEdit>,
 ) {
     for acknowledgement in acknowledged.read() {
         if excavations.contains(acknowledgement.transaction) {
             commands.entity(acknowledgement.transaction).despawn();
         }
-    }
-    for excavation in &added {
-        commits.write(CommitTerrainEdit {
-            transaction: excavation,
-            application: EditApplication::InitialCommit,
-        });
     }
 }

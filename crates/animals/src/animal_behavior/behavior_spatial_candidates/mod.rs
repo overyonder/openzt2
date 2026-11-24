@@ -6,15 +6,11 @@ use bevy::{
 use openzt2_game_assets::application_lifecycle::GamePhase;
 use openzt2_world_state::{
     application_schedule::FixedGameSet,
-    world_spawn::world_membership_types::{DefinitionId, WorldMember},
+    world_spawn::world_membership_types::WorldMember,
 };
-use openzt2_zoo_state::{animal_lifecycle::types::Animal, staff::staff_employment_types::Staff};
 
 use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
-use openzt2_zoo_state::{
-    locomotion::locomotion_types::{NavAgent, SpatialCell, SpatialCellMembers, SpatialGrid},
-    topology::topology_graph_types::FenceEdge,
-};
+use openzt2_zoo_state::locomotion::locomotion_types::{NavAgent, SpatialCell, SpatialCellMembers, SpatialGrid};
 
 const OVERFLOW_CELL_SIZE_M: f32 = 8.0;
 
@@ -30,12 +26,6 @@ struct BehaviorSpatialMembers(Vec<Entity>);
 #[derive(Component, Default)]
 struct BehaviorSpatialOverflow(HashMap<IVec2, Entity>);
 
-type SpatialRecipient = Or<(
-    With<Animal>,
-    With<Staff>,
-    With<DefinitionId>,
-    With<FenceEdge>,
-)>;
 type SpatialFacts = (
     Entity,
     &'static GlobalTransform,
@@ -57,16 +47,7 @@ pub(super) fn register_behavior_spatial_candidates(app: &mut App) {
 }
 
 fn remove_missing_spatial_inputs(
-    removed: On<
-        Remove<(
-            GlobalTransform,
-            Animal,
-            Staff,
-            WorldMember,
-            DefinitionId,
-            FenceEdge,
-        )>,
-    >,
+    removed: On<Remove<(GlobalTransform, WorldMember)>>,
     projected: Query<(), With<BehaviorSpatialCell>>,
     mut commands: Commands,
 ) {
@@ -80,22 +61,15 @@ fn remove_missing_spatial_inputs(
 fn project_spatial_candidates(
     moved: Query<
         SpatialFacts,
-        (
-            SpatialRecipient,
-            Or<(
-                Changed<GlobalTransform>,
-                Changed<WorldMember>,
-                Changed<SpatialCell>,
-                Added<Animal>,
-                Added<Staff>,
-                Added<DefinitionId>,
-                Added<FenceEdge>,
-                Added<NavAgent>,
-                (Without<BehaviorSpatialCell>, Without<SpatialCell>),
-            )>,
-        ),
+        Or<(
+            Changed<GlobalTransform>,
+            Changed<WorldMember>,
+            Changed<SpatialCell>,
+            Added<NavAgent>,
+            (Without<BehaviorSpatialCell>, Without<SpatialCell>),
+        )>,
     >,
-    all: Query<SpatialFacts, SpatialRecipient>,
+    all: Query<SpatialFacts>,
     mut worlds: Query<(Option<Ref<SpatialGrid>>, &mut BehaviorSpatialOverflow), With<WorldRoot>>,
     mut commands: Commands,
 ) {
@@ -164,7 +138,7 @@ pub(super) struct BehaviorSpatialCandidates<'w, 's> {
     members: Query<'w, 's, &'static BehaviorSpatialMembers>,
     navigation_members: Query<'w, 's, &'static SpatialCellMembers>,
     locations: Query<'w, 's, EntityLocation>,
-    eligible: Query<'w, 's, &'static WorldMember, SpatialRecipient>,
+    eligible: Query<'w, 's, &'static WorldMember>,
 }
 
 impl BehaviorSpatialCandidates<'_, '_> {

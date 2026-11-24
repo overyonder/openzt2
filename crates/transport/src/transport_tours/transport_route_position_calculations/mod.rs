@@ -1,30 +1,76 @@
 use bevy::prelude::*;
+use openzt2_game_data::world_definitions::transportation_and_tours::TransportationTrackKind;
+use openzt2_zoo_state::transport_tours::transport_topology_types::TrackProfile;
 
-use crate::transport_tours::transport_fact_validation::transport_track_segment_is_valid;
 use openzt2_zoo_state::transport_tours::transport_topology_types::TrackSegment;
 use openzt2_zoo_state::transport_tours::transport_vehicle_types::RoutePosition;
 
-#[derive(Component)]
-pub(super) struct TrackTravelDistances(Box<[[f32; 2]]>);
+#[derive(Component, PartialEq)]
+pub(super) struct TrackTravelDistances {
+    spans: Box<[[f32; 2]]>,
+    cable: Option<Box<[Vec3]>>,
+}
 
 impl TrackTravelDistances {
-    pub(super) fn from_validated_segment(segment: &TrackSegment) -> Option<Self> {
-        if !transport_track_segment_is_valid(segment) {
+    pub(super) fn calculate(path: &[Vec3]) -> Option<(Self, f32)> {
+        if path.len() < 2 || !path[0].is_finite() {
             return None;
         }
-        let mut cumulative = 0.0;
-        Some(Self(
-            segment
-                .travel_path_points
-                .windows(2)
-                .map(|points| {
-                    let span = points[0].distance(points[1]);
-                    let start_distance = cumulative;
-                    cumulative += span;
-                    [start_distance, span]
-                })
-                .collect(),
-        ))
+        let mut length = 0.0;
+        let mut spans = Vec::with_capacity(path.len() - 1);
+        for points in path.windows(2) {
+            let squared = points[0].distance_squared(points[1]);
+            if !squared.is_finite() || squared <= f32::EPSILON {
+                return None;
+            }
+            let span = squared.sqrt();
+            spans.push([length, span]);
+            length += span;
+        }
+        length.is_finite().then(|| {
+            (
+                Self {
+                    spans: spans.into_boxed_slice(),
+                    cable: None,
+                },
+                length,
+            )
+        })
+    }
+
+    pub(super) fn from_sky_cable(points: Vec<Vec3>) -> Option<Self> {
+        let (mut distances, _) = Self::calculate(&points)?;
+        distances.cable = Some(points.into_boxed_slice());
+        Some(distances)
+    }
+
+    pub(super) fn sky_cable(&self) -> Option<&[Vec3]> {
+        self.cable.as_deref()
+    }
+
+    pub(super) fn travel_length(&self, segment: &TrackSegment) -> f32 {
+        if self.cable.is_some() {
+            self.spans.last().map_or(0.0, |[start, span]| start + span)
+        } else {
+            segment.length
+        }
+    }
+
+    pub(super) fn from_segment_snapshot(segment: &TrackSegment) -> Option<Self> {
+        if segment.from_endpoint_index >= 2
+            || segment.to_endpoint_index >= 2
+            || segment.path_points.first() != Some(&segment.from_position)
+            || segment.path_points.last() != Some(&segment.to_position)
+            || segment.travel_path_points.first() != Some(&segment.from_position)
+            || segment.travel_path_points.last() != Some(&segment.to_position)
+            || !segment.length.is_finite()
+            || segment.length <= 0.0
+        {
+            return None;
+        }
+        let (distances, length) = Self::calculate(&segment.travel_path_points)?;
+        ((length - segment.length).abs() <= f32::EPSILON * segment.length.max(1.0))
+            .then_some(distances)
     }
 
     pub(super) fn translation_and_tangent(
@@ -32,21 +78,21 @@ impl TrackTravelDistances {
         segment: &TrackSegment,
         distance: f32,
     ) -> (Vec3, Vec3) {
-        let distance = distance.clamp(0.0, segment.length);
+        let distance = distance.clamp(0.0, self.travel_length(segment));
+        let points = self.cable.as_deref().unwrap_or(&segment.travel_path_points);
         let span_index = self
-            .0
+            .spans
             .partition_point(|&[start, length]| start + length < distance);
-        if let Some(&[start, length]) = self.0.get(span_index) {
-            let from = segment.travel_path_points[span_index];
-            let to = segment.travel_path_points[span_index + 1];
+        if let Some(&[start, length]) = self.spans.get(span_index) {
+            let from = points[span_index];
+            let to = points[span_index + 1];
             (
                 from.lerp(to, ((distance - start) / length).clamp(0.0, 1.0)),
                 to - from,
             )
         } else {
-            let points = &segment.travel_path_points;
             (
-                segment.to_position,
+                points[points.len() - 1],
                 points[points.len() - 1] - points[points.len() - 2],
             )
         }
@@ -56,13 +102,24 @@ impl TrackTravelDistances {
 pub(super) fn refresh_transport_track_travel_distances(
     mut commands: Commands,
     mut track: Query<
-        (Entity, &TrackSegment, Option<&mut TrackTravelDistances>),
+        (
+            Entity,
+            Ref<TrackSegment>,
+            Option<&TrackProfile>,
+            Option<&mut TrackTravelDistances>,
+        ),
         Changed<TrackSegment>,
     >,
 ) {
-    for (entity, segment, cached) in &mut track {
+    for (entity, segment, profile, cached) in &mut track {
+        if profile.is_some_and(|profile| profile.kind == TransportationTrackKind::Sky) {
+            continue;
+        }
+        if segment.is_added() && cached.is_some() {
+            continue;
+        }
         match (
-            TrackTravelDistances::from_validated_segment(segment),
+            TrackTravelDistances::from_segment_snapshot(&segment),
             cached,
         ) {
             (Some(distances), Some(mut cached)) => *cached = distances,

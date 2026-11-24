@@ -19,29 +19,32 @@ use super::{
 #[derive(Component)]
 pub(in crate::world_spawn) struct PhysicalChildPlayback {
     state: usize,
-    started_tick: Option<u64>,
-    completed_periods: u64,
+    last_tick: Option<u64>,
+    elapsed: Stopwatch,
 }
 
 impl PhysicalChildPlayback {
-    pub(in crate::world_spawn) const fn new(state: usize) -> Self {
+    pub(in crate::world_spawn) fn new(state: usize) -> Self {
         Self {
             state,
-            started_tick: None,
-            completed_periods: 0,
+            last_tick: None,
+            elapsed: Stopwatch::new(),
         }
     }
 
     fn period_finished(&mut self, tick: u64, fixed_hz: u16, duration: std::time::Duration) -> bool {
-        let started = *self.started_tick.get_or_insert(tick);
-        let elapsed_units = u128::from(tick.saturating_sub(started)) * 1_000_000_000;
-        let period_units = duration.as_nanos().saturating_mul(u128::from(fixed_hz));
-        if duration.is_zero()
-            || elapsed_units <= period_units.saturating_mul(u128::from(self.completed_periods) + 1)
-        {
+        let previous = self.last_tick.replace(tick).unwrap_or(tick);
+        // Tick-domain units preserve fractional periods exactly.
+        self.elapsed.tick(std::time::Duration::from_secs(
+            tick.saturating_sub(previous),
+        ));
+        let Some(period) = duration.checked_mul(u32::from(fixed_hz)) else {
+            return false;
+        };
+        if period.is_zero() || self.elapsed.elapsed() <= period {
             return false;
         }
-        self.completed_periods = self.completed_periods.saturating_add(1);
+        self.elapsed.set_elapsed(self.elapsed.elapsed() - period);
         true
     }
 }

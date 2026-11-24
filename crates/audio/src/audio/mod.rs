@@ -11,18 +11,21 @@ mod audio_settings_projection;
 mod audio_soundscape_playback;
 mod audio_stage_playback_projection;
 mod audio_stop_request_execution;
+mod authored_room_stages;
 mod crowd_audio_playback;
 mod deferred_audio_playback_start;
 mod deterministic_audio_sampling;
 mod direct_audio_clip_playback;
 mod main_menu_music_playback;
 mod spatial_cue_distance;
+mod stage_voice_acoustics;
 mod water_audio_stage_projection;
 mod world_audio_soundscape_membership;
 
+use bevy::audio::AddAudioSource;
 use bevy::prelude::*;
 use openzt2_game_assets::audio::audio_asset_types::{AudioAsset, AudioAssets};
-use openzt2_world_state::application_schedule::WaterPresentationSet;
+use openzt2_zoo_state::terrain::terrain_water_view_state::TerrainWaterCameraContactProjection;
 
 use audio_player_spawning::{CueVoicePool, NonspatialCueOwner};
 use audio_request_lanes::{
@@ -61,7 +64,9 @@ impl Plugin for AudioPlugin {
         app.world_mut().spawn(CueVoicePool::Spatial);
         app.world_mut()
             .spawn((CueVoicePool::Nonspatial, NonspatialCueOwner));
-        app.add_computed_state::<MenuMusicState>()
+        app.add_audio_source::<stage_voice_acoustics::StageVoiceSource>()
+            .init_resource::<stage_voice_acoustics::StageVoiceCompletion>()
+            .add_computed_state::<MenuMusicState>()
             .add_message::<PlayAudioCue>()
             .add_message::<PlayPositionedAudioCue>()
             .add_message::<PlayAudioClip>()
@@ -77,10 +82,16 @@ impl Plugin for AudioPlugin {
             .add_systems(
                 Update,
                 (
-                    project_listener_audio_environment.after(WaterPresentationSet::View),
+                    authored_room_stages::bind_room_stage_volumes,
+                    project_listener_audio_environment
+                        .after(TerrainWaterCameraContactProjection)
+                        .after(authored_room_stages::bind_room_stage_volumes),
                     select_listener_stage_ambience.after(project_listener_audio_environment),
                     advance_listener_stage_crossfades.after(select_listener_stage_ambience),
                     ramp_listener_shore_lapping.after(project_listener_audio_environment),
+                    audio_soundscape_playback::project_biome_ambience_mix_to_soundscapes
+                        .after(advance_listener_stage_crossfades)
+                        .after(world_audio_soundscape_membership::bind_world_soundscape_membership),
                 )
                     .before(merge_produced_audio_requests),
             )
@@ -99,7 +110,9 @@ impl Plugin for AudioPlugin {
                 Update,
                 (
                     (
-                        project_changed_audio_soundscapes_into_playback_and_schedules,
+                        project_changed_audio_soundscapes_into_playback_and_schedules.after(
+                            audio_soundscape_playback::project_biome_ambience_mix_to_soundscapes,
+                        ),
                         advance_audio_soundscape_cue_schedules,
                     )
                         .chain(),
@@ -116,6 +129,8 @@ impl Plugin for AudioPlugin {
                 Update,
                 (
                     merge_produced_audio_requests,
+                    spatial_cue_distance::publish_spatial_audio_listener
+                        .after(TerrainWaterCameraContactProjection),
                     execute_audio_stop_requests
                         .after(merge_produced_audio_requests)
                         .run_if(on_message::<StopAudioCue>),
@@ -124,17 +139,30 @@ impl Plugin for AudioPlugin {
                     audio_cue_playback::retire_empty_positioned_audio_groups
                         .after(audio_cue_playback::retire_empty_positioned_audio_emitters),
                     audio_cue_playback::forward_positioned_audio_cue_playback_requests
-                        .after(WaterPresentationSet::View)
+                        .after(spatial_cue_distance::publish_spatial_audio_listener)
                         .after(audio_cue_playback::retire_empty_positioned_audio_groups)
                         .run_if(on_message::<PlayPositionedAudioCue>),
+                    stage_voice_acoustics::release_finished_dry_voices,
                     execute_audio_cue_playback_requests
                         .after(audio_cue_playback::forward_positioned_audio_cue_playback_requests)
+                        .after(stage_voice_acoustics::release_finished_dry_voices)
                         .run_if(on_message::<AdmitAudioCue>),
                     execute_direct_audio_clip_playback_requests
                         .after(execute_audio_stop_requests)
                         .run_if(on_message::<PlayAudioClip>),
                     start_deferred_audio_playback_after_delays_finish
                         .after(execute_audio_cue_playback_requests),
+                ),
+            )
+            .add_systems(
+                Update,
+                (
+                    stage_voice_acoustics::publish_stage_voice_controls
+                        .after(advance_listener_stage_crossfades)
+                        .after(execute_audio_cue_playback_requests),
+                    stage_voice_acoustics::prepare_stage_voice_players
+                        .after(start_deferred_audio_playback_after_delays_finish)
+                        .after(stage_voice_acoustics::publish_stage_voice_controls),
                 ),
             )
             .add_systems(Last, project_changed_audio_settings_into_live_audio_sinks);

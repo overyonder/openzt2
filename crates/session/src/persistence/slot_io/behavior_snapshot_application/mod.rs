@@ -1,7 +1,7 @@
 mod definitions;
 mod interaction_membership;
 pub(super) mod parameters;
-mod state_application;
+pub(in crate::persistence) mod state_application;
 
 use super::{
     behavior_snapshot_entity_references::index_behavior_snapshot_entity_references,
@@ -32,7 +32,7 @@ use state_application::apply_prepared_behavior_actor;
 pub(super) fn prepare_behavior_snapshot_before_world_replacement(
     root: Entity,
     records: &[BehaviorActorSnapshot],
-    application: &BehaviorSnapshotApplication,
+    application: &mut BehaviorSnapshotApplication,
     retained: &mut Vec<Handle<BehaviorDocumentAsset>>,
     replaced_entities: &[Entity],
     imported_identifiers: impl Iterator<Item = u64>,
@@ -71,7 +71,7 @@ pub(super) fn prepare_behavior_snapshot_before_world_replacement(
     if records.iter().any(|record| record.navigation.is_some()) && capacity.is_none() {
         return Ok(false);
     }
-    let mut identities = index_behavior_snapshot_entity_references(&application.entities)?;
+    let mut identities = index_behavior_snapshot_entity_references(&application.actors.p0())?;
     identities.retain(|reference, entity| {
         !replaced_entities.contains(entity)
             && !(topology_records.is_some()
@@ -128,7 +128,7 @@ pub(super) fn restore_behavior_actor_snapshots(
     else {
         return Ok(false);
     };
-    let mut identities = index_behavior_snapshot_entity_references(&application.entities)?;
+    let mut identities = index_behavior_snapshot_entity_references(&application.actors.p0())?;
     validate_behavior_snapshot_references(records, &identities)?;
     validate_behavior_retry_references(&retry_records, &identities)?;
     let capacity = application
@@ -153,9 +153,10 @@ pub(super) fn restore_behavior_actor_snapshots(
             && matches!(nav.pursuit.as_ref().map(|pursuit| pursuit.leg),
                 Some(openzt2_zoo_state::animal_behavior::behavior_pursuit_types::BehaviorPursuitLeg::Route { .. })))
         {
+            let actors = application.actors.p0();
             let target = record.task.target.as_ref()
                 .and_then(|reference| identities.get(reference))
-                .and_then(|target| application.entities.get(*target).ok())
+                .and_then(|target| actors.get(*target).ok())
                 .ok_or(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference)?;
             if target.global_transform.is_none() { return Ok(false); }
         }
@@ -163,7 +164,8 @@ pub(super) fn restore_behavior_actor_snapshots(
             if let BehaviorSnapshotEntityReference::TankCleaningSite { tank, .. } = reference {
                 let tank = identities[&BehaviorSnapshotEntityReference::Habitat(*tank)];
                 if !application
-                    .entities
+                    .actors
+                    .p0()
                     .get(tank)
                     .is_ok_and(|tank| tank.world_member.is_some())
                 {
@@ -253,7 +255,8 @@ pub(super) fn restore_behavior_actor_snapshots(
                 BehaviorSnapshotEntityReference::TankCleaningSite { tank, position } => {
                     let tank = identities[&BehaviorSnapshotEntityReference::Habitat(*tank)];
                     let world = application
-                        .entities
+                        .actors
+                        .p0()
                         .get(tank)
                         .ok()
                         .and_then(|tank| tank.world_member.copied())

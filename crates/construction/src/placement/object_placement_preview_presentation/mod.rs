@@ -12,6 +12,7 @@ use openzt2_zoo_state::placement::object_placement_geometry::{
 };
 use openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementPrefabSource;
 
+use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
 use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
@@ -23,7 +24,6 @@ use openzt2_world_state::world_spawn::prefab_model_tint::PrefabModelTint;
 use openzt2_zoo_state::placement::object_placement_definition_queries::resolve_object_placeable_definition;
 use openzt2_zoo_state::placement::object_placement_validation::calculate_authored_object_placement_eighth_turns;
 use openzt2_zoo_state::placement::object_placement_validation::rotate_object_placement_point_by_quarter_turns;
-use openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementEntranceArrow as EntranceArrow;
 use openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementPreviewDecal;
 use openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementPreviewMaterials;
 use openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementPreviewRenderable;
@@ -172,7 +172,8 @@ pub(super) fn hydrate_object_placement_preview_materials_from_ui_document(
                     model_invalid: convert_authored_srgba_bytes_to_bevy_color(
                         policy.model_invalid_srgba,
                     ),
-                });
+                },
+            );
         }
     }
     let Some(palette) = palettes.get(&id) else {
@@ -190,9 +191,21 @@ pub(super) fn hydrate_object_placement_preview_materials_from_ui_document(
 }
 
 const ENTRANCE_ARROW_IMAGE: &str = "ui/fx/footprint/entrance_arrow.tga";
-// The pulse was matched by eye to the original.
-const ENTRANCE_ARROW_PULSE_M: f32 = 0.3;
-const ENTRANCE_ARROW_PULSE_SECONDS: f32 = 1.0;
+const ENTRANCE_ARROW_RADIANS_PER_SECOND: f32 = 6.0;
+
+#[derive(Component)]
+pub(super) struct EntranceArrow {
+    socket: Vec3,
+    outward: Vec3,
+    radius: f32,
+    phase: f32,
+}
+
+impl EntranceArrow {
+    fn translation(&self) -> Vec3 {
+        self.socket + self.outward * (self.radius + (self.phase.cos() + 1.0) * 0.5)
+    }
+}
 
 /// The world-axis rectangle a cardinal footprint covers: its centre in the
 /// preview's frame and its size.
@@ -261,26 +274,27 @@ pub(super) fn hide_alpha_blended_meshes_of_object_placement_previews(
 /// Slides each entrance arrow back and forth along the way it points.
 pub(super) fn pulse_object_placement_entrance_arrows(
     time: Res<Time>,
-    mut arrows: Query<(
-        &mut Transform,
-        &openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementEntranceArrow,
-    )>,
+    mut arrows: Query<(&mut Transform, &mut EntranceArrow)>,
 ) {
-    let phase = time.elapsed_secs() / ENTRANCE_ARROW_PULSE_SECONDS * core::f32::consts::TAU;
-    for (mut transform, arrow) in &mut arrows {
-        transform.translation =
-            arrow.rest + arrow.direction * (ENTRANCE_ARROW_PULSE_M * phase.sin());
+    for (mut transform, mut arrow) in &mut arrows {
+        arrow.phase += time.delta_secs() * ENTRANCE_ARROW_RADIANS_PER_SECOND;
+        if arrow.phase > core::f32::consts::TAU {
+            arrow.phase = 0.0;
+        }
+        transform
+            .map_unchanged(|pose| &mut pose.translation)
+            .set_if_neq(arrow.translation());
     }
 }
 
 #[derive(Component, Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) enum PlacementDecalRole {
-    Footprint(usize),
+    Footprint,
     Grid,
-    EntranceArrow,
+    EntranceArrow(usize),
 }
 
-pub(super) type PlacedDecal<'w, 's> = Query<
+type PlacedDecal<'w, 's> = Query<
     'w,
     's,
     (
@@ -302,7 +316,8 @@ pub(super) fn rebuild_object_placement_preview_footprint_and_grid_decals(
     mut scene_changes: MessageReader<ScenePlacementFootprintChanged>,
     previews: Query<(
         Entity,
-        Ref<ConstructionPreview>,
+        &ConstructionPreview,
+        Ref<Transform>,
         &WorldMember,
         Ref<ObjectPlacementPreviewMaterials>,
         Option<Ref<ObjectPlacementPrefabSource>>,
@@ -311,7 +326,8 @@ pub(super) fn rebuild_object_placement_preview_footprint_and_grid_decals(
     )>,
     mut decals: PlacedDecal,
     mut terrain: PreviewDecalTerrain,
-    arrow_nodes: DockArrowNodes,
+    prefab_assets: Res<Assets<ScenePrefabAsset>>,
+    mut prefab_events: MessageReader<AssetEvent<ScenePrefabAsset>>,
 ) {
     let changed_scenes = scene_changes
         .read()
@@ -321,12 +337,20 @@ pub(super) fn rebuild_object_placement_preview_footprint_and_grid_decals(
     let Some(catalogue) = active_definitions.get(&definitions) else {
         return;
     };
-    let changed_models = arrow_nodes.changed_preview_models();
+    let changed_prefabs = prefab_events
+        .read()
+        .filter_map(|event| match event {
+            AssetEvent::Added { id } | AssetEvent::Modified { id } | AssetEvent::Removed { id } => {
+                Some(*id)
+            }
+            _ => None,
+        })
+        .collect::<bevy::platform::collections::HashSet<_>>();
     let edited = !terrain.edits.is_empty();
     let restored = !terrain.restores.is_empty();
     terrain.edits.clear();
     terrain.restores.clear();
-    for (entity, preview, member, materials, prefab, visibility, children) in &previews {
+    for (entity, preview, pose, member, materials, prefab, visibility, children) in &previews {
         let Ok(index) = terrain.indexes.get(member.root) else {
             continue;
         };
@@ -346,11 +370,12 @@ pub(super) fn rebuild_object_placement_preview_footprint_and_grid_decals(
             && !index.is_changed()
             && !definitions_changed
             && !visibility.is_changed()
-            && !preview.is_changed()
+            && !pose.is_changed()
             && !materials.is_changed()
-            && !changed_models.contains(&entity)
             && !prefab.as_ref().is_some_and(|source| {
-                source.is_changed() || changed_scenes.contains(&source.0.id())
+                source.is_changed()
+                    || changed_scenes.contains(&source.0.id())
+                    || changed_prefabs.contains(&source.0.id())
             })
         {
             continue;
@@ -359,8 +384,7 @@ pub(super) fn rebuild_object_placement_preview_footprint_and_grid_decals(
         else {
             continue;
         };
-        let Some(turns) =
-            calculate_authored_object_placement_eighth_turns(definition, &preview.transform)
+        let Some(turns) = calculate_authored_object_placement_eighth_turns(definition, &pose)
         else {
             continue;
         };
@@ -374,7 +398,7 @@ pub(super) fn rebuild_object_placement_preview_footprint_and_grid_decals(
         };
         let pivot_cm = geometry.pivot_cm(turns);
         let pivot = Vec2::new(f32::from(pivot_cm[0]), f32::from(pivot_cm[1])) / 100.0;
-        let inverse_rotation = preview.transform.rotation.inverse();
+        let inverse_rotation = pose.rotation.inverse();
         let footprint_material = if valid {
             &materials.footprint_valid
         } else {
@@ -384,19 +408,6 @@ pub(super) fn rebuild_object_placement_preview_footprint_and_grid_decals(
             &materials.grid_cardinal[grid_size]
         } else {
             &materials.grid_diagonal[grid_size]
-        };
-        let footprint_translations = || {
-            footprint
-                .iter()
-                .filter(|cell| footprint_cell_is_occupied(cell))
-                .map(move |cell| {
-                    let local = IVec2::new(i32::from(cell.offset[0]), i32::from(cell.offset[1]));
-                    let world_offset = rotate_object_placement_point_by_quarter_turns(
-                        local.as_vec2() + Vec2::splat(0.5) - pivot,
-                        turns / 2,
-                    );
-                    inverse_rotation.mul_vec3(Vec3::new(world_offset.x, 0.025, world_offset.y))
-                })
         };
         let mut existing: bevy::platform::collections::HashMap<PlacementDecalRole, Entity> =
             children
@@ -408,7 +419,7 @@ pub(super) fn rebuild_object_placement_preview_footprint_and_grid_decals(
             plane.get_or_insert_with(|| meshes.add(Plane3d::default().mesh().size(1.0, 1.0)));
         let projection = PreviewDecals {
             owner: entity,
-            preview: preview.transform.compute_affine(),
+            preview: pose.compute_affine(),
             rotation: inverse_rotation,
             plane,
             terrain_index: &index,
@@ -428,27 +439,16 @@ pub(super) fn rebuild_object_placement_preview_footprint_and_grid_decals(
                     rotation,
                 )
             };
-        let rectangle = (turns & 1 == 0)
-            .then(|| footprint_rectangle(footprint, pivot, turns, inverse_rotation))
-            .flatten();
-        if let Some((translation, size)) = rectangle {
+        if let Some((translation, size)) =
+            footprint_rectangle(footprint, pivot, turns, inverse_rotation)
+        {
             project(
-                PlacementDecalRole::Footprint(0),
+                PlacementDecalRole::Footprint,
                 translation,
                 size,
                 footprint_material,
                 0.0,
             );
-        } else {
-            for (index, translation) in footprint_translations().enumerate() {
-                project(
-                    PlacementDecalRole::Footprint(index),
-                    translation,
-                    Vec2::ONE,
-                    footprint_material,
-                    0.0,
-                );
-            }
         }
         project(
             PlacementDecalRole::Grid,
@@ -457,42 +457,56 @@ pub(super) fn rebuild_object_placement_preview_footprint_and_grid_decals(
             grid_material,
             0.0,
         );
-        let arrow = definition.dock_arrow.and_then(|arrow| {
-            let (low, high) = arrow_nodes.model_bounds(entity)?;
-            let node = arrow_nodes.dock_arrow(entity)?;
-            let inward = (-node).with_y(0.0).normalize_or_zero();
-            let rotation = preview.transform.rotation;
-            let occupied = footprint_translations().collect::<Vec<_>>();
-            let inside = |point: Vec3| {
-                (point.x > low.x && point.x < high.x && point.z > low.z && point.z < high.z)
-                    || occupied.iter().any(|cell| {
-                        let offset = rotation * (point - *cell);
-                        offset.x.abs() < 0.5 && offset.z.abs() < 0.5
-                    })
-            };
-            let edge = (0_u8..80)
-                .map(|step| node - inward * (f32::from(step) * 0.25))
-                .find(|point| !inside(point.with_y(0.025)))?;
-            let rest = (edge - inward * (arrow.size_metres * 0.5)).with_y(0.03);
-            Some((rest, inward, arrow.size_metres))
-        });
-        if let Some((rest, direction, size)) = arrow {
-            let world_direction = preview.transform.rotation.mul_vec3(direction);
-            let entity = project(
-                PlacementDecalRole::EntranceArrow,
-                rest,
-                Vec2::splat(size),
-                &materials.entrance_arrow,
-                world_direction.x.atan2(world_direction.z),
-            );
-            if let Ok((.., Some(mut arrow))) = decals.get_mut(entity) {
-                if arrow.rest != rest || arrow.direction != direction {
-                    *arrow = EntranceArrow { rest, direction };
+        if let Some((arrow, prefab)) = definition.dock_arrow.zip(
+            prefab
+                .as_ref()
+                .and_then(|source| prefab_assets.get(&source.0)),
+        ) {
+            for index in 0_usize.. {
+                let name = if index == 0 {
+                    AssetId::from_key("dock_arrow")
+                } else {
+                    AssetId::from_key(&format!("dock_arrow{index}"))
+                };
+                let Some(socket) = prefab.prefab_attachment_transform(name) else {
+                    break;
+                };
+                let outward = socket
+                    .transform_vector3(Vec3::Z)
+                    .with_y(0.0)
+                    .normalize_or_zero();
+                if outward == Vec3::ZERO {
+                    continue;
                 }
-            } else {
-                commands
-                    .entity(entity)
-                    .insert(EntranceArrow { rest, direction });
+                let socket = socket.transform_point3(Vec3::ZERO).with_y(0.03);
+                let radius = arrow.size_metres;
+                let motion = EntranceArrow {
+                    socket,
+                    outward,
+                    radius,
+                    phase: 0.0,
+                };
+                let inward_world = pose.rotation * -outward;
+                let role = PlacementDecalRole::EntranceArrow(index);
+                let decal = projection.project(
+                    &mut commands,
+                    &mut meshes,
+                    &terrain,
+                    &mut decals,
+                    existing.remove(&role),
+                    role,
+                    motion.translation(),
+                    Vec2::splat(2.0 * radius),
+                    &materials.entrance_arrow,
+                    inward_world.x.atan2(inward_world.z),
+                );
+                if let Ok((.., Some(mut current))) = decals.get_mut(decal) {
+                    current.socket = socket;
+                    current.outward = outward;
+                    current.radius = radius;
+                } else {
+                    commands.entity(decal).insert(motion);
+                }
             }
         }
         for obsolete in existing.into_values() {
@@ -501,27 +515,79 @@ pub(super) fn rebuild_object_placement_preview_footprint_and_grid_decals(
     }
 }
 
-pub(super) fn project_object_placement_validity_onto_preview_model_tint(
-    previews: Query<(
-        Entity,
-        &ConstructionPreview,
-        &ObjectPlacementPreviewMaterials,
-    )>,
-    children: Query<&Children>,
-    mut renderables: Query<&mut PrefabModelTint, With<ObjectPlacementPreviewRenderable>>,
+#[derive(Component, Clone, Copy, PartialEq)]
+pub(super) struct PlacementPreviewTint(bool);
+
+pub(super) fn resolve_placement_preview_tint(
+    mut previews: Query<
+        (
+            Entity,
+            &ConstructionPreview,
+            Option<&mut PlacementPreviewTint>,
+        ),
+        (
+            With<ObjectPlacementPrefabSource>,
+            Changed<ConstructionPreview>,
+        ),
+    >,
+    mut commands: Commands,
 ) {
-    for (entity, preview, materials) in &previews {
-        let next = if matches!(preview.validity, PlacementValidity::Valid { .. }) {
-            materials.model_valid
+    for (entity, preview, tint) in &mut previews {
+        let next =
+            PlacementPreviewTint(matches!(preview.validity, PlacementValidity::Valid { .. }));
+        if let Some(mut current) = tint {
+            current.set_if_neq(next);
         } else {
-            materials.model_invalid
+            commands.entity(entity).insert(next);
+        }
+    }
+}
+
+pub(super) fn project_object_placement_validity_onto_preview_model_tint(
+    previews: Query<(&PlacementPreviewTint, &ObjectPlacementPreviewMaterials)>,
+    changed: Query<
+        Entity,
+        Or<(
+            Changed<PlacementPreviewTint>,
+            Changed<ObjectPlacementPreviewMaterials>,
+        )>,
+    >,
+    new_nodes: Query<
+        Entity,
+        Or<(
+            Added<ObjectPlacementPreviewRenderable>,
+            Added<PrefabModelTint>,
+            Added<PlacementDecalRole>,
+        )>,
+    >,
+    children: Query<&Children>,
+    parents: Query<&ChildOf>,
+    mut renderables: Query<&mut PrefabModelTint, With<ObjectPlacementPreviewRenderable>>,
+    mut decals: Query<(&PlacementDecalRole, &mut MeshMaterial3d<StandardMaterial>)>,
+) {
+    let mut dirty: bevy::ecs::entity::EntityHashSet = changed.iter().collect();
+    dirty.extend(new_nodes.iter().filter_map(|entity| {
+        parents
+            .iter_ancestors::<ChildOf>(entity)
+            .find(|&ancestor| previews.contains(ancestor))
+    }));
+    for entity in dirty {
+        let Ok((valid, materials)) = previews.get(entity) else {
+            continue;
+        };
+        let (model, footprint) = if valid.0 {
+            (materials.model_valid, &materials.footprint_valid)
+        } else {
+            (materials.model_invalid, &materials.footprint_invalid)
         };
         for descendant in children.iter_descendants_depth_first::<Children>(entity) {
-            let Ok(mut tint) = renderables.get_mut(descendant) else {
-                continue;
-            };
-            if tint.0 != next {
-                tint.0 = next;
+            if let Ok(mut tint) = renderables.get_mut(descendant) {
+                tint.map_unchanged(|tint| &mut tint.0).set_if_neq(model);
+            }
+            if let Ok((PlacementDecalRole::Footprint, mut material)) = decals.get_mut(descendant) {
+                material
+                    .map_unchanged(|material| &mut material.0)
+                    .set_if_neq(footprint.clone());
             }
         }
     }
@@ -558,93 +624,6 @@ fn calculate_occupied_footprint_maximum_axis_span(cells: &[FootprintCell]) -> i3
 
 fn convert_authored_srgba_bytes_to_bevy_color(value: [u8; 4]) -> Color {
     Color::srgba_u8(value[0], value[1], value[2], value[3])
-}
-
-/// The models' `Dock_Arrow` nodes, where the original game stands a `special` arrow.
-#[derive(bevy::ecs::system::SystemParam)]
-pub(super) struct DockArrowNodes<'w, 's> {
-    children: Query<'w, 's, &'static Children>,
-    // Local transforms, as a freshly loaded model's global ones lag a frame.
-    transforms: Query<'w, 's, (&'static Transform, &'static ChildOf), Without<PlacementDecalRole>>,
-    bounds: Query<'w, 's, &'static bevy::camera::primitives::Aabb, Without<ObjectPlacementPreviewDecal>>,
-    nodes: Query<
-        'w,
-        's,
-        &'static openzt2_world_state::world_spawn::prefab_authored_attachment_identifier::PrefabAuthoredAttachmentIdentifier,
-    >,
-    parents: Query<'w, 's, &'static ChildOf>,
-    previews: Query<'w, 's, (), With<ConstructionPreview>>,
-    changed: Query<'w, 's, Entity, (
-        Without<ObjectPlacementPreviewDecal>,
-        Or<(
-            Added<bevy::camera::primitives::Aabb>,
-            Added<openzt2_world_state::world_spawn::prefab_authored_attachment_identifier::PrefabAuthoredAttachmentIdentifier>,
-        )>,
-    )>,
-}
-
-impl DockArrowNodes<'_, '_> {
-    fn changed_preview_models(&self) -> bevy::ecs::entity::EntityHashSet {
-        self.changed
-            .iter()
-            .filter_map(|entity| {
-                self.parents
-                    .iter_ancestors::<ChildOf>(entity)
-                    .find(|&owner| self.previews.contains(owner))
-            })
-            .collect()
-    }
-
-    /// `node`'s frame within the preview's, without the presentation's lag.
-    fn in_preview(&self, preview: Entity, mut node: Entity) -> Option<bevy::math::Affine3A> {
-        let mut affine = bevy::math::Affine3A::IDENTITY;
-        while node != preview {
-            let (transform, parent) = self.transforms.get(node).ok()?;
-            // The model's presentation trails the preview while the pointer
-            // moves; the arrow stands where the preview is.
-            if parent.parent() == preview {
-                break;
-            }
-            affine = transform.compute_affine() * affine;
-            node = parent.parent();
-        }
-        Some(affine)
-    }
-
-    /// The model's bounds in the preview's frame, once its meshes are bounded.
-    fn model_bounds(&self, preview: Entity) -> Option<(Vec3, Vec3)> {
-        self.children
-            .iter_descendants(preview)
-            .filter_map(|node| Some((self.in_preview(preview, node)?, self.bounds.get(node).ok()?)))
-            .flat_map(|(affine, aabb)| {
-                let (centre, half) = (Vec3::from(aabb.center), Vec3::from(aabb.half_extents));
-                [-1.0_f32, 1.0].into_iter().flat_map(move |x| {
-                    [-1.0_f32, 1.0]
-                        .map(move |z| affine.transform_point3(centre + half * Vec3::new(x, 0.0, z)))
-                })
-            })
-            .fold(None, |bounds, corner| {
-                Some(
-                    bounds.map_or((corner, corner), |(low, high): (Vec3, Vec3)| {
-                        (low.min(corner), high.max(corner))
-                    }),
-                )
-            })
-    }
-
-    /// A station has `Dock_Arrow` and `Dock_Arrow1` on opposite sides;
-    /// the original game draws one arrow, on the `Dock_Arrow1` side.
-    fn dock_arrow(&self, preview: Entity) -> Option<Vec3> {
-        let find = |key| {
-            let wanted = AssetId::from_key(key);
-            let node = self
-                .children
-                .iter_descendants(preview)
-                .find(|node| self.nodes.get(*node).is_ok_and(|name| name.0 == wanted))?;
-            Some(self.in_preview(preview, node)?.translation.into())
-        };
-        find("dock_arrow1").or_else(|| find("dock_arrow"))
-    }
 }
 
 /// The ground placement decals are fitted to.

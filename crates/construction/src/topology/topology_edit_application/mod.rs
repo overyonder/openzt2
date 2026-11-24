@@ -1,3 +1,4 @@
+use super::elevated_path_layout::ElevatedPathSurfaceEdits;
 use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 use openzt2_game_data::AssetId;
@@ -40,6 +41,14 @@ use openzt2_zoo_state::topology::topology_grid_geometry::calculate_topology_edge
 use openzt2_zoo_state::topology::topology_grid_geometry::calculate_topology_edge_world_transform;
 use openzt2_zoo_state::topology::topology_grid_geometry::merge_topology_changed_cell_bounds;
 
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum TopologySlot {
+    Id(u64),
+    Node(IVec3),
+    Path(IVec3),
+    Edge(EdgeKey),
+}
+
 fn topology_snapshot_application_is_valid(
     add: &[TopologySnapshot],
     remove: &[TopologySnapshot],
@@ -52,10 +61,16 @@ fn topology_snapshot_application_is_valid(
     )>,
     gates: &Query<&Gate>,
     index: &TopologyIndex,
+    root: Entity,
+    reserved: &HashSet<(Entity, TopologySlot)>,
+    released: &bevy::ecs::entity::EntityHashSet,
 ) -> bool {
     let mut added_ids = HashSet::new();
     for snapshot in add {
-        if current.contains_key(&snapshot.id().0) || !added_ids.insert(snapshot.id().0) {
+        if current.contains_key(&snapshot.id().0)
+            || reserved.contains(&(root, TopologySlot::Id(snapshot.id().0)))
+            || !added_ids.insert(snapshot.id().0)
+        {
             return false;
         }
     }
@@ -142,17 +157,17 @@ fn topology_snapshot_application_is_valid(
     add.iter().all(|snapshot| match *snapshot {
         TopologySnapshot::Node { cell, .. } => {
             added_nodes.insert(cell)
-                && index
-                    .nodes
-                    .get(&cell)
-                    .is_none_or(|entity| removed_entities.contains(entity))
+                && !reserved.contains(&(root, TopologySlot::Node(cell)))
+                && index.nodes.get(&cell).is_none_or(|entity| {
+                    removed_entities.contains(entity) || released.contains(entity)
+                })
         }
         TopologySnapshot::Path { cell, .. } => {
             added_paths.insert(cell)
-                && index
-                    .paths
-                    .get(&cell)
-                    .is_none_or(|entity| removed_entities.contains(entity))
+                && !reserved.contains(&(root, TopologySlot::Path(cell)))
+                && index.paths.get(&cell).is_none_or(|entity| {
+                    removed_entities.contains(entity) || released.contains(entity)
+                })
         }
         TopologySnapshot::Fence { a, b, .. } => {
             let Some(a) = resolve_topology_node_cell(a, current, topology, &node_additions) else {
@@ -165,10 +180,10 @@ fn topology_snapshot_application_is_valid(
                 return false;
             };
             added_edges.insert(key)
-                && index
-                    .edges
-                    .get(&key)
-                    .is_none_or(|entity| removed_entities.contains(entity))
+                && !reserved.contains(&(root, TopologySlot::Edge(key)))
+                && index.edges.get(&key).is_none_or(|entity| {
+                    removed_entities.contains(entity) || released.contains(entity)
+                })
         }
         TopologySnapshot::Portal { .. } => true,
     })
@@ -201,23 +216,15 @@ fn resolve_topology_node_cell(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn apply_committed_topology_edit(
     mut requests: MessageReader<CommitTopologyEdit>,
-    mut commands: Commands,
-) {
-    for &request in requests.read() {
-        commands.run_system_cached_with(apply_one_committed_topology_edit, request);
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn apply_one_committed_topology_edit(
-    In(request): In<CommitTopologyEdit>,
     mut commands: Commands,
     mut edits: Query<(
         &TopologyEdit,
         Option<&mut TankTopologyRestorations>,
         Option<&mut AppliedFenceTopology>,
+        Option<&ElevatedPathSurfaceEdits>,
     )>,
     tanks: Query<(
         &Tank,
@@ -246,305 +253,364 @@ fn apply_one_committed_topology_edit(
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };
-    let Ok((edit, live_restorations, applied_fences)) = edits.get_mut(request.transaction) else {
-        write_topology_edit_acknowledgement(&request, false, &mut acknowledged);
-        return;
-    };
-    let Ok(member) = members.get(request.transaction) else {
-        write_topology_edit_acknowledgement(&request, false, &mut acknowledged);
-        return;
-    };
-    let root = member.root;
-    let Ok((index, grid)) = roots.get(root) else {
-        write_topology_edit_acknowledgement(&request, false, &mut acknowledged);
-        return;
-    };
-    let mut current = HashMap::new();
-    for snapshot in edit.created.iter().chain(&edit.removed) {
-        let operands = match *snapshot {
-            TopologySnapshot::Fence { a, b, .. } => [Some(a), Some(b)],
-            TopologySnapshot::Portal { destination, .. } => [Some(destination), None],
-            _ => [None, None],
+    let mut reserved = HashSet::new();
+    let mut released = bevy::ecs::entity::EntityHashSet::default();
+    for request in requests.read() {
+        let Ok((edit, live_restorations, applied_fences, surfaces)) =
+            edits.get_mut(request.transaction)
+        else {
+            write_topology_edit_acknowledgement(&request, false, &mut acknowledged);
+            continue;
         };
-        for id in std::iter::once(snapshot.id()).chain(operands.into_iter().flatten()) {
-            if let Some(entity) = persistent.get(root, id) {
-                current.insert(id.0, entity);
+        let Ok(member) = members.get(request.transaction) else {
+            write_topology_edit_acknowledgement(&request, false, &mut acknowledged);
+            continue;
+        };
+        let root = member.root;
+        let Ok((index, grid)) = roots.get(root) else {
+            write_topology_edit_acknowledgement(&request, false, &mut acknowledged);
+            continue;
+        };
+        let mut current = HashMap::new();
+        for snapshot in edit.created.iter().chain(&edit.removed) {
+            let operands = match *snapshot {
+                TopologySnapshot::Fence { a, b, .. } => [Some(a), Some(b)],
+                TopologySnapshot::Portal { destination, .. } => [Some(destination), None],
+                _ => [None, None],
+            };
+            for id in std::iter::once(snapshot.id()).chain(operands.into_iter().flatten()) {
+                if let Some(entity) = persistent
+                    .get(root, id)
+                    .filter(|entity| !released.contains(entity))
+                {
+                    current.insert(id.0, entity);
+                }
             }
         }
-    }
-    let forward_pair = (&edit.created, &edit.removed);
-    let inverse_pair = (&edit.removed, &edit.created);
-    let direction = match request.application {
-        EditApplication::InitialCommit | EditApplication::Redo => Some(forward_pair),
-        EditApplication::Undo => Some(inverse_pair),
-        EditApplication::FailureRollback => {
-            let forward_valid = topology_snapshot_application_is_valid(
-                forward_pair.0,
-                forward_pair.1,
-                &current,
-                &topology,
-                &gates,
-                &index,
-            );
-            let inverse_valid = topology_snapshot_application_is_valid(
-                inverse_pair.0,
-                inverse_pair.1,
-                &current,
-                &topology,
-                &gates,
-                &index,
-            );
-            match (forward_valid, inverse_valid) {
-                (true, false) => Some(forward_pair),
-                (false, true) => Some(inverse_pair),
-                _ => None,
+        let forward_pair = (&edit.created, &edit.removed);
+        let inverse_pair = (&edit.removed, &edit.created);
+        let direction = match request.application {
+            EditApplication::InitialCommit | EditApplication::Redo => Some(forward_pair),
+            EditApplication::Undo => Some(inverse_pair),
+            EditApplication::FailureRollback => {
+                let forward_valid = topology_snapshot_application_is_valid(
+                    forward_pair.0,
+                    forward_pair.1,
+                    &current,
+                    &topology,
+                    &gates,
+                    &index,
+                    root,
+                    &reserved,
+                    &released,
+                );
+                let inverse_valid = topology_snapshot_application_is_valid(
+                    inverse_pair.0,
+                    inverse_pair.1,
+                    &current,
+                    &topology,
+                    &gates,
+                    &index,
+                    root,
+                    &reserved,
+                    &released,
+                );
+                match (forward_valid, inverse_valid) {
+                    (true, false) => Some(forward_pair),
+                    (false, true) => Some(inverse_pair),
+                    _ => None,
+                }
             }
+        };
+        let Some((add, remove)) = direction else {
+            write_topology_edit_acknowledgement(&request, false, &mut acknowledged);
+            continue;
+        };
+        if request.application != EditApplication::FailureRollback
+            && !topology_snapshot_application_is_valid(
+                add, remove, &current, &topology, &gates, index, root, &reserved, &released,
+            )
+        {
+            write_topology_edit_acknowledgement(&request, false, &mut acknowledged);
+            continue;
         }
-    };
-    let Some((add, remove)) = direction else {
-        write_topology_edit_acknowledgement(&request, false, &mut acknowledged);
-        return;
-    };
-    if request.application != EditApplication::FailureRollback
-        && !topology_snapshot_application_is_valid(add, remove, &current, &topology, &gates, &index)
-    {
-        write_topology_edit_acknowledgement(&request, false, &mut acknowledged);
-        return;
-    }
 
-    let mut restorations = live_restorations.as_deref().cloned().unwrap_or_default();
-    let mut captured = Vec::new();
-    let affected_tanks: bevy::ecs::entity::EntityHashSet = remove
-        .iter()
-        .filter_map(|snapshot| current.get(&snapshot.id().0).copied())
-        .flat_map(|entity| boundaries.habitats(entity))
-        .collect();
-    for (tank, geometry, quality, region, member) in
-        tanks.iter_many(affected_tanks).filter_map(Result::ok)
-    {
-        if member.root != root {
-            continue;
+        let additions = added_node_cells(add);
+        for snapshot in add {
+            let cell = match *snapshot {
+                TopologySnapshot::Node { cell, .. } => Some(TopologySlot::Node(cell)),
+                TopologySnapshot::Path { cell, .. } => Some(TopologySlot::Path(cell)),
+                TopologySnapshot::Fence { a, b, .. } => {
+                    resolve_topology_node_cell(a, &current, &topology, &additions)
+                        .zip(resolve_topology_node_cell(
+                            b, &current, &topology, &additions,
+                        ))
+                        .and_then(|(a, b)| EdgeKey::new(a, b))
+                        .map(TopologySlot::Edge)
+                }
+                TopologySnapshot::Portal { .. } => None,
+            };
+            reserved.insert((root, TopologySlot::Id(snapshot.id().0)));
+            if let Some(cell) = cell {
+                reserved.insert((root, cell));
+            }
         }
-        let Some(seed_cell) = tank_habitat_seed_cell(region) else {
-            continue;
-        };
-        captured.push(PendingTankRestoration {
-            seed_cell,
-            definition: tank.definition,
-            geometry: *geometry,
-            water_quality: *quality,
-            water_limit_missing: false,
-        });
-    }
-    let restoring_created = std::ptr::eq(add, &edit.created);
-    let restore = if restoring_created {
-        &restorations.created
-    } else {
-        &restorations.removed
-    };
-    for image in restore.iter() {
-        commands.spawn((*image, WorldMember { root }));
-    }
-    if !captured.is_empty() {
-        if restoring_created {
-            restorations.removed = captured.into_boxed_slice();
+        let mut restorations = live_restorations.as_deref().cloned().unwrap_or_default();
+        let mut captured = Vec::new();
+        let affected_tanks: bevy::ecs::entity::EntityHashSet = remove
+            .iter()
+            .filter_map(|snapshot| current.get(&snapshot.id().0).copied())
+            .flat_map(|entity| boundaries.habitats(entity))
+            .collect();
+        for (tank, geometry, quality, region, member) in
+            tanks.iter_many(affected_tanks).filter_map(Result::ok)
+        {
+            if member.root != root {
+                continue;
+            }
+            let Some(seed_cell) = tank_habitat_seed_cell(region) else {
+                continue;
+            };
+            captured.push(PendingTankRestoration {
+                seed_cell,
+                definition: tank.definition,
+                geometry: *geometry,
+                water_quality: *quality,
+                water_limit_missing: false,
+            });
+        }
+        let restoring_created = std::ptr::eq(add, &edit.created);
+        let restore = if restoring_created {
+            &restorations.created
         } else {
-            restorations.created = captured.into_boxed_slice();
+            &restorations.removed
+        };
+        for image in restore.iter() {
+            commands.spawn((*image, WorldMember { root }));
         }
-    }
-    if let Some(mut live_restorations) = live_restorations {
-        *live_restorations = restorations;
-    } else {
-        commands.entity(request.transaction).insert(restorations);
-    }
-    let mut resolved = current;
-    let node_additions = added_node_cells(add);
-    let mut joined_endpoints: HashMap<u64, Vec<PersistentId>> = HashMap::new();
-    for snapshot in add {
-        if let TopologySnapshot::Fence { a, b, .. } = *snapshot {
-            joined_endpoints.entry(a.0).or_default().push(b);
-            joined_endpoints.entry(b.0).or_default().push(a);
+        if !captured.is_empty() {
+            if restoring_created {
+                restorations.removed = captured.into_boxed_slice();
+            } else {
+                restorations.created = captured.into_boxed_slice();
+            }
         }
-    }
-    let no_additions = HashMap::new();
-    let mut bounds: Option<IRect> = None;
-    for snapshot in remove {
-        let entity = resolved[&snapshot.id().0];
-        match *snapshot {
-            TopologySnapshot::Node { cell, .. } => {
-                bounds = merge_topology_changed_cell_bounds(bounds, topology_cell_rectangle(cell));
+        if let Some(mut live_restorations) = live_restorations {
+            *live_restorations = restorations;
+        } else {
+            commands.entity(request.transaction).insert(restorations);
+        }
+        let mut resolved = current;
+        let node_additions = added_node_cells(add);
+        let mut joined_endpoints: HashMap<u64, Vec<PersistentId>> = HashMap::new();
+        for snapshot in add {
+            if let TopologySnapshot::Fence { a, b, .. } = *snapshot {
+                joined_endpoints.entry(a.0).or_default().push(b);
+                joined_endpoints.entry(b.0).or_default().push(a);
             }
-            TopologySnapshot::Path { cell, .. } => {
-                bounds = merge_topology_changed_cell_bounds(bounds, topology_cell_rectangle(cell));
+        }
+        let no_additions = HashMap::new();
+        let mut bounds: Option<IRect> = None;
+        for snapshot in remove {
+            let entity = resolved[&snapshot.id().0];
+            match *snapshot {
+                TopologySnapshot::Node { cell, .. } => {
+                    bounds =
+                        merge_topology_changed_cell_bounds(bounds, topology_cell_rectangle(cell));
+                }
+                TopologySnapshot::Path { cell, .. } => {
+                    bounds =
+                        merge_topology_changed_cell_bounds(bounds, topology_cell_rectangle(cell));
+                }
+                TopologySnapshot::Fence { a, b, .. } => {
+                    if let (Some(a), Some(b)) = (
+                        resolve_topology_node_cell(a, &resolved, &topology, &no_additions),
+                        resolve_topology_node_cell(b, &resolved, &topology, &no_additions),
+                    ) {
+                        bounds = merge_topology_changed_cell_bounds(
+                            bounds,
+                            calculate_topology_edge_cell_bounds(a, b),
+                        );
+                    }
+                }
+                TopologySnapshot::Portal { .. } => {}
             }
-            TopologySnapshot::Fence { a, b, .. } => {
-                if let (Some(a), Some(b)) = (
-                    resolve_topology_node_cell(a, &resolved, &topology, &no_additions),
-                    resolve_topology_node_cell(b, &resolved, &topology, &no_additions),
-                ) {
+            released.insert(entity);
+            commands.entity(entity).try_despawn();
+        }
+
+        for snapshot in add
+            .iter()
+            .filter(|snapshot| matches!(snapshot, TopologySnapshot::Node { .. }))
+        {
+            let TopologySnapshot::Node { id, cell } = *snapshot else {
+                unreachable!()
+            };
+            let entity = commands
+                .spawn((TopologyNode { cell }, id, WorldMember { root }))
+                .id();
+            resolved.insert(id.0, entity);
+            bounds = merge_topology_changed_cell_bounds(bounds, topology_cell_rectangle(cell));
+        }
+        let mut created_fences = Vec::new();
+        for snapshot in add {
+            match *snapshot {
+                TopologySnapshot::Node { .. } => {}
+                TopologySnapshot::Fence {
+                    id,
+                    definition,
+                    a,
+                    b,
+                    gate,
+                    wall_top,
+                } => {
+                    let (Some(&a_entity), Some(&b_entity)) =
+                        (resolved.get(&a.0), resolved.get(&b.0))
+                    else {
+                        unreachable!()
+                    };
+                    let a_cell =
+                        resolve_topology_node_cell(a, &resolved, &topology, &node_additions)
+                            .expect("validated endpoint");
+                    let b_cell =
+                        resolve_topology_node_cell(b, &resolved, &topology, &node_additions)
+                            .expect("validated endpoint");
+                    let entity = commands
+                        .spawn((
+                            FenceEdge::between(definition, a_entity, b_entity),
+                            id,
+                            WorldMember { root },
+                            FenceTerrainEndpointPresentationCells {
+                                first: a_cell,
+                                second: b_cell,
+                            },
+                            calculate_topology_edge_world_transform(a_cell, b_cell, *grid),
+                        ))
+                        .id();
+                    if let Some(gate) = gate {
+                        commands.entity(entity).insert(gate);
+                    }
+                    if let Some(top) = wall_top {
+                        commands.entity(entity).insert(top);
+                    }
+                    let fence = if gate.is_some() {
+                        definitions.find_gate_fence(definition)
+                    } else {
+                        definitions.find_fence(definition)
+                    };
+                    if let Some(fence) = fence {
+                        let next = joined_endpoints
+                            .get(&b.0)
+                            .into_iter()
+                            .flatten()
+                            .copied()
+                            .filter(|&other| other != a)
+                            .find_map(|other| {
+                                resolve_topology_node_cell(
+                                    other,
+                                    &resolved,
+                                    &topology,
+                                    &node_additions,
+                                )
+                            });
+                        let prefab = select_authored_fence_segment_prefab_for_adjacent_topology(
+                            fence, a_cell, b_cell, next,
+                        );
+                        if prefab.asset != AssetId::default() {
+                            commands.entity(entity).insert(prefab);
+                        }
+                        if gate.is_some() {
+                            commands.entity(entity).insert(GateMechanism::default());
+                        }
+                    }
+                    resolved.insert(id.0, entity);
+                    created_fences.push(entity);
                     bounds = merge_topology_changed_cell_bounds(
                         bounds,
-                        calculate_topology_edge_cell_bounds(a, b),
+                        calculate_topology_edge_cell_bounds(a_cell, b_cell),
                     );
                 }
+                TopologySnapshot::Path {
+                    id,
+                    definition,
+                    cell,
+                } => {
+                    let entity = commands
+                        .spawn((
+                            PathTile { definition, cell },
+                            id,
+                            WorldMember { root },
+                            Transform::from_translation(grid.cell_translation(cell)),
+                        ))
+                        .id();
+                    if let Some(surface) = surfaces
+                        .and_then(|surfaces| {
+                            surfaces
+                                .0
+                                .iter()
+                                .find_map(|(piece, surface)| (*piece == id).then_some(*surface))
+                        })
+                        .or_else(|| {
+                            definitions.find_path(definition).map(|path| TileSurface {
+                                height_cm: path.surface.height_cm,
+                            })
+                        })
+                    {
+                        commands.entity(entity).insert(surface);
+                    }
+                    resolved.insert(id.0, entity);
+                    bounds =
+                        merge_topology_changed_cell_bounds(bounds, topology_cell_rectangle(cell));
+                }
+                TopologySnapshot::Portal { .. } => {}
             }
-            TopologySnapshot::Portal { .. } => {}
         }
-        commands.entity(entity).try_despawn();
-    }
+        for snapshot in add {
+            if let TopologySnapshot::Portal {
+                id, endpoint_pose, ..
+            } = *snapshot
+            {
+                let mut endpoint = commands.spawn((id, WorldMember { root }));
+                if let Some(pose) = endpoint_pose {
+                    endpoint.insert((pose, GlobalTransform::from(pose)));
+                }
+                resolved.insert(id.0, endpoint.id());
+            }
+        }
+        for snapshot in add {
+            let TopologySnapshot::Portal {
+                id,
+                destination,
+                bidirectional,
+                ..
+            } = *snapshot
+            else {
+                continue;
+            };
+            commands.entity(resolved[&id.0]).insert(Portal {
+                destination: resolved[&destination.0],
+                bidirectional,
+            });
+        }
 
-    for snapshot in add
-        .iter()
-        .filter(|snapshot| matches!(snapshot, TopologySnapshot::Node { .. }))
-    {
-        let TopologySnapshot::Node { id, cell } = *snapshot else {
-            unreachable!()
-        };
-        let entity = commands
-            .spawn((TopologyNode { cell }, id, WorldMember { root }))
-            .id();
-        resolved.insert(id.0, entity);
-        bounds = merge_topology_changed_cell_bounds(bounds, topology_cell_rectangle(cell));
-    }
-    let mut created_fences = Vec::new();
-    for snapshot in add {
-        match *snapshot {
-            TopologySnapshot::Node { .. } => {}
-            TopologySnapshot::Fence {
-                id,
-                definition,
-                a,
-                b,
-                gate,
-                wall_top,
-            } => {
-                let (Some(&a_entity), Some(&b_entity)) = (resolved.get(&a.0), resolved.get(&b.0))
-                else {
-                    unreachable!()
-                };
-                let a_cell = resolve_topology_node_cell(a, &resolved, &topology, &node_additions)
-                    .expect("validated endpoint");
-                let b_cell = resolve_topology_node_cell(b, &resolved, &topology, &node_additions)
-                    .expect("validated endpoint");
-                let entity = commands
-                    .spawn((
-                        FenceEdge::between(definition, a_entity, b_entity),
-                        id,
-                        WorldMember { root },
-                        FenceTerrainEndpointPresentationCells {
-                            first: a_cell,
-                            second: b_cell,
-                        },
-                        calculate_topology_edge_world_transform(a_cell, b_cell, *grid),
-                    ))
-                    .id();
-                if let Some(gate) = gate {
-                    commands.entity(entity).insert(gate);
-                }
-                if let Some(top) = wall_top {
-                    commands.entity(entity).insert(top);
-                }
-                let fence = if gate.is_some() {
-                    definitions.find_gate_fence(definition)
-                } else {
-                    definitions.find_fence(definition)
-                };
-                if let Some(fence) = fence {
-                    let next = joined_endpoints
-                        .get(&b.0)
-                        .into_iter()
-                        .flatten()
-                        .copied()
-                        .filter(|&other| other != a)
-                        .find_map(|other| {
-                            resolve_topology_node_cell(other, &resolved, &topology, &node_additions)
-                        });
-                    let prefab = select_authored_fence_segment_prefab_for_adjacent_topology(
-                        fence, a_cell, b_cell, next,
-                    );
-                    if prefab.asset != AssetId::default() {
-                        commands.entity(entity).insert(prefab);
-                    }
-                    if gate.is_some() {
-                        commands.entity(entity).insert(GateMechanism::default());
-                    }
-                }
-                resolved.insert(id.0, entity);
-                created_fences.push(entity);
-                bounds = merge_topology_changed_cell_bounds(
-                    bounds,
-                    calculate_topology_edge_cell_bounds(a_cell, b_cell),
-                );
+        if request.application == EditApplication::InitialCommit && !created_fences.is_empty() {
+            let fences = AppliedFenceTopology(created_fences.into_boxed_slice());
+            if let Some(mut current) = applied_fences {
+                *current = fences;
+            } else {
+                commands.entity(request.transaction).insert(fences);
             }
-            TopologySnapshot::Path {
-                id,
-                definition,
-                cell,
-            } => {
-                let entity = commands
-                    .spawn((
-                        PathTile { definition, cell },
-                        id,
-                        WorldMember { root },
-                        Transform::from_translation(grid.cell_translation(cell)),
-                    ))
-                    .id();
-                if let Some(path) = definitions.find_path(definition) {
-                    commands.entity(entity).insert(TileSurface {
-                        height_cm: path.surface.height_cm,
-                    });
-                }
-                resolved.insert(id.0, entity);
-                bounds = merge_topology_changed_cell_bounds(bounds, topology_cell_rectangle(cell));
-            }
-            TopologySnapshot::Portal { .. } => {}
         }
-    }
-    for snapshot in add {
-        if let TopologySnapshot::Portal {
-            id, endpoint_pose, ..
-        } = *snapshot
-        {
-            let mut endpoint = commands.spawn((id, WorldMember { root }));
-            if let Some(pose) = endpoint_pose {
-                endpoint.insert((pose, GlobalTransform::from(pose)));
-            }
-            resolved.insert(id.0, endpoint.id());
+        if let Some(bounds) = bounds {
+            commands.write_message(TopologyChanged {
+                transaction: Some(request.transaction),
+                bounds,
+            });
         }
-    }
-    for snapshot in add {
-        let TopologySnapshot::Portal {
-            id,
-            destination,
-            bidirectional,
-            ..
-        } = *snapshot
-        else {
-            continue;
-        };
-        commands.entity(resolved[&id.0]).insert(Portal {
-            destination: resolved[&destination.0],
-            bidirectional,
+        commands.write_message(TopologyEditAcknowledged {
+            transaction: request.transaction,
+            application: request.application,
+            accepted: true,
         });
     }
-
-    if request.application == EditApplication::InitialCommit && !created_fences.is_empty() {
-        let fences = AppliedFenceTopology(created_fences.into_boxed_slice());
-        if let Some(mut current) = applied_fences {
-            *current = fences;
-        } else {
-            commands.entity(request.transaction).insert(fences);
-        }
-    }
-    if let Some(bounds) = bounds {
-        commands.write_message(TopologyChanged {
-            transaction: Some(request.transaction),
-            bounds,
-        });
-    }
-    commands.write_message(TopologyEditAcknowledged {
-        transaction: request.transaction,
-        application: request.application,
-        accepted: true,
-    });
 }

@@ -1,3 +1,4 @@
+use super::terrain_water_renderer_inputs::TerrainWaterLowDetailTextureState;
 use crate::terrain::terrain_change_tracking_types::TerrainDirty;
 use crate::terrain::terrain_water_material_binding::bind_authored_water_material_values;
 use crate::terrain::terrain_water_material_binding::bind_authored_water_surface_textures;
@@ -29,7 +30,6 @@ use openzt2_zoo_state::terrain::terrain_water_presentation_types::{
     TerrainWaterRegionSource,
 };
 use openzt2_zoo_state::terrain::terrain_water_renderer_types::AuthoredTerrainWaterRendererTargets;
-use openzt2_zoo_state::terrain::terrain_water_renderer_types::TerrainWaterLowDetailTextureState;
 use openzt2_zoo_state::terrain::terrain_water_renderer_types::TerrainWaterScumScroll;
 use openzt2_zoo_state::terrain::terrain_water_renderer_types::TerrainWaterSurfacePassKind;
 use openzt2_zoo_state::terrain::terrain_water_renderer_types::TerrainWaterSurfaceRegion;

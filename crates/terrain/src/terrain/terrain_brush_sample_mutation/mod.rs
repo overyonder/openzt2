@@ -12,12 +12,67 @@ use openzt2_zoo_state::terrain::terrain_brush_types::TerrainBrushPreview;
 use openzt2_zoo_state::terrain::terrain_chunk_identity_type::TerrainChunkId;
 use openzt2_zoo_state::terrain::terrain_chunk_types::EditedTerrainSamples;
 use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainChunk;
+use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainIndex;
 use openzt2_zoo_state::terrain::terrain_edit_data_types::TerrainEditDelta;
 use openzt2_zoo_state::terrain::terrain_edit_data_types::TerrainSample;
 use openzt2_zoo_state::terrain::terrain_edit_rectangle_operations::terrain_sample_rectangle_length;
-use openzt2_zoo_state::terrain::terrain_sample_grid_queries::read_materialized_terrain_sample;
+use openzt2_zoo_state::terrain::terrain_sample_grid_queries::{
+    read_materialized_terrain_sample, read_terrain_sample_height_centimetres,
+};
 
 pub(super) mod water_affiliation;
+
+pub(super) struct TerrainSmoothing<'a> {
+    pub(super) radius_samples: u16,
+    pub(super) terrain: &'a TerrainIndex,
+    pub(super) read_height: &'a dyn Fn(Entity, usize, usize) -> Option<i16>,
+}
+
+impl TerrainSmoothing<'_> {
+    fn average_height_cm(
+        &self,
+        chunk: &TerrainChunk,
+        asset: &TerrainAsset,
+        edited: Option<&EditedTerrainSamples>,
+        x: usize,
+        z: usize,
+    ) -> Option<f32> {
+        let cells = i32::from(chunk.side.checked_sub(1)?);
+        if cells == 0 {
+            return None;
+        }
+        let grid = asset.canonical_terrain_grid();
+        let centre = chunk.source_coord * cells + IVec2::new(x as i32, cells - z as i32);
+        let radius = IVec2::splat(i32::from(self.radius_samples));
+        let minimum = (centre - radius).max(IVec2::ZERO);
+        let maximum =
+            (centre + radius).min(IVec2::new(grid.width as i32 - 1, grid.height as i32 - 1));
+        let last_sector = IVec2::new(grid.sector_columns as i32 - 1, grid.sector_rows as i32 - 1);
+        let mut sum = 0_i64;
+        let mut count = 0_u32;
+        for x in minimum.x..=maximum.x {
+            for z in minimum.y..=maximum.y {
+                let point = IVec2::new(x, z);
+                let sector = (point / cells).min(last_sector);
+                let local = point - sector * cells;
+                let x = local.x as usize;
+                let z = (cells - local.y) as usize;
+                let height = if sector == chunk.source_coord {
+                    read_terrain_sample_height_centimetres(chunk, asset, edited, x, z)
+                } else {
+                    let entity = *self
+                        .terrain
+                        .chunks
+                        .get(&IVec2::new(sector.x, -sector.y - 1))?;
+                    (self.read_height)(entity, x, z)
+                }?;
+                sum += i64::from(height);
+                count += 1;
+            }
+        }
+        (count != 0).then(|| sum as f32 / count as f32)
+    }
+}
 
 pub(super) fn resolve_painted_water_surface_height_centimetres<'a>(
     preview: &TerrainBrushPreview,
@@ -94,6 +149,7 @@ pub(super) fn prepare_terrain_chunk_sample_delta_from_brush_dabs(
     preview: &TerrainBrushPreview,
     dabs: &[TerrainBrushDab],
     water_surface_heights_cm: &[Option<i16>],
+    smoothing: Option<&TerrainSmoothing<'_>>,
     water_plan: Option<(
         &water_affiliation::WaterBrushRegionPlan,
         &openzt2_zoo_state::terrain::terrain_water_presentation_types::TerrainWaterRegionQuery,
@@ -157,6 +213,11 @@ pub(super) fn prepare_terrain_chunk_sample_delta_from_brush_dabs(
                 .then(|| find_default_water_style_for_terrain_sample(asset, edited, &original))
                 .flatten();
             let world = chunk.origin + Vec2::new(x as f32, z as f32) * chunk.spacing_m;
+            let smoothing_height = if matches!(preview.kind, TerrainBrushKind::Smooth) {
+                Some(smoothing?.average_height_cm(chunk, asset, edited, x, z)?)
+            } else {
+                None
+            };
             let mut result = dabs.iter().zip(water_surface_heights_cm).fold(
                 original,
                 |current, (dab, water_surface_height_cm)| {
@@ -169,7 +230,7 @@ pub(super) fn prepare_terrain_chunk_sample_delta_from_brush_dabs(
                         current,
                         chunk,
                         asset,
-                        edited,
+                        smoothing_height,
                         x,
                         z,
                         preview,
@@ -232,7 +293,7 @@ fn apply_terrain_brush_to_sample(
     original: TerrainSample,
     chunk: &TerrainChunk,
     asset: &TerrainAsset,
-    edited: Option<&EditedTerrainSamples>,
+    smoothing_height: Option<f32>,
     x: usize,
     z: usize,
     preview: &TerrainBrushPreview,
@@ -265,22 +326,7 @@ fn apply_terrain_brush_to_sample(
                 as i16;
         }
         TerrainBrushKind::Smooth => {
-            let mut sum = 0_i32;
-            let mut count = 0_i32;
-            for nz in z.saturating_sub(1)..=(z + 1).min(chunk.side as usize - 1) {
-                for nx in x.saturating_sub(1)..=(x + 1).min(chunk.side as usize - 1) {
-                    if let Some(height) =
-                        openzt2_zoo_state::terrain::terrain_sample_grid_queries::read_terrain_sample_height_centimetres(
-                            chunk, asset, edited, nx, nz,
-                        )
-                    {
-                        sum += i32::from(height);
-                        count += 1;
-                    }
-                }
-            }
-            if count > 0 {
-                let average = sum as f32 / count as f32;
+            if let Some(average) = smoothing_height {
                 let blend = (preview.strength_per_s.abs() * seconds * weight).clamp(0.0, 1.0);
                 result.height_cm = (f32::from(original.height_cm)
                     + (average - f32::from(original.height_cm)) * blend)

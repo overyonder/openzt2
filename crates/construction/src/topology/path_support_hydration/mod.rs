@@ -55,7 +55,15 @@ const FIT_LOWEST_SAMPLE_DIRECTIONS: [Vec2; 9] = [
 /// Adds a support beneath each elevated tile, anchored at the terrain height.
 pub(super) fn hydrate_authored_path_supports_at_sampled_terrain_height(
     mut commands: Commands,
-    paths: Query<(Entity, &PathTile, &WorldMember), Without<PathSupportHydrated>>,
+    paths: Query<
+        (
+            Entity,
+            &PathTile,
+            &openzt2_zoo_state::topology::topology_graph_types::TileSurface,
+            &WorldMember,
+        ),
+        Without<PathSupportHydrated>,
+    >,
     active_definitions: Res<WorldDefinitions>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     terrain_assets: Res<Assets<TerrainAsset>>,
@@ -70,7 +78,7 @@ pub(super) fn hydrate_authored_path_supports_at_sampled_terrain_height(
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };
-    for (path_entity, path, world_member) in &paths {
+    for (path_entity, path, surface, world_member) in &paths {
         let Some(definition) = definitions.find_path(path.definition) else {
             continue;
         };
@@ -115,6 +123,7 @@ pub(super) fn hydrate_authored_path_supports_at_sampled_terrain_height(
             continue;
         }
         let path_world_position = topology_grid.cell_translation(path.cell);
+        let support_top = path_world_position.y + f32::from(surface.height_cm[4]) * 0.01;
         let path_world_horizontal_position = path_world_position.xz();
         let Some(ground_height_metres) = lowest_ground_height_within_fit_radius(
             path_world_horizontal_position,
@@ -144,7 +153,7 @@ pub(super) fn hydrate_authored_path_supports_at_sampled_terrain_height(
             let direction = first_direction.unwrap_or(IVec3::Y);
             if !openzt2_world::world_spawn::expanding_column_presentation::spawn_expanding_column_presentation(
                 &mut commands, definitions, support_entity, Transform::IDENTITY,
-                path_world_position.y - ground_height_metres,
+                support_top - ground_height_metres,
                 Quat::from_rotation_y((direction.x as f32).atan2(direction.y as f32)), column,
             ) {
                 commands.entity(support_entity).despawn();
@@ -159,7 +168,7 @@ pub(super) fn hydrate_authored_path_supports_at_sampled_terrain_height(
     }
 }
 
-fn lowest_ground_height_within_fit_radius(
+pub(super) fn lowest_ground_height_within_fit_radius(
     centre: Vec2,
     fit_radius_metres: f32,
     terrain_index: &TerrainIndex,

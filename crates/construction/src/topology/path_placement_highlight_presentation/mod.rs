@@ -123,6 +123,7 @@ pub(super) fn present_ground_path_placement_highlights(
         definition: definition.id,
         from: cell,
         to: cell,
+        profile: None,
     };
     let (cells, valid) = if let Some((_, plan)) = previews
         .single()

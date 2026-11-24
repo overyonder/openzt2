@@ -1,5 +1,6 @@
 use avian3d::prelude::RigidBody;
 use bevy::asset::LoadState;
+use bevy::ecs::relationship::RelationshipTarget;
 use bevy::gltf::Gltf;
 use bevy::prelude::Assets;
 use bevy::prelude::ChildOf;
@@ -37,8 +38,6 @@ use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_world_state::world_spawn::zoo_entrance_anchor_synchronization::zoo_entrance_from_authored_gate_anchor;
 
-use std::collections::VecDeque;
-
 use openzt2_world_state::world_spawn::selected_world_document_handles::SelectedWorldDocumentHandles;
 use openzt2_world_state::world_spawn::selected_world_identity::SelectedWorldIdentity;
 use openzt2_world_state::world_spawn::starting_animal_hydration::PendingStartingAnimal;
@@ -49,13 +48,40 @@ use openzt2_world_state::world_spawn::world_load_completion_marker::{
 
 const MAXIMUM_PREFAB_WORK_IN_FLIGHT: usize = 128;
 
-#[derive(Component, Default)]
-pub(super) struct StartingPrefabWindow(VecDeque<Entity>);
-
 #[derive(Component)]
+#[relationship(relationship_target = StartingPrefabRows)]
 pub(super) struct StartingPrefabRow {
+    #[relationship]
     root: Entity,
     index: usize,
+}
+
+#[derive(Component)]
+#[relationship_target(relationship = StartingPrefabRow, linked_spawn)]
+pub(super) struct StartingPrefabRows(Vec<Entity>);
+
+#[derive(Component)]
+pub(super) struct ApplyStartingAnimalHiddenVisibility;
+
+pub(super) fn admit_starting_prefab_rows(
+    mut commands: Commands,
+    loads: Query<
+        (Entity, &WorldHydration, Option<&StartingPrefabRows>),
+        (
+            With<ImportedPersistentIdsReserved>,
+            Without<StartingPrefabsHydrated>,
+            Without<WorldLoadFailure>,
+        ),
+    >,
+) {
+    for (root, progress, pending) in &loads {
+        let (committed, total) = progress.prefab_loading_progress();
+        let first = committed + pending.map_or(0, RelationshipTarget::len);
+        let end = total.min(committed + MAXIMUM_PREFAB_WORK_IN_FLIGHT);
+        for index in first..end {
+            commands.spawn(StartingPrefabRow { root, index });
+        }
+    }
 }
 
 #[derive(Component)]
@@ -74,29 +100,6 @@ pub(super) enum StartingPrefabDependencies {
 
 #[derive(Component)]
 pub(super) struct StartingPrefabDependenciesReady;
-
-pub(super) fn admit_starting_prefab_rows(
-    mut commands: Commands,
-    mut loads: Query<
-        (Entity, &WorldHydration, &mut StartingPrefabWindow),
-        (
-            With<ImportedPersistentIdsReserved>,
-            Without<WorldLoadFailure>,
-        ),
-    >,
-) {
-    for (root, progress, mut window) in &mut loads {
-        let (committed, total) = progress.prefab_loading_progress();
-        let end = total.min(committed + MAXIMUM_PREFAB_WORK_IN_FLIGHT);
-        for index in committed + window.0.len()..end {
-            window.0.push_back(
-                commands
-                    .spawn((StartingPrefabRow { root, index }, ChildOf(root)))
-                    .id(),
-            );
-        }
-    }
-}
 
 pub(super) fn demand_starting_prefab_dependencies(
     mut commands: Commands,
@@ -316,10 +319,11 @@ pub(super) fn commit_ready_starting_prefab_rows_in_source_order(
             &SelectedWorldIdentity,
             &SelectedWorldDocumentHandles,
             &mut WorldHydration,
-            &mut StartingPrefabWindow,
+            Option<&StartingPrefabRows>,
         ),
         (
             With<ImportedPersistentIdsReserved>,
+            Without<StartingPrefabsHydrated>,
             Without<WorldLoadFailure>,
         ),
     >,
@@ -327,6 +331,7 @@ pub(super) fn commit_ready_starting_prefab_rows_in_source_order(
         (
             Option<&StartingPrefabDependencies>,
             Option<&WorldLoadFailure>,
+            &StartingPrefabRow,
         ),
         Or<(
             With<StartingPrefabDependenciesReady>,
@@ -341,7 +346,7 @@ pub(super) fn commit_ready_starting_prefab_rows_in_source_order(
     let Some(catalogue) = active_definitions.get(&definitions) else {
         return;
     };
-    for (root, selection, documents, mut progress, mut window) in &mut loads {
+    for (root, selection, documents, mut progress, pending) in &mut loads {
         let Some(start) = scenarios
             .get(&documents.start)
             .and_then(|asset| asset.document.find_starting_zoo(selection.start))
@@ -351,8 +356,24 @@ pub(super) fn commit_ready_starting_prefab_rows_in_source_order(
                 .insert_if_new(WorldLoadFailure::MissingScenario);
             continue;
         };
-        while let Some(&job) = window.0.front() {
-            let Ok((dependencies, failure)) = ready.get(job) else {
+        let (first, _) = progress.prefab_loading_progress();
+        let mut ready_prefix = [None; MAXIMUM_PREFAB_WORK_IN_FLIGHT];
+        if let Some(pending) = pending {
+            for (job, (dependencies, failure, row)) in pending
+                .iter()
+                .filter_map(|job| ready.get(job).ok().map(|values| (job, values)))
+            {
+                if let Some(slot) = row
+                    .index
+                    .checked_sub(first)
+                    .and_then(|offset| ready_prefix.get_mut(offset))
+                {
+                    *slot = Some((job, dependencies, failure));
+                }
+            }
+        }
+        for (index, entry) in (first..).zip(ready_prefix) {
+            let Some((job, dependencies, failure)) = entry else {
                 break;
             };
             if let Some(&reason) = failure {
@@ -362,7 +383,6 @@ pub(super) fn commit_ready_starting_prefab_rows_in_source_order(
             let Some(dependencies) = dependencies else {
                 break;
             };
-            let (index, _) = progress.prefab_loading_progress();
             let Some(record) = start.entities.get(index) else {
                 commands
                     .entity(root)
@@ -395,7 +415,6 @@ pub(super) fn commit_ready_starting_prefab_rows_in_source_order(
             ) {
                 Ok(entity) => {
                     progress.record_world_prefab_spawn_completion(entity);
-                    let _ = window.0.pop_front();
                     commands.entity(job).despawn();
                 }
                 Err(reason) => {
@@ -406,10 +425,7 @@ pub(super) fn commit_ready_starting_prefab_rows_in_source_order(
         }
         let (committed, total) = progress.prefab_loading_progress();
         if committed == total {
-            commands
-                .entity(root)
-                .remove::<StartingPrefabWindow>()
-                .insert(StartingPrefabsHydrated);
+            commands.entity(root).insert(StartingPrefabsHydrated);
         }
     }
 }
@@ -430,19 +446,28 @@ fn spawn_starting_prefab_row(
         .contains_all(StartingZooSpawnEntityFlags::VISIBLE);
     let id = PersistentId(record.persistent_id);
     match dependencies {
-        StartingPrefabDependencies::Animal => Ok(commands
-            .spawn((
+        StartingPrefabDependencies::Animal => {
+            let mut animal = commands.spawn((
                 WorldMember { root },
                 DefinitionId(definition),
                 id,
                 transform,
+                if visible {
+                    Visibility::Inherited
+                } else {
+                    Visibility::Hidden
+                },
                 PendingStartingAnimal {
                     variant: definition,
                     initial_needs: record.initial_needs.clone(),
                 },
                 StartingAnimalPendingFor(root),
-            ))
-            .id()),
+            ));
+            if !visible {
+                animal.insert(ApplyStartingAnimalHiddenVisibility);
+            }
+            Ok(animal.id())
+        }
         StartingPrefabDependencies::Nonvisual {
             object,
             named_prefabs,

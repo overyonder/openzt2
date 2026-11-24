@@ -4,7 +4,7 @@ use bevy::gltf::GltfMaterialName;
 use bevy::gltf::GltfMesh;
 use bevy::gltf::GltfNode;
 use bevy::prelude::*;
-use bevy::world_serialization::WorldInstanceReady;
+use bevy::world_serialization::InstanceId;
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabMaterialOverrides;
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabModel;
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabRenderable;
@@ -20,31 +20,37 @@ use super::world_entity_model_suppression::{ModelRenderVisibilityGate, ModelRend
 pub(super) struct ResidentPrefabModel;
 
 #[derive(Component)]
-#[relationship(relationship_target = ResidentSceneEntities)]
-struct ResidentSceneEntityOf(Entity);
+pub(super) struct ResidentPrefabScene(InstanceId);
 
-#[derive(Component)]
-#[relationship_target(relationship = ResidentSceneEntityOf, linked_spawn)]
-struct ResidentSceneEntities(Vec<Entity>);
+#[derive(Message)]
+pub(super) struct RetirePrefabSceneInstance(InstanceId);
 
-pub(super) fn bind_prefab_model_scene_ownership_on_ready(
-    ready: On<WorldInstanceReady>,
-    residents: Query<(), With<ResidentPrefabModel>>,
-    world_instances: Res<WorldInstanceSpawner>,
-    mut commands: Commands,
+pub(super) fn request_scene_retirement_on_removal(
+    removed: On<Remove<ResidentPrefabScene>>,
+    instances: Query<&ResidentPrefabScene, Allow<Disabled>>,
+    mut retirements: MessageWriter<RetirePrefabSceneInstance>,
 ) {
-    if !residents.contains(ready.entity) {
-        return;
+    if let Ok(scene) = instances.get(removed.entity) {
+        retirements.write(RetirePrefabSceneInstance(scene.0));
     }
-    for entity in world_instances.iter_instance_entities(ready.instance_id) {
-        commands
-            .entity(entity)
-            .try_insert(ResidentSceneEntityOf(ready.entity));
+}
+
+pub(super) fn retire_despawned_prefab_scene_instances(
+    mut commands: Commands,
+    mut retirements: MessageReader<RetirePrefabSceneInstance>,
+) {
+    for &RetirePrefabSceneInstance(instance) in retirements.read() {
+        commands.queue(move |world: &mut World| {
+            world.resource_scope(|world, mut spawner: Mut<WorldInstanceSpawner>| {
+                spawner.despawn_instance_sync(world, &instance);
+            });
+        });
     }
 }
 
 pub(super) fn instantiate_visible_gltf_model_scenes(
     mut commands: Commands,
+    mut spawner: ResMut<WorldInstanceSpawner>,
     asset_server: Res<AssetServer>,
     models: Res<Assets<Gltf>>,
     nodes: Res<Assets<GltfNode>>,
@@ -133,7 +139,10 @@ pub(super) fn instantiate_visible_gltf_model_scenes(
         };
         let gate =
             spawn_prefab_model_visibility_root(&mut commands, entity, *transform, suppressed);
-        commands.entity(gate).insert(WorldAssetRoot(scene));
+        // Retain the spawner's token so it can retire even reparented scene
+        // entities. Removing WorldAssetRoot would unregister that membership.
+        let instance = spawner.spawn_as_child(scene, gate);
+        commands.entity(gate).insert(ResidentPrefabScene(instance));
     }
 }
 

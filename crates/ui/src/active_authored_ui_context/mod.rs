@@ -2,6 +2,7 @@
 use openzt2_interface_state::ui::input_frame_capture_types::AuthoredModalInputCapture;
 use openzt2_interface_state::ui::input_frame_capture_types::OverheadModeInputCapture;
 
+use bevy::input_focus::InputFocus;
 use bevy::{ecs::system::SystemParam, prelude::*};
 
 use super::{
@@ -11,6 +12,158 @@ use super::{
     authored_ui_interaction_enabled_state::UiInteractionEnabled,
     authored_ui_node_projection_components::UiDocumentOwner,
 };
+
+#[derive(Resource, Default, PartialEq, Eq)]
+pub(super) struct AuthoredFocusScope {
+    pub(super) modal: Option<Entity>,
+    pub(super) document: Option<Entity>,
+    pub(super) focused_control_is_eligible: bool,
+}
+
+#[allow(clippy::type_complexity)]
+pub(super) fn resolve_authored_focus_scope(
+    context: ActiveAuthoredUiContext,
+    focus: Res<InputFocus>,
+    changed: Query<
+        (),
+        (
+            With<Node>,
+            Or<(
+                Changed<bevy::ui::ComputedStackIndex>,
+                Changed<InheritedVisibility>,
+                Changed<UiInteractionEnabled>,
+                Changed<UiAuthoredModalPresentation>,
+                Changed<UiDocumentOwner>,
+                Changed<ChildOf>,
+                Changed<UiListRow>,
+                Added<UiFocusable>,
+            )>,
+        ),
+    >,
+    changed_layouts: Query<
+        (),
+        (
+            With<super::authored_ui_layout_participation::UiAuthoredLayoutDisplay>,
+            Changed<Node>,
+        ),
+    >,
+    (
+        mut removed_controls,
+        mut removed_modals,
+        mut removed_enabled,
+        mut removed_parent,
+        mut removed_stack,
+    ): (
+        RemovedComponents<UiFocusable>,
+        RemovedComponents<UiAuthoredModalPresentation>,
+        RemovedComponents<UiInteractionEnabled>,
+        RemovedComponents<ChildOf>,
+        RemovedComponents<bevy::ui::ComputedStackIndex>,
+    ),
+    mut resolved: ResMut<AuthoredFocusScope>,
+    ui_nodes: Query<(), With<Node>>,
+) {
+    let hierarchy_detached = removed_parent
+        .read()
+        .any(|entity| ui_nodes.contains(entity));
+    let removed = !removed_controls.is_empty()
+        || !removed_modals.is_empty()
+        || !removed_enabled.is_empty()
+        || hierarchy_detached
+        || !removed_stack.is_empty();
+    removed_controls.clear();
+    removed_modals.clear();
+    removed_enabled.clear();
+    removed_parent.clear();
+    removed_stack.clear();
+    let (modal, document) = if removed || !changed.is_empty() || !changed_layouts.is_empty() {
+        let modal = context.top_modal();
+        (modal, context.active_scope_with_modal(modal))
+    } else if focus.is_changed() {
+        (resolved.modal, resolved.document)
+    } else {
+        return;
+    };
+    let focused_control_is_eligible = focus.get().is_some_and(|focused| {
+        document.is_some_and(|document| context.eligible_in_scope(focused, document, modal))
+    });
+    resolved.set_if_neq(AuthoredFocusScope {
+        modal,
+        document,
+        focused_control_is_eligible,
+    });
+}
+
+#[allow(clippy::type_complexity)]
+pub(super) fn project_native_widget_interaction_from_authored_enablement(
+    mut commands: Commands,
+    context: ActiveAuthoredUiContext,
+    changed_ancestors: Query<
+        Entity,
+        (
+            With<Node>,
+            Or<(Changed<UiInteractionEnabled>, Changed<ChildOf>)>,
+        ),
+    >,
+    mut removed_enabled: RemovedComponents<UiInteractionEnabled>,
+    mut detached: RemovedComponents<ChildOf>,
+    children: Query<&Children>,
+    new_widgets: Query<
+        Entity,
+        (
+            With<UiInteractionEnabled>,
+            Or<(
+                Added<bevy::ui_widgets::Button>,
+                Added<bevy::ui_widgets::Slider>,
+                Added<bevy::ui_widgets::TextInput>,
+            )>,
+        ),
+    >,
+    widgets: Query<
+        Has<bevy::ui::InteractionDisabled>,
+        (
+            With<UiInteractionEnabled>,
+            Or<(
+                With<bevy::ui_widgets::Button>,
+                With<bevy::ui_widgets::Slider>,
+                With<bevy::ui_widgets::TextInput>,
+            )>,
+        ),
+    >,
+) {
+    let mut dirty = bevy::ecs::entity::EntityHashSet::default();
+    dirty.extend(new_widgets.iter());
+    for ancestor in changed_ancestors
+        .iter()
+        .chain(removed_enabled.read())
+        .chain(detached.read())
+    {
+        if widgets.contains(ancestor) {
+            dirty.insert(ancestor);
+        }
+        dirty.extend(
+            children
+                .iter_descendants::<Children>(ancestor)
+                .filter(|node| widgets.contains(*node)),
+        );
+    }
+    for node in dirty {
+        let Ok(disabled) = widgets.get(node) else {
+            continue;
+        };
+        match (disabled, context.enabled(node)) {
+            (true, true) => {
+                commands
+                    .entity(node)
+                    .remove::<bevy::ui::InteractionDisabled>();
+            }
+            (false, false) => {
+                commands.entity(node).insert(bevy::ui::InteractionDisabled);
+            }
+            _ => {}
+        }
+    }
+}
 
 #[derive(SystemParam)]
 pub struct ActiveAuthoredUiContext<'w, 's> {
@@ -37,24 +190,19 @@ impl ActiveAuthoredUiContext<'_, '_> {
         self.visibility
             .get(entity)
             .is_ok_and(|visible| visible.get())
-            && self.enabled(entity)
             && self.ancestors(entity).all(|node| {
-                !self
-                    .layouts
-                    .get(node)
-                    .is_ok_and(|node| node.display == Display::None)
+                !self.enabled.get(node).is_ok_and(|enabled| !enabled.0)
+                    && !self
+                        .layouts
+                        .get(node)
+                        .is_ok_and(|node| node.display == Display::None)
             })
     }
 
     /// No disabled node on the path to the root, whether or not it is shown.
     pub fn enabled(&self, entity: Entity) -> bool {
-        self.ancestors(entity).all(|ancestor| {
-            !self.enabled.get(ancestor).is_ok_and(|enabled| !enabled.0)
-                && !self
-                    .focusables
-                    .get(ancestor)
-                    .is_ok_and(|focusable| !focusable.enabled)
-        })
+        self.ancestors(entity)
+            .all(|ancestor| !self.enabled.get(ancestor).is_ok_and(|enabled| !enabled.0))
     }
 
     pub fn top_modal(&self) -> Option<Entity> {
@@ -86,11 +234,7 @@ impl ActiveAuthoredUiContext<'_, '_> {
         owner
     }
 
-    pub fn active_scope(&self) -> Option<Entity> {
-        self.active_scope_with_modal(self.top_modal())
-    }
-
-    pub(super) fn active_scope_with_modal(&self, modal: Option<Entity>) -> Option<Entity> {
+    fn active_scope_with_modal(&self, modal: Option<Entity>) -> Option<Entity> {
         self.stack.uinodes.iter().rev().find_map(|entity| {
             (self.focusables.contains(*entity)
                 && self.visible_and_enabled(*entity)

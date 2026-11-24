@@ -112,7 +112,7 @@ fn selecting_mode_clears_stale_world_and_enters_map_selection() {
 }
 
 #[test]
-fn selecting_challenge_mode_defaults_starting_cash_to_thirty_thousand_dollars() {
+fn selecting_challenge_mode_leaves_starting_cash_to_the_authored_mode() {
     let mut app = routing_app(
         ShellSelection {
             mode: Some(WorldSessionMode::Freeform),
@@ -134,7 +134,7 @@ fn selecting_challenge_mode_defaults_starting_cash_to_thirty_thousand_dollars() 
         ShellSelection {
             mode: Some(WorldSessionMode::Challenge),
             scenario: None,
-            starting_cash_cents: Some(3_000_000),
+            starting_cash_cents: None,
         }
     );
 }

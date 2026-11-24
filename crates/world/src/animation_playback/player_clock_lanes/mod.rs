@@ -11,18 +11,11 @@ use openzt2_world_state::animation_playback::{
     locomotion_root_motion::ConsumedLocomotionRootMotion,
 };
 
+use super::authored_animation_event_execution::visit_interval;
+use super::authored_animation_text_action_execution_context::AuthoredAnimationTextActionExecutionContext;
 use super::managed_clip_binding::{
     FixedAnimationPlayer, ManagedAnimationClip, RealTimeAnimationPlayer,
 };
-
-pub(super) fn advance_fixed_players(
-    time: Res<Time>,
-    clips: Res<Assets<AnimationClip>>,
-    graphs: Res<Assets<AnimationGraph>>,
-    players: Query<(&mut AnimationPlayer, &AnimationGraphHandle), With<FixedAnimationPlayer>>,
-) {
-    advance_animations(time, clips, graphs, players.transmute_lens_inner().query());
-}
 
 pub(super) fn advance_render_players(
     time: Res<Time>,
@@ -39,10 +32,7 @@ pub(super) fn advance_render_players(
     advance_animations(time, clips, graphs, players.transmute_lens_inner().query());
 }
 
-#[derive(Message)]
-pub(super) struct AnimationPlaybackInterval<const REAL_TIME: bool> {
-    pub(super) controller: Entity,
-    pub(super) generation: u64,
+pub(super) struct AnimationPlaybackInterval {
     pub(super) from: f32,
     pub(super) to: f32,
     pub(super) cycle_start: f32,
@@ -52,21 +42,23 @@ pub(super) struct AnimationPlaybackInterval<const REAL_TIME: bool> {
     pub(super) clip_entry: bool,
 }
 
-pub(super) fn follow_animation_player_steps<const REAL_TIME: bool>(
+pub(super) fn advance_managed_animation_players<Lane: Component, const REAL_TIME: bool>(
     time: Res<Time<Fixed>>,
     real_time: Res<Time<Real>>,
     clips: Res<Assets<AnimationClip>>,
     sources: Res<Assets<AnimationClipSourceAsset>>,
-    mut players: Query<(
-        Entity,
-        &AnimationPlaybackController,
-        Ref<ManagedAnimationClip>,
-        &mut AnimationPlayer,
-        Option<&RetainedAnimationClipSource>,
-        Option<&mut ConsumedLocomotionRootMotion>,
-        Has<RealTimeAnimationPlayer>,
-    )>,
-    mut intervals: MessageWriter<AnimationPlaybackInterval<REAL_TIME>>,
+    mut players: Query<
+        (
+            Entity,
+            &mut AnimationPlaybackController,
+            Ref<ManagedAnimationClip>,
+            &mut AnimationPlayer,
+            Option<&RetainedAnimationClipSource>,
+            Option<&mut ConsumedLocomotionRootMotion>,
+        ),
+        With<Lane>,
+    >,
+    mut actions: AuthoredAnimationTextActionExecutionContext<REAL_TIME>,
     mut completed: MessageWriter<AnimationCompleted>,
 ) {
     let delta = if REAL_TIME {
@@ -74,10 +66,7 @@ pub(super) fn follow_animation_player_steps<const REAL_TIME: bool>(
     } else {
         time.delta_secs()
     };
-    for (entity, controller, binding, mut player, source, motion, real) in &mut players {
-        if real != REAL_TIME {
-            continue;
-        }
+    for (entity, mut controller, binding, mut player, source, motion) in &mut players {
         let mut motion = motion;
         if let Some(motion) = motion.as_deref_mut() {
             motion.clear_sample();
@@ -92,11 +81,7 @@ pub(super) fn follow_animation_player_steps<const REAL_TIME: bool>(
         if active.is_paused() && !clip_entry {
             continue;
         }
-        let from = if REAL_TIME {
-            active.seek_time()
-        } else {
-            active.last_seek_time().unwrap_or(active.seek_time())
-        };
+        let from = active.seek_time();
         let speed = active.speed();
         let mut requested = if active.is_paused() {
             from
@@ -131,23 +116,13 @@ pub(super) fn follow_animation_player_steps<const REAL_TIME: bool>(
                 offset.div_euclid(span) as i64,
             )
         } else {
-            (
-                if REAL_TIME {
-                    requested
-                } else {
-                    active.seek_time()
-                }
-                .clamp(0.0, duration),
-                0,
-            )
+            (requested.clamp(0.0, duration), 0)
         };
         let finished = !repeat
             && !active.is_paused()
-            && (active.just_completed()
-                || (speed > 0.0 && requested >= duration)
-                || (speed < 0.0 && requested <= 0.0));
+            && ((speed > 0.0 && requested >= duration) || (speed < 0.0 && requested <= 0.0));
         let to = if finished { boundary } else { to };
-        if finished || REAL_TIME || to != active.seek_time() {
+        if to != from {
             active.set_seek_time(to);
         }
         if finished {
@@ -162,22 +137,22 @@ pub(super) fn follow_animation_player_steps<const REAL_TIME: bool>(
             continue;
         };
         if let Some(mut motion) = motion {
-            if motion.owns_playback(controller) {
-                if let Some(root) = &source.authored_animation_clip_metadata.root_motion_joint {
-                    motion.sample_interval(
-                        clip,
-                        &root.joint_asset_key,
-                        from..to,
-                        cycles,
-                        cycle.clone(),
-                    );
+            if motion.owns_playback(&controller) {
+                if let Some(bound) = &binding.root_motion {
+                    let root_cycle = if repeat {
+                        &bound.loop_cycle
+                    } else {
+                        &bound.full_cycle
+                    };
+                    motion.sample_interval(clip, root_cycle, from..to, cycles);
                 }
             }
         }
-        if !source.timeline.is_empty() && (clip_entry || from != to || cycles != 0) {
-            intervals.write(AnimationPlaybackInterval {
-                controller: entity,
-                generation: binding.generation,
+        if controller.playback_generation == binding.generation
+            && !source.timeline.is_empty()
+            && (clip_entry || from != to || cycles != 0)
+        {
+            let interval = AnimationPlaybackInterval {
                 from,
                 to,
                 cycle_start: cycle.start,
@@ -185,6 +160,16 @@ pub(super) fn follow_animation_player_steps<const REAL_TIME: bool>(
                 cycles,
                 forward: speed >= 0.0,
                 clip_entry,
+            };
+            visit_interval(&interval, &source.timeline, &mut |key| {
+                for command in &key.commands {
+                    actions.execute_one_crossed_authored_animation_text_command(
+                        entity,
+                        &mut controller,
+                        key.milliseconds,
+                        command,
+                    );
+                }
             });
         }
     }

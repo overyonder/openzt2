@@ -36,23 +36,32 @@ fn project_prefab_camera_layer_sources(
     mut commands: Commands,
     changed: Query<Entity, Changed<RenderLayers>>,
     mut removed_layers: RemovedComponents<RenderLayers>,
-    sources: Query<(
+    mut sources: Query<(
         Option<&RenderLayers>,
-        Option<&Propagate<PrefabCameraRenderLayers>>,
+        Option<&mut Propagate<PrefabCameraRenderLayers>>,
     )>,
 ) {
     for entity in changed.iter().chain(removed_layers.read()) {
-        let Ok((layers, propagation)) = sources.get(entity) else {
+        let Ok((layers, propagation)) = sources.get_mut(entity) else {
             continue;
         };
-        if layers == propagation.map(|Propagate(PrefabCameraRenderLayers(layers))| layers) {
-            continue;
-        }
-        let mut target = commands.entity(entity);
-        if let Some(layers) = layers {
-            target.insert(Propagate(PrefabCameraRenderLayers(layers.clone())));
-        } else {
-            target.remove::<Propagate<PrefabCameraRenderLayers>>();
+        match (layers, propagation) {
+            (Some(layers), Some(propagation)) => {
+                propagation
+                    .map_unchanged(|propagation| &mut propagation.0 .0)
+                    .set_if_neq(layers.clone());
+            }
+            (Some(layers), None) => {
+                commands
+                    .entity(entity)
+                    .insert(Propagate(PrefabCameraRenderLayers(layers.clone())));
+            }
+            (None, Some(_)) => {
+                commands
+                    .entity(entity)
+                    .remove::<Propagate<PrefabCameraRenderLayers>>();
+            }
+            (None, None) => {}
         }
     }
 }

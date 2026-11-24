@@ -6,6 +6,8 @@ use bevy::{
 use openzt2_game_data::ui_document::document::*;
 use openzt2_game_data::ui_document::gameplay_pointer_presentation::UiGameplayInteractionCursorDefinition;
 use openzt2_game_data::AssetId;
+use openzt2_interface_state::settings::display_settings_types::DisplaySettings;
+use std::collections::VecDeque;
 
 use openzt2_game_assets::texture::interactive_texture_metadata_asset_and_borrowing_queries::InteractiveTextureMetadataAsset;
 use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
@@ -37,6 +39,39 @@ pub struct SetWaitCursor(pub bool);
 
 #[derive(Resource, Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(super) struct WaitCursor(bool);
+
+#[derive(Resource, Default, PartialEq)]
+pub(super) struct CursorWindowScale(Option<CursorCanvas>);
+
+#[derive(Clone, Copy, PartialEq)]
+struct CursorCanvas {
+    window: Entity,
+    atlas_scale: f32,
+    image_scale: f32,
+}
+
+#[derive(Resource, Default, PartialEq)]
+pub(super) struct ResolvedCursorRequest(Option<(CursorCanvas, CursorIcon)>);
+
+const MAX_SCALED_CURSOR_IMAGES: usize = 8;
+
+#[derive(Resource, Default)]
+pub(super) struct ScaledCursorImages(VecDeque<(CursorImageSize, Handle<Image>)>);
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct CursorImageSize {
+    atlas: bevy::asset::AssetId<Image>,
+    rect: URect,
+    extent: UVec2,
+}
+
+#[derive(Message)]
+pub(super) struct SynthesizeCursorImage {
+    window: Entity,
+    source: CustomCursorImage,
+    size: CursorImageSize,
+    hotspot: (u16, u16),
+}
 
 #[derive(SystemParam)]
 pub(super) struct CursorPresentation<'w, 's> {
@@ -74,25 +109,125 @@ pub(super) fn apply_wait_cursor_requests(
     mut requests: MessageReader<SetWaitCursor>,
     mut wait: ResMut<WaitCursor>,
 ) {
-    for request in requests.read() {
-        wait.0 = request.0;
+    if let Some(request) = requests.read().last() {
+        wait.set_if_neq(WaitCursor(request.0));
+    }
+}
+
+pub(super) fn project_cursor_window_scale(
+    windows: Query<(Entity, &Window), With<PrimaryWindow>>,
+    settings: Res<DisplaySettings>,
+    mut canvas: ResMut<CursorWindowScale>,
+) {
+    let geometry = windows.single().ok().map(|(entity, window)| {
+        let atlas_scale = window.scale_factor();
+        // winit uses points for macOS cursor images and physical pixels elsewhere.
+        let pixels_per_point = if cfg!(target_os = "macos") {
+            1.0
+        } else {
+            atlas_scale
+        };
+        CursorCanvas {
+            window: entity,
+            atlas_scale,
+            image_scale: window.height() / 768.0 * f32::from(settings.ui_scale_permille) / 1000.0
+                * pixels_per_point,
+        }
+    });
+    canvas.set_if_neq(CursorWindowScale(geometry));
+}
+
+#[derive(SystemParam)]
+pub(super) struct ChangedCursorSources<'w, 's> {
+    authored: Query<
+        'w,
+        's,
+        (),
+        (
+            With<UiDocumentOwner>,
+            Or<(
+                Changed<UiCursorStyle>,
+                Changed<UiGlobeDrag>,
+                Changed<GlobeHoveredMarker>,
+                Changed<UiDocumentOwner>,
+                Changed<ChildOf>,
+            )>,
+        ),
+    >,
+    tool: Query<
+        'w,
+        's,
+        (),
+        Or<(
+            Changed<ConstructionPreview>,
+            Added<RelocatingPlacedObject>,
+            Added<PlacementRotationRequest>,
+            Changed<UiDocumentRoot>,
+            Added<PendingUiProjection>,
+        )>,
+    >,
+    removed_styles: RemovedComponents<'w, 's, UiCursorStyle>,
+    removed_roots: RemovedComponents<'w, 's, UiDocumentRoot>,
+    loaded_documents: RemovedComponents<'w, 's, PendingUiProjection>,
+    removed_drags: RemovedComponents<'w, 's, UiGlobeDrag>,
+    removed_hovers: RemovedComponents<'w, 's, GlobeHoveredMarker>,
+    ended_relocation: RemovedComponents<'w, 's, RelocatingPlacedObject>,
+    ended_rotation: RemovedComponents<'w, 's, PlacementRotationRequest>,
+    removed_previews: RemovedComponents<'w, 's, ConstructionPreview>,
+}
+
+impl ChangedCursorSources<'_, '_> {
+    fn changed(&mut self) -> bool {
+        let mut changed = !self.authored.is_empty() || !self.tool.is_empty();
+        macro_rules! consume_removals {
+            ($($reader:ident),*) => {$(
+                changed |= !self.$reader.is_empty();
+                self.$reader.clear();
+            )*};
+        }
+        consume_removals!(
+            removed_styles,
+            removed_roots,
+            loaded_documents,
+            removed_drags,
+            removed_hovers,
+            ended_relocation,
+            ended_rotation,
+            removed_previews
+        );
+        changed
     }
 }
 
 /// Projects the depth-resolved authored cursor directly onto Bevy's primary
 /// window. The image handle remains owned by the loaded UI document.
-pub(super) fn present_cursor(
+pub(super) fn resolve_requested_window_cursor(
     phase: Res<State<openzt2_game_assets::application_lifecycle::GamePhase>>,
     wait: Res<WaitCursor>,
     capture: Res<UiPointerCapture>,
     tool: Res<ConstructionTool>,
     sources: CursorPresentation,
-    window: Single<(Entity, &Window, Option<&mut CursorIcon>), With<PrimaryWindow>>,
-    mut commands: Commands,
-    mut scaling: CursorScaling,
+    canvas: Res<CursorWindowScale>,
+    mut requested: ResMut<ResolvedCursorRequest>,
+    mut changed_sources: ChangedCursorSources,
 ) {
-    let (entity, window, current) = window.into_inner();
-    let scale_factor = window.scale_factor();
+    let changed = changed_sources.changed();
+    if !changed
+        && !phase.is_changed()
+        && !wait.is_changed()
+        && !capture.is_changed()
+        && !tool.is_changed()
+        && !canvas.is_changed()
+        && !sources.documents.is_changed()
+        && !sources.texture_metadata.is_changed()
+    {
+        return;
+    }
+    let Some(window) = canvas.0 else {
+        requested.set_if_neq(ResolvedCursorRequest::default());
+        return;
+    };
+    let scale_factor = window.atlas_scale;
     let next = if wait.0
         || *phase.get() == openzt2_game_assets::application_lifecycle::GamePhase::Loading
         || !sources.pending_documents.is_empty()
@@ -175,12 +310,7 @@ pub(super) fn present_cursor(
             })
             .unwrap_or(CursorIcon::System(SystemCursorIcon::Default))
     };
-    let next = scaling.scale_with_ui_canvas(next, window);
-    if let Some(mut current) = current {
-        current.set_if_neq(next);
-    } else {
-        commands.entity(entity).insert(next);
-    }
+    requested.set_if_neq(ResolvedCursorRequest(Some((window, next))));
 }
 
 fn interaction_cursor(
@@ -368,87 +498,161 @@ fn cursor_from_document(
     )
 }
 
-type ScaledCursorCache = std::collections::HashMap<
-    (bevy::asset::AssetId<Image>, URect, u32),
-    (Handle<Image>, (u16, u16)),
->;
-
-/// Scales authored cursors with the UI canvas, so a 32-pixel cursor keeps
-/// the proportion to the interface it had on the original 1024x768 screen.
-#[derive(SystemParam)]
-pub(super) struct CursorScaling<'w, 's> {
-    images: ResMut<'w, Assets<Image>>,
-    settings: Res<'w, openzt2_interface_state::settings::display_settings_types::DisplaySettings>,
-    scaled: Local<'s, ScaledCursorCache>,
+pub(super) fn initialize(app: &mut App) {
+    app.init_resource::<WaitCursor>()
+        .init_resource::<CursorWindowScale>()
+        .init_resource::<ResolvedCursorRequest>()
+        .init_resource::<ScaledCursorImages>()
+        .add_message::<SynthesizeCursorImage>();
 }
 
-impl CursorScaling<'_, '_> {
-    #[allow(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        clippy::cast_precision_loss,
-        reason = "cursor sizes are a few dozen positive pixels"
-    )]
-    fn scale_with_ui_canvas(&mut self, cursor: CursorIcon, window: &Window) -> CursorIcon {
-        let CursorIcon::Custom(CustomCursor::Image(source)) = &cursor else {
-            return cursor;
+pub(super) fn apply_cached_or_unscaled_window_cursor(
+    request: Res<ResolvedCursorRequest>,
+    mut events: MessageReader<AssetEvent<Image>>,
+    mut cache: ResMut<ScaledCursorImages>,
+    mut resize: MessageWriter<SynthesizeCursorImage>,
+    mut windows: Query<Option<&mut CursorIcon>, With<PrimaryWindow>>,
+    mut commands: Commands,
+) {
+    let source = request.0.as_ref().and_then(|(_, icon)| match icon {
+        CursorIcon::Custom(CustomCursor::Image(image)) => Some(image),
+        _ => None,
+    });
+    let mut source_changed = false;
+    for event in events.read() {
+        let id = match *event {
+            AssetEvent::Removed { id } | AssetEvent::Modified { id } => {
+                if cache.0.iter().any(|(size, _)| size.atlas == id) {
+                    cache.0.retain(|(size, _)| size.atlas != id);
+                }
+                id
+            }
+            AssetEvent::Added { id } | AssetEvent::LoadedWithDependencies { id } => id,
+            _ => continue,
         };
-        let Some(rect) = source.rect else {
-            return cursor;
-        };
-        // winit makes a macOS cursor image one point per pixel; elsewhere the
-        // image is in physical pixels.
-        let pixels_per_point = if cfg!(target_os = "macos") {
-            1.0
-        } else {
-            window.scale_factor()
-        };
-        let scale = window.height() / 768.0 * f32::from(self.settings.ui_scale_permille) / 1000.0
-            * pixels_per_point;
-        if !scale.is_finite() || scale <= 0.0 || (scale - 1.0).abs() < 0.01 {
-            return cursor;
+        source_changed |= source.is_some_and(|source| source.handle.id() == id);
+    }
+    let Some((canvas, cursor)) = &request.0 else {
+        return;
+    };
+    if !request.is_changed() && !source_changed {
+        return;
+    }
+
+    if let Some(source) = source {
+        if let Some((size, hotspot)) = cursor_image_size(source, canvas.image_scale) {
+            if let Some((_, image)) = cache.0.iter().find(|(cached, _)| *cached == size) {
+                let icon = scaled_cursor_icon(source, image.clone(), hotspot);
+                write_window_cursor(canvas.window, icon, &mut windows, &mut commands);
+            } else {
+                resize.write(SynthesizeCursorImage {
+                    window: canvas.window,
+                    source: source.clone(),
+                    size,
+                    hotspot,
+                });
+            }
+            return;
         }
-        let side = (rect.width().max(1) as f32 * scale).round().max(1.0) as u32;
-        let key = (source.handle.id(), rect, side);
-        if !self.scaled.contains_key(&key) {
-            let Some(dynamic) = self
-                .images
-                .get(&source.handle)
-                .and_then(|image| image.clone().try_into_dynamic().ok())
-            else {
-                return cursor;
-            };
-            let cropped = dynamic.crop_imm(rect.min.x, rect.min.y, rect.width(), rect.height());
-            let height = (rect.height().max(1) as f32 * scale).round().max(1.0) as u32;
-            let resized = cropped.resize_exact(side, height, image::imageops::FilterType::Triangle);
-            let hotspot = (
-                (f32::from(source.hotspot.0) * scale)
-                    .round()
-                    .min(f32::from(u16::MAX)) as u16,
-                (f32::from(source.hotspot.1) * scale)
-                    .round()
-                    .min(f32::from(u16::MAX)) as u16,
-            );
-            let handle = self.images.add(Image::from_dynamic(
-                resized,
+    }
+    write_window_cursor(canvas.window, cursor.clone(), &mut windows, &mut commands);
+}
+
+fn cursor_image_size(
+    source: &CustomCursorImage,
+    scale: f32,
+) -> Option<(CursorImageSize, (u16, u16))> {
+    let rect = source.rect?;
+    if !scale.is_finite() || scale <= 0.0 || (scale - 1.0).abs() < 0.01 {
+        return None;
+    }
+    let extent = (rect.size().max(UVec2::ONE).as_vec2() * scale)
+        .round()
+        .max(Vec2::ONE)
+        .as_uvec2();
+    let scaled_hotspot = |coordinate: u16| {
+        (f32::from(coordinate) * scale)
+            .round()
+            .min(f32::from(u16::MAX)) as u16
+    };
+    Some((
+        CursorImageSize {
+            atlas: source.handle.id(),
+            rect,
+            extent,
+        },
+        (
+            scaled_hotspot(source.hotspot.0),
+            scaled_hotspot(source.hotspot.1),
+        ),
+    ))
+}
+
+pub(super) fn synthesize_requested_cursor_image(
+    mut requests: MessageReader<SynthesizeCursorImage>,
+    mut images: ResMut<Assets<Image>>,
+    mut cache: ResMut<ScaledCursorImages>,
+    mut windows: Query<Option<&mut CursorIcon>, With<PrimaryWindow>>,
+    mut commands: Commands,
+) {
+    for request in requests.read() {
+        let size = request.size;
+        let icon = if let Some(dynamic) = images
+            .get(size.atlas)
+            .and_then(|image| image.clone().try_into_dynamic().ok())
+        {
+            let rect = size.rect;
+            let converted = dynamic
+                .crop_imm(rect.min.x, rect.min.y, rect.width(), rect.height())
+                .resize_exact(
+                    size.extent.x,
+                    size.extent.y,
+                    image::imageops::FilterType::Triangle,
+                );
+            let handle = images.add(Image::from_dynamic(
+                converted,
                 true,
                 bevy::asset::RenderAssetUsages::all(),
             ));
-            self.scaled.insert(key, (handle, hotspot));
-        }
-        let Some((handle, hotspot)) = self.scaled.get(&key) else {
-            return cursor;
+            if cache.0.len() == MAX_SCALED_CURSOR_IMAGES {
+                cache.0.pop_front();
+            }
+            cache.0.push_back((size, handle.clone()));
+            scaled_cursor_icon(&request.source, handle, request.hotspot)
+        } else {
+            CustomCursor::Image(request.source.clone()).into()
         };
-        CustomCursor::Image(CustomCursorImage {
-            handle: handle.clone(),
-            rect: None,
-            hotspot: *hotspot,
-            ..source.clone()
-        })
-        .into()
+        write_window_cursor(request.window, icon, &mut windows, &mut commands);
     }
 }
 
-pub(super) fn initialize(app: &mut App) {
-    app.init_resource::<WaitCursor>();
+fn scaled_cursor_icon(
+    source: &CustomCursorImage,
+    handle: Handle<Image>,
+    hotspot: (u16, u16),
+) -> CursorIcon {
+    CustomCursor::Image(CustomCursorImage {
+        handle,
+        rect: None,
+        hotspot,
+        ..source.clone()
+    })
+    .into()
+}
+
+fn write_window_cursor(
+    window: Entity,
+    icon: CursorIcon,
+    windows: &mut Query<Option<&mut CursorIcon>, With<PrimaryWindow>>,
+    commands: &mut Commands,
+) {
+    match windows.get_mut(window) {
+        Ok(Some(mut current)) => {
+            current.set_if_neq(icon);
+        }
+        Ok(None) => {
+            commands.entity(window).insert(icon);
+        }
+        Err(_) => {}
+    }
 }

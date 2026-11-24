@@ -1,4 +1,3 @@
-use super::guest_simulation_types::ViewingOpportunityClassified;
 use avian3d::prelude::SpatialQuery;
 use avian3d::prelude::SpatialQueryFilter;
 use bevy::{ecs::relationship::RelationshipTarget, prelude::*};
@@ -92,6 +91,7 @@ pub(crate) fn choose_guest_destination(
             &GuestFavouriteAnimal,
             &mut GuestRng,
             &GuestPhase,
+            Option<&openzt2_zoo_state::guests::guest_simulation_types::GuestDeparturePoints>,
             &WorldMember,
         ),
         (
@@ -116,6 +116,7 @@ pub(crate) fn choose_guest_destination(
     viewing_areas: Query<(Entity, &GlobalTransform, &ViewingGroundSlots, &WorldMember)>,
     animals: Query<(&GlobalTransform, &Visibility, &SpeciesHandle, &WorldMember), With<Animal>>,
     mut commands: Commands,
+    mut guest_requests: Query<&mut GuestNavigationRequest>,
     mut navigation_generations: Query<&mut NavigationRequestGeneration>,
     mut navigate: MessageWriter<NavigateTo>,
 ) {
@@ -137,12 +138,13 @@ pub(crate) fn choose_guest_destination(
         favourite,
         mut rng,
         phase,
+        departure_points,
         world,
     ) in &mut guests
     {
         // Admission and departure own navigation until the guest is visiting.
         // Service reservations and authored tasks retain it until completion.
-        if *phase != GuestPhase::Visiting {
+        if *phase != GuestPhase::Visiting || departure_points.is_some_and(|points| points.0 <= 0) {
             continue;
         }
         let Some((asset, definition)) = find_guest_definition(definitions, archetype.0) else {
@@ -282,10 +284,13 @@ pub(crate) fn choose_guest_destination(
             };
             let request_id = generation.advance();
             let mut entity_commands = commands.entity(guest);
-            entity_commands.insert((
-                GuestDestination { entity, purpose },
-                GuestNavigationRequest(Some(request_id)),
-            ));
+            entity_commands.insert(GuestDestination { entity, purpose });
+            let request = GuestNavigationRequest(Some(request_id));
+            if let Ok(mut existing) = guest_requests.get_mut(guest) {
+                existing.set_if_neq(request);
+            } else {
+                entity_commands.insert(request);
+            }
             if let Some(target) = viewing_target {
                 entity_commands.insert(target);
             }
@@ -572,12 +577,22 @@ fn view_is_clear(
         .is_none()
 }
 
+#[derive(Component)]
+pub(crate) struct EntranceFailureReported;
+
 pub(crate) fn cancel_failed_guest_destinations(
     mut failures: MessageReader<NavigationFailed>,
     mut guests: Query<&mut GuestNavigationRequest, With<Guest>>,
-    arriving_guests: Query<(&GuestPhase, &WorldMember, &NavAgent), With<Guest>>,
+    arriving_guests: Query<
+        (
+            &GuestPhase,
+            &WorldMember,
+            &NavAgent,
+            Has<EntranceFailureReported>,
+        ),
+        With<Guest>,
+    >,
     entrances: Query<(&PersistentId, &WorldMember, &ZooEntrance)>,
-    mut reported_entrance_failures: Local<bevy::ecs::entity::EntityHashSet>,
     mut navigation_generations: Query<&mut NavigationRequestGeneration>,
     mut navigate: MessageWriter<NavigateTo>,
     mut commands: Commands,
@@ -591,7 +606,7 @@ pub(crate) fn cancel_failed_guest_destinations(
             commands
                 .entity(failure.entity)
                 .remove::<(GuestDestination, Viewing, GuestViewingTarget)>();
-            let Ok((phase, member, agent)) = arriving_guests.get(failure.entity) else {
+            let Ok((phase, member, agent, reported)) = arriving_guests.get(failure.entity) else {
                 continue;
             };
             if *phase != GuestPhase::Arriving {
@@ -606,10 +621,13 @@ pub(crate) fn cancel_failed_guest_destinations(
             };
             // Visiting guests can choose another activity after a failed route.
             // Arriving guests must reach the gate before admission unlocks that path.
-            if reported_entrance_failures.insert(failure.entity) {
+            if !reported {
                 warn!(guest = ?failure.entity, reason = ?failure.reason,
                     entrance = ?entrance.inside,
                     "arriving guest has no route to the entrance; retrying");
+                commands
+                    .entity(failure.entity)
+                    .insert(EntranceFailureReported);
             }
             let Ok(mut generation) = navigation_generations.get_mut(failure.entity) else {
                 continue;
@@ -841,7 +859,7 @@ pub(crate) fn react_to_visible_litter(
         (Entity, &GlobalTransform, &WorldMember),
         Or<(Added<LooseLitterWaste>, Added<AnimalHabitatWaste>)>,
     >,
-    mut guests: Query<(&GlobalTransform, &GuestArchetype, &mut GuestRng), With<Guest>>,
+    guests: Query<&GuestArchetype, With<Guest>>,
     mut reactions: MessageWriter<GuestReaction>,
 ) {
     let Some(definitions) = active_definitions.get(&definitions) else {
@@ -852,7 +870,7 @@ pub(crate) fn react_to_visible_litter(
             continue;
         };
         for guest in spatial_membership.members(world.root, cell) {
-            let Ok((_, archetype, _)) = guests.get_mut(guest) else {
+            let Ok(archetype) = guests.get(guest) else {
                 continue;
             };
             let Some((_, definition)) = find_guest_definition(definitions, archetype.0) else {
@@ -872,23 +890,62 @@ pub(crate) fn react_to_visible_litter(
     }
 }
 
-pub(super) fn hydrate_viewing_opportunities(
+#[derive(Component)]
+pub(super) struct ProjectedViewingOpportunity;
+
+pub(super) fn project_viewing_opportunities(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
-    candidates: Query<(Entity, &Inspectable), Without<ViewingOpportunityClassified>>,
+    candidates: Query<(
+        Entity,
+        &Inspectable,
+        Has<ViewingOpportunity>,
+        Has<ProjectedViewingOpportunity>,
+    )>,
+    changed: Query<Entity, Changed<Inspectable>>,
+    mut removed: RemovedComponents<Inspectable>,
+    stale: Query<(), (With<ProjectedViewingOpportunity>, Without<Inspectable>)>,
     mut commands: Commands,
 ) {
+    for entity in removed.read().filter(|&entity| stale.contains(entity)) {
+        commands.entity(entity).remove::<(
+            ViewingOpportunity,
+            ViewingGroundSlots,
+            ProjectedViewingOpportunity,
+        )>();
+    }
+    let refresh_all = definitions.is_changed() || active_definitions.is_changed();
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };
-    for (entity, inspectable) in &candidates {
-        let mut entity = commands.entity(entity);
-        entity.insert(ViewingOpportunityClassified);
+    if definitions.has_pending_assets() {
+        return;
+    }
+    let affected = candidates
+        .iter()
+        .map(|(entity, ..)| entity)
+        .take(if refresh_all { usize::MAX } else { 0 })
+        .chain(
+            changed
+                .iter()
+                .take(if refresh_all { 0 } else { usize::MAX }),
+        );
+    for (entity, inspectable, present, owned) in candidates.iter_many(affected).matched() {
         if definitions
             .find_viewing_opportunity(inspectable.definition)
             .is_some()
         {
-            entity.insert(ViewingOpportunity);
+            if !present {
+                commands
+                    .entity(entity)
+                    .insert((ViewingOpportunity, ProjectedViewingOpportunity));
+            }
+        } else if owned {
+            commands.entity(entity).remove::<(
+                ViewingOpportunity,
+                ViewingGroundSlots,
+                ProjectedViewingOpportunity,
+            )>();
         }
     }
 }

@@ -7,7 +7,7 @@ use openzt2_zoo_state::environment::environment_state_types::ZooTickAdvanced;
 
 use super::{
     simulation_clock_types::{
-        ZooCalendar, ZooClock, ZooDay, ZooDayAdvanced, ZooMonth, ZooYearAdvanced,
+        ZooCalendar, ZooClock, ZooDay, ZooDayAdvanced, ZooDayCadence, ZooMonth, ZooYearAdvanced,
     },
     zoo_calendar_calculation::calculate_zoo_calendar_for_absolute_day,
 };
@@ -19,6 +19,7 @@ pub(crate) fn advance_authoritative_zoo_clock_and_calendar(
         (
             Entity,
             &mut ZooClock,
+            &ZooDayCadence,
             &mut ZooCalendar,
             &mut ZooDay,
             &mut ZooMonth,
@@ -32,61 +33,39 @@ pub(crate) fn advance_authoritative_zoo_clock_and_calendar(
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };
-    let Ok((root, mut zoo_clock, mut zoo_calendar, mut zoo_day, mut zoo_month)) =
+    let Ok((root, mut zoo_clock, cadence, mut zoo_calendar, mut zoo_day, mut zoo_month)) =
         roots.single_mut()
     else {
         return;
     };
-    let previous_absolute_day = zoo_clock.absolute_day;
-    if !advance_zoo_clock_by_one_tick(&mut zoo_clock, definitions.timing().ticks_per_day) {
+    let Some(next) = cadence.next_clock(*zoo_clock) else {
         return;
-    }
-    advanced_ticks.write(ZooTickAdvanced(zoo_clock.tick));
-    if zoo_clock.absolute_day == previous_absolute_day {
-        return;
-    }
-    let previous_calendar = *zoo_calendar;
-    *zoo_calendar = calculate_zoo_calendar_for_absolute_day(
-        &definitions.timing().calendar,
-        zoo_clock.absolute_day,
-    );
-    zoo_day.set_if_neq(ZooDay(zoo_clock.absolute_day));
-    let previous_month = *zoo_month;
-    let month_advanced = zoo_month.set_if_neq(ZooMonth::from(*zoo_calendar));
-    advanced_days.write(ZooDayAdvanced {
-        root,
-        previous_day: previous_absolute_day,
-        current_day: zoo_clock.absolute_day,
-        completed_month: month_advanced.then_some(previous_month),
-        calendar: *zoo_calendar,
-    });
-    if zoo_calendar.year != previous_calendar.year {
-        advanced_years.write(ZooYearAdvanced {
-            root,
-            previous_year: previous_calendar.year,
-            current_year: zoo_calendar.year,
-            calendar: *zoo_calendar,
-        });
-    }
-}
-
-pub(crate) fn advance_zoo_clock_by_one_tick(zoo_clock: &mut ZooClock, ticks_per_day: u32) -> bool {
-    if ticks_per_day == 0 || zoo_clock.tick_in_day >= ticks_per_day {
-        return false;
-    }
-    let Some(next_tick) = zoo_clock.tick.checked_add(1) else {
-        return false;
     };
-    zoo_clock.tick = next_tick;
-    zoo_clock.tick_in_day += 1;
-    if zoo_clock.tick_in_day == ticks_per_day {
-        let Some(next_absolute_day) = zoo_clock.absolute_day.checked_add(1) else {
-            zoo_clock.tick_in_day -= 1;
-            zoo_clock.tick -= 1;
-            return false;
-        };
-        zoo_clock.tick_in_day = 0;
-        zoo_clock.absolute_day = next_absolute_day;
+    let previous_absolute_day = zoo_clock.absolute_day;
+    zoo_clock.set_if_neq(next);
+    advanced_ticks.write(ZooTickAdvanced(next.tick));
+    for absolute_day in (previous_absolute_day..next.absolute_day).map(|day| day + 1) {
+        let previous_calendar = *zoo_calendar;
+        let current_calendar =
+            calculate_zoo_calendar_for_absolute_day(&definitions.timing().calendar, absolute_day);
+        zoo_calendar.set_if_neq(current_calendar);
+        zoo_day.set_if_neq(ZooDay(absolute_day));
+        let previous_month = *zoo_month;
+        let month_advanced = zoo_month.set_if_neq(ZooMonth::from(current_calendar));
+        advanced_days.write(ZooDayAdvanced {
+            root,
+            previous_day: absolute_day - 1,
+            current_day: absolute_day,
+            completed_month: month_advanced.then_some(previous_month),
+            calendar: current_calendar,
+        });
+        if current_calendar.year != previous_calendar.year {
+            advanced_years.write(ZooYearAdvanced {
+                root,
+                previous_year: previous_calendar.year,
+                current_year: current_calendar.year,
+                calendar: current_calendar,
+            });
+        }
     }
-    true
 }

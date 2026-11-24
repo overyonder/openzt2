@@ -4,7 +4,6 @@ use openzt2_game_data::AssetId;
 
 use super::authored_reusable_list_and_table_runtime_types::UiListRow;
 use super::authored_ui_interaction_enabled_state::UiInteractionEnabled;
-use super::authored_ui_layout_participation::UiAuthoredLayoutDisplay;
 use openzt2_interface_state::ui::authored_ui_activation_contracts::UiNodeActivated;
 
 // UITreeElement reserves one 22-pixel leading gutter for its expander and
@@ -70,43 +69,80 @@ impl UiAuthoredTreeExpansion {
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct UiAuthoredTreeHeader;
 
-#[derive(Component, Clone, Copy)]
+#[derive(Component, Clone, Copy, PartialEq)]
 pub(super) struct UiAuthoredTreeRowPhysicalIndent {
     pixels: f32,
+}
+
+#[derive(Component, PartialEq, Eq)]
+#[relationship(relationship_target = RowTreeItems)]
+pub(super) struct TreeItemInUiRow(Entity);
+
+#[derive(Component)]
+#[relationship_target(relationship = TreeItemInUiRow)]
+pub(super) struct RowTreeItems(Vec<Entity>);
+
+pub(super) fn bind_tree_items_to_containing_rows(
+    mut commands: Commands,
+    items: Query<
+        (Entity, Option<&TreeItemInUiRow>),
+        (
+            With<UiAuthoredTreeItem>,
+            Or<(Added<UiAuthoredTreeItem>, Changed<ChildOf>)>,
+        ),
+    >,
+    parents: Query<&ChildOf>,
+    rows: Query<(), With<UiListRow>>,
+) {
+    for (item, binding) in &items {
+        let row = std::iter::once(item)
+            .chain(parents.iter_ancestors::<ChildOf>(item))
+            .find(|entity| rows.contains(*entity));
+        match (row, binding) {
+            (Some(row), old) if old != Some(&TreeItemInUiRow(row)) => {
+                commands.entity(item).insert(TreeItemInUiRow(row));
+            }
+            (None, Some(_)) => {
+                commands.entity(item).remove::<TreeItemInUiRow>();
+            }
+            _ => {}
+        }
+    }
+}
+
+pub(super) fn update_tree_row_indentation(
+    mut commands: Commands,
+    items: Query<
+        (Entity, &UiAuthoredTreeItem, Option<&TreeItemInUiRow>),
+        Or<(Changed<UiAuthoredTreeItem>, Changed<TreeItemInUiRow>)>,
+    >,
+    mut row_indents: Query<Option<&mut UiAuthoredTreeRowPhysicalIndent>, With<UiListRow>>,
+    mut nodes: Query<&mut Node>,
+) {
+    for (entity, item, row) in &items {
+        if let Some(row) = row {
+            let indent = UiAuthoredTreeRowPhysicalIndent {
+                pixels: TREE_LEADING_GUTTER_PX
+                    + f32::from(item.hierarchy_depth()) * TREE_LEVEL_INDENT_PX,
+            };
+            if let Ok(existing) = row_indents.get_mut(row.0) {
+                if let Some(mut existing) = existing {
+                    existing.set_if_neq(indent);
+                } else {
+                    commands.entity(row.0).insert(indent);
+                }
+            }
+        }
+        if let Ok(node) = nodes.get_mut(entity) {
+            node.map_unchanged(|node| &mut node.margin.left)
+                .set_if_neq(Val::ZERO);
+        }
+    }
 }
 
 impl UiAuthoredTreeRowPhysicalIndent {
     pub(super) fn physical_pixels(&self) -> f32 {
         self.pixels
-    }
-}
-
-pub(super) fn project_authored_tree_depth_into_containing_row_indentation(
-    mut commands: Commands,
-    elements: Query<(Entity, &UiAuthoredTreeItem), Changed<UiAuthoredTreeItem>>,
-    parents: Query<&ChildOf>,
-    rows: Query<(), With<UiListRow>>,
-    mut nodes: Query<&mut Node>,
-) {
-    for (entity, item) in &elements {
-        // The tree widget is the expander inside a reusable list-row. Source
-        // indentation moves that row; moving the inner widget compounds its
-        // authored icon/text spacing and leaves sibling content behind.
-        let row = std::iter::successors(Some(entity), |entity| {
-            parents.get(*entity).ok().map(ChildOf::parent)
-        })
-        .find(|entity| rows.contains(*entity));
-        if let Some(row) = row {
-            commands
-                .entity(row)
-                .insert(UiAuthoredTreeRowPhysicalIndent {
-                    pixels: TREE_LEADING_GUTTER_PX
-                        + f32::from(item.hierarchy_depth()) * TREE_LEVEL_INDENT_PX,
-                });
-        }
-        if let Ok(mut node) = nodes.get_mut(entity) {
-            node.margin.left = Val::ZERO;
-        }
     }
 }
 
@@ -128,38 +164,6 @@ pub(super) fn toggle_authored_tree_expansion_from_presses(
         if enabled.0 {
             let next_expansion = !expanded.is_expanded();
             expanded.set_expanded(next_expansion);
-        }
-    }
-}
-
-/// Includes or excludes authored tree children from Bevy layout.
-///
-/// Visual layers are not authored document nodes and therefore do not carry
-/// `UiAuthoredLayoutDisplay`; they remain governed by the ordinary interaction
-/// presentation system.
-pub(super) fn present_authored_tree_children_from_expansion(
-    elements: Query<(&Children, &UiAuthoredTreeExpansion), Changed<UiAuthoredTreeExpansion>>,
-    mut nodes: Query<(
-        &UiAuthoredLayoutDisplay,
-        &Visibility,
-        Has<UiAuthoredTreeHeader>,
-        &mut Node,
-    )>,
-) {
-    for (children, expanded) in &elements {
-        for child in children.iter() {
-            let Ok((authored, visibility, header, mut node)) = nodes.get_mut(child) else {
-                continue;
-            };
-            let display = if *visibility != Visibility::Hidden && (expanded.is_expanded() || header)
-            {
-                authored.authored_display()
-            } else {
-                Display::None
-            };
-            if node.display != display {
-                node.display = display;
-            }
         }
     }
 }

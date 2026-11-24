@@ -1,7 +1,10 @@
 use bevy::prelude::*;
 use openzt2_game_assets::audio::audio_asset_types::{AudioAsset, AudioAssets};
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
-use openzt2_game_data::{audio::AudioWaterPolicy, AssetId};
+use openzt2_game_data::{
+    audio::{AudioWaterPolicy, STAGE_INDOOR_OCCLUSION},
+    AssetId,
+};
 use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 use openzt2_zoo_state::{
     aquatic::aquatic_simulation_types::TankGeometry,
@@ -12,11 +15,16 @@ use openzt2_zoo_state::{
 };
 
 use super::audio_environment_types::AudioStage;
+use super::authored_room_stages::ListenerRoomStages;
+use super::stage_voice_acoustics::StageAcoustics;
 
 #[derive(Component, Clone, Copy, PartialEq)]
 pub(super) struct ListenerAudioEnvironment {
     pub(super) stage: AssetId,
     pub(super) lapping_gain: f32,
+    pub(super) acoustics: StageAcoustics,
+    pub(super) room: Option<Entity>,
+    pub(super) occlude_crowd: bool,
 }
 
 pub(super) fn project_listener_audio_environment(
@@ -37,6 +45,7 @@ pub(super) fn project_listener_audio_environment(
     mut removed_terrain: RemovedComponents<TerrainWaterMembershipIndex>,
     mut removed_camera: RemovedComponents<TerrainWaterCameraContact>,
     mut removed_room: RemovedComponents<AudioStage>,
+    mut rooms: ListenerRoomStages,
 ) {
     let Some(view) = catalogue.get(&assets) else {
         return;
@@ -49,11 +58,14 @@ pub(super) fn project_listener_audio_environment(
         | (removed_room.read().count() != 0);
     let default_stage = AssetId::from_key("audio-stage:default");
     let policy = view.water();
+    let changed_rooms = rooms.affected_worlds();
     for (entity, root, membership, current) in &mut worlds {
         if !root.is_added()
             && !catalogue.is_changed()
             && !water_changed
             && !listener_changed
+            && !changed_rooms.contains(&entity)
+            && !rooms.scope_changed(entity)
             && !membership.as_ref().is_some_and(Ref::is_changed)
         {
             continue;
@@ -72,10 +84,16 @@ pub(super) fn project_listener_audio_environment(
                 policy.natural_stages[area_band(region.area_m2)]
             }
         });
+        let authored_room = camera
+            .as_ref()
+            .and_then(|(contact, _)| contact.position)
+            .and_then(|position| rooms.select(entity, position))
+            .filter(|(_, stage, _)| view.stage(*stage).is_some());
         let interior = camera
             .as_ref()
             .and_then(|(_, room)| room.as_ref())
-            .map(|room| room.0);
+            .map(|room| room.0)
+            .or_else(|| authored_room.map(|(_, stage, _)| stage));
         let stage = water_stage.or(interior).unwrap_or(default_stage);
         let lapping_gain = if let Some((policy, contact)) =
             policy.zip(camera.as_ref().map(|(contact, _)| contact))
@@ -97,9 +115,20 @@ pub(super) fn project_listener_audio_environment(
         } else {
             0.0
         };
+        let stage_definition = view.stage(stage);
+        let room = if water_stage.is_none()
+            && stage_definition.is_some_and(|stage| stage.flags & STAGE_INDOOR_OCCLUSION != 0)
+        {
+            authored_room.filter(|(_, authored_stage, _)| *authored_stage == stage)
+        } else {
+            None
+        };
         let next = ListenerAudioEnvironment {
             stage,
             lapping_gain,
+            acoustics: stage_definition.map_or_else(StageAcoustics::default, StageAcoustics::from),
+            room: room.map(|(entity, ..)| entity),
+            occlude_crowd: room.is_some_and(|(_, _, occlude)| occlude),
         };
         if let Some(mut current) = current {
             current.set_if_neq(next);

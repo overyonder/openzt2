@@ -13,7 +13,7 @@ use openzt2_game_data::ui_document::action::transportation::UiTransportAction;
 use openzt2_game_data::ui_document::action::UiActionRecord;
 use openzt2_game_data::ui_document::action::UiTrigger;
 
-use super::active_authored_ui_context::ActiveAuthoredUiContext;
+use super::active_authored_ui_context::{ActiveAuthoredUiContext, AuthoredFocusScope};
 use super::authored_hotkey_keyboard_activation::UiAuthoredHotkeyKeyboardActivationBinding;
 use super::authored_ui_action_projection_components::UiShellActions;
 use super::authored_ui_action_projection_components::{
@@ -34,6 +34,7 @@ use openzt2_interface_state::ui::input_frame_capture_types::OverheadModeInputCap
 #[derive(SystemParam)]
 pub(super) struct UiCancellationReceivers<'w, 's> {
     context: ActiveAuthoredUiContext<'w, 's>,
+    scope: Res<'w, AuthoredFocusScope>,
     capture: Res<'w, AuthoredModalInputCapture>,
     overhead_mode: Res<'w, OverheadModeInputCapture>,
     input_focus: Res<'w, InputFocus>,
@@ -101,19 +102,18 @@ pub(super) fn dismiss_one_active_ui_activity_from_cancel_requests(
     let Some(source) = source else {
         return;
     };
-    let modal = capture.0.or_else(|| context.top_modal());
+    let modal = capture.0.or(ui.scope.modal);
     let edit = ui
         .input_focus
         .get()
         .filter(|node| ui.text_edits.contains(*node) && context.visible_and_enabled(*node));
-    let active_scope = context.active_scope_with_modal(modal);
     let scope = modal
         .and_then(|entity| owners.get(entity).ok())
         .or_else(|| edit.and_then(|entity| owners.get(entity).ok()))
         .map(|owner| context.document_scope(owner.0))
         .or_else(|| {
-            matches!(source, ActionSource::Controller(_))
-                .then_some(active_scope)
+            (matches!(source, ActionSource::Controller(_)) && modal == ui.scope.modal)
+                .then_some(ui.scope.document)
                 .flatten()
         });
     let candidates = ui

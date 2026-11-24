@@ -114,6 +114,9 @@ pub struct DispatchBehaviorAnimationTextKeys {
 pub struct RunBehaviorAnimationClip(pub action::animation::BehaviorAnimationClipAction);
 
 #[derive(Component)]
+pub struct RunBehaviorAnimationSwitch(pub action::animation::BehaviorAnimationSwitchAction);
+
+#[derive(Component)]
 pub struct RunBehaviorAttachObject(pub action::attach_object::BehaviorAttachObjectAction);
 
 #[derive(Component)]
@@ -301,6 +304,15 @@ pub struct RunBehaviorDockNow(pub action::specialized::BehaviorDockNowAction);
 
 #[derive(Component)]
 pub struct RunBehaviorDockSpline(pub action::specialized::BehaviorDockSplineAction);
+
+#[derive(Component)]
+pub struct RunBehaviorFall(pub action::specialized::BehaviorFallAction);
+
+#[derive(Component)]
+pub struct RunBehaviorKickOffRider;
+
+#[derive(Component)]
+pub struct RunBehaviorAnimateForViewFromTransport(pub String);
 
 #[derive(Component)]
 pub struct RunBehaviorFollowEntity(pub action::specialized::BehaviorFollowEntityAction);
@@ -572,7 +584,7 @@ pub fn activate_due_behavior_instructions(
 
 #[track_caller]
 pub fn mark_behavior_task_for_failure_and_stop_navigation(actor: Entity, commands: &mut Commands) {
-    use crate::animal_behavior::behavior_pursuit_types::PendingBehaviorPursuit;
+    use crate::animal_behavior::behavior_pursuit_types::{BehaviorPursuitPoll, PendingBehaviorPursuit};
     use crate::locomotion::locomotion_types::{Destination, Docking};
 
     debug!(?actor, site = %std::panic::Location::caller(), "behavior task marked for failure");
@@ -585,6 +597,7 @@ pub fn mark_behavior_task_for_failure_and_stop_navigation(actor: Entity, command
             super::PendingBehaviorMoveCompletion,
             super::PendingBehaviorAnimationClipCompletion,
             PendingBehaviorPursuit,
+            BehaviorPursuitPoll,
         )>()
         .try_insert(PendingBehaviorTaskFailure);
 }
@@ -1149,6 +1162,9 @@ fn lower_behavior_instruction(world: &mut World, actor: Entity, force: bool) {
         BehaviorAction::AnimationClip(action) => {
             insert_action(world, actor, instruction, RunBehaviorAnimationClip(action))
         }
+        BehaviorAction::AnimationSwitch(action) => {
+            insert_action(world, actor, instruction, RunBehaviorAnimationSwitch(action))
+        }
         BehaviorAction::AttachObject(action) => {
             insert_action(world, actor, instruction, RunBehaviorAttachObject(action))
         }
@@ -1216,6 +1232,18 @@ fn lower_behavior_instruction(world: &mut World, actor: Entity, force: bool) {
         BehaviorAction::DockSpline(action) => {
             insert_action(world, actor, instruction, RunBehaviorDockSpline(action))
         }
+        BehaviorAction::Fall(action) => {
+            insert_action(world, actor, instruction, RunBehaviorFall(action))
+        }
+        BehaviorAction::KickOffRider => {
+            insert_action(world, actor, instruction, RunBehaviorKickOffRider)
+        }
+        BehaviorAction::AnimateForViewFromTransport { animation_type } => insert_action(
+            world,
+            actor,
+            instruction,
+            RunBehaviorAnimateForViewFromTransport(animation_type),
+        ),
         BehaviorAction::FollowEntity(action) => {
             insert_action(world, actor, instruction, RunBehaviorFollowEntity(action))
         }

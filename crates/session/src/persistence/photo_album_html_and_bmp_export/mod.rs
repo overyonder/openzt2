@@ -1,6 +1,6 @@
 //! Explicit asynchronous export of one album to a self-contained HTML directory.
 
-use std::io;
+use std::{io, path::PathBuf};
 
 use bevy::{
     ecs::relationship::RelationshipTarget,
@@ -18,14 +18,11 @@ use openzt2_interface_state::persistence::profile_types::ProfileOptions;
 
 use super::{
     durable_filesystem_operations::atomically_write_and_sync_file,
+    html_export_result_opening::HtmlExportWritten,
     persistence_filesystem_paths::PersistenceFilesystemPaths,
     rgba8_bmp_encoding::encode_tightly_packed_rgba8_as_bgra_bmp,
 };
 
-#[derive(Message, Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct PhotoAlbumHtmlAndBmpExported {
-    pub album: Entity,
-}
 #[derive(Message, Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct PhotoAlbumHtmlAndBmpExportFailed {
     pub album: Entity,
@@ -34,7 +31,7 @@ pub(super) struct PhotoAlbumHtmlAndBmpExportFailed {
 #[derive(Component)]
 pub(super) struct PhotoAlbumHtmlAndBmpWriteTask {
     album: Entity,
-    task: Task<io::Result<()>>,
+    task: Task<io::Result<PathBuf>>,
 }
 
 pub(super) fn begin_photo_album_html_and_bmp_exports(
@@ -93,7 +90,9 @@ pub(super) fn begin_photo_album_html_and_bmp_exports(
                         &bytes,
                     )
                 })?;
-                atomically_write_and_sync_file(&directory.join("album.html"), html.as_bytes())
+                let html_path = directory.join("album.html");
+                atomically_write_and_sync_file(&html_path, html.as_bytes())?;
+                Ok(html_path)
             }),
         });
     }
@@ -102,15 +101,15 @@ pub(super) fn begin_photo_album_html_and_bmp_exports(
 pub(super) fn complete_photo_album_html_and_bmp_exports(
     mut tasks: Query<(Entity, &mut PhotoAlbumHtmlAndBmpWriteTask)>,
     mut commands: Commands,
-    mut completed: MessageWriter<PhotoAlbumHtmlAndBmpExported>,
+    mut completed: MessageWriter<HtmlExportWritten>,
     mut failed: MessageWriter<PhotoAlbumHtmlAndBmpExportFailed>,
 ) {
     for (entity, mut task) in &mut tasks {
         let Some(result) = block_on(poll_once(&mut task.task)) else {
             continue;
         };
-        if result.is_ok() {
-            completed.write(PhotoAlbumHtmlAndBmpExported { album: task.album });
+        if let Ok(html_path) = result {
+            completed.write(HtmlExportWritten(html_path));
         } else {
             failed.write(PhotoAlbumHtmlAndBmpExportFailed { album: task.album });
         }

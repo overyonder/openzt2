@@ -90,6 +90,7 @@ pub(super) fn route_authored_persistence_ui_actions_to_domain_requests(
     persistence_action_nodes: Query<(&UiPersistenceActions, &UiDocumentOwner)>,
     ui_document_roots: Query<(&UiDocumentRoot, &ChildOf)>,
     selected_rows: Query<(&ChildOf, &UiSelected, &SavedGameSource), With<UiListRow>>,
+    parents: Query<&ChildOf>,
     lists: Query<(&UiDocumentOwner, &UiListPolicy)>,
     mut persistence_action_messages: PersistenceUiActionMessageWriters,
     mut commands: Commands,
@@ -118,6 +119,12 @@ pub(super) fn route_authored_persistence_ui_actions_to_domain_requests(
         let save_dialog = SaveDialogSubmission {
             document: ui_document_owner.0,
             owner: lifecycle_owner.parent(),
+        };
+        let activated_save_slot = || {
+            std::iter::once(activated_ui_node.node)
+                .chain(parents.iter_ancestors::<ChildOf>(activated_ui_node.node))
+                .take_while(|entity| *entity != ui_document_owner.0)
+                .find_map(|entity| selected_rows.get(entity).ok().map(|(_, _, source)| *source))
         };
         let authored_persistence_actions =
             authored_persistence_action_range.authored_action_records(ui_document_asset);
@@ -152,9 +159,13 @@ pub(super) fn route_authored_persistence_ui_actions_to_domain_requests(
                     ) {
                         continue;
                     }
-                    let slot = ui_values
-                        .get(activated_ui_node.node)
-                        .map_or(0, |value| value.0.max(0) as u32);
+                    let slot = match activated_save_slot() {
+                        Some(SavedGameSource::Native(slot)) => slot.0,
+                        Some(SavedGameSource::Original(_)) => continue,
+                        None => ui_values
+                            .get(activated_ui_node.node)
+                            .map_or(0, |value| value.0.max(0) as u32),
+                    };
                     let submitted_world_display_name =
                         editable_text_nodes
                             .iter()
@@ -215,9 +226,13 @@ pub(super) fn route_authored_persistence_ui_actions_to_domain_requests(
                     ) {
                         continue;
                     }
-                    let slot = ui_values
-                        .get(activated_ui_node.node)
-                        .map_or(0, |value| value.0.max(0) as u32);
+                    let slot = match activated_save_slot() {
+                        Some(SavedGameSource::Native(slot)) => slot.0,
+                        Some(SavedGameSource::Original(_)) => continue,
+                        None => ui_values
+                            .get(activated_ui_node.node)
+                            .map_or(0, |value| value.0.max(0) as u32),
+                    };
                     persistence_action_messages
                         .delete_world_snapshot_requests
                         .write(DeleteWorldSnapshotFromSlot {

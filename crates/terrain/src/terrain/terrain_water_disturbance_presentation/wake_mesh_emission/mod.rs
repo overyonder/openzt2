@@ -23,7 +23,7 @@ use crate::terrain::terrain_water_shoreline_geometry::stitch_geometry::{
 #[derive(Component)]
 pub(in crate::terrain) struct WaterWakeEmission {
     source_position: Vec2,
-    proximity_seconds_remaining: f32,
+    proximity: Timer,
 }
 
 #[derive(Component)]
@@ -65,8 +65,7 @@ pub(crate) fn advance_water_wake_mesh_lifetimes(
             commands.entity(entity).despawn();
             continue;
         }
-        emission.proximity_seconds_remaining -= time.delta_secs();
-        if emission.proximity_seconds_remaining <= 0.0
+        if emission.proximity.tick(time.delta()).is_finished()
             && children.is_none_or(|children| children.is_empty())
         {
             commands.entity(entity).despawn();
@@ -190,7 +189,7 @@ fn present_routed_water_wake_samples<const HIGH: bool>(
             let mut count = WaterWakeRegionAdmissions::default();
             if let Ok(children) = region_children.get(sample.surface) {
                 for (emission, children) in emissions.iter_many(children.iter()).flatten() {
-                    if emission.proximity_seconds_remaining > 0.0 {
+                    if !emission.proximity.is_finished() {
                         count.nearby_origins.push(emission.source_position);
                     }
                     if let Some(children) = children {
@@ -269,7 +268,7 @@ fn present_routed_water_wake_samples<const HIGH: bool>(
             .spawn((
                 WaterWakeEmission {
                     source_position: sample.source_position,
-                    proximity_seconds_remaining: 1.0,
+                    proximity: Timer::from_seconds(1.0, TimerMode::Once),
                 },
                 group_transform,
                 Visibility::Inherited,

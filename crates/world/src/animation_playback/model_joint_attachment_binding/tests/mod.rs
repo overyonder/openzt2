@@ -4,7 +4,10 @@ use super::*;
 fn model_joint_attachment_tracks_joint_and_instance_without_double_transform() {
     let mut app = App::new();
     app.add_plugins((MinimalPlugins, bevy::transform::TransformPlugin))
-        .add_systems(Update, bind_model_joint_attachments);
+        .add_systems(
+            Update,
+            (project_model_joint_indexes, bind_model_joint_attachments).chain(),
+        );
     let root = app
         .world_mut()
         .spawn(Transform::from_xyz(10.0, 0.0, 0.0))
@@ -22,7 +25,7 @@ fn model_joint_attachment_tracks_joint_and_instance_without_double_transform() {
         .spawn((
             Transform::from_xyz(100.0, 0.0, 0.0),
             ChildOf(root),
-            PendingModelJointAttachment::new(root, "Bip01 Tail"),
+            ModelJointAttachment::new(root, "Bip01 Tail"),
         ))
         .id();
     let child = app
@@ -36,8 +39,8 @@ fn model_joint_attachment_tracks_joint_and_instance_without_double_transform() {
     );
     assert!(app
         .world()
-        .get::<PendingModelJointAttachment>(attachment)
-        .is_none());
+        .get::<ModelJointAttachment>(attachment)
+        .is_some());
     app.world_mut()
         .entity_mut(joint)
         .insert(Transform::from_xyz(0.0, 5.0, 0.0));
@@ -53,14 +56,14 @@ fn model_joint_attachment_tracks_joint_and_instance_without_double_transform() {
 #[test]
 fn model_joint_attachment_does_not_bind_to_its_own_descendant() {
     let mut app = App::new();
-    app.add_systems(Update, bind_model_joint_attachments);
+    app.add_systems(
+        Update,
+        (project_model_joint_indexes, bind_model_joint_attachments).chain(),
+    );
     let root = app.world_mut().spawn_empty().id();
     let attachment = app
         .world_mut()
-        .spawn((
-            ChildOf(root),
-            PendingModelJointAttachment::new(root, "Tail"),
-        ))
+        .spawn((ChildOf(root), ModelJointAttachment::new(root, "Tail")))
         .id();
     app.world_mut()
         .spawn((Name::new("Tail"), ChildOf(attachment)));
@@ -71,6 +74,6 @@ fn model_joint_attachment_does_not_bind_to_its_own_descendant() {
     );
     assert!(app
         .world()
-        .get::<PendingModelJointAttachment>(attachment)
+        .get::<ModelJointAttachment>(attachment)
         .is_some());
 }

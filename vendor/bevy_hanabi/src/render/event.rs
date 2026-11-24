@@ -4,7 +4,7 @@ use bevy::{
     ecs::{
         lifecycle::Remove,
         observer::On,
-        query::{With, Without},
+        query::{Changed, Or, With, Without},
         system::{Commands, Query},
     },
     log::{error, trace},
@@ -27,7 +27,7 @@ use wgpu::{
 
 use super::{
     aligned_buffer_vec::HybridAlignedBufferVec, effect_cache::SlabState, gpu_buffer::GpuBuffer,
-    BufferBindingSource, EffectBindGroups, GpuDispatchIndirectArgs,
+    BufferBindingSource, EffectBindGroups, ExtractedEffect, GpuDispatchIndirectArgs,
 };
 use crate::{
     render::{effect_cache::SlabId, ChildEffectOf},
@@ -89,8 +89,8 @@ impl EventBuffer {
     }
 
     /// Allocate a new slice for a child effect.
-    pub fn allocate(&mut self, size: u32) -> Option<EventSlice> {
-        if self.size + size > self.capacity {
+    pub fn allocate(&mut self, size: u32, alignment: u32) -> Option<EventSlice> {
+        if size > self.capacity - self.size {
             return None;
         }
 
@@ -105,7 +105,7 @@ impl EventBuffer {
         for (idx, es) in self.slices.iter().enumerate() {
             let avail_size = es.slice.start - start;
             if size > avail_size {
-                start = es.slice.end;
+                start = es.slice.end.next_multiple_of(alignment);
                 continue;
             }
 
@@ -134,7 +134,8 @@ impl EventBuffer {
         // Note: could use binary search, but likely not enough elements to be
         // worth it
         if let Some(idx) = self.slices.iter().position(|es| es == slice) {
-            self.slices.remove(idx);
+            let removed = self.slices.remove(idx);
+            self.size -= removed.slice.len() as u32;
         }
         if self.slices.is_empty() {
             SlabState::Free
@@ -249,30 +250,42 @@ impl CachedEffectEvents {
 pub(crate) fn allocate_events(
     mut commands: Commands,
     mut event_cache: ResMut<EventCache>,
-    mut q_child_effects: Query<(Entity, Option<&mut CachedEffectEvents>), With<ChildEffectOf>>,
-    q_old_child_effects: Query<Entity, (With<CachedEffectEvents>, Without<ChildEffectOf>)>,
+    mut effect_bind_groups: ResMut<EffectBindGroups>,
+    mut child_effects: Query<
+        (Entity, &ExtractedEffect, Option<&mut CachedEffectEvents>),
+        (
+            With<ChildEffectOf>,
+            Or<(Changed<ExtractedEffect>, Without<CachedEffectEvents>)>,
+        ),
+    >,
+    former_children: Query<Entity, (With<CachedEffectEvents>, Without<ChildEffectOf>)>,
 ) {
-    #[cfg(feature = "trace")]
-    let _span = bevy::log::info_span!("allocate_events").entered();
-    trace!("allocate_events");
-
     event_cache.clear_previous_frame_resizes();
 
-    // Allocate storage and add the component to childs missing it.
-    for (entity, maybe_cached_events) in &mut q_child_effects {
-        if let Some(_cached_events) = maybe_cached_events {
-            // Nothing really to do for now because we hardcode a number of
-            // events, so the allocation won't ever change...
+    for (entity, child, cached) in &mut child_effects {
+        // The init pass can consume at most the number of slots in the child.
+        let capacity = child.capacity.max(1);
+        if let Some(mut cached) = cached {
+            if cached.capacity() >= capacity {
+                continue;
+            }
+            match event_cache.free(&cached) {
+                Ok(SlabState::Used) => {}
+                Ok(_) => {
+                    effect_bind_groups.init_metadata_bind_groups.clear();
+                    effect_bind_groups.update_metadata_bind_groups.clear();
+                }
+                Err(error) => error!("Failed to deallocate events of {entity}: {error:?}"),
+            }
+            *cached = event_cache.allocate(capacity);
         } else {
-            const FIXME_HARD_CODED_EVENT_COUNT: u32 = 256;
-            let cached_effect_events = event_cache.allocate(FIXME_HARD_CODED_EVENT_COUNT);
-            commands.entity(entity).insert(cached_effect_events);
+            commands
+                .entity(entity)
+                .insert(event_cache.allocate(capacity));
         }
     }
 
-    // Remove the component from effects which are not a child anymore. This
-    // should be pretty rare; in general the effect is just despawned.
-    for entity in &q_old_child_effects {
+    for entity in &former_children {
         commands.entity(entity).remove::<CachedEffectEvents>();
     }
 }
@@ -438,6 +451,8 @@ impl EventCache {
         // Allocate an entry into the indirect dispatch buffer
         // The value pushed is a dummy; see allocate_frame_buffers().
         let init_indirect_dispatch_index = self.init_indirect_dispatch_buffer.allocate();
+        let align = self.device.limits().min_storage_buffer_offset_alignment;
+        let event_alignment = (align / 4).max(1);
 
         // Try to find an allocated GPU buffer with enough capacity
         let mut empty_index = None;
@@ -452,7 +467,7 @@ impl EventCache {
             };
 
             // Try to allocate a slice into the buffer
-            if let Some(event_slice) = buffer.allocate(num_events) {
+            if let Some(event_slice) = buffer.allocate(num_events, event_alignment) {
                 trace!("Allocate new slice in event buffer #{buffer_index} for {num_events} events: range={event_slice:?}");
                 return CachedEffectEvents {
                     buffer_index: buffer_index as u32,
@@ -469,7 +484,6 @@ impl EventCache {
 
         // Create the GPU bfufer
         let label = format!("hanabi:buffer:event_buffer{buffer_index}");
-        let align = self.device.limits().min_storage_buffer_offset_alignment;
         let capacity = num_events.max(16 * 1024); // min capacity
         let byte_size = (capacity as u64 * 4).next_multiple_of(align as u64);
         let capacity = (byte_size / 4) as u32;
@@ -496,7 +510,7 @@ impl EventCache {
         let mut buffer = EventBuffer::new(buffer, capacity);
 
         // Allocate a slice from the new event buffer
-        let event_slice = buffer.allocate(num_events).expect("Failed to allocate event slice inside new buffer specifically created for this allocation.");
+        let event_slice = buffer.allocate(num_events, event_alignment).expect("Failed to allocate event slice inside new buffer specifically created for this allocation.");
         trace!("Allocate new slice in event buffer #{buffer_index} for {num_events} events: range={event_slice:?}");
 
         // Store the event buffer at the selected slot

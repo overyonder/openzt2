@@ -1,172 +1,161 @@
-use bevy::{ecs::relationship::RelationshipTarget, prelude::*};
-
-use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
-use openzt2_world_state::world_spawn::persistent_id_assignment::AssignPersistentId;
-use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
-
-use super::{
-    show_editor_interaction_types::{
-        AddShowConfirmationPending, DeleteShowConfirmationPending, EditedShow, ShowEditing,
-    },
-    show_schedule_types::{
-        ScheduledShowBreakRow, ScheduledShowPerformancePlan, ScheduledShowRow,
-        ScheduledShowRowActivationState, SelectedShowScheduleRow, ShowScheduleRowOrder,
-        ShowStageRows,
-    },
-    show_stage_types::ShowStage,
-    show_timing_operations::convert_authored_nanoseconds_to_fixed_simulation_ticks,
+use bevy::{
+    ecs::{relationship::RelationshipTarget, system::SystemParam},
+    platform::collections::{HashMap, HashSet},
+    prelude::*,
+};
+use openzt2_world_state::world_spawn::{
+    persistent_id_assignment::AssignPersistentId, world_membership_types::WorldMember,
 };
 
-pub(super) type AuthoredShowScheduleRowQuery<'world, 'state> = Query<
-    'world,
-    'state,
-    (
-        &'static ScheduledShowRow,
-        &'static mut ShowScheduleRowOrder,
-        Has<ScheduledShowPerformancePlan>,
-    ),
->;
+use super::show_schedule_types::{
+    ScheduledShowPerformancePlan, ScheduledShowRow, ShowScheduleRowOrder, ShowStageRows,
+};
 
-pub(super) fn create_scheduled_show_row_after_authored_confirmation(
-    controller: Entity,
-    confirmations: &Query<&AddShowConfirmationPending>,
-    stages: &Query<&ShowStage>,
-    definitions: WorldDefinitionsView<'_>,
-    commands: &mut Commands,
-) {
-    let Ok(confirmation) = confirmations.get(controller) else {
-        return;
-    };
-    let stage = confirmation.stage;
-    let Some(definition) = stages
-        .get(stage)
-        .ok()
-        .and_then(|stage| definitions.find_show_stage(stage.show_stage_definition))
-    else {
-        return;
-    };
-    let capacity = definition.schedule_slots;
-    commands.queue(move |world: &mut World| {
-        if world
-            .get::<AddShowConfirmationPending>(controller)
-            .is_none_or(|confirmation| confirmation.stage != stage)
-            || world.get::<ShowStage>(stage).is_none()
-        {
-            return;
-        }
-        let row = spawn_stage_schedule_row(
-            world,
-            stage,
-            (
-                ScheduledShowPerformancePlan {
-                    trick_performance_capacity: capacity,
-                },
-                ScheduledShowRowActivationState::Enabled,
-            ),
-        );
-        world
-            .entity_mut(controller)
-            .remove::<AddShowConfirmationPending>()
-            .insert((SelectedShowScheduleRow(row), EditedShow(row), ShowEditing));
-    });
+#[derive(SystemParam)]
+pub(super) struct ShowScheduleRows<'w, 's> {
+    stages: Query<'w, 's, Option<&'static ShowStageRows>>,
+    rows: Query<
+        'w,
+        's,
+        (
+            &'static ScheduledShowRow,
+            &'static mut ShowScheduleRowOrder,
+            Has<ScheduledShowPerformancePlan>,
+        ),
+    >,
 }
 
-pub(super) fn create_show_schedule_break_row_for_selected_stage(
-    stage: Entity,
-    definitions: WorldDefinitionsView<'_>,
-    commands: &mut Commands,
-) {
-    let duration_ticks = definitions.show_scheduling().map_or(1, |schedule| {
-        convert_authored_nanoseconds_to_fixed_simulation_ticks(
-            schedule.between_show_ns,
-            definitions,
-        )
-        .max(1)
-    });
-    commands.queue(move |world: &mut World| {
-        if world.get::<ShowStage>(stage).is_some() {
-            spawn_stage_schedule_row(world, stage, ScheduledShowBreakRow { duration_ticks });
-        }
-    });
+#[derive(Default)]
+pub(super) struct ShowScheduleEdits {
+    orders: HashMap<Entity, Vec<(u16, Entity)>>,
+    added: Vec<(Entity, Option<WorldMember>)>,
+    new_rows: HashMap<Entity, (Entity, bool)>,
+    deleted: HashSet<Entity>,
 }
 
-fn spawn_stage_schedule_row(world: &mut World, stage: Entity, row: impl Bundle) -> Entity {
-    let order = world
-        .get::<ShowStageRows>(stage)
-        .into_iter()
-        .flat_map(RelationshipTarget::iter)
-        .filter_map(|row| world.get::<ShowScheduleRowOrder>(row))
-        .map(|order| order.0)
-        .max()
-        .map_or(0, |order| order.saturating_add(1));
-    let entity = world
-        .spawn((ScheduledShowRow { stage }, ShowScheduleRowOrder(order), row))
-        .id();
-    if let Some(member) = world.get::<WorldMember>(stage).copied() {
-        world.entity_mut(entity).insert(member);
-        world.write_message(AssignPersistentId {
-            entity,
-            root: member.root,
-        });
+impl ShowScheduleEdits {
+    pub(super) fn row_facts(
+        &self,
+        row: Entity,
+        schedules: &ShowScheduleRows<'_, '_>,
+    ) -> Option<(Entity, bool)> {
+        if self.deleted.contains(&row) {
+            return None;
+        }
+        self.new_rows.get(&row).copied().or_else(|| {
+            schedules
+                .rows
+                .get(row)
+                .ok()
+                .map(|(owner, _, show)| (owner.stage, show))
+        })
     }
-    entity
-}
 
-pub(super) fn delete_confirmed_show_schedule_row_and_close_editor_selection(
-    controller: Entity,
-    confirmations: &Query<&DeleteShowConfirmationPending>,
-    rows: &mut AuthoredShowScheduleRowQuery<'_, '_>,
-    stage_rows: &Query<&ShowStageRows>,
-    commands: &mut Commands,
-) {
-    let Ok(confirmation) = confirmations.get(controller) else {
-        return;
-    };
-    if let Ok((owner, order, _)) = rows.get(confirmation.entry) {
-        let previous = order.0;
-        if let Ok(stage_rows) = stage_rows.get(owner.stage) {
-            for row in stage_rows.iter() {
-                if let Ok((_, mut order, _)) = rows.get_mut(row) {
-                    if order.0 > previous {
-                        order.0 -= 1;
-                    }
-                }
+    fn stage_order(
+        &mut self,
+        stage: Entity,
+        schedules: &ShowScheduleRows<'_, '_>,
+    ) -> &mut Vec<(u16, Entity)> {
+        self.orders.entry(stage).or_insert_with(|| {
+            let mut order = schedules
+                .stages
+                .get(stage)
+                .ok()
+                .flatten()
+                .into_iter()
+                .flat_map(RelationshipTarget::iter)
+                .filter_map(|row| Some((schedules.rows.get(row).ok()?.1.0, row)))
+                .collect::<Vec<_>>();
+            order.sort_unstable();
+            order
+        })
+    }
+
+    pub(super) fn append(
+        &mut self,
+        stage: Entity,
+        member: Option<&WorldMember>,
+        show: bool,
+        bundle: impl Bundle,
+        schedules: &ShowScheduleRows<'_, '_>,
+        commands: &mut Commands,
+    ) -> Entity {
+        let order = self.stage_order(stage, schedules);
+        let next = order.last().map_or(0, |(order, _)| order.saturating_add(1));
+        let mut entity = commands.spawn((ScheduledShowRow { stage }, bundle));
+        if let Some(member) = member {
+            entity.insert(*member);
+        }
+        let row = entity.id();
+        order.push((next, row));
+        self.new_rows.insert(row, (stage, show));
+        self.added.push((row, member.copied()));
+        row
+    }
+
+    pub(super) fn delete(
+        &mut self,
+        row: Entity,
+        schedules: &ShowScheduleRows<'_, '_>,
+        commands: &mut Commands,
+    ) {
+        let Some((stage, _)) = self.row_facts(row, schedules) else {
+            return;
+        };
+        let order = self.stage_order(stage, schedules);
+        let Some(index) = order.iter().position(|(_, entity)| *entity == row) else {
+            return;
+        };
+        let (previous, _) = order.remove(index);
+        for (position, _) in &mut order[index..] {
+            if *position > previous {
+                *position -= 1;
             }
         }
-        commands.entity(confirmation.entry).try_despawn();
+        self.deleted.insert(row);
+        commands.entity(row).try_despawn();
     }
-    commands.entity(controller).try_remove::<(
-        SelectedShowScheduleRow,
-        DeleteShowConfirmationPending,
-        EditedShow,
-        ShowEditing,
-    )>();
-}
 
-pub(super) fn move_show_schedule_row_by_one_position(
-    selected: Entity,
-    direction: i8,
-    rows: &mut AuthoredShowScheduleRowQuery<'_, '_>,
-    stage_rows: &Query<&ShowStageRows>,
-) {
-    let Ok((owner, order, _)) = rows.get(selected) else {
-        return;
-    };
-    let previous = order.0;
-    let Some(target) = previous.checked_add_signed(i16::from(direction)) else {
-        return;
-    };
-    let Ok(stage_rows) = stage_rows.get(owner.stage) else {
-        return;
-    };
-    let Some(other) = stage_rows
-        .iter()
-        .find(|&row| rows.get(row).is_ok_and(|(_, order, _)| order.0 == target))
-    else {
-        return;
-    };
-    if let Ok([(_, mut selected, _), (_, mut other, _)]) = rows.get_many_mut([selected, other]) {
-        selected.set_if_neq(ShowScheduleRowOrder(target));
-        other.set_if_neq(ShowScheduleRowOrder(previous));
+    pub(super) fn move_adjacent(
+        &mut self,
+        row: Entity,
+        direction: i16,
+        schedules: &ShowScheduleRows<'_, '_>,
+    ) {
+        let Some((stage, _)) = self.row_facts(row, schedules) else {
+            return;
+        };
+        let order = self.stage_order(stage, schedules);
+        let Some(index) = order.iter().position(|(_, entity)| *entity == row) else {
+            return;
+        };
+        let Some(target) = order[index].0.checked_add_signed(direction) else {
+            return;
+        };
+        let Some(other) = order.iter().position(|(order, _)| *order == target) else {
+            return;
+        };
+        let previous = order[index].0;
+        let neighbor = order[other].1;
+        order[index] = (previous, neighbor);
+        order[other] = (target, row);
+    }
+
+    pub(super) fn finish(self, schedules: &mut ShowScheduleRows<'_, '_>, commands: &mut Commands) {
+        for (order, row) in self.orders.into_values().flatten() {
+            if let Ok((_, mut current, _)) = schedules.rows.get_mut(row) {
+                current.set_if_neq(ShowScheduleRowOrder(order));
+            } else if self.new_rows.contains_key(&row) {
+                commands.entity(row).insert(ShowScheduleRowOrder(order));
+            }
+        }
+        for (row, member) in self.added {
+            if let Some(member) = member.filter(|_| !self.deleted.contains(&row)) {
+                commands.write_message(AssignPersistentId {
+                    entity: row,
+                    root: member.root,
+                });
+            }
+        }
     }
 }

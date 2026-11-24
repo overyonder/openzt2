@@ -162,9 +162,35 @@ const fn need_index(kind: GuestNeedKind) -> usize {
     kind as usize
 }
 
+#[allow(clippy::type_complexity)]
 pub(super) fn observe_guest_need_triggers(
     assets: Res<Assets<WorldDefinitionAsset>>,
     definitions: Res<WorldDefinitions>,
+    mut asset_events: MessageReader<AssetEvent<WorldDefinitionAsset>>,
+    changed_guests: Query<
+        Entity,
+        (
+            With<Guest>,
+            Or<(
+                Added<Guest>,
+                Changed<GuestArchetype>,
+                Changed<GuestHunger>,
+                Changed<GuestThirst>,
+                Changed<GuestDessert>,
+                Changed<GuestGift>,
+                Changed<GuestEnergy>,
+                Changed<GuestRestroom>,
+                Changed<GuestSocial>,
+                Changed<GuestAmusement>,
+                Changed<GuestViewingNeed>,
+                Changed<GuestSatisfaction>,
+            )>,
+        ),
+    >,
+    (mut removed_viewing, mut removed_happiness): (
+        RemovedComponents<GuestViewingNeed>,
+        RemovedComponents<GuestSatisfaction>,
+    ),
     mut guests: Query<
         (
             Entity,
@@ -176,16 +202,41 @@ pub(super) fn observe_guest_need_triggers(
     >,
     mut commands: Commands,
 ) {
+    let assets_changed = asset_events.read().fold(false, |changed, event| {
+        changed
+            | matches!(
+                event,
+                AssetEvent::Added { .. } | AssetEvent::Modified { .. } | AssetEvent::Removed { .. }
+            )
+    });
+    let refresh_all = definitions.is_changed() || assets_changed;
     let Some(definitions) = definitions.get(&assets) else {
         return;
     };
-    for (entity, archetype, facts, triggers) in &mut guests {
+    let removed_viewing = removed_viewing.read();
+    let removed_happiness = removed_happiness.read();
+    let candidates: bevy::ecs::entity::EntityHashSet = if refresh_all {
+        guests.iter().map(|(entity, ..)| entity).collect()
+    } else {
+        changed_guests
+            .iter()
+            .chain(removed_viewing)
+            .chain(removed_happiness)
+            .collect()
+    };
+    for candidate in candidates {
+        let Ok((entity, archetype, facts, triggers)) = guests.get_mut(candidate) else {
+            continue;
+        };
         let Some(definition) = definitions.find_guest(archetype.0) else {
             continue;
         };
-        let mut initial = GuestNeedTriggers::default();
-        let mut triggers = triggers;
-        let state = triggers.as_deref_mut().unwrap_or(&mut initial);
+        let mut state = GuestNeedTriggers {
+            state: triggers
+                .as_deref()
+                .map_or_else(Default::default, |triggers| triggers.state),
+            happiness_authored: definition.happiness_need.is_some(),
+        };
         for need in &definition.needs {
             state.state.observe(
                 need_index(need.kind),
@@ -222,7 +273,6 @@ pub(super) fn observe_guest_need_triggers(
                 commands.entity(entity).remove::<GuestViewingNeed>();
             }
         }
-        state.happiness_authored = definition.happiness_need.is_some();
         if let (Some(policy), Some(happiness)) = (definition.happiness_need, facts.happiness) {
             let value = happiness.source_q16();
             if policy
@@ -239,8 +289,16 @@ pub(super) fn observe_guest_need_triggers(
         } else {
             state.state.0 &= !(1 << HAPPINESS_TRIGGER_BIT);
         }
-        if triggers.is_none() {
-            commands.entity(entity).insert(initial);
+        if let Some(mut triggers) = triggers {
+            triggers
+                .reborrow()
+                .map_unchanged(|triggers| &mut triggers.state)
+                .set_if_neq(state.state);
+            triggers
+                .map_unchanged(|triggers| &mut triggers.happiness_authored)
+                .set_if_neq(state.happiness_authored);
+        } else {
+            commands.entity(entity).insert(state);
         }
     }
 }

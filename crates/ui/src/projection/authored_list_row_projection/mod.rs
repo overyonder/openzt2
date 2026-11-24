@@ -15,7 +15,7 @@ use openzt2_interface_state::ui::{
 };
 
 use super::{
-    authored_document_projection::project_document_on_entity,
+    authored_document_projection::{project_document_on_entity, UiDocumentLifetimeAttachment},
     document_asset_readiness::{document_dependencies_resolved, UiDocumentAssetEvents},
 };
 use crate::{
@@ -70,7 +70,11 @@ pub(crate) fn reconcile_changed_ui_list_row_counts(
         }
         if policy.row_document.is_some() {
             for index in (0..count).filter(|index| !occupied[usize::from(*index)]) {
-                commands.spawn((PendingUiListRow(index), ChildOf(list)));
+                commands.spawn((
+                    PendingUiListRow(index),
+                    UiDocumentLifetimeAttachment,
+                    ChildOf(list),
+                ));
             }
         }
     }

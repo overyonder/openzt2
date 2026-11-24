@@ -1,10 +1,38 @@
+use super::behavior_target_placement_application::{authored_build_charge, authored_build_terms};
+use super::{
+    biome_brush_policy::BiomeBrushRules, placement_model_headroom::PlacementModelHeadroom,
+};
+use crate::construction::construction_transaction_preparation::{
+    SubmittedConstruction, SubmittedPreview,
+};
 use bevy::ecs::system::SystemParam;
 use bevy::gltf::Gltf;
 use bevy::platform::collections::HashSet;
 use bevy::prelude::*;
+use openzt2_game_data::world_definitions::biomes_locations_and_details::BiomeAutomaticPlacementRange;
 use openzt2_game_data::world_definitions::world_objects::WorldObjectBiomeAutomaticPlacementClass;
 use openzt2_game_data::world_definitions::world_objects::WorldObjectPropertyFlags;
+use openzt2_game_data::world_definitions::{
+    biomes_locations_and_details::BiomeAutomaticPlacementVariationKind,
+    object_placement::PlacementConstraints,
+};
+use openzt2_world_state::{
+    game_session_types::WorldSessionMode,
+    world_spawn::selected_world_identity::SelectedWorldIdentity,
+};
 use openzt2_zoo_state::placement::object_placement_geometry::ScenePlacementFootprints;
+use openzt2_zoo_state::{
+    economy::zoo_cash_types::{UnlimitedZooCash, ZooCash},
+    placement::{
+        object_placement_definition_queries::object_placeable_definition_is_unlocked,
+        placement_surface_site::PlacementSiteQueries,
+    },
+    progression::{
+        adoption_and_content_availability_types::ScenarioContentAvailability,
+        unlock_types::UnlockedCatalogueDefinitionSet,
+    },
+    terrain::terrain_brush_interaction_state::{ActiveTerrainBrush, TerrainBrushDab},
+};
 
 use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
@@ -57,6 +85,96 @@ pub(super) struct BiomeAutomaticPlacementAssetDependencies {
 #[derive(Component, Debug, Clone, Copy)]
 pub(super) struct BiomeAutomaticPlacementRandomStream(DeterministicRng);
 
+#[derive(Component)]
+pub(super) struct BiomeMaskStart(IVec2);
+
+/// The range table authored by the active foliage-mix control.
+#[derive(Component, Clone, PartialEq, Eq)]
+pub struct BiomeAutomaticPlacementRanges(pub Vec<BiomeAutomaticPlacementRange>);
+
+#[derive(Component, Clone)]
+pub(super) struct BiomeObjectDrag {
+    brush: TerrainBrushPreview,
+    dabs: Vec<TerrainBrushDab>,
+    offset: IVec2,
+    dependencies: BiomeAutomaticPlacementAssetDependencies,
+    ranges: Option<BiomeAutomaticPlacementRanges>,
+}
+
+pub(super) fn begin_biome_object_drag(
+    starts: Query<
+        (
+            Entity,
+            &ActiveTerrainBrush,
+            &WorldMember,
+            Option<&mut BiomeMaskStart>,
+        ),
+        Added<ActiveTerrainBrush>,
+    >,
+    mut random: Query<&mut BiomeAutomaticPlacementRandomStream>,
+    rules: BiomeBrushRules,
+    mut commands: Commands,
+) {
+    let Some(policy) = rules.policy() else {
+        return;
+    };
+    let mut starts = starts;
+    for (entity, brush, world, stored) in &mut starts {
+        if !matches!(
+            brush.kind,
+            TerrainBrushKind::Paint { .. } | TerrainBrushKind::PaintWater { .. }
+        ) {
+            continue;
+        }
+        let Ok(mut random) = random.get_mut(world.root) else {
+            continue;
+        };
+        let offset = if policy.random_mask_start {
+            IVec2::new(
+                i32::from(random.0.next_u32().to_le_bytes()[0]),
+                i32::from(random.0.next_u32().to_le_bytes()[0]),
+            )
+        } else {
+            IVec2::ZERO
+        };
+        if let Some(mut stored) = stored {
+            stored
+                .map_unchanged(|start| &mut start.0)
+                .set_if_neq(offset);
+        } else {
+            commands.entity(entity).insert(BiomeMaskStart(offset));
+        }
+    }
+}
+
+pub(super) fn capture_biome_object_drag(
+    submissions: Query<(Entity, &SubmittedConstruction), Added<SubmittedConstruction>>,
+    sources: Query<(
+        &TerrainBrushPreview,
+        Option<&TerrainBrushPath>,
+        &BiomeMaskStart,
+        &BiomeAutomaticPlacementAssetDependencies,
+        Option<&BiomeAutomaticPlacementRanges>,
+    )>,
+    mut commands: Commands,
+) {
+    for (transaction, submission) in submissions {
+        let Ok((brush, path, start, dependencies, ranges)) = sources.get(submission.source) else {
+            continue;
+        };
+        let dabs = path.map_or_else(Vec::new, |path| path.0.clone());
+        commands
+            .entity(transaction)
+            .insert(SubmittedPreview(BiomeObjectDrag {
+                brush: *brush,
+                dabs,
+                offset: start.0,
+                dependencies: dependencies.clone(),
+                ranges: ranges.cloned(),
+            }));
+    }
+}
+
 #[derive(SystemParam)]
 pub(super) struct BiomeAutomaticObjectPlacementPreparationParameters<'w, 's> {
     definitions: Res<'w, Assets<WorldDefinitionAsset>>,
@@ -72,10 +190,8 @@ pub(super) struct BiomeAutomaticObjectPlacementPreparationParameters<'w, 's> {
         'w,
         's,
         (
-            &'static TerrainBrushPreview,
-            Option<&'static TerrainBrushPath>,
+            &'static SubmittedPreview<BiomeObjectDrag>,
             &'static WorldMember,
-            &'static BiomeAutomaticPlacementAssetDependencies,
         ),
     >,
     roots: Query<'w, 's, &'static mut BiomeAutomaticPlacementRandomStream, With<WorldRoot>>,
@@ -83,6 +199,23 @@ pub(super) struct BiomeAutomaticObjectPlacementPreparationParameters<'w, 's> {
     ground_paths: GroundPathPlacementStomp<'w, 's>,
     placed: Query<'w, 's, StompablePlacedObject>,
     allocator: Query<'w, 's, &'static mut PersistentIdAllocator>,
+    model_headroom: PlacementModelHeadroom<'w, 's>,
+    headroom: super::object_placement_preview_permission_projection::ObjectPlacementHeadroomQueries<
+        'w,
+        's,
+    >,
+    sites: PlacementSiteQueries<'w, 's>,
+    eligibility: Query<
+        'w,
+        's,
+        (
+            &'static ZooCash,
+            Option<&'static UnlimitedZooCash>,
+            Option<&'static SelectedWorldIdentity>,
+            Option<&'static ScenarioContentAvailability>,
+            &'static UnlockedCatalogueDefinitionSet,
+        ),
+    >,
     scratch: Local<'s, Vec<IVec2>>,
 }
 
@@ -102,7 +235,9 @@ pub(super) fn hydrate_biome_automatic_placement_state_onto_world_and_terrain_bru
         Entity,
         Ref<TerrainBrushPreview>,
         Option<&mut BiomeAutomaticPlacementAssetDependencies>,
+        Option<Ref<BiomeAutomaticPlacementRanges>>,
     )>,
+    mut removed_ranges: RemovedComponents<BiomeAutomaticPlacementRanges>,
 ) {
     let seed = seed.into_inner();
     for root in &roots {
@@ -120,17 +255,28 @@ pub(super) fn hydrate_biome_automatic_placement_state_onto_world_and_terrain_bru
         return;
     };
     let catalogue_changed = active_definitions.is_changed() || definitions.is_changed();
-    for (entity, preview, retained) in &mut previews {
-        if retained.is_some() && !preview.is_changed() && !catalogue_changed {
+    let removed: bevy::ecs::entity::EntityHashSet = removed_ranges.read().collect();
+    for (entity, preview, retained, ranges) in &mut previews {
+        if retained.is_some()
+            && !preview.is_changed()
+            && !catalogue_changed
+            && !ranges.as_ref().is_some_and(|ranges| ranges.is_changed())
+            && !removed.contains(&entity)
+        {
             continue;
         }
-        let TerrainBrushKind::Paint { biome, .. } = preview.kind else {
-            if retained.is_some() {
-                commands
-                    .entity(entity)
-                    .remove::<BiomeAutomaticPlacementAssetDependencies>();
+        let biome = match preview.kind {
+            TerrainBrushKind::Paint { biome, .. } | TerrainBrushKind::PaintWater { biome, .. } => {
+                biome
             }
-            continue;
+            _ => {
+                if retained.is_some() {
+                    commands
+                        .entity(entity)
+                        .remove::<BiomeAutomaticPlacementAssetDependencies>();
+                }
+                continue;
+            }
         };
         let Some(definition) = catalogue.find_biome(biome) else {
             if retained.is_some() {
@@ -148,10 +294,25 @@ pub(super) fn hydrate_biome_automatic_placement_state_onto_world_and_terrain_bru
             }
             continue;
         };
-        let mut candidate_object_identifiers = definition
+        let water = matches!(preview.kind, TerrainBrushKind::PaintWater { .. });
+        let default_ranges = definition
             .automatic_placement_variations
             .iter()
-            .flat_map(|variation| &variation.ranges)
+            .filter(|table| {
+                if water {
+                    table.kind == BiomeAutomaticPlacementVariationKind::Water
+                } else {
+                    table.kind == preview.automatic_placement_variation
+                }
+            })
+            .flat_map(|variation| &variation.ranges);
+        let authored_ranges = ranges.as_ref().filter(|_| !water);
+        let effective_ranges = default_ranges.filter(|_| authored_ranges.is_none()).chain(
+            authored_ranges
+                .into_iter()
+                .flat_map(|ranges| ranges.0.iter()),
+        );
+        let mut candidate_object_identifiers = effective_ranges
             .flat_map(|range| &range.choices)
             .filter_map(|choice| choice.object)
             .collect::<Vec<_>>();
@@ -162,7 +323,7 @@ pub(super) fn hydrate_biome_automatic_placement_state_onto_world_and_terrain_bru
             .filter_map(|identifier| catalogue.find_object(identifier))
             .filter(|object| {
                 object.biome_automatic_placement_class.is_some_and(|class| {
-                    biome_automatic_placement_class_is_enabled(class, &preview)
+                    water || biome_automatic_placement_class_is_enabled(class, &preview)
                 })
             })
             .filter_map(|object| catalogue.scene(object.prefab))
@@ -188,7 +349,8 @@ pub(super) fn hydrate_biome_automatic_placement_state_onto_world_and_terrain_bru
 pub(super) fn prepare_biome_automatic_object_placement_edits(
     mut commands: Commands,
     mut requests: MessageReader<PrepareConstruction>,
-    parameters: BiomeAutomaticObjectPlacementPreparationParameters,
+    params: BiomeAutomaticObjectPlacementPreparationParameters,
+    rules: BiomeBrushRules,
     mut prepared: MessageWriter<ObjectPlacementEditPrepared>,
     mut topology_prepared: MessageWriter<TopologyEditPrepared>,
 ) {
@@ -209,25 +371,56 @@ pub(super) fn prepare_biome_automatic_object_placement_edits(
         placed,
         mut allocator,
         mut scratch,
-    } = parameters;
+        mut model_headroom,
+        headroom,
+        sites,
+        eligibility,
+    } = params;
     let Some(catalogue) = active_definitions.get(&definitions) else {
         return;
     };
+    let Some(policy) = rules.policy() else {
+        return;
+    };
+    let nothing_weight = rules.nothing_weight_percent(policy);
     for request in requests.read() {
-        let Ok((preview, path, member, dependencies)) = previews.get(request.preview) else {
+        let Ok((drag, member)) = previews.get(request.transaction) else {
             continue;
         };
+        let BiomeObjectDrag {
+            brush: preview,
+            dabs,
+            offset,
+            dependencies,
+            ranges,
+        } = &drag.0;
         let Ok(terrain_index) = terrain_indexes.get(member.root) else {
             continue;
         };
-        let TerrainBrushKind::Paint { biome, .. } = preview.kind else {
-            continue;
+        let (biome, variation_kind, water) = match preview.kind {
+            TerrainBrushKind::Paint { biome, .. } => {
+                (biome, preview.automatic_placement_variation, false)
+            }
+            TerrainBrushKind::PaintWater { biome, .. } => {
+                (biome, BiomeAutomaticPlacementVariationKind::Water, true)
+            }
+            _ => continue,
         };
         if dependencies.biome != biome
-            || !(preview.paint_trees || preview.paint_foliage || preview.paint_rocks)
+            || (!water && !(preview.paint_trees || preview.paint_foliage || preview.paint_rocks))
         {
             continue;
         }
+        let Ok((cash, unlimited, selection, availability, unlocks)) = eligibility.get(member.root)
+        else {
+            continue;
+        };
+        let mode = selection.map(|selection| selection.mode);
+        let budget = if unlimited.is_some_and(|unlimited| unlimited.0) {
+            i64::MAX
+        } else {
+            cash.0 .0
+        };
         let (Some(biome_definition), Some(mask), Ok(mut random)) = (
             catalogue.find_biome(biome),
             images.get(&dependencies.mask),
@@ -242,39 +435,44 @@ pub(super) fn prepare_biome_automatic_object_placement_edits(
         }) {
             continue;
         }
-        let Some(variation) = biome_definition
-            .automatic_placement_variations
-            .iter()
-            .find(|variation| variation.kind == preview.automatic_placement_variation)
-        else {
+        let effective_ranges = ranges
+            .as_ref()
+            .filter(|_| !water)
+            .map(|ranges| ranges.0.as_slice())
+            .or_else(|| {
+                biome_definition
+                    .automatic_placement_variations
+                    .iter()
+                    .find(|variation| variation.kind == variation_kind)
+                    .map(|variation| variation.ranges.as_slice())
+            });
+        let Some(effective_ranges) = effective_ranges else {
             continue;
         };
-        let mask_offset = IVec2::new(
-            i32::from(random.0.next_u32().to_ne_bytes()[0]),
-            i32::from(random.0.next_u32().to_ne_bytes()[0]),
-        );
-        let mut candidate_cells = HashSet::new();
-        if let Some(path) = path {
-            for dab in &path.0 {
-                collect_cells_inside_biome_brush(
-                    dab.center,
-                    preview.radius_m,
-                    &mut candidate_cells,
-                );
-            }
+        let mut candidate_cells = Vec::new();
+        let mut seen = HashSet::new();
+        let mut covered = HashSet::new();
+        let mut collect_dab = |centre| {
+            collect_cells_inside_biome_brush(centre, preview.radius_m, &mut covered);
+            let mut ordered: Vec<_> = covered.drain().collect();
+            ordered.sort_unstable_by_key(|cell| (cell.y, cell.x));
+            candidate_cells.extend(ordered.into_iter().filter(|&cell| seen.insert(cell)));
+        };
+        if dabs.is_empty() {
+            collect_dab(preview.center);
         } else {
-            collect_cells_inside_biome_brush(
-                preview.center,
-                preview.radius_m,
-                &mut candidate_cells,
-            );
+            for dab in dabs {
+                collect_dab(dab.center);
+            }
         }
-        let mut candidate_cells = candidate_cells.into_iter().collect::<Vec<_>>();
-        candidate_cells.sort_unstable_by_key(|cell| (cell.y, cell.x));
 
         let mut removed_entities = HashSet::new();
         let mut mutations = Vec::new();
-        for cell in candidate_cells.iter().copied() {
+        for cell in candidate_cells
+            .iter()
+            .copied()
+            .filter(|_| policy.delete_biome_entities)
+        {
             for entity in placement.entities_occupying_cell(member.root, cell) {
                 if removed_entities.contains(&entity) {
                     continue;
@@ -286,7 +484,7 @@ pub(super) fn prepare_biome_automatic_object_placement_edits(
                     continue;
                 };
                 let removable_class = object.biome_automatic_placement_class.is_some_and(|class| {
-                    biome_automatic_placement_class_is_enabled(class, preview)
+                    water || biome_automatic_placement_class_is_enabled(class, preview)
                 });
                 if !removable_class
                     || object
@@ -327,21 +525,38 @@ pub(super) fn prepare_biome_automatic_object_placement_edits(
         let mut created_cells = HashSet::new();
         let mut total_cost = 0_i64;
         for cell in candidate_cells.iter().copied() {
+            if !policy.random_mask_start
+                && !policy.delete_biome_entities
+                && placement
+                    .entities_occupying_cell(member.root, cell)
+                    .any(|entity| {
+                        placed
+                            .get(entity)
+                            .ok()
+                            .and_then(|(_, reference, ..)| {
+                                catalogue.find_object(reference.definition)
+                            })
+                            .is_some_and(|object| object.biomes.contains(&biome))
+                    })
+            {
+                continue;
+            }
             let Some(mask_value) =
-                sample_world_aligned_biome_automatic_placement_mask(mask, cell + mask_offset)
+                sample_world_aligned_biome_automatic_placement_mask(mask, cell + *offset)
             else {
                 continue;
             };
-            let Some(range) = variation
-                .ranges
+            let Some(range) = effective_ranges
                 .iter()
                 .find(|range| mask_value <= range.maximum_mask_value)
             else {
                 continue;
             };
-            let Some(definition_id) =
-                select_weighted_biome_automatic_placement_choice(&range.choices, &mut random.0)
-            else {
+            let Some(definition_id) = select_weighted_biome_automatic_placement_choice(
+                &range.choices,
+                nothing_weight,
+                &mut random.0,
+            ) else {
                 continue;
             };
             let (Some(object), Some(definition)) = (
@@ -350,12 +565,44 @@ pub(super) fn prepare_biome_automatic_object_placement_edits(
             ) else {
                 continue;
             };
-            if !object
-                .biome_automatic_placement_class
-                .is_some_and(|class| biome_automatic_placement_class_is_enabled(class, preview))
+            if !object.biome_automatic_placement_class.is_some_and(|class| {
+                water || biome_automatic_placement_class_is_enabled(class, preview)
+            }) {
+                continue;
+            }
+            if water
+                && (!definition.surface_policy.water
+                    || !object
+                        .properties
+                        .contains_all(WorldObjectPropertyFlags::WATER_PLACEABLE))
             {
                 continue;
             }
+            if mode != Some(WorldSessionMode::Freeform)
+                && !object_placeable_definition_is_unlocked(
+                    catalogue,
+                    definition_id,
+                    mode,
+                    availability,
+                    unlocks,
+                )
+            {
+                continue;
+            }
+            let Some((_, terms)) = authored_build_terms(catalogue, definition_id) else {
+                continue;
+            };
+            let Some(amount) =
+                authored_build_charge(&terms, object.price_cents, || Some(random.0.next_u32()))
+            else {
+                continue;
+            };
+            let Some(next_cost) = total_cost
+                .checked_add(amount.0)
+                .filter(|&cost| cost <= budget)
+            else {
+                continue;
+            };
             let position = Vec2::new(
                 cell.x as f32 + random.0.unit_f32() - 0.5,
                 cell.y as f32 + random.0.unit_f32() - 0.5,
@@ -373,11 +620,36 @@ pub(super) fn prepare_biome_automatic_object_placement_edits(
                 rotation: Quat::from_rotation_y(
                     f32::from(eighth_turns) * core::f32::consts::FRAC_PI_4,
                 ),
-                scale: Vec3::ONE,
+                scale: Vec3::splat(object.prefab_scale),
             };
             let Some(prefab) = catalogue.scene(object.prefab) else {
                 continue;
             };
+            let Some(scene) = prefabs.get(&prefab) else {
+                continue;
+            };
+            model_headroom.request_models(definition, scene);
+            let Some(clearance) = model_headroom.clearance(definition, Some(scene), &transform)
+            else {
+                continue;
+            };
+            if definition
+                .constraints
+                .contains_all(PlacementConstraints::REQUIRE_PATH)
+                || definition
+                    .constraints
+                    .contains_all(PlacementConstraints::REQUIRE_WALL)
+                || sites
+                    .validate(
+                        definition.surface_policy,
+                        member.root,
+                        None,
+                        transform.translation,
+                    )
+                    .is_err()
+            {
+                continue;
+            }
             let geometry = footprints.resolve(definition, Some(&prefab));
             let path_overlaps = ground_paths.overlaps(member.root, definition, catalogue);
             let validity = validate_object_placement_footprint_cells(
@@ -420,6 +692,24 @@ pub(super) fn prepare_biome_automatic_object_placement_edits(
             else {
                 continue;
             };
+            if clearance > f32::EPSILON
+                && cells.iter().any(|cell| {
+                    let origin =
+                        Vec3::new(cell.x as f32, transform.translation.y + 0.01, cell.y as f32);
+                    headroom
+                        .cast_occupied_cell_headroom_ray(
+                            origin,
+                            clearance,
+                            Entity::PLACEHOLDER,
+                            None,
+                            None,
+                            None,
+                        )
+                        .is_some()
+                })
+            {
+                continue;
+            }
             if prefabs.get(&prefab).is_none_or(|scene| {
                 (definition.automatic_footprint
                     && scene
@@ -450,10 +740,7 @@ pub(super) fn prepare_biome_automatic_object_placement_edits(
             else {
                 continue;
             };
-            let Some(cost) = total_cost.checked_add(definition.price_cents) else {
-                continue;
-            };
-            total_cost = cost;
+            total_cost = next_cost;
             removed_paths.collect(&path_overlaps, &cells);
             removed_entities.extend(removals.iter().filter_map(|removal| removal.applied_entity));
             mutations.extend(removals);
@@ -509,16 +796,21 @@ fn sample_world_aligned_biome_automatic_placement_mask(mask: &Image, cell: IVec2
 
 fn select_weighted_biome_automatic_placement_choice(
     choices: &[openzt2_game_data::world_definitions::biomes_locations_and_details::BiomeAutomaticPlacementChoice],
+    nothing_weight_percent: u32,
     random: &mut DeterministicRng,
 ) -> Option<openzt2_game_data::AssetId> {
+    let weight = |choice: &openzt2_game_data::world_definitions::biomes_locations_and_details::BiomeAutomaticPlacementChoice| {
+        if choice.object.is_some() { choice.weight }
+        else { u32::try_from(u64::from(choice.weight) * u64::from(nothing_weight_percent) / 100).unwrap_or(u32::MAX) }
+    };
     let total = choices
         .iter()
-        .try_fold(0_u32, |total, choice| total.checked_add(choice.weight))?;
+        .try_fold(0_u32, |total, choice| total.checked_add(weight(choice)))?;
     let draw = random.range_u32(total)?;
     choices
         .iter()
         .scan(0_u32, |maximum, choice| {
-            *maximum += choice.weight;
+            *maximum += weight(choice);
             Some((*maximum, choice))
         })
         .find(|(maximum, _)| draw < *maximum)

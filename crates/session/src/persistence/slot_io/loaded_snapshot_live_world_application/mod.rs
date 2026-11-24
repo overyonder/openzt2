@@ -41,7 +41,7 @@ pub(super) fn restore_snapshot_sections(
     } = snapshot;
     let WorldSnapshotApplicationState {
         persistent_ids,
-        behavior,
+        mut behavior,
         topology,
         scenario,
         placements,
@@ -330,7 +330,7 @@ pub(super) fn restore_snapshot_sections(
     if !super::behavior_snapshot_application::prepare_behavior_snapshot_before_world_replacement(
         world_root_entity,
         behavior_snapshot_records,
-        &behavior,
+        &mut behavior,
         behavior_documents,
         &replaced_behavior_entities,
         imported_behavior_identifiers,

@@ -4,6 +4,10 @@ use std::{
     marker::PhantomData,
     num::{NonZeroU32, NonZeroU64},
     ops::{Deref, DerefMut, Range},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
     time::Duration,
     vec,
 };
@@ -14,6 +18,7 @@ use bevy::core_pipeline::core_2d::{Transparent2d, CORE_2D_DEPTH_FORMAT};
 use bevy::math::FloatOrd;
 use bevy::{
     camera::primitives::Frustum,
+    diagnostic::FrameCount,
     ecs::{
         change_detection::Tick,
         prelude::*,
@@ -38,23 +43,23 @@ use bevy::{
             *,
         },
         renderer::{RenderContext, RenderDevice, RenderGraph, RenderGraphSystems, RenderQueue},
-        sync_world::{MainEntity, RenderEntity, TemporaryRenderEntity},
+        sync_world::{MainEntity, RenderEntity},
         texture::GpuImage,
+        uniform::{ComponentUniforms, DynamicUniformIndex},
         view::{
             ExtractedView, RenderVisibleEntities, ViewUniform, ViewUniformOffset, ViewUniforms,
         },
-        Extract, MainWorld,
+        Extract,
     },
 };
 #[cfg(feature = "3d")]
 use bevy::{
     core_pipeline::{
-        core_3d::{
-            AlphaMask3d, Opaque3d, Opaque3dBatchSetKey, Opaque3dBinKey, Transparent3d,
-        },
+        core_3d::{AlphaMask3d, Opaque3d, Opaque3dBatchSetKey, Opaque3dBinKey, Transparent3d},
         prepass::{OpaqueNoLightmap3dBatchSetKey, OpaqueNoLightmap3dBinKey},
     },
     render::{
+        camera::DirtySpecializations,
         mesh::allocator::MeshSlabs,
         render_phase::{BinnedPhaseItem, ViewBinnedRenderPhases},
     },
@@ -63,7 +68,6 @@ use bitflags::bitflags;
 use bytemuck::{Pod, Zeroable};
 use effect_cache::{CachedEffect, EffectSlice, SlabState};
 use event::{CachedChildInfo, CachedEffectEvents, CachedParentInfo, GpuChildInfo};
-use fixedbitset::FixedBitSet;
 use gpu_buffer::GpuBuffer;
 use thiserror::Error;
 
@@ -74,17 +78,18 @@ use crate::{
         batch::{BatchInput, EffectDrawBatch, EffectSorter, InitAndUpdatePipelineIds},
         effect_cache::{AnyDrawIndirectArgs, CachedDrawIndirectArgs, SlabId},
     },
+    render_feedback::{ParticleCountSample, ParticleRenderFeedback, ParticleRenderFeedbackSender},
     AlphaMode, Attribute, CompiledParticleEffect, EffectProperties, EffectShaders,
     EffectSimulation, EffectSpawner, EffectVisibilityClass, HanabiMainCamera, ParticleLayout,
-    PropertyLayout, SimulationCondition, TextureLayout,
+    ParticleViewFog, PropertyLayout, SimulationCondition, TextureLayout,
 };
 
 mod aligned_buffer_vec;
 pub(crate) mod authored_draw;
 pub(crate) mod distance_sort;
 use authored_draw::{
-    AuthoredParticleDrawQueue, CompiledEffectRenderPasses, EffectRenderPassState,
-    EffectRenderPasses, QueuedParticlePass, QueuedParticlePasses,
+    CompiledEffectRenderPasses, EffectRenderPassState, EffectRenderPasses, ParticleViewDraws,
+    QueuedParticlePass, QueuedParticlePasses,
 };
 mod batch;
 mod buffer_table;
@@ -2075,6 +2080,7 @@ impl SpecializedComputePipeline for ParticlesUpdatePipeline {
 #[derive(Resource)]
 pub(crate) struct ParticlesRenderPipeline {
     view_layout_desc: BindGroupLayoutDescriptor,
+    fog_view_layout_desc: BindGroupLayoutDescriptor,
 }
 
 impl FromWorld for ParticlesRenderPipeline {
@@ -2092,7 +2098,21 @@ impl FromWorld for ParticlesRenderPipeline {
             ),
         );
 
-        Self { view_layout_desc }
+        let fog_view_layout_desc = BindGroupLayoutDescriptor::new(
+            "hanabi:bgl:render:fog_view@0",
+            &BindGroupLayoutEntries::sequential(
+                ShaderStages::VERTEX_FRAGMENT,
+                (
+                    uniform_buffer::<ViewUniform>(true),
+                    uniform_buffer::<GpuSimParams>(false),
+                    uniform_buffer::<ParticleViewFog>(true),
+                ),
+            ),
+        );
+        Self {
+            view_layout_desc,
+            fog_view_layout_desc,
+        }
     }
 }
 
@@ -2125,6 +2145,7 @@ pub(crate) struct ParticleRenderPipelineKey {
     #[cfg(feature = "3d")]
     depth_stencil_format: TextureFormat,
     distance_sorted: bool,
+    needs_view_fog: bool,
     /// Key: FLIPBOOK
     /// The effect is rendered with flipbook texture animation based on the
     /// sprite index of each particle.
@@ -2193,12 +2214,19 @@ impl SpecializedRenderPipeline for ParticlesRenderPipeline {
         );
 
         let mut layout = vec![
-            self.view_layout_desc.clone(),
+            if key.needs_view_fog {
+                self.fog_view_layout_desc.clone()
+            } else {
+                self.view_layout_desc.clone()
+            },
             particle_bind_group_layout_desc,
             key.spawner_bind_group_layout_desc.clone(),
         ];
 
         let mut shader_defs = vec![];
+        if key.needs_view_fog {
+            shader_defs.push("NEEDS_VIEW_FOG".into());
+        }
         if key.distance_sorted {
             layout.push(distance_sort::render_layout());
             shader_defs.push("DISTANCE_SORTED".into());
@@ -2383,6 +2411,8 @@ pub(crate) struct ExtractedEffect {
     pub particle_layout: ParticleLayout,
     /// Effect capacity, in number of particles.
     pub capacity: u32,
+    pub event_binding_count: u32,
+    pub compilation: Tick,
     /// Layout flags.
     pub layout_flags: LayoutFlags,
     /// Texture layout.
@@ -2397,7 +2427,7 @@ pub(crate) struct ExtractedEffect {
     pub simulation_condition: SimulationCondition,
 }
 
-#[derive(Component)]
+#[derive(Component, PartialEq)]
 pub(crate) struct ExtractedParticleDrawPasses(Vec<authored_draw::CompiledEffectRenderPass>);
 
 /// Extracted data for the [`GpuSpawnerParams`].
@@ -2419,11 +2449,23 @@ pub(crate) struct ExtractedSpawner {
     /// Is the effect visible this frame?
     pub is_visible: bool,
     pub spawn_points: Vec<crate::ParticleSpawnPoint>,
-    pub alive_count: Option<crate::ParticleAliveCount>,
     pub spawn_submission: u32,
     pub particle_size_scale: f32,
     /// Effective simulation delta for this effect instance.
     pub delta_time: f32,
+}
+
+#[derive(Component)]
+pub(crate) struct ExtractedParticleCountRequest {
+    generation: Tick,
+    frame: u32,
+    in_flight: Arc<AtomicBool>,
+}
+
+#[derive(Clone, Copy, Component, PartialEq, Eq)]
+pub(crate) struct ReportedParticleReadiness {
+    compilation: Tick,
+    ready: bool,
 }
 
 /// Cache info for the metadata of the effect.
@@ -2495,21 +2537,14 @@ impl Deref for ChildrenEffects {
 /// Extracted data for an effect's properties, if any.
 ///
 /// This component is present on the [`RenderEntity`] of an extracted effect if
-/// that effect has properties. It optionally contains new CPU data to
-/// (re-)upload this frame. If the effect has no property, this component is
-/// removed.
-#[derive(Debug, Component)]
+/// that effect has properties.
+#[derive(Debug, Component, PartialEq)]
 pub(crate) struct ExtractedProperties {
     /// Property layout for the effect.
     pub property_layout: PropertyLayout,
     /// Values of properties written in a binary blob according to
-    /// [`property_layout`].
-    ///
-    /// This is `Some(blob)` if the data needs to be (re)uploaded to GPU, or
-    /// `None` if nothing needs to be done for this frame.
-    ///
-    /// [`property_layout`]: crate::render::ExtractedEffect::property_layout
-    pub property_data: Option<Vec<u8>>,
+    /// [`Self::property_layout`].
+    pub property_data: Vec<u8>,
 }
 
 #[derive(Default, Resource)]
@@ -2660,42 +2695,6 @@ pub(crate) fn start_stop_gpu_debug_capture(
     }
 }
 
-/// Write the ready state of all render world effects back into their source
-/// effect in the main world.
-pub(crate) fn report_ready_state(
-    mut main_world: ResMut<MainWorld>,
-    q_ready_state: Query<(
-        &CachedReadyState,
-        &ExtractedEffect,
-        Option<&ExtractedParticleDrawPasses>,
-    )>,
-    gpu_images: Res<RenderAssets<GpuImage>>,
-    draw_ready: Query<(), With<CachedDrawIndirectArgs>>,
-) {
-    let mut q_effects = main_world.query::<(RenderEntity, &mut CompiledParticleEffect)>();
-    for (render_entity, mut compiled_particle_effect) in q_effects.iter_mut(&mut main_world) {
-        let ready = q_ready_state
-            .get(render_entity)
-            .is_ok_and(|(state, effect, passes)| {
-                state.is_ready()
-                    && draw_ready.contains(render_entity)
-                    && effect
-                        .textures
-                        .iter()
-                        .all(|texture| gpu_images.get(texture).is_some())
-                    && passes.is_none_or(|passes| {
-                        !passes.0.is_empty()
-                            && passes.0.iter().all(|pass| {
-                                pass.textures
-                                    .iter()
-                                    .all(|texture| gpu_images.get(texture).is_some())
-                            })
-                    })
-            });
-        compiled_particle_effect.is_ready = ready;
-    }
-}
-
 /// System extracting data for rendering of all active [`ParticleEffect`]
 /// components.
 ///
@@ -2704,7 +2703,9 @@ pub(crate) fn extract_effects(
     mut commands: Commands,
     effects: Extract<Res<Assets<EffectAsset>>>,
     time: Extract<Res<Time<EffectSimulation>>>,
+    frame: Extract<Res<FrameCount>>,
     default_mesh: Extract<Res<DefaultMesh>>,
+    render_entities: Extract<Query<RenderEntity>>,
     // Main world effects to extract
     q_effects: Extract<
         Query<(
@@ -2713,14 +2714,16 @@ pub(crate) fn extract_effects(
             Option<&InheritedVisibility>,
             Option<&ViewVisibility>,
             &EffectSpawner,
-            &CompiledParticleEffect,
+            Ref<CompiledParticleEffect>,
             Option<(&EffectRenderPasses, Ref<CompiledEffectRenderPasses>)>,
             Option<Ref<EffectProperties>>,
             &GlobalTransform,
             Option<&crate::EffectDeltaTime>,
             Option<&crate::ParticleSpawnBatch>,
-            Option<&crate::ParticleAliveCount>,
+            Option<Ref<crate::ParticleAliveCount>>,
             Option<&crate::EffectParticleSizeScale>,
+            Option<(&crate::EffectParent, &crate::asset::EffectCollisionSlot)>,
+            &crate::EffectPrngState,
         )>,
     >,
     // Render world effects extracted from a previous frame, if any
@@ -2730,6 +2733,8 @@ pub(crate) fn extract_effects(
         Option<&ChildEffectOf>, // immutable, because of relationship
         Option<&mut ExtractedEffectMesh>,
         Option<&mut ExtractedProperties>,
+        Option<&mut ExtractedParticleDrawPasses>,
+        Option<&mut ExtractedParticleCountRequest>,
     )>,
 ) {
     #[cfg(feature = "trace")]
@@ -2752,21 +2757,25 @@ pub(crate) fn extract_effects(
         spawn_batch,
         alive_count,
         particle_size_scale,
+        collision_parent,
+        prng,
     ) in q_effects.iter()
     {
-        // Check if shaders are configured
-        let Some(effect_shaders) = compiled_effect.get_configured_shaders() else {
-            trace!("Effect {:?}: no configured shader, skipped.", main_entity);
-            continue;
-        };
-
-        // Check if asset is available, otherwise silently ignore
-        let Some(asset) = effects.get(&compiled_effect.asset) else {
+        let (Some(effect_shaders), Some(asset)) = (
+            compiled_effect.get_configured_shaders(),
+            effects.get(&compiled_effect.asset),
+        ) else {
             trace!(
-                "Effect {:?}: EffectAsset not ready, skipped. asset:{:?}",
+                "Effect {:?}: no configured shader or missing asset {:?}, skipped.",
                 main_entity,
                 compiled_effect.asset
             );
+            if q_extracted_effects
+                .get(render_entity)
+                .is_ok_and(|(_, spawner, ..)| spawner.is_some())
+            {
+                commands.entity(render_entity).remove::<ExtractedSpawner>();
+            }
             continue;
         };
 
@@ -2791,10 +2800,24 @@ pub(crate) fn extract_effects(
             maybe_child_of,
             maybe_extracted_mesh,
             maybe_extracted_properties,
+            maybe_extracted_passes,
+            maybe_count_request,
         ) = q_extracted_effects
             .get_mut(render_entity)
-            .map(|(extracted_effect, b, c, d, e)| (Some(extracted_effect), b, c, d, e))
-            .unwrap_or((None, None, None, None, None));
+            .map(
+                |(effect, spawner, parent, mesh, properties, passes, count)| {
+                    (
+                        Some(effect),
+                        spawner,
+                        parent,
+                        mesh,
+                        properties,
+                        passes,
+                        count,
+                    )
+                },
+            )
+            .unwrap_or((None, None, None, None, None, None, None));
 
         // Validate material
         let texture_layout = asset.module().texture_layout();
@@ -2807,6 +2830,9 @@ pub(crate) fn extract_effects(
                 num_expected_tex,
                 compiled_effect.textures.len()
             );
+            if maybe_extracted_spawner.is_some() {
+                cmd.remove::<ExtractedSpawner>();
+            }
             continue;
         }
         let textures = if compiled_effect.textures.len() > num_expected_tex {
@@ -2836,8 +2862,10 @@ pub(crate) fn extract_effects(
         );
         let new_extracted_effect = ExtractedEffect {
             handle: compiled_effect.asset.clone(),
-            particle_layout: asset.particle_layout().clone(),
+            particle_layout: compiled_effect.particle_layout.clone(),
             capacity: asset.capacity(),
+            event_binding_count: compiled_effect.event_binding_count,
+            compilation: compiled_effect.last_changed(),
             layout_flags,
             texture_layout,
             textures,
@@ -2849,7 +2877,6 @@ pub(crate) fn extract_effects(
                 asset.simulation_condition
             },
         };
-        let maybe_new_extraction = maybe_extracted_effect.is_none();
         if let Some(mut extracted_effect) = maybe_extracted_effect {
             extracted_effect.set_if_neq(new_extracted_effect);
         } else {
@@ -2860,11 +2887,14 @@ pub(crate) fn extract_effects(
             cmd.insert(new_extracted_effect);
         }
 
-        match authored_passes {
-            Some((_, passes)) if passes.is_changed() || maybe_new_extraction => {
+        match (authored_passes, maybe_extracted_passes) {
+            (Some((_, passes)), Some(mut extracted_passes)) if passes.is_changed() => {
+                extracted_passes.set_if_neq(ExtractedParticleDrawPasses(passes.passes()));
+            }
+            (Some((_, passes)), None) => {
                 cmd.insert(ExtractedParticleDrawPasses(passes.passes()));
             }
-            None => {
+            (None, Some(_)) => {
                 cmd.remove::<ExtractedParticleDrawPasses>();
             }
             _ => {}
@@ -2873,11 +2903,10 @@ pub(crate) fn extract_effects(
         // Extract the spawner data
         let new_spawner = ExtractedSpawner {
             spawn_count: effect_spawner.spawn_count,
-            prng_seed: compiled_effect.prng_seed,
+            prng_seed: prng.0,
             transform: *transform,
             is_visible,
             spawn_points: spawn_batch.map_or_else(Vec::new, |batch| batch.points.clone()),
-            alive_count: alive_count.cloned(),
             spawn_submission: spawn_batch.map_or(0, |batch| batch.submission),
             particle_size_scale: particle_size_scale.map_or(1.0, |scale| scale.0),
             delta_time: effect_delta.map_or(time.delta_secs(), |delta| delta.0.max(0.0)),
@@ -2898,6 +2927,25 @@ pub(crate) fn extract_effects(
             cmd.insert(new_spawner);
         }
 
+        if let Some(count) = alive_count {
+            let generation = count.added();
+            if let Some(mut extracted) = maybe_count_request {
+                if extracted.generation != generation {
+                    extracted.generation = generation;
+                    extracted.in_flight = Arc::default();
+                }
+                extracted.frame = frame.0;
+            } else {
+                cmd.insert(ExtractedParticleCountRequest {
+                    generation,
+                    frame: frame.0,
+                    in_flight: Arc::default(),
+                });
+            }
+        } else if maybe_count_request.is_some() {
+            cmd.remove::<ExtractedParticleCountRequest>();
+        }
+
         // Extract the effect mesh
         let mesh = compiled_effect
             .mesh
@@ -2914,98 +2962,165 @@ pub(crate) fn extract_effects(
             cmd.insert(new_mesh);
         }
 
-        // Extract the parent, if any, and resolve its render entity
-        let parent_slot = if let Some(parent_entity) = compiled_effect.parent {
-            let Ok((_, render_entity, _, _, _, parent, ..)) = q_effects.get(parent_entity) else {
-                error!(
-                    "Failed to resolve render entity of parent with main entity {:?}.",
-                    parent_entity
-                );
+        let new_parent = collision_parent.and_then(|(parent, slot)| {
+            render_entities
+                .get(parent.entity)
+                .ok()
+                .map(|parent| ChildEffectOf {
+                    parent,
+                    slot: slot.0,
+                })
+        });
+        match (new_parent, maybe_child_of) {
+            (Some(parent), previous) if previous != Some(&parent) => {
+                cmd.insert(parent);
+            }
+            (None, Some(_)) => {
                 cmd.remove::<ChildEffectOf>();
-                // TODO - prevent extraction altogether here, instead of just
-                // de-parenting?
-                continue;
-            };
-            parent
-                .children
-                .iter()
-                .position(|child| *child == main_entity)
-                .map(|slot| (render_entity, slot as u32))
-        } else {
-            None
-        };
-        if let Some((render_entity, slot)) = parent_slot {
-            let new_child_of = ChildEffectOf {
-                parent: render_entity,
-                slot,
-            };
-            // If there's already an ExtractedParent component, ensure we
-            // overwrite only if different, to not trigger ECS
-            // change detection that we rely on.
-            if let Some(child_effect_of) = maybe_child_of {
-                // The relationship makes ChildEffectOf immutable, so re-insert
-                // to mutate
-                if *child_effect_of != new_child_of {
-                    cmd.insert(new_child_of);
-                }
-            } else {
-                trace!(
-                    "Inserting new ChildEffectOf component on {:?}",
-                    render_entity
-                );
-                cmd.insert(new_child_of);
             }
-        } else {
-            cmd.remove::<ChildEffectOf>();
+            _ => {}
         }
 
-        // Extract property data
-        let property_layout = asset.property_layout();
+        let property_layout = &compiled_effect.property_layout;
         if property_layout.is_empty() {
-            cmd.remove::<ExtractedProperties>();
+            if maybe_extracted_properties.is_some() {
+                cmd.remove::<ExtractedProperties>();
+            }
         } else {
-            // Re-extract CPU property data if any. Note that this data is not a
-            // "new value" but instead a "value that must be
-            // uploaded this frame", and therefore is empty when
-            // there's no change (as opposed to, having a constant value
-            // frame-to-frame).
-            let property_data = if let Some(properties) = maybe_properties {
-                if properties.is_changed() {
-                    trace!("Detected property change, re-serializing...");
-                    Some(properties.serialize(&property_layout))
-                } else {
-                    None
-                }
-            } else {
-                None
+            let serialize = || {
+                maybe_properties.as_deref().map_or_else(
+                    || EffectProperties::default().serialize(property_layout),
+                    |properties| properties.serialize(property_layout),
+                )
             };
-
-            let new_properties = ExtractedProperties {
-                property_layout,
-                property_data,
-            };
-            trace!("new_properties = {new_properties:?}");
-
             if let Some(mut extracted_properties) = maybe_extracted_properties {
-                // Always mutate if there's new CPU data to re-upload. Otherwise
-                // check for any other change.
-                if new_properties.property_data.is_some()
-                    || (extracted_properties.property_layout != new_properties.property_layout)
+                if extracted_properties.property_layout != *property_layout
+                    || compiled_effect.is_changed()
+                    || maybe_properties
+                        .as_ref()
+                        .is_some_and(DetectChanges::is_changed)
                 {
-                    trace!(
-                        "Updating existing ExtractedProperties (was: {:?})",
-                        extracted_properties.as_ref()
-                    );
-                    *extracted_properties = new_properties;
+                    let property_data = serialize();
+                    extracted_properties.set_if_neq(ExtractedProperties {
+                        property_layout: property_layout.clone(),
+                        property_data,
+                    });
                 }
             } else {
-                trace!(
-                    "Inserting new ExtractedProperties component on {:?}",
-                    render_entity
-                );
-                cmd.insert(new_properties);
+                let property_data = serialize();
+                cmd.insert(ExtractedProperties {
+                    property_layout: property_layout.clone(),
+                    property_data,
+                });
             }
         }
+    }
+}
+
+pub(crate) fn publish_render_ready_state(
+    mut commands: Commands,
+    feedback: Res<ParticleRenderFeedbackSender>,
+    gpu_images: Res<RenderAssets<GpuImage>>,
+    changed: Query<
+        Entity,
+        (
+            With<ExtractedEffect>,
+            Or<(
+                Changed<ExtractedEffect>,
+                Changed<ExtractedParticleDrawPasses>,
+                Changed<CachedReadyState>,
+                Added<ExtractedSpawner>,
+                Added<CachedMeshLocation>,
+                Added<CachedParentInfo>,
+                Changed<CachedChildInfo>,
+                Without<ReportedParticleReadiness>,
+            )>,
+        ),
+    >,
+    mut removed_passes: RemovedComponents<ExtractedParticleDrawPasses>,
+    mut removed_spawners: RemovedComponents<ExtractedSpawner>,
+    mut removed_meshes: RemovedComponents<CachedMeshLocation>,
+    mut removed_parents: RemovedComponents<CachedParentInfo>,
+    mut removed_children: RemovedComponents<CachedChildInfo>,
+    mut effects: Query<(
+        Entity,
+        MainEntity,
+        &ExtractedEffect,
+        &CachedReadyState,
+        Option<&ExtractedParticleDrawPasses>,
+        Has<ExtractedSpawner>,
+        Has<CachedMeshLocation>,
+        Has<CachedParentInfo>,
+        Option<&CachedChildInfo>,
+        Option<&mut ReportedParticleReadiness>,
+    )>,
+) {
+    let changed_entities = changed
+        .iter()
+        .chain(removed_passes.read())
+        .chain(removed_spawners.read())
+        .chain(removed_meshes.read())
+        .chain(removed_parents.read())
+        .chain(removed_children.read());
+    let selected: bevy::platform::collections::HashSet<_> = if gpu_images.is_changed() {
+        changed_entities.for_each(drop);
+        effects.iter().map(|(entity, ..)| entity).collect()
+    } else {
+        changed_entities.collect()
+    };
+    let mut selected_effects = effects.iter_many_mut(selected).matched();
+    while let Some((
+        entity,
+        main,
+        effect,
+        pipelines,
+        passes,
+        active,
+        mesh,
+        parent,
+        child,
+        reported,
+    )) = selected_effects.fetch_next()
+    {
+        let ready = active
+            && mesh
+            && pipelines.is_ready()
+            && (!effect
+                .layout_flags
+                .contains(LayoutFlags::EMIT_GPU_SPAWN_EVENTS)
+                || parent)
+            && (!effect
+                .layout_flags
+                .contains(LayoutFlags::CONSUME_GPU_SPAWN_EVENTS)
+                || child.is_some_and(|child| child.global_child_index != u32::MAX))
+            && effect
+                .textures
+                .iter()
+                .all(|texture| gpu_images.get(texture).is_some())
+            && passes.is_none_or(|passes| {
+                !passes.0.is_empty()
+                    && passes.0.iter().all(|pass| {
+                        pass.textures
+                            .iter()
+                            .all(|texture| gpu_images.get(texture).is_some())
+                    })
+            });
+        let readiness = ReportedParticleReadiness {
+            compilation: effect.compilation,
+            ready,
+        };
+        if let Some(mut reported) = reported {
+            if !reported.set_if_neq(readiness) {
+                continue;
+            }
+        } else {
+            commands.entity(entity).insert(readiness);
+        }
+        let _ = feedback.0.send(ParticleRenderFeedback::Readiness {
+            entity: main,
+            compilation: readiness.compilation,
+            ready,
+        });
     }
 }
 
@@ -3148,6 +3263,32 @@ impl GpuLimits {
     }
 }
 
+#[derive(Resource)]
+pub(crate) struct ParticleDrawIndirectBuffer(BufferTable<GpuDrawIndexedIndirectArgs>);
+
+impl Default for ParticleDrawIndirectBuffer {
+    fn default() -> Self {
+        Self(BufferTable::new(
+            BufferUsages::STORAGE | BufferUsages::INDIRECT,
+            Some(GpuDrawIndexedIndirectArgs::SHADER_SIZE),
+            Some("hanabi:buffer:draw_indirect_args".to_owned()),
+        ))
+    }
+}
+
+#[derive(Resource)]
+pub(crate) struct ParticleEffectMetadataBuffer(BufferTable<GpuEffectMetadata>);
+
+impl Default for ParticleEffectMetadataBuffer {
+    fn default() -> Self {
+        Self(BufferTable::new(
+            BufferUsages::STORAGE | BufferUsages::INDIRECT | BufferUsages::COPY_SRC,
+            None,
+            Some("hanabi:buffer:effect_metadata".to_owned()),
+        ))
+    }
+}
+
 /// Global render world resource containing the GPU data to draw all the
 /// particle effects in all views.
 ///
@@ -3160,6 +3301,7 @@ pub struct EffectsMeta {
     /// Bind group for the camera view, containing the camera projection and
     /// other uniform values related to the camera.
     view_bind_group: Option<BindGroup>,
+    fog_view_bind_group: Option<BindGroup>,
     /// Bind group #0 of the vfx_update shader, for the simulation parameters
     /// like the current time and frame delta time.
     update_sim_params_bind_group: Option<BindGroup>,
@@ -3182,15 +3324,6 @@ pub struct EffectsMeta {
     /// Global shared GPU buffer storing the various indirect dispatch args
     /// structs for the indirect dispatch of the Update pass.
     dispatch_indirect_args_buffer: GpuBuffer<GpuDispatchIndirectArgs>,
-    /// Global shared GPU buffer storing the various indirect draw args structs
-    /// for the indirect Render pass. Note that we use
-    /// [`GpuDrawIndexedIndirectArgs`] as the largest of the two variants (the
-    /// other being [`GpuDrawIndirectArgs`]). For non-indexed entries, we ignore
-    /// the last `u32` value.
-    draw_indirect_args_buffer: BufferTable<GpuDrawIndexedIndirectArgs>,
-    /// Global shared GPU buffer storing the various `EffectMetadata`
-    /// structs for the active effect instances.
-    effect_metadata_buffer: BufferTable<GpuEffectMetadata>,
     /// Various GPU limits and aligned sizes lazily allocated and cached for
     /// convenience.
     #[allow(dead_code)]
@@ -3229,6 +3362,7 @@ impl EffectsMeta {
 
         Self {
             view_bind_group: None,
+            fog_view_bind_group: None,
             update_sim_params_bind_group: None,
             init_and_indirect_sim_params_bind_group: None,
             indirect_metadata_bind_group: None,
@@ -3247,16 +3381,6 @@ impl EffectsMeta {
             dispatch_indirect_args_buffer: GpuBuffer::new(
                 BufferUsages::STORAGE | BufferUsages::INDIRECT,
                 Some("hanabi:buffer:dispatch_indirect_args".to_string()),
-            ),
-            draw_indirect_args_buffer: BufferTable::new(
-                BufferUsages::STORAGE | BufferUsages::INDIRECT,
-                Some(GpuDrawIndexedIndirectArgs::SHADER_SIZE),
-                Some("hanabi:buffer:draw_indirect_args".to_string()),
-            ),
-            effect_metadata_buffer: BufferTable::new(
-                BufferUsages::STORAGE | BufferUsages::INDIRECT | BufferUsages::COPY_SRC,
-                None,
-                Some("hanabi:buffer:effect_metadata".to_string()),
             ),
             gpu_limits,
             indirect_shader_noevent,
@@ -3284,28 +3408,6 @@ impl EffectsMeta {
         let spawner_base = self.spawner_buffer.len() as u32;
         self.spawner_buffer.push(gpu_spawner_params);
         spawner_base
-    }
-
-    pub fn allocate_draw_indirect(
-        &mut self,
-        draw_args: &AnyDrawIndirectArgs,
-    ) -> CachedDrawIndirectArgs {
-        let row = self
-            .draw_indirect_args_buffer
-            .insert(draw_args.bitcast_to_row_entry());
-        CachedDrawIndirectArgs {
-            row,
-            args: *draw_args,
-        }
-    }
-
-    pub fn update_draw_indirect(&mut self, row_index: &CachedDrawIndirectArgs) {
-        self.draw_indirect_args_buffer
-            .update(row_index.get_row(), row_index.args.bitcast_to_row_entry());
-    }
-
-    pub fn free_draw_indirect(&mut self, row_index: &CachedDrawIndirectArgs) {
-        self.draw_indirect_args_buffer.remove(row_index.get_row());
     }
 }
 
@@ -3343,6 +3445,8 @@ bitflags! {
         const READ_PARENT_PARTICLE = (1 << 11);
         /// The effect access to the particle data in the fragment shader.
         const NEEDS_PARTICLE_FRAGMENT = (1 << 12);
+        /// The render shader reads the view's linear fog settings.
+        const NEEDS_VIEW_FOG = (1 << 13);
     }
 }
 
@@ -3400,16 +3504,14 @@ pub(crate) fn on_remove_cached_effect(
 pub(crate) fn on_remove_cached_metadata(
     trigger: On<Remove<CachedEffectMetadata>>,
     query: Query<&CachedEffectMetadata>,
-    mut effects_meta: ResMut<EffectsMeta>,
+    mut metadata_buffer: ResMut<ParticleEffectMetadataBuffer>,
 ) {
     #[cfg(feature = "trace")]
     let _span = bevy::log::info_span!("on_remove_cached_metadata").entered();
 
     if let Ok(cached_metadata) = query.get(trigger.event().entity) {
         if cached_metadata.table_id.is_valid() {
-            effects_meta
-                .effect_metadata_buffer
-                .remove(cached_metadata.table_id);
+            metadata_buffer.0.remove(cached_metadata.table_id);
         }
     };
 }
@@ -3419,13 +3521,13 @@ pub(crate) fn on_remove_cached_metadata(
 pub(crate) fn on_remove_cached_draw_indirect_args(
     trigger: On<Remove<CachedDrawIndirectArgs>>,
     query: Query<&CachedDrawIndirectArgs>,
-    mut effects_meta: ResMut<EffectsMeta>,
+    mut draw_indirect_buffer: ResMut<ParticleDrawIndirectBuffer>,
 ) {
     #[cfg(feature = "trace")]
     let _span = bevy::log::info_span!("on_remove_cached_draw_indirect_args").entered();
 
     if let Ok(cached_draw_args) = query.get(trigger.event().entity) {
-        effects_meta.free_draw_indirect(cached_draw_args);
+        draw_indirect_buffer.0.remove(cached_draw_args.get_row());
     };
 }
 
@@ -3436,6 +3538,8 @@ pub(crate) fn on_remove_cached_draw_indirect_args(
 /// then can be discarded here.
 pub(crate) fn clear_previous_frame_resizes(
     mut effects_meta: ResMut<EffectsMeta>,
+    mut draw_indirect_buffer: ResMut<ParticleDrawIndirectBuffer>,
+    mut metadata_buffer: ResMut<ParticleEffectMetadataBuffer>,
     mut sort_bind_groups: ResMut<SortBindGroups>,
     mut init_fill_dispatch_queue: ResMut<InitFillDispatchQueue>,
     mut sort_fill_dispatch_queue: ResMut<SortFillDispatchQueue>,
@@ -3454,12 +3558,8 @@ pub(crate) fn clear_previous_frame_resizes(
     effects_meta
         .dispatch_indirect_args_buffer
         .clear_previous_frame_resizes();
-    effects_meta
-        .draw_indirect_args_buffer
-        .clear_previous_frame_resizes();
-    effects_meta
-        .effect_metadata_buffer
-        .clear_previous_frame_resizes();
+    draw_indirect_buffer.0.clear_previous_frame_resizes();
+    metadata_buffer.0.clear_previous_frame_resizes();
     sort_bind_groups.clear_previous_frame_resizes();
 }
 
@@ -3588,7 +3688,7 @@ pub fn allocate_effects(
 /// [`CachedIndirectDrawArgs`] components.
 pub fn update_mesh_locations(
     mut commands: Commands,
-    mut effects_meta: ResMut<EffectsMeta>,
+    mut draw_indirect_buffer: ResMut<ParticleDrawIndirectBuffer>,
     mesh_allocator: Res<MeshAllocator>,
     render_meshes: Res<RenderAssets<RenderMesh>>,
     mut q_cached_effects: Query<(
@@ -3692,10 +3792,19 @@ pub fn update_mesh_locations(
                     entity, cached_draw_indirect.args, new_draw_args
                 );
                 cached_draw_indirect.args = new_draw_args;
-                effects_meta.update_draw_indirect(cached_draw_indirect.as_ref());
+                draw_indirect_buffer.0.update(
+                    cached_draw_indirect.get_row(),
+                    new_draw_args.bitcast_to_row_entry(),
+                );
             }
         } else {
-            cmds.insert(effects_meta.allocate_draw_indirect(&new_draw_args));
+            let row = draw_indirect_buffer
+                .0
+                .insert(new_draw_args.bitcast_to_row_entry());
+            cmds.insert(CachedDrawIndirectArgs {
+                row,
+                args: new_draw_args,
+            });
         }
 
         // Compare to any cached data and update if necessary, or insert if
@@ -3727,14 +3836,12 @@ pub fn update_mesh_locations(
 /// this system).
 // TODO - consider using observer OnAdd instead?
 pub fn allocate_metadata(
-    mut effects_meta: ResMut<EffectsMeta>,
+    mut metadata_buffer: ResMut<ParticleEffectMetadataBuffer>,
     mut q_metadata: Query<&mut CachedEffectMetadata>,
 ) {
     for mut metadata in &mut q_metadata {
         if !metadata.table_id.is_valid() {
-            metadata.table_id = effects_meta
-                .effect_metadata_buffer
-                .insert(metadata.metadata);
+            metadata.table_id = metadata_buffer.0.insert(metadata.metadata);
         } else {
             // Unless this is the first time we allocate the GPU entry (above),
             // we should never reach the beginning of this frame
@@ -3888,7 +3995,7 @@ pub fn allocate_parent_child_infos(
         // to have partial relationships, this is too complex for shader
         // bindings.
         debug_assert_eq!(new_children.len(), new_child_infos.len());
-        if new_children.len() != children_effects.len() {
+        if new_children.len() != parent_extracted_effect.event_binding_count as usize {
             if maybe_cached_parent_info.is_some() {
                 commands.entity(parent_entity).remove::<CachedParentInfo>();
             }
@@ -4239,20 +4346,6 @@ pub fn prepare_indirect_pipeline(
     }
 }
 
-// TEMP - Mark all cached effects as invalid for this frame until another system
-// explicitly marks them as valid. Otherwise we early out in some parts, and
-// reuse by mistake the previous frame's extraction.
-pub fn clear_transient_batch_inputs(
-    mut commands: Commands,
-    mut q_cached_effects: Query<Entity, With<BatchInput>>,
-) {
-    for entity in &mut q_cached_effects {
-        if let Ok(mut cmd) = commands.get_entity(entity) {
-            cmd.remove::<BatchInput>();
-        }
-    }
-}
-
 /// Effect mesh extracted from the main world.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Component)]
 pub(crate) struct ExtractedEffectMesh {
@@ -4568,22 +4661,44 @@ pub(crate) fn prepare_batch_inputs(
     read_only_params: PrepareEffectsReadOnlyParams,
     pipeline_cache: Res<PipelineCache>,
     mut effects_meta: ResMut<EffectsMeta>,
-    q_cached_effects: Query<(
-        MainEntity,
+    q_cached_effects: Query<
+        (
+            MainEntity,
+            Entity,
+            &ExtractedEffect,
+            &ExtractedSpawner,
+            &CachedEffect,
+            &CachedEffectMetadata,
+            &CachedReadyState,
+            &CachedPipelines,
+            &CachedDrawIndirectArgs,
+            Option<&CachedParentInfo>,
+            Option<&ChildEffectOf>,
+            Option<&CachedChildInfo>,
+            Option<&CachedEffectEvents>,
+            Option<&CachedEffectProperties>,
+        ),
+        (With<ExtractedEffectMesh>, With<CachedMeshLocation>),
+    >,
+    mut batch_inputs: Query<&mut BatchInput>,
+    incomplete_effects: Query<
         Entity,
-        &ExtractedEffect,
-        &ExtractedSpawner,
-        &CachedEffect,
-        &CachedEffectMetadata,
-        &CachedReadyState,
-        &CachedPipelines,
-        Option<&CachedDrawIndirectArgs>,
-        Option<&CachedParentInfo>,
-        Option<&ChildEffectOf>,
-        Option<&CachedChildInfo>,
-        Option<&CachedEffectEvents>,
-        Option<&CachedEffectProperties>,
-    )>,
+        (
+            With<BatchInput>,
+            Or<(
+                Without<MainEntity>,
+                Without<ExtractedEffect>,
+                Without<ExtractedSpawner>,
+                Without<ExtractedEffectMesh>,
+                Without<CachedEffect>,
+                Without<CachedEffectMetadata>,
+                Without<CachedReadyState>,
+                Without<CachedPipelines>,
+                Without<CachedDrawIndirectArgs>,
+                Without<CachedMeshLocation>,
+            )>,
+        ),
+    >,
     mut sort_bind_groups: ResMut<SortBindGroups>,
     q_render_camera: Query<&HanabiRenderCamera>,
 ) {
@@ -4616,7 +4731,7 @@ pub(crate) fn prepare_batch_inputs(
         cached_effect_metadata,
         cached_ready_state,
         cached_pipelines,
-        maybe_cached_draw_indirect_args,
+        cached_draw_indirect_args,
         maybe_cached_parent_info,
         maybe_child_effect_of,
         maybe_cached_child_info,
@@ -4625,10 +4740,16 @@ pub(crate) fn prepare_batch_inputs(
     ) in &q_cached_effects
     {
         extracted_effect_count += 1;
+        let mut remove_batch_input = || {
+            if batch_inputs.contains(render_entity) {
+                commands.entity(render_entity).remove::<BatchInput>();
+            }
+        };
 
         // Skip this effect if not ready
         if !cached_ready_state.is_ready() {
             trace!("Pipelines not ready for effect {}, skipped.", render_entity);
+            remove_batch_input();
             continue;
         }
 
@@ -4641,6 +4762,7 @@ pub(crate) fn prepare_batch_inputs(
                 .contains(LayoutFlags::CONSUME_GPU_SPAWN_EVENTS)
                 && maybe_cached_child_info.is_none_or(|child| child.global_child_index == u32::MAX)
         {
+            remove_batch_input();
             continue;
         }
 
@@ -4652,6 +4774,7 @@ pub(crate) fn prepare_batch_inputs(
                 "Effect {} not visible, and simulation condition is WhenVisible, so skipped.",
                 render_entity
             );
+            remove_batch_input();
             continue;
         }
 
@@ -4682,6 +4805,7 @@ pub(crate) fn prepare_batch_inputs(
                     "Effect main_entity {:?}: parent render entity {:?} not found.",
                     main_entity, child_effect_of.parent
                 );
+                remove_batch_input();
                 continue;
             };
             Some(parent_cached_effect.slab_id)
@@ -4705,6 +4829,7 @@ pub(crate) fn prepare_batch_inputs(
                     "Failed to create bind group for ribbon effect sorting: {:?}",
                     err
                 );
+                remove_batch_input();
                 continue;
             }
 
@@ -4717,6 +4842,7 @@ pub(crate) fn prepare_batch_inputs(
                     "Sort pipeline not ready for effect on main entity {:?}; skipped.",
                     main_entity
                 );
+                remove_batch_input();
                 continue;
             }
         }
@@ -4744,7 +4870,7 @@ pub(crate) fn prepare_batch_inputs(
             cached_effect.slice.range().start,
             parent_slab_offset,
             cached_effect_metadata.table_id,
-            maybe_cached_draw_indirect_args,
+            Some(cached_draw_indirect_args),
         );
         gpu_spawner_params.particle_size_scale = extracted_spawner.particle_size_scale;
         gpu_spawner_params.simulation_delta_time = extracted_spawner.delta_time;
@@ -4762,26 +4888,27 @@ pub(crate) fn prepare_batch_inputs(
             }
         }
 
-        trace!("Updating cached effect at entity {render_entity:?}...");
-        let mut cmd = commands.entity(render_entity);
-        // Inserting the BatchInput component marks the effect as ready for this
-        // frame
-        cmd.insert(BatchInput {
+        let input = BatchInput {
             effect_slice,
             init_and_update_pipeline_ids,
             parent_slab_id,
-            event_buffer_index: maybe_cached_effect_events.map(|cee| cee.buffer_index),
+            event_buffer_index: maybe_cached_effect_events.map(|events| events.buffer_index),
             child_effects: maybe_cached_parent_info
-                .as_ref()
-                .map(|cp| cp.children.clone())
+                .map(|parent| parent.children.clone())
                 .unwrap_or_default(),
             gpu_spawner_params,
             init_indirect_dispatch_index: maybe_cached_child_info
-                .as_ref()
-                .map(|cc| cc.init_indirect_dispatch_index),
-        });
-
+                .map(|child| child.init_indirect_dispatch_index),
+        };
+        if let Ok(mut previous_input) = batch_inputs.get_mut(render_entity) {
+            *previous_input = input;
+        } else {
+            commands.entity(render_entity).insert(input);
+        }
         prepared_effect_count += 1;
+    }
+    for entity in &incomplete_effects {
+        commands.entity(entity).remove::<BatchInput>();
     }
     trace!("Prepared {prepared_effect_count}/{extracted_effect_count} extracted effect(s)");
 
@@ -4825,6 +4952,7 @@ pub(crate) fn batch_effects(
     render_queue: Res<RenderQueue>,
     mut commands: Commands,
     mut effects_meta: ResMut<EffectsMeta>,
+    mut draw_indirect_buffer: ResMut<ParticleDrawIndirectBuffer>,
     mut sort_bind_groups: ResMut<SortBindGroups>,
     mut q_cached_effects: Query<(
         Entity,
@@ -4839,8 +4967,9 @@ pub(crate) fn batch_effects(
         Option<&CachedChildInfo>,
         Option<&CachedEffectProperties>,
         // The presence of BatchInput ensure the effect is ready
-        &mut BatchInput,
+        &BatchInput,
         Option<&ExtractedParticleDrawPasses>,
+        Option<&mut EffectDrawBatch>,
     )>,
     mut property_cache: ResMut<PropertyCache>,
     mut batcher: ResMut<Batcher>,
@@ -4863,7 +4992,7 @@ pub(crate) fn batch_effects(
     // - with parents before their children, to ensure ???? FIXME don't we need
     //   to opposite?!!!
     let mut effect_sorter = EffectSorter::new();
-    for (entity, _, _, _, _, _, _, _, child_of, _, _, input, _) in &q_cached_effects {
+    for (entity, _, _, _, _, _, _, _, child_of, _, _, input, ..) in &q_cached_effects {
         effect_sorter.insert(
             entity,
             input.effect_slice.slab_id,
@@ -4894,8 +5023,9 @@ pub(crate) fn batch_effects(
             _,
             cached_child_info,
             cached_properties,
-            mut input,
+            input,
             authored_passes,
+            previous_draw,
         )) = q_cached_effects.get_mut(entity)
         else {
             continue;
@@ -4933,7 +5063,7 @@ pub(crate) fn batch_effects(
             cached_effect_events,
             cached_child_info,
             spawner_index,
-            &mut input,
+            input,
             cached_draw_indirect_args.row,
             cached_effect_metadata.table_id,
             property_key,
@@ -4977,28 +5107,18 @@ pub(crate) fn batch_effects(
 
         // Append to sorted compute batches; this may merge with the previous
         // one.
-        let (new_effect_batch_index, sort_prefix_sum_index) =
+        let (effect_batch_index, effect_index, sort_prefix_sum_index) =
             batcher.push(effect_batch, instance_spawn_count);
-        if let Some(new_effect_batch_index) = new_effect_batch_index {
-            trace!(
-                "Spawned new effect batch #{:?} from cached instance on entity {:?}.",
-                new_effect_batch_index,
-                entity,
-            );
-
-            // Spawn an EffectDrawBatch to drive rendering for that batch. Note
-            // that technically nothing imposes we use the same
-            // batching for compute init/update and for rendering,
-            // so we could (and probably should) re-batch specifically
-            // for rendering. For now we just use the same batches.
-            commands
-                .spawn(EffectDrawBatch {
-                    effect_batch_index: new_effect_batch_index,
-                    translation,
-                    transform: extracted_spawner.transform,
-                    main_entity: *main_entity,
-                })
-                .insert(TemporaryRenderEntity::default());
+        let draw = EffectDrawBatch {
+            effect_batch_index,
+            effect_index,
+            translation,
+            transform: extracted_spawner.transform,
+        };
+        if let Some(mut previous) = previous_draw {
+            previous.set_if_neq(draw);
+        } else {
+            commands.entity(entity).insert(draw);
         }
         if let Some((sort_fill_indirect_dispatch_index, sort_indirect_dispatch_index)) =
             sort_indirect_dispatch_indices
@@ -5019,7 +5139,7 @@ pub(crate) fn batch_effects(
             AnyDrawIndirectArgs::Indexed(args) => args.first_instance = 0,
         }
 
-        effects_meta.draw_indirect_args_buffer.update(
+        draw_indirect_buffer.0.update(
             cached_draw_indirect_args.row,
             draw_args.bitcast_to_row_entry(),
         );
@@ -5565,7 +5685,6 @@ impl EffectBindGroups {
 
 #[derive(SystemParam)]
 pub struct QueueEffectsReadOnlyParams<'w, 's> {
-    effects_meta: Res<'w, EffectsMeta>,
     property_cache: Res<'w, PropertyCache>,
     pipeline_cache: Res<'w, PipelineCache>,
     render_device: Res<'w, RenderDevice>,
@@ -5582,11 +5701,15 @@ pub struct QueueEffectsReadOnlyParams<'w, 's> {
 }
 
 fn emit_sorted_draw<T, F>(
-    views: &Query<(&RenderVisibleEntities, &ExtractedView, &Msaa)>,
+    views: &mut Query<(
+        &RenderVisibleEntities,
+        &ExtractedView,
+        &Msaa,
+        &mut ParticleViewDraws,
+    )>,
     render_phases: &mut ResMut<ViewSortedRenderPhases<T>>,
-    view_entities: &mut FixedBitSet,
     batcher: &Batcher,
-    effect_draw_batches: &Query<(Entity, &mut EffectDrawBatch)>,
+    effect_draw_batches: &Query<&EffectDrawBatch, With<BatchInput>>,
     render_pipeline: &mut ParticlesRenderPipeline,
     mut specialized_render_pipelines: Mut<SpecializedRenderPipelines<ParticlesRenderPipeline>>,
     property_cache: &PropertyCache,
@@ -5594,8 +5717,6 @@ fn emit_sorted_draw<T, F>(
     pipeline_cache: &PipelineCache,
     render_device: &RenderDevice,
     sort_pipeline: &distance_sort::ParticleDistanceSortPipeline,
-    authored_draws: &mut AuthoredParticleDrawQueue,
-    previous_draws: &mut AuthoredParticleDrawQueue,
     make_phase_item: F,
     #[cfg(all(feature = "2d", feature = "3d"))] pipeline_mode: PipelineMode,
 ) where
@@ -5604,8 +5725,12 @@ fn emit_sorted_draw<T, F>(
 {
     trace!("emit_sorted_draw() {} views", views.iter().len());
 
-    for (visible_entities, view, msaa) in views.iter() {
+    for (visible_entities, view, msaa, mut view_draws) in views.iter_mut() {
+        let Some(render_phase) = render_phases.get_mut(&view.retained_view_entity) else {
+            continue;
+        };
         let Some(visible_effect_entities) = visible_entities.get::<EffectVisibilityClass>() else {
+            view_draws.authored.clear();
             continue;
         };
         trace!(
@@ -5613,30 +5738,16 @@ fn emit_sorted_draw<T, F>(
             visible_effect_entities.iter_visible().count()
         );
 
-        let Some(render_phase) = render_phases.get_mut(&view.retained_view_entity) else {
-            continue;
-        };
         let stencil_attachment =
             cfg!(feature = "3d") && view.depth_stencil_format.has_stencil_aspect();
         #[cfg(all(feature = "2d", feature = "3d"))]
         let stencil_attachment = stencil_attachment && pipeline_mode == PipelineMode::Camera3d;
 
-        {
-            #[cfg(feature = "trace")]
-            let _span = bevy::log::info_span!("collect_view_entities").entered();
-
-            view_entities.clear();
-            view_entities.extend(
-                visible_effect_entities
-                    .iter_visible()
-                    .map(|(_, main_entity)| main_entity.index_u32() as usize),
-            );
-        }
-
-        // For each view, loop over all the effect batches to determine if the
-        // effect needs to be rendered for that view, and enqueue a
-        // view-dependent batch if so.
-        for (draw_entity, draw_batch) in effect_draw_batches.iter() {
+        let mut active_authored = bevy::platform::collections::HashSet::new();
+        for (&draw_entity, &main_entity) in visible_effect_entities.iter_visible() {
+            let Ok(draw_batch) = effect_draw_batches.get(draw_entity) else {
+                continue;
+            };
             #[cfg(feature = "trace")]
             let _span_draw = bevy::log::info_span!("draw_batch").entered();
 
@@ -5668,30 +5779,6 @@ fn emit_sorted_draw<T, F>(
                 continue;
             }
 
-            // Check if batch contains any entity visible in the current view.
-            // Otherwise we can skip the entire batch. Note: This is
-            // O(n^2) but (unlike the Sprite renderer this is
-            // inspired from) we don't expect more than a handful of
-            // particle effect instances, so would rather not pay the memory
-            // cost of a FixedBitSet for the sake of an arguable speed-up.
-            // TODO - Profile to confirm.
-            #[cfg(feature = "trace")]
-            let _span_check_vis = bevy::log::info_span!("check_visibility").entered();
-            let has_visible_entity = effect_batch
-                .effect_data
-                .iter()
-                .any(|effect_data| view_entities.contains(effect_data.entity as usize));
-            if !has_visible_entity {
-                trace!("No visible entity for view, not emitting any draw call.");
-                continue;
-            }
-            #[cfg(feature = "trace")]
-            _span_check_vis.exit();
-
-            // FIXME - We draw the entire batch, but part of it may not be
-            // visible in this view! We should re-batch for the
-            // current view specifically!
-
             let local_space_simulation = effect_batch
                 .layout_flags
                 .contains(LayoutFlags::LOCAL_SPACE_SIMULATION);
@@ -5715,8 +5802,7 @@ fn emit_sorted_draw<T, F>(
             };
             let mesh_layout = render_mesh.layout.clone();
             if let Some(passes) = &effect_batch.authored_passes {
-                let draw_key = (view.retained_view_entity, draw_batch.main_entity);
-                let previous = previous_draws.views.remove(&draw_key);
+                let previous = view_draws.authored.remove(&main_entity);
                 let mut queued = QueuedParticlePasses {
                     passes: Vec::with_capacity(passes.len()),
                     sort: None,
@@ -5759,6 +5845,7 @@ fn emit_sorted_draw<T, F>(
                             alpha_mode: pass.alpha_mode,
                             authored_state: pass.state.clone(),
                             distance_sorted: sorted,
+                            needs_view_fog: pass.flags.contains(LayoutFlags::NEEDS_VIEW_FOG),
                             flipbook: pass.flags.contains(LayoutFlags::FLIPBOOK),
                             needs_uv: pass.flags.contains(LayoutFlags::NEEDS_UV),
                             needs_normal: pass.flags.contains(LayoutFlags::NEEDS_NORMAL),
@@ -5779,17 +5866,19 @@ fn emit_sorted_draw<T, F>(
                         pipeline: id,
                         properties: pass.property_key(effect_batch),
                         sorted,
+                        needs_view_fog: pass.flags.contains(LayoutFlags::NEEDS_VIEW_FOG),
                         stencil_reference: pass.stencil_reference.filter(|_| stencil_attachment),
                     });
                 }
                 if let Some(first) = queued.passes.first() {
                     render_phase.add_transient(make_phase_item(
                         first.pipeline,
-                        (draw_entity, draw_batch.main_entity),
+                        (draw_entity, main_entity),
                         draw_batch,
                         view,
                     ));
-                    authored_draws.views.insert(draw_key, queued);
+                    view_draws.authored.insert(main_entity, queued);
+                    active_authored.insert(main_entity);
                 }
                 continue;
             }
@@ -5844,6 +5933,9 @@ fn emit_sorted_draw<T, F>(
                     alpha_mode,
                     authored_state: None,
                     distance_sorted: false,
+                    needs_view_fog: effect_batch
+                        .layout_flags
+                        .contains(LayoutFlags::NEEDS_VIEW_FOG),
                     flipbook,
                     needs_uv,
                     needs_normal,
@@ -5872,21 +5964,29 @@ fn emit_sorted_draw<T, F>(
             );
             render_phase.add_transient(make_phase_item(
                 render_pipeline_id,
-                (draw_entity, draw_batch.main_entity),
+                (draw_entity, main_entity),
                 draw_batch,
                 view,
             ));
         }
+        view_draws
+            .authored
+            .retain(|entity, _| active_authored.contains(entity));
     }
 }
 
 #[cfg(feature = "3d")]
 fn emit_binned_draw<T, F, G>(
-    views: &Query<(&RenderVisibleEntities, &ExtractedView, &Msaa)>,
+    views: &Query<(
+        &RenderVisibleEntities,
+        &ExtractedView,
+        &Msaa,
+        &mut ParticleViewDraws,
+    )>,
     render_phases: &mut ResMut<ViewBinnedRenderPhases<T>>,
-    view_entities: &mut FixedBitSet,
+    dirty: &DirtySpecializations,
     batcher: &Batcher,
-    effect_draw_batches: &Query<(Entity, &mut EffectDrawBatch)>,
+    effect_draw_batches: &Query<&EffectDrawBatch, With<BatchInput>>,
     render_pipeline: &mut ParticlesRenderPipeline,
     mut specialized_render_pipelines: Mut<SpecializedRenderPipelines<ParticlesRenderPipeline>>,
     property_cache: &PropertyCache,
@@ -5906,32 +6006,30 @@ fn emit_binned_draw<T, F, G>(
 
     trace!("emit_binned_draw() {} views", views.iter().len());
 
-    for (visible_entities, view, msaa) in views.iter() {
-        let Some(visible_effect_entities) = visible_entities.get::<EffectVisibilityClass>() else {
-            continue;
-        };
+    let mut queued = bevy::render::sync_world::MainEntityHashSet::default();
+    let pending = default();
+    for (visible_entities, view, msaa, _) in views.iter() {
         trace!("Process new binned view (alpha_mask={:?})", alpha_mask);
 
         let Some(render_phase) = render_phases.get_mut(&view.retained_view_entity) else {
             continue;
         };
+        let Some(visible_effect_entities) = visible_entities.get::<EffectVisibilityClass>() else {
+            continue;
+        };
 
-        {
-            #[cfg(feature = "trace")]
-            let _span = bevy::log::info_span!("collect_view_entities").entered();
-
-            view_entities.clear();
-            view_entities.extend(
-                visible_effect_entities
-                    .iter_visible()
-                    .map(|(_, main_entity)| main_entity.index_u32() as usize),
-            );
+        for &entity in dirty.iter_to_dequeue(view.retained_view_entity, visible_effect_entities) {
+            render_phase.remove(entity);
         }
-
-        // For each view, loop over all the effect batches to determine if the
-        // effect needs to be rendered for that view, and enqueue a
-        // view-dependent batch if so.
-        for (draw_entity, draw_batch) in effect_draw_batches.iter() {
+        for (&draw_entity, &main_entity) in dirty.iter_to_queue(
+            view.retained_view_entity,
+            visible_effect_entities,
+            &pending,
+            &mut queued,
+        ) {
+            let Ok(draw_batch) = effect_draw_batches.get(draw_entity) else {
+                continue;
+            };
             #[cfg(feature = "trace")]
             let _span_draw = bevy::log::info_span!("draw_batch").entered();
 
@@ -5963,30 +6061,6 @@ fn emit_binned_draw<T, F, G>(
                 );
                 continue;
             }
-
-            // Check if batch contains any entity visible in the current view.
-            // Otherwise we can skip the entire batch. Note: This is
-            // O(n^2) but (unlike the Sprite renderer this is
-            // inspired from) we don't expect more than a handful of
-            // particle effect instances, so would rather not pay the memory
-            // cost of a FixedBitSet for the sake of an arguable speed-up.
-            // TODO - Profile to confirm.
-            #[cfg(feature = "trace")]
-            let _span_check_vis = bevy::log::info_span!("check_visibility").entered();
-            let has_visible_entity = effect_batch
-                .effect_data
-                .iter()
-                .any(|effect_data| view_entities.contains(effect_data.entity as usize));
-            if !has_visible_entity {
-                trace!("No visible entity for view, not emitting any draw call.");
-                continue;
-            }
-            #[cfg(feature = "trace")]
-            _span_check_vis.exit();
-
-            // FIXME - We draw the entire batch, but part of it may not be
-            // visible in this view! We should re-batch for the
-            // current view specifically!
 
             let local_space_simulation = effect_batch
                 .layout_flags
@@ -6059,6 +6133,9 @@ fn emit_binned_draw<T, F, G>(
                     alpha_mode,
                     authored_state: None,
                     distance_sorted: false,
+                    needs_view_fog: effect_batch
+                        .layout_flags
+                        .contains(LayoutFlags::NEEDS_VIEW_FOG),
                     flipbook,
                     needs_uv,
                     needs_normal,
@@ -6091,7 +6168,7 @@ fn emit_binned_draw<T, F, G>(
             render_phase.add(
                 make_batch_set_key(render_pipeline_id, draw_batch, view, slabs),
                 make_bin_key(),
-                (draw_entity, draw_batch.main_entity),
+                (draw_entity, main_entity),
                 InputUniformIndex::default(),
                 BinnedRenderPhaseType::NonMesh,
             );
@@ -6099,24 +6176,47 @@ fn emit_binned_draw<T, F, G>(
     }
 }
 
+#[cfg(feature = "3d")]
+#[derive(SystemParam)]
+pub(crate) struct ParticlePhaseChanges<'w, 's> {
+    changed: Query<
+        'w,
+        's,
+        MainEntity,
+        Or<(
+            Added<BatchInput>,
+            Changed<ExtractedEffect>,
+            Changed<ExtractedEffectMesh>,
+            Changed<CachedMeshLocation>,
+            Changed<CachedEffectProperties>,
+            Changed<ExtractedParticleDrawPasses>,
+        )>,
+    >,
+    main_entities: Query<'w, 's, MainEntity>,
+    inactive: RemovedComponents<'w, 's, BatchInput>,
+    removed_properties: RemovedComponents<'w, 's, CachedEffectProperties>,
+    removed_passes: RemovedComponents<'w, 's, ExtractedParticleDrawPasses>,
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn queue_effects(
-    views: Query<(&RenderVisibleEntities, &ExtractedView, &Msaa)>,
+    mut views: Query<(
+        &RenderVisibleEntities,
+        &ExtractedView,
+        &Msaa,
+        &mut ParticleViewDraws,
+    )>,
     mut render_pipeline: ResMut<ParticlesRenderPipeline>,
     mut specialized_render_pipelines: ResMut<SpecializedRenderPipelines<ParticlesRenderPipeline>>,
     mut effect_bind_groups: ResMut<EffectBindGroups>,
     batcher: Res<Batcher>,
-    effect_draw_batches: Query<(Entity, &mut EffectDrawBatch)>,
+    effect_draw_batches: Query<&EffectDrawBatch, With<BatchInput>>,
     events: Res<EffectAssetEvents>,
     render_meshes: Res<RenderAssets<RenderMesh>>,
     #[cfg(feature = "3d")] mesh_allocator: Res<MeshAllocator>,
+    #[cfg(feature = "3d")] mut changes: ParticlePhaseChanges,
     read_params: QueueEffectsReadOnlyParams,
-    (mut authored_draws, mut previous_draws, mut property_bind_groups): (
-        ResMut<AuthoredParticleDrawQueue>,
-        Local<AuthoredParticleDrawQueue>,
-        ResMut<PropertyBindGroups>,
-    ),
-    mut view_entities: Local<FixedBitSet>,
+    mut property_bind_groups: ResMut<PropertyBindGroups>,
     #[cfg(feature = "2d")] mut transparent_2d_render_phases: ResMut<
         ViewSortedRenderPhases<Transparent2d>,
     >,
@@ -6127,24 +6227,14 @@ pub(crate) fn queue_effects(
         ResMut<ViewBinnedRenderPhases<Opaque3d>>,
         ResMut<ViewBinnedRenderPhases<AlphaMask3d>>,
     ),
-    mut change_tick: Local<Tick>,
 ) {
     #[cfg(feature = "trace")]
     let _span = bevy::log::info_span!("hanabi:queue_effects").entered();
 
     trace!("queue_effects");
-    previous_draws.views.clear();
-    std::mem::swap(&mut *authored_draws, &mut *previous_draws);
 
-    let effects_meta = read_params.effects_meta.into_inner();
     let property_cache = read_params.property_cache.into_inner();
     let pipeline_cache = read_params.pipeline_cache.into_inner();
-
-    // Bump the change tick so that Bevy is forced to rebuild the binned render
-    // phase bins. We don't use the built-in caching so we don't want Bevy to
-    // reuse stale data.
-    let next_change_tick = change_tick.get() + 1;
-    change_tick.set(next_change_tick);
 
     // If an image has changed, the GpuImage has (probably) changed
     for event in &events.images {
@@ -6167,10 +6257,34 @@ pub(crate) fn queue_effects(
         };
     }
 
-    if effects_meta.spawner_buffer.buffer().is_none() || effects_meta.spawner_buffer.is_empty() {
-        // No spawners are active
-        return;
-    }
+    #[cfg(feature = "3d")]
+    let dirty = {
+        let mut dirty = DirtySpecializations::default();
+        dirty
+            .changed_renderables
+            .extend(changes.changed.iter().map(MainEntity::from));
+        dirty.changed_renderables.extend(
+            changes
+                .inactive
+                .read()
+                .chain(changes.removed_properties.read())
+                .chain(changes.removed_passes.read())
+                .filter_map(|entity| changes.main_entities.get(entity).ok())
+                .map(MainEntity::from),
+        );
+        for (_, view, msaa, mut draws) in &mut views {
+            let key = authored_draw::ParticleBinnedViewKey {
+                target_format: view.target_format,
+                depth_format: view.depth_stencil_format,
+                msaa_samples: msaa.samples(),
+            };
+            if draws.binned_pipeline_key != Some(key) {
+                draws.binned_pipeline_key = Some(key);
+                dirty.views.insert(view.retained_view_entity);
+            }
+        }
+        dirty
+    };
 
     // Loop over all 2D cameras/views that need to render effects
     #[cfg(feature = "2d")]
@@ -6188,9 +6302,8 @@ pub(crate) fn queue_effects(
         if !views.is_empty() {
             trace!("Emit effect draw calls for alpha blended 2D views...");
             emit_sorted_draw(
-                &views,
+                &mut views,
                 &mut transparent_2d_render_phases,
-                &mut view_entities,
                 &batcher,
                 &effect_draw_batches,
                 &mut render_pipeline,
@@ -6200,8 +6313,6 @@ pub(crate) fn queue_effects(
                 pipeline_cache,
                 &read_params.render_device,
                 &read_params.distance_sort,
-                &mut authored_draws,
-                &mut previous_draws,
                 |id, entity, draw_batch, _view| Transparent2d {
                     sort_key: FloatOrd(draw_batch.translation.z),
                     entity,
@@ -6237,9 +6348,8 @@ pub(crate) fn queue_effects(
                 .unwrap();
 
             emit_sorted_draw(
-                &views,
+                &mut views,
                 &mut transparent_3d_render_phases,
-                &mut view_entities,
                 &batcher,
                 &effect_draw_batches,
                 &mut render_pipeline,
@@ -6249,8 +6359,6 @@ pub(crate) fn queue_effects(
                 pipeline_cache,
                 &read_params.render_device,
                 &read_params.distance_sort,
-                &mut authored_draws,
-                &mut previous_draws,
                 |id, entity, batch, view| Transparent3d {
                     sorting_info: TransparentSortingInfo3d::Sorted {
                         mesh_center: batch.translation,
@@ -6285,7 +6393,7 @@ pub(crate) fn queue_effects(
             emit_binned_draw(
                 &views,
                 &mut alpha_mask_3d_render_phases,
-                &mut view_entities,
+                &dirty,
                 &batcher,
                 &effect_draw_batches,
                 &mut render_pipeline,
@@ -6326,7 +6434,7 @@ pub(crate) fn queue_effects(
             emit_binned_draw(
                 &views,
                 &mut opaque_3d_render_phases,
-                &mut view_entities,
+                &dirty,
                 &batcher,
                 &effect_draw_batches,
                 &mut render_pipeline,
@@ -6404,6 +6512,7 @@ pub fn queue_init_indirect_workgroup_update(
 /// access to the current camera view.
 pub(crate) fn prepare_gpu_resources(
     mut effects_meta: ResMut<EffectsMeta>,
+    mut draw_indirect_buffer: ResMut<ParticleDrawIndirectBuffer>,
     //mut effect_cache: ResMut<EffectCache>,
     mut event_cache: ResMut<EventCache>,
     mut effect_bind_groups: ResMut<EffectBindGroups>,
@@ -6444,8 +6553,8 @@ pub(crate) fn prepare_gpu_resources(
     ));
 
     // Re-/allocate the draw indirect args buffer if needed
-    if effects_meta
-        .draw_indirect_args_buffer
+    if draw_indirect_buffer
+        .0
         .allocate_gpu(&render_device, &render_queue)
     {
         // All those bind groups use the buffer so need to be re-created
@@ -6491,6 +6600,7 @@ pub(crate) fn prepare_effect_metadata(
         &mut CachedEffectMetadata,
     )>,
     mut effects_meta: ResMut<EffectsMeta>,
+    mut metadata_buffer: ResMut<ParticleEffectMetadataBuffer>,
     mut effect_bind_groups: ResMut<EffectBindGroups>,
 ) {
     #[cfg(feature = "trace")]
@@ -6612,7 +6722,7 @@ pub(crate) fn prepare_effect_metadata(
 
         // Insert of update entry in GPU buffer table
         assert!(cached_effect_metadata.table_id.is_valid());
-        let table = &mut effects_meta.effect_metadata_buffer;
+        let table = &mut metadata_buffer.0;
         if is_changed_ce || cached_effect_metadata.is_added() {
             table.update(cached_effect_metadata.table_id, gpu_effect_metadata);
         } else if gpu_effect_metadata != cached_effect_metadata.metadata {
@@ -6633,8 +6743,8 @@ pub(crate) fn prepare_effect_metadata(
     }
 
     // Once all EffectMetadata values are written, schedule a GPU upload
-    if effects_meta
-        .effect_metadata_buffer
+    if metadata_buffer
+        .0
         .allocate_gpu(render_device.as_ref(), render_queue.as_ref())
     {
         // All those bind groups use the buffer so need to be re-created
@@ -6654,7 +6764,7 @@ pub(crate) fn prepare_effect_metadata(
 /// before [`queue_init_fill_dispatch_ops()`], which uploads the shared
 /// [`GpuBufferOperations`] args buffer to the GPU at the end of the frame.
 pub(crate) fn queue_sort_fill_dispatch_ops(
-    effects_meta: Res<EffectsMeta>,
+    metadata_buffer: Res<ParticleEffectMetadataBuffer>,
     sort_bind_groups: Res<SortBindGroups>,
     sort_fill_dispatch_queue: Res<SortFillDispatchQueue>,
     mut gpu_buffer_operations: ResMut<GpuBufferOperations>,
@@ -6676,7 +6786,7 @@ pub(crate) fn queue_sort_fill_dispatch_ops(
         return;
     };
     let queue_indices = sort_fill_dispatch_queue.submit(
-        &effects_meta.effect_metadata_buffer,
+        &metadata_buffer.0,
         prefix_sum_buffer,
         &sort_bind_groups,
         &mut gpu_buffer_operations,
@@ -6736,6 +6846,8 @@ pub struct PipelineParams<'w, 's> {
 
 pub(crate) fn prepare_bind_groups(
     mut effects_meta: ResMut<EffectsMeta>,
+    draw_indirect_buffer: Res<ParticleDrawIndirectBuffer>,
+    metadata_buffer: Res<ParticleEffectMetadataBuffer>,
     mut effect_cache: ResMut<EffectCache>,
     mut event_cache: ResMut<EventCache>,
     mut effect_bind_groups: ResMut<EffectBindGroups>,
@@ -6792,7 +6904,7 @@ pub(crate) fn prepare_bind_groups(
         // Create the sim_params@0 bind group for the global simulation
         // parameters, which is shared by the init and update passes.
         if effects_meta.update_sim_params_bind_group.is_none() {
-            if let Some(draw_indirect_buffer) = effects_meta.draw_indirect_args_buffer.buffer() {
+            if let Some(draw_indirect_buffer) = draw_indirect_buffer.0.buffer() {
                 effects_meta.update_sim_params_bind_group = Some(render_device.create_bind_group(
                     "hanabi:bg:vfx_update:sim_params@0",
                     &pipeline_cache.get_bind_group_layout(&update_pipeline.sim_params_layout_desc),
@@ -6832,31 +6944,29 @@ pub(crate) fn prepare_bind_groups(
 
         // Create the @1 bind group for the indirect dispatch preparation pass
         // of all effects at once
-        effects_meta.indirect_metadata_bind_group = match (
-            effects_meta.effect_metadata_buffer.buffer(),
-            effects_meta.draw_indirect_args_buffer.buffer(),
-        ) {
-            (Some(effect_metadata_buffer), Some(draw_indirect_buffer)) => {
-                // Base bind group for indirect pass
-                Some(render_device.create_bind_group(
-                    "hanabi:bg:vfx_indirect:metadata@1",
-                    &pipeline_cache.get_bind_group_layout(
-                        &dispatch_indirect_pipeline.effect_metadata_bind_group_layout_desc,
-                    ),
-                    &BindGroupEntries::sequential((
-                        // @group(1) @binding(0) var<storage, read_write> effect_metadatas :
-                        // array<EffectMetadata>;
-                        effect_metadata_buffer.as_entire_binding(),
-                        // @group(1) @binding(1) var<storage, read_write> draw_indirect_buffer :
-                        // array<u32>;
-                        draw_indirect_buffer.as_entire_binding(),
-                    )),
-                ))
-            }
+        effects_meta.indirect_metadata_bind_group =
+            match (metadata_buffer.0.buffer(), draw_indirect_buffer.0.buffer()) {
+                (Some(effect_metadata_buffer), Some(draw_indirect_buffer)) => {
+                    // Base bind group for indirect pass
+                    Some(render_device.create_bind_group(
+                        "hanabi:bg:vfx_indirect:metadata@1",
+                        &pipeline_cache.get_bind_group_layout(
+                            &dispatch_indirect_pipeline.effect_metadata_bind_group_layout_desc,
+                        ),
+                        &BindGroupEntries::sequential((
+                            // @group(1) @binding(0) var<storage, read_write> effect_metadatas :
+                            // array<EffectMetadata>;
+                            effect_metadata_buffer.as_entire_binding(),
+                            // @group(1) @binding(1) var<storage, read_write> draw_indirect_buffer :
+                            // array<u32>;
+                            draw_indirect_buffer.as_entire_binding(),
+                        )),
+                    ))
+                }
 
-            // Some buffer is not yet available, can't create the bind group
-            _ => None,
-        };
+                // Some buffer is not yet available, can't create the bind group
+                _ => None,
+            };
 
         // Create the @2 bind group for the indirect dispatch preparation pass
         // of all effects at once
@@ -7045,7 +7155,7 @@ pub(crate) fn prepare_bind_groups(
                     effect_batch,
                     &render_device,
                     &pipeline_cache.get_bind_group_layout(init_metadata_layout_desc),
-                    effects_meta.effect_metadata_buffer.buffer().unwrap(),
+                    metadata_buffer.0.buffer().unwrap(),
                     consume_event_buffers,
                 )
                 .is_err()
@@ -7069,7 +7179,7 @@ pub(crate) fn prepare_bind_groups(
                     effect_batch,
                     &render_device,
                     &pipeline_cache.get_bind_group_layout(update_metadata_layout_desc),
-                    effects_meta.effect_metadata_buffer.buffer().unwrap(),
+                    metadata_buffer.0.buffer().unwrap(),
                     event_cache.child_infos_buffer(),
                     &effect_batch.child_event_buffers[..],
                 )
@@ -7085,7 +7195,7 @@ pub(crate) fn prepare_bind_groups(
             // Bind group @0 of sort-fill pass
             let particle_buffer = effect_buffer.particle_buffer();
             let indirect_index_buffer = effect_buffer.indirect_index_buffer();
-            let effect_metadata_buffer = effects_meta.effect_metadata_buffer.buffer().unwrap();
+            let effect_metadata_buffer = metadata_buffer.0.buffer().unwrap();
             if let Err(err) = sort_bind_groups.ensure_sort_fill_bind_group(
                 &render_device,
                 &effect_batch.particle_layout,
@@ -7125,17 +7235,46 @@ pub(crate) fn prepare_bind_groups(
     }
 }
 
+pub(crate) fn prepare_particle_view_fog_bind_group(
+    mut effects_meta: ResMut<EffectsMeta>,
+    view_uniforms: Res<ViewUniforms>,
+    fog_uniforms: Res<ComponentUniforms<ParticleViewFog>>,
+    render_device: Res<RenderDevice>,
+    pipeline: Res<ParticlesRenderPipeline>,
+    pipeline_cache: Res<PipelineCache>,
+) {
+    effects_meta.fog_view_bind_group = view_uniforms
+        .uniforms
+        .binding()
+        .zip(effects_meta.sim_params_uniforms.binding())
+        .zip(fog_uniforms.binding())
+        .map(|((view, simulation), fog)| {
+            render_device.create_bind_group(
+                "hanabi:bg:fog_camera_view",
+                &pipeline_cache.get_bind_group_layout(&pipeline.fog_view_layout_desc),
+                &BindGroupEntries::sequential((view, simulation, fog)),
+            )
+        });
+}
+
 type DrawEffectsSystemState = SystemState<(
     SRes<EffectsMeta>,
+    SRes<ParticleDrawIndirectBuffer>,
     SRes<EffectBindGroups>,
     SRes<PropertyBindGroups>,
     SRes<PipelineCache>,
     SRes<RenderAssets<RenderMesh>>,
     SRes<MeshAllocator>,
-    SQuery<(Read<ViewUniformOffset>, Read<ExtractedView>)>,
-    SRes<AuthoredParticleDrawQueue>,
+    SQuery<(
+        Read<ViewUniformOffset>,
+        Option<Read<ParticleViewDraws>>,
+        Option<(
+            Read<ParticleViewFog>,
+            Read<DynamicUniformIndex<ParticleViewFog>>,
+        )>,
+    )>,
     SRes<Batcher>,
-    SQuery<Read<EffectDrawBatch>>,
+    SQuery<Read<EffectDrawBatch>, With<BatchInput>>,
 )>;
 
 /// Draw function for rendering all active effects for the current frame.
@@ -7167,33 +7306,45 @@ fn draw<'w>(
 ) {
     let (
         effects_meta,
+        draw_indirect_buffer,
         effect_bind_groups,
         property_bind_groups,
         pipeline_cache,
         meshes,
         mesh_allocator,
         views,
-        authored_draws,
         batcher,
         effect_draw_batches,
     ) = params.get(world).unwrap();
-    let (view_uniform, view) = views.get(view).unwrap();
+    let Ok((view_uniform, view_draws, fog)) = views.get_inner(view) else {
+        return;
+    };
     let effects_meta = effects_meta.into_inner();
     let effect_bind_groups = effect_bind_groups.into_inner();
     let property_bind_groups = property_bind_groups.into_inner();
     let meshes = meshes.into_inner();
     let mesh_allocator = mesh_allocator.into_inner();
-    let effect_draw_batch = effect_draw_batches.get(entity.0).unwrap();
-    let effect_batch = batcher.get(effect_draw_batch.effect_batch_index).unwrap();
+    let Ok(effect_draw_batch) = effect_draw_batches.get(entity.0) else {
+        return;
+    };
+    let Some(effect_batch) = batcher.get(effect_draw_batch.effect_batch_index) else {
+        return;
+    };
+    let Some(effect_data) = effect_batch.effect_data.get(effect_draw_batch.effect_index) else {
+        return;
+    };
     let pipeline_cache = pipeline_cache.into_inner();
-    let authored_draws = authored_draws.into_inner();
-    let authored = authored_draws
-        .views
-        .get(&(view.retained_view_entity, entity.1));
+    let authored = view_draws.and_then(|view| view.authored.get(&entity.1));
+    if effect_batch.authored_passes.is_some() && authored.is_none() {
+        return;
+    }
     let single = QueuedParticlePass {
         pipeline: pipeline_id,
         properties: effect_batch.property_key.clone(),
         sorted: false,
+        needs_view_fog: effect_batch
+            .layout_flags
+            .contains(LayoutFlags::NEEDS_VIEW_FOG),
         stencil_reference: None,
     };
     let passes = authored.map_or(std::slice::from_ref(&single), |draw| draw.passes.as_slice());
@@ -7218,13 +7369,6 @@ fn draw<'w>(
     // "base_vertex" in the indirect struct...
     pass.set_vertex_buffer(0, vertex_buffer_slice.buffer.slice(..));
 
-    // View properties (camera matrix, etc.)
-    pass.set_bind_group(
-        0,
-        effects_meta.view_bind_group.as_ref().unwrap(),
-        &[view_uniform.offset],
-    );
-
     // Particles buffer
     pass.set_bind_group(
         1,
@@ -7234,7 +7378,7 @@ fn draw<'w>(
         &[],
     );
 
-    let Some(indirect_buffer) = effects_meta.draw_indirect_args_buffer.buffer() else {
+    let Some(indirect_buffer) = draw_indirect_buffer.into_inner().0.buffer() else {
         trace!(
             "The draw indirect buffer containing the indirect draw args is not ready for batch slab_id=#{}. Skipping draw call.",
             effect_batch.slab_id.index(),
@@ -7248,7 +7392,26 @@ fn draw<'w>(
     for draw in passes {
         let pipeline = pipeline_cache.get_render_pipeline(draw.pipeline).unwrap();
         let property_bind_group = property_bind_groups.get(&draw.properties, false).unwrap();
+        let fog_binding = if draw.needs_view_fog {
+            let Some((_, fog_index)) = fog else {
+                continue;
+            };
+            let Some(binding) = effects_meta.fog_view_bind_group.as_ref() else {
+                continue;
+            };
+            Some((binding, fog_index.index()))
+        } else {
+            None
+        };
         pass.set_render_pipeline(pipeline);
+        if let Some((binding, fog_index)) = fog_binding {
+            pass.set_bind_group(0, binding, &[view_uniform.offset, fog_index]);
+        } else {
+            let Some(binding) = effects_meta.view_bind_group.as_ref() else {
+                continue;
+            };
+            pass.set_bind_group(0, binding, &[view_uniform.offset]);
+        }
         if let Some(reference) = draw.stencil_reference {
             pass.set_stencil_reference(reference);
         }
@@ -7257,80 +7420,24 @@ fn draw<'w>(
                 pass.set_bind_group(3, &sort.render_binding, &[]);
             }
         }
+        pass.set_bind_group(
+            2,
+            property_bind_group,
+            &[effect_data.render_batch_info_offset],
+        );
+        let draw_indirect_offset = u64::from(effect_data.draw_indirect_buffer_row_index.0)
+            * GpuDrawIndexedIndirectArgs::SHADER_SIZE.get();
         match render_mesh.buffer_info {
             RenderMeshBufferInfo::Indexed { index_format, .. } => {
                 let Some(index_buffer_slice) = mesh_allocator.mesh_index_slice(&effect_batch.mesh)
                 else {
-                    trace!(
-                    "The index buffer for indexed rendering is not ready for batch slab_id=#{}. Skipping draw call.",
-                    effect_batch.slab_id.index(),
-                );
                     return;
                 };
-
                 pass.set_index_buffer(index_buffer_slice.buffer.slice(..), index_format);
-                // Note: multi_draw_indexed_indirect() only works if first_instance
-                // is available, which doesn't work without validation
-                // in wgpu. This is due to a limitation in DX12. We
-                // could have multidraw in Vulkan only though, but that
-                // requires dynamically switching.
-                // pass.multi_draw_indexed_indirect(
-                //     indirect_buffer,
-                //     draw_indirect_offset,
-                //     effect_batch.effect_count,
-                // );
-                trace!(
-                    "Emit non-batched draw_indexed_indirect() for {} effect instances...",
-                    effect_batch.effect_data.len()
-                );
-                for effect_data in &effect_batch.effect_data {
-                    pass.set_bind_group(
-                        2,
-                        property_bind_group,
-                        &[effect_data.render_batch_info_offset],
-                    );
-                    let draw_indirect_index = effect_data.draw_indirect_buffer_row_index.0;
-                    assert_eq!(GpuDrawIndexedIndirectArgs::SHADER_SIZE.get(), 20);
-                    let draw_indirect_offset =
-                        draw_indirect_index as u64 * GpuDrawIndexedIndirectArgs::SHADER_SIZE.get();
-                    trace!(
-                        "+ batch-info @+{}B (row #{}), draw_indirect_offset=+{}B (row #{})",
-                        effect_data.render_batch_info_offset,
-                        effect_data.render_batch_info_offset
-                            / GpuBatchInfo::SHADER_SIZE.get() as u32,
-                        draw_indirect_offset,
-                        draw_indirect_index,
-                    );
-                    pass.draw_indexed_indirect(indirect_buffer, draw_indirect_offset);
-                }
+                pass.draw_indexed_indirect(indirect_buffer, draw_indirect_offset);
             }
             RenderMeshBufferInfo::NonIndexed => {
-                // Note: multi_draw_indexed_indirect() only works if first_instance
-                // is available, which doesn't work without validation
-                // in wgpu. This is due to a limitation in DX12. We
-                // could have multidraw in Vulkan only though, but that
-                // requires dynamically switching.
-                // pass.multi_draw_indirect(
-                //     indirect_buffer,
-                //     draw_indirect_offset,
-                //     effect_batch.effect_count,
-                // );
-                trace!(
-                    "Emit non-batched draw_indirect() for {} effect instances...",
-                    effect_batch.effect_data.len()
-                );
-                for effect_data in &effect_batch.effect_data {
-                    pass.set_bind_group(
-                        2,
-                        property_bind_group,
-                        &[effect_data.render_batch_info_offset],
-                    );
-                    let draw_indirect_index = effect_data.draw_indirect_buffer_row_index.0;
-                    assert_eq!(GpuDrawIndexedIndirectArgs::SHADER_SIZE.get(), 20);
-                    let draw_indirect_offset =
-                        draw_indirect_index as u64 * GpuDrawIndexedIndirectArgs::SHADER_SIZE.get();
-                    pass.draw_indirect(indirect_buffer, draw_indirect_offset);
-                }
+                pass.draw_indirect(indirect_buffer, draw_indirect_offset);
             }
         }
     }
@@ -7521,18 +7628,21 @@ impl<'a> HanabiComputePass<'a> {
 
 fn simulate(
     mut render_context: RenderContext,
-    render_device: Res<RenderDevice>,
+    (render_device, feedback): (Res<RenderDevice>, Res<ParticleRenderFeedbackSender>),
     sampled_effects: Query<
         (
+            MainEntity,
+            &ExtractedParticleCountRequest,
             &ExtractedSpawner,
             &CachedEffectMetadata,
-            &CachedReadyState,
             Option<&CachedChildInfo>,
         ),
         With<BatchInput>,
     >,
     pipeline_cache: Res<PipelineCache>,
     effects_meta: Res<EffectsMeta>,
+    draw_indirect_buffer: Res<ParticleDrawIndirectBuffer>,
+    metadata_buffer: Res<ParticleEffectMetadataBuffer>,
     effect_bind_groups: Res<EffectBindGroups>,
     property_bind_groups: Res<PropertyBindGroups>,
     sort_bind_groups: Res<SortBindGroups>,
@@ -7552,12 +7662,8 @@ fn simulate(
         effects_meta
             .dispatch_indirect_args_buffer
             .write_buffers(command_encoder);
-        effects_meta
-            .draw_indirect_args_buffer
-            .write_buffer(command_encoder);
-        effects_meta
-            .effect_metadata_buffer
-            .write_buffer(command_encoder);
+        draw_indirect_buffer.0.write_buffer(command_encoder);
+        metadata_buffer.0.write_buffer(command_encoder);
         event_cache.write_buffers(command_encoder);
         sort_bind_groups.write_buffers(command_encoder);
     }
@@ -7812,7 +7918,7 @@ fn simulate(
         //error!("FIXME - effect_metadata_buffer has gaps!!!! this won't work.
         // len() is the size exluding gaps!");
         const WORKGROUP_SIZE: u32 = 64;
-        //let total_effect_count = effects_meta.effect_metadata_buffer.len();
+        //let total_effect_count = metadata_buffer.0.len();
         let total_effect_count = effects_meta.spawner_buffer.len() as u32;
         let workgroup_count = total_effect_count.div_ceil(WORKGROUP_SIZE);
 
@@ -8064,7 +8170,7 @@ fn simulate(
 
         // Compute sort pass
         {
-            let effect_metadata_buffer = effects_meta.effect_metadata_buffer.buffer().unwrap();
+            let effect_metadata_buffer = metadata_buffer.0.buffer().unwrap();
             let indirect_args_buffer = sort_bind_groups.indirect_args_buffer().unwrap();
 
             // Loop on batches and find those which need sorting
@@ -8330,7 +8436,8 @@ fn simulate(
     readback_live_particle_counts(
         &mut render_context,
         &render_device,
-        &effects_meta,
+        &feedback,
+        &metadata_buffer,
         &event_cache,
         &sampled_effects,
     );
@@ -8339,28 +8446,25 @@ fn simulate(
 fn readback_live_particle_counts(
     render_context: &mut RenderContext,
     render_device: &RenderDevice,
-    effects_meta: &EffectsMeta,
+    feedback: &ParticleRenderFeedbackSender,
+    metadata_buffer: &ParticleEffectMetadataBuffer,
     event_cache: &EventCache,
     sampled_effects: &Query<
         (
+            MainEntity,
+            &ExtractedParticleCountRequest,
             &ExtractedSpawner,
             &CachedEffectMetadata,
-            &CachedReadyState,
             Option<&CachedChildInfo>,
         ),
         With<BatchInput>,
     >,
 ) {
-    use std::sync::atomic::Ordering;
-
-    let Some(source) = effects_meta.effect_metadata_buffer.buffer() else {
+    let Some(source) = metadata_buffer.0.buffer() else {
         return;
     };
     let event_records = event_cache.child_infos().buffer();
-    for (spawner, metadata, ready, child) in sampled_effects {
-        let Some(count) = spawner.alive_count.as_ref().filter(|_| ready.is_ready()) else {
-            continue;
-        };
+    for (entity, request, spawner, metadata, child) in sampled_effects {
         let pending_events = if let Some(child) = child {
             let offset = u64::from(child.global_child_index) * GpuChildInfo::SHADER_SIZE.get()
                 + std::mem::offset_of!(GpuChildInfo, event_count) as u64;
@@ -8371,10 +8475,9 @@ fn readback_live_particle_counts(
         } else {
             None
         };
-        let offset = u64::from(metadata.table_id.0)
-            * effects_meta.effect_metadata_buffer.aligned_size() as u64
+        let offset = u64::from(metadata.table_id.0) * metadata_buffer.0.aligned_size() as u64
             + std::mem::offset_of!(GpuEffectMetadata, alive_count) as u64;
-        if offset + 4 > source.size() || count.value.pending.swap(true, Ordering::AcqRel) {
+        if offset + 4 > source.size() || request.in_flight.swap(true, Ordering::AcqRel) {
             continue;
         }
         let staging = render_device.create_buffer(&BufferDescriptor {
@@ -8389,8 +8492,11 @@ fn readback_live_particle_counts(
             encoder.copy_buffer_to_buffer(events, offset, &staging, 4, 4);
         }
         let mapped = staging.clone();
-        let value = count.value.clone();
-        let submission = u64::from(spawner.spawn_submission);
+        let in_flight = request.in_flight.clone();
+        let sender = feedback.0.clone();
+        let generation = request.generation;
+        let submission = spawner.spawn_submission;
+        let frame = request.frame;
         encoder.map_buffer_on_submit(&staging, MapMode::Read, .., move |result| {
             if let Some(bytes) = result
                 .ok()
@@ -8400,20 +8506,18 @@ fn readback_live_particle_counts(
                 let queued = bytes[4..].iter().any(|&byte| byte != 0);
                 drop(bytes);
                 mapped.unmap();
-                value
-                    .sample
-                    .store((submission << 32) | u64::from(count), Ordering::Release);
-                value.sampled.store(true, Ordering::Release);
-                value.drain_sample.store(
-                    if count == 0 && !queued {
-                        submission + 1
-                    } else {
-                        0
+                let _ = sender.send(ParticleRenderFeedback::Count {
+                    entity,
+                    request: generation,
+                    sample: ParticleCountSample {
+                        submission,
+                        frame,
+                        count,
+                        queued,
                     },
-                    Ordering::Release,
-                );
+                });
             }
-            value.pending.store(false, Ordering::Release);
+            in_flight.store(false, Ordering::Release);
         });
     }
 }

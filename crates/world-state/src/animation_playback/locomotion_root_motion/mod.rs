@@ -61,29 +61,17 @@ impl ConsumedLocomotionRootMotion {
     pub fn sample_interval(
         &mut self,
         clip: &AnimationClip,
-        root: &str,
+        cycle: &LocomotionRootMotionCycle,
         interval: std::ops::Range<f32>,
         complete_cycles: i64,
-        cycle: std::ops::Range<f32>,
     ) {
-        let target = AnimationTargetId::from_name(&Name::new(root.to_ascii_lowercase()));
-        let sample = |time| {
-            let translation = clip
-                .sample_clamped(animated_field!(Transform::translation), target, time)
-                .unwrap_or(Vec3::ZERO);
-            let rotation = clip
-                .sample_clamped(animated_field!(Transform::rotation), target, time)
-                .unwrap_or(Quat::IDENTITY);
-            Affine3A::from_rotation_translation(rotation, translation)
-        };
-        let first = sample(cycle.start);
-        let last = sample(cycle.end);
+        let target = cycle.target;
         self.mean_translation = self
             .actor_from_root_parent
-            .transform_vector3(Vec3::from(last.translation - first.translation));
+            .transform_vector3(cycle.translation);
         // Lift wrapped samples into the continuous trajectory. Compose whole
         // cycles as rigid transforms so turning clips also retain their motion.
-        let mut cycle = last * first.inverse();
+        let mut cycle = cycle.motion;
         if complete_cycles < 0 {
             cycle = cycle.inverse();
         }
@@ -96,8 +84,8 @@ impl ConsumedLocomotionRootMotion {
             cycle *= cycle;
             count >>= 1;
         }
-        let previous = sample(interval.start);
-        let next = accumulated * sample(interval.end);
+        let previous = sample_root_at(clip, target, interval.start);
+        let next = accumulated * sample_root_at(clip, target, interval.end);
         self.translation = self
             .actor_from_root_parent
             .transform_vector3(Vec3::from(next.translation - previous.translation));
@@ -113,6 +101,37 @@ impl ConsumedLocomotionRootMotion {
             * parent_rotation.inverse())
         .normalize();
     }
+}
+
+/// Source-space motion across the bound clip's effective loop window.
+#[derive(Clone, Copy, Debug)]
+pub struct LocomotionRootMotionCycle {
+    target: AnimationTargetId,
+    motion: Affine3A,
+    translation: Vec3,
+}
+
+impl LocomotionRootMotionCycle {
+    pub fn from_clip(clip: &AnimationClip, root: &str, window: std::ops::Range<f32>) -> Self {
+        let target = AnimationTargetId::from_name(&Name::new(root.to_ascii_lowercase()));
+        let first = sample_root_at(clip, target, window.start);
+        let last = sample_root_at(clip, target, window.end);
+        Self {
+            target,
+            motion: last * first.inverse(),
+            translation: (last.translation - first.translation).into(),
+        }
+    }
+}
+
+fn sample_root_at(clip: &AnimationClip, target: AnimationTargetId, time: f32) -> Affine3A {
+    let translation = clip
+        .sample_clamped(animated_field!(Transform::translation), target, time)
+        .unwrap_or(Vec3::ZERO);
+    let rotation = clip
+        .sample_clamped(animated_field!(Transform::rotation), target, time)
+        .unwrap_or(Quat::IDENTITY);
+    Affine3A::from_rotation_translation(rotation, translation)
 }
 
 /// Mean transformed clip velocity used by route planning and steering.

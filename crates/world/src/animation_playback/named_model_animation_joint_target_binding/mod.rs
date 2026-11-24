@@ -34,13 +34,13 @@ pub(super) struct AnimationJointBindingChanges<'w, 's> {
 pub(super) fn bind_new_named_model_entities_and_new_animation_playback_controller_descendants(
     mut commands: Commands,
     mut changes: AnimationJointBindingChanges,
-    named_entities: Query<
+    mut named_entities: Query<
         (
             &Name,
             Option<&AnimationJointTarget>,
-            Option<&AnimatedBy>,
-            Option<&AnimationTargetId>,
-            Option<&StandardBevyAnimationJointBlendPose>,
+            Option<&mut AnimatedBy>,
+            Option<&mut AnimationTargetId>,
+            Option<&mut StandardBevyAnimationJointBlendPose>,
         ),
         (
             Without<PrefabTransformClocks>,
@@ -150,44 +150,54 @@ pub(super) fn bind_new_named_model_entities_and_new_animation_playback_controlle
                     })
                     .collect::<HashMap<_, _>>()
             });
-        insert_animation_joint_target_binding(
-            &mut commands,
-            named_entity,
-            entity_name,
+        let inherited_pose = blend_poses.get(&target_id).copied();
+        let target = AnimationJointTarget {
             animation_playback_controller_entity,
-            &animation_players,
-            blend_poses.get(&target_id).copied(),
-            target_id,
-        );
-    }
-}
-
-fn insert_animation_joint_target_binding(
-    commands: &mut Commands,
-    named_entity: Entity,
-    entity_name: &Name,
-    animation_playback_controller_entity: Entity,
-    animation_players: &Query<(), With<AnimationPlayer>>,
-    blend_pose: Option<StandardBevyAnimationJointBlendPose>,
-    target_id: AnimationTargetId,
-) {
-    let mut named_entity_commands = commands.entity(named_entity);
-    if let Some(blend_pose) = blend_pose {
-        named_entity_commands.insert(blend_pose);
-    } else {
-        named_entity_commands.remove::<StandardBevyAnimationJointBlendPose>();
-    }
-    named_entity_commands.insert(AnimationJointTarget {
-        animation_playback_controller_entity,
-        joint_asset_key: entity_name.as_str().to_owned(),
-        authored_joint_id: openzt2_game_data::AssetId::from_key(
-            &entity_name.as_str().to_ascii_lowercase(),
-        ),
-    });
-    if animation_players.contains(animation_playback_controller_entity) {
-        named_entity_commands.insert((target_id, AnimatedBy(animation_playback_controller_entity)));
-    } else {
-        named_entity_commands.remove::<(AnimationTargetId, AnimatedBy)>();
+            joint_asset_key: entity_name.as_str().to_owned(),
+            authored_joint_id: openzt2_game_data::AssetId::from_key(
+                &entity_name.as_str().to_ascii_lowercase(),
+            ),
+        };
+        let relation_changed = binding.is_none_or(|binding| {
+            binding.animation_playback_controller_entity != animation_playback_controller_entity
+                || binding.joint_asset_key != target.joint_asset_key
+        });
+        let Ok((_, _, driver, active_target, snapshot)) = named_entities.get_mut(named_entity)
+        else {
+            continue;
+        };
+        let mut entity = commands.entity(named_entity);
+        if relation_changed {
+            entity.insert(target);
+        }
+        match (snapshot, inherited_pose) {
+            (Some(mut snapshot), Some(pose)) => {
+                snapshot.set_if_neq(pose);
+            }
+            (None, Some(pose)) => {
+                entity.insert(pose);
+            }
+            (Some(_), None) => {
+                entity.remove::<StandardBevyAnimationJointBlendPose>();
+            }
+            (None, None) => {}
+        }
+        if has_player {
+            if let Some(mut active_target) = active_target {
+                active_target.set_if_neq(target_id);
+            } else {
+                entity.insert(target_id);
+            }
+            if let Some(driver) = driver {
+                driver
+                    .map_unchanged(|driver| &mut driver.0)
+                    .set_if_neq(animation_playback_controller_entity);
+            } else {
+                entity.insert(AnimatedBy(animation_playback_controller_entity));
+            }
+        } else {
+            entity.remove::<(AnimationTargetId, AnimatedBy)>();
+        }
     }
 }
 

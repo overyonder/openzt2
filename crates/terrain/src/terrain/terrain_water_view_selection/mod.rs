@@ -8,8 +8,8 @@ use openzt2_zoo_state::terrain::terrain_water_presentation_types::{
     TerrainWaterRegionRetired, TerrainWaterRegionSource,
 };
 use openzt2_zoo_state::terrain::terrain_water_view_state::{
-    TerrainWaterCameraContact, TerrainWaterCameraPose, TerrainWaterCaptureSelection,
-    TerrainWaterRegionFade, TerrainWaterRegionVisibility,
+    TerrainWaterCameraContact, TerrainWaterCameraPose, TerrainWaterCaptureRegion,
+    TerrainWaterCaptureSelection, TerrainWaterRegionFade, TerrainWaterRegionVisibility,
 };
 
 pub(super) fn sample_terrain_water_camera_pose(
@@ -188,8 +188,14 @@ fn collect_water_capture_hits(
 }
 
 pub(super) fn update_terrain_water_view_selection(
+    mut commands: Commands,
     mut cameras: Query<
-        (&TerrainWaterCaptureHits, &mut TerrainWaterCaptureSelection),
+        (
+            Entity,
+            &TerrainWaterCaptureHits,
+            &mut TerrainWaterCaptureSelection,
+            Option<&TerrainWaterCaptureRegion>,
+        ),
         With<ZooCamera>,
     >,
     indexes: Query<&TerrainWaterMembershipIndex>,
@@ -201,7 +207,7 @@ pub(super) fn update_terrain_water_view_selection(
     region_sources: TerrainWaterRegionQuery,
     assets: Res<Assets<TerrainAsset>>,
 ) {
-    let Ok((hits, mut selection)) = cameras.single_mut() else {
+    let Ok((camera, hits, mut selection, region)) = cameras.single_mut() else {
         return;
     };
     let Some((hits, (index, asset))) = hits.0.as_ref().zip(
@@ -211,13 +217,18 @@ pub(super) fn update_terrain_water_view_selection(
             .and_then(|index| assets.get(index.terrain()).map(|asset| (index, asset))),
     ) else {
         selection.set_if_neq(TerrainWaterCaptureSelection::default());
+        if region.is_some() {
+            commands
+                .entity(camera)
+                .remove::<TerrainWaterCaptureRegion>();
+        }
         return;
     };
     let config = asset
         .canonical_terrain_grid()
         .presentation
         .water_distance_fade;
-    let previous = selection.region.map(|(owner, _)| owner);
+    let previous = region.map(|region| region.0);
     let candidate = select_water_region_from_view_hits(
         hits.iter().copied(),
         previous,
@@ -248,7 +259,6 @@ pub(super) fn update_terrain_water_view_selection(
             }
         }
     }
-    let height = selected.and_then(|selected| region_sources.get(selected)?.surface_height(asset));
     let alternate = (selected != previous && selected.is_some())
         || regions.iter().any(|(owner, visible, fade)| {
             region_sources
@@ -259,10 +269,26 @@ pub(super) fn update_terrain_water_view_selection(
                     || (candidate != previous && Some(owner) == previous && visible.0))
         });
     selection.set_if_neq(TerrainWaterCaptureSelection {
-        region: selected.zip(height),
         resolved: true,
         alternate_regions_visible: alternate,
     });
+    let next = selected.filter(|&owner| {
+        region_sources
+            .get(owner)
+            .and_then(|source| source.surface_height(asset))
+            .is_some()
+    });
+    if previous != next {
+        if let Some(owner) = next {
+            commands
+                .entity(camera)
+                .insert(TerrainWaterCaptureRegion(owner));
+        } else {
+            commands
+                .entity(camera)
+                .remove::<TerrainWaterCaptureRegion>();
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

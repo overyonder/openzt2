@@ -90,6 +90,36 @@ pub(super) fn apply_prepared_placed_object_creation_edit(
     else {
         return false;
     };
+    commit_validated_placed_object_creation(
+        commands,
+        transaction,
+        edit,
+        definition,
+        prefab,
+        root,
+        PlacedObjectFootprintOccupancy {
+            origin,
+            eighth_turns: turns,
+        },
+        repeat_placement,
+        tool,
+        object_placed,
+    );
+    true
+}
+
+pub(super) fn commit_validated_placed_object_creation(
+    commands: &mut Commands,
+    transaction: Entity,
+    edit: &mut PreparedObjectPlacementMutation,
+    definition: &openzt2_game_data::world_definitions::object_placement::PlaceableDefinition,
+    prefab: &ScenePrefabAsset,
+    root: Entity,
+    occupancy: PlacedObjectFootprintOccupancy,
+    repeat_placement: bool,
+    tool: &mut ConstructionTool,
+    object_placed: &mut MessageWriter<ObjectPlacementCommitted>,
+) {
     let spawned = spawn_loaded_scene_prefab_as_world_instance(
         commands,
         prefab,
@@ -113,10 +143,7 @@ pub(super) fn apply_prepared_placed_object_creation_edit(
             PlacedObjectDefinitionReference {
                 definition: edit.definition,
             },
-            PlacedObjectFootprintOccupancy {
-                origin,
-                eighth_turns: turns,
-            },
+            occupancy,
             openzt2_zoo_state::placement::placed_object_types::IndexedObjectPlacementCells(
                 edit.cells.clone(),
             ),
@@ -152,5 +179,4 @@ pub(super) fn apply_prepared_placed_object_creation_edit(
             *tool = ConstructionTool::Inspect;
         }
     }
-    true
 }

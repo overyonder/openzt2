@@ -24,7 +24,7 @@ use bevy::prelude::*;
 use openzt2_game_assets::application_lifecycle::GamePhase;
 use openzt2_interface_state::ui::UiSet;
 use openzt2_world_state::application_schedule::FixedGameSet;
-use openzt2_world_state::application_schedule::GameSet;
+use openzt2_world_state::application_schedule::{GameSet, WaterPresentationSet};
 use openzt2_zoo_state::construction::FixedConstructionPreparedDomainEditMaterializationSet;
 use openzt2_zoo_state::construction::FixedConstructionSet;
 use openzt2_zoo_state::construction::FixedConstructionTransactionMaterializationSet;
@@ -46,6 +46,9 @@ pub struct AquaticPlugin;
 impl Plugin for AquaticPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<aquatic_simulation_types::AddAquaticWaterDirt>()
+            .register_required_components::<aquatic_simulation_types::WaterQuality, water_filter_operation::WaterQualityFraction>()
+            .register_required_components_with::<openzt2_zoo_state::terrain::terrain_water_presentation_types::TerrainWaterRegionSource, aquatic_simulation_types::WaterQuality>(|| aquatic_simulation_types::WaterQuality(1000))
+            .register_required_components_with::<openzt2_zoo_state::terrain::terrain_water_presentation_types::TerrainWaterRegionEdit, aquatic_simulation_types::WaterQuality>(|| aquatic_simulation_types::WaterQuality(1000))
             .add_message::<CommitTankGeometryEdit>()
             .add_message::<TankGeometryEditAcknowledged>()
             .add_message::<TankGeometryEditPrepared>()
@@ -59,7 +62,8 @@ impl Plugin for AquaticPlugin {
             .add_observer(tank_capacity_accounting::invalidate_reenabled_tank_resident)
             .add_observer(aquatic_home_invalidation::notify_residents_of_tank_demotion)
             .add_observer(tank_floor_terrain_excavation::queue_terrain_restoration_after_tank_removal)
-            .add_observer(tank_presentation::retire_tank_presentation_on_demotion)
+            .add_observer(tank_presentation::retire_tank_surfaces_on_demotion)
+            .add_observer(tank_presentation::retire_tank_wall_panel)
             .add_observer(tank_geometry_edit_execution::restore_uncommitted_tank_geometry)
             .add_observer(water_filter_operation::remove_water_filter_timing_and_target)
             .add_systems(
@@ -78,9 +82,14 @@ impl Plugin for AquaticPlugin {
                     .run_if(in_state(GamePhase::InGame)),
             )
             .add_systems(
-                FixedUpdate,
-                tank_floor_terrain_excavation::commit_tank_floor_excavations
-                    .in_set(FixedConstructionSet::Prepare),
+                Update,
+                (
+                    tank_geometry_projection::sample_changed_tank_floor_levels,
+                    tank_floor_terrain_excavation::excavate_changed_tank_floors,
+                    tank_floor_terrain_excavation::retire_applied_tank_floor_excavations,
+                ).chain()
+                    .in_set(GameSet::Presentation)
+                    .before(WaterPresentationSet::View),
             )
             .add_systems(
                 FixedUpdate,
@@ -112,7 +121,8 @@ impl Plugin for AquaticPlugin {
                         add_animal_dirt_to_home_tank_water
                             .after(clamp_changed_normalized_tank_facts_to_permille_range),
                         clean_tank_water_through_filters
-                            .after(resolve_water_filter_targets),
+                            .after(resolve_water_filter_targets)
+                            .run_if(on_message::<openzt2_zoo_state::environment::environment_state_types::ZooTickAdvanced>),
                         project_changed_tank_facts_into_live_aquatic_animal_suitability
                             .after(tank_fact_hydration::initialize_legacy_tank_water_limits)
                             .after(tank_capacity_accounting::recompute_changed_tank_capacity),
@@ -126,8 +136,6 @@ impl Plugin for AquaticPlugin {
                     (
                         tank_wall_enclosure_promotion::promote_or_restore_habitats_enclosed_by_tank_walls,
                         project_changed_habitat_and_terrain_geometry_into_tanks,
-                        tank_geometry_projection::sample_changed_tank_floor_levels,
-                        tank_floor_terrain_excavation::excavate_changed_tank_floors,
                     ).chain(),
                     aquatic_home_invalidation::notify_terminal_aquatic_animal_departures
                         .after(tank_wall_enclosure_promotion::promote_or_restore_habitats_enclosed_by_tank_walls),
@@ -139,7 +147,19 @@ impl Plugin for AquaticPlugin {
             )
             .add_systems(
                 Update,
-                tank_presentation::present_changed_tank_water_and_glass
+                (
+                    tank_presentation::project_tank_surface_meshes
+                        .before(WaterPresentationSet::View),
+                    tank_presentation::project_tank_wall_panels
+                        .after(WaterPresentationSet::View),
+                    tank_presentation::project_authored_tank_material_passes
+                        .after(tank_presentation::project_tank_wall_panels)
+                        .after(tank_presentation::project_tank_surface_meshes),
+                    tank_presentation::update_tank_wall_water_bindings
+                        .after(tank_presentation::project_authored_tank_material_passes)
+                        .after(WaterPresentationSet::Environment),
+                )
+                    .in_set(GameSet::Presentation)
                     .run_if(in_state(GamePhase::InGame)),
             );
     }

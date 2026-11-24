@@ -1,4 +1,4 @@
-use bevy::{ecs::{lifecycle::HookContext, world::DeferredWorld}, prelude::*};
+use bevy::{ecs::{relationship::RelationshipTarget, system::SystemParam}, prelude::*};
 use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
 use openzt2_game_data::{world_definitions::object_placement::PlaceableDefinition, AssetId};
@@ -9,7 +9,6 @@ use crate::behavior_task_execution_types::{
 };
 
 #[derive(Component)]
-#[component(on_discard = remove_travel_site)]
 pub struct BehaviorTargetPlacement {
     pub execution_id: u64,
     pub origin: BehaviorTaskReturnFrame,
@@ -48,6 +47,44 @@ pub struct BehaviorTargetPlacementSite {
 pub struct BehaviorPlacementDelivering;
 
 #[derive(Component)]
+#[relationship(relationship_target = BehaviorPlacementTravelPoint)]
+pub struct BehaviorTravelPointOf(pub Entity);
+
+#[derive(Component)]
+#[relationship_target(relationship = BehaviorTravelPointOf)]
+pub struct BehaviorPlacementTravelPoint(Entity);
+
+#[derive(SystemParam)]
+pub struct BehaviorPlacementTravelTargets<'w, 's> {
+    placements: Query<'w, 's, &'static BehaviorPlacements>,
+    travel_points: Query<
+        'w,
+        's,
+        (
+            &'static BehaviorTargetPlacement,
+            &'static BehaviorPlacementTravelPoint,
+        ),
+        With<BehaviorPlacementDelivering>,
+    >,
+}
+
+impl BehaviorPlacementTravelTargets<'_, '_> {
+    pub fn for_actor(&self, actor: Entity, task: &BehaviorTaskExecutionState) -> Option<Entity> {
+        self.placements
+            .get(actor)
+            .into_iter()
+            .flat_map(RelationshipTarget::iter)
+            .find_map(|operation| {
+                let (placement, points) = self.travel_points.get(operation).ok()?;
+                (placement.execution_id == task.execution_id && task.depth > placement.depth)
+                    .then(|| points.iter().next())
+                    .flatten()
+            })
+            .or(task.target)
+    }
+}
+
+#[derive(Component)]
 pub struct BehaviorPlacementPutDown;
 
 #[derive(Component)]
@@ -55,12 +92,6 @@ pub struct BehaviorPlacementAwaitingPayment(pub Entity);
 
 #[derive(Component)]
 pub struct BehaviorPlacementResult(pub bool);
-
-#[derive(Component)]
-pub struct BehaviorPlacementTravelSite {
-    pub operation: Entity,
-    pub point: Entity,
-}
 
 impl BehaviorTargetPlacementSite {
     pub fn uses_current_prefab(
@@ -98,31 +129,4 @@ impl BehaviorTargetPlacement {
     pub fn is_current(&self, task: &BehaviorTaskExecutionState) -> bool {
         task.is_at_exact_frame(&self.origin, self.depth)
     }
-}
-
-pub fn travel_target(
-    task: &BehaviorTaskExecutionState,
-    site: Option<&BehaviorPlacementTravelSite>,
-) -> Option<Entity> {
-    site.map(|site| site.point).or(task.target)
-}
-
-fn remove_travel_site(mut world: DeferredWorld, context: HookContext) {
-    let Some(actor) = world
-        .get::<BehaviorPlacementOf>(context.entity)
-        .map(|owner| owner.0)
-    else {
-        return;
-    };
-    let operation = context.entity;
-    world.commands().entity(actor).queue_silenced(
-        move |mut actor: bevy::ecs::world::EntityWorldMut<'_>| {
-            if actor
-                .get::<BehaviorPlacementTravelSite>()
-                .is_some_and(|site| site.operation == operation)
-            {
-                actor.remove::<BehaviorPlacementTravelSite>();
-            }
-        },
-    );
 }

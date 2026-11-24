@@ -11,3 +11,7 @@ mod authored_widget_projection;
 mod document_asset_readiness;
 
 pub(super) mod ui_document_opening;
+
+pub(super) fn register_document_attachment_cleanup(app: &mut bevy::prelude::App) {
+    app.add_observer(authored_document_projection::despawn_document_attachment_to_missing_owner);
+}

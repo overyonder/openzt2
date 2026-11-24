@@ -1,12 +1,15 @@
 use crate::terrain::ground_path_surface_mask_selection::ground_path_surface_origin_from_source_direction_cell;
 use crate::terrain::ground_path_surface_mask_selection::select_authored_ground_path_surface_mask_textures;
 use bevy::asset::AssetId as BevyAssetId;
+use bevy::ecs::entity::{EntityHashMap, EntityHashSet};
 use bevy::ecs::query::QueryData;
+use bevy::ecs::relationship::RelationshipTarget;
 use bevy::platform::collections::HashMap;
 use bevy::platform::collections::HashSet;
 use bevy::prelude::*;
 use bevy::tasks::{ComputeTaskPool, TaskPool};
 use openzt2_game_data::AssetId;
+use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use openzt2_game_assets::world_definitions::ground_path_surface_images::GroundPathSurfaceImage;
@@ -24,6 +27,7 @@ use openzt2_zoo_state::topology::topology_graph_types::PathTile;
 use openzt2_zoo_state::topology::topology_graph_types::{TopologyGrid, TopologyIndex};
 
 use super::terrain_change_tracking_types::TerrainSurfaceBasePending;
+use super::water_regions::authored_membership::TerrainWaterMembershipChanged;
 use crate::terrain::terrain_surface_image_composition::blend_ground_path_surface_patch_into_terrain_surface_image;
 use crate::terrain::terrain_surface_image_composition::blend_terrain_surface_paint_into_terrain_surface_image;
 use crate::terrain::terrain_surface_image_composition::{
@@ -35,9 +39,9 @@ use openzt2_zoo_state::terrain::terrain_chunk_presentation_types::TerrainSurface
 use openzt2_zoo_state::terrain::terrain_chunk_types::EditedTerrainSamples;
 use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainChunk;
 use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainIndex;
-
-#[derive(Message)]
-pub(super) struct DiscardedTerrainPaintArea(Rect);
+use openzt2_zoo_state::terrain::terrain_water_presentation_types::{
+    TerrainWaterMembershipIndex, TerrainWaterRegionQuery,
+};
 
 #[derive(Component)]
 pub(super) struct RecomposeTerrainOverlays {
@@ -124,36 +128,65 @@ struct GroundPathSurfaceOverlay {
     mirror_y: bool,
 }
 
-/// Invalidates only terrain chunks whose composed image can contain a changed
-/// path surface. Source reloads also invalidate chunks near existing paths.
+fn indexed_chunks_overlapping_surface(
+    index: &TerrainIndex,
+    bounds: Rect,
+) -> impl Iterator<Item = Entity> + '_ {
+    let min = if index.chunk_span_m > 0.0 {
+        ((bounds.min - index.origin) / index.chunk_span_m)
+            .ceil()
+            .as_ivec2()
+            .saturating_sub(IVec2::ONE)
+    } else {
+        IVec2::ONE
+    };
+    let max = if index.chunk_span_m > 0.0 {
+        ((bounds.max - index.origin) / index.chunk_span_m)
+            .floor()
+            .as_ivec2()
+    } else {
+        IVec2::ZERO
+    };
+    (min.y..=max.y).flat_map(move |y| {
+        (min.x..=max.x).filter_map(move |x| index.chunks.get(&IVec2::new(x, y)).copied())
+    })
+}
+
+fn terrain_paint_area(paint: &TerrainPaintedTexture) -> Rect {
+    Rect::from_center_size(paint.centre, Vec2::splat(paint.size_m))
+}
+
 #[allow(clippy::too_many_arguments)]
-pub(super) fn mark_terrain_chunks_requiring_ground_path_surface_recomposition(
+pub(super) fn invalidate_indexed_ground_path_surface_footprints(
     mut dirty: MessageWriter<TerrainOverlayInvalidated>,
-    mut topology_changed: MessageReader<TopologyChanged>,
+    mut topology: MessageReader<TopologyChanged>,
     added_paths: Query<&PathTile, Changed<PathTile>>,
-    mut discarded_paths: MessageReader<DiscardedGroundPathCell>,
+    mut discarded: MessageReader<DiscardedGroundPathCell>,
     mut image_events: MessageReader<AssetEvent<GroundPathSurfaceImage>>,
-    active_definitions: Res<WorldDefinitions>,
+    active: Res<WorldDefinitions>,
+    definitions: Res<Assets<WorldDefinitionAsset>>,
     grid: Single<&TopologyGrid>,
+    index: Single<&TerrainIndex>,
     paths: Query<&PathTile>,
-    chunks: Query<(Entity, &TerrainChunk), With<TerrainRenderChunk>>,
+    old_overlays: Query<(Entity, &TerrainChunkOverlays)>,
+    chunks: Query<&TerrainChunk, With<TerrainRenderChunk>>,
+    terrain: Res<Assets<TerrainAsset>>,
 ) {
     let grid = grid.into_inner();
-    let dependency_image_changed = image_events.read().any(|event| match *event {
+    let index = index.into_inner();
+    let source_changed = image_events.read().any(|event| match *event {
         AssetEvent::Added { id }
         | AssetEvent::Modified { id }
         | AssetEvent::LoadedWithDependencies { id }
-        | AssetEvent::Removed { id } => active_definitions.owns_ground_path_surface_image(id),
+        | AssetEvent::Removed { id } => active.owns_ground_path_surface_image(id),
         AssetEvent::Unused { .. } => false,
-    });
+    }) || active.is_changed();
     image_events.clear();
-    let source_changed = dependency_image_changed || active_definitions.is_changed();
-
-    let changed_bounds = topology_changed
+    let topology_bounds = topology
         .read()
         .map(|change| change.bounds)
         .chain(
-            discarded_paths
+            discarded
                 .read()
                 .map(|cell| IRect::from_corners(cell.0, cell.0)),
         )
@@ -161,43 +194,235 @@ pub(super) fn mark_terrain_chunks_requiring_ground_path_surface_recomposition(
             added_paths
                 .iter()
                 .map(|path| IRect::from_corners(path.cell.xy(), path.cell.xy())),
-        )
-        .reduce(|current, next| current.union(next));
-    if changed_bounds.is_none() && !source_changed {
-        return;
-    }
-    let surface_patch_margin = Vec2::splat(grid.spacing_m * 5.0);
-    let changed_world_bounds = changed_bounds.map(|bounds| {
-        (
-            grid.cell_translation(bounds.min.extend(0)).xz() - surface_patch_margin,
-            grid.cell_translation(bounds.max.extend(0)).xz() + surface_patch_margin,
-        )
-    });
-    for (entity, chunk) in &chunks {
-        let chunk_cells = f32::from(chunk.side.saturating_sub(1));
-        let chunk_min = chunk.origin;
-        let chunk_max = chunk.origin + Vec2::splat(chunk_cells * chunk.spacing_m);
-        let topology_changed = changed_world_bounds.is_some_and(|(world_min, world_max)| {
-            chunk_min.cmple(world_max).all() && chunk_max.cmpge(world_min).all()
+        );
+    let patch_margin = index
+        .chunks
+        .values()
+        .next()
+        .and_then(|&entity| chunks.get(entity).ok())
+        .and_then(|chunk| {
+            let asset = terrain.get(&chunk.asset)?;
+            let setup = &asset.canonical_terrain_grid().presentation;
+            Some((
+                f32::from(setup.surface_margin_cells) * chunk.spacing_m,
+                index.chunk_span_m * 43.0 / f32::from(setup.surface_resolution),
+            ))
         });
-        let near_path = source_changed
-            && paths.iter().any(|path| {
-                let path_origin = grid.cell_translation(path.cell).xz();
-                path_origin.cmple(chunk_max + surface_patch_margin).all()
-                    && path_origin.cmpge(chunk_min - surface_patch_margin).all()
-            });
-        if topology_changed || near_path {
+    let (image_margin, patch_extent) = patch_margin.unwrap_or_default();
+    let width = active.get(&definitions).map_or(0.0, |definitions| {
+        f32::from(definitions.maximum_ground_path_width_cm()) * 0.01
+    });
+    let margin = (grid.spacing_m * 5.0).max(2.0 * width + patch_extent + grid.spacing_m * 3.0);
+    for bounds in topology_bounds {
+        let world = Rect::from_corners(
+            grid.cell_translation(bounds.min.extend(0)).xz(),
+            grid.cell_translation(bounds.max.extend(0)).xz(),
+        )
+        .inflate(margin);
+        for entity in indexed_chunks_overlapping_surface(index, world.inflate(image_margin)) {
             dirty.write(TerrainOverlayInvalidated(
                 entity,
                 RecomposeTerrainOverlays {
-                    bounds: if near_path {
-                        None
-                    } else {
-                        changed_world_bounds.map(|(min, max)| Rect::from_corners(min, max))
-                    },
+                    bounds: Some(world),
                     paths_changed: true,
                 },
             ));
+        }
+    }
+    if source_changed {
+        let mut affected: EntityHashSet = old_overlays
+            .iter()
+            .filter_map(|(chunk, overlays)| (!overlays.paths.is_empty()).then_some(chunk))
+            .collect();
+        for path in &paths {
+            let point = grid.cell_translation(path.cell).xz();
+            let area = Rect::from_corners(point, point).inflate(margin + image_margin);
+            affected.extend(indexed_chunks_overlapping_surface(index, area));
+        }
+        for entity in affected {
+            dirty.write(TerrainOverlayInvalidated(
+                entity,
+                RecomposeTerrainOverlays {
+                    bounds: None,
+                    paths_changed: true,
+                },
+            ));
+        }
+    }
+}
+
+pub(super) fn unlink_discarded_terrain_paint_footprint(
+    discarded: On<Discard<TerrainPaintedTexture>>,
+    paints: Query<(&TerrainPaintedTexture, &TerrainPaintAffectedChunks)>,
+    edges: Query<&TerrainPaintChunk>,
+    mut commands: Commands,
+    mut dirty: MessageWriter<TerrainOverlayInvalidated>,
+) {
+    if let Ok((paint, linked)) = paints.get(discarded.entity) {
+        let area = terrain_paint_area(paint);
+        for edge in linked.iter() {
+            if let Ok(chunk) = edges.get(edge) {
+                dirty.write(TerrainOverlayInvalidated(
+                    chunk.0,
+                    RecomposeTerrainOverlays {
+                        bounds: Some(area),
+                        paths_changed: false,
+                    },
+                ));
+            }
+            commands.entity(edge).try_despawn();
+        }
+    }
+}
+
+#[allow(clippy::type_complexity)]
+pub(super) fn link_changed_terrain_paint_footprints(
+    mut commands: Commands,
+    mut dirty: MessageWriter<TerrainOverlayInvalidated>,
+    index: Single<&TerrainIndex>,
+    mut paints: Query<(
+        Entity,
+        Ref<TerrainPaintedTexture>,
+        Option<&TerrainPaintAffectedChunks>,
+    )>,
+    changed_paints: Query<(), Changed<TerrainPaintedTexture>>,
+    changed_chunks: Query<(), Changed<TerrainRenderChunk>>,
+    chunks: Query<&TerrainChunk, With<TerrainRenderChunk>>,
+    terrain: Res<Assets<TerrainAsset>>,
+    mut edges: Query<(&TerrainPaintChunk, &mut TerrainPaintInputOrder)>,
+) {
+    let index = index.into_inner();
+    if changed_paints.is_empty() && changed_chunks.is_empty() && !terrain.is_changed() {
+        return;
+    }
+    let Some(margin) = index
+        .chunks
+        .values()
+        .next()
+        .and_then(|&entity| chunks.get(entity).ok())
+        .and_then(|chunk| {
+            let asset = terrain.get(&chunk.asset)?;
+            Some(
+                f32::from(
+                    asset
+                        .canonical_terrain_grid()
+                        .presentation
+                        .surface_margin_cells,
+                ) * chunk.spacing_m,
+            )
+        })
+    else {
+        return;
+    };
+    for (order, (entity, paint, links)) in paints.iter_mut().enumerate() {
+        let area = terrain_paint_area(&paint);
+        let mut linked = EntityHashSet::default();
+        for edge in links.into_iter().flat_map(RelationshipTarget::iter) {
+            let Ok((chunk, mut input_order)) = edges.get_mut(edge) else {
+                continue;
+            };
+            let still_overlaps = chunks.get(chunk.0).is_ok_and(|chunk| {
+                let chunk_bounds = Rect::from_corners(
+                    chunk.origin,
+                    chunk.origin + Vec2::splat(index.chunk_span_m),
+                );
+                !area.intersect(chunk_bounds.inflate(margin)).is_empty()
+            });
+            if !still_overlaps {
+                dirty.write(TerrainOverlayInvalidated(
+                    chunk.0,
+                    RecomposeTerrainOverlays {
+                        bounds: Some(area),
+                        paths_changed: false,
+                    },
+                ));
+                commands.entity(edge).try_despawn();
+                continue;
+            }
+            linked.insert(chunk.0);
+            if input_order.0 != order {
+                input_order.0 = order;
+            }
+        }
+        if !paint.is_changed() && changed_chunks.is_empty() && !terrain.is_changed() {
+            continue;
+        }
+        for chunk in indexed_chunks_overlapping_surface(index, area.inflate(margin)) {
+            if linked.contains(&chunk) {
+                continue;
+            }
+            commands.spawn((
+                TerrainPaintChunk(chunk),
+                TerrainPaintInput(entity),
+                TerrainPaintInputOrder(order),
+            ));
+            dirty.write(TerrainOverlayInvalidated(
+                chunk,
+                RecomposeTerrainOverlays {
+                    bounds: Some(area),
+                    paths_changed: false,
+                },
+            ));
+        }
+    }
+}
+
+pub(super) fn invalidate_changed_terrain_overlay_images(
+    mut dirty: MessageWriter<TerrainOverlayInvalidated>,
+    mut image_events: MessageReader<AssetEvent<Image>>,
+    paints: Query<(&TerrainPaintedTexture, &TerrainPaintAffectedChunks)>,
+    edges: Query<&TerrainPaintChunk>,
+    chunks: Query<(Entity, &TerrainChunk, &TerrainChunkOverlays)>,
+    terrain: Res<Assets<TerrainAsset>>,
+) {
+    let changed: HashSet<_> = image_events
+        .read()
+        .filter_map(|event| match *event {
+            AssetEvent::Added { id }
+            | AssetEvent::Modified { id }
+            | AssetEvent::LoadedWithDependencies { id }
+            | AssetEvent::Removed { id } => Some(id),
+            AssetEvent::Unused { .. } => None,
+        })
+        .collect();
+    if changed.is_empty() {
+        return;
+    }
+    for (paint, links) in &paints {
+        if changed.contains(&paint.texture.id()) {
+            let area = terrain_paint_area(paint);
+            for chunk in edges.iter_many(links.iter()).flatten() {
+                dirty.write(TerrainOverlayInvalidated(
+                    chunk.0,
+                    RecomposeTerrainOverlays {
+                        bounds: Some(area),
+                        paths_changed: false,
+                    },
+                ));
+            }
+        }
+    }
+    for (entity, chunk, overlays) in &chunks {
+        let Some(terrain) = terrain.get(&chunk.asset) else {
+            continue;
+        };
+        let settings = &terrain.canonical_terrain_grid().presentation;
+        let extent = f32::from(chunk.side.saturating_sub(1)) * chunk.spacing_m * 43.0
+            / f32::from(settings.surface_resolution);
+        for overlay in &overlays.paths {
+            if changed.contains(&overlay.texture) || changed.contains(&overlay.mask) {
+                let area = Rect::from_corners(
+                    overlay.origin - Vec2::new(0.0, extent),
+                    overlay.origin + Vec2::new(extent, 0.0),
+                );
+                dirty.write(TerrainOverlayInvalidated(
+                    entity,
+                    RecomposeTerrainOverlays {
+                        bounds: Some(area),
+                        paths_changed: false,
+                    },
+                ));
+            }
         }
     }
 }
@@ -212,112 +437,6 @@ pub(super) fn record_discarded_ground_path_cell(
 ) {
     if let Ok(path) = paths.get(discard.entity) {
         discarded.write(DiscardedGroundPathCell(path.cell.xy()));
-    }
-}
-
-pub(super) fn record_discarded_terrain_paint_area(
-    discard: On<Discard<TerrainPaintedTexture>>,
-    paints: Query<&TerrainPaintedTexture>,
-    mut discarded: MessageWriter<DiscardedTerrainPaintArea>,
-) {
-    if let Ok(paint) = paints.get(discard.entity) {
-        discarded.write(DiscardedTerrainPaintArea(terrain_paint_area(paint)));
-    }
-}
-
-fn terrain_paint_area(paint: &TerrainPaintedTexture) -> Rect {
-    Rect::from_center_size(paint.centre, Vec2::splat(paint.size_m))
-}
-
-/// Invalidates the terrain chunks under a painted texture that was added,
-/// changed or removed (a road piece built or demolished).
-pub(super) fn mark_terrain_chunks_under_changed_painted_textures(
-    mut dirty: MessageWriter<TerrainOverlayInvalidated>,
-    changed: Query<&TerrainPaintedTexture, Changed<TerrainPaintedTexture>>,
-    mut discarded: MessageReader<DiscardedTerrainPaintArea>,
-    chunks: Query<(Entity, &TerrainChunk, Option<&TerrainChunkOverlays>), With<TerrainRenderChunk>>,
-    assets: Res<Assets<TerrainAsset>>,
-    paints: Query<&TerrainPaintedTexture>,
-    paint_links: TerrainPaintLinks,
-    mut image_events: MessageReader<AssetEvent<Image>>,
-) {
-    let image_changes: HashSet<_> = image_events
-        .read()
-        .filter_map(|event| match *event {
-            AssetEvent::Added { id }
-            | AssetEvent::Modified { id }
-            | AssetEvent::LoadedWithDependencies { id }
-            | AssetEvent::Removed { id } => Some(id),
-            AssetEvent::Unused { .. } => None,
-        })
-        .collect();
-    let changed_areas = discarded
-        .read()
-        .map(|discarded| discarded.0)
-        .chain(changed.iter().map(terrain_paint_area))
-        .collect::<Vec<_>>();
-    if changed_areas.is_empty() && image_changes.is_empty() {
-        return;
-    }
-    for (entity, chunk, overlays) in &chunks {
-        let Some(asset) = assets.get(&chunk.asset) else {
-            continue;
-        };
-        let margin = f32::from(
-            asset
-                .canonical_terrain_grid()
-                .presentation
-                .surface_margin_cells,
-        );
-        let chunk_area = Rect::from_corners(
-            chunk.origin,
-            chunk.origin + Vec2::splat(f32::from(chunk.side.saturating_sub(1)) * chunk.spacing_m),
-        )
-        .inflate(chunk.spacing_m * margin);
-        let mut areas: Vec<_> = changed_areas
-            .iter()
-            .copied()
-            .filter(|area| !area.intersect(chunk_area).is_empty())
-            .collect();
-        if let Some(overlays) = overlays {
-            areas.extend(
-                paints
-                    .iter_many(paint_links.for_chunk(entity).map(|(_, paint, _)| paint))
-                    .flatten()
-                    .filter(|paint| image_changes.contains(&paint.texture.id()))
-                    .map(terrain_paint_area),
-            );
-            let settings = &asset.canonical_terrain_grid().presentation;
-            let extent = f32::from(chunk.side.saturating_sub(1)) * chunk.spacing_m * 43.0
-                / f32::from(settings.surface_resolution);
-            areas.extend(
-                overlays
-                    .paths
-                    .iter()
-                    .filter(|overlay| {
-                        image_changes.contains(&overlay.texture)
-                            || image_changes.contains(&overlay.mask)
-                    })
-                    .map(|overlay| {
-                        Rect::from_corners(
-                            overlay.origin - Vec2::new(0.0, extent),
-                            overlay.origin + Vec2::new(extent, 0.0),
-                        )
-                    }),
-            );
-        }
-        if let Some(bounds) = areas
-            .into_iter()
-            .reduce(|current, next| current.union(next))
-        {
-            dirty.write(TerrainOverlayInvalidated(
-                entity,
-                RecomposeTerrainOverlays {
-                    bounds: Some(bounds),
-                    paths_changed: false,
-                },
-            ));
-        }
     }
 }
 
@@ -347,6 +466,58 @@ pub(super) fn merge_terrain_overlay_invalidations(
     }
 }
 
+pub(super) fn invalidate_surface_stamps_on_water_membership_changes(
+    mut membership_changes: MessageReader<TerrainWaterMembershipChanged>,
+    indexes: Query<&TerrainIndex>,
+    memberships: Query<(&WorldMember, &TerrainWaterMembershipIndex)>,
+    terrains: Res<Assets<TerrainAsset>>,
+    chunks: Query<&TerrainChunk, With<TerrainRenderChunk>>,
+    mut changes: MessageWriter<TerrainOverlayInvalidated>,
+) {
+    let mut dirty = EntityHashSet::default();
+    for change in membership_changes.read() {
+        let Some(terrain) = terrains.get(change.terrain) else {
+            continue;
+        };
+        let grid = terrain.canonical_terrain_grid();
+        let spacing = grid.units.cell_size_metres;
+        let reach = (f32::from(grid.presentation.surface_margin_cells) + 1.0) * spacing;
+        for (member, membership) in &memberships {
+            if membership.terrain() != change.terrain {
+                continue;
+            }
+            let Ok(index) = indexes.get(member.root) else {
+                continue;
+            };
+            let Some(points) = change.points.as_ref() else {
+                dirty.extend(index.chunks.values().copied());
+                continue;
+            };
+            let region_points = change
+                .regions
+                .iter()
+                .flat_map(|owners| owners.iter().copied())
+                .flat_map(|owner| membership.accepted_points(owner));
+            for point in points.iter().copied().chain(region_points) {
+                let centre = point.as_vec2() * Vec2::new(spacing, -spacing);
+                let bounds = Rect::from_center_size(centre, Vec2::splat(2.0 * reach));
+                dirty.extend(indexed_chunks_overlapping_surface(index, bounds));
+            }
+        }
+    }
+    for entity in dirty {
+        if chunks.contains(entity) {
+            changes.write(TerrainOverlayInvalidated(
+                entity,
+                RecomposeTerrainOverlays {
+                    bounds: None,
+                    paths_changed: false,
+                },
+            ));
+        }
+    }
+}
+
 #[derive(QueryData)]
 pub(super) struct GroundPathSurfaceChunk {
     chunk: &'static TerrainChunk,
@@ -372,7 +543,7 @@ fn resolve_ground_path_patches(
     let path_layouts = paths
         .iter()
         .copied()
-        .filter_map(|(_, path)| {
+        .filter_map(|(entity, path)| {
             let definition = definitions.find_path(path.definition)?;
             if definition.elevated {
                 return None;
@@ -383,22 +554,22 @@ fn resolve_ground_path_patches(
                 definition.width_cm,
                 definitions.topology_cell_size_cm(),
             )?;
-            Some((AssetId(definition.curb.0), cell, centre, width))
+            Some((entity, path, definition, cell, centre, width))
         })
         .collect::<Vec<_>>();
     let triangles = path_layouts
         .iter()
-        .flat_map(|&(_, cell, centre, width)| ground_path_tile_triangles(cell, centre, width))
+        .flat_map(|&(_, _, _, cell, centre, width)| ground_path_tile_triangles(cell, centre, width))
         .collect::<HashSet<_>>();
-    if path_layouts
-        .iter()
-        .any(|&(curb, ..)| curb != AssetId::default() && definitions.find_fence(curb).is_none())
-    {
+    if path_layouts.iter().any(|&(_, _, definition, ..)| {
+        definition.curb != AssetId::default() && definitions.find_fence(definition.curb).is_none()
+    }) {
         return None;
     }
     let mut segments = path_layouts
         .iter()
-        .flat_map(|&(curb, cell, centre, width)| {
+        .flat_map(|&(_, _, definition, cell, centre, width)| {
+            let curb = definition.curb;
             let triangles = &triangles;
             ground_path_tile_triangles(cell, centre, width).flat_map(move |triangle| {
                 ground_path_triangle_curb_boundary(triangles, centre, triangle)
@@ -441,59 +612,48 @@ fn resolve_ground_path_patches(
             Some(surface_images.get(source)?.image.id())
         })
     };
-    let overlays = paths
-        .iter()
-        .copied()
-        .filter_map(|(entity, path)| {
-            let definition = definitions.find_path(path.definition)?;
-            if definition.elevated {
-                return None;
-            }
-            // The mask switches use source XY, while topology owns
-            // Bevy XZ. Convert only this transient presentation calculation.
-            let source_cell =
-                source_grid_offset + IVec3::new(path.cell.x, -path.cell.y, path.cell.z);
-            let (centre, width_cells, _) = calculate_snapped_ground_path_layout(
-                source_cell,
-                definition.width_cm,
-                definitions.topology_cell_size_cm(),
-            )?;
-            let direction_offset = width_cells / 2;
-            let relative = source_cell - centre;
-            let direction = match relative.xy() {
-                offset if offset == IVec2::new(0, direction_offset) => 0,
-                offset if offset == IVec2::new(direction_offset, 0) => 2,
-                offset if offset == IVec2::new(0, -direction_offset) => 4,
-                offset if offset == IVec2::new(-direction_offset, 0) => 6,
-                _ => return None,
-            };
-            let curb = AssetId(definition.curb.0);
-            let Some(mut mask_texture_selections) =
-                select_authored_ground_path_surface_mask_textures(
-                    direction,
-                    centre,
-                    width_cells,
-                    curb,
-                    &curb_edges,
-                )
-            else {
-                error!(
-                    path = ?path.definition,
-                    cell = ?path.cell,
-                    direction,
-                    "ground-path direction is outside the four authored cardinal directions"
-                );
-                return None;
-            };
-            for selection in mask_texture_selections.iter_mut().flatten() {
-                selection.cell = ground_path_surface_origin_from_source_direction_cell(
-                    selection.cell,
-                    definition.width_cm,
-                    definitions.topology_cell_size_cm(),
-                )? + IVec3::new(-source_grid_offset.x, source_grid_offset.y, 0);
-            }
-            Some((entity, definition.surface_texture, mask_texture_selections))
-        })
+    let overlays = path_layouts
+        .into_iter()
+        .filter_map(
+            |(entity, path, definition, source_cell, centre, width_cells)| {
+                let direction_offset = width_cells / 2;
+                let relative = source_cell - centre;
+                let direction = match relative.xy() {
+                    offset if offset == IVec2::new(0, direction_offset) => 0,
+                    offset if offset == IVec2::new(direction_offset, 0) => 2,
+                    offset if offset == IVec2::new(0, -direction_offset) => 4,
+                    offset if offset == IVec2::new(-direction_offset, 0) => 6,
+                    _ => return None,
+                };
+                let curb = definition.curb;
+                let Some(mut mask_texture_selections) =
+                    select_authored_ground_path_surface_mask_textures(
+                        direction,
+                        centre,
+                        width_cells,
+                        curb,
+                        &curb_edges,
+                    )
+                else {
+                    error!(
+                        path = ?path.definition,
+                        cell = ?path.cell,
+                        direction,
+                        "ground-path direction is outside the four authored cardinal directions"
+                    );
+                    return None;
+                };
+                for selection in mask_texture_selections.iter_mut().flatten() {
+                    selection.cell =
+                        ground_path_surface_origin_from_source_direction_cell(
+                            selection.cell,
+                            definition.width_cm,
+                            definitions.topology_cell_size_cm(),
+                        )? + IVec3::new(-source_grid_offset.x, source_grid_offset.y, 0);
+                }
+                Some((entity, definition.surface_texture, mask_texture_selections))
+            },
+        )
         .flat_map(|(entity, texture, selections)| {
             selections
                 .into_iter()
@@ -532,8 +692,7 @@ pub(super) fn prepare_terrain_chunk_surface_images(
     terrain_assets: Res<Assets<TerrainAsset>>,
     active_definitions: Res<WorldDefinitions>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
-    grid: Single<&TopologyGrid>,
-    topology: Single<&TopologyIndex>,
+    (grid, topology): (Single<&TopologyGrid>, Single<&TopologyIndex>),
     paths: Query<(Entity, &PathTile)>,
     paints: Query<(Entity, &TerrainPaintedTexture)>,
     chunks: Query<GroundPathSurfaceChunk, With<TerrainRenderChunk>>,
@@ -554,6 +713,7 @@ pub(super) fn prepare_terrain_chunk_surface_images(
     server: Res<AssetServer>,
     mut overlays: Query<&mut TerrainChunkOverlays>,
     paint_links: TerrainPaintLinks,
+    (memberships, water_regions): (Query<&TerrainWaterMembershipIndex>, TerrainWaterRegionQuery),
 ) {
     let grid = grid.into_inner();
     let topology = topology.into_inner();
@@ -564,6 +724,14 @@ pub(super) fn prepare_terrain_chunk_surface_images(
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };
+    let water_heights: EntityHashMap<_> = water_regions
+        .iter()
+        .filter_map(|(owner, region)| {
+            let terrain = terrain_assets.get(region.terrain())?;
+            Some((owner, region.surface_height(terrain)?))
+        })
+        .collect();
+    let maximum_width_m = f32::from(definitions.maximum_ground_path_width_cm()) * 0.01;
     let mut jobs = Vec::new();
     for entity in &pending_chunks {
         let Ok(GroundPathSurfaceChunkItem {
@@ -579,6 +747,10 @@ pub(super) fn prepare_terrain_chunk_surface_images(
         let Some(asset) = terrain_assets.get(&chunk.asset) else {
             continue;
         };
+        let water = memberships
+            .iter()
+            .find(|membership| membership.terrain() == chunk.asset.id())
+            .map(|membership| (membership, &water_heights));
         let Some(previous) = images.get(&surface.0) else {
             continue;
         };
@@ -598,11 +770,6 @@ pub(super) fn prepare_terrain_chunk_surface_images(
             } else {
                 // A curb can depend on its neighbour's reciprocal corner. Keep
                 // enough surrounding path cells for two snapped layout widths.
-                let maximum_width_m = definitions
-                    .paths()
-                    .filter(|path| !path.elevated)
-                    .map(|path| f32::from(path.width_cm) * 0.01)
-                    .fold(0.0_f32, f32::max);
                 let layout = image_area
                     .inflate(2.0 * maximum_width_m + native_patch_extent + grid.spacing_m * 3.0);
                 let min = ((layout.min - grid.origin) / grid.spacing_m)
@@ -611,12 +778,11 @@ pub(super) fn prepare_terrain_chunk_surface_images(
                 let max = ((layout.max - grid.origin) / grid.spacing_m)
                     .ceil()
                     .as_ivec2();
-                let topology = &*topology;
-                let cells = (min.y..=max.y).flat_map(|y| {
-                    (min.x..=max.x)
-                        .filter_map(move |x| topology.paths.get(&IVec3::new(x, y, 0)).copied())
-                });
-                let path_rows: Vec<_> = paths.iter_many(cells).flatten().collect();
+                let path_rows: Vec<_> = paths
+                    .iter_many(topology.paths_within(min, max))
+                    .flatten()
+                    .filter(|(_, path)| path.cell.z == 0)
+                    .collect();
                 let Some(mut paths) = resolve_ground_path_patches(
                     &path_rows,
                     *grid,
@@ -634,23 +800,11 @@ pub(super) fn prepare_terrain_chunk_surface_images(
                 });
                 paths
             };
-        let paint_entities: Vec<_> = if old.is_some() && pending.is_none() {
-            let mut paint_entities: Vec<_> = paint_links
-                .for_chunk(entity)
-                .map(|(_, paint, order)| (paint, order))
-                .collect();
-            paint_entities.sort_unstable_by_key(|&(_, order)| order);
-            paint_entities
-        } else {
-            paints
-                .iter()
-                .enumerate()
-                .filter_map(|(order, (entity, paint))| {
-                    (!terrain_paint_area(paint).intersect(image_area).is_empty())
-                        .then_some((entity, order))
-                })
-                .collect()
-        };
+        let mut paint_entities: Vec<_> = paint_links
+            .for_chunk(entity)
+            .map(|(_, paint, order)| (paint, order))
+            .collect();
+        paint_entities.sort_unstable_by_key(|&(_, order)| order);
         let relevant_paints = paints
             .iter_many(paint_entities.iter().map(|&(paint, _)| paint))
             .map(|item| {
@@ -720,8 +874,8 @@ pub(super) fn prepare_terrain_chunk_surface_images(
             full,
             margin_cells,
             edited,
+            water,
             next,
-            paint_entities,
             relevant_paints,
             full_repaint,
             samples,
@@ -730,15 +884,15 @@ pub(super) fn prepare_terrain_chunk_surface_images(
     }
     let images = &*images;
     let prepared: Vec<_> = ComputeTaskPool::get_or_init(TaskPool::default).scope(|scope| {
-        for (entity, chunk, asset, previous, full, margin_cells, edited, overlays, paint_entities, paints,
+        for (entity, chunk, asset, previous, full, margin_cells, edited, water, overlays, paints,
             full_repaint, samples, pixels) in jobs {
             scope.spawn(async move {
                 let restored = if full_repaint {
-                    compose_terrain_surface_image(chunk, asset, &edited, images)
+                    compose_terrain_surface_image(chunk, asset, &edited, water, images)
                         .map(|image| (image, full))
                 } else {
                     recompose_terrain_surface_image_region(
-                        chunk, asset, &edited, images, previous, samples, pixels,
+                        chunk, asset, &edited, water, images, previous, samples, pixels,
                     )
                 };
                 let (mut composed, clip) = restored?;
@@ -759,31 +913,11 @@ pub(super) fn prepare_terrain_chunk_surface_images(
                             "terrain painted texture rejected source image");
                     }
                 }
-                Some((entity, overlays, paint_entities, composed))
+                Some((entity, overlays, composed))
             });
         }
     });
-    for (entity, next, paint_entities, image) in prepared.into_iter().flatten() {
-        let mut existing: bevy::ecs::entity::EntityHashMap<(Entity, usize)> = paint_links
-            .for_chunk(entity)
-            .map(|(edge, paint, order)| (paint, (edge, order)))
-            .collect();
-        for (paint, order) in paint_entities {
-            if let Some((edge, previous)) = existing.remove(&paint) {
-                if previous == order {
-                    continue;
-                }
-                commands.entity(edge).try_despawn();
-            }
-            commands.spawn((
-                TerrainPaintChunk(entity),
-                TerrainPaintInput(paint),
-                TerrainPaintInputOrder(order),
-            ));
-        }
-        for &(edge, _) in existing.values() {
-            commands.entity(edge).try_despawn();
-        }
+    for (entity, next, image) in prepared.into_iter().flatten() {
         if let Ok(mut current) = overlays.get_mut(entity) {
             *current = next;
         } else {

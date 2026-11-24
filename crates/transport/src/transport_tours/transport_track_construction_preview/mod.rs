@@ -314,9 +314,9 @@ pub(super) fn update_transport_track_construction_preview_from_pointer_and_stati
                 && profile.kind == TransportationTrackKind::Ground
                 && segment.from() != track_preview.from_endpoint
                 && !stations.contains(segment.from())
-                && !segments
-                    .iter()
-                    .any(|(_, _, other, _)| other.to() == segment.from())
+                && !incidence
+                    .incoming(segment.from())
+                    .any(|track| segments.contains(track))
                 && segment.from_position.distance(cursor.world) <= GAP_START_SNAP_DISTANCE_METRES
         })
         .min_by(|(_, _, left, _), (_, _, right, _)| {

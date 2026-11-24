@@ -13,8 +13,43 @@ pub(super) fn project_prefab_ambient_light_contributions(
         ),
         Without<ModelRenderingSuppressed>,
     >,
+    changed: Query<
+        (),
+        (
+            With<PrefabAmbientLightContribution>,
+            Or<(
+                Changed<PrefabAmbientLightContribution>,
+                Changed<RenderLayers>,
+                Changed<InheritedVisibility>,
+            )>,
+        ),
+    >,
+    mut removed_contributions: RemovedComponents<PrefabAmbientLightContribution>,
+    mut removed_layers: RemovedComponents<RenderLayers>,
+    mut removed_visibility: RemovedComponents<InheritedVisibility>,
+    changed_suppression: Query<
+        (),
+        (
+            With<PrefabAmbientLightContribution>,
+            Added<ModelRenderingSuppressed>,
+        ),
+    >,
+    mut removed_suppression: RemovedComponents<ModelRenderingSuppressed>,
     mut ambient: ResMut<GlobalAmbientLight>,
 ) {
+    let removed = (removed_contributions.read().count() != 0)
+        | removed_layers
+            .read()
+            .any(|entity| contributions.contains(entity))
+        | removed_visibility
+            .read()
+            .any(|entity| contributions.contains(entity))
+        | removed_suppression
+            .read()
+            .any(|entity| contributions.contains(entity));
+    if !ambient.is_changed() && !removed && changed.is_empty() && changed_suppression.is_empty() {
+        return;
+    }
     let linear = contributions
         .iter()
         .filter(|(_, layers, visibility)| {

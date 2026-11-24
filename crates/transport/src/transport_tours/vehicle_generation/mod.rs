@@ -46,7 +46,7 @@ struct VehiclePurchase {
     cost: Money,
 }
 
-#[derive(Component)]
+#[derive(Component, PartialEq, Eq)]
 struct ColliderModels(Box<[Handle<Gltf>]>);
 
 #[derive(Component)]
@@ -137,8 +137,8 @@ fn observe_purchase_assets(
     mut model_events: MessageReader<AssetEvent<Gltf>>,
     mut model_failures: MessageReader<AssetLoadFailedEvent<Gltf>>,
     new_purchases: Query<Entity, Added<VehiclePurchase>>,
-    purchases: Query<
-        (Entity, Ref<VehiclePurchase>, Option<&ColliderModels>),
+    mut purchases: Query<
+        (Entity, Ref<VehiclePurchase>, Option<&mut ColliderModels>),
         (
             Without<VehicleAssetsReady>,
             Without<RequestedVehiclePayment>,
@@ -158,10 +158,10 @@ fn observe_purchase_assets(
     if changed_prefabs.is_empty() && changed_models.is_empty() && new_purchases.is_empty() {
         return;
     }
-    for (operation, purchase, retained_models) in &purchases {
+    for (operation, purchase, retained_models) in &mut purchases {
         if !purchase.is_added()
             && !changed_prefabs.contains(&purchase.prefab.id())
-            && !retained_models.is_some_and(|retained| {
+            && !retained_models.as_ref().is_some_and(|retained| {
                 retained
                     .0
                     .iter()
@@ -206,7 +206,11 @@ fn observe_purchase_assets(
             let ready = models
                 .iter()
                 .all(|model| assets.models.contains(model.id()));
-            commands.entity(operation).insert(ColliderModels(models));
+            if let Some(mut retained) = retained_models {
+                retained.set_if_neq(ColliderModels(models));
+            } else {
+                commands.entity(operation).insert(ColliderModels(models));
+            }
             if ready {
                 commands.entity(operation).insert(VehicleAssetsReady);
             }

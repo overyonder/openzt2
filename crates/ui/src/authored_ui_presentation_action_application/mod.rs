@@ -30,7 +30,4 @@ impl UiCachedMessages {
     }
 }
 
-mod ordered_presentation;
-pub(crate) use ordered_presentation::{
-    register_presentation_observers, route_presentation_actions,
-};
+pub(crate) mod presentation_batch;

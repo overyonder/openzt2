@@ -292,6 +292,7 @@ fn a_fence_built_over_a_broken_segment_replaces_it_and_another_fence_occupies_th
                         &terrain_assets,
                         &chunks,
                         &hosts,
+                        None,
                     )
                     .map(|(.., replaced)| replaced)
                 },

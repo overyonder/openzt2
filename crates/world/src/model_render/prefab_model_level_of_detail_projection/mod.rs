@@ -45,64 +45,54 @@ pub(super) fn project_prefab_model_level_of_detail_visibility(
                 .filter_map(|entity| lods.get(entity).ok().map(|(_, range, ..)| range.group)),
         );
     }
-    let detail_scale = match graphics.object_detail {
-        ThreeLevelGraphicsDetail::Low => 0.5,
+    let view_factor: f32 = match graphics.object_detail {
+        ThreeLevelGraphicsDetail::Low => 2.0,
         ThreeLevelGraphicsDetail::Medium => 1.0,
-        ThreeLevelGraphicsDetail::High => 1.5,
+        ThreeLevelGraphicsDetail::High => 1.0 / 1.5,
     };
+    let view_factor_squared = view_factor * view_factor;
     for (group, members, transform) in &groups {
         if !refresh_all
             && !members.is_changed()
-            && transform.as_ref().is_some_and(|t| !t.is_changed())
+            && transform
+                .as_ref()
+                .is_some_and(|transform| !transform.is_changed())
             && !changed_groups.contains(&group)
         {
             continue;
         }
         let transform = transform.as_deref();
-        let scale = transform.map_or(1.0, |transform| {
+        let world_scale = transform.map_or(1.0, |transform| {
             transform
                 .to_scale_rotation_translation()
                 .0
                 .abs()
                 .max_element()
-        }) * detail_scale;
-        let mut previous_depth = None;
-        let mut selected = None;
-        for member in members.iter() {
-            let Ok((fallback, range, layers, tier_selection, _)) = lods.get(member) else {
-                continue;
-            };
-            if tier_selection.is_some_and(|selection| !selection.0) {
-                continue;
-            }
-            let matches = range.active_without_range || {
+        });
+        let selected = members
+            .iter()
+            .filter_map(|member| {
+                let (fallback, range, layers, tier_selection, _) = lods.get(member).ok()?;
+                if tier_selection.is_some_and(|selection| !selection.0) {
+                    return None;
+                }
+                if range.active_without_range {
+                    return Some(range.ordinal);
+                }
                 let layers = layers.map(|layers| &layers.0).unwrap_or_default();
-                cameras.for_level_of_detail(layers).is_some_and(|camera| {
-                    let origin = transform.map_or_else(
-                        || fallback.translation(),
-                        |t| t.transform_point(range.center_m),
-                    );
-                    let depth = match previous_depth {
-                        Some((id, center, depth)) if id == camera.entity && center == origin => {
-                            depth
-                        }
-                        _ => {
-                            let depth = camera
-                                .pose
-                                .forward()
-                                .dot(origin - camera.pose.translation());
-                            previous_depth = Some((camera.entity, origin, depth));
-                            depth
-                        }
-                    };
-                    depth >= range.near_m * scale && depth < range.far_m * scale
-                })
-            };
-            if matches {
-                selected =
-                    Some(selected.map_or(range.ordinal, |value: u16| value.min(range.ordinal)));
-            }
-        }
+                let camera = cameras.for_level_of_detail(layers)?;
+                let center = transform.map_or_else(
+                    || fallback.translation(),
+                    |transform| transform.transform_point(range.center_m),
+                );
+                let distance_squared =
+                    camera.pose.translation().distance_squared(center) * view_factor_squared;
+                let near = range.near_m * world_scale;
+                let far = range.far_m * world_scale;
+                (distance_squared >= near * near && distance_squared < far * far)
+                    .then_some(range.ordinal)
+            })
+            .max();
         for member in members.iter() {
             if let Ok((_, range, _, tier_selection, mut visibility)) = lods.get_mut(member) {
                 visibility.set_if_neq(

@@ -9,8 +9,9 @@ use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and
 
 use crate::transport_tours::transport_fact_validation::authored_transport_track_piece_chain_is_valid;
 use crate::transport_tours::transport_fact_validation::transport_station_capacity_is_valid;
-use crate::transport_tours::transport_fact_validation::transport_track_path_length;
-use crate::transport_tours::transport_route_position_calculations::construct_native_ground_transport_track_travel_path_points;
+use crate::transport_tours::transport_route_position_calculations::{
+    construct_native_ground_transport_track_travel_path_points, TrackTravelDistances,
+};
 use openzt2_zoo_state::transport_tours::transport_circuit_types::CircuitMember;
 use openzt2_zoo_state::transport_tours::transport_circuit_types::TransportCircuit;
 use openzt2_zoo_state::transport_tours::transport_topology_types::AttachTransportStationRequest;
@@ -118,9 +119,13 @@ fn disconnect_track(
         if let Ok(mut circuit) = circuits.get_mut(member.0) {
             circuit.closed = true;
         }
-        commands
-            .entity(request.track)
-            .remove::<(TrackSegment, TrackStart, TrackEnd, CircuitMember)>();
+        commands.entity(request.track).remove::<(
+            TrackSegment,
+            TrackTravelDistances,
+            TrackStart,
+            TrackEnd,
+            CircuitMember,
+        )>();
     }
     disconnected_tracks.write(TransportTrackDisconnectionApplied {
         transaction: request.transaction,
@@ -377,7 +382,7 @@ fn connect_track(
         } else {
             request.path_points.clone()
         };
-    let Some(length) = transport_track_path_length(&travel_path_points) else {
+    let Some((distances, length)) = TrackTravelDistances::calculate(&travel_path_points) else {
         rejected_tracks.write(TransportTrackConnectionRejected {
             transaction: request.transaction,
             application: request.application,
@@ -387,6 +392,8 @@ fn connect_track(
         return;
     };
     if request.from == request.to
+        || request.from_endpoint_index >= 2
+        || request.to_endpoint_index >= 2
         || request.path_points.first() != Some(&from)
         || request.path_points.last() != Some(&to)
         || !authored_transport_track_piece_chain_is_valid(authored_track, &request.path_points)
@@ -427,6 +434,9 @@ fn connect_track(
 
     circuit.closed = true;
 
+    if profile.kind == openzt2_game_data::world_definitions::transportation_and_tours::TransportationTrackKind::Ground {
+        commands.entity(request.track).insert(distances);
+    }
     commands.entity(request.track).insert((
         CircuitMember(request.circuit),
         TrackStart(request.from),

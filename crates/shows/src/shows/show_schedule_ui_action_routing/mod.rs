@@ -1,43 +1,52 @@
-use bevy::ecs::system::SystemParam;
-use bevy::prelude::*;
+use bevy::{ecs::system::SystemParam, platform::collections::HashMap, prelude::*};
 use openzt2_game_data::ui_document::action::animal_shows::UiShowAction;
 
 use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_interface_state::information::entity_selection_types::WorldUiSelection;
-use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner;
-use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentRoot;
+use openzt2_interface_state::ui::authored_ui_action_projection_components::UiShowActions;
+use openzt2_interface_state::ui::authored_ui_activation_contracts::UiNodeActivated;
+use openzt2_interface_state::ui::authored_ui_node_projection_components::{UiDocumentOwner, UiDocumentRoot};
+use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
 use super::{
     show_editor_interaction_types::{
         AddShowConfirmationPending, DeleteShowConfirmationPending, EditedShow, ShowEditing,
     },
-    show_schedule_types::{SelectedShowScheduleRow, ShowStageRows},
-    show_schedule_ui_mutation_operations::{
-        create_scheduled_show_row_after_authored_confirmation,
-        create_show_schedule_break_row_for_selected_stage,
-        delete_confirmed_show_schedule_row_and_close_editor_selection,
-        move_show_schedule_row_by_one_position, AuthoredShowScheduleRowQuery,
+    show_schedule_types::{
+        ScheduledShowBreakRow, ScheduledShowPerformancePlan, ScheduledShowRowActivationState,
+        SelectedShowScheduleRow,
     },
+    show_schedule_ui_mutation_operations::{ShowScheduleEdits, ShowScheduleRows},
     show_stage_types::ShowStage,
+    show_timing_operations::convert_authored_nanoseconds_to_fixed_simulation_ticks,
 };
-use openzt2_interface_state::ui::authored_ui_action_projection_components::UiShowActions;
-use openzt2_interface_state::ui::authored_ui_activation_contracts::UiNodeActivated;
 
 #[derive(SystemParam)]
 pub(super) struct AuthoredShowScheduleActionRoutingInputs<'w, 's> {
-    action_nodes: Query<'w, 's, (&'static UiShowActions, &'static UiDocumentOwner)>,
+    actions: Query<'w, 's, (&'static UiShowActions, &'static UiDocumentOwner)>,
     roots: Query<'w, 's, (&'static UiDocumentRoot, Option<&'static ChildOf>)>,
-    stages: Query<'w, 's, &'static ShowStage>,
-    scheduler_selection: Query<'w, 's, &'static SelectedShowScheduleRow>,
-    add_confirmations: Query<'w, 's, &'static AddShowConfirmationPending>,
-    delete_confirmations: Query<'w, 's, &'static DeleteShowConfirmationPending>,
-    scheduled: AuthoredShowScheduleRowQuery<'w, 's>,
-    stage_rows: Query<'w, 's, &'static ShowStageRows>,
+    stages: Query<'w, 's, (&'static ShowStage, Option<&'static WorldMember>)>,
+    controller: Query<
+        'w,
+        's,
+        (
+            Option<&'static SelectedShowScheduleRow>,
+            Option<&'static AddShowConfirmationPending>,
+            Option<&'static DeleteShowConfirmationPending>,
+        ),
+    >,
+    schedules: ShowScheduleRows<'w, 's>,
 }
 
-#[allow(clippy::too_many_arguments)]
+#[derive(Default)]
+struct PendingScheduleControllerChanges {
+    selected_row: Option<Entity>,
+    add_stage: Option<Entity>,
+    delete_row: Option<Entity>,
+}
+
 pub(super) fn route_authored_show_schedule_actions_into_rows_and_editor_selection(
     mut commands: Commands,
     mut activations: MessageReader<UiNodeActivated>,
@@ -45,90 +54,122 @@ pub(super) fn route_authored_show_schedule_actions_into_rows_and_editor_selectio
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,
     selected: WorldUiSelection,
-    inputs: AuthoredShowScheduleActionRoutingInputs,
+    mut inputs: AuthoredShowScheduleActionRoutingInputs,
 ) {
-    let AuthoredShowScheduleActionRoutingInputs {
-        action_nodes,
-        roots,
-        stages,
-        scheduler_selection,
-        add_confirmations,
-        delete_confirmations,
-        mut scheduled,
-        stage_rows,
-    } = inputs;
+    if activations.is_empty() {
+        return;
+    }
+    let definitions = active_world_definitions.get(&world_definition_assets);
+    let selected_stage = selected
+        .subject()
+        .filter(|&entity| inputs.stages.contains(entity));
+    let mut edits = ShowScheduleEdits::default();
+    let mut controllers = HashMap::<Entity, PendingScheduleControllerChanges>::new();
     for activation in activations.read() {
-        let Ok((range, owner)) = action_nodes.get(activation.node) else {
+        let Ok((range, owner)) = inputs.actions.get(activation.node) else {
             continue;
         };
-        let Ok((root, parent)) = roots.get(owner.0) else {
+        let Ok((root, parent)) = inputs.roots.get(owner.0) else {
             continue;
         };
         let Some(document) = documents.get(&root.document) else {
             continue;
         };
         let controller = parent.map_or(owner.0, ChildOf::parent);
-        let selected_stage = selected.subject().filter(|entity| stages.contains(*entity));
-        let selected_schedule = selected
-            .subject()
-            .filter(|entity| scheduled.contains(*entity));
-        if let Some(entry) = selected_schedule {
-            commands
-                .entity(controller)
-                .insert(SelectedShowScheduleRow(entry));
-        }
-        let schedule_selection = selected_schedule.or_else(|| {
-            scheduler_selection
-                .get(controller)
-                .ok()
-                .map(|selection| selection.0)
+        let current = controllers.entry(controller).or_insert_with(|| {
+            let (selection, add, delete) = inputs.controller.get(controller).unwrap_or_default();
+            let mut selected_row = selection.map(|selection| selection.0);
+            if let Some(row) = selected
+                .subject()
+                .filter(|&row| edits.row_facts(row, &inputs.schedules).is_some())
+            {
+                if selected_row != Some(row) {
+                    commands
+                        .entity(controller)
+                        .insert(SelectedShowScheduleRow(row));
+                }
+                selected_row = Some(row);
+            }
+            PendingScheduleControllerChanges {
+                selected_row,
+                add_stage: add.map(|add| add.stage),
+                delete_row: delete.map(|delete| delete.entry),
+            }
         });
-        let records = range.authored_action_records(document);
-        for record in records {
+        for record in range.authored_action_records(document) {
             if activation.trigger != record.trigger {
                 continue;
             }
-            match &record.action {
+            match record.action {
                 UiShowAction::RequestAddShow => {
                     if let Some(stage) = selected_stage {
+                        current.add_stage = Some(stage);
                         commands
                             .entity(controller)
                             .insert(AddShowConfirmationPending { stage });
                     }
                 }
                 UiShowAction::AddShow => {
-                    if let Some(world_definitions) =
-                        active_world_definitions.get(&world_definition_assets)
-                    {
-                        create_scheduled_show_row_after_authored_confirmation(
-                            controller,
-                            &add_confirmations,
-                            &stages,
-                            world_definitions,
-                            &mut commands,
-                        );
-                    }
+                    let (Some(stage), Some(definitions)) = (current.add_stage, definitions) else {
+                        continue;
+                    };
+                    let Ok((stage_facts, member)) = inputs.stages.get(stage) else {
+                        continue;
+                    };
+                    let Some(definition) =
+                        definitions.find_show_stage(stage_facts.show_stage_definition)
+                    else {
+                        continue;
+                    };
+                    current.add_stage = None;
+                    let row = edits.append(
+                        stage,
+                        member,
+                        true,
+                        (
+                            ScheduledShowPerformancePlan {
+                                trick_performance_capacity: definition.schedule_slots,
+                            },
+                            ScheduledShowRowActivationState::Enabled,
+                        ),
+                        &inputs.schedules,
+                        &mut commands,
+                    );
+                    current.selected_row = Some(row);
+                    commands
+                        .entity(controller)
+                        .remove::<AddShowConfirmationPending>()
+                        .insert((SelectedShowScheduleRow(row), EditedShow(row), ShowEditing));
                 }
                 UiShowAction::RequestDeleteSelected => {
-                    if let Some(entry) = schedule_selection {
+                    if let Some(entry) = current
+                        .selected_row
+                        .filter(|&row| edits.row_facts(row, &inputs.schedules).is_some())
+                    {
+                        current.delete_row = Some(entry);
                         commands
                             .entity(controller)
                             .insert(DeleteShowConfirmationPending { entry });
                     }
                 }
                 UiShowAction::DeleteSelected => {
-                    delete_confirmed_show_schedule_row_and_close_editor_selection(
-                        controller,
-                        &delete_confirmations,
-                        &mut scheduled,
-                        &stage_rows,
-                        &mut commands,
-                    );
+                    if let Some(row) = current.delete_row.take() {
+                        edits.delete(row, &inputs.schedules, &mut commands);
+                        current.selected_row = None;
+                        commands.entity(controller).try_remove::<(
+                            SelectedShowScheduleRow,
+                            DeleteShowConfirmationPending,
+                            EditedShow,
+                            ShowEditing,
+                        )>();
+                    }
                 }
                 UiShowAction::ViewSelected => {
-                    if let Some(row) = schedule_selection
-                        .filter(|&row| scheduled.get(row).is_ok_and(|(_, _, is_show)| is_show))
-                    {
+                    if let Some(row) = current.selected_row.filter(|&row| {
+                        edits
+                            .row_facts(row, &inputs.schedules)
+                            .is_some_and(|(_, is_show)| is_show)
+                    }) {
                         commands
                             .entity(controller)
                             .insert(EditedShow(row))
@@ -136,45 +177,41 @@ pub(super) fn route_authored_show_schedule_actions_into_rows_and_editor_selectio
                     }
                 }
                 UiShowAction::AddBreak => {
-                    if let Some(stage) = selected_stage {
-                        if let Some(world_definitions) =
-                            active_world_definitions.get(&world_definition_assets)
-                        {
-                            create_show_schedule_break_row_for_selected_stage(
-                                stage,
-                                world_definitions,
-                                &mut commands,
-                            );
-                        }
-                    }
+                    let (Some(stage), Some(definitions)) = (selected_stage, definitions) else {
+                        continue;
+                    };
+                    let Ok((_, member)) = inputs.stages.get(stage) else {
+                        continue;
+                    };
+                    let duration_ticks = definitions.show_scheduling().map_or(1, |schedule| {
+                        convert_authored_nanoseconds_to_fixed_simulation_ticks(
+                            schedule.between_show_ns,
+                            definitions,
+                        )
+                        .max(1)
+                    });
+                    edits.append(
+                        stage,
+                        member,
+                        false,
+                        ScheduledShowBreakRow { duration_ticks },
+                        &inputs.schedules,
+                        &mut commands,
+                    );
                 }
                 UiShowAction::MoveSelectedUp | UiShowAction::MoveSelectedDown => {
-                    if let Some(row) = schedule_selection {
+                    if let Some(row) = current.selected_row {
                         let direction = if matches!(record.action, UiShowAction::MoveSelectedUp) {
                             -1
                         } else {
                             1
                         };
-                        move_show_schedule_row_by_one_position(
-                            row,
-                            direction,
-                            &mut scheduled,
-                            &stage_rows,
-                        );
+                        edits.move_adjacent(row, direction, &inputs.schedules);
                     }
                 }
-                UiShowAction::ToggleSelectedEnabled
-                | UiShowAction::EditSelected
-                | UiShowAction::CancelEdit
-                | UiShowAction::SetSelectedName
-                | UiShowAction::ShowMixerPanel
-                | UiShowAction::ToggleEditing
-                | UiShowAction::DismissMixerDropdown
-                | UiShowAction::SetSelectedOpen { .. }
-                | UiShowAction::PurchaseSelectedPlatformUpgrade
-                | UiShowAction::SelectPlatformUpgrade { .. }
-                | UiShowAction::ResolvePlatformDeletion { .. } => {}
+                _ => {}
             }
         }
     }
+    edits.finish(&mut inputs.schedules, &mut commands);
 }

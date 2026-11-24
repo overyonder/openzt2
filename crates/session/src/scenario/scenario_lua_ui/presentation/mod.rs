@@ -543,7 +543,8 @@ pub(super) fn apply_scenario_ui_commands(
         });
         let Some((root, target_node)) = target else {
             if let Some(role) = role_for(&documents, &path) {
-                if matches!(operation, NodeOperation::Visible(true))
+                if (matches!(operation, NodeOperation::Visible(true))
+                    && !(role == UiDocumentRole::PhotoMode && path.len() > 1))
                     || role == UiDocumentRole::Tutorial
                 {
                     if let Ok(owner) = owners.single() {

@@ -1,6 +1,6 @@
 use super::{
     pending_snapshot_application_types::{PendingSnapshotApplication, SnapshotBytes},
-    persistence_slot_filesystem_task_types::PersistenceSlotFilesystemTask,
+    persistence_slot_filesystem_task_types::PersistenceSlotOperation,
     terrain_snapshot_types::TerrainSnapshotRecord,
     world_snapshot_types::WorldSnapshotRecord,
 };
@@ -26,6 +26,7 @@ use openzt2_interface_state::persistence::{
 use openzt2_zoo_state::economy::world_economy_configuration::WorldEconomyConfiguration;
 
 #[derive(Component)]
+#[require(PersistenceSlotOperation)]
 pub(in crate::persistence) struct OriginalSavedGameLoadPreparation {
     source: AssetId,
     profile: AssetId,
@@ -51,14 +52,7 @@ pub(in crate::persistence) fn begin_original_saved_game_loading(
     catalogue: Res<SaveSlotCatalogue>,
     locations: Res<super::super::original_profile_save_locations::OriginalProfileSaveLocations>,
     sources: Option<Res<OriginalSavedGameSources>>,
-    active: Query<
-        (),
-        Or<(
-            With<PersistenceSlotFilesystemTask>,
-            With<PendingSnapshotApplication>,
-            With<OriginalSavedGameLoadPreparation>,
-        )>,
-    >,
+    active: Query<(), With<PersistenceSlotOperation>>,
     mut failures: MessageWriter<OriginalSavedGameLoadFailed>,
 ) {
     let mut accepted = false;

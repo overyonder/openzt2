@@ -1,3 +1,4 @@
+use super::placement_model_headroom::PlacementModelHeadroom;
 use avian3d::prelude::RayHitData;
 use avian3d::prelude::SpatialQuery;
 use avian3d::prelude::SpatialQueryFilter;
@@ -76,7 +77,7 @@ impl ObjectPlacementHeadroomQueries<'_, '_> {
             && terrain_cell_indices(candidate, cell).is_some()
     }
 
-    fn cast_occupied_cell_headroom_ray(
+    pub(super) fn cast_occupied_cell_headroom_ray(
         &self,
         origin: Vec3,
         clearance_m: f32,
@@ -224,7 +225,7 @@ pub(super) fn project_authoritative_facts_onto_object_placement_previews(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     (prefabs, footprints): (Res<Assets<ScenePrefabAsset>>, Res<ScenePlacementFootprints>),
-    models: Res<Assets<Gltf>>,
+    (models, mut model_headroom): (Res<Assets<Gltf>>, PlacementModelHeadroom),
     mut diagnostics: Option<ResMut<ObjectPlacementHeadroomDiagnosticState>>,
     mut previews: Query<(
         Entity,
@@ -251,7 +252,8 @@ pub(super) fn project_authoritative_facts_onto_object_placement_previews(
         || active_definitions.is_changed()
         || prefabs.is_changed()
         || footprints.is_changed()
-        || models.is_changed();
+        || models.is_changed()
+        || model_headroom.assets_changed();
     let Some(catalogue) = active_definitions.get(&definitions) else {
         return;
     };
@@ -285,6 +287,11 @@ pub(super) fn project_authoritative_facts_onto_object_placement_previews(
             continue;
         };
         let geometry = footprints.resolve(definition, Some(&prefab_source.0));
+        let prefab = prefabs.get(&prefab_source.0);
+        if let Some(prefab) = prefab {
+            model_headroom.request_models(definition, prefab);
+        }
+        let clearance = model_headroom.clearance(definition, prefab, &preview.transform);
         let constraints = definition.constraints;
         let pose = calculate_authored_object_placement_eighth_turns(definition, &preview.transform)
             .and_then(|turns| {
@@ -297,7 +304,7 @@ pub(super) fn project_authoritative_facts_onto_object_placement_previews(
             && !changed_habitats.contains(&entity)
             && diagnostics.is_none()
         {
-            let blockers_moved = definition.minimum_headroom_metres > 0.0
+            let blockers_moved = clearance.is_some_and(|clearance| clearance > 0.0)
                 && if permission.headroom_valid {
                     pose.is_some_and(|(origin, turns)| {
                         let cells = geometry.cells(turns);
@@ -371,7 +378,7 @@ pub(super) fn project_authoritative_facts_onto_object_placement_previews(
                     });
             has_path && has_wall
         });
-        let clearance_m = definition.minimum_headroom_metres;
+        let clearance_m = clearance.unwrap_or(0.0);
         // The terrain transaction stores centimetres in i16. Outside its
         // representable range, no terrain removal may be assumed.
         let height_cm = preview.transform.translation.y * 100.0;
@@ -382,43 +389,45 @@ pub(super) fn project_authoritative_facts_onto_object_placement_previews(
             .filter(|_| (f32::from(i16::MIN)..=f32::from(i16::MAX)).contains(&height_cm))
             .map(|member| member.root);
         let mut blocking_ray = None;
-        let headroom_valid = clearance_m <= f32::EPSILON
-            || pose.is_some_and(|(origin, turns)| {
-                geometry
-                    .cells(turns)
-                    .iter()
-                    .filter(|cell| cell.flags.contains_all(FootprintCellFlags::OCCUPIED))
-                    .all(|cell| {
-                        let local =
-                            IVec2::new(i32::from(cell.offset[0]), i32::from(cell.offset[1]));
-                        let world_cell = origin
-                            + rotate_object_placement_cell_by_quarter_turns(local, turns / 2);
-                        let cell = world_cell.as_vec2();
-                        let ray_origin =
-                            Vec3::new(cell.x, preview.transform.translation.y + 0.01, cell.y);
-                        let mut exemption = diagnostics
-                            .as_ref()
-                            .map(|_| ObjectPlacementTerrainExemptionObservation::default());
-                        let hit = headroom.cast_occupied_cell_headroom_ray(
-                            ray_origin,
-                            clearance_m,
-                            entity,
-                            relocation.map(|source| source.0),
-                            flattening_world,
-                            exemption.as_mut(),
-                        );
-                        if let Some(exemption) = exemption {
-                            blocking_ray = hit.map(|hit| ObjectPlacementBlockingHeadroomRay {
-                                local_cell: local,
-                                world_cell,
-                                origin: ray_origin,
-                                hit,
-                                exemption,
-                            });
-                        }
-                        hit.is_none()
-                    })
-            });
+        let headroom_valid = clearance.is_some_and(|clearance| {
+            clearance <= f32::EPSILON
+                || pose.is_some_and(|(origin, turns)| {
+                    geometry
+                        .cells(turns)
+                        .iter()
+                        .filter(|cell| cell.flags.contains_all(FootprintCellFlags::OCCUPIED))
+                        .all(|cell| {
+                            let local =
+                                IVec2::new(i32::from(cell.offset[0]), i32::from(cell.offset[1]));
+                            let world_cell = origin
+                                + rotate_object_placement_cell_by_quarter_turns(local, turns / 2);
+                            let cell = world_cell.as_vec2();
+                            let ray_origin =
+                                Vec3::new(cell.x, preview.transform.translation.y + 0.01, cell.y);
+                            let mut exemption = diagnostics
+                                .as_ref()
+                                .map(|_| ObjectPlacementTerrainExemptionObservation::default());
+                            let hit = headroom.cast_occupied_cell_headroom_ray(
+                                ray_origin,
+                                clearance_m,
+                                entity,
+                                relocation.map(|source| source.0),
+                                flattening_world,
+                                exemption.as_mut(),
+                            );
+                            if let Some(exemption) = exemption {
+                                blocking_ray = hit.map(|hit| ObjectPlacementBlockingHeadroomRay {
+                                    local_cell: local,
+                                    world_cell,
+                                    origin: ray_origin,
+                                    hit,
+                                    exemption,
+                                });
+                            }
+                            hit.is_none()
+                        })
+                })
+        });
         if let Some(diagnostics) = diagnostics.as_mut() {
             diagnostics.pending = Some(ObjectPlacementHeadroomObservation {
                 preview: entity,
@@ -481,15 +490,16 @@ pub(super) fn project_authoritative_facts_onto_object_placement_previews(
             topology_valid,
             headroom_valid,
             surface_valid,
-            prefab_ready: prefabs.get(&prefab_source.0).is_some_and(|prefab| {
-                (!definition.automatic_footprint
-                    || prefab
-                        .canonical_scene_prefab_document()
-                        .automatic_placement_bounds_xz
-                        .is_none()
-                    || footprints.has_scene_bounds(&prefab_source.0))
-                    && first_missing_prefab_collider_model_asset_id(prefab, &models).is_none()
-            }),
+            prefab_ready: clearance.is_some()
+                && prefab.is_some_and(|prefab| {
+                    (!definition.automatic_footprint
+                        || prefab
+                            .canonical_scene_prefab_document()
+                            .automatic_placement_bounds_xz
+                            .is_none()
+                        || footprints.has_scene_bounds(&prefab_source.0))
+                        && first_missing_prefab_collider_model_asset_id(prefab, &models).is_none()
+                }),
         };
         if *permission != next {
             *permission = next;

@@ -1,10 +1,10 @@
-use bevy::prelude::*;
+use bevy::{ecs::relationship::RelationshipTarget, prelude::*};
 use openzt2_game_data::AssetId;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 use std::collections::BTreeMap;
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-#[require(ResearchPurchaseState, ResearchDurationOverride)]
+#[require(ResearchDurationOverride)]
 pub struct ResearchProjectAvailability {
     pub item: AssetId,
     pub available: bool,
@@ -36,11 +36,10 @@ pub struct PendingResearchProjectPayment {
 #[relationship_target(relationship = PendingResearchProjectPayment, linked_spawn)]
 pub struct ResearchItemPayments(Entity);
 
-#[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum ResearchPurchaseState {
-    #[default]
-    Idle,
-    AwaitingPayment(Entity),
+impl ResearchItemPayments {
+    pub fn pending_payment(&self) -> Entity {
+        *self.collection()
+    }
 }
 
 #[derive(Component, Debug, Clone, Copy, Default, PartialEq)]

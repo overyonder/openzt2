@@ -1,7 +1,7 @@
 use bevy::{
     input::mouse::{MouseScrollUnit, MouseWheel},
-    picking::events::PointerScroll,
     prelude::*,
+    window::PrimaryWindow,
 };
 
 use super::authored_wheel_scroll_diagnostic_types::AuthoredWheelScrollConsumption;
@@ -11,46 +11,30 @@ use openzt2_interface_state::ui::pointer_capture_types::UiWheelCapture;
 
 /// Picking resolves one wheel receiver independently of click hover.
 pub fn scroll_captured_authored_list_or_window_from_mouse_wheel(
-    (mut pointer_scroll, mut wheel): (MessageReader<PointerScroll>, MessageReader<MouseWheel>),
+    mut wheel: MessageReader<MouseWheel>,
+    primary_windows: Query<Entity, With<PrimaryWindow>>,
     capture: Res<UiPointerCapture>,
     mut panels: Query<(&mut ScrollPosition, &ComputedNode, &Node)>,
     mut diagnostic: Option<ResMut<AuthoredWheelScrollDiagnosticState>>,
 ) {
-    let record_input = diagnostic.is_some();
+    let Ok(window) = primary_windows.single() else {
+        wheel.clear();
+        return;
+    };
+    // The captured scroll rectangle can receive wheel input through empty cells.
     let mut event_count = 0usize;
     let mut first_event = None;
-    let raw_delta = wheel.read().fold(0.0, |total, event| {
-        if record_input {
-            event_count += 1;
-            if first_event.is_none() {
-                first_event = Some((event.window, event.unit, event.x, event.y));
-            }
-        }
-        total
-            - event.y
-                * if event.unit == MouseScrollUnit::Line {
-                    28.0
-                } else {
-                    1.0
-                }
-    });
-    let mut targeted = false;
-    let pointer_delta = pointer_scroll
-        .read()
-        .filter(|event| event.pointer.id.is_mouse() && Some(event.entity) == capture.target)
-        .map(|event| {
-            targeted = true;
-            -event.y
-                * if event.unit == MouseScrollUnit::Line {
-                    28.0
-                } else {
-                    1.0
-                }
-        })
-        .sum::<f32>();
-    // A rectangular list can consume wheel input while none of its empty
-    // cells participates in alpha picking.
-    let delta = if targeted { pointer_delta } else { raw_delta };
+    let mut delta = 0.0;
+    for event in wheel.read().filter(|event| event.window == window) {
+        event_count += 1;
+        first_event.get_or_insert((event.window, event.unit, event.x, event.y));
+        delta -= event.y
+            * if event.unit == MouseScrollUnit::Line {
+                28.0
+            } else {
+                1.0
+            };
+    }
     let mut record = |applied, outcome| {
         if let Some(diagnostic) = diagnostic.as_deref_mut() {
             diagnostic.record_consumption(AuthoredWheelScrollConsumption {

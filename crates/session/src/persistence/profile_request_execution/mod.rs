@@ -29,8 +29,8 @@ use super::{
         MAXIMUM_PROFILE_DISPLAY_NAME_BYTE_COUNT, MAXIMUM_PROFILE_INDEX_BYTE_COUNT,
     },
     profile_persistence_types::{
-        ProfileFilesystemTask, ProfileFilesystemTaskCompletion, ProfileFilesystemTaskContext,
-        StoredProfileRecordAndSettings,
+        PendingProfileSettingsWrite, ProfileFilesystemTask, ProfileFilesystemTaskCompletion,
+        ProfileFilesystemTaskContext, StoredProfileRecordAndSettings,
     },
 };
 
@@ -477,7 +477,7 @@ pub(super) fn begin_deleting_requested_profiles(
     }
 }
 
-/// Saves the latest settings once the previous profile operation has finished.
+/// Coalesces settings changes until the profile index is available to write.
 pub(super) fn begin_persisting_changed_active_profile_options(
     mut commands: Commands,
     profile_options: Res<ProfileOptions>,
@@ -493,8 +493,9 @@ pub(super) fn begin_persisting_changed_active_profile_options(
     persistence_filesystem_paths: Option<Res<PersistenceFilesystemPaths>>,
     profile_index: Res<ProfileIndex>,
     active_profile_filesystem_tasks: Query<(), With<ProfileFilesystemTask>>,
+    pending: Query<(Entity, &PendingProfileSettingsWrite)>,
+    mut finished: RemovedComponents<ProfileFilesystemTask>,
     mut profile_operation_failure_messages: MessageWriter<ProfileOperationFailed>,
-    mut pending_settings_profile: Local<Option<AssetId>>,
     scenario_variables: Res<
         openzt2_zoo_state::progression::profile_scenario_variables::ProfileScenarioVariables,
     >,
@@ -502,16 +503,23 @@ pub(super) fn begin_persisting_changed_active_profile_options(
         openzt2_zoo_state::progression::profile_scenario_variables::PersistProfileScenarioVariables,
     >,
 ) {
-    let Some(active_profile_identifier) = profile_index.selected_profile_identifier else {
-        *pending_settings_profile = None;
+    let task_finished = finished.read().count() != 0;
+    let scenario_save_requested = save_scenario_variables.read().count() != 0;
+    let selected = profile_index
+        .selected_profile_identifier
+        .filter(|id| *id == profile_options.profile_identifier);
+    let queued = pending.single().ok().and_then(|(entity, write)| {
+        if Some(write.0) == selected {
+            Some(entity)
+        } else {
+            commands.entity(entity).despawn();
+            None
+        }
+    });
+    let Some(active_profile_identifier) = selected else {
         return;
     };
-    if profile_options.profile_identifier != active_profile_identifier {
-        *pending_settings_profile = None;
-        return;
-    }
-    let scenario_save_requested = save_scenario_variables.read().count() != 0;
-    if profile_options.is_changed()
+    let requested = profile_options.is_changed()
         || scenario_variables.is_changed()
         || scenario_save_requested
         || profile_challenge_completion_counts.is_changed()
@@ -520,17 +528,20 @@ pub(super) fn begin_persisting_changed_active_profile_options(
         || display_settings.is_changed()
         || graphics_settings.is_changed()
         || online_message_policy.is_changed()
-        || modder_tools_settings.is_changed()
-    {
-        *pending_settings_profile = Some(active_profile_identifier);
-    }
-    if !active_profile_filesystem_tasks.is_empty()
-        || *pending_settings_profile != Some(active_profile_identifier)
-    {
+        || modder_tools_settings.is_changed();
+    if !requested && !(task_finished && queued.is_some()) {
         return;
     }
-    *pending_settings_profile = None;
+    if !active_profile_filesystem_tasks.is_empty() {
+        if queued.is_none() {
+            commands.spawn(PendingProfileSettingsWrite(active_profile_identifier));
+        }
+        return;
+    }
     let Some(persistence_filesystem_paths) = persistence_filesystem_paths.as_deref() else {
+        if let Some(queued) = queued {
+            commands.entity(queued).despawn();
+        }
         profile_operation_failure_messages.write(ProfileOperationFailed {
             affected_profile_identifier: Some(active_profile_identifier),
             failure_reason: ProfileFailure::Io,
@@ -547,7 +558,11 @@ pub(super) fn begin_persisting_changed_active_profile_options(
     let online_message_policy_to_persist = *online_message_policy;
     let modder_tools_settings_to_persist = *modder_tools_settings;
     let profile_index_file_path = persistence_filesystem_paths.profile_index_file_path();
-    commands.spawn((
+    let mut operation = match queued {
+        Some(queued) => commands.entity(queued),
+        None => commands.spawn_empty(),
+    };
+    operation.remove::<PendingProfileSettingsWrite>().insert((
         ProfileFilesystemTaskContext(Some(active_profile_identifier)),
         ProfileFilesystemTask(IoTaskPool::get().spawn(async move {
             let (mut stored_profile_records_and_settings, selected_profile_identifier) =

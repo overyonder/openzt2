@@ -1,3 +1,4 @@
+use super::prefab_socket_index::PrefabSocketIndex;
 use super::prefab_attachment_independent_rotation::PrefabAttachmentIndependentRotation;
 use openzt2_world_state::world_spawn::prefab_authored_attachment_identifier::PrefabAuthoredAttachmentIdentifier;
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabPresentation;
@@ -332,7 +333,7 @@ pub(super) fn select_named_presentation_fade_states(
 /// A binder holder waiting for the node of its owner's model to exist.
 #[derive(Component, Debug, Clone)]
 pub(super) struct PendingNamedPresentationNodeAttachment {
-    owner: Entity,
+    pub(super) owner: Entity,
     node: String,
 }
 
@@ -343,36 +344,38 @@ pub(super) struct PendingNamedPresentationNodeAttachment {
 /// keeps waiting rather than giving up.
 pub(super) fn attach_named_presentations_to_model_nodes(
     mut commands: Commands,
-    pending: Query<(Entity, &PendingNamedPresentationNodeAttachment)>,
-    children: Query<&Children>,
+    mut pending: Query<(
+        Entity,
+        Ref<PendingNamedPresentationNodeAttachment>,
+        Option<&mut Visibility>,
+    )>,
+    indexes: Query<Ref<PrefabSocketIndex>>,
     parents: Query<&ChildOf>,
-    identifiers: Query<&PrefabAuthoredAttachmentIdentifier>,
-    names: Query<&Name>,
 ) {
-    for (holder, attachment) in &pending {
-        let node_name = attachment.node.trim();
-        let node = AssetId::from_key(&node_name.to_ascii_lowercase());
-        let Some(node_entity) = children
-            .iter_descendants_depth_first::<Children>(attachment.owner)
-            .filter(|candidate| {
-                *candidate != holder
-                    && !parents
-                        .iter_ancestors::<ChildOf>(*candidate)
-                        .any(|ancestor| ancestor == holder)
-            })
-            .find(|candidate| {
-                identifiers.get(*candidate).is_ok_and(|id| id.0 == node)
-                    || names
-                        .get(*candidate)
-                        .is_ok_and(|name| name.as_str().eq_ignore_ascii_case(node_name))
-            })
-        else {
+    for (holder, attachment, visibility) in &mut pending {
+        let Ok(index) = indexes.get(attachment.owner) else {
             continue;
         };
-        commands
-            .entity(holder)
-            .insert((ChildOf(node_entity), Visibility::Inherited))
-            .remove::<PendingNamedPresentationNodeAttachment>();
+        if !index.is_changed() && !attachment.is_changed() {
+            continue;
+        }
+        let key = AssetId::from_key(&attachment.node.trim().to_ascii_lowercase());
+        let Some(node_entity) = index.named(key).find(|&candidate| {
+            candidate != holder
+                && parents
+                    .iter_ancestors::<ChildOf>(candidate)
+                    .all(|ancestor| ancestor != holder)
+        }) else {
+            continue;
+        };
+        let mut holder = commands.entity(holder);
+        holder.insert(ChildOf(node_entity));
+        if let Some(mut visibility) = visibility {
+            visibility.set_if_neq(Visibility::Inherited);
+        } else {
+            holder.insert(Visibility::Inherited);
+        }
+        holder.remove::<PendingNamedPresentationNodeAttachment>();
     }
 }
 

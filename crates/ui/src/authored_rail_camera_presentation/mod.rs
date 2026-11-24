@@ -17,7 +17,6 @@ use openzt2_game_data::AssetId;
 
 use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
 use openzt2_world::world_spawn::prefab_presentation_render_tree::spawn_prefab_render_tree;
-use openzt2_world_state::world_spawn::prefab_ambient_light_contribution::PrefabAmbientLightContribution;
 
 use super::authored_ui_selection_state::UiSelected;
 
@@ -37,16 +36,9 @@ pub(super) struct UiRailCameraRuntime {
     keys: Vec<RailKey>,
     pending: VecDeque<RailDeveloperCommand>,
     file_task: Option<Task<Result<Option<Vec<RailKey>>, String>>>,
-    elapsed: f32,
     playing: bool,
     commands: [bool; 14],
 }
-
-#[derive(Component, Default, PartialEq)]
-pub(super) struct UiRailClipTime(Option<f32>);
-
-#[derive(Component)]
-pub(super) struct UiRailEnvironment;
 
 #[derive(Component)]
 pub(super) struct UiRailLightTrack {
@@ -70,6 +62,9 @@ pub(super) struct RailDeveloperCommand {
     command: PrefabRailCameraCommand,
     active: bool,
 }
+
+#[derive(Message, Clone, Copy)]
+pub(super) struct RailWaypointsEdited(Entity);
 
 #[derive(serde::Deserialize, serde::Serialize)]
 struct SavedRailCamera {
@@ -112,11 +107,6 @@ pub(super) fn hydrate_rail_cameras(
                 Visibility::Inherited,
                 RenderLayers::layer(RAIL_RENDER_LAYER),
                 UiRailCameraSceneOwner(owner),
-                UiRailEnvironment,
-                PrefabAmbientLightContribution {
-                    color_linear: Vec3::ZERO,
-                    intensity: 0.0,
-                },
             ))
             .id();
         let (_, renderables, lights) =
@@ -151,6 +141,11 @@ pub(super) fn hydrate_rail_cameras(
                     clear_color: ClearColorConfig::Custom(Color::BLACK),
                     ..default()
                 },
+                AmbientLight {
+                    color: Color::BLACK,
+                    brightness: 0.0,
+                    ..default()
+                },
                 RenderTarget::Image(target.clone().into()),
                 transform,
                 RenderLayers::layer(RAIL_RENDER_LAYER),
@@ -165,7 +160,6 @@ pub(super) fn hydrate_rail_cameras(
                     keys,
                     pending: VecDeque::new(),
                     file_task: None,
-                    elapsed: 0.0,
                     playing: true,
                     commands: [false; 14],
                 },
@@ -186,9 +180,7 @@ pub(super) fn hydrate_rail_cameras(
                 },
             ));
         }
-        commands
-            .entity(owner)
-            .insert((ImageNode::new(target), UiRailClipTime::default()));
+        commands.entity(owner).insert(ImageNode::new(target));
     }
 }
 
@@ -258,88 +250,134 @@ pub(super) fn route_rail_developer_hotkeys(
     }
 }
 
-pub(super) fn update_rail_cameras(
+pub(super) fn apply_rail_developer_edits(
     time: Res<Time>,
-    prefabs: Res<Assets<ScenePrefabAsset>>,
-    mut rails: Query<(
-        &UiRailCameraPresentation,
-        &InheritedVisibility,
-        &UiSelected,
-        &mut UiRailClipTime,
-    )>,
+    rails: Query<(&InheritedVisibility, &UiSelected)>,
     mut cameras: Query<(
+        Entity,
         &UiRailCameraSceneOwner,
-        &mut Camera,
         &mut Transform,
-        &mut AnimationPlayer,
         &mut UiRailCameraRuntime,
     )>,
-    mut animations: ResMut<Assets<AnimationClip>>,
     mut developer_commands: MessageReader<RailDeveloperCommand>,
+    mut edits: MessageWriter<RailWaypointsEdited>,
 ) {
     for command in developer_commands.read() {
-        if let Ok((_, _, _, _, mut runtime)) = cameras.get_mut(command.camera) {
+        if let Ok((_, _, _, mut runtime)) = cameras.get_mut(command.camera) {
             runtime.pending.push_back(*command);
         }
     }
-    for (owner, mut camera, mut transform, mut player, mut runtime) in &mut cameras {
-        let Ok((presentation, visible, active, mut clip_time)) = rails.get_mut(owner.0) else {
+    for (camera, owner, mut transform, mut runtime) in &mut cameras {
+        if !rails
+            .get(owner.0)
+            .is_ok_and(|(visible, active)| visible.get() && active.0)
+        {
+            continue;
+        }
+        let edited = (!runtime.pending.is_empty() || runtime.file_task.is_some())
+            && apply_ordered_developer_commands(&mut runtime);
+        let moved_or_recording = runtime.commands.iter().enumerate().any(|(index, held)| {
+            *held
+                && index != command_index(PrefabRailCameraCommand::Play)
+                && index != command_index(PrefabRailCameraCommand::Fast)
+        });
+        let recorded = moved_or_recording
+            && apply_developer_commands(time.delta_secs(), &mut runtime, &mut transform);
+        if edited || recorded {
+            edits.write(RailWaypointsEdited(camera));
+        }
+    }
+}
+
+pub(super) fn rebuild_edited_rail_clips(
+    mut edits: MessageReader<RailWaypointsEdited>,
+    cameras: Query<(&UiRailCameraSceneOwner, &UiRailCameraRuntime)>,
+    rails: Query<&UiRailCameraPresentation>,
+    prefabs: Res<Assets<ScenePrefabAsset>>,
+    mut clips: ResMut<Assets<AnimationClip>>,
+) {
+    for edit in edits.read() {
+        let Ok((owner, runtime)) = cameras.get(edit.0) else {
             continue;
         };
-        let camera_is_active = visible.get() && active.0;
-        if camera.is_active != camera_is_active {
-            camera.is_active = camera_is_active;
-        }
-        if !camera_is_active {
-            if player.animation(runtime.animation).is_some() {
-                player.stop(runtime.animation);
-            }
-            clip_time.set_if_neq(UiRailClipTime(None));
-            continue;
-        }
-        let Some(rail) = prefabs.get(&presentation.0).and_then(|prefab| {
-            prefab
-                .canonical_scene_prefab_document()
-                .rail_camera
-                .as_ref()
-        }) else {
+        let Some(rail) = rails
+            .get(owner.0)
+            .ok()
+            .and_then(|presentation| prefabs.get(&presentation.0))
+            .and_then(|prefab| {
+                prefab
+                    .canonical_scene_prefab_document()
+                    .rail_camera
+                    .as_ref()
+            })
+        else {
             continue;
         };
-        let changed = apply_ordered_developer_commands(&mut runtime);
-        let recorded = apply_developer_commands(time.delta_secs(), &mut runtime, &mut transform);
-        if changed || recorded {
-            if let Some(mut clip) = animations.get_mut(&runtime.clip) {
-                *clip = rail_clip(runtime.target, &runtime.keys, rail.seconds_per_segment);
+        if let Some(mut clip) = clips.get_mut(&runtime.clip) {
+            *clip = rail_clip(runtime.target, &runtime.keys, rail.seconds_per_segment);
+        }
+    }
+}
+
+pub(super) fn synchronize_rail_animation_playback(
+    rails: Query<(&InheritedVisibility, &UiSelected)>,
+    mut cameras: Query<(
+        &UiRailCameraSceneOwner,
+        &UiRailCameraRuntime,
+        &mut Camera,
+        &mut AnimationPlayer,
+    )>,
+) {
+    for (owner, runtime, mut camera, mut player) in &mut cameras {
+        let visible = rails
+            .get(owner.0)
+            .is_ok_and(|(visible, active)| visible.get() && active.0);
+        camera
+            .reborrow()
+            .map_unchanged(|camera| &mut camera.is_active)
+            .set_if_neq(visible);
+        let playing = visible && runtime.playing && runtime.keys.len() > 1;
+        let speed = if runtime.commands[command_index(PrefabRailCameraCommand::Fast)] {
+            4.0
+        } else {
+            1.0
+        };
+        if playing {
+            let needs_playback_update =
+                player.animation(runtime.animation).is_none_or(|animation| {
+                    animation.is_paused() || animation.speed() != speed || animation.weight() != 1.0
+                });
+            if needs_playback_update {
+                player
+                    .play(runtime.animation)
+                    .repeat()
+                    .resume()
+                    .set_speed(speed)
+                    .set_weight(1.0);
+            }
+        } else if player
+            .animation(runtime.animation)
+            .is_some_and(|animation| !animation.is_paused() || animation.weight() != 0.0)
+        {
+            if let Some(animation) = player.animation_mut(runtime.animation) {
+                animation.pause().set_weight(0.0);
             }
         }
-        let duration =
-            rail.seconds_per_segment.max(f32::EPSILON) * runtime.keys.len().max(1) as f32;
-        if runtime.playing && runtime.keys.len() > 1 {
-            let fast = runtime.commands[command_index(PrefabRailCameraCommand::Fast)];
-            runtime.elapsed = (runtime.elapsed + time.delta_secs() * if fast { 4.0 } else { 1.0 })
-                .rem_euclid(duration);
-            player
-                .play(runtime.animation)
-                .pause()
-                .seek_to(runtime.elapsed);
-        } else if player.animation(runtime.animation).is_some() {
-            player.stop(runtime.animation);
-        }
-        clip_time.set_if_neq(UiRailClipTime(Some(
-            runtime.elapsed.rem_euclid(duration) / duration,
-        )));
     }
 }
 
 pub(super) fn project_rail_lighting(
     prefabs: Res<Assets<ScenePrefabAsset>>,
+    animations: Res<Assets<AnimationClip>>,
     mut asset_events: MessageReader<AssetEvent<ScenePrefabAsset>>,
-    rails: Query<(
-        &UiRailCameraPresentation,
-        Ref<UiRailClipTime>,
-        &UiRailCameraSceneEntities,
+    rails: Query<(&UiRailCameraPresentation, &UiRailCameraSceneEntities)>,
+    cameras: Query<(
+        Entity,
+        Ref<Camera>,
+        Ref<AnimationPlayer>,
+        Ref<UiRailCameraRuntime>,
     )>,
-    mut ambient: Query<&mut PrefabAmbientLightContribution, With<UiRailEnvironment>>,
+    mut ambient: Query<&mut AmbientLight>,
     mut lights: Query<(&mut DirectionalLight, &mut Transform, &mut UiRailLightTrack)>,
 ) {
     let changed_prefabs: std::collections::HashSet<_> = asset_events
@@ -349,9 +387,14 @@ pub(super) fn project_rail_lighting(
             _ => None,
         })
         .collect();
-    for (presentation, clip_time, targets) in &rails {
+    for (presentation, targets) in &rails {
+        let Some((camera_entity, camera, player, runtime)) =
+            targets.iter().find_map(|target| cameras.get(target).ok())
+        else {
+            continue;
+        };
         let asset_changed = changed_prefabs.contains(&presentation.0.id());
-        if !clip_time.is_changed() && !asset_changed {
+        if !camera.is_changed() && !player.is_changed() && !runtime.is_changed() && !asset_changed {
             continue;
         }
         let Some(rail) = prefabs.get(&presentation.0).and_then(|prefab| {
@@ -364,18 +407,39 @@ pub(super) fn project_rail_lighting(
         };
         let refreshed_tracks =
             asset_changed.then(|| group_light_keys(&rail.directional_light_keys));
-        let environment = clip_time
-            .0
-            .and_then(|time| sample_environment(&rail.environment_keys, time));
-        for target in targets.iter() {
-            if let Some((color, _)) = environment {
-                if let Ok(mut current) = ambient.get_mut(target) {
-                    current.set_if_neq(PrefabAmbientLightContribution {
-                        color_linear: Vec3::from_array(color),
-                        intensity: 1.0,
-                    });
-                }
+        let clip_time = camera.is_active.then(|| {
+            let duration = animations
+                .get(&runtime.clip)
+                .map_or(0.0, AnimationClip::duration);
+            let seconds = player
+                .animation(runtime.animation)
+                .map_or(0.0, |animation| animation.seek_time());
+            if duration > 0.0 {
+                seconds.rem_euclid(duration) / duration
+            } else {
+                0.0
             }
+        });
+        let environment =
+            clip_time.and_then(|time| sample_environment(&rail.environment_keys, time));
+        if let (Some((color, _)), Ok(mut current)) = (environment, ambient.get_mut(camera_entity)) {
+            let linear = Vec3::from_array(color);
+            let brightness = linear.max_element();
+            let normalized = if brightness > f32::EPSILON {
+                linear / brightness
+            } else {
+                Vec3::ZERO
+            };
+            let color = Color::linear_rgb(normalized.x, normalized.y, normalized.z);
+            current
+                .reborrow()
+                .map_unchanged(|light| &mut light.color)
+                .set_if_neq(color);
+            current
+                .map_unchanged(|light| &mut light.brightness)
+                .set_if_neq(brightness);
+        }
+        for target in targets.iter() {
             let Ok((mut light, mut transform, mut track)) = lights.get_mut(target) else {
                 continue;
             };
@@ -389,7 +453,7 @@ pub(super) fn project_rail_lighting(
                 }
             }
             if let Some((color, intensity, direction)) =
-                clip_time.0.and_then(|time| sample_light(&track.keys, time))
+                clip_time.and_then(|time| sample_light(&track.keys, time))
             {
                 let color = Color::srgb(color[0], color[1], color[2]);
                 let illuminance = intensity * 100_000.0;
@@ -528,7 +592,7 @@ fn apply_ordered_developer_commands(runtime: &mut UiRailCameraRuntime) -> bool {
 fn apply_developer_commands(
     delta: f32,
     runtime: &mut UiRailCameraRuntime,
-    camera: &mut Transform,
+    camera: &mut Mut<Transform>,
 ) -> bool {
     let fast = if runtime.commands[command_index(PrefabRailCameraCommand::Fast)] {
         4.0
@@ -553,13 +617,18 @@ fn apply_developer_commands(
         ),
     ) * delta
         * fast;
-    camera.translation += camera.rotation * movement;
+    if movement != Vec3::ZERO {
+        let displacement = camera.rotation * movement;
+        camera.translation += displacement;
+    }
     let roll = axis(
         runtime,
         PrefabRailCameraCommand::RollRight,
         PrefabRailCameraCommand::RollLeft,
     );
-    camera.rotate_local_z(roll * delta * fast);
+    if roll != 0.0 {
+        camera.rotate_local_z(roll * delta * fast);
+    }
     let record = runtime.file_task.is_none()
         && runtime.commands[command_index(PrefabRailCameraCommand::Record)];
     if record {

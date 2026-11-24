@@ -25,15 +25,6 @@ impl NeedAdjustmentCadence {
     }
 
     pub(crate) fn tick(&mut self, step: Duration, delay_steps: u32) -> bool {
-        if !self.timer.tick(step).is_finished() {
-            return false;
-        }
-        let Some(delay) = self.random.range_u32(delay_steps) else {
-            return false;
-        };
-        self.timer
-            .set_duration(Duration::from_millis(u64::from(delay) * 100));
-        self.timer.reset();
-        true
+        openzt2_zoo_state::need_adjustment::tick_need_adjustment(&mut self.timer, step, delay_steps, &mut self.random)
     }
 }

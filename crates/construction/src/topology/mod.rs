@@ -1,5 +1,10 @@
 //! Fence, path, gate, and portal facts stored directly in the live ECS.
+use crate::construction::construction_transaction_preparation::{
+    capture_submitted_preview, clear_submitted_preview, ConstructionSubmissionSet,
+};
 
+mod elevated_curb_layout;
+mod elevated_path_layout;
 mod fence_anchor_cursor_presentation;
 pub mod fence_anchor_press_diagnostic_types;
 mod fence_construction_preview_presentation;
@@ -8,6 +13,7 @@ pub mod fence_terrain_endpoint_skew_presentation;
 mod gate_automatic_operation;
 mod gate_state_application;
 mod loaded_topology_validation;
+mod path_curb_patterns;
 pub mod path_curb_presentation;
 mod path_placement_highlight_presentation;
 mod path_presentation_neighborhood;
@@ -97,7 +103,13 @@ impl Plugin for TopologyPlugin {
             .add_observer(path_curb_presentation::notify_discarded_path_curb_segment)
             .add_observer(topology_construction_interaction::drop_prompt_candidates_when_fence_component_is_removed)
             .init_resource::<ElevatedPathSurfacePresentationAssets>()
+            .init_asset::<elevated_path_layout::ElevatedPathModeDefinition>()
+            .init_asset_loader::<elevated_path_layout::ElevatedPathModeLoader>()
+            .init_resource::<elevated_path_layout::ElevatedPathModeAsset>()
             .init_resource::<path_placement_highlight_presentation::PathPlacementHighlightAssets>()
+            .init_asset::<path_curb_patterns::PathCurbPatterns>()
+            .init_asset_loader::<path_curb_patterns::PathCurbPatternLoader>()
+            .init_resource::<path_curb_patterns::PathCurbPatternAsset>()
             .add_message::<PlaceFence>()
             .add_message::<PlacePath>()
             .add_message::<path_curb_presentation::DiscardedPathCurbSegment>()
@@ -169,21 +181,23 @@ impl Plugin for TopologyPlugin {
             )
             .add_systems(
                 Update,
-                path_placement_highlight_presentation::present_ground_path_placement_highlights
-                    .in_set(GameSet::Presentation),
+                (
+                    path_placement_highlight_presentation::present_ground_path_placement_highlights,
+                    path_surface_presentation::project_elevated_path_preview,
+                ).in_set(GameSet::Presentation),
             )
             .add_systems(
-                PostUpdate,
+                Update,
                 (
-                    crate::construction::capture_confirmed_preview::<topology_construction_preview_types::FenceDrawPlan>,
-                    crate::construction::capture_confirmed_preview::<topology_construction_preview_types::PathDrawPlan>,
-                ),
+                    capture_submitted_preview::<topology_construction_preview_types::FencePreview>,
+                    capture_submitted_preview::<topology_construction_preview_types::PathPreview>,
+                ).in_set(ConstructionSubmissionSet),
             )
             .add_systems(
                 FixedUpdate,
                 (
-                    crate::construction::clear_confirmed_previews::<topology_construction_preview_types::FenceDrawPlan>,
-                    crate::construction::clear_confirmed_previews::<topology_construction_preview_types::PathDrawPlan>,
+                    clear_submitted_preview::<topology_construction_preview_types::FencePreview>,
+                    clear_submitted_preview::<topology_construction_preview_types::PathPreview>,
                 )
                     .after(FixedConstructionSet::Prepare)
                     .before(FixedConstructionSet::Apply),

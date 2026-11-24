@@ -134,8 +134,9 @@ pub(super) fn validate_index_and_project_loaded_terrain_chunks(
         let images = &*images;
         ComputeTaskPool::get().scope(|scope| {
             for (_, chunk, _, _, asset, _, _) in &projectable {
-                scope
-                    .spawn(async move { compose_terrain_surface_image(chunk, asset, &[], images) });
+                scope.spawn(async move {
+                    compose_terrain_surface_image(chunk, asset, &[], None, images)
+                });
             }
         })
     };

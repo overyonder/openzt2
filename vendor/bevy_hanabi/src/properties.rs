@@ -405,8 +405,12 @@ impl EffectProperties {
         let mut new_props = vec![];
         let mut intersect = HashSet::new();
         for prop in asset_properties {
-            if this.properties.iter().any(|p| p.def.name() == prop.name()) {
-                intersect.insert(prop.name());
+            if this
+                .properties
+                .iter()
+                .any(|p| p.def.name() == prop.name() && p.def.value_type() == prop.value_type())
+            {
+                intersect.insert((prop.name(), prop.value_type()));
                 continue;
             }
             new_props.push(PropertyInstance {
@@ -419,7 +423,7 @@ impl EffectProperties {
         if intersect.len() != this.properties.len() {
             // Delete instances for unknown properties
             this.properties
-                .retain(|prop| intersect.contains(prop.def.name()));
+                .retain(|prop| intersect.contains(&(prop.def.name(), prop.def.value_type())));
         }
 
         // Only mutate if needed to avoid triggering change detection
@@ -438,16 +442,17 @@ impl EffectProperties {
     pub(crate) fn serialize(&self, layout: &PropertyLayout) -> Vec<u8> {
         let size = layout.cpu_size() as usize;
         let mut data = vec![0; size];
-        // FIXME: O(n^2) search due to offset() being O(n) linear search already
-        for property in &self.properties {
-            if let Some(offset) = layout.offset(property.def.name()) {
-                let offset = offset as usize;
-                let size = property.def.size();
-                let src = property.value.as_bytes();
-                debug_assert_eq!(src.len(), size);
-                let dst = &mut data[offset..offset + size];
-                dst.copy_from_slice(src);
-            }
+        for (offset, definition) in layout.properties() {
+            let value = self
+                .properties
+                .iter()
+                .find(|property| {
+                    property.def.name() == definition.name()
+                        && property.def.value_type() == definition.value_type()
+                })
+                .map_or(definition.default_value(), |property| &property.value);
+            let start = offset as usize;
+            data[start..start + definition.size()].copy_from_slice(value.as_bytes());
         }
         data
     }
@@ -859,6 +864,7 @@ impl PropertyLayout {
     /// Get the offset in byte of the property with the given name.
     ///
     /// If no property with the given name is found, this returns `None`.
+    #[cfg(test)]
     pub(crate) fn offset(&self, name: &str) -> Option<u32> {
         self.layout.iter().find_map(|entry| {
             if entry.property.name == name {

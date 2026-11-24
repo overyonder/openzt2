@@ -18,16 +18,23 @@ use openzt2_zoo_state::terrain::{
         TerrainWaterRegionRetired, TerrainWaterRegionSource,
     },
     terrain_water_underwater_particle_types::{
-        TerrainWaterBubbleEmitter, TerrainWaterParticleEffects, TerrainWaterSuspensionEmitter,
-        TerrainWaterSuspensionVolume,
+        TerrainWaterParticleEffects, TerrainWaterSuspensionEmitter, TerrainWaterSuspensionVolume,
     },
 };
+use std::time::Duration;
 
 use super::{
     append_initial_suspension_emission, append_suspension_density_top_up,
     bubble_spawn_delay_seconds, bubble_spawn_point, select_bubble_detail,
     suspension_emitter_density,
 };
+
+#[derive(Component)]
+pub(in crate::terrain) struct TerrainWaterBubbleEmission {
+    emitter: openzt2_game_data::AssetId,
+    emission_index: usize,
+    interval: Timer,
+}
 
 fn water_quality(settings: &GraphicsSettings) -> u32 {
     match settings.water_detail {
@@ -262,10 +269,13 @@ pub(in crate::terrain) fn synchronize_region_underwater_particle_effects(
             };
             for (emission_index, &emitter) in effect.root_emitter_ids().iter().enumerate() {
                 commands.spawn((
-                    TerrainWaterBubbleEmitter {
+                    TerrainWaterBubbleEmission {
                         emitter,
                         emission_index,
-                        remaining_seconds: (8.0 - 7.0 * random.unit_f64()) as f32,
+                        interval: Timer::from_seconds(
+                            (8.0 - 7.0 * random.unit_f64()) as f32,
+                            TimerMode::Once,
+                        ),
                     },
                     Transform::IDENTITY,
                     Visibility::Hidden,
@@ -291,7 +301,7 @@ pub(in crate::terrain) fn update_underwater_particle_visibility(
         ),
         Or<(
             With<TerrainWaterSuspensionEmitter>,
-            With<TerrainWaterBubbleEmitter>,
+            With<TerrainWaterBubbleEmission>,
         )>,
     >,
 ) {
@@ -440,7 +450,7 @@ pub(in crate::terrain) fn emit_region_underwater_particles(
         &mut TerrainWaterSuspensionEmitter,
         &mut ParticleEffectPointEmitter,
     )>,
-    mut bubble_emitters: Query<(Entity, &ChildOf, &mut TerrainWaterBubbleEmitter)>,
+    mut bubble_emitters: Query<(Entity, &ChildOf, &mut TerrainWaterBubbleEmission)>,
     mut points: MessageWriter<AppendParticleEffectPoints>,
     mut bubbles: MessageWriter<SpawnParticleEffectEmitter>,
     mut sounds: MessageWriter<
@@ -556,8 +566,7 @@ pub(in crate::terrain) fn emit_region_underwater_particles(
         else {
             continue;
         };
-        emitter.remaining_seconds -= time.delta_secs();
-        if emitter.remaining_seconds > 0.0 {
+        if !emitter.interval.tick(time.delta()).is_finished() {
             continue;
         }
         if let Some(position) = source
@@ -602,7 +611,7 @@ pub(in crate::terrain) fn emit_region_underwater_particles(
             .emitters
             .get(emitter.emission_index)
             .or_else(|| detail.emitters.last());
-        emitter.remaining_seconds = bubble_spawn_delay_seconds(
+        let delay = bubble_spawn_delay_seconds(
             timing
                 .and_then(|timing| timing.small_seconds)
                 .unwrap_or(8.0),
@@ -610,5 +619,9 @@ pub(in crate::terrain) fn emit_region_underwater_particles(
             index.render_area_m2(owner, terrain),
             &mut random,
         );
+        emitter
+            .interval
+            .set_duration(Duration::try_from_secs_f32(delay).unwrap_or_default());
+        emitter.interval.reset();
     }
 }

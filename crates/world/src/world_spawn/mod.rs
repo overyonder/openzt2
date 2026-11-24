@@ -5,6 +5,7 @@ pub mod prefab_renderable_components;
 pub mod prefab_world_instance_spawning;
 // One-time translation from authored scenario and prefab rows into the live ECS.
 
+pub mod challenge_economy_initialization;
 pub mod expanding_column_presentation;
 mod generated_entity_name_application;
 mod named_physical_presentation_projection;
@@ -15,6 +16,7 @@ mod prefab_authored_rotation_cycle_advancement;
 mod prefab_authored_transform_animation_advancement;
 mod prefab_object_presentation_attachment_projection;
 pub mod prefab_presentation_render_tree;
+mod prefab_socket_index;
 
 #[cfg(test)]
 mod persistent_id_tests;
@@ -59,7 +61,7 @@ use crate::world_spawn::world_persistent_id_reservation::reserve_all_imported_wo
 use crate::world_spawn::world_prefab_record_hydration::{
     admit_starting_prefab_rows, commit_ready_starting_prefab_rows_in_source_order,
     demand_starting_prefab_dependencies, mark_ready_starting_prefab_dependencies,
-    StartingPrefabDependencies,
+    StartingPrefabDependencies, StartingPrefabDependenciesReady, StartingPrefabRow,
 };
 use crate::world_spawn::world_spawn_value_application::apply_all_authored_world_spawn_values_once;
 use crate::world_spawn::world_terrain_hydration::hydrate_selected_terrain_chunks_world_bounds_and_topology_grid;
@@ -78,13 +80,29 @@ use bevy::prelude::*;
 
 use openzt2_game_assets::application_lifecycle::GamePhase;
 use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
+use openzt2_game_assets::species::species_asset_types::SpeciesAssets;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::world_scenario::world_scenario_asset_set_state_and_borrowing_queries::WorldScenarios;
+use openzt2_game_assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset;
 use openzt2_world_state::application_schedule::FixedGameSet;
 use openzt2_world_state::application_schedule::GameSet;
+use openzt2_world_state::world_spawn::world_load_completion_marker::ImportedPersistentIdsReserved;
+use openzt2_world_state::world_spawn::world_load_failure::WorldLoadFailure;
+use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
+use challenge_economy_initialization::{ChallengeEconomyInitializer, ChallengeEconomyInitializerLoader};
 
 pub struct WorldSpawnPlugin;
 
+#[derive(SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct LoadingWorldDocumentReady;
+
+#[derive(SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct IndependentAttachmentOrientation;
+
 impl Plugin for WorldSpawnPlugin {
     fn build(&self, app: &mut App) {
+        app.init_asset::<ChallengeEconomyInitializer>()
+            .init_asset_loader::<ChallengeEconomyInitializerLoader>();
         use openzt2_world_state::world_spawn::persistent_id_index::PersistentIdIndexPlugin;
         if !app.is_plugin_added::<PersistentIdIndexPlugin>() {
             app.add_plugins(PersistentIdIndexPlugin);
@@ -107,15 +125,14 @@ impl Plugin for WorldSpawnPlugin {
             Update,
             (
                 WorldLoadPreparationSet::Accept,
-                WorldLoadPreparationSet::InitializeClock,
+                WorldLoadPreparationSet::InitializeClock.in_set(LoadingWorldDocumentReady),
                 WorldLoadPreparationSet::HydrateTerrain,
             )
                 .chain(),
         );
         app.configure_sets(
             Update,
-            WorldLoadPreparationSet::InitializeClock
-                .run_if(world_hydration_completion::loading_screen_is_ready),
+            LoadingWorldDocumentReady.run_if(world_hydration_completion::loading_screen_is_ready),
         );
         app.add_message::<openzt2_world_state::world_spawn::physical_presentation_state::PhysicalPresentationRequest>()
             .add_message::<openzt2_world_state::world_spawn::prefab_model_replacement::PrefabModelReplaced>()
@@ -133,7 +150,16 @@ impl Plugin for WorldSpawnPlugin {
                 (
                     (
                         admit_first_world_load_request.run_if(on_message::<openzt2_world_state::world_spawn::world_load_request_acceptance::BeginWorldLoad>),
-                        accept_queued_world_load_after_required_assets_resolve.run_if(any_with_component::<PendingWorldLoad>),
+                        accept_queued_world_load_after_required_assets_resolve.run_if(
+                            any_match_filter::<Added<PendingWorldLoad>>
+                                .or_eager(resource_changed::<WorldDefinitions>)
+                                .or_eager(resource_changed::<WorldScenarios>)
+                                .or_eager(on_message::<AssetEvent<WorldScenarioDocumentAsset>>)
+                                .or_eager(on_message::<AssetLoadFailedEvent<WorldScenarioDocumentAsset>>)
+                                .or_eager(on_message::<AssetEvent<ChallengeEconomyInitializer>>)
+                                .or_eager(on_message::<AssetLoadFailedEvent<ChallengeEconomyInitializer>>)
+                                .or_eager(|mut removed: RemovedComponents<WorldRoot>| removed.read().count() != 0),
+                        ),
                     ).chain().in_set(WorldLoadPreparationSet::Accept),
                     (
                         hydrate_selected_terrain_chunks_world_bounds_and_topology_grid.in_set(WorldLoadPreparationSet::HydrateTerrain),
@@ -146,21 +172,31 @@ impl Plugin for WorldSpawnPlugin {
                             .after(reserve_all_imported_world_persistent_ids)
                             .run_if(any_with_component::<openzt2_zoo_state::topology::topology_graph_types::TopologyGrid>),
                         (
-                            admit_starting_prefab_rows,
-                            demand_starting_prefab_dependencies,
+                            admit_starting_prefab_rows.run_if(
+                                any_match_filter::<Or<(Added<ImportedPersistentIdsReserved>, Changed<openzt2_world_state::world_spawn::world_hydration_types::WorldHydration>)>>,
+                            ),
+                            demand_starting_prefab_dependencies.run_if(
+                                any_match_filter::<Added<StartingPrefabRow>>
+                                    .or_eager(resource_changed::<WorldDefinitions>)
+                                    .or_eager(resource_changed::<SpeciesAssets>),
+                            ),
                             mark_ready_starting_prefab_dependencies.run_if(
                                 any_match_filter::<Added<StartingPrefabDependencies>>
-                                    .or_else(on_message::<AssetEvent<ScenePrefabAsset>>)
-                                    .or_else(on_message::<AssetEvent<Gltf>>)
-                                    .or_else(on_message::<AssetLoadFailedEvent<ScenePrefabAsset>>)
-                                    .or_else(on_message::<AssetLoadFailedEvent<Gltf>>),
+                                    .or_eager(on_message::<AssetEvent<ScenePrefabAsset>>)
+                                    .or_eager(on_message::<AssetEvent<Gltf>>)
+                                    .or_eager(on_message::<AssetLoadFailedEvent<ScenePrefabAsset>>)
+                                    .or_eager(on_message::<AssetLoadFailedEvent<Gltf>>),
                             ),
-                            commit_ready_starting_prefab_rows_in_source_order,
+                            commit_ready_starting_prefab_rows_in_source_order.run_if(
+                                any_match_filter::<Added<ImportedPersistentIdsReserved>>
+                                    .or_eager(any_match_filter::<(With<StartingPrefabRow>, Or<(Added<StartingPrefabDependenciesReady>, Added<WorldLoadFailure>)>)>)
+                                    .or_eager(resource_changed::<WorldDefinitions>),
+                            ),
                             apply_all_authored_world_spawn_values_once,
                         ).chain().after(reserve_all_imported_world_persistent_ids),
                     )
                         .before(WorldLoadCompletionSet)
-                        .run_if(world_hydration_completion::loading_screen_is_ready),
+                        .in_set(LoadingWorldDocumentReady),
                     complete_or_fail_finished_world_hydration.in_set(WorldLoadCompletionSet),
                 )
                     .in_set(GameSet::Intent)
@@ -208,17 +244,27 @@ impl Plugin for WorldSpawnPlugin {
                     hydrate_prefab_presentations
                         .after(prefab_presentation_render_tree::rebuild_prefab_presentations_after_prefab_reload),
                     crate::world_spawn::expanding_column_presentation::align_expanding_column_piece_attachments
-                        .after(hydrate_prefab_presentations),
+                        .run_if(
+                            any_match_filter::<Added<expanding_column_presentation::PendingExpandingColumnPieceAttachment>>
+                                .or_eager(on_message::<AssetEvent<openzt2_game_assets::scene_prefab::ScenePrefabAsset>>),
+                        ),
                     initialize_authored_physical_presentation_controllers,
+                    prefab_socket_index::project_prefab_socket_indexes
+                        .after(initialize_authored_physical_presentation_controllers)
+                        .after(hydrate_required_named_physical_presentations)
+                        .after(finish_rebuilding_world_instance_renderables)
+                        .after(hydrate_prefab_presentations),
                     crate::world_spawn::physical_presentation_state::apply_physical_presentation_requests
                         .after(initialize_authored_physical_presentation_controllers),
                     project_pending_physical_presentation_children
+                        .after(prefab_socket_index::project_prefab_socket_indexes)
                         .after(crate::world_spawn::physical_presentation_state::apply_physical_presentation_requests)
                         .after(hydrate_prefab_presentations)
                         .after(finish_rebuilding_world_instance_renderables),
                     hydrate_required_named_physical_presentations
                         .after(commit_ready_starting_prefab_rows_in_source_order),
                     attach_named_presentations_to_model_nodes
+                        .after(prefab_socket_index::project_prefab_socket_indexes)
                         .after(hydrate_required_named_physical_presentations)
                         .after(finish_rebuilding_world_instance_renderables)
                         .after(hydrate_prefab_presentations),
@@ -236,6 +282,8 @@ impl Plugin for WorldSpawnPlugin {
                 PostUpdate,
                 crate::world_spawn::prefab_attachment_independent_rotation::preserve_independent_attachment_orientation
                     .after(bevy::app::AnimationSystems)
+                    .after(openzt2_world_state::world_spawn::prefab_authored_billboard_orientation_mode::PrefabBillboardProjection)
+                    .in_set(IndependentAttachmentOrientation)
                     .before(bevy::transform::TransformSystems::Propagate),
             )
             .add_systems(

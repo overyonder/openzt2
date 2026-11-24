@@ -4,12 +4,13 @@ use openzt2_game_assets::animation::animation_clip_source_queries::AnimationClip
 use openzt2_game_assets::animation::animation_set_asset_types::AnimationSetAsset;
 use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackController;
 
+use super::animation_graph_route_selection::resolve_authored_animation_route;
 use openzt2_world_state::animation_graph::animation_graph_playback_message_types::AnimationGraphNodePlaybackRequest;
 use openzt2_world_state::animation_graph::animation_graph_playback_message_types::AnimationGraphNodePlaybackRequestRejected;
 use openzt2_world_state::animation_graph::animation_graph_playback_message_types::AnimationGraphNodePlaybackRequestRejectionReason;
 use openzt2_world_state::animation_graph::animation_graph_playback_state_types::AnimationGraphEnabled;
 use openzt2_world_state::animation_graph::animation_graph_playback_state_types::AnimationGraphPlaybackState;
-use openzt2_world_state::animation_graph::animation_graph_transition_operations::begin_requested_animation_graph_node_transition;
+use openzt2_world_state::animation_graph::animation_graph_transition_operations::begin_resolved_animation_graph_route;
 use openzt2_world_state::animation_graph::animation_graph_transition_operations::enter_animation_graph_node_playback;
 use openzt2_world_state::animation_graph::animation_presentation_relationship_types::AnimationPresentations;
 use openzt2_world_state::animation_graph::model_animation_asset_binding_types::ModelAnimationAssetLibrary;
@@ -70,15 +71,48 @@ pub(crate) fn execute_animation_graph_node_playback_requests(
                 })
                 .and_then(|index| u32::try_from(index).ok());
             if let Some(requested_animation_graph_node_index) = requested_current_graph_node_index {
-                match begin_requested_animation_graph_node_transition(
-                    current_animation_set_asset,
-                    |key| clip_sources.get(current_animation_set_asset, key).is_some(),
-                    requested_animation_graph_node_index,
-                    &mut animation_playback_controller,
-                    &mut animation_graph_playback_state,
-                    animation_graph_node_playback_request.blend_duration_milliseconds,
-                    animation_graph_node_playback_request.enters_immediately,
-                ) {
+                use AnimationGraphNodePlaybackRequestRejectionReason::{
+                    ActiveTransitionNotInterruptible, MissingAuthoredGraphEdge,
+                };
+                let source = animation_graph_playback_state.current_animation_graph_node_index;
+                let duration = animation_graph_node_playback_request.blend_duration_milliseconds;
+                let ready =
+                    |key: &str| clip_sources.get(current_animation_set_asset, key).is_some();
+                let result = if animation_graph_node_playback_request.enters_immediately
+                    || source == requested_animation_graph_node_index
+                {
+                    enter_animation_graph_node_playback(
+                        current_animation_set_asset,
+                        ready,
+                        requested_animation_graph_node_index,
+                        &mut animation_playback_controller,
+                        &mut animation_graph_playback_state,
+                        duration.unwrap_or_default(),
+                    )
+                } else if animation_graph_playback_state
+                    .active_animation_graph_transition
+                    .is_some()
+                {
+                    Err(ActiveTransitionNotInterruptible)
+                } else {
+                    resolve_authored_animation_route(
+                        current_animation_set_asset,
+                        source,
+                        requested_animation_graph_node_index,
+                    )
+                    .ok_or(MissingAuthoredGraphEdge)
+                    .and_then(|route| {
+                        begin_resolved_animation_graph_route(
+                            current_animation_set_asset,
+                            ready,
+                            route,
+                            &mut animation_playback_controller,
+                            &mut animation_graph_playback_state,
+                            duration,
+                        )
+                    })
+                };
+                match result {
                     Err(animation_graph_node_request_rejection_reason) => {
                         rejection_reason = Some(animation_graph_node_request_rejection_reason);
                     }

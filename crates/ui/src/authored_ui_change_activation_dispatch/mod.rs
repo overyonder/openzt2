@@ -4,15 +4,19 @@ use openzt2_game_data::ui_document::action::UiTrigger;
 use openzt2_interface_state::input::input_types::ActionSource;
 
 use super::authored_ui_node_projection_components::UiNodeId;
-use super::authored_ui_node_projection_components::UiValue;
+use super::authored_ui_node_projection_components::{UiSliderValueChanged, UiValue};
 use openzt2_interface_state::ui::authored_ui_activation_contracts::UiNodeActivated;
 
 pub(super) fn dispatch_authored_value_change_activations(
-    values: Query<(Entity, Ref<UiValue>)>,
+    values: Query<
+        (Entity, Ref<UiValue>),
+        (Changed<UiValue>, Without<crate::slider::UiSliderPolicy>),
+    >,
+    mut slider_edits: MessageReader<UiSliderValueChanged>,
     mut activated: MessageWriter<UiNodeActivated>,
 ) {
     for (node, value) in &values {
-        if value.is_changed() && !value.is_added() {
+        if !value.is_added() {
             activated.write(UiNodeActivated {
                 source: ActionSource::System,
                 node,
@@ -20,6 +24,11 @@ pub(super) fn dispatch_authored_value_change_activations(
             });
         }
     }
+    let _ = activated.write_batch(slider_edits.read().map(|edit| UiNodeActivated {
+        source: ActionSource::System,
+        node: edit.slider,
+        trigger: UiTrigger::Change,
+    }));
 }
 #[derive(Component)]
 pub(super) struct UiInitialDeselection;

@@ -48,7 +48,7 @@ pub(super) fn validate_authored_behavior_memberships(
 pub(super) fn prepare_behavior_membership_restoration(
     records: &[&BehaviorTaskActorSnapshot],
     identities: &BTreeMap<BehaviorSnapshotEntityReference, Entity>,
-    application: &BehaviorSnapshotApplication,
+    application: &mut BehaviorSnapshotApplication,
 ) -> Result<Vec<(Entity, InteractionContainerAdmissionRequest, bool)>, Failure> {
     let restored_actors: EntityHashSet = records
         .iter()
@@ -77,7 +77,7 @@ pub(super) fn prepare_behavior_membership_restoration(
         let target = *identities
             .get(&membership.container)
             .ok_or(Failure::BrokenPersistentEntityReference)?;
-        if !application.entities.get(target).is_ok_and(|target| {
+        if !application.actors.p0().get(target).is_ok_and(|target| {
             target
                 .definition_id
                 .is_some_and(|definition| definition.0 == membership.definition)

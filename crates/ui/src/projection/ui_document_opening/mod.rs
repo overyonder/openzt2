@@ -25,13 +25,15 @@ use openzt2_interface_state::ui::{
 use openzt2_world_state::simulation_time::simulation_control_types::UiDocumentPauseTransfer;
 
 use super::{
-    authored_document_projection::project_document_on_entity,
+    authored_document_projection::{project_document_on_entity, UiDocumentLifetimeAttachment},
     document_asset_readiness::{document_dependencies_resolved, UiDocumentAssetEvents},
 };
 use crate::{
-    animation::UiShowHideAnimation,
+    animation::{UiAnimationPlaybackOperation, UiAnimationPlaybackRequest, UiShowHideAnimation},
     authored_image_selection_diagnostic_override::UiAuthoredImageSelectionDiagnosticOverride,
-    authored_ui_change_activation_dispatch::apply_visibility_transition,
+    authored_ui_change_activation_dispatch::{
+        apply_visibility_transition, set_authored_visibility,
+    },
     authored_ui_target_lookup::AuthoredUiTargetLookup,
 };
 
@@ -40,6 +42,12 @@ pub(crate) struct PendingUiProjection(Handle<UiDocumentAsset>);
 
 #[derive(Component, Default)]
 pub(crate) struct UiDocumentOpeningEffects(Vec<UiDocumentOperation>);
+
+impl UiDocumentOpeningEffects {
+    pub(crate) fn drain(&mut self) -> impl Iterator<Item = UiDocumentOperation> + '_ {
+        self.0.drain(..)
+    }
+}
 
 pub(crate) fn ingest_ui_document_opening_requests(
     mut commands: Commands,
@@ -90,7 +98,9 @@ pub(crate) fn ingest_ui_document_opening_requests(
         });
         if let Some((entity, loaded)) = existing {
             if loaded && reopen_entry {
-                show_document_entry(entity, &children, &mut visibility, &mut activations);
+                show_document_entry(entity, &children, &mut visibility, &mut |event| {
+                    activations.write(event);
+                });
             }
         } else {
             commands.spawn((
@@ -98,6 +108,7 @@ pub(crate) fn ingest_ui_document_opening_requests(
                 UiDocumentOpeningEffects::default(),
                 Visibility::Inherited,
                 UiDocumentPauseTransfer(false),
+                UiDocumentLifetimeAttachment,
                 ChildOf(owner),
             ));
         }
@@ -250,6 +261,7 @@ pub(crate) fn apply_authored_ui_document_opening_operations(
                 effects,
                 Visibility::Inherited,
                 UiDocumentPauseTransfer(paused),
+                UiDocumentLifetimeAttachment,
                 ChildOf(owner),
             ));
         }
@@ -319,8 +331,8 @@ pub(crate) struct LiveUiDocumentEffects<'w, 's> {
     nodes: Query<'w, 's, (&'static UiDocumentOwner, &'static UiSelected)>,
     targets: AuthoredUiTargetLookup<'w, 's>,
     visibility: Query<'w, 's, &'static mut Visibility>,
-    animation: Query<'w, 's, &'static mut UiShowHideAnimation>,
-    activations: MessageWriter<'w, UiNodeActivated>,
+    animations: Query<'w, 's, (), With<UiShowHideAnimation>>,
+    playback: MessageWriter<'w, UiAnimationPlaybackRequest>,
 }
 
 impl LiveUiDocumentEffects<'_, '_> {
@@ -338,37 +350,33 @@ impl LiveUiDocumentEffects<'_, '_> {
         })
     }
 
-    pub(crate) fn apply(&mut self, document: Entity, effect: UiDocumentOperation) {
+    pub(crate) fn apply(
+        &mut self,
+        document: Entity,
+        effect: UiDocumentOperation,
+        emit: &mut impl FnMut(UiNodeActivated),
+    ) {
         match effect {
             UiDocumentOperation::Open => {
-                show_document_entry(
-                    document,
-                    &self.children,
-                    &mut self.visibility,
-                    &mut self.activations,
-                );
+                show_document_entry(document, &self.children, &mut self.visibility, emit);
             }
             UiDocumentOperation::ShowNode { target, visible } => {
                 if visible {
-                    show_document_entry(
-                        document,
-                        &self.children,
-                        &mut self.visibility,
-                        &mut self.activations,
-                    );
+                    show_document_entry(document, &self.children, &mut self.visibility, emit);
                 }
                 let Some(node) = self.targets.candidates(document, target).next() else {
                     return;
                 };
-                let animated = if let Ok(mut animation) = self.animation.get_mut(node) {
-                    animation.start_authored_visibility_transition(visible);
-                    true
-                } else {
-                    false
-                };
+                let animated = self.animations.contains(node);
+                if animated {
+                    self.playback.write(UiAnimationPlaybackRequest {
+                        entity: node,
+                        operation: UiAnimationPlaybackOperation::Transition(visible),
+                    });
+                }
                 if visible || !animated {
                     if let Ok(mut visibility) = self.visibility.get_mut(node) {
-                        apply_visibility_transition(
+                        if let Some(event) = set_authored_visibility(
                             node,
                             &mut visibility,
                             if visible {
@@ -377,8 +385,9 @@ impl LiveUiDocumentEffects<'_, '_> {
                                 Visibility::Hidden
                             },
                             true,
-                            &mut self.activations,
-                        );
+                        ) {
+                            emit(event);
+                        }
                     }
                 }
             }
@@ -396,7 +405,7 @@ impl LiveUiDocumentEffects<'_, '_> {
                         })
                     });
                 if let Some(node) = selected {
-                    self.activations.write(UiNodeActivated {
+                    emit(UiNodeActivated {
                         node,
                         source,
                         trigger: UiTrigger::On,
@@ -405,38 +414,14 @@ impl LiveUiDocumentEffects<'_, '_> {
             }
             UiDocumentOperation::Hide => {
                 if let Ok(mut visibility) = self.visibility.get_mut(document) {
-                    apply_visibility_transition(
-                        document,
-                        &mut visibility,
-                        Visibility::Hidden,
-                        true,
-                        &mut self.activations,
-                    );
+                    if let Some(event) =
+                        set_authored_visibility(document, &mut visibility, Visibility::Hidden, true)
+                    {
+                        emit(event);
+                    }
                 }
             }
         }
-    }
-}
-
-pub(crate) fn apply_ready_ui_document_opening_effects(
-    mut documents: Query<
-        (
-            Entity,
-            &mut UiDocumentOpeningEffects,
-            &mut UiDocumentPauseTransfer,
-        ),
-        (
-            With<UiDocumentRoot>,
-            Or<(Changed<UiDocumentOpeningEffects>, Added<UiDocumentRoot>)>,
-        ),
-    >,
-    mut live: LiveUiDocumentEffects,
-) {
-    for (document, mut effects, mut pause) in &mut documents {
-        for effect in effects.0.drain(..) {
-            live.apply(document, effect);
-        }
-        pause.set_if_neq(UiDocumentPauseTransfer(false));
     }
 }
 
@@ -444,7 +429,7 @@ fn show_document_entry(
     document: Entity,
     children: &Query<&Children>,
     visibility: &mut Query<&mut Visibility>,
-    activations: &mut MessageWriter<UiNodeActivated>,
+    emit: &mut impl FnMut(UiNodeActivated),
 ) {
     let entry = children
         .get(document)
@@ -452,13 +437,11 @@ fn show_document_entry(
         .and_then(|children| children.first().copied());
     for node in std::iter::once(document).chain(entry) {
         if let Ok(mut visibility) = visibility.get_mut(node) {
-            apply_visibility_transition(
-                node,
-                &mut visibility,
-                Visibility::Inherited,
-                true,
-                activations,
-            );
+            if let Some(event) =
+                set_authored_visibility(node, &mut visibility, Visibility::Inherited, true)
+            {
+                emit(event);
+            }
         }
     }
 }

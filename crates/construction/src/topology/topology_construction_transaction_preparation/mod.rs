@@ -1,6 +1,5 @@
-use super::topology_construction_preview_types::{
-    terrain_change_cursor, FenceDrawPlan, PathDrawPlan, TopologyPlanVersion,
-};
+use super::elevated_curb_layout::ElevatedCurbSurfaces;
+use super::elevated_path_layout::{elevated_path_tiles, ElevatedPathSurfaceEdits};
 use crate::construction::construction_transaction_preparation::SubmittedPreview;
 use bevy::prelude::*;
 use openzt2_zoo_state::topology::{
@@ -54,7 +53,6 @@ use openzt2_zoo_state::topology::topology_graph_types::TopologyIndex;
 
 fn prepare_fence_construction_snapshots(
     root: Entity,
-    submitted: Option<&FenceDrawPlan>,
     preview: &FencePreview,
     index: &TopologyIndex,
     grid: TopologyGrid,
@@ -67,24 +65,23 @@ fn prepare_fence_construction_snapshots(
     joined_tank_water_height: impl Fn(IVec3) -> Option<f32>,
     ground: &TankWallGroundSampling,
     paths: &Query<&PathTile>,
-    (hosts, wall_tops): (&GateHostEdges, &Query<&TankWallTopHeight>),
+    (hosts, wall_tops, curb_surfaces): (
+        &GateHostEdges,
+        &Query<&TankWallTopHeight>,
+        &ElevatedCurbSurfaces,
+    ),
 ) -> Result<(Vec<TopologySnapshot>, Vec<TopologySnapshot>, Money), PlacementFailure> {
-    let (cells, cost, gate, replaced) = if let Some((plan, (cost, gate, replaced))) =
-        submitted.and_then(|plan| plan.quote.as_ref().map(|quote| (plan, quote)))
-    {
-        (plan.cells.clone(), *cost, *gate, replaced.clone())
-    } else {
-        calculate_fence_construction_plan(
-            preview,
-            index,
-            grid,
-            definitions,
-            terrain_index,
-            terrain_assets,
-            terrain_chunks,
-            hosts,
-        )?
-    };
+    let (cells, cost, gate, replaced) = calculate_fence_construction_plan(
+        preview,
+        index,
+        grid,
+        definitions,
+        terrain_index,
+        terrain_assets,
+        terrain_chunks,
+        hosts,
+        Some(curb_surfaces),
+    )?;
     let id = |entity| {
         persistent
             .get(entity)
@@ -223,7 +220,6 @@ fn prepare_fence_construction_snapshots(
 /// Swaps the fence segment under a gate preview for the same segment with a
 /// closed gate, so undo restores the plain fence.
 fn prepare_gate_replacement_snapshots(
-    submitted: Option<&FenceDrawPlan>,
     preview: &FencePreview,
     index: &TopologyIndex,
     definitions: WorldDefinitionsView<'_>,
@@ -232,13 +228,7 @@ fn prepare_gate_replacement_snapshots(
     persistent: &Query<&PersistentId>,
     ids: &mut PersistentIdAllocator,
 ) -> Result<(TopologySnapshot, TopologySnapshot, Money), PlacementFailure> {
-    let (edge, cost) = if let Some((edge, (cost, ..))) =
-        submitted.and_then(|plan| plan.replaced.zip(plan.quote.as_ref()))
-    {
-        (edge, *cost)
-    } else {
-        calculate_gate_replacement_plan(preview, index, definitions, hosts)?
-    };
+    let (edge, cost) = calculate_gate_replacement_plan(preview, index, definitions, hosts)?;
     let (fence, ..) = hosts
         .get(edge)
         .map_err(|_| PlacementFailure::InvalidTopology)?;
@@ -274,7 +264,6 @@ fn prepare_gate_replacement_snapshots(
 }
 
 fn prepare_path_construction_snapshots(
-    submitted: Option<&PathDrawPlan>,
     preview: &PathPreview,
     index: &TopologyIndex,
     grid: TopologyGrid,
@@ -284,16 +273,7 @@ fn prepare_path_construction_snapshots(
     terrain_chunks: &Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
     ids: &mut PersistentIdAllocator,
 ) -> Result<(Vec<TopologySnapshot>, Money), PlacementFailure> {
-    let (cells, cost) = if let Some((plan, cost)) = submitted.and_then(|plan| {
-        if let openzt2_zoo_state::construction::construction_interaction_types::PlacementValidity::Valid { cost } = plan.validity {
-            Some((plan, cost))
-        } else {
-            None
-        }
-    }) {
-        (plan.approved.clone(), cost)
-    } else {
-calculate_path_construction_plan(
+    let (cells, cost) = calculate_path_construction_plan(
         preview,
         index,
         grid,
@@ -301,8 +281,7 @@ calculate_path_construction_plan(
         terrain_index,
         terrain_assets,
         terrain_chunks,
-    )?
-    };
+    )?;
     let mut snapshots = Vec::with_capacity(cells.len());
     for cell in cells {
         snapshots.push(TopologySnapshot::Path {
@@ -381,29 +360,29 @@ fn prepare_objects_stomped_by_ground_path(
 pub(super) fn prepare_topology_construction_transaction(
     mut commands: Commands,
     mut requests: MessageReader<PrepareConstruction>,
-    roots: Query<(Ref<TopologyIndex>, Ref<TopologyGrid>, Ref<TerrainIndex>)>,
-    (terrain_assets, terrain_chunks, ground, paths, terrain_messages): (
+    roots: Query<(&TopologyIndex, &TopologyGrid, &TerrainIndex)>,
+    (terrain_assets, terrain_chunks, ground, paths): (
         Res<Assets<TerrainAsset>>,
         Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
         TankWallGroundSampling,
         Query<&PathTile>,
-        Res<Messages<openzt2_zoo_state::terrain::terrain_edit_types::TerrainChanged>>,
     ),
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     mut allocators: Query<&mut PersistentIdAllocator>,
     previews: Query<
         (
-            Option<&FencePreview>,
-            Option<&PathPreview>,
-            Option<&SubmittedPreview<FenceDrawPlan>>,
-            Option<&SubmittedPreview<PathDrawPlan>>,
+            Option<&SubmittedPreview<FencePreview>>,
+            Option<&SubmittedPreview<PathPreview>>,
         ),
-        Or<(With<FencePreview>, With<PathPreview>)>,
+        Or<(
+            With<SubmittedPreview<FencePreview>>,
+            With<SubmittedPreview<PathPreview>>,
+        )>,
     >,
     transactions: Query<&WorldMember>,
     persistent: Query<&PersistentId>,
-    gate_hosts: GateHostEdges,
+    (gate_hosts, curb_surfaces): (GateHostEdges, ElevatedCurbSurfaces),
     wall_tops: Query<&TankWallTopHeight>,
     (tanks, incident, boundaries): (
         Query<&TankGeometry, With<Tank>>,
@@ -420,19 +399,15 @@ pub(super) fn prepare_topology_construction_transaction(
         MessageWriter<ObjectPlacementEditPrepared>,
     ),
 ) {
-    let definition_change = definitions.last_changed();
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };
     for request in requests.read() {
-        let Ok((fence, path, fence_submission, path_submission)) = previews.get(request.preview)
-        else {
+        let Ok((fence, path)) = previews.get(request.transaction) else {
             continue;
         };
-        let fence_plan = fence_submission.map(|submission| &submission.0);
-        let path_plan = path_submission.map(|submission| &submission.0);
-        let fence = fence_plan.map(|plan| &plan.input).or(fence);
-        let path = path_plan.map(|plan| &plan.input).or(path);
+        let fence = fence.map(|submission| &submission.0);
+        let path = path.map(|submission| &submission.0);
         let Ok(member) = transactions.get(request.transaction) else {
             write_topology_edit_preparation_rejection(
                 request.transaction,
@@ -448,17 +423,6 @@ pub(super) fn prepare_topology_construction_transaction(
                 &mut rejected,
             );
             continue;
-        };
-        let version = TopologyPlanVersion {
-            revisions: [
-                grid.last_changed(),
-                index.last_changed(),
-                active_definitions.last_changed(),
-                definition_change,
-                terrain.last_changed(),
-                terrain_assets.last_changed(),
-            ],
-            terrain_changes: terrain_change_cursor(&terrain_messages),
         };
         if terrain.chunks.is_empty() {
             write_topology_edit_preparation_rejection(
@@ -480,7 +444,6 @@ pub(super) fn prepare_topology_construction_transaction(
         let result = match (fence, path) {
             (Some(preview), None) if fence_definition_is_gate(definitions, preview.definition) => {
                 prepare_gate_replacement_snapshots(
-                    fence_plan.filter(|plan| plan.version == version && plan.input == *preview),
                     preview,
                     &index,
                     definitions,
@@ -493,7 +456,6 @@ pub(super) fn prepare_topology_construction_transaction(
             }
             (Some(preview), None) => prepare_fence_construction_snapshots(
                 member.root,
-                fence_plan.filter(|plan| plan.version == version && plan.input == *preview),
                 preview,
                 &index,
                 *grid,
@@ -521,10 +483,9 @@ pub(super) fn prepare_topology_construction_transaction(
                 },
                 &ground,
                 &paths,
-                (&gate_hosts, &wall_tops),
+                (&gate_hosts, &wall_tops, &curb_surfaces),
             ),
             (None, Some(preview)) => prepare_path_construction_snapshots(
-                path_plan.filter(|plan| plan.version == version && plan.input == *preview),
                 preview,
                 &index,
                 *grid,
@@ -567,6 +528,25 @@ pub(super) fn prepare_topology_construction_transaction(
                         );
                         continue;
                     }
+                }
+                if let Some(samples) = path.and_then(|preview| {
+                    let definition = definitions.find_path(preview.definition)?;
+                    elevated_path_tiles(preview, definition)
+                }) {
+                    let samples: bevy::platform::collections::HashMap<_, _> =
+                        samples.into_iter().collect();
+                    let surfaces = created
+                        .iter()
+                        .filter_map(|snapshot| {
+                            let TopologySnapshot::Path { id, cell, .. } = *snapshot else {
+                                return None;
+                            };
+                            Some((id, *samples.get(&cell)?))
+                        })
+                        .collect();
+                    commands
+                        .entity(request.transaction)
+                        .insert(ElevatedPathSurfaceEdits(surfaces));
                 }
                 commands.entity(request.transaction).insert(TopologyEdit {
                     created: created.into_boxed_slice(),

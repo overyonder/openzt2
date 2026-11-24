@@ -1,10 +1,13 @@
-use bevy::{ecs::relationship::RelationshipTarget, prelude::*};
+use bevy::{ecs::relationship::RelationshipTarget, platform::collections::HashSet, prelude::*};
 use openzt2_game_assets::world_definitions::{
     world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions,
     world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
 };
-use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
+use openzt2_world_state::world_spawn::{
+    persistent_id_types::PersistentId, world_membership_types::WorldMember,
+};
 use openzt2_zoo_state::{
+    animal_health::types::Dead,
     animal_lifecycle::types::Animal,
     shows::{
         running_show_types::{
@@ -27,6 +30,12 @@ pub(super) struct ShowRunSlotOrder(pub(super) Box<[Entity]>);
 
 #[derive(Component, Default)]
 pub(super) struct ShowScheduleCursor(Option<u16>);
+
+#[derive(Message)]
+pub(super) struct ShowRunCancelled {
+    pub(super) show: Entity,
+    pub(super) stage: Entity,
+}
 
 pub(super) fn initialize_show_schedule_cursors(
     stages: Query<Entity, (With<ShowStage>, Without<ShowScheduleCursor>)>,
@@ -125,13 +134,16 @@ pub(super) fn advance_running_stage_shows(
         &ShowRunSlotOrder,
         &mut RunningShow,
         Option<&ShowTrickBeingPerformedBy>,
+        Has<RunningShowTrick>,
     )>,
-    stages: Query<Option<&ShowStageOpenState>, With<ShowStage>>,
+    stages: Query<(Option<&ShowStageOpenState>, Option<&PersistentId>), With<ShowStage>>,
     slots: Query<(&ScheduledShowTrickPerformance, &ScheduledTrickPerformer)>,
-    animals: Query<Option<&AnimalPerformingShowTrick>, With<Animal>>,
+    animals: Query<Option<&AnimalPerformingShowTrick>, (With<Animal>, Without<Dead>)>,
     definitions: Res<WorldDefinitions>,
     assets: Res<Assets<WorldDefinitionAsset>>,
     mut finished: MessageWriter<ShowRunFinished>,
+    mut cancelled: MessageWriter<ShowRunCancelled>,
+    mut started: MessageWriter<BeginScheduledShowTrick>,
     mut commands: Commands,
 ) {
     let Some(definitions) = definitions.get(&assets) else {
@@ -140,11 +152,22 @@ pub(super) fn advance_running_stage_shows(
     let Some(timing) = definitions.show_scheduling() else {
         return;
     };
-    for (entity, stage, slot_order, mut show, performer) in &mut shows {
-        if !stages
-            .get(stage.0)
-            .is_ok_and(|open| open != Some(&ShowStageOpenState::Closed))
-        {
+    let mut releasing_runs = HashSet::new();
+    let mut advancing_runs = Vec::new();
+    for (entity, stage, _, mut show, performer, has_trick) in &mut shows {
+        let stage_facts = stages.get(stage.0).ok();
+        let stage_is_open =
+            stage_facts.is_some_and(|(open, _)| open != Some(&ShowStageOpenState::Closed));
+        if !stage_is_open {
+            if show.phase != ShowPhase::BetweenShows {
+                cancelled.write(ShowRunCancelled {
+                    show: entity,
+                    stage: stage.0,
+                });
+            }
+            if performer.is_some() {
+                releasing_runs.insert(entity);
+            }
             commands.entity(entity).try_despawn();
             continue;
         }
@@ -170,55 +193,68 @@ pub(super) fn advance_running_stage_shows(
             );
             continue;
         }
-        show.phase = ShowPhase::Conducting;
         if performer.is_some() {
+            releasing_runs.insert(entity);
             commands
                 .entity(entity)
-                .remove::<(ShowTrickBeingPerformedBy, RunningShowTrick)>();
+                .try_remove::<ShowTrickBeingPerformedBy>();
         }
-        let mut scheduled = None;
+        if has_trick {
+            commands.entity(entity).try_remove::<RunningShowTrick>();
+        }
+        let stage_id = stage_facts
+            .and_then(|(_, id)| id)
+            .map_or(u64::MAX, |id| id.0);
+        advancing_runs.push((stage_id, stage.0, entity));
+    }
+
+    advancing_runs.sort_unstable();
+    let mut accepted_performers = HashSet::new();
+    for (_, stage, entity) in advancing_runs {
+        let Ok((_, _, slot_order, mut show, ..)) = shows.get_mut(entity) else {
+            continue;
+        };
+        let mut claimed = false;
         while let Some(&slot) = slot_order.0.get(show.current_slot) {
-            show.current_slot += 1;
-            if let Ok((trick, performer)) = slots.get(slot) {
-                if animals
-                    .get(performer.0)
-                    .is_ok_and(|active| active.is_none_or(|active| active.collection() == &entity))
-                {
-                    scheduled = Some((slot, trick, performer.0));
-                    break;
-                }
+            let Ok((trick, performer)) = slots.get(slot) else {
+                show.current_slot += 1;
+                continue;
+            };
+            let Ok(active) = animals.get(performer.0) else {
+                show.current_slot += 1;
+                continue;
+            };
+            if accepted_performers.contains(&performer.0)
+                || active.is_some_and(|owner| !releasing_runs.contains(owner.collection()))
+            {
+                // Keep the slot at the head of the run until its performer is free.
+                claimed = true;
+                break;
             }
-        }
-        if let Some((slot, trick, performer)) = scheduled {
+            accepted_performers.insert(performer.0);
+            show.current_slot += 1;
+            show.phase = ShowPhase::Conducting;
             show.remaining_ticks = trick.duration_ticks.max(1);
-            let request = BeginScheduledShowTrick {
+            commands.entity(entity).insert((
+                ShowTrickBeingPerformedBy(performer.0),
+                RunningShowTrick {
+                    definition: trick.trick,
+                    slot,
+                    scored: false,
+                },
+            ));
+            started.write(BeginScheduledShowTrick {
                 show: entity,
-                stage: stage.0,
-                performer,
+                stage,
+                performer: performer.0,
                 slot,
                 trick: trick.trick,
                 duration_ticks: show.remaining_ticks,
-            };
-            commands.queue(move |world: &mut World| {
-                if world.get::<Animal>(performer).is_none()
-                    || world
-                        .get::<AnimalPerformingShowTrick>(performer)
-                        .is_some_and(|active| !active.is_empty())
-                    || world.get::<RunningShow>(entity).is_none()
-                {
-                    return;
-                }
-                world.entity_mut(entity).insert((
-                    ShowTrickBeingPerformedBy(performer),
-                    RunningShowTrick {
-                        definition: request.trick,
-                        slot: request.slot,
-                        scored: false,
-                    },
-                ));
-                world.write_message(request);
             });
-        } else {
+            claimed = true;
+            break;
+        }
+        if !claimed {
             begin_postshow(&mut show, timing.post_show_ns, definitions);
         }
     }

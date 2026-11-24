@@ -11,25 +11,26 @@ use openzt2_world_state::{
     world_spawn::world_membership_types::{DefinitionId, WorldMember},
 };
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
-    SplineDockMotion, SplineDockPhase,
+    SplineDockMotion, SplineDockPhase, SplineDockRetry,
 };
 use openzt2_zoo_state::{
     animal_behavior::interaction_container_membership::{
-        requests::{InteractionContainerAdmissionOutcome, InteractionContainerAdmissionRequest},
         DockedAtInteractionContainer, InteractionContainerMemberships,
+        requests::{InteractionContainerAdmissionOutcome, InteractionContainerAdmissionRequest},
     },
     aquatic::aquatic_simulation_types::{TankGeometry, TankWallTopHeight},
     behavior_task_execution_types::{
+        BehaviorTaskExecutionState, PendingBehaviorDockingCompletion, PendingBehaviorTaskFailure,
         running_actions::{
             BehaviorStepFixedSet, RunBehaviorDockNow, RunBehaviorDockSpline,
             RunBehaviorDockTankWall, RunBehaviorUsePortal, RunningBehaviorInstruction,
             WhenBehaviorAction,
         },
-        BehaviorTaskExecutionState, PendingBehaviorDockingCompletion, PendingBehaviorTaskFailure,
     },
     habitat::habitat_types::{HabitatMember, HabitatRegion},
     locomotion::locomotion_types::{
-        Arrived, DockAt, NavAgent, NavigateTo, NavigationFailed, NavigationRequestGeneration,
+        ActiveTerrainDerivedNavigationGraph, Arrived, DockAt, LocomotionMode, NavAgent, NavFlags,
+        NavigateTo, NavigationFailed, NavigationRequestGeneration,
     },
     topology::{
         gate_operation_types::Gate,
@@ -41,6 +42,7 @@ use openzt2_zoo_state::{
 use super::{
     behavior_container_admission::BehaviorAdmissionInstruction,
     behavior_named_nodes::NamedNodeTransforms,
+    behavior_object_attachment_execution::{ContainedObject, detach::detach_object},
     behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation,
 };
 
@@ -60,6 +62,7 @@ type DockActor<'w, 's, A> = Query<
 struct DockPoses<'w, 's> {
     transforms: Query<'w, 's, &'static GlobalTransform>,
     nodes: NamedNodeTransforms<'w, 's>,
+    animation: super::docking_animation_pose::DockingAnimationPose<'w, 's>,
 }
 
 impl DockPoses<'_, '_> {
@@ -75,10 +78,19 @@ impl DockPoses<'_, '_> {
         &self,
         actor: Entity,
         subject_node: Option<&str>,
+        subject_animation: Option<&str>,
         target_pose: GlobalTransform,
     ) -> Option<Transform> {
         let subject = self.transforms.get(actor).ok()?;
-        let attachment = self.node(actor, subject_node)?.reparented_to(subject);
+        let node = if let Some(name) = subject_node {
+            let (entity, live) = self.nodes.entity_and_pose(actor, name)?;
+            subject_animation
+                .and_then(|clip| self.animation.sample_node(actor, entity, clip, subject))
+                .unwrap_or(*live)
+        } else {
+            *subject
+        };
+        let attachment = node.reparented_to(subject);
         let root = target_pose.affine() * attachment.compute_affine().inverse();
         root.is_finite()
             .then(|| Transform::from_matrix(Mat4::from(root)))
@@ -95,7 +107,11 @@ pub(super) fn register(app: &mut App) {
         .add_observer(retire_spline_docking)
         .add_systems(
             FixedUpdate,
-            (follow_docking_splines, follow_bound_immediate_dock_poses)
+            (
+                follow_docking_splines,
+                follow_bound_immediate_dock_poses,
+                advance_portal_crossings,
+            )
                 .in_set(BehaviorStepFixedSet::Think),
         )
         .add_systems(
@@ -105,14 +121,81 @@ pub(super) fn register(app: &mut App) {
 }
 
 #[derive(Component)]
-struct PortalCrossing(
-    openzt2_zoo_state::behavior_task_execution_types::running_actions::BehaviorInstructionId,
-);
+struct PortalCrossing {
+    instruction:
+        openzt2_zoo_state::behavior_task_execution_types::running_actions::BehaviorInstructionId,
+    gate: Entity,
+    destination: Transform,
+    fallback: Transform,
+    disabled_collider: bool,
+}
 
-fn clear_portal_crossing(removed: On<Remove<RunBehaviorUsePortal>>, mut commands: Commands) {
-    commands
-        .entity(removed.entity)
-        .try_remove::<PortalCrossing>();
+fn clear_portal_crossing(
+    removed: On<Remove<RunBehaviorUsePortal>>,
+    crossings: Query<&PortalCrossing>,
+    mut commands: Commands,
+) {
+    if let Ok(crossing) = crossings.get(removed.entity) {
+        let mut actor = commands.entity(removed.entity);
+        if crossing.disabled_collider {
+            actor.try_remove::<avian3d::prelude::ColliderDisabled>();
+        }
+        actor.try_remove::<PortalCrossing>();
+    }
+}
+
+fn advance_portal_crossings(
+    mut actors: Query<
+        (
+            Entity,
+            &BehaviorTaskExecutionState,
+            &RunningBehaviorInstruction,
+            &PortalCrossing,
+            &NavAgent,
+            Option<&ChildOf>,
+            &mut Transform,
+        ),
+        (
+            With<RunBehaviorUsePortal>,
+            Without<PendingBehaviorTaskFailure>,
+        ),
+    >,
+    gates: Query<&Gate>,
+    parents: Query<&GlobalTransform>,
+    time: Res<Time<Fixed>>,
+    clock: Single<&ZooClock>,
+    mut commands: Commands,
+) {
+    for (actor, task, step, crossing, agent, parent, mut local) in &mut actors {
+        if step.id() != crossing.instruction || !step.is_current(task) {
+            continue;
+        }
+        let parent = parent.and_then(|value| parents.get(value.parent()).ok());
+        let world = parent.map_or(local.translation, |pose| {
+            pose.transform_point(local.translation)
+        });
+        let open = gates
+            .get(crossing.gate)
+            .is_ok_and(|gate| gate.open && !gate.locked);
+        let mut pose = if open {
+            crossing.destination
+        } else {
+            crossing.fallback
+        };
+        let delta = pose.translation - world;
+        let distance = delta.length();
+        let travel = agent.max_speed_mps * time.delta_secs();
+        let arrived = !open || distance <= travel;
+        if !arrived {
+            pose.translation = world + delta * (travel / distance);
+        }
+        local.set_if_neq(parent.map_or(pose, |parent| {
+            GlobalTransform::from(pose).reparented_to(parent)
+        }));
+        if arrived {
+            step.complete(actor, clock.tick, &mut commands);
+        }
+    }
 }
 
 #[derive(Component)]
@@ -122,6 +205,7 @@ struct ImmediateDockBinding {
     target: Entity,
     subject_node: Option<String>,
     target_node: Option<String>,
+    subject_animation: Option<String>,
 }
 
 #[derive(Component)]
@@ -228,13 +312,20 @@ fn apply_immediate_dock(
         &RunBehaviorDockNow,
         &mut Transform,
         Option<&ChildOf>,
+        &WorldMember,
+        Has<ImmediateDockBinding>,
     )>,
     mut poses: ParamSet<(DockPoses, Query<&mut GlobalTransform>)>,
     memberships: InteractionContainerMemberships,
+    definitions: Res<WorldDefinitions>,
+    assets: Res<Assets<WorldDefinitionAsset>>,
+    contained: Query<(&ContainedObject, &DefinitionId, Option<&WorldMember>)>,
     mut commands: Commands,
 ) {
     let actor = admitted.entity;
-    let Ok((mut task, instruction, action, mut local, parent)) = actors.get_mut(actor) else {
+    let Ok((mut task, instruction, action, mut local, parent, member, has_binding)) =
+        actors.get_mut(actor)
+    else {
         return;
     };
     if task.target != Some(admitted.target) || !instruction.is_current(&task) {
@@ -242,6 +333,34 @@ fn apply_immediate_dock(
     }
     let action = &action.0;
     let target = admitted.target;
+    if action.unparent && memberships.actor_slot(target, actor).is_some() {
+        let release = definitions.get(&assets).and_then(|definitions| {
+            let (_, id, _) = contained.get(actor).ok()?;
+            let actions = &definitions.find_object(id.0)?.detach_actions;
+            let rule = ["dropitem", "fallitem"]
+                .into_iter()
+                .map(openzt2_game_data::AssetId::from_key)
+                .find(|key| actions.iter().any(|rule| rule.name == *key))?;
+            Some((definitions, rule))
+        });
+        if let Some((definitions, rule)) = release {
+            if detach_object(
+                target,
+                actor,
+                Some(rule),
+                &definitions,
+                &contained,
+                &poses.p0().transforms,
+                &mut commands,
+            ) {
+                commands.entity(actor).try_remove::<ImmediateDockBinding>();
+                instruction.complete(actor, clock.tick, &mut commands);
+            } else {
+                mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
+            }
+            return;
+        }
+    }
     if !action.redock
         && !action.unparent
         && !action.parent_to_target
@@ -256,7 +375,12 @@ fn apply_immediate_dock(
             poses
                 .node(target, action.target_node.as_deref())
                 .and_then(|target_pose| {
-                    poses.align(actor, action.subject_node.as_deref(), target_pose)
+                    poses.align(
+                        actor,
+                        action.subject_node.as_deref(),
+                        action.target_animation.as_deref(),
+                        target_pose,
+                    )
                 })
         else {
             mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
@@ -278,6 +402,7 @@ fn apply_immediate_dock(
             target,
             subject_node: action.subject_node.clone(),
             target_node: action.target_node.clone(),
+            subject_animation: action.target_animation.clone(),
         });
     }
     if action.unparent {
@@ -286,6 +411,21 @@ fn apply_immediate_dock(
     if let Some(slot) = admitted.slot {
         task.interaction_slot = Some(slot);
         entity.insert_if_new(DockedAtInteractionContainer);
+    }
+    if action.unparent && (has_binding || parent.is_some()) {
+        use openzt2_zoo_state::animal_behavior::behavior_world_release_types::{
+            BehaviorWorldObjectReleased, BehaviorWorldReleaseMotion,
+        };
+        commands.trigger(BehaviorWorldObjectReleased {
+            object: actor,
+            world: member.root,
+            pose,
+            motion: if has_binding {
+                BehaviorWorldReleaseMotion::Fall { speed_mps: 0.0 }
+            } else {
+                BehaviorWorldReleaseMotion::Drop
+            },
+        });
     }
     instruction.complete(actor, clock.tick, &mut commands);
 }
@@ -303,7 +443,14 @@ fn follow_bound_immediate_dock_poses(
     for (actor, binding, mut transform, parent) in &mut actors {
         let Some(world_pose) = poses
             .node(binding.target, binding.target_node.as_deref())
-            .and_then(|target| poses.align(actor, binding.subject_node.as_deref(), target))
+            .and_then(|target| {
+                poses.align(
+                    actor,
+                    binding.subject_node.as_deref(),
+                    binding.subject_animation.as_deref(),
+                    target,
+                )
+            })
         else {
             commands.entity(actor).remove::<ImmediateDockBinding>();
             continue;
@@ -364,6 +511,7 @@ fn start_spline_dock(
     targets: Query<&WorldMember>,
     memberships: InteractionContainerMemberships,
     poses: DockPoses,
+    habitats: Query<(&HabitatMember, Option<&LocomotionMode>)>,
     mut agents: Query<(&NavAgent, &mut NavigationRequestGeneration)>,
     mut routes: MessageWriter<NavigateTo>,
     disabled: Query<(), With<avian3d::prelude::ColliderDisabled>>,
@@ -397,7 +545,14 @@ fn start_spline_dock(
         poses.node(actor, None),
         poses
             .node(target, action.target_node.as_deref())
-            .and_then(|node| poses.align(actor, action.subject_node.as_deref(), node)),
+            .and_then(|node| {
+                poses.align(
+                    actor,
+                    action.subject_node.as_deref(),
+                    action.target_animation.as_deref(),
+                    node,
+                )
+            }),
         agents.get_mut(actor),
     ) else {
         mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
@@ -436,27 +591,49 @@ fn start_spline_dock(
         phase,
         owns_disabled_collider: action.ignore_target_collision && !disabled.contains(actor),
     });
+    if matches!(phase, SplineDockPhase::Approach(_))
+        && habitats
+            .get(actor)
+            .ok()
+            .zip(habitats.get(target).ok())
+            .is_some_and(|((subject, mode), (target, _))| {
+                mode == Some(&LocomotionMode::Swim)
+                    && subject.habitat_entity == target.habitat_entity
+            })
+    {
+        commands.entity(actor).insert(SplineDockRetry(Timer::new(
+            std::time::Duration::from_secs(2) + std::time::Duration::from_nanos(1),
+            TimerMode::Once,
+        )));
+    }
 }
 
 fn accept_spline_approach_outcomes(
     mut arrivals: MessageReader<Arrived>,
     mut failures: MessageReader<NavigationFailed>,
-    mut motions: Query<(&RunningBehaviorInstruction, &mut SplineDockMotion)>,
+    mut motions: Query<(
+        &RunningBehaviorInstruction,
+        &mut SplineDockMotion,
+        Has<SplineDockRetry>,
+    )>,
     mut commands: Commands,
 ) {
     for arrival in arrivals.read() {
-        let Ok((step, mut motion)) = motions.get_mut(arrival.entity) else {
+        let Ok((step, mut motion, retry)) = motions.get_mut(arrival.entity) else {
             continue;
         };
         if motion.instruction == step.id()
             && matches!(motion.phase, SplineDockPhase::Approach(request) if request == arrival.request_id)
         {
             motion.phase = SplineDockPhase::Ready;
+            if retry {
+                commands.entity(arrival.entity).remove::<SplineDockRetry>();
+            }
         }
     }
     for failure in failures.read() {
-        if motions.get(failure.entity).is_ok_and(|(step, motion)| {
-            motion.instruction == step.id() && matches!(motion.phase, SplineDockPhase::Approach(request) if request == failure.request_id)
+        if motions.get(failure.entity).is_ok_and(|(step, motion, retry)| {
+            !retry && motion.instruction == step.id() && matches!(motion.phase, SplineDockPhase::Approach(request) if request == failure.request_id)
         }) {
             mark_behavior_task_for_failure_and_stop_navigation(failure.entity, &mut commands);
         }
@@ -467,6 +644,7 @@ fn follow_docking_splines(
     clock: Single<&ZooClock>,
     time: Res<Time<Fixed>>,
     poses: DockPoses,
+    buoyancy: super::docking_animation_pose::DockingBuoyancy,
     memberships: InteractionContainerMemberships,
     mut actors: Query<
         (
@@ -480,10 +658,12 @@ fn follow_docking_splines(
             Option<&ChildOf>,
             Option<&mut avian3d::prelude::LinearVelocity>,
             Has<avian3d::prelude::ColliderDisabled>,
+            Option<(&mut SplineDockRetry, &mut NavigationRequestGeneration)>,
         ),
         Without<PendingBehaviorTaskFailure>,
     >,
     mut commands: Commands,
+    mut routes: MessageWriter<NavigateTo>,
 ) {
     for (
         actor,
@@ -496,6 +676,7 @@ fn follow_docking_splines(
         parent,
         velocity,
         collision_disabled,
+        retry,
     ) in &mut actors
     {
         if !step.can_update_after_activation(clock.tick)
@@ -504,8 +685,44 @@ fn follow_docking_splines(
         {
             continue;
         }
+        if matches!(motion.phase, SplineDockPhase::Approach(_)) && retry.as_ref().is_none() {
+            continue;
+        }
         let (start, advanced) = match motion.phase {
-            SplineDockPhase::Approach(_) => continue,
+            SplineDockPhase::Approach(_) => {
+                if let Some((mut retry, mut generation)) = retry {
+                    if retry.0.tick(time.delta()).is_finished() {
+                        retry.0.reset();
+                        let action = &action.0;
+                        if let Some(end) = poses
+                            .node(motion.target, action.target_node.as_deref())
+                            .and_then(|pose| {
+                                poses.align(
+                                    actor,
+                                    action.subject_node.as_deref(),
+                                    action.target_animation.as_deref(),
+                                    pose,
+                                )
+                            })
+                        {
+                            let request_id = generation.advance();
+                            routes.write(NavigateTo {
+                                entity: actor,
+                                request_id,
+                                destination: end.translation - 3.0 * (end.rotation * Vec3::Z),
+                                arrival_radius_m: agent.radius_m.max(0.05),
+                            });
+                            motion.phase = SplineDockPhase::Approach(request_id);
+                        } else {
+                            mark_behavior_task_for_failure_and_stop_navigation(
+                                actor,
+                                &mut commands,
+                            );
+                        }
+                    }
+                }
+                continue;
+            }
             SplineDockPhase::Ready => {
                 let Ok(current) = poses.transforms.get(actor) else {
                     continue;
@@ -517,7 +734,14 @@ fn follow_docking_splines(
         let action = &action.0;
         let Some(end) = poses
             .node(motion.target, action.target_node.as_deref())
-            .and_then(|target| poses.align(actor, action.subject_node.as_deref(), target))
+            .and_then(|target| {
+                poses.align(
+                    actor,
+                    action.subject_node.as_deref(),
+                    action.target_animation.as_deref(),
+                    target,
+                )
+            })
         else {
             mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
             continue;
@@ -545,11 +769,23 @@ fn follow_docking_splines(
         let ab = a.lerp(b, fraction);
         let bc = b.lerp(c, fraction);
         let cd = c.lerp(d, fraction);
-        let world = Transform {
+        let mut world = Transform {
             translation: ab.lerp(bc, fraction).lerp(bc.lerp(cd, fraction), fraction),
             rotation: start.rotation.slerp(end.rotation, fraction),
             scale: start.scale,
         };
+        if action.use_buoy_nodes && fraction < 1.0 {
+            if let Some(offset) = poses
+                .node(actor, None)
+                .and_then(|root| buoyancy.support_offset(actor, &root))
+            {
+                let start_height = (start.rotation * (start.scale * offset)).y;
+                let end_height = (end.rotation * (end.scale * offset)).y;
+                let curved_height = (world.rotation * (world.scale * offset)).y;
+                world.translation.y +=
+                    start_height + (end_height - start_height) * fraction - curved_height;
+            }
+        }
         *local = parent
             .and_then(|parent| poses.transforms.get(parent.parent()).ok())
             .map_or(world, |parent| {
@@ -578,7 +814,7 @@ fn retire_spline_docking(
         return;
     };
     let mut actor = commands.entity(removed.entity);
-    actor.try_remove::<SplineDockMotion>();
+    actor.try_remove::<(SplineDockMotion, SplineDockRetry)>();
     if motion.owns_disabled_collider {
         actor.try_remove::<avian3d::prelude::ColliderDisabled>();
     }
@@ -667,6 +903,7 @@ fn start_tank_wall_dock(
     let Some(aligned) = poses.align(
         actor,
         action.subject_node.as_deref(),
+        None,
         GlobalTransform::from(pose),
     ) else {
         mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
@@ -688,10 +925,25 @@ struct TankPortalDocks<'w, 's> {
     nodes: Query<'w, 's, &'static TopologyNode>,
     bounds: HabitatBoundaryQueries<'w, 's>,
     tanks: Query<'w, 's, (&'static TankGeometry, &'static HabitatRegion)>,
+    ground: openzt2_zoo_state::terrain::dry_surface_eligibility::DrySurfaceEligibility<'w, 's>,
+    navigation: Query<
+        'w,
+        's,
+        (
+            &'static ActiveTerrainDerivedNavigationGraph,
+            Option<&'static openzt2_zoo_state::aquatic::tank_navigation_water::TankNavigationWater>,
+        ),
+    >,
 }
 
 impl TankPortalDocks<'_, '_> {
-    fn endpoints(&self, gate: Entity, root: Entity, from: Vec3) -> Option<(Transform, Transform)> {
+    fn endpoints(
+        &self,
+        gate: Entity,
+        root: Entity,
+        from: Vec3,
+        agent: &NavAgent,
+    ) -> Option<(Transform, Transform)> {
         let (fence, state, world) = self.fences.get(gate).ok()?;
         if world.root != root || !state.open || state.locked {
             return None;
@@ -700,8 +952,8 @@ impl TankPortalDocks<'_, '_> {
         let definition = definitions
             .find_gate_fence(fence.definition)
             .or_else(|| definitions.find_fence(fence.definition))?;
-        if !definitions
-            .find_object(definition.object)?
+        let portal = definitions.find_object(definition.object)?;
+        if !portal
             .behavior_type_identifiers
             .contains(&openzt2_game_data::AssetId::from_key("tankportalsegment"))
         {
@@ -748,13 +1000,52 @@ impl TankPortalDocks<'_, '_> {
         let [Some(near), Some(far)] = depths else {
             return None;
         };
-        let depth = (near.water_height.min(far.water_height) - 0.2)
-            .max(near.floor_height.max(far.floor_height));
-        let rotation = Quat::from_rotation_y(forward.x.atan2(forward.y));
-        let dock =
-            |point: Vec2| Transform::from_xyz(point.x, depth, point.y).with_rotation(rotation);
-        let offset = forward;
-        Some((dock(centre - offset), dock(centre + offset)))
+        let property = |name| {
+            let key = openzt2_game_data::AssetId::from_key(name);
+            let properties = &portal.authored_runtime.numeric_behavior_properties;
+            properties
+                .binary_search_by_key(&key, |(id, _)| *id)
+                .ok()
+                .map(|index| properties[index].1)
+        };
+        let raised_base = near.water_height.min(far.water_height)
+            - property("gateheight")?
+            - property("watersurfaceoffset")?;
+        let wall_ground = [a, b]
+            .into_iter()
+            .filter_map(|point| self.ground.ground_height(root, point))
+            .reduce(f32::max)?;
+        let depth = raised_base.max(wall_ground) + 1.0;
+        let dock = |point: Vec2, heading: Vec2| {
+            Transform::from_xyz(point.x, depth, point.y)
+                .with_rotation(Quat::from_rotation_y(heading.x.atan2(heading.y)))
+        };
+        let first = dock(centre - forward, forward);
+        let second = dock(centre + forward, -forward);
+        let passable = |point: Vec3| {
+            self.navigation.get(root).is_ok_and(|(graph, water)| {
+                let graph = graph.terrain_derived_navigation_graph();
+                graph
+                    .navigation_surface_at_world_position(point)
+                    .and_then(|index| graph.effective_navigation_node(index, water))
+                    .is_some_and(|node| {
+                        node.eligibility_flags.0 & agent.capabilities.0 & NavFlags::ELIGIBILITY_BITS
+                            != 0
+                            && !node
+                                .eligibility_flags
+                                .contains(NavFlags::DISABLED_BY_DEFAULT)
+                            && f32::from(node.clearance_centimetres) >= agent.radius_m * 100.0
+                    })
+            })
+        };
+        let start_on_far_side = !passable(first.translation) && passable(second.translation);
+        let (start, mut end) = if start_on_far_side {
+            (second, first)
+        } else {
+            (first, second)
+        };
+        end.rotation = start.rotation;
+        Some((start, end))
     }
 }
 
@@ -765,6 +1056,7 @@ fn use_portal(
     tank_portals: TankPortalDocks,
     poses: DockPoses,
     pending: Query<(), With<PendingBehaviorDockingCompletion>>,
+    agents: Query<&NavAgent>,
     mut navigation: DockNavigation,
     mut commands: Commands,
 ) {
@@ -784,9 +1076,14 @@ fn use_portal(
             && portal.destination != entrance
             && gate.is_none_or(|gate| gate.open && !gate.locked)
     });
-    let tank_endpoints = poses
-        .node(actor, None)
-        .and_then(|from| tank_portals.endpoints(entrance, world.root, from.translation()));
+    let tank_endpoints = poses.node(actor, None).and_then(|from| {
+        tank_portals.endpoints(
+            entrance,
+            world.root,
+            from.translation(),
+            agents.get(actor).ok()?,
+        )
+    });
     let place = poses.node(entrance, None).or_else(|| {
         let pose = tank_endpoints.map(|(near, _)| near).or_else(|| {
             let (portal, _, _) = graph_portal?;
@@ -848,8 +1145,14 @@ fn finish_special_docks(
     >,
     portals: Query<(&Portal, &WorldMember, Option<&Gate>)>,
     tank_portals: TankPortalDocks,
-    transforms: Query<(&GlobalTransform, &WorldMember)>,
-    mut actors: Query<(&mut Transform, Option<&ChildOf>)>,
+    transforms: Query<&GlobalTransform>,
+    members: Query<&WorldMember>,
+    mut actors: Query<(
+        &mut Transform,
+        Option<&ChildOf>,
+        &NavAgent,
+        Has<avian3d::prelude::ColliderDisabled>,
+    )>,
     mut navigation: DockNavigation,
     mut clips: MessageWriter<AnimationClipPlaybackRequest>,
     mut commands: Commands,
@@ -859,8 +1162,23 @@ fn finish_special_docks(
         if member.root != root || gate.is_some_and(|gate| !gate.open || gate.locked) {
             return None;
         }
-        let (pose, member) = transforms.get(portal.destination).ok()?;
-        (member.root == root).then_some((portal.destination, pose))
+        if members.get(portal.destination).ok()?.root != root {
+            return None;
+        }
+        let pose = transforms
+            .get(portal.destination)
+            .ok()
+            .copied()
+            .or_else(|| {
+                tank_portals
+                    .graph_endpoint_pose(portal.destination, entrance)
+                    .map(|pose| {
+                        GlobalTransform::from(pose.with_rotation(
+                            pose.rotation * Quat::from_rotation_y(std::f32::consts::PI),
+                        ))
+                    })
+            })?;
+        Some((portal.destination, pose))
     };
 
     let mut settled_failures = bevy::ecs::entity::EntityHashSet::default();
@@ -875,17 +1193,27 @@ fn finish_special_docks(
         if !settled_failures.insert(event.entity) {
             continue;
         }
-        let exit = portal
+        let graph_exit = portal
             .filter(|_| crossing.is_none())
             .and_then(|_| portal_exit(task.target?, world.root));
-        if let Some((_, pose)) = exit {
-            if let Ok((mut transform, parent)) = actors.get_mut(event.entity) {
-                *transform = parent
-                    .and_then(|parent| transforms.get(parent.parent()).ok())
-                    .map_or_else(
-                        || pose.compute_transform(),
-                        |(parent, _)| pose.reparented_to(parent),
-                    );
+        if portal.is_some() {
+            if let Ok((mut transform, parent, agent, _)) = actors.get_mut(event.entity) {
+                let parent = parent.and_then(|parent| transforms.get(parent.parent()).ok());
+                let from = parent.map_or(transform.translation, |pose| {
+                    pose.transform_point(transform.translation)
+                });
+                let fallback = tank_portals
+                    .endpoints(waiting.target, world.root, from, agent)
+                    .map(|(near, _)| GlobalTransform::from(near))
+                    .or(graph_exit.map(|(_, pose)| pose));
+                let Some(pose) = fallback else {
+                    mark_behavior_task_for_failure_and_stop_navigation(event.entity, &mut commands);
+                    continue;
+                };
+                transform.set_if_neq(parent.map_or_else(
+                    || pose.compute_transform(),
+                    |parent| pose.reparented_to(parent),
+                ));
                 commands
                     .entity(event.entity)
                     .remove::<PendingBehaviorDockingCompletion>();
@@ -908,8 +1236,7 @@ fn finish_special_docks(
         commands
             .entity(event.entity)
             .remove::<PendingBehaviorDockingCompletion>();
-        if crossing.is_some_and(|crossing| crossing.0 == step.id()) {
-            step.complete(event.entity, clock.tick, &mut commands);
+        if crossing.is_some() {
             continue;
         }
         if let Some(portal) = portal.filter(|_| task.target == Some(waiting.target)) {
@@ -924,38 +1251,43 @@ fn finish_special_docks(
                 });
             }
             if let Some((exit, exit_pose)) = portal_exit(waiting.target, world.root) {
+                if !transforms.contains(exit) {
+                    commands
+                        .entity(exit)
+                        .insert((exit_pose.compute_transform(), exit_pose));
+                }
                 navigation.request(
                     event.entity,
                     step,
                     exit,
-                    exit_pose,
+                    &exit_pose,
                     exit_pose.compute_transform(),
                     &mut commands,
                 );
                 continue;
             }
-            if let Ok((transform, parent)) = actors.get(event.entity) {
-                let parent = parent
-                    .and_then(|parent| transforms.get(parent.parent()).ok())
-                    .map(|(pose, _)| pose);
+            if let Ok((transform, parent, agent, collider_already_disabled)) =
+                actors.get(event.entity)
+            {
+                let parent = parent.and_then(|parent| transforms.get(parent.parent()).ok());
                 let from = parent.map_or(transform.translation, |parent| {
                     parent.transform_point(transform.translation)
                 });
-                if let Some((_, exit)) = tank_portals.endpoints(waiting.target, world.root, from) {
-                    if let Ok((entrance, _)) = transforms.get(waiting.target) {
-                        commands
-                            .entity(event.entity)
-                            .insert(PortalCrossing(step.id()));
-                        navigation.request(
-                            event.entity,
-                            step,
-                            waiting.target,
-                            entrance,
-                            exit,
-                            &mut commands,
-                        );
-                        continue;
+                if let Some((near, exit)) =
+                    tank_portals.endpoints(waiting.target, world.root, from, agent)
+                {
+                    let mut actor = commands.entity(event.entity);
+                    if !collider_already_disabled {
+                        actor.insert(avian3d::prelude::ColliderDisabled);
                     }
+                    actor.insert(PortalCrossing {
+                        instruction: step.id(),
+                        gate: waiting.target,
+                        destination: exit,
+                        fallback: near,
+                        disabled_collider: !collider_already_disabled,
+                    });
+                    continue;
                 }
             }
             mark_behavior_task_for_failure_and_stop_navigation(event.entity, &mut commands);

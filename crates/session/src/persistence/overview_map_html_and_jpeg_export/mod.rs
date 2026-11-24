@@ -21,11 +21,9 @@ use openzt2_interface_state::ui::authored_ui_node_projection_components::UiNodeI
 
 use super::{
     durable_filesystem_operations::atomically_write_and_sync_file,
+    html_export_result_opening::HtmlExportWritten,
     persistence_filesystem_paths::PersistenceFilesystemPaths,
 };
-
-#[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct OverviewMapHtmlAndJpegExported;
 
 #[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct OverviewMapHtmlAndJpegExportFailed;
@@ -40,7 +38,7 @@ pub(super) struct OverviewExportProjection {
 pub(super) struct OverviewExportReadbackStarted;
 
 #[derive(Component)]
-pub(super) struct OverviewMapHtmlAndJpegWriteTask(Task<io::Result<()>>);
+pub(super) struct OverviewMapHtmlAndJpegWriteTask(Task<io::Result<PathBuf>>);
 
 #[derive(QueryData)]
 pub(super) struct OverviewPresentationNode {
@@ -297,10 +295,9 @@ fn begin_writing_captured_overview_map_presentation(
             let html = format!(
                 "<!doctype html><html><head><meta charset=\"utf-8\"><title>Overview Map</title></head><body><img src=\"overviewmap.jpg\" width=\"{width}\" height=\"{height}\" alt=\"Overview Map\"></body></html>\n"
             );
-            atomically_write_and_sync_file(
-                &directory.join("overviewmap.html"),
-                html.as_bytes(),
-            )
+            let html_path = directory.join("overviewmap.html");
+            atomically_write_and_sync_file(&html_path, html.as_bytes())?;
+            Ok(html_path)
         }),
     ));
 }
@@ -308,15 +305,15 @@ fn begin_writing_captured_overview_map_presentation(
 pub(super) fn complete_overview_map_html_and_jpeg_exports(
     mut tasks: Query<(Entity, &mut OverviewMapHtmlAndJpegWriteTask)>,
     mut commands: Commands,
-    mut completed: MessageWriter<OverviewMapHtmlAndJpegExported>,
+    mut completed: MessageWriter<HtmlExportWritten>,
     mut failed: MessageWriter<OverviewMapHtmlAndJpegExportFailed>,
 ) {
     for (entity, mut task) in &mut tasks {
         let Some(result) = block_on(poll_once(&mut task.0)) else {
             continue;
         };
-        if result.is_ok() {
-            completed.write(OverviewMapHtmlAndJpegExported);
+        if let Ok(html_path) = result {
+            completed.write(HtmlExportWritten(html_path));
         } else {
             failed.write(OverviewMapHtmlAndJpegExportFailed);
         }

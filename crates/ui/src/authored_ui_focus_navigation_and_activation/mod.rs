@@ -1,6 +1,6 @@
 use bevy::{
     input_focus::{
-        tab_navigation::{NavAction, TabGroup, TabNavigation},
+        tab_navigation::{NavAction, TabGroup, TabIndex, TabNavigation},
         FocusCause, FocusGained, FocusLost, InputFocus, InputFocusVisible,
     },
     picking::pointer::{PointerButton, PointerInput},
@@ -14,7 +14,7 @@ use openzt2_interface_state::input::input_types::ActiveInputDevice;
 use openzt2_interface_state::input::input_types::GameAction;
 
 use super::{
-    active_authored_ui_context::ActiveAuthoredUiContext,
+    active_authored_ui_context::{ActiveAuthoredUiContext, AuthoredFocusScope},
     authored_button_runtime_policy::UiButtonPolicy,
     authored_text_edit_bevy_adaptation::UiTextEditPolicy,
     authored_ui_focus_state::UiFocusable,
@@ -37,6 +37,7 @@ pub(super) struct AuthoredHoverPresentation(pub(super) bool);
 
 pub(super) fn update_active_authored_focus(
     context: ActiveAuthoredUiContext,
+    resolved: Res<AuthoredFocusScope>,
     memory: Query<&UiFocusMemory>,
     controls: Query<(), With<UiFocusable>>,
     input: Res<ActiveInputDevice>,
@@ -48,20 +49,16 @@ pub(super) fn update_active_authored_focus(
         visibility.0 = highlight;
     }
     let current = focus.get();
-    let modal = context.top_modal();
-    let scope = context.active_scope();
-    if current.is_some_and(|node| {
-        !controls.contains(node)
-            || scope.is_some_and(|scope| context.eligible_in_scope(node, scope, modal))
-    }) {
+    if current.is_some_and(|node| !controls.contains(node) || resolved.focused_control_is_eligible)
+    {
         return;
     }
-    let next = scope.and_then(|scope| {
+    let next = resolved.document.and_then(|scope| {
         memory
             .get(scope)
             .ok()?
             .remembered
-            .filter(|next| context.eligible_in_scope(*next, scope, modal))
+            .filter(|next| context.eligible_in_scope(*next, scope, resolved.modal))
     });
     if let Some(next) = next {
         focus.set(next, FocusCause::Navigated);
@@ -136,7 +133,7 @@ pub(super) fn authored_focus_left(
 
 pub(super) fn navigate_authored_ui_focus_from_actions(
     mut actions: MessageReader<ActionRequest>,
-    focusables: Query<(Entity, &UiFocusable, &InheritedVisibility, &UiDocumentOwner)>,
+    focusables: Query<(Entity, &TabIndex), With<UiFocusable>>,
     sliders: Query<&UiSliderPolicy>,
     text_edits: Query<(), With<UiTextEditPolicy>>,
     memory: Query<&UiFocusMemory>,
@@ -144,16 +141,18 @@ pub(super) fn navigate_authored_ui_focus_from_actions(
     navigation: TabNavigation,
     groups: Query<&TabGroup>,
     context: ActiveAuthoredUiContext,
+    resolved: Res<AuthoredFocusScope>,
 ) {
-    let active = context.active_scope();
-    let modal = context.top_modal();
+    let modal = resolved.modal;
     for request in actions.read() {
         let direction = match request.action {
             GameAction::NavigateUp | GameAction::NavigateLeft => -1,
             GameAction::NavigateDown | GameAction::NavigateRight => 1,
             _ => continue,
         };
-        let Some(root) = active else { continue };
+        let Some(root) = resolved.document else {
+            continue;
+        };
         let current = focus
             .get()
             .filter(|node| context.eligible_in_scope(*node, root, modal));
@@ -197,6 +196,7 @@ pub(super) fn navigate_authored_ui_focus_from_actions(
                     direction,
                     &focusables,
                     &context,
+                    modal,
                 )
             });
         if let Some(next) = next {
@@ -211,24 +211,24 @@ fn next_focusable_node_in_projected_document(
     document_root: Entity,
     current: Option<Entity>,
     direction: i8,
-    nodes: &Query<(Entity, &UiFocusable, &InheritedVisibility, &UiDocumentOwner)>,
+    nodes: &Query<(Entity, &TabIndex), With<UiFocusable>>,
     context: &ActiveAuthoredUiContext,
+    modal: Option<Entity>,
 ) -> Option<Entity> {
-    let modal = context.top_modal();
     let current_order = current.and_then(|entity| {
         nodes
             .get(entity)
             .ok()
-            .filter(|(entity, _, _, _)| context.eligible_in_scope(*entity, document_root, modal))
-            .map(|(entity, focusable, _, _)| (focusable.order, context.navigation_order(entity)))
+            .filter(|(entity, _)| context.eligible_in_scope(*entity, document_root, modal))
+            .map(|(entity, index)| (index.0, context.navigation_order(entity)))
     });
     choose_wrapped_authored_ui_focus_candidate(
         current_order,
         direction,
-        nodes.iter().filter_map(|(entity, focusable, _, _)| {
+        nodes.iter().filter_map(|(entity, index)| {
             context
                 .eligible_in_scope(entity, document_root, modal)
-                .then_some(((focusable.order, context.navigation_order(entity)), entity))
+                .then_some(((index.0, context.navigation_order(entity)), entity))
         }),
     )
 }
@@ -270,19 +270,14 @@ pub(super) fn activate_focused_authored_ui_node_from_confirm(
     mut actions: MessageReader<ActionRequest>,
     memory: Query<&UiFocusMemory>,
     focus: Res<InputFocus>,
-    focusables: Query<(Entity, &UiFocusable, &InheritedVisibility, &UiDocumentOwner)>,
+    focusables: Query<(Entity, &TabIndex), With<UiFocusable>>,
     context: ActiveAuthoredUiContext,
-    nodes: Query<(
-        &UiFocusable,
-        &UiDocumentOwner,
-        &InheritedVisibility,
-        Option<&UiSubmitTarget>,
-        Option<&UiButtonPolicy>,
-    )>,
+    resolved: Res<AuthoredFocusScope>,
+    nodes: Query<(Option<&UiSubmitTarget>, Option<&UiButtonPolicy>), With<UiFocusable>>,
     mut activated: MessageWriter<UiNodeActivated>,
 ) {
-    let active_modal = context.top_modal();
-    let active_root = context.active_scope_with_modal(active_modal);
+    let active_modal = resolved.modal;
+    let active_root = resolved.document;
     for request in actions.read() {
         if request.action != GameAction::Confirm {
             continue;
@@ -299,45 +294,44 @@ pub(super) fn activate_focused_authored_ui_node_from_confirm(
                         .and_then(|memory| memory.remembered.or(memory.default))
                 })
                 .filter(|node| {
-                    nodes
-                        .get(*node)
-                        .is_ok_and(|(focusable, _owner, visible, _, _)| {
-                            context.eligible_in_scope(*node, root, active_modal)
-                                && focusable.enabled
-                                && visible.get()
-                        })
+                    nodes.contains(*node) && context.eligible_in_scope(*node, root, active_modal)
                 })
                 .or_else(|| {
-                    next_focusable_node_in_projected_document(root, None, 1, &focusables, &context)
+                    next_focusable_node_in_projected_document(
+                        root,
+                        None,
+                        1,
+                        &focusables,
+                        &context,
+                        active_modal,
+                    )
                 })
             else {
                 continue;
             };
-            let Ok((focusable, _owner, visible, submit, button)) = nodes.get(node) else {
+            let Ok((submit, button)) = nodes.get(node) else {
                 continue;
             };
-            if focusable.enabled && visible.get() {
+            activated.write(UiNodeActivated {
+                node,
+                source: request.source,
+                trigger: if submit.is_some() {
+                    UiTrigger::Submit
+                } else {
+                    UiTrigger::Press
+                },
+            });
+            if button.is_some_and(|policy| !policy.selectable) {
                 activated.write(UiNodeActivated {
                     node,
                     source: request.source,
-                    trigger: if submit.is_some() {
-                        UiTrigger::Submit
-                    } else {
-                        UiTrigger::Press
-                    },
+                    trigger: UiTrigger::On,
                 });
-                if button.is_some_and(|policy| !policy.selectable) {
-                    activated.write(UiNodeActivated {
-                        node,
-                        source: request.source,
-                        trigger: UiTrigger::On,
-                    });
-                    activated.write(UiNodeActivated {
-                        node,
-                        source: request.source,
-                        trigger: UiTrigger::Off,
-                    });
-                }
+                activated.write(UiNodeActivated {
+                    node,
+                    source: request.source,
+                    trigger: UiTrigger::Off,
+                });
             }
         }
     }

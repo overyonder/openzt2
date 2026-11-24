@@ -22,7 +22,7 @@ use std::cell::RefCell;
 
 use super::{
     scenario_lua_query_fact_collection::ScenarioLuaQueryFactSources,
-    scenario_lua_types::{ScenarioLuaQueryFacts, ScenarioLuaVirtualMachineContexts},
+    scenario_lua_types::{ScenarioLuaContext, ScenarioLuaQueryFacts},
 };
 
 #[derive(Message, Debug, Clone)]
@@ -105,6 +105,7 @@ pub(super) fn register(app: &mut App) {
         .add_systems(
             Update,
             (
+                create_named_ui_lua_contexts_for_requested_scripts,
                 run_authored_timed_scenario_scripts,
                 presentation::apply_scenario_ui_commands,
                 presentation::apply_scenario_tool_requests,
@@ -343,10 +344,7 @@ pub(super) fn extend_ui_root<'scope, 'env: 'scope>(
         scope.create_function(move |lua, (root, name): (Table, String)| {
             if matches!(
                 name.as_str(),
-                "challenge layout"
-                    | "instant challenge layout"
-                    | "photo challenges layout"
-                    | "challenge text"
+                "challenge layout" | "instant challenge layout" | "challenge text"
             ) {
                 return existing.call::<Table>((root, name));
             }
@@ -823,13 +821,84 @@ fn install_node_methods<'scope, 'env: 'scope>(
     Ok(())
 }
 
+#[derive(Component)]
+struct NamedScenarioUiLuaContext(AssetId);
+
+#[derive(Component)]
+#[relationship(relationship_target = NamedScenarioUiLuaContexts)]
+struct NamedScenarioUiLuaContextOf(Entity);
+
+#[derive(Component)]
+#[relationship_target(relationship = NamedScenarioUiLuaContextOf, linked_spawn)]
+struct NamedScenarioUiLuaContexts(Vec<Entity>);
+
+#[derive(bevy::ecs::system::SystemParam)]
+struct ScenarioUiLuaContextOwners<'w, 's> {
+    documents: Query<'w, 's, (&'static UiDocumentRoot, &'static ChildOf)>,
+    worlds: Query<
+        'w,
+        's,
+        Entity,
+        With<openzt2_world_state::world_spawn::world_membership_types::WorldRoot>,
+    >,
+    owned: Query<'w, 's, &'static NamedScenarioUiLuaContexts>,
+    names: Query<'w, 's, &'static NamedScenarioUiLuaContext>,
+}
+
+impl ScenarioUiLuaContextOwners<'_, '_> {
+    fn owner(&self, document: Entity) -> Option<(&UiDocumentRoot, Entity)> {
+        let (root, parent) = self.documents.get(document).ok()?;
+        Some((
+            root,
+            self.worlds.single().unwrap_or_else(|_| parent.parent()),
+        ))
+    }
+
+    fn find(&self, owner: Entity, name: AssetId) -> Option<Entity> {
+        use bevy::ecs::relationship::RelationshipTarget;
+        self.owned.get(owner).ok()?.iter().find(|entity| {
+            self.names
+                .get(*entity)
+                .is_ok_and(|context| context.0 == name)
+        })
+    }
+}
+
+fn create_named_ui_lua_contexts_for_requested_scripts(
+    mut commands: Commands,
+    mut requests: MessageReader<RunTimedScenarioUiAction>,
+    owners: ScenarioUiLuaContextOwners,
+) {
+    let mut created = std::collections::HashSet::new();
+    for request in requests.read() {
+        let mut words = request.command.split_ascii_whitespace();
+        let (Some(name), Some(_), Some(_)) = (words.next(), words.next(), words.next()) else {
+            continue;
+        };
+        if name.eq_ignore_ascii_case("scenario") {
+            continue;
+        }
+        let Some((_, owner)) = owners.owner(request.document_root) else {
+            continue;
+        };
+        let name = AssetId::from_virtual_path(name);
+        if owners.find(owner, name).is_none() && created.insert((owner, name)) {
+            commands.spawn((
+                NamedScenarioUiLuaContext(name),
+                NamedScenarioUiLuaContextOf(owner),
+                ScenarioLuaContext::default(),
+            ));
+        }
+    }
+}
+
 fn run_authored_timed_scenario_scripts(
     mut requests: MessageReader<RunTimedScenarioUiAction>,
-    roots: Query<&UiDocumentRoot>,
+    owners: ScenarioUiLuaContextOwners,
     active_scenarios: Query<(Entity, &ActiveScenarioSession, &ScenarioDocument)>,
     scripts: Res<Assets<LuaScriptAsset>>,
     script_index: Res<LuaScriptArchivePathIndex>,
-    mut runtime: NonSendMut<ScenarioLuaVirtualMachineContexts>,
+    mut runtime: Query<&mut ScenarioLuaContext>,
     (fact_sources, direct): (
         ScenarioLuaQueryFactSources,
         super::scenario_lua_entity_commands::ScenarioLuaDirectAccess,
@@ -846,7 +915,7 @@ fn run_authored_timed_scenario_scripts(
     queries.profile = Some(&profile);
     for request in requests.read() {
         let delivered = (|| {
-            let Ok(root) = roots.get(request.document_root) else {
+            let Some((root, view_owner)) = owners.owner(request.document_root) else {
                 return false;
             };
             let mut words = request.command.split_ascii_whitespace();
@@ -866,23 +935,23 @@ fn run_authored_timed_scenario_scripts(
                 warn!(%path, "timed UI script does not resolve");
                 return false;
             };
-            use super::scenario_lua_types::ScenarioLuaRuntimeOwner;
             let (owner, scenario, document_id) = if context.eq_ignore_ascii_case("scenario") {
                 let Ok((owner, active, document)) = active_scenarios.single() else {
                     return false;
                 };
-                (
-                    ScenarioLuaRuntimeOwner::Scenario(owner),
-                    active.definition,
-                    Some(document.0.id()),
-                )
+                (owner, active.definition, Some(document.0.id()))
             } else {
                 let context = AssetId::from_virtual_path(context);
-                (ScenarioLuaRuntimeOwner::NamedUi(context), context, None)
+                let Some(owner) = owners.find(view_owner, context) else {
+                    return false;
+                };
+                (owner, context, None)
+            };
+            let Ok(mut context) = runtime.get_mut(owner) else {
+                return false;
             };
             let arguments = words.collect::<Vec<_>>();
-            match runtime.execute_scenario_lua_script_binding(
-                owner,
+            match context.execute(
                 document_id,
                 script_path,
                 script_handle,

@@ -1,13 +1,9 @@
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
-use bevy::{prelude::*, time::Stopwatch};
+use bevy::{ecs::entity::EntityHashSet, prelude::*};
 use openzt2_game_data::ui_document::action::UiTrigger;
 use openzt2_interface_state::{
-    input::input_types::ActionSource,
-    ui::{
-        authored_ui_activation_contracts::UiNodeActivated,
-        authored_ui_node_projection_components::UiDocumentOwner,
-    },
+    input::input_types::ActionSource, ui::authored_ui_activation_contracts::UiNodeActivated,
 };
 use openzt2_zoo_state::scenario::timed_scenario_ui_actions::{
     PendingScenarioUiSelection, RunTimedScenarioUiAction, ScenarioUiSelectionCompleted,
@@ -15,125 +11,211 @@ use openzt2_zoo_state::scenario::timed_scenario_ui_actions::{
 };
 
 #[derive(Component)]
-pub(super) struct TimedScenarioScript(pub(super) std::sync::Arc<str>);
+pub(super) struct TimedScenarioScript(pub(super) Arc<str>);
 
 #[derive(Component)]
 pub(super) struct UiTimedActionDue(pub(super) Duration);
 
-#[derive(Component, Default)]
-pub(super) struct UiAuthoredTimedActionSequencePlayback(Option<UiTimedActionClock>);
+#[derive(Component)]
+pub(super) struct UiAuthoredTimedActionSequencePlayback {
+    document: Entity,
+    steps: Box<[Entity]>,
+    starts_with_immediate_step: bool,
+    clock: Option<UiTimedActionClock>,
+}
 
 #[derive(Default)]
 struct UiTimedActionClock {
-    elapsed: Stopwatch,
-    emitted: bevy::platform::collections::HashSet<Entity>,
+    elapsed_seconds: f32,
+    next_step: usize,
     awaiting_script: Option<Entity>,
+    awaiting_presentation: Option<Entity>,
+    selection: Option<ScenarioUiSelectionCompleted>,
 }
 
 impl UiAuthoredTimedActionSequencePlayback {
-    pub(super) fn set_active_and_restart(&mut self, active: bool) {
-        self.0 = active.then(UiTimedActionClock::default);
+    pub(super) fn new(
+        document: Entity,
+        steps: Box<[Entity]>,
+        starts_with_immediate_step: bool,
+        starts_active: bool,
+    ) -> Self {
+        Self {
+            document,
+            steps,
+            starts_with_immediate_step,
+            clock: starts_active.then(UiTimedActionClock::default),
+        }
+    }
+
+    pub(super) fn restart(
+        &mut self,
+        active: bool,
+        selection: Option<ScenarioUiSelectionCompleted>,
+    ) -> Option<ScenarioUiSelectionCompleted> {
+        let previous = self.clock.take().and_then(|clock| clock.selection);
+        self.clock = active.then(|| UiTimedActionClock {
+            selection: self
+                .starts_with_immediate_step
+                .then_some(selection)
+                .flatten(),
+            ..default()
+        });
+        previous
     }
 }
 
-pub(super) fn advance_authored_timed_action_sequences_and_activate_due_proxies(
+#[derive(Message, Clone, Copy)]
+pub(super) struct TimedUiPresentationCommitted(pub(super) Entity);
+
+#[derive(Message, Clone, Copy)]
+pub(super) struct UiSelectionWaitEnded(pub(super) ScenarioUiSelectionCompleted);
+
+#[derive(Component, PartialEq, Eq)]
+pub(super) struct UiSelectionPresentationCommitted(pub(super) ScenarioUiSelectionCompleted);
+
+pub(super) fn release_selection_when_timed_sequence_disappears(
+    removed: On<Remove, UiAuthoredTimedActionSequencePlayback>,
+    sequences: Query<&UiAuthoredTimedActionSequencePlayback>,
+    mut released: MessageWriter<UiSelectionWaitEnded>,
+) {
+    if let Some(selection) = sequences
+        .get(removed.entity)
+        .ok()
+        .and_then(|sequence| sequence.clock.as_ref())
+        .and_then(|clock| clock.selection)
+    {
+        released.write(UiSelectionWaitEnded(selection));
+    }
+}
+
+pub(super) fn dispatch_due_authored_sequence_steps(
     time: Res<Time<Real>>,
-    mut sequences: Query<(&Children, &mut UiAuthoredTimedActionSequencePlayback)>,
-    deadlines: Query<(
-        &UiTimedActionDue,
-        &UiDocumentOwner,
-        Option<&TimedScenarioScript>,
-    )>,
+    mut sequences: Query<&mut UiAuthoredTimedActionSequencePlayback>,
+    deadlines: Query<(&UiTimedActionDue, Option<&TimedScenarioScript>)>,
     mut scripts: Option<MessageWriter<RunTimedScenarioUiAction>>,
     mut completed_scripts: Option<MessageReader<TimedScenarioUiActionCompleted>>,
-    mut activations: ParamSet<(
-        MessageReader<UiNodeActivated>,
-        MessageWriter<UiNodeActivated>,
-    )>,
-    mut commands: Commands,
-    selections: Query<(Entity, &PendingScenarioUiSelection)>,
-    mut completed_selections: Option<MessageWriter<ScenarioUiSelectionCompleted>>,
+    mut committed_presentations: MessageReader<TimedUiPresentationCommitted>,
+    mut activated: MessageWriter<UiNodeActivated>,
+    mut ended: MessageWriter<UiSelectionWaitEnded>,
 ) {
-    // The presentation router runs before this system. Its deferred actions
-    // emit further activations for the next pass through the authored chain.
-    let authored_chain_active = activations.p0().read().fold(false, |active, event| {
-        active || event.source == ActionSource::System
-    });
-    if !authored_chain_active {
-        if let Some(completed) = completed_selections.as_mut() {
-            for (document, selection) in &selections {
-                completed.write(selection.0);
-                commands
-                    .entity(document)
-                    .remove::<PendingScenarioUiSelection>();
-            }
-        }
-    }
-    let mut activated = activations.p1();
-    let completed = completed_scripts
+    let committed: EntityHashSet = committed_presentations
+        .read()
+        .map(|commit| commit.0)
+        .collect();
+    let scripts_completed: EntityHashSet = completed_scripts
         .as_mut()
-        .map(|messages| {
-            messages
-                .read()
-                .map(|message| message.0)
-                .collect::<bevy::platform::collections::HashSet<_>>()
-        })
+        .map(|completed| completed.read().map(|completion| completion.0).collect())
         .unwrap_or_default();
-    for (actions, mut playback) in &mut sequences {
-        if playback.0.is_none() {
+    for mut sequence in &mut sequences {
+        if sequence.clock.is_none() {
             continue;
         }
-        let Some(clock) = playback.0.as_mut() else {
+        let UiAuthoredTimedActionSequencePlayback {
+            document,
+            steps,
+            clock,
+            ..
+        } = &mut *sequence;
+        let Some(active) = clock.as_mut() else {
             continue;
         };
-        // Authored deadlines use single-precision seconds and fire strictly
-        // after the deadline, including entries authored at time zero.
-        let seconds = clock.elapsed.elapsed_secs() + time.delta_secs();
-        clock.elapsed.tick(time.delta());
-        if clock.elapsed.elapsed_secs() != seconds {
-            clock.elapsed.set_elapsed(Duration::from_secs_f32(seconds));
+        active.elapsed_seconds += time.delta_secs();
+        if active
+            .awaiting_presentation
+            .is_some_and(|step| committed.contains(&step))
+        {
+            active.awaiting_presentation = None;
         }
-        if let Some(action) = clock.awaiting_script {
-            if !completed.contains(&action) {
-                continue;
-            }
-            clock.awaiting_script = None;
+        if active
+            .awaiting_script
+            .is_some_and(|step| scripts_completed.contains(&step))
+        {
+            active.awaiting_script = None;
         }
-        let mut complete = true;
-        let ordered = actions.iter().filter_map(|node| {
-            let (deadline, owner, script) = deadlines.get(node).ok()?;
-            Some((node, deadline, owner, script))
-        });
-        for (node, deadline, owner, script) in ordered {
-            if clock.emitted.contains(&node) {
-                continue;
-            }
-            if deadline.0.as_secs_f32() >= seconds {
-                complete = false;
-                continue;
-            }
-            clock.emitted.insert(node);
-            if let Some(script) = script {
-                if let Some(writer) = scripts.as_mut() {
-                    writer.write(RunTimedScenarioUiAction {
-                        action: node,
-                        document_root: owner.0,
-                        command: script.0.clone(),
-                    });
-                    clock.awaiting_script = Some(node);
-                    complete = false;
+        if active.awaiting_script.is_none() {
+            while let Some(&step) = steps.get(active.next_step) {
+                let Ok((due, script)) = deadlines.get(step) else {
+                    active.next_step += 1;
+                    continue;
+                };
+                // Even a time-zero step requires strictly positive elapsed time.
+                if active.elapsed_seconds <= due.0.as_secs_f32() {
                     break;
                 }
-            } else {
-                activated.write(UiNodeActivated {
-                    source: ActionSource::System,
-                    node,
-                    trigger: UiTrigger::Press,
-                });
+                active.next_step += 1;
+                if let Some(script) = script {
+                    if let Some(scripts) = scripts.as_mut() {
+                        scripts.write(RunTimedScenarioUiAction {
+                            action: step,
+                            document_root: *document,
+                            command: script.0.clone(),
+                        });
+                        active.awaiting_script = Some(step);
+                        break;
+                    }
+                } else {
+                    activated.write(UiNodeActivated {
+                        source: ActionSource::System,
+                        node: step,
+                        trigger: UiTrigger::Press,
+                    });
+                    if active.selection.is_some() {
+                        active.awaiting_presentation = Some(step);
+                    }
+                }
             }
         }
-        if complete {
-            playback.0 = None;
+        let handoff = active.awaiting_script.is_some()
+            || active.next_step == steps.len()
+            || steps
+                .get(active.next_step)
+                .and_then(|step| deadlines.get(*step).ok())
+                .is_some_and(|(due, _)| !due.0.is_zero());
+        if handoff && active.awaiting_presentation.is_none() {
+            if let Some(selection) = active.selection.take() {
+                ended.write(UiSelectionWaitEnded(selection));
+            }
+        }
+        if active.next_step == steps.len()
+            && active.awaiting_script.is_none()
+            && active.awaiting_presentation.is_none()
+        {
+            *clock = None;
+        }
+    }
+}
+
+pub(super) fn acknowledge_settled_scenario_ui_selections(
+    mut commands: Commands,
+    roots: Query<(
+        Entity,
+        Ref<UiSelectionPresentationCommitted>,
+        &PendingScenarioUiSelection,
+    )>,
+    sequences: Query<&UiAuthoredTimedActionSequencePlayback>,
+    mut released: MessageReader<UiSelectionWaitEnded>,
+    mut completed: Option<MessageWriter<ScenarioUiSelectionCompleted>>,
+) {
+    let released: EntityHashSet = released.read().map(|event| event.0.document_root).collect();
+    let Some(completed) = completed.as_mut() else {
+        return;
+    };
+    for (root, committed, pending) in &roots {
+        if !(committed.is_changed() || released.contains(&root)) || committed.0 != pending.0 {
+            continue;
+        }
+        let waiting = sequences.iter().any(|sequence| {
+            sequence
+                .clock
+                .as_ref()
+                .is_some_and(|clock| clock.selection == Some(committed.0))
+        });
+        if !waiting {
+            completed.write(committed.0);
+            commands
+                .entity(root)
+                .remove::<(UiSelectionPresentationCommitted, PendingScenarioUiSelection)>();
         }
     }
 }

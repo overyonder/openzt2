@@ -35,7 +35,7 @@ use openzt2_game_data::ui_document::widget_live_collection::UiWidgetLiveCollecti
 use openzt2_game_data::AssetId;
 
 use crate::animation::NotifyOnUiAnimationComplete;
-use crate::animation::UiShowHideAnimation;
+use crate::animation::{UiAnimationDirection, UiShowHideAnimation, UiShowHidePlayback};
 use crate::authored_grid_layout_projection::authored_grid_record_owns_child_layout;
 use crate::authored_grid_layout_projection::authored_unbounded_grid_packing_direction;
 use crate::authored_modal_presentation::UiAuthoredModalPresentation;
@@ -63,6 +63,23 @@ use openzt2_interface_state::ui::authored_online_message_node_roles::UiAuthoredO
 use openzt2_interface_state::ui::authored_ui_focus_state::UiFocusable;
 use openzt2_interface_state::ui::authored_ui_interaction_enabled_state::UiInteractionEnabled;
 use openzt2_interface_state::ui::authored_ui_visual_types::UiVisualBackgroundSlotOwner;
+
+#[derive(Component)]
+pub(super) struct UiDocumentLifetimeAttachment;
+
+pub(in crate::projection) fn despawn_document_attachment_to_missing_owner(
+    removal: On<Remove, ChildOf>,
+    attachments: Query<&ChildOf, With<UiDocumentLifetimeAttachment>>,
+    entities: Query<Entity>,
+    mut commands: Commands,
+) {
+    if attachments
+        .get(removal.entity)
+        .is_ok_and(|parent| !entities.contains(parent.parent()))
+    {
+        commands.entity(removal.entity).try_despawn();
+    }
+}
 
 pub fn project_document(
     commands: &mut Commands,
@@ -111,14 +128,43 @@ pub(super) fn project_document_on_entity(
     let mut authored_root_surface = None;
     let mut default_focus = None;
     let top_level = !matches!(&data.role, UiDocumentRole::Fragment);
+    if decorate_owner {
+        let (justify_content, align_items) = if top_level {
+            (JustifyContent::Center, AlignItems::Center)
+        } else {
+            (JustifyContent::Start, AlignItems::Start)
+        };
+        commands.entity(request.owner).try_insert_if_new((
+            Node {
+                width: percent(100.0),
+                height: percent(100.0),
+                justify_content,
+                align_items,
+                ..default()
+            },
+            Visibility::Inherited,
+            Pickable::IGNORE,
+        ));
+    }
 
     for (index, record) in data.nodes.iter().enumerate() {
         let entity = if index == 0 {
-            let entity = existing_root.unwrap_or_else(|| commands.spawn_empty().id());
+            let entity = existing_root.unwrap_or_else(|| {
+                commands
+                    .spawn((UiDocumentLifetimeAttachment, ChildOf(request.owner)))
+                    .id()
+            });
             root = Some(entity);
             entity
         } else {
-            commands.spawn_empty().id()
+            let parent = if record.parent == 0 {
+                authored_root_surface.unwrap_or(entities[0])
+            } else {
+                entities[record.parent as usize]
+            };
+            commands
+                .spawn((UiDocumentLifetimeAttachment, ChildOf(parent)))
+                .id()
         };
         let document_root = root.expect("validated UI preorder starts at its root");
         entities.push(entity);
@@ -177,6 +223,7 @@ pub(super) fn project_document_on_entity(
                                 std::mem::take(&mut node),
                                 Pickable::IGNORE,
                                 UiDocumentOwner(document_root),
+                                UiDocumentLifetimeAttachment,
                                 ChildOf(entity),
                             ))
                             .id(),
@@ -250,6 +297,15 @@ pub(super) fn project_document_on_entity(
                 .entity(entity)
                 .insert(crate::authored_ui_layout_participation::UiOverheadOnly);
         }
+        if data.role == UiDocumentRole::InGameHud
+            && index != 0
+            && record.parent == 0
+            && record.name.eq_ignore_ascii_case("Edge Scroller")
+        {
+            commands
+                .entity(entity)
+                .insert(crate::authored_ui_node_projection_components::UiEdgePanSurface::default());
+        }
         if index == 0 && data.role == UiDocumentRole::InGamePersistentStatus {
             commands.entity(entity).insert(GlobalZIndex(1));
         }
@@ -305,28 +361,38 @@ pub(super) fn project_document_on_entity(
             let duration_ms = animation.duration_ms as f32;
             let elapsed_ms = (animation.initial_ms as f32).min(duration_ms);
             let authored_animation = matches!(record.kind, UiNodeKind::Animation);
-            commands.entity(entity).insert(UiShowHideAnimation {
-                elapsed_ms,
+            let policy = UiShowHideAnimation {
                 duration_ms,
                 exit_rate: animation.exit_rate,
                 delay_ms: animation.delay_ms as f32,
-                delay_remaining_ms: if authored_animation {
-                    animation.delay_ms as f32
-                } else {
-                    0.0
-                },
                 bob_factor: animation.bob_factor,
                 interpolation: animation.interpolation,
-                forward: animation.initial_forward,
-                running: duration_ms > 0.0
-                    && (authored_animation || elapsed_ms > 0.0 && elapsed_ms < duration_ms),
                 base_rect: record.rect.map(|value| value),
                 rect_intervals: animation.rect_intervals,
                 animates_color: animation.animates_color,
                 affects_text_color: animation.affects_text_color,
                 start_color: animation.start_color,
                 end_color: animation.end_color,
-            });
+            };
+            commands
+                .entity(entity)
+                .insert((policy, UiAnimationDirection(animation.initial_forward)));
+            if duration_ms > 0.0
+                && (authored_animation || elapsed_ms > 0.0 && elapsed_ms < duration_ms)
+            {
+                commands
+                    .entity(entity)
+                    .insert(UiShowHidePlayback::at_elapsed(
+                        &policy,
+                        animation.initial_forward,
+                        elapsed_ms,
+                        if authored_animation {
+                            policy.delay_ms
+                        } else {
+                            0.0
+                        },
+                    ));
+            }
         }
         if flags & UiNodeFlags::NOTIFY_ANIMATION_COMPLETED.0 != 0 {
             commands.entity(entity).insert(NotifyOnUiAnimationComplete);
@@ -341,47 +407,6 @@ pub(super) fn project_document_on_entity(
                     super::ui_document_opening::UiDocumentOpeningEffects::default(),
                     openzt2_world_state::simulation_time::simulation_control_types::UiDocumentPauseTransfer(false),
                 ));
-            }
-            // The owner remains the lifecycle parent, but it must also
-            // participate in Bevy UI's hierarchy. Bevy only lays out a Node
-            // without a Node ancestor as a UI root; a marker-only parent would
-            // otherwise exclude this entire document from layout.
-            let owner = request.owner;
-            if existing_root.is_none() || decorate_owner {
-                commands.queue(move |world: &mut World| {
-                    let Ok(mut owner) = world.get_entity_mut(owner) else {
-                        world.despawn(entity);
-                        return;
-                    };
-                    if decorate_owner {
-                        owner.insert((
-                            Node {
-                                width: percent(100.0),
-                                height: percent(100.0),
-                                justify_content: if top_level {
-                                    JustifyContent::Center
-                                } else {
-                                    JustifyContent::Start
-                                },
-                                align_items: if top_level {
-                                    AlignItems::Center
-                                } else {
-                                    AlignItems::Start
-                                },
-                                ..default()
-                            },
-                            Visibility::Inherited,
-                            // Lifecycle owners participate in layout only. Without an
-                            // explicit ignore marker, Bevy UI picking treats this
-                            // full-window node as the top hit and never reaches the
-                            // authored controls below it.
-                            Pickable::IGNORE,
-                        ));
-                    }
-                    if existing_root.is_none() {
-                        owner.add_child(entity);
-                    }
-                });
             }
             let logical_size = data.logical_size.map(|value| value);
             if top_level {
@@ -411,13 +436,6 @@ pub(super) fn project_document_on_entity(
                         node.height = px(canvas[1]);
                     }
                 });
-        } else {
-            let parent = if record.parent == 0 {
-                authored_root_surface.unwrap_or(entities[0])
-            } else {
-                entities[record.parent as usize]
-            };
-            commands.entity(parent).add_child(entity);
         }
 
         if focusable {
@@ -427,7 +445,7 @@ pub(super) fn project_document_on_entity(
                 record.tab_order as u32
             };
             commands.entity(entity).insert((
-                UiFocusable { order, enabled },
+                UiFocusable,
                 Focusable,
                 TabIndex(i32::try_from(order).unwrap_or(i32::MAX)),
                 UiInteractionEnabled(enabled),
@@ -450,6 +468,33 @@ pub(super) fn project_document_on_entity(
 
         if matches!(&record.kind, UiNodeKind::Button | UiNodeKind::Toggle) {
             commands.entity(entity).insert(bevy::ui_widgets::Button);
+        }
+        if data.role == UiDocumentRole::InGameHud
+            && record.kind == UiNodeKind::Toggle
+            && index != 0
+            && data.nodes[0].name.eq_ignore_ascii_case("MainGUI")
+            && data.nodes[record.parent as usize]
+                .name
+                .eq_ignore_ascii_case("View filter layout")
+        {
+            let name = record.name.as_str();
+            let selected = name.eq_ignore_ascii_case("show timer button");
+            if selected
+                || [
+                    "guest button",
+                    "building button",
+                    "fence button",
+                    "foliage button",
+                    "emote button",
+                    "guest view button",
+                ]
+                .iter()
+                .any(|receiver| name.eq_ignore_ascii_case(receiver))
+            {
+                commands
+                    .entity(entity)
+                    .insert(crate::main_toolbar::ToolbarToggleInitialSelection(selected));
+            }
         }
         if matches!(&record.kind, UiNodeKind::Edit) {
             commands.entity(entity).insert(UiSubmitTarget);
@@ -576,6 +621,23 @@ pub(super) fn project_document_on_entity(
         project_authored_hotkey_action_proxies(commands, root, document, &entities);
     }
     let root = root.expect("validated UI document has a root");
+    if data.role == UiDocumentRole::Modal {
+        let node = |name| {
+            let id = UiDocumentRole::Modal.node_id(name);
+            data.nodes
+                .iter()
+                .zip(&entities)
+                .find_map(|(node, &entity)| (node.id == id).then_some(entity))
+        };
+        if let (Some(alert), Some(body)) = (node("Alert Box"), node("Alert Text")) {
+            commands
+                .entity(alert)
+                .insert(crate::notification::ProjectedNotificationAlert {
+                    owner: request.owner,
+                    body,
+                });
+        }
+    }
     if data.role == UiDocumentRole::EntityInfo {
         commands
             .entity(root)

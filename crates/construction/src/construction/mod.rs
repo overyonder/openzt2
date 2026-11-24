@@ -12,8 +12,10 @@ mod construction_payment_operation_types;
 mod construction_payment_request_creation;
 pub(crate) mod construction_tool_and_action_routing;
 pub mod construction_transaction_preparation;
-pub(crate) use construction_transaction_preparation::{
-    capture_confirmed_preview, clear_confirmed_previews,
+use construction_transaction_preparation::{
+    begin_construction_transaction_from_valid_preview, capture_submitted_preview,
+    clear_submitted_construction, clear_submitted_preview, prepare_submitted_construction,
+    ConstructionSubmissionSet,
 };
 mod construction_ui_action_routing;
 mod cursor_money_fragment_lifecycle;
@@ -21,6 +23,7 @@ mod cursor_money_presentation;
 mod cursor_money_types;
 pub mod deletion_transaction_preparation;
 mod selected_biome_ui_projection;
+pub mod transport_spatial_picking;
 
 use bevy::ecs::schedule::ApplyDeferred;
 use bevy::prelude::*;
@@ -99,6 +102,10 @@ impl Plugin for ConstructionPlugin {
         configure_fixed_construction_sets(app);
         app.add_message::<construction_cursor_terrain_surface_tracking::ConstructionSurfaceDiscarded>()
             .add_message::<construction_delete_hover_target_resolution::ConstructionPickableDiscarded>()
+            .add_message::<construction_delete_hover_target_resolution::ConstructionPickableMeshChanged>()
+            .add_observer(construction_delete_hover_target_resolution::notify_added_placeable_pick_mesh)
+            .add_observer(construction_delete_hover_target_resolution::notify_changed_placeable_pick_hierarchy)
+            .add_observer(construction_delete_hover_target_resolution::notify_discarded_placeable_pick_hierarchy)
             .add_observer(construction_cursor_terrain_surface_tracking::notify_discarded_construction_terrain)
             .add_observer(construction_cursor_terrain_surface_tracking::notify_discarded_construction_water)
             .add_observer(construction_delete_hover_target_resolution::notify_discarded_placeable_pick_mesh)
@@ -112,6 +119,18 @@ impl Plugin for ConstructionPlugin {
                     .run_if(in_state(GamePhase::InGame)),
             );
         app
+            .add_systems(
+                Update,
+                transport_spatial_picking::project_transport_spatial_membership
+                    .in_set(GameSet::Intent)
+                    .before(openzt2_zoo_state::construction::ConstructionCursorUpdateSet),
+            )
+            .add_systems(
+                Update,
+                construction_delete_hover_target_resolution::bind_construction_pickable_meshes
+                    .in_set(GameSet::Intent)
+                    .before(construction_delete_hover_target_resolution::update_delete_hover_target),
+            )
             .add_systems(
                 Update,
                 (
@@ -169,7 +188,7 @@ impl Plugin for ConstructionPlugin {
             .add_systems(
                 FixedUpdate,
                 (
-                    crate::construction::construction_transaction_preparation::begin_construction_transaction_from_valid_preview,
+                    prepare_submitted_construction,
                     crate::construction::deletion_transaction_preparation::begin_deletion_transaction_preparation,
                     ApplyDeferred.in_set(FixedConstructionTransactionMaterializationSet),
                     ApplyDeferred.in_set(FixedConstructionPreparedDomainEditMaterializationSet),
@@ -177,13 +196,32 @@ impl Plugin for ConstructionPlugin {
                     .chain()
                     .in_set(FixedConstructionSet::Prepare),
             )
+            .configure_sets(
+                Update,
+                ConstructionSubmissionSet
+                    .after(begin_construction_transaction_from_valid_preview)
+                    .before(openzt2_zoo_state::construction::ConstructionPreviewCancellationSet)
+                    .run_if(in_state(GamePhase::InGame)),
+            )
             .add_systems(
-                PostUpdate,
-                capture_confirmed_preview::<openzt2_zoo_state::construction::construction_interaction_types::ConstructionPreview>,
+                Update,
+                begin_construction_transaction_from_valid_preview
+                    .after(GameSet::Intent)
+                    .after(openzt2_interface_state::ui::UiSet::Interaction)
+                    .before(openzt2_zoo_state::construction::ConstructionPreviewCancellationSet)
+                    .run_if(in_state(GamePhase::InGame)),
+            )
+            .add_systems(
+                Update,
+                capture_submitted_preview::<openzt2_zoo_state::terrain::terrain_brush_types::TerrainBrushPreview>
+                    .in_set(ConstructionSubmissionSet),
             )
             .add_systems(
                 FixedUpdate,
-                clear_confirmed_previews::<openzt2_zoo_state::construction::construction_interaction_types::ConstructionPreview>
+                (
+                    clear_submitted_construction,
+                    clear_submitted_preview::<openzt2_zoo_state::terrain::terrain_brush_types::TerrainBrushPreview>,
+                )
                     .after(FixedConstructionSet::Prepare)
                     .before(FixedConstructionSet::Apply),
             )

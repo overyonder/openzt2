@@ -1,11 +1,17 @@
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
+use openzt2_game_assets::localization::{
+    localization_asset_types::LocalizationAsset,
+    localization_precedence_index::LocalizationPrecedenceIndex,
+};
 use openzt2_game_data::localization::LocalizationRichContentKind;
 use openzt2_game_data::ui_document::widget_control::UiTooltipPresentation;
 use openzt2_game_data::AssetId;
 
 use super::authored_ui_canvas_scaling_and_clipping::UiLogicalCanvas;
+use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner;
 use openzt2_interface_state::ui::pointer_capture_types::UiPointerCapture;
+use std::time::Duration;
 
 #[derive(Component, Debug, Clone, Copy, PartialEq)]
 pub struct UiTooltipPolicy {
@@ -31,183 +37,298 @@ pub struct UiShortTooltipKey(pub AssetId);
 pub(crate) struct UiHelpTopicKey(pub(crate) AssetId);
 
 #[derive(Component)]
-pub(super) struct UiTooltipTextPresentation {
-    tooltip: Entity,
-    key: AssetId,
+pub(super) struct UiTooltipTextPresentation;
+
+#[derive(Component, PartialEq, Eq)]
+pub(super) struct TooltipHoverBinding {
+    target: Entity,
+    text: AssetId,
 }
 
-#[derive(Component, Debug, Clone, Copy, Default, PartialEq)]
-pub(super) struct UiTooltipState {
-    target: Option<Entity>,
-    hovered_seconds: f32,
-    visible_seconds: f32,
+#[derive(Component)]
+pub(super) struct ActiveTooltipTiming {
+    show: Option<Timer>,
+    expire: Option<Timer>,
 }
 
-pub(super) fn update_authored_tooltip_presentations(
+fn tooltip_duration(seconds: f32) -> Duration {
+    Duration::try_from_secs_f32(seconds.max(0.0)).unwrap_or(Duration::MAX)
+}
+
+#[allow(clippy::type_complexity)]
+pub(super) fn resolve_tooltip_hover_targets(
     mut commands: Commands,
-    time: Res<Time>,
     capture: Res<UiPointerCapture>,
-    active_localization: Res<
-        openzt2_game_assets::localization::localization_precedence_index::LocalizationPrecedenceIndex,
+    precedence: Res<LocalizationPrecedenceIndex>,
+    localizations: Res<Assets<LocalizationAsset>>,
+    context: super::active_authored_ui_context::ActiveAuthoredUiContext,
+    dirty: Query<
+        (),
+        (
+            With<Node>,
+            Or<(
+                Changed<UiDisplayNameKey>,
+                Changed<UiShortTooltipKey>,
+                Changed<UiLongTooltipKey>,
+                Changed<UiHelpTopicKey>,
+                Changed<ChildOf>,
+                Changed<UiDocumentOwner>,
+                Changed<InheritedVisibility>,
+                Changed<super::authored_ui_interaction_enabled_state::UiInteractionEnabled>,
+            )>,
+        ),
     >,
-    localizations: Res<
-        Assets<openzt2_game_assets::localization::localization_asset_types::LocalizationAsset>,
-    >,
-    mut tooltips: Query<(
-        Entity,
-        &UiTooltipPolicy,
-        &openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner,
-        Option<&mut UiTooltipState>,
-        &mut Visibility,
-        &mut Text,
-        &TextFont,
-        &mut TextColor,
-        &TextLayout,
-        &mut Node,
-        &ComputedNode,
-    )>,
-    tooltip_text_presentations: Query<(Entity, &UiTooltipTextPresentation)>,
+    mut removed_help: RemovedComponents<UiShortTooltipKey>,
+    mut removed_long_help: RemovedComponents<UiLongTooltipKey>,
     help_nodes: Query<(
         Option<&UiDisplayNameKey>,
         Option<&UiShortTooltipKey>,
         Option<&UiLongTooltipKey>,
         Option<&UiHelpTopicKey>,
         Option<&ChildOf>,
-        &openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner,
+        &UiDocumentOwner,
     )>,
-    windows: Query<&Window, With<PrimaryWindow>>,
-    canvases: Query<(&UiLogicalCanvas, &UiTransform)>,
+    mut tooltips: Query<(
+        Entity,
+        Ref<UiTooltipPolicy>,
+        &UiDocumentOwner,
+        Option<&mut TooltipHoverBinding>,
+        Option<&mut ActiveTooltipTiming>,
+        &mut Visibility,
+    )>,
 ) {
-    let localization = active_localization.borrow_loaded_localization_view(&localizations);
-    for (
-        entity,
-        policy,
-        owner,
-        mut current_state,
-        mut visibility,
-        mut text,
-        font,
-        mut text_color,
-        text_layout,
-        mut node,
-        computed,
-    ) in &mut tooltips
-    {
-        let previous_state = current_state.as_deref().copied();
-        let mut state = previous_state.unwrap_or_default();
-        let hovered =
-            hovered_help_target(capture.target, owner.0, entity, policy.global, &help_nodes);
-        let key = hovered.and_then(|hovered| {
-            tooltip_key_from_ancestry(
-                hovered,
-                (!policy.global).then_some(owner.0),
-                policy.presentation,
-                &help_nodes,
-            )
-        });
-        if let Some((localization, key, label)) = key.and_then(|key| {
-            localization.and_then(|localization| {
-                crate::localized_ui_text_writing::localized_ui_text(localization, key)
-                    .map(|label| (localization, key, label))
-            })
-        }) {
-            let changed_target = state.target != hovered;
-            if changed_target {
-                state = UiTooltipState {
-                    target: hovered,
-                    ..default()
-                };
+    let refresh = capture.is_changed()
+        || precedence.is_changed()
+        || localizations.is_changed()
+        || !dirty.is_empty()
+        || !removed_help.is_empty()
+        || !removed_long_help.is_empty();
+    removed_help.clear();
+    removed_long_help.clear();
+    if !refresh && !tooltips.iter().any(|(_, policy, ..)| policy.is_changed()) {
+        return;
+    }
+    let locale = precedence.borrow_loaded_localization_view(&localizations);
+    let hovered = capture
+        .target
+        .filter(|target| context.visible_and_enabled(*target));
+    for (tooltip, policy, owner, binding, active, mut visibility) in &mut tooltips {
+        if !refresh && !policy.is_changed() {
+            continue;
+        }
+        let next = hovered_help_target(hovered, owner.0, tooltip, policy.global, &help_nodes)
+            .and_then(|target| {
+                let key = tooltip_key_from_ancestry(
+                    target,
+                    (!policy.global).then_some(owner.0),
+                    policy.presentation,
+                    &help_nodes,
+                )?;
+                crate::localized_ui_text_writing::localized_ui_text(locale?, key)?;
+                Some(TooltipHoverBinding { target, text: key })
+            });
+        let restart = next
+            .as_ref()
+            .is_some_and(|next| binding.as_ref().is_none_or(|old| old.target != next.target))
+            || policy.is_changed();
+        match (binding, next) {
+            (Some(mut binding), Some(next)) => {
+                binding.set_if_neq(next);
             }
-            let has_current_text_presentation = tooltip_text_presentations
-                .iter()
-                .any(|(_, presentation)| presentation.tooltip == entity && presentation.key == key);
-            if changed_target || !has_current_text_presentation {
-                set_tooltip_text(
-                    &mut commands,
-                    entity,
-                    &mut text,
-                    font,
-                    &mut text_color,
-                    text_layout,
-                    node.padding,
-                    policy.floating,
-                    localization,
-                    key,
-                    label,
-                    &tooltip_text_presentations,
-                );
+            (None, Some(next)) => {
+                commands.entity(tooltip).insert(next);
             }
-            if policy.floating {
-                if let Some((window, position)) = windows
-                    .iter()
-                    .next()
-                    .and_then(|window| window.cursor_position().map(|position| (window, position)))
-                {
-                    let viewport = Vec2::new(window.width(), window.height());
-                    let (logical_size, transform) = canvases
-                        .get(owner.0)
-                        .map_or((viewport, UiTransform::IDENTITY), |(canvas, transform)| {
-                            (canvas.logical_size(), *transform)
-                        });
-                    let scale = transform.scale.max(Vec2::splat(f32::EPSILON));
-                    let translation = Vec2::new(
-                        match transform.translation.x {
-                            Val::Px(value) => value,
-                            _ => 0.0,
-                        },
-                        match transform.translation.y {
-                            Val::Px(value) => value,
-                            _ => 0.0,
-                        },
-                    );
-                    let origin = logical_size * 0.5 + translation - logical_size * scale * 0.5;
-                    let visible_min = -origin / scale;
-                    let visible_max = (viewport - origin) / scale;
-                    let size = computed.size() * computed.inverse_scale_factor();
-                    let desired = (position - origin) / scale
-                        + Vec2::new(policy.offset[0] as f32, policy.offset[1] as f32);
-                    let maximum = (visible_max - size).max(visible_min);
-                    let clamped = desired.clamp(visible_min, maximum);
-                    if node.position_type != PositionType::Absolute
-                        || node.left != px(clamped.x)
-                        || node.top != px(clamped.y)
-                    {
-                        node.position_type = PositionType::Absolute;
-                        node.left = px(clamped.x);
-                        node.top = px(clamped.y);
-                    }
+            (binding, None) => {
+                if binding.is_some() {
+                    commands
+                        .entity(tooltip)
+                        .remove::<(TooltipHoverBinding, ActiveTooltipTiming)>();
                 }
+                visibility.set_if_neq(Visibility::Hidden);
+                continue;
             }
-            state.hovered_seconds += time.delta_secs();
-            state.visible_seconds = if state.hovered_seconds >= policy.appear_seconds {
-                state.visible_seconds + time.delta_secs()
+        }
+        if restart {
+            let next = ActiveTooltipTiming {
+                show: Some(Timer::new(
+                    tooltip_duration(policy.appear_seconds),
+                    TimerMode::Once,
+                )),
+                expire: (policy.autohide && policy.display_seconds > 0.0).then(|| {
+                    Timer::new(
+                        tooltip_duration(policy.display_seconds)
+                            .saturating_add(Duration::from_nanos(1)),
+                        TimerMode::Once,
+                    )
+                }),
+            };
+            if let Some(mut active) = active {
+                *active = next;
+            } else {
+                commands.entity(tooltip).insert(next);
+            }
+            visibility.set_if_neq(Visibility::Hidden);
+        }
+    }
+}
+
+pub(super) fn tick_active_tooltip_timers(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut tooltips: Query<(Entity, &mut ActiveTooltipTiming, &mut Visibility)>,
+) {
+    for (tooltip, mut active, mut visibility) in &mut tooltips {
+        if let Some(delay) = &mut active.show {
+            if !delay.tick(time.delta()).is_finished() {
+                continue;
+            }
+            active.show = None;
+            visibility.set_if_neq(Visibility::Inherited);
+        }
+        if let Some(expiry) = &mut active.expire {
+            if expiry.tick(time.delta()).is_finished() {
+                visibility.set_if_neq(Visibility::Hidden);
+                commands.entity(tooltip).remove::<ActiveTooltipTiming>();
+            }
+        } else {
+            commands.entity(tooltip).remove::<ActiveTooltipTiming>();
+        }
+    }
+}
+
+pub(super) fn project_tooltip_text_from_hover_binding(
+    mut commands: Commands,
+    precedence: Res<LocalizationPrecedenceIndex>,
+    localizations: Res<Assets<LocalizationAsset>>,
+    mut exited: RemovedComponents<TooltipHoverBinding>,
+    mut tooltips: Query<(
+        Entity,
+        &UiTooltipPolicy,
+        Option<Ref<TooltipHoverBinding>>,
+        &mut Text,
+        &TextFont,
+        &mut TextColor,
+        &TextLayout,
+        &Node,
+        Option<&Children>,
+    )>,
+    generated: Query<(), With<UiTooltipTextPresentation>>,
+) {
+    let locale_changed = precedence.is_changed() || localizations.is_changed();
+    let removed: bevy::ecs::entity::EntityHashSet = exited.read().collect();
+    if !locale_changed
+        && removed.is_empty()
+        && !tooltips
+            .iter()
+            .any(|(_, _, binding, ..)| binding.is_some_and(|binding| binding.is_changed()))
+    {
+        return;
+    }
+    let localization = precedence.borrow_loaded_localization_view(&localizations);
+    for (entity, policy, binding, mut text, font, mut text_color, layout, node, children) in
+        &mut tooltips
+    {
+        if !locale_changed
+            && !removed.contains(&entity)
+            && !binding.as_ref().is_some_and(DetectChanges::is_changed)
+        {
+            continue;
+        }
+        for child in children
+            .into_iter()
+            .flatten()
+            .filter(|child| generated.contains(**child))
+        {
+            commands.entity(*child).try_despawn();
+        }
+        let content = binding.and_then(|binding| {
+            let locale = localization?;
+            let text = crate::localized_ui_text_writing::localized_ui_text(locale, binding.text)?;
+            Some((locale, binding.text, text))
+        });
+        if let Some((locale, key, content)) = content {
+            set_tooltip_text(
+                &mut commands,
+                entity,
+                &mut text,
+                font,
+                &mut text_color,
+                layout,
+                node.padding,
+                policy.floating,
+                locale,
+                key,
+                content,
+            );
+        } else {
+            text.map_unchanged(|text| &mut text.0).clone_from_if_neq("");
+        }
+    }
+}
+
+pub(super) fn position_floating_tooltips(
+    windows: Query<Ref<Window>, With<PrimaryWindow>>,
+    canvases: Query<(&UiLogicalCanvas, Ref<UiTransform>)>,
+    mut tooltips: Query<(
+        Ref<UiTooltipPolicy>,
+        &UiDocumentOwner,
+        Ref<TooltipHoverBinding>,
+        Ref<ComputedNode>,
+        &mut Node,
+    )>,
+) {
+    let Ok(window) = windows.single() else {
+        return;
+    };
+    let Some(position) = window.cursor_position() else {
+        return;
+    };
+    let viewport = Vec2::new(window.width(), window.height());
+    for (policy, owner, target, computed, mut node) in &mut tooltips {
+        if !policy.floating {
+            continue;
+        }
+        let canvas = canvases.get(owner.0).ok();
+        if !(window.is_changed()
+            || target.is_added()
+            || computed.is_changed()
+            || policy.is_changed()
+            || canvas
+                .as_ref()
+                .is_some_and(|(_, transform)| transform.is_changed()))
+        {
+            continue;
+        }
+        let (logical_size, transform) = canvas
+            .map_or((viewport, UiTransform::IDENTITY), |(canvas, transform)| {
+                (canvas.logical_size(), *transform)
+            });
+        let scale = transform.scale.max(Vec2::splat(f32::EPSILON));
+        let pixels = |value| {
+            if let Val::Px(value) = value {
+                value
             } else {
                 0.0
-            };
-        } else {
-            state = UiTooltipState::default();
-            if !text.0.is_empty() {
-                text.0.clear();
             }
-            retire_tooltip_text_presentations(&mut commands, entity, &tooltip_text_presentations);
-        }
-        let timed_out = policy.autohide
-            && policy.display_seconds > 0.0
-            && state.visible_seconds > policy.display_seconds;
-        let next_visibility = if state.hovered_seconds >= policy.appear_seconds && !timed_out {
-            Visibility::Inherited
-        } else {
-            Visibility::Hidden
         };
-        if *visibility != next_visibility {
-            *visibility = next_visibility;
-        }
-        if let Some(current_state) = current_state.as_deref_mut() {
-            if *current_state != state {
-                *current_state = state;
-            }
-        } else if state != UiTooltipState::default() {
-            commands.entity(entity).insert(state);
+        let translation = Vec2::new(
+            pixels(transform.translation.x),
+            pixels(transform.translation.y),
+        );
+        let origin = logical_size * 0.5 + translation - logical_size * scale * 0.5;
+        let visible_min = -origin / scale;
+        let visible_max = (viewport - origin) / scale;
+        let size = computed.size() * computed.inverse_scale_factor();
+        let desired = (position - origin) / scale
+            + Vec2::new(policy.offset[0] as f32, policy.offset[1] as f32);
+        let clamped = desired.clamp(visible_min, (visible_max - size).max(visible_min));
+        if node.position_type != PositionType::Absolute
+            || node.left != px(clamped.x)
+            || node.top != px(clamped.y)
+        {
+            node.position_type = PositionType::Absolute;
+            node.left = px(clamped.x);
+            node.top = px(clamped.y);
         }
     }
 }
@@ -227,9 +348,7 @@ fn set_tooltip_text(
     >,
     key: AssetId,
     fallback: &str,
-    tooltip_text_presentations: &Query<(Entity, &UiTooltipTextPresentation)>,
 ) {
-    retire_tooltip_text_presentations(commands, tooltip, tooltip_text_presentations);
     text.0.clear();
     text.0.push_str(fallback);
     *base_text_color = TextColor(Color::NONE);
@@ -238,7 +357,7 @@ fn set_tooltip_text(
         .filter(|content| !content.is_empty());
     let tooltip_text_presentation_entity = commands
         .spawn((
-            UiTooltipTextPresentation { tooltip, key },
+            UiTooltipTextPresentation,
             Text::new(content.map_or(fallback, |_| "")),
             base_font.clone(),
             TextColor(Color::WHITE),
@@ -348,19 +467,6 @@ fn set_tooltip_text(
             span.insert(Underline);
         }
     }
-}
-
-fn retire_tooltip_text_presentations(
-    commands: &mut Commands,
-    tooltip: Entity,
-    tooltip_text_presentations: &Query<(Entity, &UiTooltipTextPresentation)>,
-) {
-    tooltip_text_presentations
-        .iter()
-        .filter(|(_, presentation)| presentation.tooltip == tooltip)
-        .for_each(|(entity, _)| {
-            commands.entity(entity).despawn();
-        });
 }
 
 fn hovered_help_target(

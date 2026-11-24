@@ -2,6 +2,7 @@ use bevy::{
     prelude::*,
     window::{MonitorSelection, PrimaryWindow, WindowMode},
 };
+use openzt2_interface_state::persistence::profile_types::ProfileSelected;
 
 use super::{
     display_settings_types::{
@@ -11,9 +12,9 @@ use super::{
     display_settings_validation::validate_proposed_display_settings,
 };
 
-/// Refreshes the options-screen capability facts from Bevy's winit-owned
-/// monitor entities. Duplicate refresh-rate/bit-depth modes intentionally
-/// collapse to one selectable width/height pair, matching the source UI.
+#[derive(Resource, Default, PartialEq)]
+pub(super) struct AcceptedDisplaySettingsReady(bool);
+
 pub(super) fn validate_selected_screen_resolution_and_request_display_settings_replacement(
     mut requests: MessageReader<SelectScreenResolutionRequest>,
     current: Res<DisplaySettings>,
@@ -35,6 +36,7 @@ pub(super) fn validate_selected_screen_resolution_and_request_display_settings_r
 pub(super) fn validate_and_accept_requested_display_settings(
     mut requests: MessageReader<ReplaceDisplaySettingsRequest>,
     mut current: ResMut<DisplaySettings>,
+    mut ready: ResMut<AcceptedDisplaySettingsReady>,
     primary_window: Query<&Window, With<PrimaryWindow>>,
 ) {
     let primary_window_exists = primary_window.single().is_ok();
@@ -42,38 +44,50 @@ pub(super) fn validate_and_accept_requested_display_settings(
         if validate_proposed_display_settings(request.0, primary_window_exists).is_err() {
             continue;
         }
-        if *current != request.0 {
-            *current = request.0;
-        }
+        current.set_if_neq(request.0);
+        ready.set_if_neq(AcceptedDisplaySettingsReady(true));
     }
 }
 
-pub(super) fn apply_accepted_display_settings_to_primary_window(
+pub(super) fn apply_ready_display_settings_to_primary_window(
+    mut selected_profiles: MessageReader<ProfileSelected>,
     settings: Res<DisplaySettings>,
-    mut primary_window: Query<&mut Window, With<PrimaryWindow>>,
+    mut ready: ResMut<AcceptedDisplaySettingsReady>,
+    mut primary_window: Query<(&mut Window, Ref<PrimaryWindow>), With<PrimaryWindow>>,
 ) {
-    // The startup default (borderless fullscreen) is only a placeholder until
-    // the selected profile's settings arrive. Applying it first moves the
-    // window to its own fullscreen space on macOS, and leaving that space for
-    // the profile's windowed mode can leave the window stuck at monitor size.
-    if settings.added() == settings.last_changed() {
+    let profile_selected = selected_profiles.read().last().is_some();
+    if profile_selected {
+        ready.set_if_neq(AcceptedDisplaySettingsReady(true));
+    }
+    if !ready.0 {
         return;
     }
-    let Ok(mut window) = primary_window.single_mut() else {
+    let Ok((mut window, primary)) = primary_window.single_mut() else {
         return;
     };
-    // Borderless fullscreen takes the monitor's size; forcing a physical size
-    // there shrinks the surface on HiDPI (macOS) or the window itself (Windows).
-    if settings.mode == DisplayMode::Windowed {
+    if !profile_selected && !ready.is_changed() && !settings.is_changed() && !primary.is_added() {
+        return;
+    }
+
+    // Borderless fullscreen gets its physical size from the monitor.
+    if settings.mode == DisplayMode::Windowed
+        && window.resolution.physical_size() != UVec2::new(settings.width, settings.height)
+    {
         window
             .resolution
             .set_physical_resolution(settings.width, settings.height);
     }
-    window.mode = match settings.mode {
+    let mode = match settings.mode {
         DisplayMode::Windowed => WindowMode::Windowed,
         DisplayMode::BorderlessFullscreen => {
             WindowMode::BorderlessFullscreen(MonitorSelection::Current)
         }
     };
-    window.present_mode = settings.pacing.bevy_present_mode();
+    window
+        .reborrow()
+        .map_unchanged(|window| &mut window.mode)
+        .set_if_neq(mode);
+    window
+        .map_unchanged(|window| &mut window.present_mode)
+        .set_if_neq(settings.pacing.bevy_present_mode());
 }

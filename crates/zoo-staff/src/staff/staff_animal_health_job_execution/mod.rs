@@ -112,9 +112,8 @@ pub(crate) fn complete_staff_jobs_after_animal_health_effects_apply(
     mut completed_jobs: MessageWriter<StaffJobCompleted>,
 ) {
     for captured_animal in captured_animals.read() {
-        for (job_entity, job, claim, _) in &mut jobs {
+        if let Ok((job_entity, job, claim, _)) = jobs.get(captured_animal.job) {
             if job.kind == Some(StaffJobKind::Capture)
-                && job_entity == captured_animal.job
                 && job.target == captured_animal.animal
                 && claim.staff == captured_animal.staff
                 && behavior_tasks.get(job_entity).is_ok_and(|behavior| {

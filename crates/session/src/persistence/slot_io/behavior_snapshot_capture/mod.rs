@@ -442,7 +442,10 @@ fn capture_owned_navigation(
                     documents,
                 )?,
                 stack_depth: task.depth,
-                poll_remaining_seconds: pending.poll_remaining_seconds,
+                poll_remaining_seconds: actor.behavior_pursuit_poll.map_or(
+                    0.0,
+                    openzt2_zoo_state::animal_behavior::behavior_pursuit_types::BehaviorPursuitPoll::remaining_seconds,
+                ),
                 leg: pending.leg,
             })
         })

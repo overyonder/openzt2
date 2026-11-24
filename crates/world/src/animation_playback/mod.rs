@@ -2,7 +2,6 @@ mod locomotion_root_motion;
 // Runtime animation playback, authored events, attachments, and Bevy player projection.
 
 mod animation_playback_controller_ancestor_lookup;
-mod animation_traversal_transition_request_projection;
 mod animation_water_effect_binding;
 mod authored_animation_audio_and_effect_text_action_execution;
 mod authored_animation_control_text_action_execution;
@@ -35,12 +34,11 @@ use self::authored_animation_text_action_execution::execute_behavior_animation_t
 use openzt2_world_state::application_schedule::FixedGameSet;
 use openzt2_world_state::application_schedule::GameSet;
 
-use crate::animation_playback::animation_traversal_transition_request_projection::project_authored_animation_traversal_transitions_to_graph_node_playback_requests;
-use crate::animation_playback::authored_animation_event_execution::execute_crossed_authored_animation_events;
+use self::managed_clip_binding::{FixedAnimationPlayer, RealTimeAnimationPlayer};
+use self::player_clock_lanes::advance_managed_animation_players;
 use crate::animation_playback::named_model_animation_joint_target_binding::bind_new_named_model_entities_and_new_animation_playback_controller_descendants;
 use openzt2_world_state::animation_playback::animation_event_message_types::AnimationCompleted;
 use openzt2_world_state::animation_playback::animation_event_message_types::AnimationObjectCommand;
-use openzt2_world_state::animation_playback::animation_event_message_types::AnimationTraversalTransitionRequested;
 
 #[derive(Default)]
 pub struct AnimationPlaybackPlugin;
@@ -69,10 +67,9 @@ impl Plugin for AnimationPlaybackPlugin {
                 .expect("stock animation advancement is registered");
         }
         application
+            .add_observer(managed_clip_binding::assign_animation_player_clock)
             .add_message::<authored_animation_presentation_action_delivery::AnimationPresentationTextAction<false>>()
             .add_message::<authored_animation_presentation_action_delivery::AnimationPresentationTextAction<true>>()
-            .add_message::<player_clock_lanes::AnimationPlaybackInterval<false>>()
-            .add_message::<player_clock_lanes::AnimationPlaybackInterval<true>>()
             .add_systems(PostUpdate, player_clock_lanes::advance_render_players
                 .after(bevy::animation::transition::advance_transitions)
                 .before(bevy::animation::animate_targets)
@@ -100,17 +97,16 @@ impl Plugin for AnimationPlaybackPlugin {
             .add_message::<openzt2_world_state::animation_playback::animation_event_message_types::AnimationAiCommandRequested>()
             .add_message::<openzt2_world_state::animation_playback::animation_event_message_types::AnimationWhapRequested>()
             .add_message::<openzt2_world_state::animation_playback::animation_event_message_types::AnimationObjectCommand>()
-            .add_message::<AnimationTraversalTransitionRequested>()
             .add_systems(
                 Update,
-                authored_binder_rig_binding::bind_authored_animation_binder_rigs
-                    .before(managed_clip_binding::bind_selected_clips)
+                authored_binder_rig_binding::bind_authored_animation_binder_rigs::<RealTimeAnimationPlayer>
+                    .before(managed_clip_binding::bind_selected_clips::<RealTimeAnimationPlayer>)
                     .in_set(GameSet::Presentation),
             )
             .add_systems(
                 FixedUpdate,
-                authored_binder_rig_binding::bind_authored_animation_binder_rigs
-                    .before(managed_clip_binding::bind_selected_clips)
+                authored_binder_rig_binding::bind_authored_animation_binder_rigs::<FixedAnimationPlayer>
+                    .before(managed_clip_binding::bind_selected_clips::<FixedAnimationPlayer>)
                     .in_set(FixedGameSet::Act),
             )
             .add_systems(
@@ -118,8 +114,12 @@ impl Plugin for AnimationPlaybackPlugin {
                 (
                     procedural_ground_fit::clear_procedural_ground_fit_pose
                         .before(bevy::app::AnimationSystems),
+                    procedural_ground_fit::index_ground_fit_joints
+                        .after(bind_new_named_model_entities_and_new_animation_playback_controller_descendants)
+                        .before(procedural_ground_fit::apply_procedural_ground_fit_pose),
                     procedural_ground_fit::apply_procedural_ground_fit_pose
                         .after(locomotion_root_motion::remove_consumed_root_trajectory)
+                        .before(crate::world_spawn::IndependentAttachmentOrientation)
                         .before(bevy::transform::TransformSystems::Propagate)
                         .run_if(bevy::ecs::schedule::common_conditions::any_with_component::<procedural_ground_fit::GroundFitPose>),
                 ),
@@ -127,18 +127,16 @@ impl Plugin for AnimationPlaybackPlugin {
             .add_systems(
                 FixedUpdate,
                 authored_decal_texture_cycles::advance_authored_decal_texture_cycles
-                    .after(execute_crossed_authored_animation_events::<false>)
+                    .after(advance_managed_animation_players::<FixedAnimationPlayer, false>)
                     .in_set(FixedGameSet::Act)
                     .run_if(authored_secondary_motion_enabled)
-                    .run_if(bevy::ecs::schedule::common_conditions::any_with_component::<authored_decal_texture_cycles::DecalCyclePlayback>),
+                    .run_if(bevy::ecs::schedule::common_conditions::any_with_component::<authored_decal_texture_cycles::DecalCyclesAdvancing>),
             )
             .add_systems(
                 FixedUpdate,
                 (
-                    managed_clip_binding::bind_selected_clips,
-                    player_clock_lanes::advance_fixed_players,
-                    player_clock_lanes::follow_animation_player_steps::<false>,
-                    execute_crossed_authored_animation_events::<false>,
+                    managed_clip_binding::bind_selected_clips::<FixedAnimationPlayer>,
+                    advance_managed_animation_players::<FixedAnimationPlayer, false>,
                 ).chain()
                     .in_set(openzt2_world_state::animation_playback::locomotion_root_motion::AnimationLocomotionMotionSampling)
                     .before(AnimationObjectCommandDelivery)
@@ -159,21 +157,28 @@ impl Plugin for AnimationPlaybackPlugin {
             .add_systems(
                 Update,
                 (
-                    managed_clip_binding::bind_selected_clips,
-                    player_clock_lanes::follow_animation_player_steps::<true>,
-                    execute_crossed_authored_animation_events::<true>.in_set(AuthoredAnimationRenderTextKeys),
+                    managed_clip_binding::bind_selected_clips::<RealTimeAnimationPlayer>,
+                    advance_managed_animation_players::<RealTimeAnimationPlayer, true>
+                        .in_set(AuthoredAnimationRenderTextKeys),
                 )
                     .chain()
                     .in_set(GameSet::Presentation),
             )
             .add_systems(Update, (
-                model_joint_attachment_binding::bind_model_joint_attachments,
                 traversal_animation_path_binding::bind_authored_traversal_animation_paths,
                 authored_animation_presentation_action_delivery::deliver_presentation_text_actions::<true>
-                    .after(execute_crossed_authored_animation_events::<true>),
-                project_authored_animation_traversal_transitions_to_graph_node_playback_requests
-                    .after(execute_crossed_authored_animation_events::<true>),
-            ).in_set(GameSet::Presentation));
+                    .after(advance_managed_animation_players::<RealTimeAnimationPlayer, true>),
+            ).in_set(GameSet::Presentation))
+            .add_systems(
+                PostUpdate,
+                (
+                    model_joint_attachment_binding::project_model_joint_indexes,
+                    model_joint_attachment_binding::bind_model_joint_attachments,
+                )
+                    .chain()
+                    .before(bind_new_named_model_entities_and_new_animation_playback_controller_descendants)
+                    .before(bevy::transform::TransformSystems::Propagate),
+            );
     }
 }
 

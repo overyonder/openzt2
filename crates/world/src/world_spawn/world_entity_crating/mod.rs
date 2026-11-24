@@ -1,3 +1,4 @@
+use super::world_prefab_record_hydration::ApplyStartingAnimalHiddenVisibility;
 use bevy::prelude::*;
 use openzt2_world_state::world_spawn::world_entity_crating::{
     AnimalCrate, ContainedCratedAnimal, RemoveWorldEntityFromCrate, WorldEntityIsCrated,
@@ -39,7 +40,9 @@ pub(super) fn remove_requested_world_entities_from_crates(
                 }
                 commands.entity(crate_link.0).try_despawn();
             }
-            commands.entity(animal).remove::<AnimalCrate>();
+            commands
+                .entity(animal)
+                .remove::<(AnimalCrate, ApplyStartingAnimalHiddenVisibility)>();
             if let Some(mut visibility) = visibility {
                 visibility.set_if_neq(Visibility::Inherited);
             }

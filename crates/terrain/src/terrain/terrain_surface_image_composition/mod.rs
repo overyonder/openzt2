@@ -1,11 +1,13 @@
 use bevy::{
     asset::RenderAssetUsages,
+    ecs::entity::EntityHashMap,
     prelude::*,
     render::render_resource::{Extent3d, TextureDimension, TextureFormat},
 };
 
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
-use openzt2_game_data::terrain::{TerrainBiome, TerrainWaterDepth};
+use openzt2_game_data::terrain::TerrainBiome;
+use openzt2_zoo_state::terrain::terrain_water_presentation_types::TerrainWaterMembershipIndex;
 
 use openzt2_zoo_state::terrain::terrain_chunk_presentation_types::TerrainPaintedTexture;
 use openzt2_zoo_state::terrain::terrain_chunk_types::{EditedTerrainSamples, TerrainChunk};
@@ -24,34 +26,26 @@ struct TerrainSurfacePaint {
     cover: bool,
     linked: bool,
     transition: bool,
-    height_m: f32,
-    water_level_m: Option<f32>,
     water: TerrainSurfaceWater,
 }
 
-// The shore band is any dry sample next to water and no higher than
-// that water plus its biome shoreOffset; the native rule is unknown.
-fn classify_terrain_surface_water<'a>(
-    paint: &TerrainSurfacePaint,
-    mut neighbours: impl Iterator<Item = &'a TerrainSurfacePaint>,
-    biomes: &[TerrainBiome],
+pub(super) type TerrainSurfaceWaterLinks<'a> =
+    (&'a TerrainWaterMembershipIndex, &'a EntityHashMap<f32>);
+
+fn classify_terrain_surface_water(
+    height_m: f32,
+    water_level_m: Option<f32>,
+    biome: &TerrainBiome,
 ) -> TerrainSurfaceWater {
-    if paint.water_level_m.is_some() {
-        return TerrainSurfaceWater::Submerged;
-    }
-    let on_shore = neighbours.any(|other| {
-        other.water_level_m.is_some_and(|level| {
-            let offset_mm = biomes
-                .get(other.biome)
-                .and_then(|biome| biome.water_shore_offset_mm)
-                .unwrap_or(0);
-            paint.height_m <= level + offset_mm as f32 * 0.001
-        })
-    });
-    if on_shore {
+    let Some(level) = water_level_m else {
+        return TerrainSurfaceWater::Dry;
+    };
+    let shore_offset = f64::from(biome.water_shore_offset_mm.unwrap_or(0) as f32 * 0.001);
+    let shallow_depth = f64::from(biome.shallow_water_depth_mm.unwrap_or(0) as f32 * 0.001);
+    if f64::from(height_m) > f64::from(level) + shore_offset - shallow_depth {
         TerrainSurfaceWater::Shore
     } else {
-        TerrainSurfaceWater::Dry
+        TerrainSurfaceWater::Submerged
     }
 }
 
@@ -79,10 +73,11 @@ pub(super) fn compose_terrain_surface_image(
     chunk: &TerrainChunk,
     asset: &TerrainAsset,
     edited_chunks: &[(Handle<TerrainAsset>, IVec2, EditedTerrainSamples)],
+    water: Option<TerrainSurfaceWaterLinks<'_>>,
     images: &Assets<Image>,
 ) -> Option<Image> {
     let _span = info_span!("compose_whole_terrain_surface").entered();
-    let (paints, layout) = compose_terrain_surface_paints(chunk, asset, edited_chunks)?;
+    let (paints, layout) = compose_terrain_surface_paints(chunk, asset, edited_chunks, water)?;
     let mut rgba = vec![0; layout.extent as usize * layout.extent as usize * 4];
     let whole = (IVec2::ZERO, IVec2::splat(layout.extent as i32));
     composite_terrain_surface_stamps(asset, images, &layout, &paints, whole, &mut rgba)?;
@@ -91,20 +86,20 @@ pub(super) fn compose_terrain_surface_image(
 
 /// Recomposes only the part of `previous` that the changed local samples
 /// (`changed_min..=changed_max`) can reach, giving the same pixels as a full
-/// composition. A cell's water and transition flags read its neighbours, so
-/// cells two away from a change are restamped too; every stamp overlapping
+/// composition. Transition flags read neighbouring cells. Every stamp overlapping
 /// that region is composited again, clipped to it.
 pub(super) fn recompose_terrain_surface_image_region(
     chunk: &TerrainChunk,
     asset: &TerrainAsset,
     edited_chunks: &[(Handle<TerrainAsset>, IVec2, EditedTerrainSamples)],
+    water: Option<TerrainSurfaceWaterLinks<'_>>,
     images: &Assets<Image>,
     previous: &Image,
     changed_samples: Option<(UVec2, UVec2)>,
     changed_pixels: Option<IRect>,
 ) -> Option<(Image, IRect)> {
     let _span = info_span!("recompose_terrain_surface_region").entered();
-    let (paints, layout) = compose_terrain_surface_paints(chunk, asset, edited_chunks)?;
+    let (paints, layout) = compose_terrain_surface_paints(chunk, asset, edited_chunks, water)?;
     let previous_data = previous.data.as_ref().filter(|data| {
         previous.texture_descriptor.format == TextureFormat::Rgba8Unorm
             && previous.texture_descriptor.size.width == layout.extent
@@ -112,7 +107,7 @@ pub(super) fn recompose_terrain_surface_image_region(
             && data.len() == layout.extent as usize * layout.extent as usize * 4
     });
     let Some(previous_data) = previous_data else {
-        let image = compose_terrain_surface_image(chunk, asset, edited_chunks, images)?;
+        let image = compose_terrain_surface_image(chunk, asset, edited_chunks, water, images)?;
         let extent = read_rgba_image_extent(&image)?.as_ivec2();
         return Some((image, IRect::from_corners(IVec2::ZERO, extent)));
     };
@@ -198,6 +193,7 @@ fn compose_terrain_surface_paints(
     chunk: &TerrainChunk,
     asset: &TerrainAsset,
     edited_chunks: &[(Handle<TerrainAsset>, IVec2, EditedTerrainSamples)],
+    water: Option<TerrainSurfaceWaterLinks<'_>>,
 ) -> Option<(Vec<TerrainSurfacePaint>, TerrainSurfaceLayout)> {
     let _span = info_span!("compose_terrain_surface_paints").entered();
     let chunk_cells = i32::from(chunk.side.checked_sub(1)?);
@@ -220,18 +216,11 @@ fn compose_terrain_surface_paints(
     let composed_cells = chunk_cells + margin * 2;
     let mut paints = (0..=composed_cells)
         .flat_map(|z| (0..=composed_cells).map(move |x| origin + IVec2::new(x, z)))
-        .map(|coordinate| read_terrain_surface_paint(chunk, asset, edited_chunks, coordinate))
+        .map(|coordinate| {
+            read_terrain_surface_paint(chunk, asset, edited_chunks, water, coordinate)
+        })
         .collect::<Option<Vec<_>>>()?;
     let side = usize::try_from(composed_cells + 1).ok()?;
-    let biomes = &asset.canonical_terrain_grid().biomes;
-    let snapshot = paints.clone();
-    for (index, paint) in paints.iter_mut().enumerate() {
-        paint.water = classify_terrain_surface_water(
-            paint,
-            surrounding_terrain_surface_paints(&snapshot, side, index),
-            biomes,
-        );
-    }
     let snapshot = paints.clone();
     for (index, paint) in paints.iter_mut().enumerate() {
         paint.transition =
@@ -269,6 +258,7 @@ fn read_terrain_surface_paint(
     chunk: &TerrainChunk,
     asset: &TerrainAsset,
     edited_chunks: &[(Handle<TerrainAsset>, IVec2, EditedTerrainSamples)],
+    water: Option<TerrainSurfaceWaterLinks<'_>>,
     coordinate: IVec2,
 ) -> Option<TerrainSurfacePaint> {
     let source_coordinate = IVec2::new(coordinate.x, -coordinate.y);
@@ -317,18 +307,16 @@ fn read_terrain_surface_paint(
             base.height_relative_to_base_metres + grid.units.base_height_metres,
             |height| f32::from(*height) * 0.01,
         );
-    let water_level_m = match edited {
-        Some(edited) => (*edited.water_styles.get(local)? != 0)
-            .then_some(f32::from(*edited.water_cm.get(local)?) * 0.01),
-        None => (base.water_depth != TerrainWaterDepth::Dry).then(|| {
-            asset
-                .sample_authored_water_region_index(global)
-                .flatten()
-                .and_then(|region| grid.water_regions.get(region))
-                .map_or(height_m, |region| {
-                    grid.units.base_height_metres + region.height_relative_to_base_metres
-                })
-        }),
+    let water_level_m = if let Some((membership, heights)) = water {
+        membership
+            .point_owner(UVec2::new(x as u32, z as u32))
+            .and_then(|owner| heights.get(&owner).copied())
+    } else {
+        asset
+            .sample_authored_water_region_index(global)
+            .flatten()
+            .and_then(|region| grid.water_regions.get(region))
+            .map(|region| grid.units.base_height_metres + region.height_relative_to_base_metres)
     };
     Some(TerrainSurfacePaint {
         coordinate,
@@ -336,9 +324,7 @@ fn read_terrain_surface_paint(
         cover,
         linked: base.height_is_linked,
         transition: false,
-        height_m,
-        water_level_m,
-        water: TerrainSurfaceWater::Dry,
+        water: classify_terrain_surface_water(height_m, water_level_m, grid.biomes.get(biome)?),
     })
 }
 
@@ -695,17 +681,7 @@ mod shore_classification_tests {
     use super::*;
 
     #[test]
-    fn banks_within_the_shore_offset_take_the_shore_texture() {
-        let paint = |height_m, water_level_m| TerrainSurfacePaint {
-            coordinate: IVec2::ZERO,
-            biome: 0,
-            cover: false,
-            linked: false,
-            transition: false,
-            height_m,
-            water_level_m,
-            water: TerrainSurfaceWater::Dry,
-        };
+    fn linked_samples_above_the_authored_cutoff_take_the_shore_texture() {
         let biome = TerrainBiome {
             name: String::new(),
             ground_texture: String::new(),
@@ -717,23 +693,16 @@ mod shore_classification_tests {
             ground_no_blend_brushes: Default::default(),
             cover_no_blend_brushes: Default::default(),
             draw_order: 0,
-            shallow_water_depth_mm: None,
+            shallow_water_depth_mm: Some(1500),
             deep_water_depth_mm: None,
-            water_shore_offset_mm: Some(400),
+            water_shore_offset_mm: Some(500),
             water_presentation: None,
         };
-        let biomes = [biome];
-        let water = [paint(5.0, Some(6.6))];
-        let classify = |paint: TerrainSurfacePaint| {
-            classify_terrain_surface_water(&paint, water.iter(), &biomes)
-        };
-        assert!(classify(paint(5.0, Some(6.6))) == TerrainSurfaceWater::Submerged);
-        assert!(classify(paint(6.9, None)) == TerrainSurfaceWater::Shore);
-        assert!(classify(paint(7.1, None)) == TerrainSurfaceWater::Dry);
-        assert!(
-            classify_terrain_surface_water(&paint(6.0, None), std::iter::empty(), &biomes)
-                == TerrainSurfaceWater::Dry
-        );
+        let classify = |height, water| classify_terrain_surface_water(height, water, &biome);
+        assert!(classify(4.5, Some(6.0)) == TerrainSurfaceWater::Submerged);
+        assert!(classify(5.0, Some(6.0)) == TerrainSurfaceWater::Submerged);
+        assert!(classify(5.01, Some(6.0)) == TerrainSurfaceWater::Shore);
+        assert!(classify(5.01, None) == TerrainSurfaceWater::Dry);
     }
 }
 
@@ -1171,6 +1140,7 @@ mod region_recomposition_tests {
             &chunk,
             &asset,
             &[(chunk.asset.clone(), chunk.coord, edited.clone())],
+            None,
             &images,
         )
         .expect("unedited surface");
@@ -1183,12 +1153,13 @@ mod region_recomposition_tests {
             }
         }
         let edited_chunks = [(chunk.asset.clone(), chunk.coord, edited)];
-        let whole = compose_terrain_surface_image(&chunk, &asset, &edited_chunks, &images)
+        let whole = compose_terrain_surface_image(&chunk, &asset, &edited_chunks, None, &images)
             .expect("whole surface");
         let region = recompose_terrain_surface_image_region(
             &chunk,
             &asset,
             &edited_chunks,
+            None,
             &images,
             &before,
             Some((min, max)),

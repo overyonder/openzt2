@@ -110,8 +110,6 @@ pub struct GuestShowNeed {
     pub minimum: f32,
     pub cessation: f32,
     pub trigger: f32,
-    pub remaining_ns: u64,
-    pub rng: openzt2_world_state::simulation_time::deterministic_random_stream::DeterministicRng,
 }
 
 impl GuestShowNeed {

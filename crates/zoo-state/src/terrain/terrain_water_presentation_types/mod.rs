@@ -191,7 +191,7 @@ pub struct TerrainWaterMembershipIndex {
     height: u32,
     point_owners: Box<[Option<Entity>]>,
     side_owners: Box<[[Option<Entity>; 4]]>,
-    has_water_sides: bool,
+    wet_side_tile_count: usize,
     regions: Box<[TerrainWaterRegionSpatialIndex]>,
     empty_selector_topology: bool,
     selector_projection: Arc<[Option<[u8; 4]>]>,
@@ -284,7 +284,10 @@ impl TerrainWaterMembershipIndex {
             width,
             height,
             point_owners,
-            has_water_sides: side_owners.iter().flatten().any(Option::is_some),
+            wet_side_tile_count: side_owners
+                .iter()
+                .filter(|sides| sides.iter().any(Option::is_some))
+                .count(),
             side_owners,
             regions,
             empty_selector_topology,
@@ -318,20 +321,12 @@ impl TerrainWaterMembershipIndex {
         Some(self)
     }
 
-    pub fn selector_projection_matches(&self, projection: &[Option<[u8; 4]>]) -> bool {
-        self.selector_projection.as_ref() == projection
-    }
-
     pub fn with_fence_probes(mut self, probes: Box<[[Box<[[Vec2; 2]]>; 8]]>) -> Option<Self> {
         if probes.len() != self.side_owners.len() {
             return None;
         }
         self.fence_probes = probes.into();
         Some(self)
-    }
-
-    pub fn fence_probes_match(&self, probes: &[[Box<[[Vec2; 2]]>; 8]]) -> bool {
-        self.fence_probes.as_ref() == probes
     }
 
     pub fn replace_selector_geometry(
@@ -351,11 +346,6 @@ impl TerrainWaterMembershipIndex {
 
     pub fn replace_height_support_limits(&mut self, limits: Arc<TerrainWaterSupportLimits>) {
         self.height_support_limits = limits;
-    }
-
-    pub fn height_support_limits_match(&self, limits: &Arc<TerrainWaterSupportLimits>) -> bool {
-        Arc::ptr_eq(&self.height_support_limits, limits)
-            || self.height_support_limits.as_ref() == limits.as_ref()
     }
 
     pub fn with_tank_minimum_depth(mut self, depth: Option<f32>) -> Self {
@@ -436,7 +426,7 @@ impl TerrainWaterMembershipIndex {
     }
 
     pub fn has_water_sides(&self) -> bool {
-        self.has_water_sides
+        self.wet_side_tile_count != 0
     }
 
     /// Sets the owners and edited heights of `points`, returning the points
@@ -549,48 +539,6 @@ impl TerrainWaterMembershipIndex {
         Some(changed)
     }
 
-    /// Points whose owner, edited height, side owners or selector codes differ
-    /// from `previous`, or `None` when the grids differ in shape. A changed
-    /// slope tile reports its two opposite corners.
-    pub fn changed_points_since(&self, previous: &Self) -> Option<Vec<UVec2>> {
-        if previous.terrain != self.terrain
-            || previous.width != self.width
-            || previous.height != self.height
-        {
-            return None;
-        }
-        let point = |index: usize| UVec2::new(index as u32 % self.width, index as u32 / self.width);
-        let mut changed: Vec<_> = self
-            .point_owners
-            .iter()
-            .zip(&previous.point_owners)
-            .enumerate()
-            .filter(|(_, (now, before))| now != before)
-            .map(|(index, _)| point(index))
-            .collect();
-        match (&self.edited_point_heights, &previous.edited_point_heights) {
-            (Some(now), Some(before)) => changed.extend(
-                now.iter()
-                    .zip(before.iter())
-                    .enumerate()
-                    .filter(|(_, (now, before))| now.to_bits() != before.to_bits())
-                    .map(|(index, _)| point(index)),
-            ),
-            (None, None) => {}
-            _ => return None,
-        }
-        let tile_width = (self.width - 1) / 4;
-        for index in 0..self.side_owners.len() {
-            if self.side_owners[index] != previous.side_owners[index]
-                || self.selector_projection[index] != previous.selector_projection[index]
-            {
-                let tile = UVec2::new(index as u32 % tile_width, index as u32 / tile_width);
-                changed.extend([tile * 4, tile * 4 + UVec2::splat(4)]);
-            }
-        }
-        Some(changed)
-    }
-
     /// Includes owners of slope tiles that can sample this point or a
     /// neighboring tile while projecting shoreline and suspension geometry.
     pub fn collect_owners_near_point(
@@ -622,8 +570,15 @@ impl TerrainWaterMembershipIndex {
         if *slots == sides {
             return Some(false);
         }
+        match (
+            slots.iter().any(Option::is_some),
+            sides.iter().any(Option::is_some),
+        ) {
+            (true, false) => self.wet_side_tile_count -= 1,
+            (false, true) => self.wet_side_tile_count += 1,
+            _ => {}
+        }
         *slots = sides;
-        self.has_water_sides = self.side_owners.iter().flatten().any(Option::is_some);
         Some(true)
     }
 

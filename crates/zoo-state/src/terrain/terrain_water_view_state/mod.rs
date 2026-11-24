@@ -27,10 +27,18 @@ impl TerrainWaterCameraContact {
 /// The selected reflection capture and any alternate region still visible.
 #[derive(Component, Debug, Default, Clone, Copy, PartialEq)]
 pub struct TerrainWaterCaptureSelection {
-    pub region: Option<(Entity, f32)>,
     pub resolved: bool,
     pub alternate_regions_visible: bool,
 }
+
+/// The reflection capture's selected water region.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+#[relationship(relationship_target = TerrainWaterCaptureCameras)]
+pub struct TerrainWaterCaptureRegion(pub Entity);
+
+#[derive(Component)]
+#[relationship_target(relationship = TerrainWaterCaptureRegion)]
+pub struct TerrainWaterCaptureCameras(Vec<Entity>);
 
 #[derive(Component, Debug, Default, Clone, Copy, PartialEq)]
 pub struct TerrainWaterTrainingFade(pub f32);
@@ -45,6 +53,10 @@ pub struct TerrainWaterRegionFade {
 impl TerrainWaterRegionFade {
     pub fn fraction(&self) -> f32 {
         self.fraction
+    }
+    pub const fn is_active(&self) -> bool {
+        (self.rate_per_second > 0.0 && self.fraction < 1.0)
+            || (self.rate_per_second < 0.0 && self.fraction > 0.0)
     }
     pub fn is_transitioning(&self) -> bool {
         self.fraction > 0.0 && self.fraction < 1.0

@@ -4,6 +4,9 @@ mod authored_disease_exposure;
 pub(crate) mod autonomous_task_selection;
 mod behavior_follow_entity_execution;
 mod behavior_special_docking;
+mod behavior_trick_teleport;
+mod behavior_exit_and_escape;
+mod docking_animation_pose;
 mod behavior_splash_guest_execution;
 mod behavior_staff_training_execution;
 
@@ -53,6 +56,7 @@ mod behavior_target_morph_execution;
 mod placed_object_virtual_nodes;
 use openzt2_zoo_state::animal_behavior::behavior_random_stream_state;
 mod behavior_script_execution;
+pub use behavior_script_execution::{BreedingCenterEndangeredBirths, ScriptFloatAttributes};
 mod behavior_set_start_request_handling;
 use openzt2_zoo_state::animal_behavior::behavior_set_start_request_types;
 mod behavior_show_event_execution;
@@ -101,6 +105,7 @@ impl Plugin for AnimalBehaviorExecutionPlugin {
                 .pipe(behavior_move_execution::start_current_supported_behavior_move_actions),
         );
         application.add_observer(activated_behavior_actor::<(openzt2_zoo_state::behavior_task_execution_types::running_actions::RunBehaviorDock, openzt2_zoo_state::behavior_task_execution_types::running_actions::RunBehaviorDockQueue)>.pipe(behavior_docking_execution::start_current_supported_behavior_docking_actions));
+        application.add_observer(behavior_docking_execution::release_dock_pose_clip);
         application.add_observer(activated_behavior_actor::<openzt2_zoo_state::behavior_task_execution_types::running_actions::RunBehaviorAnimationClip>.pipe(behavior_animation_clip_execution::start_current_behavior_animation_clip_actions));
         application.add_observer(activated_behavior_actor::<openzt2_zoo_state::behavior_task_execution_types::running_actions::RunBehaviorAnimationSwitch>.pipe(behavior_animation_clip_execution::start_current_behavior_animation_clip_actions));
         application.add_observer(activated_behavior_actor::<openzt2_zoo_state::behavior_task_execution_types::running_actions::RunBehaviorRandomAnimation>.pipe(behavior_random_animation_execution::start_next_random_behavior_animation));
@@ -132,6 +137,9 @@ impl Plugin for AnimalBehaviorExecutionPlugin {
             .add_observer(behavior_task_phase_transition_execution::advance_behavior_tasks_through_return_failure_completion_and_final_outcome)
             .add_systems(FixedUpdate, activate_due_behavior_instructions.in_set(BehaviorStepFixedSet::Think));
         behavior_special_docking::register(application);
+        application.add_observer(behavior_trick_teleport::teleport_trick_target);
+        behavior_exit_and_escape::register(application);
+        application.add_observer(behavior_docking_execution::clear_queue_dock);
         behavior_follow_entity_execution::register(application);
         behavior_splash_guest_execution::register(application);
         behavior_staff_training_execution::register(application);
@@ -159,7 +167,8 @@ impl Plugin for AnimalBehaviorExecutionPlugin {
         autonomous_task_selection::target_types::register_target_type_projection(application);
         application.add_systems(
             FixedUpdate,
-            authored_disease_exposure::expose_animals_to_authored_diseases
+            authored_disease_exposure::periodic_evaluation
+                .pipe(authored_disease_exposure::expose_animals_to_authored_diseases)
                 .in_set(FixedGameSet::Think)
                 .after(crate::animal_lifecycle::ResolveAnimalLifeStages)
                 .before(autonomous_task_selection::select_idle_animal_tasks)
@@ -168,6 +177,8 @@ impl Plugin for AnimalBehaviorExecutionPlugin {
                 .run_if(any_with_component::<ZooSeed>)
                 .run_if(authored_disease_exposure::disease_exposure_is_due),
         );
+        application.add_observer(authored_disease_exposure::evaluation_request
+            .pipe(authored_disease_exposure::expose_animals_to_authored_diseases));
         application
             .add_observer(authored_disease_exposure::clear_authored_disease_tokens_when_cured);
         application
@@ -263,6 +274,7 @@ impl Plugin for AnimalBehaviorExecutionPlugin {
             FixedUpdate,
             (
                 update_waiting_behavior_actors.pipe(behavior_docking_execution::start_current_supported_behavior_docking_actions),
+                behavior_docking_execution::update_live_queue_docks,
                 update_waiting_behavior_actors.pipe(behavior_move_execution::start_current_supported_behavior_move_actions),
                 update_waiting_behavior_actors.pipe(behavior_animation_clip_execution::start_current_behavior_animation_clip_actions),
                 update_waiting_behavior_actors.pipe(behavior_random_animation_execution::start_next_random_behavior_animation),

@@ -25,6 +25,8 @@ use openzt2_game_assets::graphics_settings_types::ReplaceGraphicsSettingsRequest
 
 use bevy::{ecs::schedule::common_conditions::*, prelude::*};
 
+use openzt2_interface_state::persistence::profile_types::ProfileSelected;
+use openzt2_interface_state::ui::authored_ui_node_projection_components::UiSliderValueChanged;
 use openzt2_interface_state::ui::UiSet;
 use openzt2_world_state::application_schedule::GameSet;
 
@@ -33,6 +35,9 @@ pub struct SettingsPlugin;
 impl Plugin for SettingsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<DisplaySettings>()
+            .init_resource::<display_settings_application::AcceptedDisplaySettingsReady>()
+            .add_message::<ProfileSelected>()
+            .add_message::<UiSliderValueChanged>()
             .init_resource::<AudioSettings>()
             .init_resource::<GraphicsSettings>()
             .init_resource::<OnlineMessagePolicy>()
@@ -80,24 +85,15 @@ impl Plugin for SettingsPlugin {
             )
             .add_systems(
                 Update,
-                display_resolution_ui_presentation::
-                    synchronize_supported_display_resolutions_from_primary_monitor
-                    .in_set(GameSet::Intent),
-            )
-            .add_systems(
-                Update,
-                display_settings_application::
-                    validate_selected_screen_resolution_and_request_display_settings_replacement
-                    .run_if(on_message::<SelectScreenResolutionRequest>)
-                    .in_set(GameSet::Intent),
-            )
-            .add_systems(
-                Update,
-                display_settings_application::validate_and_accept_requested_display_settings
-                    .after(authored_options_settings::apply_authored_options_setting_edits)
-                    .before(openzt2_interface_state::shell::ShellNavigationAfterSettings)
-                    .run_if(on_message::<ReplaceDisplaySettingsRequest>)
-                    .in_set(GameSet::Intent),
+                (
+                    display_resolution_ui_presentation::refresh_supported_display_resolutions,
+                    display_settings_application::validate_selected_screen_resolution_and_request_display_settings_replacement
+                        .run_if(on_message::<SelectScreenResolutionRequest>),
+                    display_settings_application::validate_and_accept_requested_display_settings
+                        .after(authored_options_settings::apply_authored_options_setting_edits)
+                        .before(openzt2_interface_state::shell::ShellNavigationAfterSettings)
+                        .run_if(on_message::<ReplaceDisplaySettingsRequest>),
+                ).chain().in_set(GameSet::Intent),
             )
             .add_systems(
                 Update,
@@ -109,8 +105,7 @@ impl Plugin for SettingsPlugin {
             )
             .add_systems(
                 Update,
-                display_settings_application::apply_accepted_display_settings_to_primary_window
-                    .run_if(resource_changed::<DisplaySettings>)
+                display_settings_application::apply_ready_display_settings_to_primary_window
                     .in_set(GameSet::Presentation),
             )
             .add_systems(
@@ -129,20 +124,29 @@ impl Plugin for SettingsPlugin {
             )
             .add_systems(
                 Update,
+                graphics_detail_setting_ui_presentation::apply_accepted_graphics_detail_slider_edits_to_draft
+                    .run_if(on_message::<UiSliderValueChanged>)
+                    .before(authored_options_settings::apply_authored_options_setting_edits)
+                    .in_set(GameSet::Intent),
+            )
+            .add_systems(
+                Update,
                 (
                     display_resolution_ui_presentation::
                         set_authored_display_resolution_list_row_count,
                     display_resolution_ui_presentation::
                         project_supported_display_resolutions_into_authored_rows,
                     display_resolution_ui_presentation::
-                        copy_activated_display_resolution_into_settings_draft,
+                        copy_activated_display_resolution_into_settings_draft
+                            .after(display_resolution_ui_presentation::project_supported_display_resolutions_into_authored_rows)
+                            .after(authored_options_settings::initialize_projected_options_settings_drafts),
                     display_resolution_ui_presentation::
-                        project_drafted_display_resolution_selection_into_authored_rows,
+                        project_drafted_display_resolution_selection_into_authored_rows
+                            .after(display_resolution_ui_presentation::copy_activated_display_resolution_into_settings_draft),
                     display_resolution_ui_presentation::
-                        project_drafted_display_resolution_into_authored_text,
+                        project_drafted_display_resolution_into_authored_text
+                            .after(display_resolution_ui_presentation::copy_activated_display_resolution_into_settings_draft),
                 )
-                    .chain()
-                    .after(authored_options_settings::initialize_projected_options_settings_drafts)
                     .in_set(UiSet::DomainProjection),
             )
             .add_systems(
@@ -151,12 +155,9 @@ impl Plugin for SettingsPlugin {
                     graphics_detail_setting_ui_presentation::
                         set_authored_graphics_detail_setting_list_row_count,
                     graphics_detail_setting_ui_presentation::
-                        copy_changed_graphics_detail_slider_levels_into_settings_draft,
-                    graphics_detail_setting_ui_presentation::
-                        project_drafted_graphics_detail_settings_into_authored_rows,
+                        project_drafted_graphics_detail_settings_into_authored_rows
+                            .after(authored_options_settings::initialize_projected_options_settings_drafts),
                 )
-                    .chain()
-                    .after(authored_options_settings::initialize_projected_options_settings_drafts)
                     .in_set(UiSet::DomainProjection),
             );
     }

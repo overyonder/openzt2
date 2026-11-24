@@ -201,6 +201,8 @@ fn fixture() -> (App, Entity, Entity, Entity) {
 fn emit(app: &mut App, subject: Entity) {
     let id = AssetId::from_key("viewing-test");
     app.world_mut().write_message(BehaviorViewEventEmitted {
+        education: 0.0,
+        education_donation: 0.0,
         source: subject,
         source_definition: id,
         view_key: id,

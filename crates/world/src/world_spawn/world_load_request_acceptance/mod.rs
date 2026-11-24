@@ -2,6 +2,8 @@ use bevy::ecs::{entity_disabling::Disabled, query::Allow};
 use openzt2_game_assets::application_lifecycle::GamePhase;
 use openzt2_game_assets::saved_world_asset_source::SavedWorldTerrainAsset;
 use std::collections::BTreeMap;
+use super::challenge_economy_initialization::{ChallengeEconomyInitializer, CHALLENGE_MODE_DOCUMENT};
+use openzt2_world_state::game_session_types::WorldSessionMode;
 use bevy::prelude::info;
 use bevy::prelude::warn;
 use bevy::prelude::AssetServer;
@@ -35,16 +37,17 @@ use openzt2_world_state::world_spawn::world_load_failure::WorldLoadFailure;
 use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 use openzt2_world_state::world_spawn::world_load_request_acceptance::BeginWorldLoad;
 use openzt2_world_state::world_spawn::world_load_request_acceptance::WorldLoadOperationOwner;
-use super::world_prefab_record_hydration::StartingPrefabWindow;
 
 #[derive(Component)]
 pub struct PendingWorldLoad {
     request: BeginWorldLoad,
     demanded_starts: BTreeMap<AssetId, Handle<WorldScenarioDocumentAsset>>,
+    challenge_economy: Option<Handle<ChallengeEconomyInitializer>>,
 }
 
 pub fn admit_first_world_load_request(
     mut commands: Commands,
+    asset_server: Res<AssetServer>,
     mut requests: MessageReader<BeginWorldLoad>,
     pending: Query<(), With<PendingWorldLoad>>,
 ) {
@@ -55,6 +58,10 @@ pub fn admit_first_world_load_request(
             PendingWorldLoad {
                 request,
                 demanded_starts: BTreeMap::new(),
+                challenge_economy: (request.mode == WorldSessionMode::Challenge
+                    && request.saved_world_document.is_none()
+                    && request.starting_cash_cents.is_none())
+                .then(|| asset_server.load(CHALLENGE_MODE_DOCUMENT)),
             },
             DespawnOnExit(GamePhase::Loading),
         ));
@@ -64,6 +71,7 @@ pub fn admit_first_world_load_request(
 pub fn accept_queued_world_load_after_required_assets_resolve(
     mut commands: Commands,
     scenarios: Res<Assets<WorldScenarioDocumentAsset>>,
+    challenge_initializers: Option<Res<Assets<ChallengeEconomyInitializer>>>,
     active_scenarios: Res<WorldScenarios>,
     asset_server: Res<AssetServer>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
@@ -83,6 +91,24 @@ pub fn accept_queued_world_load_after_required_assets_resolve(
         return;
     };
     let request = pending.request;
+    let challenge_cash = if let Some(handle) = pending.challenge_economy.as_ref() {
+        if let Some(initializer) = challenge_initializers
+            .as_ref()
+            .and_then(|assets| assets.get(handle))
+        {
+            Some(initializer.starting_cash_cents)
+        } else if matches!(
+            asset_server.load_state(handle.id()),
+            bevy::asset::LoadState::Failed(_)
+        ) {
+            warn!("Challenge economy initializer is unavailable");
+            None
+        } else {
+            return;
+        }
+    } else {
+        None
+    };
     let demanded_starts = &mut pending.demanded_starts;
     let saved_document = request
         .saved_world_document
@@ -197,13 +223,14 @@ pub fn accept_queued_world_load_after_required_assets_resolve(
         mode: request.mode,
         profile: request.profile,
     };
-    let default_starting_cash = match request.mode {
-        openzt2_world_state::game_session_types::WorldSessionMode::Challenge => 3_000_000,
-        _ => cash_cents,
-    };
-    let starting_cash = ZooCash(Money(
-        request.starting_cash_cents.unwrap_or(default_starting_cash),
-    ));
+    let starting_cash = ZooCash(Money(if request.saved_world_document.is_some() {
+        start_record.cash_cents
+    } else {
+        request
+            .starting_cash_cents
+            .or(challenge_cash)
+            .unwrap_or(cash_cents)
+    }));
     let general_accounts = start_record.general_cash_cents.map(|cash| {
         GeneralEconomyLedger::from_starting_balance(
             u32::from(start_record.calendar[0]) * 12
@@ -294,10 +321,9 @@ pub fn accept_queued_world_load_after_required_assets_resolve(
             .map(|policy| policy.percent)
             .or(start_record.maximum_fame_percent_reached),
     });
-    commands.entity(root).insert((
-        WorldHydration::new_pending_world_hydration(record_count),
-        StartingPrefabWindow::default(),
-    ));
+    commands
+        .entity(root)
+        .insert(WorldHydration::new_pending_world_hydration(record_count));
     commands.entity(load_entity).despawn();
 }
 

@@ -33,6 +33,15 @@ struct VertexOutput {
 @group(0) @binding(0) var<uniform> view: View;
 @group(0) @binding(1) var<uniform> sim_params : SimParams;
 
+struct ParticleViewFog {
+    depth_range: vec4<f32>,
+    depth_plane: vec4<f32>,
+    colour: vec4<f32>,
+}
+
+@if(NEEDS_VIEW_FOG)
+@group(0) @binding(2) var<uniform> particle_view_fog: ParticleViewFog;
+
 // Per-batch bindings
 @group(1) @binding(0) var<storage, read> particle_buffer : ParticleBuffer;
 @group(1) @binding(1) var<storage, read> indirect_buffer : IndirectBuffer;

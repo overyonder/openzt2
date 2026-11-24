@@ -35,7 +35,7 @@ use guest_arrival_execution::{
     initialize_guest_arrivals, initialize_spawned_guests, report_changed_guest_arrival_failures,
     spawn_arriving_guests,
 };
-use guest_destination_and_viewing_execution::hydrate_viewing_opportunities;
+use guest_destination_and_viewing_execution::project_viewing_opportunities;
 use guest_destination_and_viewing_execution::{
     advance_viewing, begin_viewing, cancel_failed_guest_destinations, choose_guest_destination,
     react_to_visible_litter,
@@ -43,7 +43,9 @@ use guest_destination_and_viewing_execution::{
 use guest_lifecycle_and_memory_execution::{
     advance_guest_lifecycle, age_guest_memories, despawn_departed_guests,
 };
-use guest_need_execution::{apply_guest_satisfaction_adjustments, decay_guest_needs};
+use guest_need_execution::{
+    apply_guest_satisfaction_adjustments, decay_due_guest_needs, tick_guest_need_cadences,
+};
 use guest_survey_execution::{
     adjust_guest_survey_data, advance_guest_survey_day, initialize_guest_survey,
     route_guest_survey_triggers,
@@ -63,8 +65,11 @@ impl Plugin for GuestsPlugin {
         };
         app.add_observer(activated_behavior_actor::<openzt2_zoo_state::behavior_task_execution_types::running_actions::RunBehaviorViewAnimals>.pipe(guest_view_animals_execution::watch_animals_for_current_view_actions));
 
-        app.add_message::<view_event_execution::BehaviorViewEventEmitted>()
+        app.register_required_components::<Guest, openzt2_zoo_state::locomotion::locomotion_types::CaffeineFlags>()
+            .add_message::<view_event_execution::BehaviorViewEventEmitted>()
             .add_message::<GuestReaction>()
+            .add_message::<GuestNeedAdjustmentDue>()
+            .add_message::<guest_task_target_loss::GuestTaskTargetLost>()
             .add_message::<view_event_execution::AppliedAnimalView>()
             .add_message::<AdjustGuestSatisfaction>()
             .add_message::<AdjustGuestSurveyData>()
@@ -75,7 +80,10 @@ impl Plugin for GuestsPlugin {
             .add_message::<GuestArrivalFailed>()
             .add_message::<RequestGuestArrivals>()
             .add_observer(guest_behavior_fact_execution::apply_authored_guest_behavior_fact_modifications)
+            .add_observer(guest_task_target_loss::observe_guest_task_target_removal)
+            .add_observer(guest_task_target_loss::observe_guest_task_target_disabling)
             .add_observer(view_event_execution::emit_authored_view_events)
+            .add_observer(guest_behavior_departure_execution::remove_guest_after_authored_departure)
             .add_systems(
                 Update,
                 (
@@ -109,14 +117,17 @@ impl Plugin for GuestsPlugin {
                 (
                     initialize_spawned_guests,
                     guest_view_event_meter_application::initialize_guest_species_view_counts,
-                    guest_task_target_loss::fail_guest_tasks_whose_target_is_gone,
-                    hydrate_viewing_opportunities,
+                    guest_task_target_loss::reconcile_guest_task_targets,
+                    project_viewing_opportunities,
                     guest_destination_and_viewing_execution::project_authored_viewing_ground_slots
-                        .after(hydrate_viewing_opportunities),
-                    decay_guest_needs.after(initialize_spawned_guests),
-                    guest_task_need_facts::observe_guest_need_triggers.after_ignore_deferred(decay_guest_needs),
+                        .after(project_viewing_opportunities),
+                    tick_guest_need_cadences.after(initialize_spawned_guests),
+                    decay_due_guest_needs
+                        .after_ignore_deferred(tick_guest_need_cadences)
+                        .run_if(on_message::<GuestNeedAdjustmentDue>),
+                    guest_task_need_facts::observe_guest_need_triggers.after_ignore_deferred(decay_due_guest_needs),
                     advance_guest_survey_day,
-                    guest_survey_need_sampling::sample_current_guest_need_observations.after_ignore_deferred(decay_guest_needs),
+                    guest_survey_need_sampling::sample_current_guest_need_observations.after_ignore_deferred(decay_due_guest_needs),
                     route_guest_survey_triggers,
                     adjust_guest_survey_data
                         .after_ignore_deferred(advance_guest_survey_day)
@@ -125,12 +136,13 @@ impl Plugin for GuestsPlugin {
                     react_to_visible_litter,
                     choose_guest_destination
                         .after(guest_destination_and_viewing_execution::project_authored_viewing_ground_slots)
-                        .after_ignore_deferred(guest_task_need_facts::observe_guest_need_triggers)
+                        .after(guest_task_need_facts::observe_guest_need_triggers)
                         .in_set(GuestDestinationSelection),
                     guest_self_task_selection::select_idle_guest_tasks
                         .after(choose_guest_destination)
                         .before(BehaviorStepFixedSet::Think),
                     guest_task_progress_diagnostics::report_guest_task_progress_changes
+                        .run_if(guest_task_progress_diagnostics::guest_progress_diagnostics_enabled)
                         .after(guest_self_task_selection::select_idle_guest_tasks),
                 )
                     .in_set(FixedGameSet::Think)
@@ -158,7 +170,6 @@ impl Plugin for GuestsPlugin {
             .add_systems(
                 FixedUpdate,
                 (advance_guest_lifecycle.in_set(GuestLifecycleAdvance), age_guest_memories)
-                    .chain()
                     .in_set(FixedGameSet::Cleanup)
                     .run_if(in_state(GamePhase::InGame)),
             )

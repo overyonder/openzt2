@@ -46,14 +46,6 @@ impl SimulationControl {
         self.update_effective_pause()
     }
 
-    pub const fn pause_claims_match(
-        &self,
-        temporary_ui_pause: bool,
-        immersive_pause: bool,
-    ) -> bool {
-        self.temporary_ui_pause == temporary_ui_pause && self.immersive_pause == immersive_pause
-    }
-
     fn update_effective_pause(&mut self) -> bool {
         let previous = self.paused;
         self.paused = self.requested_pause || self.temporary_ui_pause || self.immersive_pause;
@@ -101,3 +93,7 @@ pub struct SimulationControlChanged {
 /// A UI node shown while the simulation is paused.
 #[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct UiSimulationPausedVisibility;
+
+/// An authored toggle whose selected state follows effective simulation pause.
+#[derive(Component)]
+pub struct UiSimulationPauseToggle;

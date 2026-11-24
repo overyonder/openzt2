@@ -1,5 +1,5 @@
 use bevy::{
-    prelude::{Commands, MessageReader, MessageWriter, Or, Query, Res, ResMut, With},
+    prelude::{Commands, MessageReader, MessageWriter, Query, Res, ResMut, With},
     tasks::IoTaskPool,
 };
 
@@ -16,12 +16,9 @@ use super::super::{
     snapshot_container_encoding_and_validation::MAXIMUM_WORLD_SNAPSHOT_CONTAINER_BYTE_COUNT,
     snapshot_container_types::ReusableWorldSnapshotByteBuffer,
 };
-use super::{
-    pending_snapshot_application_types::PendingSnapshotApplication,
-    persistence_slot_filesystem_task_types::{
-        PersistenceSlotFilesystemOperationContext, PersistenceSlotFilesystemTask,
-        PersistenceSlotFilesystemTaskCompletion,
-    },
+use super::persistence_slot_filesystem_task_types::{
+    PersistenceSlotFilesystemOperationContext, PersistenceSlotFilesystemTask,
+    PersistenceSlotFilesystemTaskCompletion, PersistenceSlotOperation,
 };
 
 pub(in super::super) fn begin_loading_requested_world_snapshot_from_save_slot(
@@ -29,14 +26,7 @@ pub(in super::super) fn begin_loading_requested_world_snapshot_from_save_slot(
     mut load_requests: MessageReader<LoadWorldSnapshotFromSlot>,
     persistence_filesystem_paths: Option<Res<PersistenceFilesystemPaths>>,
     profile_options: Res<ProfileOptions>,
-    active_persistence_operations: Query<
-        (),
-        Or<(
-            With<PersistenceSlotFilesystemTask>,
-            With<PendingSnapshotApplication>,
-            With<super::original_saved_game_load_preparation::OriginalSavedGameLoadPreparation>,
-        )>,
-    >,
+    active_persistence_operations: Query<(), With<PersistenceSlotOperation>>,
     mut snapshot_scratch_storage: ResMut<ReusableWorldSnapshotByteBuffer>,
     mut persistence_failures: MessageWriter<WorldSnapshotPersistenceFailed>,
 ) {

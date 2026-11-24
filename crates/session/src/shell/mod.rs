@@ -7,6 +7,7 @@ mod in_game_options_overlay_lifecycle;
 mod in_game_shell_ui_action_routing;
 mod loading_screen_presentation;
 mod main_menu_screen_lifecycle_and_presentation;
+pub(crate) mod main_mode_cash;
 mod map_selection_screen_lifecycle;
 mod menu_screen_lifecycle;
 mod online_message_operations;
@@ -40,7 +41,10 @@ pub struct ShellPlugin;
 
 impl Plugin for ShellPlugin {
     fn build(&self, app: &mut App) {
-        app.add_sub_state::<ShellMenuPage>()
+        app.init_asset::<main_mode_cash::MainModeCash>()
+            .init_asset_loader::<main_mode_cash::MainModeCashLoader>()
+            .init_resource::<main_mode_cash::MainModeCashAsset>()
+            .add_sub_state::<ShellMenuPage>()
             .add_message::<shell_navigation_request_types::ContinueCampaign>()
             .init_resource::<ShellSelection>()
             .add_message::<NavigateShellBack>()
@@ -106,18 +110,23 @@ impl Plugin for ShellPlugin {
                     campaign_selection_list_presentation::
                         request_authored_campaign_and_scenario_list_row_counts,
                     campaign_selection_list_presentation::
-                        project_campaign_and_scenario_records_into_authored_list_rows,
+                        project_campaign_and_scenario_records_into_authored_list_rows
+                        .after(world_choice_catalogue_hydration::hydrate_launchable_world_choices_from_active_scenario_catalogue)
+                        .after_ignore_deferred(campaign_selection_list_presentation::request_authored_campaign_and_scenario_list_row_counts),
                     world_choice_list_presentation::
-                        project_launchable_world_choices_into_authored_list_rows,
+                        project_launchable_world_choices_into_authored_list_rows
+                        .after(world_choice_catalogue_hydration::hydrate_launchable_world_choices_from_active_scenario_catalogue),
                     world_selection_presentation::
-                        filter_world_choice_rows_by_selected_catalogue_filter,
+                        filter_world_choice_rows_by_selected_catalogue_filter
+                        .after(world_choice_list_presentation::project_launchable_world_choices_into_authored_list_rows),
                     world_selection_presentation::
                         project_selected_world_catalogue_filter_into_authored_location_toggle,
                     world_selection_presentation::show_only_selected_secondary_globe_biome_model,
                     world_selection_presentation::
-                        project_selected_world_facts_into_authored_map_selection_controls,
+                        project_selected_world_facts_into_authored_map_selection_controls
+                        .after(campaign_selection_list_presentation::project_campaign_and_scenario_records_into_authored_list_rows)
+                        .after_ignore_deferred(world_selection_presentation::filter_world_choice_rows_by_selected_catalogue_filter),
                 )
-                    .chain()
                     .after(shell_ui_action_routing::route_authored_shell_ui_actions_to_navigation_requests)
                     .in_set(openzt2_interface_state::ui::UiSet::Routing)
                     .run_if(in_state(GamePhase::MapSelection)),
@@ -125,21 +134,26 @@ impl Plugin for ShellPlugin {
             .add_systems(
                 Update,
                 (
-                    shell_navigation_and_world_launch::
-                        select_requested_play_mode_and_enter_map_selection,
-                    shell_navigation_and_world_launch::
-                        select_world_from_activated_choice_view,
-                    shell_navigation_and_world_launch::select_requested_compatible_world,
-                    shell_navigation_and_world_launch::request_campaign_launch_after_world_exit,
-                    shell_navigation_and_world_launch::begin_loading_selected_world,
+                    (
+                        shell_navigation_and_world_launch::
+                            select_requested_play_mode_and_enter_map_selection,
+                        shell_navigation_and_world_launch::
+                            select_world_from_activated_choice_view,
+                        shell_navigation_and_world_launch::select_requested_compatible_world,
+                        shell_navigation_and_world_launch::request_campaign_launch_after_world_exit,
+                        shell_navigation_and_world_launch::begin_loading_selected_world,
+                    ).chain_ignore_deferred(),
                     in_game_shell_ui_action_routing::route_authored_in_game_shell_ui_actions,
-                    in_game_options_overlay_lifecycle::close_finished_in_game_options_overlays,
+                    in_game_options_overlay_lifecycle::close_finished_in_game_options_overlays
+                        .after(in_game_shell_ui_action_routing::route_authored_in_game_shell_ui_actions),
                     exit_confirmation_presentation::
                         reveal_authored_exit_confirmation_after_modal_projection,
-                    shell_navigation_and_world_launch::exit_application_after_request,
-                    menu_screen_lifecycle::route_requested_shell_menu_page,
+                    shell_navigation_and_world_launch::exit_application_after_request
+                        .after_ignore_deferred(in_game_shell_ui_action_routing::route_authored_in_game_shell_ui_actions),
+                    menu_screen_lifecycle::route_requested_shell_menu_page
+                        .after_ignore_deferred(in_game_shell_ui_action_routing::route_authored_in_game_shell_ui_actions)
+                        .after_ignore_deferred(shell_navigation_and_world_launch::begin_loading_selected_world),
                 )
-                    .chain()
                     .in_set(ShellNavigationAfterSettings)
                     .in_set(GameSet::Intent),
             )

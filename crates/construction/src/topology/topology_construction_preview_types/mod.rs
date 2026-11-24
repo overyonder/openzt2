@@ -17,6 +17,7 @@ pub struct PathPreview {
     pub(crate) definition: AssetId,
     pub(crate) from: IVec3,
     pub(crate) to: IVec3,
+    pub(super) profile: Option<super::elevated_path_layout::ElevatedPathProfile>,
 }
 
 #[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,39 +34,18 @@ pub struct PlacePath {
     pub(crate) definition: AssetId,
     pub(crate) from: IVec3,
     pub(crate) to: IVec3,
+    pub(super) profile: Option<super::elevated_path_layout::ElevatedPathProfile>,
 }
 
 #[derive(Component, Clone, Debug, PartialEq, Eq)]
 pub(super) struct FenceDrawPlan {
-    pub input: FencePreview,
-    pub version: TopologyPlanVersion,
-    pub quote: Option<(
-        openzt2_zoo_state::economy::money_types::Money,
-        Option<openzt2_zoo_state::topology::gate_operation_types::Gate>,
-        Vec<Entity>,
-    )>,
     pub cells: Vec<IVec3>,
     pub replaced: Option<Entity>,
 }
 
 #[derive(Component, Clone, Debug, PartialEq, Eq)]
 pub(super) struct PathDrawPlan {
-    pub input: PathPreview,
-    pub version: TopologyPlanVersion,
-    pub approved: Vec<IVec3>,
     pub cells: Vec<IVec3>,
     pub validity:
         openzt2_zoo_state::construction::construction_interaction_types::PlacementValidity,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct TopologyPlanVersion {
-    pub revisions: [bevy::ecs::change_detection::Tick; 6],
-    pub terrain_changes: usize,
-}
-
-pub(super) fn terrain_change_cursor(
-    changes: &Messages<openzt2_zoo_state::terrain::terrain_edit_types::TerrainChanged>,
-) -> usize {
-    changes.oldest_message_count() + changes.len()
 }

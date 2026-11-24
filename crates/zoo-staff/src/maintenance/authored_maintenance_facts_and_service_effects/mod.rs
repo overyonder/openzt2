@@ -11,19 +11,36 @@ use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator
 use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
-use super::maintenance_types::{
-    AuthoredMaintenanceFactsResolutionMarker, FacilityContainedWaste, LooseLitterWaste,
-};
+use super::maintenance_types::{FacilityContainedWaste, LooseLitterWaste};
 
-pub(super) fn initialize_authored_maintenance_facts_for_world_objects(
+#[derive(Component)]
+pub(super) struct ProjectedMaintenanceContainer;
+
+pub(super) fn project_authored_maintenance_capacity(
     mut commands: Commands,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,
-    unresolved_world_objects: Query<
-        (Entity, &DefinitionId),
-        Without<AuthoredMaintenanceFactsResolutionMarker>,
-    >,
+    (mut removed, changed): (
+        RemovedComponents<DefinitionId>,
+        Query<Entity, Changed<DefinitionId>>,
+    ),
+    mut objects: Query<(
+        Entity,
+        &DefinitionId,
+        Option<&mut FacilityContainedWaste>,
+        Has<ProjectedMaintenanceContainer>,
+    )>,
+    lost_definitions: Query<(), (With<ProjectedMaintenanceContainer>, Without<DefinitionId>)>,
 ) {
+    for entity in removed
+        .read()
+        .filter(|&entity| lost_definitions.contains(entity))
+    {
+        commands
+            .entity(entity)
+            .remove::<(FacilityContainedWaste, ProjectedMaintenanceContainer)>();
+    }
+    let refresh_all = active_world_definitions.is_changed() || world_definition_assets.is_changed();
     let Some(world_definitions) = active_world_definitions.get(&world_definition_assets) else {
         return;
     };
@@ -32,22 +49,47 @@ pub(super) fn initialize_authored_maintenance_facts_for_world_objects(
     if world_definitions.has_pending_assets() {
         return;
     }
-    for (world_object_entity, definition_id) in &unresolved_world_objects {
-        let Some(maintenance_definition) =
-            world_definitions.find_maintenance_by_object(definition_id.0)
-        else {
+    let candidates: Vec<Entity> = if refresh_all {
+        objects.iter().map(|(entity, ..)| entity).collect()
+    } else {
+        changed.iter().collect()
+    };
+    for candidate in candidates {
+        let Ok((entity, definition, current, owned)) = objects.get_mut(candidate) else {
             continue;
         };
-        let mut world_object = commands.entity(world_object_entity);
-        if maintenance_definition.waste_capacity_units != 0 {
-            world_object.insert_if_new(FacilityContainedWaste {
-                contained_waste_units: maintenance_definition
-                    .initial_waste_units
-                    .min(maintenance_definition.waste_capacity_units),
-                contained_waste_capacity_units: maintenance_definition.waste_capacity_units,
+        let Some(policy) = world_definitions
+            .find_maintenance_by_object(definition.0)
+            .filter(|policy| policy.waste_capacity_units > 0)
+        else {
+            if owned {
+                commands
+                    .entity(entity)
+                    .remove::<(FacilityContainedWaste, ProjectedMaintenanceContainer)>();
+            }
+            continue;
+        };
+        let capacity = policy.waste_capacity_units;
+        if let Some(mut current) = current {
+            let units = current.contained_waste_units.min(capacity);
+            current
+                .reborrow()
+                .map_unchanged(|waste| &mut waste.contained_waste_capacity_units)
+                .set_if_neq(capacity);
+            current
+                .map_unchanged(|waste| &mut waste.contained_waste_units)
+                .set_if_neq(units);
+        } else {
+            commands.entity(entity).insert(FacilityContainedWaste {
+                contained_waste_units: policy.initial_waste_units.min(capacity),
+                contained_waste_capacity_units: capacity,
             });
         }
-        world_object.insert(AuthoredMaintenanceFactsResolutionMarker);
+        if !owned {
+            commands
+                .entity(entity)
+                .insert(ProjectedMaintenanceContainer);
+        }
     }
 }
 

@@ -53,6 +53,7 @@ use openzt2_world_state::{
         CancelAnimationClipPlaybackRequest,
     },
     animation_playback::animation_playback_controller_types::AnimationPlaybackRepetitionPolicy,
+    simulation_time::simulation_clock_types::ZooClock,
     world_spawn::world_membership_types::{DefinitionId, WorldMember},
 };
 use openzt2_zoo_state::{
@@ -61,10 +62,15 @@ use openzt2_zoo_state::{
     },
     terrain::{
         terrain_chunk_types::{EditedTerrainSamples, TerrainChunk, TerrainIndex},
-        terrain_collision_rebuilding_types::TerrainChunkCollisionSurface,
         terrain_water_presentation_types::{TerrainWaterMembershipIndex, TerrainWaterRegionQuery},
         terrain_world_sampling::{sample_terrain, terrain_chunk_at},
     },
+    behavior_task_execution_types::{
+        BehaviorTaskExecutionState, PendingBehaviorAnimationClipCompletion,
+        running_actions::{RunBehaviorFall, RunningBehaviorInstruction},
+    },
+    placement::placement_occupancy_index::PlacedObjectFootprintQueries,
+    topology::topology_graph_types::TopologyGrid,
 };
 
 use super::{
@@ -88,6 +94,8 @@ pub(super) fn release_behavior_object_into_world(
     assets: Res<Assets<WorldDefinitionAsset>>,
     mut clips: MessageWriter<AnimationClipPlaybackRequest>,
     mut options: MessageWriter<AnimationClipActionOptions>,
+    authored_falls: Query<(&RunBehaviorFall, &RunningBehaviorInstruction, &BehaviorTaskExecutionState)>,
+    clocks: Query<&ZooClock>,
 ) {
     let Ok((member, mut transform, definition, body, disabled, falling, animation)) =
         objects.get_mut(released.object)
@@ -114,12 +122,19 @@ pub(super) fn release_behavior_object_into_world(
                 }
             }
         }
-        BehaviorWorldReleaseMotion::Fall => {
+        BehaviorWorldReleaseMotion::Fall { speed_mps } => {
+            let authored = authored_falls.get(released.object).ok()
+                .filter(|(_, instruction, task)| instruction.is_current(task));
             if object.is_some_and(|object| {
                 object
                     .behavior_type_identifiers
                     .contains(&AssetId::from_key("b_donotfall"))
             }) {
+                if let Some((_, instruction, _)) = authored {
+                    if let Ok(clock) = clocks.get(released.world) {
+                        instruction.complete(released.object, clock.tick, &mut commands);
+                    }
+                }
                 return;
             }
             let resume_body = body.is_some() && !disabled;
@@ -141,6 +156,10 @@ pub(super) fn release_behavior_object_into_world(
                     })
                 })
                 .unwrap_or_default();
+            let action = authored.map(|(action, _, _)| &action.0);
+            let airborne = action.and_then(|action| action.airborne.clone()).or(airborne);
+            let land_impact = action.and_then(|action| action.land_impact.clone()).or(land_impact);
+            let water_impact = action.and_then(|action| action.water_impact.clone()).or(water_impact);
             let airborne_request = airborne.map(|clip| {
                 request_release_clip(
                     released.object,
@@ -151,11 +170,12 @@ pub(super) fn release_behavior_object_into_world(
                 )
             });
             entity.insert(FallingReleasedObject {
-                downward_speed: 0.0,
+                downward_speed: speed_mps,
                 resume_body,
                 airborne_request,
                 land_impact_clip: land_impact,
                 water_impact_clip: water_impact,
+                instruction: authored.map(|(_, instruction, _)| instruction.id()),
             });
         }
     }
@@ -171,11 +191,11 @@ pub(super) fn advance_falling_released_objects(
     memberships: Query<&TerrainWaterMembershipIndex>,
     regions: TerrainWaterRegionQuery,
     spatial: SpatialQuery,
-    colliders: Query<&ColliderOf>,
-    nonsupporting_colliders: Query<(), Or<(With<TerrainChunkCollisionSurface>, With<Sensor>)>>,
-    static_bodies: Query<&RigidBody>,
-    parents: Query<&ChildOf>,
-    mut falling: Query<(Entity, &mut FallingReleasedObject, &mut Transform)>,
+    placed_objects: PlacedObjectFootprintQueries,
+    topology: Query<&TopologyGrid>,
+    (colliders, sensors, clocks): (Query<&ColliderOf>, Query<(), With<Sensor>>, Query<&ZooClock>),
+    authored_falls: Query<(&RunningBehaviorInstruction, &BehaviorTaskExecutionState), With<RunBehaviorFall>>,
+    mut falling: Query<(Entity, &WorldMember, &mut FallingReleasedObject, &mut Transform)>,
     mut clips: MessageWriter<AnimationClipPlaybackRequest>,
     mut options: MessageWriter<AnimationClipActionOptions>,
     mut cancel: MessageWriter<CancelAnimationClipPlaybackRequest>,
@@ -185,7 +205,7 @@ pub(super) fn advance_falling_released_objects(
         return;
     };
     let delta = time.delta_secs();
-    for (entity, mut fall, mut transform) in &mut falling {
+    for (entity, world, mut fall, mut transform) in &mut falling {
         let position = transform.translation;
         let Some(chunk) = terrain_chunk_at(&index, position.xz()) else {
             commands.entity(entity).try_despawn();
@@ -206,26 +226,22 @@ pub(super) fn advance_falling_released_objects(
             position.xz(),
         )
         .map(|(height, _)| height);
-        let supporting_collider = spatial
-            .cast_ray_predicate(
-                position,
-                Dir3::NEG_Y,
-                position.y - next_height,
-                false,
-                &SpatialQueryFilter::default(),
-                &|collider| {
-                    let body = colliders.get(collider).map_or(collider, |owner| owner.body);
-                    body != entity
-                        && !nonsupporting_colliders.contains(collider)
-                        && !parents
-                            .iter_ancestors(collider)
-                            .any(|owner| owner == entity)
-                        && static_bodies
-                            .get(body)
-                            .is_ok_and(|body| *body == RigidBody::Static)
-                },
-            )
-            .map(|hit| position.y - hit.distance);
+        let supporting_collider = (next_height < position.y).then(|| {
+            let grid = topology.get(world.root).ok()?;
+            let cell = grid.position_cell(position).truncate();
+            placed_objects.entities_occupying_cell(world.root, cell)
+                .filter(|support| *support != entity)
+                .find_map(|support| {
+                    let hit = spatial.cast_ray_predicate(
+                        position, Dir3::NEG_Y, position.y - next_height, false,
+                        &SpatialQueryFilter::default(),
+                        &|collider| !sensors.contains(collider)
+                            && colliders.get(collider).map_or(collider, |owner| owner.body) == support,
+                    )?;
+                    let height = position.y - hit.distance;
+                    (next_height < height && height < position.y).then_some(height)
+                })
+        }).flatten();
         if let Some((support, in_water)) = fall_landing_surface(
             position.y,
             next_height,
@@ -250,14 +266,30 @@ pub(super) fn advance_falling_released_objects(
             } else {
                 fall.land_impact_clip.take()
             };
-            if let Some(impact_clip) = impact_clip {
-                request_release_clip(
+            let impact_request = impact_clip.map(|impact_clip| {
+                let request_id = request_release_clip(
                     entity,
-                    impact_clip,
+                    impact_clip.clone(),
                     AnimationPlaybackRepetitionPolicy::PlayOnce,
                     &mut clips,
                     &mut options,
                 );
+                (request_id, impact_clip)
+            });
+            if let Some((step, task)) = authored_falls.get(entity).ok()
+                .filter(|(step, task)| Some(step.id()) == fall.instruction && step.is_current(task))
+            {
+                if let Some((request_id, clip_key)) = impact_request {
+                    commands.entity(entity).insert(PendingBehaviorAnimationClipCompletion {
+                        instruction: step.id(),
+                        request_id,
+                        clip_key,
+                        target: task.target,
+                        repeats: false,
+                    });
+                } else if let Ok(clock) = clocks.get(world.root) {
+                    step.complete(entity, clock.tick, &mut commands);
+                }
             }
         } else {
             transform.translation.y = next_height;

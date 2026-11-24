@@ -1151,10 +1151,21 @@ impl AssetLoader for EffectAssetLoader {
 /// [`EventEmitCondition::Always`]: crate::EventEmitCondition::Always
 /// [`EventEmitCondition::OnDie`]: crate::EventEmitCondition::OnDie
 #[derive(Debug, Clone, Copy, Component, Reflect)]
+#[relationship(relationship_target = EffectChildren)]
+#[require(EffectCollisionSlot)]
 pub struct EffectParent {
     /// Entity of the parent effect.
+    #[relationship]
     pub entity: Entity,
 }
+
+/// GPU spawn-event children in binding order, independent of scene parenting.
+#[derive(Debug, Component)]
+#[relationship_target(relationship = EffectParent)]
+pub struct EffectChildren(Vec<Entity>);
+
+#[derive(Debug, Default, Component, PartialEq, Eq)]
+pub(crate) struct EffectCollisionSlot(pub u32);
 
 impl EffectParent {
     /// Create a new component with the given entity as parent.

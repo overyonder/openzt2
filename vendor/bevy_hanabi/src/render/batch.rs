@@ -257,7 +257,7 @@ impl EffectBatch {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct EffectBatchIndex(pub u32);
 
 #[derive(Resource)]
@@ -426,27 +426,29 @@ impl Batcher {
     ///
     /// # Returns
     ///
-    /// This returns the index of the new batch if the inserted one couldn't be
-    /// merged with a previous batch. Otherwise the input batch was merged with
-    /// an existing one, and therefore share its index; in that case `None` is
-    /// returned.
-    ///
-    /// Also returns the index of that effect batch in the prefix sum buffer.
+    /// Returns the batch index, the effect's index within the batch, and its
+    /// prefix sum buffer index.
     pub fn push(
         &mut self,
         effect_batch: EffectBatch,
         instance_spawn_count: u32,
-    ) -> (Option<EffectBatchIndex>, u32) {
+    ) -> (EffectBatchIndex, usize, u32) {
         assert!(effect_batch.effect_data.len() == 1);
 
         let prefix_sum_index = self.prefix_sum_buffer.len() as u32;
 
+        let batch_count = self.batches.len();
         let effect_batch = if let Some(batch) = self.batches.last_mut() {
+            let effect_index = batch.effect_data.len();
             let Err(effect_batch) = batch.try_merge(effect_batch) else {
                 // Successfully batched
                 self.add_effect_to_batch(self.cpu_prefix_sum_value);
                 self.cpu_prefix_sum_value += instance_spawn_count;
-                return (None, prefix_sum_index);
+                return (
+                    EffectBatchIndex((batch_count - 1) as u32),
+                    effect_index,
+                    prefix_sum_index,
+                );
             };
             // Failed to merge incompatible batches
             effect_batch
@@ -471,7 +473,7 @@ impl Batcher {
         self.add_effect_to_batch(self.cpu_prefix_sum_value);
         self.cpu_prefix_sum_value += instance_spawn_count;
 
-        (Some(EffectBatchIndex(index)), prefix_sum_index)
+        (EffectBatchIndex(index), 0, prefix_sum_index)
     }
 
     #[inline]
@@ -729,27 +731,15 @@ impl EffectSorter {
     }
 }
 
-/// Single effect batch to drive rendering.
-///
-/// This component is spawned into the render world during the prepare phase
-/// ([`prepare_effects()`]), once per effect batch per group. In turns it
-/// references an [`EffectBatch`] component containing all the shared data for
-/// all the groups of the effect.
-#[derive(Debug, Component)]
+/// This emitter's draw instance within its shared simulation batch.
+#[derive(Debug, Component, PartialEq)]
 pub(crate) struct EffectDrawBatch {
-    /// Index of the [`EffectBatch`] in the [`SortedEffectBatches`] this draw
-    /// batch is part of.
-    ///
-    /// Note: currently there's a 1:1 mapping between effect batch and draw
-    /// batch.
     pub effect_batch_index: EffectBatchIndex,
+    pub effect_index: usize,
     /// Position of the emitter so we can compute distance to camera.
     pub translation: Vec3,
     /// Transform used for distance sorting particles in local simulation space.
     pub transform: GlobalTransform,
-    /// The main-world entity that contains this effect.
-    #[allow(dead_code)]
-    pub main_entity: MainEntity,
 }
 
 impl EffectBatch {
@@ -762,7 +752,7 @@ impl EffectBatch {
         cached_effect_events: Option<&CachedEffectEvents>,
         cached_child_info: Option<&CachedChildInfo>,
         spawner_index: u32,
-        input: &mut BatchInput,
+        input: &BatchInput,
         draw_indirect_buffer_row_index: BufferTableId,
         metadata_table_id: BufferTableId,
         property_key: PropertyBindGroupKey,

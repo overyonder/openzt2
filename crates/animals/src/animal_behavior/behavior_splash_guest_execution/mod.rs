@@ -7,11 +7,11 @@ use openzt2_game_assets::{
     },
 };
 use openzt2_game_data::{
+    AssetId,
     animation::animation_text_key::{
         AuthoredAnimationSurfaceEffectKind, AuthoredAnimationTextAction,
     },
     behavior::action::token::BehaviorTokenRecipient,
-    AssetId,
 };
 use openzt2_world_state::{
     animation_graph::{
@@ -38,11 +38,11 @@ use openzt2_zoo_state::{
     aquatic::aquatic_simulation_types::TankGeometry,
     audio::audio_playback_message_types::PlayPositionedAudioCue,
     behavior_task_execution_types::{
-        running_actions::{
-            BehaviorInstructionId, RunBehaviorSplashGuest, RunningBehaviorInstruction,
-            WhenBehaviorAction,
-        },
         BehaviorTaskExecutionState, PendingBehaviorTaskFailure,
+        running_actions::{
+            RestoredSplashAnimation, RunBehaviorSplashGuest, RunningBehaviorInstruction,
+            SplashAnimation, SplashAnimationSeek, WhenBehaviorAction,
+        },
     },
     guests::guest_simulation_types::Guest,
     habitat::habitat_types::HabitatMember,
@@ -50,13 +50,6 @@ use openzt2_zoo_state::{
 };
 
 use super::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation;
-
-#[derive(Component)]
-struct SplashAnimation {
-    step: BehaviorInstructionId,
-    request: usize,
-    emitted: bool,
-}
 
 #[derive(SystemParam)]
 struct SplashEffects<'w, 's> {
@@ -105,14 +98,18 @@ pub(super) fn register(app: &mut App) {
 fn start_splash(
     activation: On<WhenBehaviorAction<RunBehaviorSplashGuest>>,
     clock: Single<&ZooClock>,
-    scenes: Query<(&RunBehaviorSplashGuest, &RunningBehaviorInstruction)>,
+    scenes: Query<(
+        &RunBehaviorSplashGuest,
+        &RunningBehaviorInstruction,
+        Option<&RestoredSplashAnimation>,
+    )>,
     mut playback: MessageWriter<AnimationClipPlaybackRequest>,
     mut options: MessageWriter<AnimationClipActionOptions>,
     mut effects: SplashEffects,
     mut commands: Commands,
 ) {
     let actor = activation.entity;
-    let Ok((action, step)) = scenes.get(actor) else {
+    let Ok((action, step, restored)) = scenes.get(actor) else {
         return;
     };
     if let Some(animation) = &action.0.animation {
@@ -132,11 +129,21 @@ fn start_splash(
             interrupts_current_animation: action.0.interrupts_animation,
             interruptible: false,
         });
-        commands.entity(actor).insert(SplashAnimation {
+        let mut actor_commands = commands.entity(actor);
+        actor_commands.insert(SplashAnimation {
             step: step.id(),
             request,
-            emitted: false,
+            emitted: restored.is_some_and(|restored| restored.emitted),
         });
+        if let Some(restored) = restored {
+            if restored.seek_seconds.is_finite() && restored.seek_seconds > 0.0 {
+                actor_commands.insert(SplashAnimationSeek {
+                    request,
+                    seconds: restored.seek_seconds,
+                });
+            }
+            actor_commands.remove::<RestoredSplashAnimation>();
+        }
     } else if effects.emit(actor, step, action, None, None, clock.tick, &mut commands) {
         step.complete(actor, clock.tick, &mut commands);
     } else {
@@ -428,5 +435,5 @@ fn finish_splash_animations(
 fn clear_splash_animation(removed: On<Remove<RunBehaviorSplashGuest>>, mut commands: Commands) {
     commands
         .entity(removed.entity)
-        .try_remove::<SplashAnimation>();
+        .try_remove::<(SplashAnimation, SplashAnimationSeek)>();
 }

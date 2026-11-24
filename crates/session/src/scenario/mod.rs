@@ -4,6 +4,7 @@ mod challenge_offer_lua_validation;
 mod challenge_offer_presentation;
 pub mod challenge_offer_types;
 mod profile_scenario_variable_application;
+mod scenario_biome_cell_counts;
 mod scenario_goal_and_challenge_ui_action_routing;
 mod scenario_goal_panel_presentation;
 pub(crate) mod scenario_group_completion;
@@ -56,8 +57,13 @@ pub struct ScenarioPlugin;
 impl Plugin for ScenarioPlugin {
     fn build(&self, app: &mut App) {
         scenario_lua_ui::register(app);
+        scenario_biome_cell_counts::register(app);
         scenario_lua_entity_commands::register(app);
-        app.init_non_send::<scenario_lua_types::ScenarioLuaVirtualMachineContexts>()
+        app.register_required_components::<
+            openzt2_zoo_state::scenario::scenario_session_types::ScenarioDocument,
+            scenario_lua_types::ScenarioLuaContext,
+        >()
+            .add_observer(scenario_lua_virtual_machine_invalidation::release_removed_scenario_lua_context)
             .init_resource::<openzt2_zoo_state::progression::profile_scenario_variables::ProfileScenarioVariables>()
             .add_message::<openzt2_zoo_state::progression::profile_scenario_variables::SetProfileScenarioVariable>()
             .add_message::<openzt2_zoo_state::progression::profile_scenario_variables::PersistProfileScenarioVariables>()
@@ -111,7 +117,6 @@ impl Plugin for ScenarioPlugin {
                     scenario_instantiation::
                         initialize_scenario_challenge_random_number_generator,
                 )
-                    .chain()
                     .in_set(GameSet::Intent)
                     .run_if(in_state(GamePhase::InGame)),
             )
@@ -136,14 +141,13 @@ impl Plugin for ScenarioPlugin {
                         apply_mode_scenario_ui_modifications_to_projected_nodes,
                     challenge_offer_presentation::project_authored_challenge_panel_text,
                     challenge_offer_presentation::reopen_restored_challenge_panel,
-                    scenario_goal_panel_presentation::
-                        set_authored_scenario_goal_panel_row_counts,
-                    scenario_goal_panel_presentation::
-                        connect_authored_scenario_goal_rows_to_live_objectives,
-                    scenario_goal_panel_presentation::
-                        apply_scenario_goal_panel_filters_to_projected_rows,
+                    scenario_goal_panel_presentation::size_and_bind_authored_scenario_goal_rows,
+                    scenario_goal_panel_presentation::project_changed_scenario_goal_rows
+                        .after(scenario_goal_panel_presentation::size_and_bind_authored_scenario_goal_rows)
+                        .after_ignore_deferred(scenario_rule_visibility::show_requested_scenario_rules),
+                    scenario_goal_panel_presentation::project_scenario_description_visibility
+                        .after(scenario_goal_panel_presentation::size_and_bind_authored_scenario_goal_rows),
                 )
-                    .chain()
                     .in_set(GameSet::Presentation)
                     .run_if(in_state(GamePhase::InGame)),
             )
@@ -184,8 +188,7 @@ impl Plugin for ScenarioPlugin {
                     apply_terminal_scenario_results_and_remove_completed_challenges
                     .in_set(ScenarioFixedUpdateStage::ApplyTerminalScenarioResults)
                     .run_if(in_state(GamePhase::InGame)),
-            )
-            .add_systems(Update, scenario_lua_virtual_machine_invalidation::remove_unloaded_scenario_lua_contexts);
+            );
     }
 }
 

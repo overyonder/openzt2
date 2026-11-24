@@ -1,12 +1,17 @@
 //! Debug-level trace of what holds each guest between task selections.
 use openzt2_zoo_state::guests::guest_simulation_types::GuestNeedTriggers;
 
-use bevy::{ecs::entity::EntityHashMap, prelude::*};
+use bevy::{
+    ecs::{entity::EntityHashSet, system::SystemParam},
+    prelude::*,
+};
 use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
 use openzt2_game_data::AssetId;
 
 use openzt2_world_state::animation_graph::animation_graph_playback_state_types::AnimationGraphPlaybackState;
-use openzt2_world_state::animation_graph::animation_presentation_relationship_types::AnimationPresentationOwner;
+use openzt2_world_state::animation_graph::animation_presentation_relationship_types::{
+    AnimationPresentationOwner, AnimationPresentations,
+};
 use openzt2_world_state::animation_graph::model_animation_asset_binding_types::ModelAnimationAttachmentResolved;
 use openzt2_world_state::animation_graph::model_animation_asset_binding_types::PendingModelAnimationAssets;
 use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackController;
@@ -30,6 +35,48 @@ use openzt2_zoo_state::transport_tours::transport_rider_types::WaitingForTranspo
 use super::guest_simulation_types::{Guest, GuestDestination, GuestPhase, Viewing};
 use super::guest_task_need_facts::GuestTaskNeedFacts;
 
+#[derive(SystemParam)]
+pub(super) struct RemovedGuestProgress<'w, 's> {
+    tasks: RemovedComponents<'w, 's, BehaviorTaskExecutionState>,
+    routes: RemovedComponents<'w, 's, Destination>,
+    destinations: RemovedComponents<'w, 's, GuestDestination>,
+    services: RemovedComponents<'w, 's, ServiceReservation>,
+    viewing: RemovedComponents<'w, 's, Viewing>,
+    sets: RemovedComponents<'w, 's, PendingBehaviorSet>,
+    transport: RemovedComponents<'w, 's, WaitingForTransport>,
+    riders: RemovedComponents<'w, 's, TransportRider>,
+    synchronized: RemovedComponents<'w, 's, SynchronizedBehaviorParticipant>,
+    clips: RemovedComponents<'w, 's, PendingBehaviorAnimationClipCompletion>,
+    docking: RemovedComponents<'w, 's, PendingBehaviorDockingCompletion>,
+    moving: RemovedComponents<'w, 's, PendingBehaviorMoveCompletion>,
+    failing: RemovedComponents<'w, 's, PendingBehaviorTaskFailure>,
+    presentations: RemovedComponents<'w, 's, AnimationPresentations>,
+}
+
+impl RemovedGuestProgress<'_, '_> {
+    fn read(&mut self) -> impl Iterator<Item = Entity> + '_ {
+        self.tasks
+            .read()
+            .chain(self.routes.read())
+            .chain(self.destinations.read())
+            .chain(self.services.read())
+            .chain(self.viewing.read())
+            .chain(self.sets.read())
+            .chain(self.transport.read())
+            .chain(self.riders.read())
+            .chain(self.synchronized.read())
+            .chain(self.clips.read())
+            .chain(self.docking.read())
+            .chain(self.moving.read())
+            .chain(self.failing.read())
+            .chain(self.presentations.read())
+    }
+}
+
+pub(super) fn guest_progress_diagnostics_enabled() -> bool {
+    bevy::log::tracing::enabled!(bevy::log::Level::DEBUG)
+}
+
 /// Logs each guest's phase, current task frame, blocking components and
 /// hunger whenever any of them changes, so a guest that never returns to task
 /// selection shows what it is still waiting for.
@@ -37,6 +84,35 @@ use super::guest_task_need_facts::GuestTaskNeedFacts;
 pub(super) fn report_guest_task_progress_changes(
     clock: Single<&ZooClock>,
     documents: Res<Assets<BehaviorDocumentAsset>>,
+    changed: Query<
+        Entity,
+        (
+            With<Guest>,
+            Or<(
+                Changed<GuestPhase>,
+                Changed<BehaviorTaskExecutionState>,
+                Changed<GuestNeedTriggers>,
+                Added<Destination>,
+                Added<GuestDestination>,
+                Added<ServiceReservation>,
+                Added<Viewing>,
+                Added<PendingBehaviorSet>,
+                Added<WaitingForTransport>,
+                Added<TransportRider>,
+                Added<SynchronizedBehaviorParticipant>,
+                Changed<AnimationPresentations>,
+                Or<(
+                    Added<PendingBehaviorAnimationClipCompletion>,
+                    Added<PendingBehaviorDockingCompletion>,
+                    Added<PendingBehaviorMoveCompletion>,
+                    Added<PendingBehaviorTaskFailure>,
+                    Added<PrefabPresentationHydrated>,
+                    Changed<InheritedVisibility>,
+                )>,
+            )>,
+        ),
+    >,
+    mut removed: RemovedGuestProgress,
     guests: Query<
         (
             Entity,
@@ -64,12 +140,28 @@ pub(super) fn report_guest_task_progress_changes(
         With<Guest>,
     >,
     controllers: Query<
-        &AnimationPresentationOwner,
+        (),
         (
             With<AnimationPlaybackController>,
             With<AnimationGraphPlaybackState>,
         ),
     >,
+    presentations: Query<&AnimationPresentations>,
+    changed_models: Query<
+        (Entity, Option<&AnimationPresentationOwner>),
+        (
+            With<PrefabModel>,
+            Or<(
+                Added<PrefabModel>,
+                Added<ModelExpanded>,
+                Added<PendingModelAnimationAssets>,
+                Added<ModelAnimationAttachmentResolved>,
+                Added<AnimationPlaybackController>,
+                Added<AnimationGraphPlaybackState>,
+            )>,
+        ),
+    >,
+    parents: Query<&ChildOf>,
     children: Query<&Children>,
     models: Query<(
         Has<PrefabModel>,
@@ -80,13 +172,24 @@ pub(super) fn report_guest_task_progress_changes(
         Has<AnimationGraphPlaybackState>,
     )>,
     hydrated: Query<(Has<PrefabPresentationHydrated>, &InheritedVisibility)>,
-    mut reported: Local<EntityHashMap<String>>,
 ) {
-    if !bevy::log::tracing::enabled!(bevy::log::Level::DEBUG) {
-        return;
+    let mut affected: EntityHashSet = changed.iter().chain(removed.read()).collect();
+    for (model, owner) in &changed_models {
+        if let Some(guest) = owner
+            .map(|owner| owner.gameplay_entity)
+            .filter(|&guest| guests.contains(guest))
+            .or_else(|| {
+                parents
+                    .iter_ancestors::<ChildOf>(model)
+                    .find(|&ancestor| guests.contains(ancestor))
+            })
+        {
+            affected.insert(guest);
+        }
     }
-    reported.retain(|guest, _| guests.contains(*guest));
-    for (guest, phase, task, needs, triggers, blockers, waits) in &guests {
+    for (guest, phase, task, needs, triggers, blockers, waits) in
+        guests.iter_many(&affected).matched()
+    {
         let task = task.map(|task| {
             let name = (task.phase != BehaviorTaskExecutionPhase::Set)
                 .then(|| {
@@ -123,23 +226,17 @@ pub(super) fn report_guest_task_progress_changes(
             .get(guest)
             .map(|(hydrated, visible)| (hydrated, visible.get()))
             .ok();
-        let has_controller = controllers
-            .iter()
-            .any(|owner| owner.gameplay_entity == guest);
-        let signature = format!(
+        let has_controller =
+            AnimationPresentations::for_subject(guest, presentations.get(guest).ok())
+                .any(|controller| controllers.contains(controller));
+        debug!(
+            ?guest,
+            tick = clock.tick,
             "phase={phase:?} controller={has_controller} task={task:?} \
              (destination, guest_destination, service, viewing, pending_set, waiting_transport, rider, synchronized)={blockers:?} \
              (clip, docking, move, failure)={waits:?} hunger_percent_triggered={hunger:?} \
              (hydrated, visible)={presentation:?} \
              (models, expanded, pending, resolved, controller, graph)={model_pipeline:?}"
         );
-        if reported.get(&guest) != Some(&signature) {
-            debug!(
-                ?guest,
-                tick = clock.tick,
-                "guest task progress: {signature}"
-            );
-            reported.insert(guest, signature);
-        }
     }
 }
