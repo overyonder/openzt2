@@ -156,6 +156,7 @@ pub(crate) fn project_live_name_to_selected_entity_panel(
         };
         let Some(subject_name) = live_name
             .map(|name| name.as_str().to_owned())
+            .filter(|name| !name.is_empty())
             .or_else(|| generated_person_name(world_definitions?, generated?))
         else {
             continue;
@@ -200,6 +201,7 @@ pub(crate) fn project_selected_entity_name_to_authored_editable_fields(
             .and_then(|(subject, live_name, generated)| {
                 live_name
                     .map(|name| name.as_str().to_owned())
+                    .filter(|name| !name.is_empty())
                     .or_else(|| generated_person_name(world_definitions?, generated?))
                     .or_else(|| {
                         let definition = world_definitions?.find_object(subject.definition)?;
