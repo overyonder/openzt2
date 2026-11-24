@@ -13,7 +13,8 @@ use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocum
 use openzt2_interface_state::ui::authored_ui_visual_types::UiVisualLayer;
 use openzt2_interface_state::ui::pointer_capture_types::UiPointerInteraction;
 use openzt2_ui::authored_tooltip_presentation::UiShortTooltipKey;
-use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
+use openzt2_game_data::AssetId;
+use openzt2_interface_state::information::entity_selection_types::Inspectable;
 use openzt2_zoo_state::animal_behavior::interaction_container_occupancy::InteractionContainerOccupancy;
 
 /// The selected entity's carried items that have a definition, in the order
@@ -21,11 +22,11 @@ use openzt2_zoo_state::animal_behavior::interaction_container_occupancy::Interac
 fn carried_items(
     occupancy: &InteractionContainerOccupancy,
     holder: Entity,
-    definitions: &Query<&DefinitionId>,
-) -> Vec<DefinitionId> {
+    definitions: &Query<&Inspectable>,
+) -> Vec<AssetId> {
     occupancy
         .members_of_container(holder)
-        .filter_map(|item| definitions.get(item).ok().copied())
+        .filter_map(|item| definitions.get(item).ok().map(|item| item.definition))
         .collect()
 }
 
@@ -33,7 +34,7 @@ pub(crate) fn request_selected_entity_inventory_row_counts(
     occupancy: Res<InteractionContainerOccupancy>,
     lists: Query<(Entity, &UiListPolicy, &UiDocumentOwner)>,
     panels: Query<&InfoPanel>,
-    items: Query<&DefinitionId>,
+    items: Query<&Inspectable>,
     mut requested: Local<bevy::platform::collections::HashMap<Entity, u16>>,
     mut row_count_requests: MessageWriter<SetUiListRowCount>,
 ) {
@@ -60,7 +61,7 @@ pub(crate) fn project_selected_entity_inventory_to_list_rows(
     active_world_definitions: Res<WorldDefinitions>,
     lists: Query<(&UiListPolicy, &UiDocumentOwner)>,
     panels: Query<&InfoPanel>,
-    items: Query<&DefinitionId>,
+    items: Query<&Inspectable>,
     mut rows: Query<(
         Entity,
         &UiListRow,
@@ -88,7 +89,7 @@ pub(crate) fn project_selected_entity_inventory_to_list_rows(
                     .get(usize::from(row.index))
                     .copied()
             })
-            .and_then(|item| definitions.find_object(item.0))
+            .and_then(|item| definitions.find_object(item))
         else {
             continue;
         };

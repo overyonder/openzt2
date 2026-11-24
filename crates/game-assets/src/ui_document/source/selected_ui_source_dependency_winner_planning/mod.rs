@@ -198,8 +198,8 @@ pub(super) fn plan_selected_ui_source_dependency_winners_and_image_dimensions(
         // through the same selected archive overlay as explicit UI document
         // references so the typed list retains the winning Bevy dependency.
         if source_document_path == "ui/layout/entityinfo.xml" {
-            // The thought list's rows come from native code the same way.
-            for row in ["needsitem.xml", "thoughtitem.xml"] {
+            // The thought and inventory lists' rows come from native code the same way.
+            for row in ["needsitem.xml", "thoughtitem.xml", "iconitem.xml"] {
                 if let Some(selected_row_path) =
                     asset_archives.resolve_ui_reference(Path::new(&source_document_path), row)
                 {
