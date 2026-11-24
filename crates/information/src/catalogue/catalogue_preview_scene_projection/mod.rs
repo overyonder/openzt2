@@ -31,6 +31,7 @@ use openzt2_world::world_spawn::prefab_presentation_render_tree::spawn_prefab_re
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabModel;
 
 use openzt2_interface_state::information::catalogue_types::SelectedCatalogueEntry;
+use openzt2_interface_state::information::entity_selection_types::{InfoPanel, Inspectable};
 
 pub(super) const CATALOGUE_PREVIEW_SCENE_RENDER_LAYER: usize = 29;
 
@@ -83,6 +84,10 @@ pub(crate) struct CataloguePreviewAnimationAttachmentConsidered;
 /// by the authored buy-details panel. The scene is presentation-only: the
 /// selected definition remains the sole catalogue state and no gameplay
 /// entity, physics body, or copied object record is created.
+///
+/// An information panel's `Entity Image Display` shows the same render for a
+/// subject whose `iconObj` names a binder, such as a guest's head: the original
+/// takes the image from the object's icon component, which draws that binder.
 pub(crate) fn project_selected_catalogue_entry_into_preview_scene(
     mut commands: Commands,
     mut images: ResMut<Assets<Image>>,
@@ -91,6 +96,8 @@ pub(crate) fn project_selected_catalogue_entry_into_preview_scene(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     selected_entry: Res<SelectedCatalogueEntry>,
+    information_panels: Query<&InfoPanel>,
+    inspectables: Query<&Inspectable>,
     mut nodes: Query<(
         Entity,
         &UiDocumentOwner,
@@ -101,15 +108,35 @@ pub(crate) fn project_selected_catalogue_entry_into_preview_scene(
     )>,
 ) {
     let definitions = active_definitions.get(&definitions);
-    for (node, _owner, binding, inherited_visibility, current, image_node) in &mut nodes {
-        if !matches!(
-            &binding.0,
-            UiImagePropertyBindingSource::CatalogueEntryPreview
-        ) {
-            continue;
-        }
+    for (node, owner, binding, inherited_visibility, current, image_node) in &mut nodes {
+        let definition = match &binding.0 {
+            UiImagePropertyBindingSource::CatalogueEntryPreview => selected_entry.0,
+            UiImagePropertyBindingSource::SelectedEntityIcon => {
+                let portrait = information_panels
+                    .get(owner.0)
+                    .and_then(|panel| inspectables.get(panel.subject))
+                    .ok()
+                    .map(|subject| subject.definition)
+                    .filter(|definition| {
+                        definitions
+                            .and_then(|definitions| definitions.find_object(*definition))
+                            .is_some_and(|object| object.catalogue_preview_prefab.is_some())
+                    });
+                // Other subjects show their flat icon on the node's visual layer.
+                if portrait.is_none() {
+                    if let Some(current) = current {
+                        commands.entity(current.scene).despawn();
+                        commands
+                            .entity(node)
+                            .remove::<(CataloguePreviewScene, ImageNode)>();
+                    }
+                    continue;
+                }
+                portrait
+            }
+            _ => continue,
+        };
         let mut image_node = image_node;
-        let definition = selected_entry.0;
         let Some(definition) = definition else {
             if let Some(current) = current {
                 commands.entity(current.scene).despawn();

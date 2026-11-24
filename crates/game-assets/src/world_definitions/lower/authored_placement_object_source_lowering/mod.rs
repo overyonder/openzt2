@@ -403,17 +403,29 @@ pub(super) fn bind_authored_placement_object(
         .and_then(|data| data.attribute_named_any(&["location"]))
         .map(id)
         .unwrap_or_default();
-    let placement_data = record.descendant_named("ZTPlacementData");
-    let preview_offset_cm = placement_data
-        .and_then(|data| data.attribute_named_any(&["icon3Doffset"]))
-        .map(parse_f32_triplet)
-        .transpose()?
-        .unwrap_or_default()
-        .map(|metres| (metres * 100.0).round() as i16);
-    let preview_scale = placement_data
-        .and_then(|data| data.attribute_named_any(&["icon3Dscale"]))
-        .and_then(parse_blue_fang_source_numeric_lexeme)
-        .unwrap_or(1.0);
+    // A guest look inherits its icon placement from its family.
+    let preview_offset_cm =
+        authored_type_family_component_attribute(record, "ZTPlacementData", "icon3Doffset")
+            .map(parse_f32_triplet)
+            .transpose()?
+            .unwrap_or_default()
+            .map(|metres| (metres * 100.0).round() as i16);
+    let preview_scale =
+        authored_type_family_component_attribute(record, "ZTPlacementData", "icon3Dscale")
+            .and_then(parse_blue_fang_source_numeric_lexeme)
+            .unwrap_or(1.0);
+    // `iconObj` names the binder the original draws as the object's icon, such
+    // as a guest's `headObj`; the information panel shows it as a portrait.
+    let catalogue_preview_prefab =
+        authored_type_family_component_attribute(record, "ZTPlacementData", "iconObj")
+            .filter(|binder| !source_document_names_are_semantically_equal(binder, "mainObj"))
+            .and_then(|binder| {
+                let binder = AssetId::from_key(&canonicalize_source_document_record_key(binder));
+                named_physical_presentations
+                    .iter()
+                    .find(|presentation| presentation.name == binder)
+                    .map(|presentation| presentation.prefab)
+            });
     // A building's ruin (`rubble_xt_1`) or a tree's stump has no placement
     // data of its own; an animal puts it down where the object stood, sized
     // to its model.
@@ -557,7 +569,7 @@ pub(super) fn bind_authored_placement_object(
         prefab,
         presentation_attachments,
         named_physical_presentations,
-        catalogue_preview_prefab: None,
+        catalogue_preview_prefab,
         interaction_slots,
         transactions,
         prefab_scale: presentation_scale,

@@ -81,7 +81,9 @@ pub(crate) fn project_authored_definition_name_to_selected_entity_panel(
                 replace_projected_ui_text_if_changed(&mut text.0, localized_definition_name);
             }
         }
+        // A portrait subject's image is its rendered icon binder instead.
         let icon_image = world_definition
+            .filter(|definition| definition.catalogue_preview_prefab.is_none())
             .and_then(|definition| world_definitions?.texture_image(AssetId(definition.icon.0)));
         for (entity, document_owner, image_binding) in &image_nodes {
             if document_owner.0 != panel_entity
