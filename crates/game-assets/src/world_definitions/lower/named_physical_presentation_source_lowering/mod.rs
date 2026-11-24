@@ -553,20 +553,21 @@ mod tests {
                 .ok_or_else(|| std::io::Error::other("stand produced no document"))?;
             Ok(document.objects[0].simple_lod_distances_m.clone())
         };
-        // Unauthored, the game's own distances.
+        // Unauthored, the game's own distances, doubled.
         assert_eq!(
             distances(r#"<BFSimpleLODComponent modelfile="stand.nif"/>"#)?,
             Some(vec![
-                0.0, 15.0, 40.0, 65.0, 90.0, 115.0, 130.0, 145.0, 160.0, 175.0
+                0.0, 30.0, 80.0, 130.0, 180.0, 230.0, 260.0, 290.0, 320.0, 350.0
             ])
         );
-        // As the shipped hot dog stands author them: the larger of each pair,
-        // and 0 past the authored entries.
+        // As the shipped hot dog stands author them: the larger of each
+        // doubled `switch` and its `minSwitch`, and 0 past the authored
+        // entries.
         assert_eq!(
             distances(
-                r#"<BFSimpleLODComponent modelfile="stand.nif" switch="7 18 36" minSwitch="0 0 40"/>"#
+                r#"<BFSimpleLODComponent modelfile="stand.nif" switch="7 18 36" minSwitch="0 0 80"/>"#
             )?,
-            Some(vec![0.0, 18.0, 40.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+            Some(vec![0.0, 36.0, 80.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
         );
         assert_eq!(
             distances(r#"<BFSceneGraphComponent modelfile="stand.nif"/>"#)?,
@@ -745,6 +746,12 @@ mod tests {
 /// one before plus 1 for an invalid entry and 0 past its last
 /// (`FUN_007718b4`); `minSwitch` takes the one before for an invalid entry and
 /// 0 past its last (`FUN_0077191f`). Another component gives none.
+///
+/// `world/lodScales.xml` then scales each `switch` entry, not `minSwitch`, by
+/// its `lodPriority` column (`FUN_007451b1`, `FUN_007912d6`). The game starts
+/// on the table's first row, for a full frame rate, and only drops when it
+/// cannot keep up. No shipped object authors `lodPriority`, so every one
+/// takes column `two` (its default), 2.0 in that row.
 pub(super) fn simple_lod_distances(component: &OrderedSourceDocumentNode) -> Option<Vec<f32>> {
     if !source_document_names_are_semantically_equal(
         component.name.as_str(),
@@ -753,6 +760,7 @@ pub(super) fn simple_lod_distances(component: &OrderedSourceDocumentNode) -> Opt
         return None;
     }
     const LEVELS: usize = 10;
+    const LOD_SCALE: f32 = 2.0;
     let authored = |name: &str| {
         component.attribute_named_any(&[name]).map(|values| {
             values
@@ -791,7 +799,7 @@ pub(super) fn simple_lod_distances(component: &OrderedSourceDocumentNode) -> Opt
         switch
             .iter()
             .zip(min_switch)
-            .map(|(switch, min_switch)| switch.max(min_switch))
+            .map(|(switch, min_switch)| (switch * LOD_SCALE).max(min_switch))
             .collect(),
     )
 }
