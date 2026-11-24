@@ -79,6 +79,7 @@ fn document() -> WorldDefinitionDocument {
             zoopedia_subject: id,
             prefab: id,
             catalogue_preview_prefab: None,
+            texture_replacement_sets: Vec::new(),
             presentation_attachments: vec![],
             named_physical_presentations: vec![],
             interaction_slots: vec![],

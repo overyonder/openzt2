@@ -48,6 +48,7 @@ pub(super) fn install_fence_definition_with_broken_variant(
             zoopedia_subject: AssetId::default(),
             prefab: AssetId::default(),
             catalogue_preview_prefab: None,
+            texture_replacement_sets: Vec::new(),
             presentation_attachments: Vec::new(),
             named_physical_presentations: Vec::new(),
             interaction_slots: Vec::new(),

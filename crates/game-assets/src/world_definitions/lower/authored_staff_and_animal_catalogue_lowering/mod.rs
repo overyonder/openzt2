@@ -696,7 +696,7 @@ fn lower_authored_staff_tank_gate_animations(
     })
 }
 
-fn lower_authored_texture_replacement_set(
+pub(super) fn lower_authored_texture_replacement_set(
     set: &OrderedSourceDocumentNode,
 ) -> WorldObjectTextureReplacementSet {
     let named = |element: &OrderedSourceDocumentNode, name: &str| {
@@ -1051,6 +1051,7 @@ pub(super) fn bind_authored_staff_catalogue(
         zoopedia_subject: authored_zoopedia_subject_from_world_object_record(record)?,
         prefab: AssetId::from_virtual_path(prefab),
         catalogue_preview_prefab,
+        texture_replacement_sets: Vec::new(),
         presentation_attachments: Vec::new(),
         named_physical_presentations: Vec::new(),
         interaction_slots: super::interaction_container_source_lowering::lower_authored_world_object_interaction_slots(record)?,
@@ -1291,6 +1292,7 @@ pub(super) fn bind_authored_animal_catalogue(
         presentation_attachments: Vec::new(),
         named_physical_presentations: Vec::new(),
         catalogue_preview_prefab: None,
+        texture_replacement_sets: Vec::new(),
         interaction_slots: super::interaction_container_source_lowering::lower_authored_world_object_interaction_slots(record)?,
         container_quantity: None,
         transactions: super::authored_transaction_lowering::lower_object_transactions(record)?,

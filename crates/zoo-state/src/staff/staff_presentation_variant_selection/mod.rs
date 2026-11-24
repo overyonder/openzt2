@@ -7,6 +7,7 @@ use bevy::prelude::*;
 use openzt2_game_data::world_definitions::staff_management::{
     StaffPresentationVariant, StaffRoleDefinition,
 };
+use openzt2_game_data::world_definitions::world_objects::WorldObjectTextureReplacementSet;
 use openzt2_game_data::AssetId;
 
 use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
@@ -74,11 +75,11 @@ pub fn staff_body_prefab(
 
 /// One weighted group index per replacement set.
 fn drawn_texture_replacement_groups(
-    variant: &StaffPresentationVariant,
+    sets: &[WorldObjectTextureReplacementSet],
     persistent_id: u64,
 ) -> impl Iterator<Item = usize> + '_ {
     let mut bits = mix(persistent_id ^ 0x7465_7874_7572_6573);
-    variant.texture_replacement_sets.iter().map(move |set| {
+    sets.iter().map(move |set| {
         bits = mix(bits);
         let total = set
             .groups
@@ -121,10 +122,27 @@ pub fn attach_staff_presentation_variant(
             StaffAttachedHead,
         ));
     }
-    let textures = variant
-        .texture_replacement_sets
-        .iter()
-        .zip(drawn_texture_replacement_groups(variant, persistent_id))
+    let textures = drawn_texture_replacements(
+        &variant.texture_replacement_sets,
+        persistent_id,
+        definitions,
+    );
+    if !textures.is_empty() {
+        commands
+            .entity(staff)
+            .insert(PrefabTextureReplacements(textures));
+    }
+}
+
+/// The textures a persistent entity wears: one weighted group drawn from each
+/// replacement set, as a staff member's or a guest's look.
+pub fn drawn_texture_replacements(
+    sets: &[WorldObjectTextureReplacementSet],
+    persistent_id: u64,
+    definitions: WorldDefinitionsView<'_>,
+) -> Box<[(Box<str>, Handle<Image>)]> {
+    sets.iter()
+        .zip(drawn_texture_replacement_groups(sets, persistent_id))
         .flat_map(|(set, group)| &set.groups[group].items)
         .filter_map(|item| {
             Some((
@@ -132,10 +150,5 @@ pub fn attach_staff_presentation_variant(
                 definitions.texture_image(item.image)?,
             ))
         })
-        .collect::<Box<[_]>>();
-    if !textures.is_empty() {
-        commands
-            .entity(staff)
-            .insert(PrefabTextureReplacements(textures));
-    }
+        .collect()
 }
