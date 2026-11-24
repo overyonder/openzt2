@@ -715,13 +715,20 @@ pub(super) fn lower_authored_texture_replacement_set(
                 items: group
                     .element_children()
                     .filter(|item| named(item, "item"))
-                    .filter(|item| {
-                        item.attribute_named_any(&["layer"]).is_none_or(|layer| {
-                            source_document_names_are_semantically_equal(layer, "base")
-                        })
-                    })
                     .filter_map(|item| {
+                        let layer = item.attribute_named_any(&["layer"]);
+                        let decal = layer.is_some_and(|layer| {
+                            source_document_names_are_semantically_equal(layer, "decal0")
+                        });
+                        if !decal
+                            && layer.is_some_and(|layer| {
+                                !source_document_names_are_semantically_equal(layer, "base")
+                            })
+                        {
+                            return None;
+                        }
                         Some(WorldObjectTextureReplacement {
+                            decal,
                             material: item
                                 .attribute_named_any(&["material"])?
                                 .trim()

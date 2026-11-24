@@ -193,9 +193,10 @@ fn a_ruin_or_stump_can_be_put_down_although_it_has_no_placement_data(
 fn a_look_takes_its_texture_sets_from_its_binders_and_family(
 ) -> Result<(), Box<dyn std::error::Error>> {
     // As a guest look authors its clothes on `mainObj` and its face on
-    // `headObj`, and only base-layer items replace a texture.
+    // `headObj`. A `decal0` item is a print drawn over its material's base
+    // texture; other layers are left out.
     let documents = [
-        ("entities/look.xml", r#"<BFTypedBinder binderType="Look"><types><entity><scenery><Look/></scenery></entity></types><shared><BFPhysObj/></shared><binder><BFNamedBinder binderName="mainObj"><shared><BFSharedRandomTextureInfo><replacementSet><group weight="1"><item material="Top" image="top_a.dds" layer="base"/></group><group weight="0.5"><item material="top" image="top_b.dds"/><item material="top" image="print.dds" layer="decal0"/></group></replacementSet></BFSharedRandomTextureInfo></shared></BFNamedBinder><BFNamedBinder binderName="headObj"><shared><BFSharedRandomTextureInfo><replacementSet><group><item material="face" image="face.dds" layer="base"/></group></replacementSet></BFSharedRandomTextureInfo></shared></BFNamedBinder></binder></BFTypedBinder>"#),
+        ("entities/look.xml", r#"<BFTypedBinder binderType="Look"><types><entity><scenery><Look/></scenery></entity></types><shared><BFPhysObj/></shared><binder><BFNamedBinder binderName="mainObj"><shared><BFSharedRandomTextureInfo><replacementSet><group weight="1"><item material="Top" image="top_a.dds" layer="base"/></group><group weight="0.5"><item material="top" image="top_b.dds"/><item material="top" image="print.dds" layer="decal0"/><item material="top" image="other.dds" layer="decal1"/></group></replacementSet></BFSharedRandomTextureInfo></shared></BFNamedBinder><BFNamedBinder binderName="headObj"><shared><BFSharedRandomTextureInfo><replacementSet><group><item material="face" image="face.dds" layer="base"/></group></replacementSet></BFSharedRandomTextureInfo></shared></BFNamedBinder></binder></BFTypedBinder>"#),
         ("entities/look_a.xml", r#"<BFTypedBinder binderType="Look_A"><types><entity><scenery><Look><Look_A/></Look></scenery></entity></types><shared><BFPhysObj/></shared></BFTypedBinder>"#),
     ].map(|(path, source)| parse_blue_fang_source_document(AssetPath::new(path), source.as_bytes()))
     .into_iter()
@@ -221,7 +222,7 @@ fn a_look_takes_its_texture_sets_from_its_binders_and_family(
                         group
                             .items
                             .iter()
-                            .map(|item| item.material.as_str())
+                            .map(|item| (item.material.as_str(), item.decal))
                             .collect::<Vec<_>>(),
                     )
                 })
@@ -231,8 +232,11 @@ fn a_look_takes_its_texture_sets_from_its_binders_and_family(
     assert_eq!(
         summary,
         [
-            vec![(1.0, vec!["top"]), (0.5, vec!["top"])],
-            vec![(1.0, vec!["face"])],
+            vec![
+                (1.0, vec![("top", false)]),
+                (0.5, vec![("top", false), ("top", true)])
+            ],
+            vec![(1.0, vec![("face", false)])],
         ]
     );
     Ok(())

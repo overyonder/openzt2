@@ -112,6 +112,10 @@ pub struct WorldObjectTextureReplacement {
     /// Lowercase source material name, matched against prefab renderables.
     pub material: String,
     pub image: AssetId,
+    /// `layer="decal0"`: drawn over the material's base texture through its
+    /// alpha, as a T-shirt's print, rather than replacing it.
+    #[serde(default)]
+    pub decal: bool,
 }
 
 #[allow(

@@ -393,23 +393,29 @@ pub(crate) fn initialize_spawned_guests(
         };
         let initial_needs = needs.map(&mut initial_need_value);
         let mut entity_commands = commands.entity(entity);
-        // A look draws its clothes, skin and hair as a staff member's does.
-        let textures = definitions
-            .find_object(definition.object)
-            .map(|object| {
+        // A look draws its clothes, skin, hair and prints as a staff member's
+        // look draws its textures.
+        if let Some(object) = definitions.find_object(definition.object) {
+            let drawn = |decals| {
                 openzt2_zoo_state::staff::staff_presentation_variant_selection::drawn_texture_replacements(
                     &object.texture_replacement_sets,
                     id.0,
                     definitions,
+                    decals,
                 )
-            })
-            .unwrap_or_default();
-        if !textures.is_empty() {
-            entity_commands.insert(
-                openzt2_world_state::world_spawn::prefab_texture_replacements::PrefabTextureReplacements(
-                    textures,
-                ),
-            );
+            };
+            let textures = drawn(false);
+            if !textures.is_empty() {
+                entity_commands.insert(
+                    openzt2_world_state::world_spawn::prefab_texture_replacements::PrefabTextureReplacements(textures),
+                );
+            }
+            let decals = drawn(true);
+            if !decals.is_empty() {
+                entity_commands.insert(
+                    openzt2_world_state::world_spawn::prefab_texture_replacements::PrefabDecalTextures(decals),
+                );
+            }
         }
         entity_commands.insert((
             GuestRng(guest_rng),

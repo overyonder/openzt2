@@ -14,7 +14,9 @@ use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
 use openzt2_world_state::animation_playback::model_joint_attachment_binding::PendingModelJointAttachment;
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabPresentation;
-use openzt2_world_state::world_spawn::prefab_texture_replacements::PrefabTextureReplacements;
+use openzt2_world_state::world_spawn::prefab_texture_replacements::{
+    PrefabDecalTextures, PrefabTextureReplacements,
+};
 
 #[cfg(test)]
 mod tests;
@@ -122,28 +124,39 @@ pub fn attach_staff_presentation_variant(
             StaffAttachedHead,
         ));
     }
-    let textures = drawn_texture_replacements(
-        &variant.texture_replacement_sets,
-        persistent_id,
-        definitions,
-    );
+    let drawn = |decals| {
+        drawn_texture_replacements(
+            &variant.texture_replacement_sets,
+            persistent_id,
+            definitions,
+            decals,
+        )
+    };
+    let textures = drawn(false);
     if !textures.is_empty() {
         commands
             .entity(staff)
             .insert(PrefabTextureReplacements(textures));
     }
+    let decals = drawn(true);
+    if !decals.is_empty() {
+        commands.entity(staff).insert(PrefabDecalTextures(decals));
+    }
 }
 
 /// The textures a persistent entity wears: one weighted group drawn from each
-/// replacement set, as a staff member's or a guest's look.
+/// replacement set, as a staff member's or a guest's look. Base textures
+/// replace a material's own; decals draw over it.
 pub fn drawn_texture_replacements(
     sets: &[WorldObjectTextureReplacementSet],
     persistent_id: u64,
     definitions: WorldDefinitionsView<'_>,
+    decals: bool,
 ) -> Box<[(Box<str>, Handle<Image>)]> {
     sets.iter()
         .zip(drawn_texture_replacement_groups(sets, persistent_id))
         .flat_map(|(set, group)| &set.groups[group].items)
+        .filter(|item| item.decal == decals)
         .filter_map(|item| {
             Some((
                 item.material.clone().into_boxed_str(),
