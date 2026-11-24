@@ -4,8 +4,9 @@ use openzt2_zoo_state::animal_lifecycle::types::AnimalVariant;
 
 use crate::locomotion::animal_navigation_policy::AnimalNavigationPolicy;
 use crate::locomotion::fence_navigation_policy::FenceNavigationPolicy;
+use crate::locomotion::object_navigation_policy::ObjectNavigationPolicy;
 use crate::locomotion::pathfinding::{
-    ITERATIONS_PER_SLICE, LONG_PATH_ITERATIONS, RouteSearch, advance_route,
+    advance_route, RouteSearch, ITERATIONS_PER_SLICE, LONG_PATH_ITERATIONS,
 };
 use std::collections::{HashSet, VecDeque};
 
@@ -38,6 +39,7 @@ pub(super) fn plan_routes_for_changed_navigation_destinations(
     mut route_planning_scratch: Local<RouteScratch>,
     animal_policy: AnimalNavigationPolicy,
     fence_policy: FenceNavigationPolicy,
+    object_policy: ObjectNavigationPolicy,
     changed: Query<Entity, Changed<Destination>>,
     mut queue: Local<RouteQueue>,
     mut agents: Query<
@@ -131,7 +133,13 @@ pub(super) fn plan_routes_for_changed_navigation_destinations(
                 advance_route(
                     terrain_navigation_graph,
                     |from, to| {
-                        navigation_overlay
+                        object_policy.node_is_blocked(
+                            terrain_navigation_graph,
+                            to,
+                            global_transform.translation(),
+                            destination.world,
+                            navigation_agent.capabilities,
+                        ) || navigation_overlay
                             .fence_crossings(from, to)
                             .iter()
                             .any(|fence| {

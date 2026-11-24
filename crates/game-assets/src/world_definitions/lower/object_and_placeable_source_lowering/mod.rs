@@ -235,6 +235,7 @@ pub(super) fn bind_object(
         zoopedia_subject: authored_zoopedia_subject_from_world_object_record(record)?,
         prefab: asset(record, &["prefab", "model", "visual"]),
         catalogue_preview_prefab: None,
+        movement_blocking: Default::default(),
         presentation_attachments: Vec::new(),
         named_physical_presentations: Vec::new(),
         interaction_slots: super::interaction_container_source_lowering::lower_authored_world_object_interaction_slots(record)?,

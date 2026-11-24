@@ -55,6 +55,7 @@ fn marker_object(id: AssetId) -> WorldObjectDefinition {
         zoopedia_subject: AssetId::default(),
         prefab: AssetId::default(),
         catalogue_preview_prefab: None,
+        movement_blocking: Default::default(),
         presentation_attachments: Vec::new(),
         // Without an asset server no scene is registered, so the second
         // binder stands in for a scene that never resolves.

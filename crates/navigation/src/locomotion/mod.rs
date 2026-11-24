@@ -18,6 +18,7 @@ mod local_steering_calculation;
 mod navigation_agent_initialization;
 mod navigation_destination_request_execution;
 mod navigation_reachability_testing;
+mod object_navigation_policy;
 mod path_surface_navigation_projection;
 mod pathfinding;
 mod person_walk_animation;
