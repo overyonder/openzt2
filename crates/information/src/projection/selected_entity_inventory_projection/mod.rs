@@ -143,18 +143,34 @@ pub(crate) fn project_selected_entity_inventory_to_list_rows(
             continue;
         };
         let icon = definitions.texture_image(object.icon).unwrap_or_default();
-        // The row's own image, or the visual layers it draws through.
-        if let Some(mut image) = image {
-            if image.image != icon {
+        // An object's icon holds its button's four states; a row draws the
+        // normal one, the source rectangle 3,5,57,48, as the buy panel does.
+        // `iconitem.xml` authors an empty image, so its row starts with none.
+        let rect = Some(Rect::new(3.0, 5.0, 60.0, 53.0));
+        let mut drawn = false;
+        let mut draw = |image: &mut ImageNode| {
+            drawn = true;
+            if image.image != icon || image.rect != rect {
                 image.image = icon.clone();
+                image.rect = rect;
+                image.image_mode = NodeImageMode::Stretch;
             }
+        };
+        if let Some(mut image) = image {
+            draw(&mut image);
         }
         for child in children.get(row_entity).into_iter().flat_map(|c| c.iter()) {
             if let Ok(mut image) = visual_images.get_mut(child) {
-                if image.image != icon {
-                    image.image = icon.clone();
-                }
+                draw(&mut image);
             }
+        }
+        if !drawn {
+            commands.entity(row_entity).insert(ImageNode {
+                image: icon,
+                rect,
+                image_mode: NodeImageMode::Stretch,
+                ..default()
+            });
         }
         if tooltip.map(|tooltip| tooltip.0) != Some(object.name_key) {
             commands.entity(row_entity).insert((
