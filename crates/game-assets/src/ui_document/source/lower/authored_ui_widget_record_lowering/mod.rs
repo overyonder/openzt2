@@ -269,6 +269,11 @@ pub(super) fn unbound_list_source(
         {
             UiWidgetLiveCollectionSource::SelectedAnimalAdvancedNeeds
         }
+        (UiDocumentRole::EntityInfo, Some(name))
+            if name.eq_ignore_ascii_case("guest favorites") =>
+        {
+            UiWidgetLiveCollectionSource::SelectedGuestFavorites
+        }
         (UiDocumentRole::EntityInfo, Some(name)) if name.eq_ignore_ascii_case("guest needs") => {
             UiWidgetLiveCollectionSource::SelectedGuestNeeds
         }
@@ -353,7 +358,8 @@ pub(super) fn list_row_document(
         .as_ref()
         .map(|value| AssetId::from_virtual_path(&list_row_document_path(value)))
         .unwrap_or_else(|| match list_source(role, name, list) {
-            UiWidgetLiveCollectionSource::SelectedEntityInventory => {
+            UiWidgetLiveCollectionSource::SelectedEntityInventory
+            | UiWidgetLiveCollectionSource::SelectedGuestFavorites => {
                 AssetId::from_virtual_path(SELECTED_ENTITY_INVENTORY_ROW_DOCUMENT)
             }
             UiWidgetLiveCollectionSource::SelectedAnimalBasicNeeds

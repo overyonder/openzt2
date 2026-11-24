@@ -22,6 +22,8 @@ pub enum UiWidgetLiveCollectionSource {
     SelectedEntityThoughts,
     /// The selected guest's happiness and needs.
     SelectedGuestNeeds,
+    /// The selected guest's favourite animal.
+    SelectedGuestFavorites,
     ScenarioObjectives,
     ZoopediaTableOfContents,
     OverviewLayers,

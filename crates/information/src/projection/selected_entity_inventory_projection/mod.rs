@@ -1,5 +1,6 @@
-//! The items a selected guest carries, one `iconitem.xml` row each in its
-//! panel's `Inventory` list.
+//! The items a selected guest carries and its favourite animal, one
+//! `iconitem.xml` row each in its panel's `Inventory` and `guest favorites`
+//! lists.
 
 use bevy::prelude::*;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
@@ -15,37 +16,80 @@ use openzt2_interface_state::ui::pointer_capture_types::UiPointerInteraction;
 use openzt2_ui::authored_tooltip_presentation::UiShortTooltipKey;
 use openzt2_game_data::AssetId;
 use openzt2_interface_state::information::entity_selection_types::Inspectable;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
 use openzt2_zoo_state::animal_behavior::interaction_container_occupancy::InteractionContainerOccupancy;
+use openzt2_zoo_state::guests::guest_simulation_types::GuestFavouriteAnimal;
 
-/// The selected entity's carried items that have a definition, in the order
-/// they were taken.
-fn carried_items(
+/// The objects a list shows for the selected entity: the items it carries,
+/// in the order they were taken, or its favourite animal, shown as the
+/// first adoptable animal of that species.
+fn listed_objects(
+    source: UiWidgetLiveCollectionSource,
+    subject: Entity,
     occupancy: &InteractionContainerOccupancy,
-    holder: Entity,
-    definitions: &Query<&Inspectable>,
-) -> Vec<AssetId> {
-    occupancy
-        .members_of_container(holder)
-        .filter_map(|item| definitions.get(item).ok().map(|item| item.definition))
-        .collect()
+    items: &Query<&Inspectable>,
+    favourites: &Query<&GuestFavouriteAnimal>,
+    definitions: Option<WorldDefinitionsView<'_>>,
+) -> Option<Vec<AssetId>> {
+    match source {
+        UiWidgetLiveCollectionSource::SelectedEntityInventory => Some(
+            occupancy
+                .members_of_container(subject)
+                .filter_map(|item| items.get(item).ok().map(|item| item.definition))
+                .collect(),
+        ),
+        UiWidgetLiveCollectionSource::SelectedGuestFavorites => Some(
+            favourites
+                .get(subject)
+                .ok()
+                .and_then(|favourite| favourite.0)
+                .and_then(|species| {
+                    definitions?
+                        .animal_adoption_species_eligibility()
+                        .find(|animal| animal.species == species)
+                        .map(|animal| animal.id)
+                })
+                .into_iter()
+                .collect(),
+        ),
+        _ => None,
+    }
 }
 
 pub(crate) fn request_selected_entity_inventory_row_counts(
     occupancy: Res<InteractionContainerOccupancy>,
+    world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
+    active_world_definitions: Res<WorldDefinitions>,
     lists: Query<(Entity, &UiListPolicy, &UiDocumentOwner)>,
     panels: Query<&InfoPanel>,
     items: Query<&Inspectable>,
+    favourites: Query<&GuestFavouriteAnimal>,
     mut requested: Local<bevy::platform::collections::HashMap<Entity, u16>>,
     mut row_count_requests: MessageWriter<SetUiListRowCount>,
 ) {
+    let definitions = active_world_definitions.get(&world_definition_assets);
     requested.retain(|list, _| lists.contains(*list));
     for (list, policy, owner) in &lists {
-        if policy.source != UiWidgetLiveCollectionSource::SelectedEntityInventory {
+        if !matches!(
+            policy.source,
+            UiWidgetLiveCollectionSource::SelectedEntityInventory
+                | UiWidgetLiveCollectionSource::SelectedGuestFavorites
+        ) {
             continue;
         }
-        let count = panels.get(owner.0).map_or(0, |panel| {
-            carried_items(&occupancy, panel.subject, &items).len()
-        });
+        let Some(objects) = panels.get(owner.0).map_or(Some(Vec::new()), |panel| {
+            listed_objects(
+                policy.source,
+                panel.subject,
+                &occupancy,
+                &items,
+                &favourites,
+                definitions,
+            )
+        }) else {
+            continue;
+        };
+        let count = objects.len();
         let count = u16::try_from(count).unwrap_or(u16::MAX);
         if requested.insert(list, count) != Some(count) {
             row_count_requests.write(SetUiListRowCount { list, count });
@@ -62,6 +106,7 @@ pub(crate) fn project_selected_entity_inventory_to_list_rows(
     lists: Query<(&UiListPolicy, &UiDocumentOwner)>,
     panels: Query<&InfoPanel>,
     items: Query<&Inspectable>,
+    favourites: Query<&GuestFavouriteAnimal>,
     mut rows: Query<(
         Entity,
         &UiListRow,
@@ -78,16 +123,20 @@ pub(crate) fn project_selected_entity_inventory_to_list_rows(
         let Ok((policy, owner)) = lists.get(row.list) else {
             continue;
         };
-        if policy.source != UiWidgetLiveCollectionSource::SelectedEntityInventory {
-            continue;
-        }
         let Some(object) = panels
             .get(owner.0)
             .ok()
             .and_then(|panel| {
-                carried_items(&occupancy, panel.subject, &items)
-                    .get(usize::from(row.index))
-                    .copied()
+                listed_objects(
+                    policy.source,
+                    panel.subject,
+                    &occupancy,
+                    &items,
+                    &favourites,
+                    Some(definitions),
+                )?
+                .get(usize::from(row.index))
+                .copied()
             })
             .and_then(|item| definitions.find_object(item))
         else {
