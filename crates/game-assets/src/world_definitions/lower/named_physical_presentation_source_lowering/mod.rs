@@ -127,25 +127,32 @@ pub(super) fn lower_parented_named_physical_presentations(
         {
             continue;
         }
-        let Some(binder) = binders.iter().copied().find(|binder| {
+        // A concrete look such as `YoungFemale_01` names the binder again
+        // only to set its textures; its model comes from the family.
+        let named = |binder: &&OrderedSourceDocumentNode| {
             binder
                 .attribute_named_any(&["binderName"])
                 .is_some_and(|name| source_document_names_are_semantically_equal(name, child))
-        }) else {
-            continue;
         };
-        if binder
-            .attribute_named_any(&["required"])
-            .is_some_and(|value| matches!(value.trim(), "0" | "false"))
-        {
+        if binders.iter().copied().find(named).is_some_and(|binder| {
+            binder
+                .attribute_named_any(&["required"])
+                .is_some_and(|value| matches!(value.trim(), "0" | "false"))
+        }) {
             continue;
         }
-        let Some(component) = find_presentation_component(binder).filter(|component| {
-            !source_document_names_are_semantically_equal(
-                component.name.as_str(),
-                "BFActorComponent",
-            )
-        }) else {
+        let Some(component) = binders
+            .iter()
+            .copied()
+            .filter(named)
+            .find_map(|binder| find_presentation_component(binder))
+            .filter(|component| {
+                !source_document_names_are_semantically_equal(
+                    component.name.as_str(),
+                    "BFActorComponent",
+                )
+            })
+        else {
             continue;
         };
         let model = component
@@ -454,6 +461,67 @@ mod tests {
                 ),
             ],
             "optional alternatives and actors are not parented presentations"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_look_takes_its_head_model_from_its_family() -> Result<(), Box<dyn std::error::Error>> {
+        // As `YoungFemale_01` names `headObj` again only for its textures.
+        let sources = [
+            (
+                "youngfemale.xml",
+                r#"<BFTypedBinder binderType="YoungFemale">
+                <types><entity><scenery><YoungFemale/></scenery></entity></types>
+                <instance><BFGEntity><physObjParenting>
+                    <parentObj parent="mainObj" child="headObj" rottype="use" postype="use" attachnode="Link_Head"/>
+                </physObjParenting></BFGEntity></instance>
+                <binder>
+                    <BFNamedBinder binderName="mainObj"><instance><BFPhysObj><BFSimpleLODComponent modelfile="body.nif"/></BFPhysObj></instance></BFNamedBinder>
+                    <BFNamedBinder binderName="headObj"><instance><BFPhysObj><BFSimpleLODComponent modelfile="head.nif"/></BFPhysObj></instance></BFNamedBinder>
+                </binder>
+            </BFTypedBinder>"#,
+            ),
+            (
+                "youngfemale_01.xml",
+                r#"<BFTypedBinder binderType="YoungFemale_01">
+                <types><entity><scenery><YoungFemale><YoungFemale_01/></YoungFemale></scenery></entity></types>
+                <binder><BFNamedBinder binderName="headObj"><instance><BFPhysObj/></instance><shared><BFSharedRandomTextureInfo/></shared></BFNamedBinder></binder>
+            </BFTypedBinder>"#,
+            ),
+        ]
+        .map(|(path, xml)| parse_blue_fang_source_document(AssetPath::new(path), xml.as_bytes()))
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| std::io::Error::other(format!("{error:?}")))?;
+        let mut scenes = BlueFangActorManifestModelAndSceneResolutionIndex::default();
+        for model in ["body.nif", "head.nif"] {
+            scenes.register_archive_resolved_native_model_scene_asset_path(
+                model,
+                &format!("{model}#scene"),
+            );
+        }
+        let document =
+            lower_resolved_world_definition_source_document_closure_to_canonical_document(
+                &sources,
+                &scenes,
+                "youngfemale_01.xml",
+                [0, 0],
+            )?
+            .ok_or_else(|| std::io::Error::other("guest source produced no document"))?;
+        let object = document
+            .objects
+            .iter()
+            .find(|object| object.id == AssetId::from_key("youngfemale_01"))
+            .ok_or_else(|| std::io::Error::other("the look is absent"))?;
+        let [head] = object.named_physical_presentations.as_slice() else {
+            return Err(std::io::Error::other("expected the head alone").into());
+        };
+        assert_eq!(head.prefab, AssetId::from_virtual_path("head.nif#scene"));
+        assert_eq!(head.attach_node.as_deref(), Some("Link_Head"));
+        assert!(
+            head.simple_lod,
+            "a BFSimpleLODComponent head switches its own levels"
         );
         Ok(())
     }
