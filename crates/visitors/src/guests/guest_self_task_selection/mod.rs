@@ -238,11 +238,13 @@ pub(super) fn select_idle_guest_tasks(
             .unwrap_or_default();
     }
     let viewing_paths = subject_tasks.viewing_paths.clone();
-    // Like the task's `Use_Path` reservation, one guest views from a path
-    // tile at a time, so watchers spread along the fence instead of crowding
-    // onto the best spot.
+    // A viewing task's `reserveTag="Use_Path"` lets one guest view from a
+    // path tile at a time, so watchers spread along the fence instead of
+    // crowding onto the best spot. `GuestViewAnimal_Approach` reserves nothing:
+    // a guest who finds every spot taken walks towards the exhibit instead.
     let mut reserved_viewing_paths = busy_guests
         .iter()
+        .filter(|task| task.reservation_tag(&assets).is_some())
         .filter_map(|task| task.target())
         .collect::<bevy::platform::collections::HashSet<_>>();
     let mut target_index = None;
@@ -484,7 +486,10 @@ pub(super) fn select_idle_guest_tasks(
             } else if task.targets[0] == "path" {
                 if task.sensor_tag == Some(view_sensor) {
                     for &(path, position, root, elevated) in &viewing_paths {
-                        if root == world.root && !reserved_viewing_paths.contains(&path) {
+                        if root == world.root
+                            && (task.reservation_tag.is_none()
+                                || !reserved_viewing_paths.contains(&path))
+                        {
                             consider_target(path, None, Some(elevated), None, position);
                         }
                     }
@@ -560,7 +565,9 @@ pub(super) fn select_idle_guest_tasks(
             debug!(?guest, "idle guest found no task scoring above the minimum");
             continue;
         };
-        reserved_viewing_paths.insert(target);
+        if task.reservation_tag.is_some() {
+            reserved_viewing_paths.insert(target);
+        }
         // The authored delay starts once the task ends. An unsupported winner
         // ends at once, so its delay still lets lower-ranked tasks run meanwhile.
         if let Some([minimum, maximum]) =
