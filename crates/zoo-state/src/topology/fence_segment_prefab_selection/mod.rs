@@ -261,6 +261,7 @@ mod tests {
             height_cm: 200,
             strength: 1,
             blocks: FenceTraversalBlockingFlags::default(),
+            collision_width_cm: 0,
             gate: AssetId::default(),
             post_prefab: AssetId::default(),
             segments: FenceSegmentPrefabs {

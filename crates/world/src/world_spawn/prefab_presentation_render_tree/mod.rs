@@ -43,6 +43,24 @@ pub fn spawn_prefab_render_tree(
             if let Some(bound) = row.local_render_bound {
                 entity.insert(PrefabLocalRenderBound(bound));
             }
+            // A presentation spawns no physics colliders; a body capsule
+            // stays as data for walkers that keep it off fences.
+            if let Some((radius_m, half_height_m)) =
+                row.colliders.iter().find_map(|collider| match collider.source {
+                    openzt2_game_data::scene_prefab::PrefabColliderSource::Capsule {
+                        radius_m,
+                        half_height_m,
+                    } => Some((radius_m, half_height_m)),
+                    _ => None,
+                })
+            {
+                entity.insert(
+                    openzt2_world_state::world_spawn::prefab_presentation_types::PrefabBodyCapsule {
+                        radius_m,
+                        half_height_m,
+                    },
+                );
+            }
             if let Some(bound) = &row.skin_render_bound {
                 entity.insert(openzt2_world_state::world_spawn::prefab_presentation_types::PrefabSkinRenderBound(bound.clone()));
             }

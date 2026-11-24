@@ -208,9 +208,13 @@ pub(in super::super) fn lower_blue_fang_scene_prefab(
         let axis = std::array::from_fn(|index| end[index] - start[index]);
         let length = source_vector_length(axis);
         if collision.radius.is_finite() && collision.radius > 0.0 && length > f32::EPSILON {
+            // Under the scene root, so a model's body capsule moves with it,
+            // as an animal's does on `Bip01 Spine1`.
             let entity = builder.entity(
                 &format!("bfb_capsule_{:08x}", collision.block_id),
-                None,
+                (document.hierarchy().len() > 0)
+                    .then(|| bfb_key(0))
+                    .as_deref(),
                 PrefabTransform {
                     translation_m: std::array::from_fn(|index| (start[index] + end[index]) * 0.5),
                     rotation_xyzw: rotation_from_source_positive_y_axis(

@@ -79,6 +79,7 @@ pub(super) fn install_fence_definition_with_broken_variant(
             height_cm: 100,
             strength: 1,
             blocks: FenceTraversalBlockingFlags::default(),
+            collision_width_cm: 0,
             gate: AssetId::default(),
             post_prefab: AssetId::default(),
             segments: FenceSegmentPrefabs {
