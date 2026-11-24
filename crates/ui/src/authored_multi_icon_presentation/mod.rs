@@ -14,6 +14,49 @@ use super::authored_ui_visual_types::UiSourceRect;
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UiMultiIconPolicy;
 
+/// Selects a multi-icon's entry by its authored `key`, such as
+/// `guest_hunger`, rather than by position: an expansion's layout may insert
+/// entries, as `x301`'s `needsitem.xml` adds `animal_eggtimer`.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UiMultiIconKey(pub openzt2_game_data::AssetId);
+
+/// Sets `UiValue` to the position of the entry a `UiMultiIconKey` names.
+pub(crate) fn select_multi_icons_by_key(
+    documents: Res<Assets<UiDocumentAsset>>,
+    roots: Query<&UiDocumentRoot>,
+    mut icons: Query<
+        (&UiNodeId, &UiDocumentOwner, &UiMultiIconKey, &mut UiValue),
+        With<UiMultiIconPolicy>,
+    >,
+) {
+    for (node, owner, key, mut value) in &mut icons {
+        let Some(index) = roots
+            .get(owner.0)
+            .ok()
+            .and_then(|root| documents.get(&root.document))
+            .and_then(|document| {
+                match &document
+                    .canonical_ui_document()
+                    .nodes
+                    .get(node.index as usize)?
+                    .widget
+                {
+                    UiWidgetRecord::MultiIcon { entries } => {
+                        entries.iter().position(|entry| entry.key == key.0)
+                    }
+                    _ => None,
+                }
+            })
+        else {
+            continue;
+        };
+        let index = index as i64;
+        if value.0 != index {
+            value.0 = index;
+        }
+    }
+}
+
 /// Displays the document image selected by `UiValue`.
 pub(crate) fn present_multi_icons(
     mut commands: Commands,

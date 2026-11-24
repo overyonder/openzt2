@@ -14,11 +14,11 @@ use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types:
     SetUiListRowCount, UiListPolicy, UiListRow,
 };
 use openzt2_interface_state::ui::authored_ui_node_projection_components::{
-    UiDocumentOwner, UiValue,
+    UiDocumentOwner,
 };
 use openzt2_interface_state::ui::authored_ui_visual_types::UiVisualLayer;
 use openzt2_interface_state::ui::pointer_capture_types::UiPointerInteraction;
-use openzt2_ui::authored_multi_icon_presentation::UiMultiIconPolicy;
+use openzt2_ui::authored_multi_icon_presentation::{UiMultiIconKey, UiMultiIconPolicy};
 use openzt2_ui::authored_tooltip_presentation::{UiShortTooltipKey, UiTooltipStatusKey};
 use openzt2_zoo_state::guests::guest_simulation_types::{
     Guest, GuestAmusement, GuestArchetype, GuestEnergy, GuestHunger, GuestRestroom,
@@ -26,8 +26,8 @@ use openzt2_zoo_state::guests::guest_simulation_types::{
 };
 
 use super::selected_animal_need_list_projection::{
-    set_need_icon_fill, set_tooltip_status, status_label, CRITICAL_COLOR, PRESSING_COLOR,
-    SATISFIED_COLOR,
+    set_multi_icon_key, set_need_icon_fill, set_tooltip_status, status_label, CRITICAL_COLOR,
+    PRESSING_COLOR, SATISFIED_COLOR,
 };
 
 /// The rows of a guest's need list: its happiness, then the needs the
@@ -48,15 +48,17 @@ enum GuestNeedRow {
 }
 
 /// `needsitem.xml` icon index and `needs.xml` label of a row.
-fn guest_need_icon_and_label(row: GuestNeedRow, unhappy: bool) -> (i64, &'static str) {
+fn guest_need_icon_and_label(row: GuestNeedRow, unhappy: bool) -> (&'static str, &'static str) {
     match row {
-        GuestNeedRow::Happiness if unhappy => (17, "entityneeds:guest_happy"),
-        GuestNeedRow::Happiness => (16, "entityneeds:guest_happy"),
-        GuestNeedRow::Need(GuestNeedKind::Hunger) => (18, "entityneeds:guest_hunger"),
-        GuestNeedRow::Need(GuestNeedKind::Thirst) => (19, "entityneeds:guest_thirst"),
-        GuestNeedRow::Need(GuestNeedKind::Energy) => (20, "entityneeds:guest_rest"),
-        GuestNeedRow::Need(GuestNeedKind::Amusement) => (21, "entityneeds:guest_amusement"),
-        GuestNeedRow::Need(_) => (22, "entityneeds:guest_bathroom"),
+        GuestNeedRow::Happiness if unhappy => ("guest_unhappy", "entityneeds:guest_happy"),
+        GuestNeedRow::Happiness => ("guest_happy", "entityneeds:guest_happy"),
+        GuestNeedRow::Need(GuestNeedKind::Hunger) => ("guest_hunger", "entityneeds:guest_hunger"),
+        GuestNeedRow::Need(GuestNeedKind::Thirst) => ("guest_thirst", "entityneeds:guest_thirst"),
+        GuestNeedRow::Need(GuestNeedKind::Energy) => ("guest_rest", "entityneeds:guest_rest"),
+        GuestNeedRow::Need(GuestNeedKind::Amusement) => {
+            ("guest_amusement", "entityneeds:guest_amusement")
+        }
+        GuestNeedRow::Need(_) => ("guest_bathroom", "entityneeds:guest_bathroom"),
     }
 }
 
@@ -124,7 +126,10 @@ pub(crate) fn project_selected_guest_needs_to_list_rows(
         Option<&UiTooltipStatusKey>,
     )>,
     mut commands: Commands,
-    mut multi_icons: Query<(&UiDocumentOwner, &mut UiValue), With<UiMultiIconPolicy>>,
+    multi_icons: Query<
+        (Entity, &UiDocumentOwner, Option<&UiMultiIconKey>),
+        With<UiMultiIconPolicy>,
+    >,
     mut foreground_layouts: Query<(Entity, &Name, &UiDocumentOwner, &mut Node)>,
     mut foreground_visuals: Query<(&ChildOf, &mut ImageNode), With<UiVisualLayer>>,
 ) {
@@ -191,11 +196,7 @@ pub(crate) fn project_selected_guest_needs_to_list_rows(
             ));
         }
         set_tooltip_status(&mut commands, row_entity, status, Some(status_label(color)));
-        for (icon_owner, mut value) in &mut multi_icons {
-            if icon_owner.0 == row_entity && value.0 != icon {
-                value.0 = icon;
-            }
-        }
+        set_multi_icon_key(&mut commands, row_entity, icon, &multi_icons);
         set_need_icon_fill(
             row_entity,
             100.0 - f32::from(wellness.min(1_000)) / 10.0,
@@ -219,7 +220,7 @@ mod tests {
         assert_eq!(icons.len(), GUEST_NEED_ROWS.len());
         assert_eq!(
             guest_need_icon_and_label(GuestNeedRow::Happiness, true).0,
-            17
+            "guest_unhappy"
         );
     }
 }

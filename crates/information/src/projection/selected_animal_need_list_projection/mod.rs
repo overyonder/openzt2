@@ -13,7 +13,7 @@ use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types:
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiValue;
 use openzt2_interface_state::ui::authored_ui_visual_types::UiVisualLayer;
-use openzt2_ui::authored_multi_icon_presentation::UiMultiIconPolicy;
+use openzt2_ui::authored_multi_icon_presentation::{UiMultiIconKey, UiMultiIconPolicy};
 use openzt2_zoo_state::animal_health::types::Disease;
 use openzt2_zoo_state::animal_lifecycle::types::Animal;
 use openzt2_zoo_state::animal_lifecycle::types::Pregnancy;
@@ -97,16 +97,16 @@ pub(crate) fn request_selected_animal_state_row_counts(
 }
 
 /// `needsitem.xml` icon indices for the state rows.
-const HAPPY_ICON: i64 = 10;
-const NOT_HAPPY_ICON: i64 = 11;
-const PREGNANT_ICON: i64 = 12;
-const SICK_ICON: i64 = 14;
-const WELL_ICON: i64 = 15;
+const HAPPY_ICON: &str = "animal_happy";
+const NOT_HAPPY_ICON: &str = "animal_not_happy";
+const PREGNANT_ICON: &str = "animal_pregnant";
+const SICK_ICON: &str = "animal_sick";
+const WELL_ICON: &str = "animal_well";
 
 /// The happiness row's fill and colour: need points are bad minus good, from
 /// -100 to 100. Below 0 the animal is satisfied, from 0 pressing, and from
 /// half the maximum critical.
-fn happiness_row(points: &NeedPoints) -> (i64, f32, Color) {
+fn happiness_row(points: &NeedPoints) -> (&'static str, f32, Color) {
     let balance = (points.bad - points.good).clamp(-100.0, 100.0);
     let icon = if balance < 0.0 {
         HAPPY_ICON
@@ -149,7 +149,10 @@ pub(crate) fn project_selected_animal_states_to_authored_list_rows(
         Option<&UiTooltipStatusKey>,
     )>,
     mut commands: Commands,
-    mut multi_icons: Query<(&UiDocumentOwner, &mut UiValue), With<UiMultiIconPolicy>>,
+    multi_icons: Query<
+        (Entity, &UiDocumentOwner, Option<&UiMultiIconKey>),
+        With<UiMultiIconPolicy>,
+    >,
     mut foreground_layouts: Query<(Entity, &Name, &UiDocumentOwner, &mut Node)>,
     mut foreground_visuals: Query<(&ChildOf, &mut ImageNode), With<UiVisualLayer>>,
 ) {
@@ -242,11 +245,7 @@ pub(crate) fn project_selected_animal_states_to_authored_list_rows(
                 UiPointerInteraction::default(),
             ));
         }
-        for (owner, mut value) in &mut multi_icons {
-            if owner.0 == row_entity && value.0 != icon {
-                value.0 = icon;
-            }
-        }
+        set_multi_icon_key(&mut commands, row_entity, icon, &multi_icons);
         set_need_icon_fill(
             row_entity,
             fill_percent,
@@ -254,6 +253,21 @@ pub(crate) fn project_selected_animal_states_to_authored_list_rows(
             &mut foreground_layouts,
             &mut foreground_visuals,
         );
+    }
+}
+
+/// Shows a row's icon by its `needsitem.xml` key.
+pub(super) fn set_multi_icon_key(
+    commands: &mut Commands,
+    row: Entity,
+    key: &str,
+    icons: &Query<(Entity, &UiDocumentOwner, Option<&UiMultiIconKey>), With<UiMultiIconPolicy>>,
+) {
+    let key = AssetId::from_key(key);
+    for (icon, owner, current) in icons {
+        if owner.0 == row && current.map(|current| current.0) != Some(key) {
+            commands.entity(icon).insert(UiMultiIconKey(key));
+        }
     }
 }
 
