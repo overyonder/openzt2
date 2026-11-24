@@ -236,7 +236,9 @@ pub(super) struct PendingNamedPresentationNodeAttachment {
 /// entity with that authored attachment name (static model nodes), or an
 /// animated skeleton joint with that name. The node may live in a model that
 /// loads later, such as a counter attached to the same building, so a holder
-/// keeps waiting rather than giving up.
+/// keeps waiting rather than giving up. A node under a hidden part of the
+/// owner is passed over: an animated person's static model keeps its own
+/// `Link_Head` hidden beside the skeleton's.
 pub(super) fn attach_named_presentations_to_model_nodes(
     mut commands: Commands,
     pending: Query<(Entity, &PendingNamedPresentationNodeAttachment)>,
@@ -244,6 +246,7 @@ pub(super) fn attach_named_presentations_to_model_nodes(
     parents: Query<&ChildOf>,
     identifiers: Query<&PrefabAuthoredAttachmentIdentifier>,
     names: Query<&Name>,
+    visibilities: Query<&Visibility>,
 ) {
     for (holder, attachment) in &pending {
         let node_name = attachment.node.trim();
@@ -255,6 +258,10 @@ pub(super) fn attach_named_presentations_to_model_nodes(
                     && !parents
                         .iter_ancestors::<ChildOf>(*candidate)
                         .any(|ancestor| ancestor == holder)
+                    && !parents
+                        .iter_ancestors::<ChildOf>(*candidate)
+                        .take_while(|ancestor| *ancestor != attachment.owner)
+                        .any(|ancestor| visibilities.get(ancestor) == Ok(&Visibility::Hidden))
             })
             .find(|candidate| {
                 identifiers.get(*candidate).is_ok_and(|id| id.0 == node)
