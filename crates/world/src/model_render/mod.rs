@@ -47,7 +47,9 @@ use prefab_fixed_function_world_lighting_projection::{
     project_prefab_fixed_function_world_lighting_policies, update_fixed_function_world_light_buffer,
 };
 use prefab_model_billboard_orientation::orient_prefab_model_billboards_toward_active_camera_on_matching_render_layers;
-use prefab_model_level_of_detail_projection::project_prefab_model_level_of_detail_visibility;
+use prefab_model_level_of_detail_projection::{
+    apply_simple_lod_switching, project_prefab_model_level_of_detail_visibility,
+};
 use prefab_model_tint_projection::project_prefab_model_tints_onto_standard_materials_and_effect_pass_vertex_colors;
 use prefab_texture_replacement_projection::project_prefab_texture_replacements_onto_effect_pass_materials;
 
@@ -144,6 +146,8 @@ impl Plugin for ModelRenderPlugin {
             PostUpdate,
             (
                 invalidate_authored_model_material_pass_projection.before(project_authored_model_material_passes),
+                apply_simple_lod_switching
+                    .before(project_prefab_model_level_of_detail_visibility),
                 project_prefab_model_level_of_detail_visibility
                     .in_set(ModelRenderPresentationSet::LevelOfDetail),
                 instantiate_visible_gltf_model_scenes.after(VisibilitySystems::VisibilityPropagate),

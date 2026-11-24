@@ -2,7 +2,8 @@ use bevy::camera::visibility::RenderLayers;
 use bevy::prelude::*;
 use openzt2_game_assets::graphics_settings_types::{GraphicsSettings, ThreeLevelGraphicsDetail};
 use openzt2_world_state::world_spawn::prefab_model_level_of_detail_visibility_range::{
-    PrefabLodRanges, PrefabModelLevelOfDetailVisibilityRange,
+    simple_lod_ranges, PrefabLodRanges, PrefabModelLevelOfDetailVisibilityRange, SimpleLodRange,
+    SimpleLodSwitching,
 };
 
 use crate::model_render::prefab_render_layer_camera_matching::PrefabRenderLayers;
@@ -22,6 +23,7 @@ pub(super) fn project_prefab_model_level_of_detail_visibility(
         &GlobalTransform,
         &PrefabModelLevelOfDetailVisibilityRange,
         &mut Visibility,
+        Option<&SimpleLodRange>,
     )>,
     mut selection: Local<LodSelection>,
     mut current_cameras: Local<Vec<(Entity, Vec3, Dir3, RenderLayers)>>,
@@ -69,9 +71,12 @@ pub(super) fn project_prefab_model_level_of_detail_visibility(
         let mut previous_depth = None;
         let mut selected = None;
         for member in members.iter() {
-            let Ok((fallback, range, _)) = lods.get(member) else {
+            let Ok((fallback, range, _, simple)) = lods.get(member) else {
                 continue;
             };
+            let (near_m, far_m) = simple.map_or((range.near_m, range.far_m), |simple| {
+                (simple.near_m, simple.far_m)
+            });
             let matches = range.active_without_range || {
                 let layers = inherited_layers.get(member);
                 selection
@@ -91,7 +96,7 @@ pub(super) fn project_prefab_model_level_of_detail_visibility(
                                 depth
                             }
                         };
-                        depth >= range.near_m * scale && depth < range.far_m * scale
+                        depth >= near_m * scale && depth < far_m * scale
                     })
             };
             if matches {
@@ -100,13 +105,45 @@ pub(super) fn project_prefab_model_level_of_detail_visibility(
             }
         }
         for member in members.iter() {
-            if let Ok((_, range, mut visibility)) = lods.get_mut(member) {
+            if let Ok((_, range, mut visibility, _)) = lods.get_mut(member) {
                 visibility.set_if_neq(if Some(range.ordinal) == selected {
                     Visibility::Inherited
                 } else {
                     Visibility::Hidden
                 });
             }
+        }
+    }
+}
+
+/// Gives the LOD levels of a `SimpleLodSwitching` presentation the game's own
+/// distances once, when they spawn.
+pub(super) fn apply_simple_lod_switching(
+    mut commands: Commands,
+    groups: Query<(Entity, &PrefabLodRanges), Added<PrefabLodRanges>>,
+    parents: Query<&ChildOf>,
+    switching: Query<(), With<SimpleLodSwitching>>,
+    ranges: Query<&PrefabModelLevelOfDetailVisibilityRange>,
+) {
+    for (group, members) in &groups {
+        if !std::iter::once(group)
+            .chain(parents.iter_ancestors(group))
+            .any(|entity| switching.contains(entity))
+        {
+            continue;
+        }
+        let far = members
+            .iter()
+            .map(|member| {
+                ranges
+                    .get(member)
+                    .map_or(f32::INFINITY, |range| range.far_m)
+            })
+            .collect::<Vec<_>>();
+        for (member, (near_m, far_m)) in members.iter().zip(simple_lod_ranges(&far)) {
+            commands
+                .entity(member)
+                .insert(SimpleLodRange { near_m, far_m });
         }
     }
 }

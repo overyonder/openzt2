@@ -1,4 +1,5 @@
 use super::prefab_attachment_independent_rotation::PrefabAttachmentIndependentRotation;
+use openzt2_world_state::world_spawn::prefab_model_level_of_detail_visibility_range::SimpleLodSwitching;
 use openzt2_world_state::world_spawn::prefab_authored_attachment_identifier::PrefabAuthoredAttachmentIdentifier;
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabPresentation;
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabCausticPolicy;
@@ -167,6 +168,9 @@ pub(super) fn spawn_required_named_physical_presentations<'a>(
         }
         if let Some(fade) = presentation.fade {
             child.insert(NamedPresentationFade(fade));
+        }
+        if presentation.simple_lod {
+            child.insert(SimpleLodSwitching);
         }
     }
     commands

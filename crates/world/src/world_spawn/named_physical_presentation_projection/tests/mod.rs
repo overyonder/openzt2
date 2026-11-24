@@ -31,6 +31,7 @@ fn presentation(
         attach_node: None,
         inherit_attach_rotation: false,
         fade: None,
+        simple_lod: false,
     }
 }
 

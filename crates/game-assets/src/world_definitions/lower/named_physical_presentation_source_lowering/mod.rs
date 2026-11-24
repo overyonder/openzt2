@@ -89,6 +89,7 @@ pub(super) fn lower_named_physical_presentations(
             attach_node: None,
             inherit_attach_rotation: false,
             fade: None,
+            simple_lod: is_simple_lod(component),
         });
     }
     Ok(presentations)
@@ -181,6 +182,7 @@ pub(super) fn lower_parented_named_physical_presentations(
                 .attribute_named_any(&["rottype"])
                 .is_some_and(|mode| source_document_names_are_semantically_equal(mode, "use")),
             fade: None,
+            simple_lod: is_simple_lod(component),
         });
     }
     lower_station_construction_markers(&binders, scene_paths, &mut seen, &mut presentations);
@@ -233,6 +235,7 @@ fn lower_station_construction_markers(
             attach_node: None,
             inherit_attach_rotation: false,
             fade: None,
+            simple_lod: is_simple_lod(component),
         });
     }
 }
@@ -340,6 +343,7 @@ pub(super) fn lower_fade_controller_states(
                 attach_node: None,
                 inherit_attach_rotation: false,
                 fade: Some(fade),
+                simple_lod: is_simple_lod(component),
             });
         }
     }
@@ -614,4 +618,10 @@ mod tests {
             .all(|presentation| presentation.attach_node.is_none()));
         Ok(())
     }
+}
+
+/// The original switches a `BFSimpleLODComponent` model's LOD levels at its
+/// own distances.
+fn is_simple_lod(component: &OrderedSourceDocumentNode) -> bool {
+    source_document_names_are_semantically_equal(component.name.as_str(), "BFSimpleLODComponent")
 }
