@@ -7,6 +7,7 @@ use bevy::prelude::*;
 use openzt2_game_data::world_definitions::staff_management::{
     StaffPresentationVariant, StaffRoleDefinition,
 };
+use openzt2_game_data::world_definitions::world_objects::WorldObjectTextureReplacementSet;
 use openzt2_game_data::AssetId;
 
 use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
@@ -75,11 +76,11 @@ pub fn staff_body_prefab(
 
 /// One weighted group index per replacement set.
 fn drawn_texture_replacement_groups(
-    variant: &StaffPresentationVariant,
+    sets: &[WorldObjectTextureReplacementSet],
     persistent_id: u64,
 ) -> impl Iterator<Item = usize> + '_ {
     let mut bits = mix(persistent_id ^ 0x7465_7874_7572_6573);
-    variant.texture_replacement_sets.iter().map(move |set| {
+    sets.iter().map(move |set| {
         bits = mix(bits);
         let total = set
             .groups
@@ -108,27 +109,56 @@ pub fn attach_staff_presentation_variant(
     commands
         .entity(staff)
         .insert(StaffModelAnimationSet(variant.model_animation_set));
-    if let Some((head, prefab)) = variant
-        .head
-        .as_ref()
+    dress_staff(commands, staff, variant, persistent_id, definitions, false);
+}
+
+/// What an employee currently wears: its wetsuit or its own look, and the
+/// head it spawned for it.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct StaffDress {
+    pub wet: bool,
+    pub head: Option<Entity>,
+}
+
+/// Spawns the look's head and sets its textures, or in water its wetsuit's
+/// head and textures drawn over the look's own, as `ZTWetsuitComponent` swaps
+/// them. A look without a wetsuit always wears its own.
+pub fn dress_staff(
+    commands: &mut Commands,
+    staff: Entity,
+    variant: &StaffPresentationVariant,
+    persistent_id: u64,
+    definitions: WorldDefinitionsView<'_>,
+    wet: bool,
+) {
+    let wetsuit = variant.wetsuit.as_ref().filter(|_| wet);
+    let head = wetsuit
+        .map_or(variant.head.as_ref(), |wetsuit| wetsuit.head.as_ref())
         .and_then(|head| Some((head, definitions.scene(head.prefab)?)))
-    {
-        commands.spawn((
-            Transform::IDENTITY,
-            Visibility::Inherited,
-            ChildOf(staff),
-            PrefabPresentation::new(prefab),
-            PendingModelJointAttachment::new(staff, &head.joint),
-            StaffAttachedHead,
-            // A head is a `BFSimpleLODComponent` model.
-            SimpleLodSwitching,
-        ));
-    }
-    let textures = variant
-        .texture_replacement_sets
-        .iter()
-        .zip(drawn_texture_replacement_groups(variant, persistent_id))
-        .flat_map(|(set, group)| &set.groups[group].items)
+        .map(|(head, prefab)| {
+            commands
+                .spawn((
+                    Transform::IDENTITY,
+                    Visibility::Inherited,
+                    ChildOf(staff),
+                    PrefabPresentation::new(prefab),
+                    PendingModelJointAttachment::new(staff, &head.joint),
+                    StaffAttachedHead,
+                    // A head is a `BFSimpleLODComponent` model.
+                    SimpleLodSwitching,
+                ))
+                .id()
+        });
+    // The first replacement for a material wins, so the wetsuit's go first.
+    let textures = wetsuit
+        .map(|wetsuit| wetsuit.texture_replacement_sets.as_slice())
+        .into_iter()
+        .chain([variant.texture_replacement_sets.as_slice()])
+        .flat_map(|sets| {
+            sets.iter()
+                .zip(drawn_texture_replacement_groups(sets, persistent_id))
+                .flat_map(|(set, group)| &set.groups[group].items)
+        })
         .filter_map(|item| {
             Some((
                 item.material.clone().into_boxed_str(),
@@ -136,9 +166,14 @@ pub fn attach_staff_presentation_variant(
             ))
         })
         .collect::<Box<[_]>>();
-    if !textures.is_empty() {
-        commands
-            .entity(staff)
-            .insert(PrefabTextureReplacements(textures));
+    let mut staff = commands.entity(staff);
+    staff.insert(StaffDress {
+        wet: wetsuit.is_some(),
+        head,
+    });
+    if textures.is_empty() {
+        staff.remove::<PrefabTextureReplacements>();
+    } else {
+        staff.insert(PrefabTextureReplacements(textures));
     }
 }

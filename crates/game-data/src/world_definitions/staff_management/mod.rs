@@ -150,6 +150,17 @@ pub struct StaffPresentationVariant {
     pub name_pool: AssetId,
     pub head: Option<StaffHeadPresentation>,
     pub texture_replacement_sets: Vec<super::world_objects::WorldObjectTextureReplacementSet>,
+    /// What the look wears while swimming, from `ZTWetsuitComponent`'s
+    /// `InWater`.
+    #[serde(default)]
+    pub wetsuit: Option<StaffWetsuitPresentation>,
+}
+
+/// A look's wetsuit: its head and the textures drawn over the look's own.
+#[derive(Clone, Debug, serde::Deserialize, PartialEq, serde::Serialize)]
+pub struct StaffWetsuitPresentation {
+    pub head: Option<StaffHeadPresentation>,
+    pub texture_replacement_sets: Vec<super::world_objects::WorldObjectTextureReplacementSet>,
 }
 
 /// Separate head model the original attaches to a body joint.

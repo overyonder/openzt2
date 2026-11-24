@@ -25,6 +25,7 @@ use openzt2_game_data::world_definitions::catalogue_and_progression::catalogue_d
 use openzt2_game_data::world_definitions::staff_management::{
     StaffHeadPresentation, StaffJobCapabilityFlags, StaffPresentationVariant, StaffRoleDefinition,
     StaffRoleKind, StaffStateVariable, StaffSwimmingDepths, StaffVirtualNode,
+    StaffWetsuitPresentation,
 };
 use openzt2_game_data::world_definitions::world_objects::{
     WorldObjectAffordanceFlags, WorldObjectDefinition, WorldObjectKind, WorldObjectPropertyFlags,
@@ -228,7 +229,8 @@ mod tests {
                 <types><entity><actor><people><Staff><Keeper><Keeper_Adult_M_01/></Keeper></Staff></people></actor></entity></types>
                 <binder><BFNamedBinder binderName="mainObj"><instance><BFPhysObj><BFActorComponent actorfile="body_m.bfm"/></BFPhysObj></instance></BFNamedBinder>
                 <BFNamedBinder binderName="headObj"><instance><BFPhysObj><BFSimpleLODComponent modelfile="head_m.nif"/></BFPhysObj></instance></BFNamedBinder>
-                <BFBinder><instance><ZTWetsuitComponent><OnLand><Physobjs><parenting child="headObj" attachnode="Link_Head"/></Physobjs></OnLand><InWater><Physobjs><parenting child="headObjWetsuit" attachnode="Link_Wetsuit"/></Physobjs></InWater></ZTWetsuitComponent></instance></BFBinder></binder>
+                <BFNamedBinder binderName="headObjWetsuit"><instance><BFPhysObj><BFSimpleLODComponent modelfile="head_m_mm.nif"/></BFPhysObj></instance><shared><BFSharedRandomTextureInfo><replacementSet><group><item material="guest_m_head" image="marine_head.dds" layer="base"/></group></replacementSet></BFSharedRandomTextureInfo></shared></BFNamedBinder>
+                <BFBinder><instance><ZTWetsuitComponent><OnLand><Physobjs><parenting child="headObj" attachnode="Link_Head"/></Physobjs></OnLand><InWater><Textures><group><item material="body" image="wetsuit.dds" layer="base"/></group></Textures><Physobjs><parenting child="headObjWetsuit" attachnode="Link_Wetsuit"/></Physobjs></InWater></ZTWetsuitComponent></instance></BFBinder></binder>
             </BFTypedBinder>"#,
             ),
             (
@@ -261,6 +263,7 @@ mod tests {
         for (source, scene) in [
             ("body_m.bfm", "body_m.nif#scene"),
             ("head_m.nif", "head_m.nif#scene"),
+            ("head_m_mm.nif", "head_m_mm.nif#scene"),
         ] {
             scenes.register_archive_resolved_actor_scene_asset_path(source, scene.into());
         }
@@ -298,6 +301,33 @@ mod tests {
         assert_eq!(
             wetsuit_head.joint, "Link_Head",
             "a keeper on land wears headObj"
+        );
+        let wetsuit_look = look_with("body_m.nif#scene")?;
+        assert!(
+            wetsuit_look.texture_replacement_sets.is_empty(),
+            "the wetsuit head's textures are worn only in water"
+        );
+        let wetsuit = wetsuit_look
+            .wetsuit
+            .as_ref()
+            .ok_or_else(|| std::io::Error::other("the keeper's wetsuit is absent"))?;
+        let in_water_head = wetsuit
+            .head
+            .as_ref()
+            .ok_or_else(|| std::io::Error::other("the wetsuit head is absent"))?;
+        assert_eq!(
+            in_water_head.prefab,
+            AssetId::from_virtual_path("head_m_mm.nif#scene")
+        );
+        assert_eq!(in_water_head.joint, "Link_Wetsuit");
+        assert_eq!(
+            wetsuit
+                .texture_replacement_sets
+                .iter()
+                .flat_map(|set| &set.groups[0].items)
+                .map(|item| item.material.as_str())
+                .collect::<Vec<_>>(),
+            ["body", "guest_m_head"]
         );
         let look = look_with("body_f.nif#scene")?;
         assert_eq!(look.prefab, AssetId::from_virtual_path("body_f.nif#scene"));
@@ -426,34 +456,60 @@ fn lower_authored_staff_presentation_variants(
                 );
                 return None;
             };
-            let head = family
-                .iter()
-                .find_map(|candidate| {
-                    authored_staff_named_presentation_component(candidate, "headObj")
-                })
-                .and_then(|component| component.attribute_named_any(&["modelfile", "actorfile"]))
-                .and_then(|model| {
-                    actor_scene_paths.get(&canonicalize_source_document_record_key(model))
-                })
-                // A keeper parents its head through `ZTWetsuitComponent`'s
-                // `OnLand` instead of `physObjParenting`; its `InWater` swaps
-                // in `headObjWetsuit`.
-                .zip(
-                    authored_type_family_elements_named(variant, "parentObj")
-                        .into_iter()
-                        .chain(authored_type_family_elements_named(variant, "parenting"))
-                        .find(|parenting| {
-                            parenting
-                                .attribute_named_any(&["child"])
-                                .is_some_and(|child| {
-                                    source_document_names_are_semantically_equal(child, "headObj")
-                                })
+            // A keeper parents its head through `ZTWetsuitComponent`: its
+            // `OnLand` hangs `headObj`, its `InWater` `headObjWetsuit`.
+            let head = |binder: &str| {
+                family
+                    .iter()
+                    .find_map(|candidate| {
+                        authored_staff_named_presentation_component(candidate, binder)
+                    })
+                    .and_then(|component| {
+                        component.attribute_named_any(&["modelfile", "actorfile"])
+                    })
+                    .and_then(|model| {
+                        actor_scene_paths.get(&canonicalize_source_document_record_key(model))
+                    })
+                    .zip(
+                        authored_type_family_elements_named(variant, "parentObj")
+                            .into_iter()
+                            .chain(authored_type_family_elements_named(variant, "parenting"))
+                            .find(|parenting| {
+                                parenting
+                                    .attribute_named_any(&["child"])
+                                    .is_some_and(|child| {
+                                        source_document_names_are_semantically_equal(child, binder)
+                                    })
+                            })
+                            .and_then(|parenting| parenting.attribute_named_any(&["attachnode"])),
+                    )
+                    .map(|(scene, joint)| StaffHeadPresentation {
+                        prefab: AssetId::from_virtual_path(scene),
+                        joint: joint.trim().to_owned(),
+                    })
+            };
+            let wetsuit_head_sets = authored_type_family_elements_named(variant, "BFNamedBinder")
+                .into_iter()
+                .filter(|binder| {
+                    binder
+                        .attribute_named_any(&["binderName"])
+                        .is_some_and(|name| {
+                            source_document_names_are_semantically_equal(name, "headObjWetsuit")
                         })
-                        .and_then(|parenting| parenting.attribute_named_any(&["attachnode"])),
-                )
-                .map(|(scene, joint)| StaffHeadPresentation {
-                    prefab: AssetId::from_virtual_path(scene),
-                    joint: joint.trim().to_owned(),
+                })
+                .filter_map(|binder| find_descendant(binder, "replacementSet"))
+                .collect::<Vec<_>>();
+            let wetsuit = authored_type_family_elements_named(variant, "InWater")
+                .into_iter()
+                .next()
+                .map(|in_water| StaffWetsuitPresentation {
+                    head: head("headObjWetsuit"),
+                    texture_replacement_sets: find_descendant(in_water, "Textures")
+                        .into_iter()
+                        .chain(wetsuit_head_sets.iter().copied())
+                        .map(lower_authored_texture_replacement_set)
+                        .filter(|set| !set.groups.is_empty())
+                        .collect(),
                 });
             Some(StaffPresentationVariant {
                 prefab: AssetId::from_virtual_path(prefab),
@@ -461,15 +517,18 @@ fn lower_authored_staff_presentation_variants(
                     &canonicalize_source_document_record_key(actor),
                 ),
                 name_pool: id(&format!("personname:{}", actor_record.key)),
-                head,
+                head: head("headObj"),
+                // The wetsuit head's textures are worn only in water.
                 texture_replacement_sets: authored_type_family_elements_named(
                     variant,
                     "replacementSet",
                 )
                 .into_iter()
+                .filter(|set| !wetsuit_head_sets.iter().any(|wet| std::ptr::eq(*wet, *set)))
                 .map(lower_authored_texture_replacement_set)
                 .filter(|set| !set.groups.is_empty())
                 .collect(),
+                wetsuit,
             })
         })
         .collect()
