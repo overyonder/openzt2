@@ -52,7 +52,16 @@ fn guest_and_staff_selection_share_the_window_on_opposite_sides_of_behavior_upda
     }
 }
 
+#[test]
+fn a_guest_failing_to_reach_a_path_tile_rejects_it_for_a_while() {
+    check_guest_and_staff_selection_window_for(50, 2000, true);
+}
+
 fn check_guest_and_staff_selection_window(interval: u32, cap: u32) {
+    check_guest_and_staff_selection_window_for(interval, cap, false);
+}
+
+fn check_guest_and_staff_selection_window_for(interval: u32, cap: u32, path_tile: bool) {
     use openzt2_game_data::world_definitions::document::WorldDefinitionDocument;
     use openzt2_world_state::application_schedule::FixedGameSet;
     use openzt2_zoo_state::guests::guest_simulation_types::Guest;
@@ -104,10 +113,20 @@ fn check_guest_and_staff_selection_window(interval: u32, cap: u32) {
                 .in_set(FixedGameSet::Think),
         );
     let root = app.world_mut().spawn_empty().id();
-    let target = app
-        .world_mut()
-        .spawn(DefinitionId(AssetId::from_key("service")))
-        .id();
+    let target = if path_tile {
+        app.world_mut()
+            .spawn(
+                openzt2_zoo_state::topology::topology_graph_types::PathTile {
+                    definition: AssetId::from_key("path"),
+                    cell: IVec3::ZERO,
+                },
+            )
+            .id()
+    } else {
+        app.world_mut()
+            .spawn(DefinitionId(AssetId::from_key("service")))
+            .id()
+    };
     let rejected = || {
         let mut delays = BehaviorTargetRetryDelays::default();
         delays.record_failure(target, policy);
