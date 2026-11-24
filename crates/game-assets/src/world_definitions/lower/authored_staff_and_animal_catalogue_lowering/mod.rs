@@ -223,6 +223,15 @@ mod tests {
             </BFTypedBinder>"#,
             ),
             (
+                "keeper_m_01.xml",
+                r#"<BFTypedBinder binderType="Keeper_Adult_M_01">
+                <types><entity><actor><people><Staff><Keeper><Keeper_Adult_M_01/></Keeper></Staff></people></actor></entity></types>
+                <binder><BFNamedBinder binderName="mainObj"><instance><BFPhysObj><BFActorComponent actorfile="body_m.bfm"/></BFPhysObj></instance></BFNamedBinder>
+                <BFNamedBinder binderName="headObj"><instance><BFPhysObj><BFSimpleLODComponent modelfile="head_m.nif"/></BFPhysObj></instance></BFNamedBinder>
+                <BFBinder><instance><ZTWetsuitComponent><OnLand><Physobjs><parenting child="headObj" attachnode="Link_Head"/></Physobjs></OnLand><InWater><Physobjs><parenting child="headObjWetsuit" attachnode="Link_Wetsuit"/></Physobjs></InWater></ZTWetsuitComponent></instance></BFBinder></binder>
+            </BFTypedBinder>"#,
+            ),
+            (
                 "keeper_f_01.xml",
                 r#"<BFTypedBinder binderType="Keeper_Adult_F_01">
                 <types><entity><actor><people><Staff><Keeper><Keeper_Adult_F><Keeper_Adult_F_01/></Keeper_Adult_F></Keeper></Staff></people></actor></entity></types>
@@ -249,6 +258,12 @@ mod tests {
             "head_f.nif",
             "head_f.nif#scene".into(),
         );
+        for (source, scene) in [
+            ("body_m.bfm", "body_m.nif#scene"),
+            ("head_m.nif", "head_m.nif#scene"),
+        ] {
+            scenes.register_archive_resolved_actor_scene_asset_path(source, scene.into());
+        }
         let document =
             lower_resolved_world_definition_source_document_closure_to_canonical_document(
                 &documents,
@@ -263,10 +278,28 @@ mod tests {
             .ok_or_else(|| std::io::Error::other("staff role is absent"))?;
         assert_eq!(
             role.presentation_variants.len(),
-            1,
+            2,
             "abstract binders are not looks"
         );
-        let look = &role.presentation_variants[0];
+        let look_with = |prefab: &str| {
+            role.presentation_variants
+                .iter()
+                .find(|look| look.prefab == AssetId::from_virtual_path(prefab))
+                .ok_or_else(|| std::io::Error::other(format!("{prefab} look is absent")))
+        };
+        let wetsuit_head = look_with("body_m.nif#scene")?
+            .head
+            .as_ref()
+            .ok_or_else(|| std::io::Error::other("the wetsuit keeper's head is absent"))?;
+        assert_eq!(
+            wetsuit_head.prefab,
+            AssetId::from_virtual_path("head_m.nif#scene")
+        );
+        assert_eq!(
+            wetsuit_head.joint, "Link_Head",
+            "a keeper on land wears headObj"
+        );
+        let look = look_with("body_f.nif#scene")?;
         assert_eq!(look.prefab, AssetId::from_virtual_path("body_f.nif#scene"));
         assert_eq!(
             look.model_animation_set,
@@ -402,9 +435,13 @@ fn lower_authored_staff_presentation_variants(
                 .and_then(|model| {
                     actor_scene_paths.get(&canonicalize_source_document_record_key(model))
                 })
+                // A keeper parents its head through `ZTWetsuitComponent`'s
+                // `OnLand` instead of `physObjParenting`; its `InWater` swaps
+                // in `headObjWetsuit`.
                 .zip(
                     authored_type_family_elements_named(variant, "parentObj")
                         .into_iter()
+                        .chain(authored_type_family_elements_named(variant, "parenting"))
                         .find(|parenting| {
                             parenting
                                 .attribute_named_any(&["child"])
