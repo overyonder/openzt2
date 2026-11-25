@@ -86,7 +86,8 @@ impl Plugin for WorldSpawnPlugin {
             WorldLoadPreparationSet::InitializeClock
                 .run_if(world_hydration_completion::loading_screen_is_ready),
         );
-        app.add_message::<openzt2_world_state::world_spawn::physical_presentation_state::PhysicalPresentationRequest>();
+        app.add_message::<openzt2_world_state::world_spawn::physical_presentation_state::PhysicalPresentationRequest>()
+            .add_message::<openzt2_world_state::world_spawn::prefab_model_replacement::PrefabModelReplaced>();
         app.add_message::<openzt2_world_state::world_spawn::persistent_id_assignment::AssignPersistentId>()
             .add_message::<openzt2_world_state::world_spawn::persistent_id_assignment::PersistentIdAssigned>()
             .add_message::<openzt2_world_state::world_spawn::persistent_id_assignment::PersistentIdAssignmentFailed>()
@@ -141,6 +142,9 @@ impl Plugin for WorldSpawnPlugin {
             .add_systems(
                 Update,
                 (
+                    crate::world_spawn::prefab_presentation_render_tree::rebuild_prefab_presentations_after_prefab_reload,
+                    crate::world_spawn::prefab_world_instance_spawning::begin_rebuilding_world_instance_renderables_after_prefab_reload,
+                    crate::world_spawn::prefab_world_instance_spawning::finish_rebuilding_world_instance_renderables,
                     hydrate_prefab_presentations,
                     crate::world_spawn::expanding_column_presentation::align_expanding_column_piece_attachments,
                     crate::world_spawn::physical_presentation_state::apply_physical_presentation_requests,

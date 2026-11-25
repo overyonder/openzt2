@@ -132,19 +132,59 @@ pub fn sample_terrain_triangle_height_bounds(
     ])
 }
 
-pub fn sample_authored_terrain(
+/// The terrain under a world position, with the water biome channel and
+/// style of the nearest sample when water covers it.
+pub fn sample_terrain_water(
     chunk: &TerrainChunk,
     asset: &TerrainAsset,
     edited: Option<&EditedTerrainSamples>,
     world: Vec2,
-) -> Option<AuthoredTerrainPoint> {
+) -> Option<(TerrainPoint, Option<(u8, u16)>)> {
     let geometry = sample_terrain(chunk, asset, edited, world)?;
+    let (local, source) = nearest_terrain_sample(chunk, asset, world)?;
+    let water_biome_channel = edited
+        .and_then(|edited| edited.water_biome_channels.get(local).copied())
+        .unwrap_or(source.biome_index);
+    let water_biome = asset
+        .canonical_terrain_grid()
+        .biomes
+        .get(usize::from(water_biome_channel))?;
+    let water_style = edited
+        .and_then(|edited| edited.water_styles.get(local).copied())
+        .unwrap_or(match source.water_depth {
+            TerrainWaterDepth::Dry => 0,
+            TerrainWaterDepth::Shallow => 1,
+            TerrainWaterDepth::Deep => 2,
+        });
+    let water = geometry
+        .water_height_m
+        .and(water_biome.water_presentation.as_ref())
+        .map(|_| (water_biome_channel, water_style));
+    Some((geometry, water))
+}
+
+fn nearest_terrain_sample<'a>(
+    chunk: &TerrainChunk,
+    asset: &'a TerrainAsset,
+    world: Vec2,
+) -> Option<(usize, &'a openzt2_game_data::terrain::TerrainSample)> {
     let grid = ((world - chunk.origin) / chunk.spacing_m)
         .round()
         .clamp(Vec2::ZERO, Vec2::splat(f32::from(chunk.side - 1)));
     let local =
         calculate_row_major_terrain_sample_index(chunk.side, grid.x as usize, grid.y as usize)?;
     let source = read_authored_terrain_sample(chunk, asset, grid.x as usize, grid.y as usize)?;
+    Some((local, source))
+}
+
+pub fn sample_authored_terrain(
+    chunk: &TerrainChunk,
+    asset: &TerrainAsset,
+    edited: Option<&EditedTerrainSamples>,
+    world: Vec2,
+) -> Option<AuthoredTerrainPoint> {
+    let (geometry, water) = sample_terrain_water(chunk, asset, edited, world)?;
+    let (local, source) = nearest_terrain_sample(chunk, asset, world)?;
     let (channel, weight, biome_id) = edited
         .and_then(|edited| {
             let weights = edited.blend_weights.get(local * 16..(local + 1) * 16)?;
@@ -170,30 +210,20 @@ pub fn sample_authored_terrain(
                     .name,
             ),
         ));
-    let water_biome_channel = edited
-        .and_then(|edited| edited.water_biome_channels.get(local).copied())
-        .unwrap_or(source.biome_index);
-    let water_biome = asset
-        .canonical_terrain_grid()
-        .biomes
-        .get(usize::from(water_biome_channel))?;
-    let water_style = edited
-        .and_then(|edited| edited.water_styles.get(local).copied())
-        .unwrap_or(match source.water_depth {
-            TerrainWaterDepth::Dry => 0,
-            TerrainWaterDepth::Shallow => 1,
-            TerrainWaterDepth::Deep => 2,
-        });
-    let water = geometry
-        .water_height_m
-        .and_then(|_| water_biome.water_presentation.as_ref())
-        .map(|water_presentation| TerrainWaterPoint {
-            biome_channel: water_biome_channel,
-            style: water_style,
-            id: AssetId::from_key(&format!("{}/water/{water_style}", water_biome.name)),
+    let water = water.and_then(|(biome_channel, style)| {
+        let water_biome = asset
+            .canonical_terrain_grid()
+            .biomes
+            .get(usize::from(biome_channel))?;
+        let water_presentation = water_biome.water_presentation.as_ref()?;
+        Some(TerrainWaterPoint {
+            biome_channel,
+            style,
+            id: AssetId::from_key(&format!("{}/water/{style}", water_biome.name)),
             appearance: AssetId::from_key(&water_presentation.texture_animations[0].texture),
             flags: 0,
-        });
+        })
+    });
     Some(AuthoredTerrainPoint {
         geometry,
         biome: Some(TerrainBiomePoint {

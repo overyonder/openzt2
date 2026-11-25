@@ -353,12 +353,21 @@ pub(super) fn lower_authored_ui_node_property_bindings_to_canonical_records(
                 UiImagePropertyBindingSource::SelectedWorldThumbnail,
             )),
             Some("starting cash slider") => Some(UiNodePropertyBinding::Visibility(
+                UiBooleanPropertyBindingSource::SelectedWorldStartingCashShown,
+            )),
+            Some("slideup" | "slidedown") => Some(UiNodePropertyBinding::Visibility(
                 UiBooleanPropertyBindingSource::SelectedWorldAdjustableCash,
             )),
             Some("unlimited display") => Some(UiNodePropertyBinding::Visibility(
                 UiBooleanPropertyBindingSource::SelectedWorldUnlimitedCash,
             )),
-            Some("difficulty header" | "scenario difficulty") => {
+            Some("difficulty header") => Some(UiNodePropertyBinding::Visibility(
+                UiBooleanPropertyBindingSource::SelectedWorldDifficulty,
+            )),
+            Some("scenario difficulty") => {
+                output.bindings.push(UiNodePropertyBinding::TextContent(
+                    UiTextPropertyBindingSource::SelectedWorldDifficulty,
+                ));
                 Some(UiNodePropertyBinding::Visibility(
                     UiBooleanPropertyBindingSource::SelectedWorldDifficulty,
                 ))

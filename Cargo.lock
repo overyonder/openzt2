@@ -5319,6 +5319,7 @@ dependencies = [
  "image_dds",
  "lunify",
  "mlua",
+ "naga",
  "openzt2_game_data",
  "postcard",
  "quick-xml 0.38.4",
@@ -5462,6 +5463,7 @@ dependencies = [
  "serde_json",
  "ureq",
  "windows-sys 0.61.2",
+ "zip",
 ]
 
 [[package]]

@@ -1,5 +1,7 @@
+use bevy::ecs::system::SystemId;
 use bevy::ecs::system::SystemState;
 use bevy::prelude::*;
+use openzt2_game_data::terrain::TerrainBiome;
 use openzt2_game_data::terrain::TerrainGrid;
 use openzt2_game_data::terrain::TerrainPresentation;
 use openzt2_game_data::terrain::TerrainSample;
@@ -10,6 +12,12 @@ use openzt2_game_data::terrain::TerrainWaterRegion;
 use openzt2_game_data::world_definitions::document::WorldDefinitionDocument;
 
 use openzt2_zoo_state::terrain::dry_surface_eligibility::TerrainDrySurfaceEligibility;
+use openzt2_zoo_state::terrain::terrain_edit_data_types::TerrainWaterAffiliation;
+use openzt2_zoo_state::terrain::terrain_edit_types::TerrainChanged;
+use openzt2_zoo_state::terrain::terrain_water_presentation_types::{
+    TerrainWaterRegionEdit, TerrainWaterRegionSource,
+};
+use openzt2_zoo_state::topology::topology_graph_types::TopologyGrid;
 use openzt2_zoo_state::terrain::terrain_chunk_types::EditedTerrainSamples;
 use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainChunk;
 use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainIndex;
@@ -41,7 +49,22 @@ fn saved_water_asset() -> TerrainAsset {
             surface_margin_cells: 0,
             full_alpha_composition: false,
         },
-        biomes: Vec::new(),
+        biomes: vec![TerrainBiome {
+            name: String::new(),
+            ground_texture: String::new(),
+            cover_texture: String::new(),
+            mix_mask: String::new(),
+            cliff_textures: Default::default(),
+            ground_brushes: Default::default(),
+            cover_brushes: Default::default(),
+            ground_no_blend_brushes: Default::default(),
+            cover_no_blend_brushes: Default::default(),
+            draw_order: 0,
+            shallow_water_depth_mm: None,
+            deep_water_depth_mm: Some(1000),
+            water_shore_offset_mm: Some(0),
+            water_presentation: None,
+        }],
         samples: vec![
             TerrainSample {
                 height_relative_to_base_metres: 0.0,
@@ -75,6 +98,8 @@ fn saved_water_asset() -> TerrainAsset {
     terrain_test_asset(grid)
 }
 
+/// One 17-sample chunk at source coordinate (0, 0). Source rows run along
+/// negative world z, so the chunk spans world z from -16 to 0.
 fn edited_water_world() -> (World, Entity, Handle<TerrainAsset>) {
     let mut world = World::new();
     let mut assets = Assets::default();
@@ -88,13 +113,22 @@ fn edited_water_world() -> (World, Entity, Handle<TerrainAsset>) {
     let mut definitions = WorldDefinitions::default();
     definitions.index_test_document(definition_handle, &document);
     world.insert_resource(definitions);
+    world.insert_resource(TopologyGrid::default());
+    let projection = world.register_system(
+        crate::terrain::water_regions::authored_membership::project_terrain_water_membership,
+    );
+    world.insert_resource(MembershipProjection(projection));
+    world.init_resource::<Messages<TerrainChanged>>();
+    world.init_resource::<
+        Messages<crate::terrain::water_regions::authored_membership::TerrainWaterMembershipChanged>,
+    >();
     let chunk = world
         .spawn((
             TerrainChunk {
                 source_coord: IVec2::ZERO,
                 coord: IVec2::ZERO,
                 asset: handle.clone(),
-                origin: Vec2::ZERO,
+                origin: Vec2::new(0.0, -16.0),
                 spacing_m: 1.0,
                 side: 17,
             },
@@ -111,31 +145,51 @@ fn edited_water_world() -> (World, Entity, Handle<TerrainAsset>) {
         .id();
     world.insert_resource(TerrainIndex {
         chunks: [(IVec2::ZERO, chunk)].into(),
-        origin: Vec2::ZERO,
+        origin: Vec2::new(0.0, -16.0),
         chunk_span_m: 16.0,
     });
     (world, chunk, handle)
 }
 
+#[derive(Resource)]
+struct MembershipProjection(SystemId);
+
+/// Water membership is projected from the edited samples before eligibility
+/// reads it, by one system that sees each edit as a change since its last run.
 fn on_land(world: &mut World, point: Vec2) -> Option<bool> {
+    let projection = world.resource::<MembershipProjection>().0;
+    world.run_system(projection).unwrap();
     SystemState::<TerrainDrySurfaceEligibility>::new(world)
         .get(world)
         .unwrap()
         .on_land(point)
 }
 
-#[test]
-fn live_water_and_ground_edits_supersede_saved_region_membership() {
-    let (mut world, chunk, _) = edited_water_world();
-    let point = Vec2::splat(6.25);
-    // Removed water is dry even though the saved region and wet flags remain.
-    assert_eq!(on_land(&mut world, point), Some(true));
+fn set_affiliations(
+    world: &mut World,
+    chunk: Entity,
+    affiliation: Option<TerrainWaterAffiliation>,
+) {
     world
         .get_mut::<EditedTerrainSamples>(chunk)
         .unwrap()
-        .water_styles[6 * 17 + 6] = 1;
+        .water_affiliations
+        .fill(affiliation);
+}
+
+#[test]
+fn live_water_and_ground_edits_supersede_saved_region_membership() {
+    let (mut world, chunk, handle) = edited_water_world();
+    world.spawn(TerrainWaterRegionSource::new(handle, 0));
+    let point = Vec2::new(6.25, -6.25);
+    // Removed water is dry even though the saved region and wet flags remain.
+    assert_eq!(on_land(&mut world, point), Some(true));
+    set_affiliations(
+        &mut world,
+        chunk,
+        Some(TerrainWaterAffiliation::SourceRow(0)),
+    );
     assert_eq!(on_land(&mut world, point), Some(false));
-    assert_eq!(on_land(&mut world, Vec2::splat(7.25)), Some(true));
     world
         .get_mut::<EditedTerrainSamples>(chunk)
         .unwrap()
@@ -148,11 +202,7 @@ fn live_water_and_ground_edits_supersede_saved_region_membership() {
         .heights_cm
         .fill(0);
     assert_eq!(on_land(&mut world, point), Some(false));
-    world
-        .get_mut::<EditedTerrainSamples>(chunk)
-        .unwrap()
-        .water_styles
-        .fill(0);
+    set_affiliations(&mut world, chunk, None);
     assert_eq!(on_land(&mut world, point), Some(true));
 }
 
@@ -170,19 +220,24 @@ fn water_painted_on_originally_dry_ground_changes_eligibility() {
             sample.water_surface_flag = false;
         }
     }
-    let point = Vec2::splat(6.25);
+    let painted = world
+        .spawn(TerrainWaterRegionEdit {
+            terrain: handle,
+            biome_index: 0,
+            surface_height_metres: 1.0,
+            depth_ratio: 1.0,
+            uses_tank_minimum_depth: false,
+        })
+        .id();
+    let point = Vec2::new(6.25, -6.25);
     assert_eq!(on_land(&mut world, point), Some(true));
-    world
-        .get_mut::<EditedTerrainSamples>(chunk)
-        .unwrap()
-        .water_styles
-        .fill(1);
+    set_affiliations(
+        &mut world,
+        chunk,
+        Some(TerrainWaterAffiliation::Edited(painted)),
+    );
     assert_eq!(on_land(&mut world, point), Some(false));
-    world
-        .get_mut::<EditedTerrainSamples>(chunk)
-        .unwrap()
-        .water_styles
-        .fill(0);
+    set_affiliations(&mut world, chunk, None);
     assert_eq!(on_land(&mut world, point), Some(true));
     world.entity_mut(chunk).remove::<EditedTerrainSamples>();
     assert_eq!(on_land(&mut world, point), Some(true));

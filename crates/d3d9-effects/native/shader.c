@@ -326,6 +326,73 @@ void openzt2_effect_transform_output_layout(const struct openzt2_effect *owner,
     layout[3] = value->value_count;
 }
 
+/* The compiled program of a texture-stage expression, so a renderer can run
+ * it itself. Returns 0 for a state that copies one parameter directly. */
+const MOJOSHADER_preshader *openzt2_effect_transform_preshader(const struct openzt2_effect *owner,
+                                                               unsigned int technique,
+                                                               unsigned int pass,
+                                                               unsigned int index)
+{
+    return owner->effect->techniques[technique].passes[pass].states[index].preshader;
+}
+
+/* literal, temp, instruction, register and symbol counts. */
+void openzt2_preshader_counts(const MOJOSHADER_preshader *preshader, unsigned int *counts)
+{
+    counts[0] = preshader->literal_count;
+    counts[1] = preshader->temp_count;
+    counts[2] = preshader->instruction_count;
+    counts[3] = preshader->register_count;
+    counts[4] = preshader->symbol_count;
+}
+
+double openzt2_preshader_literal(const MOJOSHADER_preshader *preshader, unsigned int index)
+{
+    return preshader->literals[index];
+}
+
+/* One component of the default input register file. */
+float openzt2_preshader_register(const MOJOSHADER_preshader *preshader, unsigned int component)
+{
+    return preshader->registers[component];
+}
+
+/* The first input register and register count a dependency is copied to. */
+void openzt2_preshader_symbol(const MOJOSHADER_preshader *preshader, unsigned int index,
+                              unsigned int *symbol)
+{
+    symbol[0] = preshader->symbols[index].register_index;
+    symbol[1] = preshader->symbols[index].register_count;
+}
+
+/* opcode, element count and operand count, then type, index and array
+ * register count for each of the four operands. */
+void openzt2_preshader_instruction(const MOJOSHADER_preshader *preshader, unsigned int index,
+                                   unsigned int *instruction)
+{
+    const MOJOSHADER_preshaderInstruction *source = &preshader->instructions[index];
+    instruction[0] = (unsigned int)source->opcode;
+    instruction[1] = source->element_count;
+    instruction[2] = source->operand_count;
+    for (unsigned int operand = 0; operand < 4; ++operand)
+    {
+        instruction[3 + operand * 3] = (unsigned int)source->operands[operand].type;
+        instruction[4 + operand * 3] = source->operands[operand].index;
+        instruction[5 + operand * 3] = source->operands[operand].array_register_count;
+    }
+}
+
+/* parameter class, rows, columns and value count of an effect parameter. */
+void openzt2_effect_parameter_layout(const struct openzt2_effect *owner, unsigned int parameter,
+                                     unsigned int *layout)
+{
+    const MOJOSHADER_effectValue *value = &owner->effect->params[parameter].value;
+    layout[0] = value->type.parameter_class;
+    layout[1] = value->type.rows;
+    layout[2] = value->type.columns;
+    layout[3] = value->value_count;
+}
+
 int openzt2_effect_evaluate_transform(const struct openzt2_effect *program,
                                       const struct openzt2_effect *scratch, unsigned int technique,
                                       unsigned int pass, unsigned int index, float *output)

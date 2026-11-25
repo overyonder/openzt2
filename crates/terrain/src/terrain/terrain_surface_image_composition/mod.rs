@@ -67,12 +67,122 @@ fn surrounding_terrain_surface_paints(
     })
 }
 
+/// Where a chunk's composed cells sit in its surface image.
+struct TerrainSurfaceLayout {
+    origin: IVec2,
+    composed_cells: i32,
+    margin: i32,
+    extent: u32,
+}
+
 pub(super) fn compose_terrain_surface_image(
     chunk: &TerrainChunk,
     asset: &TerrainAsset,
     edited_chunks: &[(Handle<TerrainAsset>, IVec2, EditedTerrainSamples)],
     images: &Assets<Image>,
 ) -> Option<Image> {
+    let _span = info_span!("compose_whole_terrain_surface").entered();
+    let (paints, layout) = compose_terrain_surface_paints(chunk, asset, edited_chunks)?;
+    let mut rgba = vec![0; layout.extent as usize * layout.extent as usize * 4];
+    let whole = (IVec2::ZERO, IVec2::splat(layout.extent as i32));
+    composite_terrain_surface_stamps(asset, images, &layout, &paints, whole, &mut rgba)?;
+    Some(terrain_surface_image(layout.extent, rgba))
+}
+
+/// Recomposes only the part of `previous` that the changed local samples
+/// (`changed_min..=changed_max`) can reach, giving the same pixels as a full
+/// composition. A cell's water and transition flags read its neighbours, so
+/// cells two away from a change are restamped too; every stamp overlapping
+/// that region is composited again, clipped to it.
+pub(super) fn recompose_terrain_surface_image_region(
+    chunk: &TerrainChunk,
+    asset: &TerrainAsset,
+    edited_chunks: &[(Handle<TerrainAsset>, IVec2, EditedTerrainSamples)],
+    images: &Assets<Image>,
+    previous: &Image,
+    changed_min: UVec2,
+    changed_max: UVec2,
+) -> Option<Image> {
+    let _span = info_span!("recompose_terrain_surface_region").entered();
+    let (paints, layout) = compose_terrain_surface_paints(chunk, asset, edited_chunks)?;
+    let previous_data = previous.data.as_ref().filter(|data| {
+        previous.texture_descriptor.format == TextureFormat::Rgba8Unorm
+            && previous.texture_descriptor.size.width == layout.extent
+            && previous.texture_descriptor.size.height == layout.extent
+            && data.len() == layout.extent as usize * layout.extent as usize * 4
+    });
+    let Some(previous_data) = previous_data else {
+        return compose_terrain_surface_image(chunk, asset, edited_chunks, images);
+    };
+    let reach_min = changed_min.as_ivec2() + IVec2::splat(layout.margin - 2);
+    let reach_max = changed_max.as_ivec2() + IVec2::splat(layout.margin + 2);
+    let mut region: Option<(IVec2, IVec2)> = None;
+    for paint in &paints {
+        let cell = paint.coordinate - layout.origin;
+        if cell.cmplt(reach_min).any() || cell.cmpgt(reach_max).any() {
+            continue;
+        }
+        let Some((corner, size)) = terrain_surface_stamp_bounds(asset, images, &layout, paint)
+        else {
+            continue;
+        };
+        let end = corner + size.as_ivec2();
+        region = Some(region.map_or((corner, end), |(min, max)| (min.min(corner), max.max(end))));
+    }
+    let Some((min, max)) = region else {
+        return Some(previous.clone());
+    };
+    let clip = (
+        min.max(IVec2::ZERO),
+        max.min(IVec2::splat(layout.extent as i32)),
+    );
+    let mut rgba = previous_data.clone();
+    // Most stamps lie far from the region, and their centres alone rule them
+    // out without looking up their brushes.
+    let reach = terrain_surface_stamp_reach(asset, images);
+    let mut overlapping = Vec::new();
+    for paint in paints {
+        let center = terrain_surface_stamp_center(&layout, &paint);
+        if reach.is_some_and(|reach| {
+            (center + reach).cmple(clip.0).any() || (center - reach).cmpge(clip.1).any()
+        }) {
+            continue;
+        }
+        let Some((corner, size)) = terrain_surface_stamp_bounds(asset, images, &layout, &paint)
+        else {
+            continue;
+        };
+        let end = corner + size.as_ivec2();
+        if end.cmple(clip.0).any() || corner.cmpge(clip.1).any() {
+            continue;
+        }
+        overlapping.push(paint);
+    }
+    composite_terrain_surface_stamps(asset, images, &layout, &overlapping, clip, &mut rgba)?;
+    Some(terrain_surface_image(layout.extent, rgba))
+}
+
+fn terrain_surface_image(extent: u32, rgba: Vec<u8>) -> Image {
+    Image::new(
+        Extent3d {
+            width: extent,
+            height: extent,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        rgba,
+        TextureFormat::Rgba8Unorm,
+        RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+    )
+}
+
+/// Every composed cell's paint, classified and in draw order.
+fn compose_terrain_surface_paints(
+    chunk: &TerrainChunk,
+    asset: &TerrainAsset,
+    edited_chunks: &[(Handle<TerrainAsset>, IVec2, EditedTerrainSamples)],
+) -> Option<(Vec<TerrainSurfacePaint>, TerrainSurfaceLayout)> {
+    let _span = info_span!("compose_terrain_surface_paints").entered();
     let chunk_cells = i32::from(chunk.side.checked_sub(1)?);
     let margin = i32::from(
         asset
@@ -127,28 +237,14 @@ pub(super) fn compose_terrain_surface_image(
             paint.coordinate.x,
         )
     });
-    let mut rgba = vec![0; extent as usize * extent as usize * 4];
-    for paint in paints {
-        paint_terrain_surface_stamp(
-            asset,
-            images,
+    Some((
+        paints,
+        TerrainSurfaceLayout {
             origin,
             composed_cells,
+            margin,
             extent,
-            paint,
-            &mut rgba,
-        )?;
-    }
-    Some(Image::new(
-        Extent3d {
-            width: extent,
-            height: extent,
-            depth_or_array_layers: 1,
         },
-        TextureDimension::D2,
-        rgba,
-        TextureFormat::Rgba8Unorm,
-        RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
     ))
 }
 
@@ -229,15 +325,12 @@ fn read_terrain_surface_paint(
     })
 }
 
-fn paint_terrain_surface_stamp(
+/// The brush mask and texture a paint stamps with.
+fn terrain_surface_stamp_images<'a>(
     asset: &TerrainAsset,
-    images: &Assets<Image>,
-    origin: IVec2,
-    cells: i32,
-    extent: u32,
-    paint: TerrainSurfacePaint,
-    output: &mut [u8],
-) -> Option<()> {
+    images: &'a Assets<Image>,
+    paint: &TerrainSurfacePaint,
+) -> Option<(&'a Image, &'a Image)> {
     let biome = asset.canonical_terrain_grid().biomes.get(paint.biome)?;
     let selector = (paint.coordinate.x * 13 + paint.coordinate.y * 7 + 20).rem_euclid(4) as usize;
     let water_texture = biome
@@ -266,10 +359,21 @@ fn paint_terrain_surface_stamp(
     } else {
         &biome.ground_texture
     });
-    let brush = images.get(asset.texture_image(brush_path)?)?;
-    let texture = images.get(asset.texture_image(texture_path)?)?;
+    Some((
+        images.get(asset.texture_image(brush_path)?)?,
+        images.get(asset.texture_image(texture_path)?)?,
+    ))
+}
+
+/// The pixel rectangle (corner and size) a paint's stamp covers.
+fn terrain_surface_stamp_bounds(
+    asset: &TerrainAsset,
+    images: &Assets<Image>,
+    layout: &TerrainSurfaceLayout,
+    paint: &TerrainSurfacePaint,
+) -> Option<(IVec2, UVec2)> {
+    let (brush, _) = terrain_surface_stamp_images(asset, images, paint)?;
     let brush_extent = read_rgba_image_extent(brush)?;
-    let texture_extent = read_rgba_image_extent(texture)?;
     let divisor = if asset
         .canonical_terrain_grid()
         .presentation
@@ -283,76 +387,273 @@ fn paint_terrain_surface_stamp(
         brush_extent.x.div_ceil(divisor),
         brush_extent.y.div_ceil(divisor),
     );
-    let center = IVec2::new(
-        (paint.coordinate.x - origin.x) * extent as i32 / cells,
-        (paint.coordinate.y - origin.y) * extent as i32 / cells,
-    );
-    let corner = center - IVec2::new(stamp.x as i32 / 2, stamp.y as i32 / 2);
-    for y in 0..stamp.y {
-        for x in 0..stamp.x {
-            let destination = corner + IVec2::new(x as i32, y as i32);
-            if destination.cmplt(IVec2::ZERO).any()
-                || destination.cmpge(IVec2::splat(extent as i32)).any()
-            {
-                continue;
+    let center = terrain_surface_stamp_center(layout, paint);
+    Some((
+        center - IVec2::new(stamp.x as i32 / 2, stamp.y as i32 / 2),
+        stamp,
+    ))
+}
+
+fn terrain_surface_stamp_center(
+    layout: &TerrainSurfaceLayout,
+    paint: &TerrainSurfacePaint,
+) -> IVec2 {
+    (paint.coordinate - layout.origin) * layout.extent as i32 / layout.composed_cells
+}
+
+/// The farthest any stamp reaches from its centre: half the largest brush
+/// stamp, rounded up. `None` while a brush is unloaded.
+fn terrain_surface_stamp_reach(asset: &TerrainAsset, images: &Assets<Image>) -> Option<IVec2> {
+    let divisor = if asset
+        .canonical_terrain_grid()
+        .presentation
+        .full_alpha_composition
+    {
+        1
+    } else {
+        2
+    };
+    let mut reach = UVec2::ZERO;
+    for biome in &asset.canonical_terrain_grid().biomes {
+        for path in biome
+            .ground_brushes
+            .iter()
+            .chain(&biome.cover_brushes)
+            .chain(&biome.ground_no_blend_brushes)
+            .chain(&biome.cover_no_blend_brushes)
+        {
+            let extent = read_rgba_image_extent(images.get(asset.texture_image(path)?)?)?;
+            reach = reach.max(UVec2::new(
+                extent.x.div_ceil(divisor),
+                extent.y.div_ceil(divisor),
+            ));
+        }
+    }
+    Some((reach / 2 + UVec2::ONE).as_ivec2())
+}
+
+/// Composites `paints`, given in draw order, into `output` inside `clip`
+/// (min inclusive, max exclusive), over a cleared (transparent black) region.
+///
+/// Each pixel lies under many overlapping stamps, so each pixel takes the
+/// stamps over it front to back and stops once it is opaque, keeping the
+/// transparency the stamps above left. The stamps over each cell-sized block
+/// of pixels are listed once, so a pixel only visits stamps that cover its
+/// block, and most pixels turn opaque after a few.
+fn composite_terrain_surface_stamps(
+    asset: &TerrainAsset,
+    images: &Assets<Image>,
+    layout: &TerrainSurfaceLayout,
+    paints: &[TerrainSurfacePaint],
+    clip: (IVec2, IVec2),
+    output: &mut [u8],
+) -> Option<()> {
+    const BLOCK: i32 = 8;
+    struct Resolved<'a> {
+        brush: *const Image,
+        corner: IVec2,
+        size: UVec2,
+        brush_extent: UVec2,
+        texture: &'a [u8],
+        texture_extent: UVec2,
+        texture_bgra: bool,
+        texture_base: UVec2,
+    }
+    struct Stamp<'a> {
+        corner: IVec2,
+        size: IVec2,
+        coverage: &'a [u8],
+        /// Brush texel column, and row times width, for each stamp pixel.
+        brush_columns: &'a [u32],
+        brush_rows: &'a [u32],
+        texture: &'a [u8],
+        texture_extent: UVec2,
+        texture_bgra: bool,
+        /// The texture texel under the stamp's corner.
+        texture_base: UVec2,
+    }
+    let size = (clip.1 - clip.0).max(IVec2::ZERO);
+    let full_alpha = asset
+        .canonical_terrain_grid()
+        .presentation
+        .full_alpha_composition;
+    let (threshold, texels_per_cell) = if full_alpha { (10, 8) } else { (99, 4) };
+    // Brush masks are read as luminance coverage, converted once per brush,
+    // and stamps of one size scale a brush extent alike.
+    let mut masks = bevy::platform::collections::HashMap::<*const Image, Box<[u8]>>::new();
+    let mut scales =
+        bevy::platform::collections::HashMap::<(UVec2, UVec2), (Box<[u32]>, Box<[u32]>)>::new();
+    let mut resolved = Vec::with_capacity(paints.len());
+    for paint in paints.iter().rev() {
+        let (brush, texture) = terrain_surface_stamp_images(asset, images, paint)?;
+        let brush_extent = read_rgba_image_extent(brush)?;
+        let texture_extent = read_rgba_image_extent(texture)?;
+        let (corner, stamp) = terrain_surface_stamp_bounds(asset, images, layout, paint)?;
+        let (texture, texture_bgra) = rgba_image_bytes(texture, texture_extent)?;
+        if !masks.contains_key(&(brush as *const Image)) {
+            let (brush_data, brush_bgra) = rgba_image_bytes(brush, brush_extent)?;
+            let (red, blue) = if brush_bgra { (2, 0) } else { (0, 2) };
+            let texels = brush_extent.x as usize * brush_extent.y as usize;
+            let mask = brush_data[..texels * 4]
+                .chunks_exact(4)
+                .map(|texel| {
+                    ((u16::from(texel[red]) * 54
+                        + u16::from(texel[1]) * 183
+                        + u16::from(texel[blue]) * 19)
+                        >> 8) as u8
+                })
+                .collect();
+            masks.insert(brush as *const Image, mask);
+        }
+        scales.entry((brush_extent, stamp)).or_insert_with(|| {
+            (
+                (0..stamp.x)
+                    .map(|x| x * brush_extent.x / stamp.x % brush_extent.x)
+                    .collect(),
+                (0..stamp.y)
+                    .map(|y| y * brush_extent.y / stamp.y % brush_extent.y * brush_extent.x)
+                    .collect(),
+            )
+        });
+        resolved.push(Resolved {
+            brush,
+            corner,
+            size: stamp,
+            brush_extent,
+            texture,
+            texture_extent,
+            texture_bgra,
+            texture_base: UVec2::new(
+                paint.coordinate.x.rem_euclid(texture_extent.x as i32) as u32 * texels_per_cell,
+                paint.coordinate.y.rem_euclid(texture_extent.y as i32) as u32 * texels_per_cell,
+            ) % texture_extent,
+        });
+    }
+    let stamps: Vec<_> = resolved
+        .iter()
+        .map(|stamp| {
+            let (brush_columns, brush_rows) = &scales[&(stamp.brush_extent, stamp.size)];
+            Stamp {
+                corner: stamp.corner,
+                size: stamp.size.as_ivec2(),
+                coverage: &masks[&stamp.brush],
+                brush_columns,
+                brush_rows,
+                texture: stamp.texture,
+                texture_extent: stamp.texture_extent,
+                texture_bgra: stamp.texture_bgra,
+                texture_base: stamp.texture_base,
             }
-            let mask = read_wrapped_rgba_image_pixel(
-                brush,
-                x * brush_extent.x / stamp.x,
-                y * brush_extent.y / stamp.y,
-            )?;
-            let coverage =
-                ((u16::from(mask[0]) * 54 + u16::from(mask[1]) * 183 + u16::from(mask[2]) * 19)
-                    >> 8) as u8;
-            if asset
-                .canonical_terrain_grid()
-                .presentation
-                .full_alpha_composition
-            {
-                if coverage <= 10 {
-                    continue;
-                }
-            } else if coverage <= 99 {
-                continue;
-            }
-            let texels_per_cell = if asset
-                .canonical_terrain_grid()
-                .presentation
-                .full_alpha_composition
-            {
-                8
-            } else {
-                4
-            };
-            let source_x = (paint.coordinate.x.rem_euclid(texture_extent.x as i32) as u32
-                * texels_per_cell
-                + x)
-                % texture_extent.x;
-            let source_y = (paint.coordinate.y.rem_euclid(texture_extent.y as i32) as u32
-                * texels_per_cell
-                + y)
-                % texture_extent.y;
-            let source = read_wrapped_rgba_image_pixel(texture, source_x, source_y)?;
-            let target = (destination.y as usize * extent as usize + destination.x as usize) * 4;
-            if !asset
-                .canonical_terrain_grid()
-                .presentation
-                .full_alpha_composition
-                || coverage >= 246
-            {
-                output[target..target + 4].copy_from_slice(&source);
-            } else {
-                let alpha = u16::from(coverage);
-                output[target..target + 4].iter_mut().zip(source).for_each(
-                    |(destination, source)| {
-                        *destination = ((u16::from(*destination) * (255 - alpha)
-                            + u16::from(source) * alpha)
-                            / 255) as u8;
-                    },
-                );
+        })
+        .collect();
+    let blocks = (size + IVec2::splat(BLOCK - 1)) / BLOCK;
+    let mut block_stamps = vec![Vec::<u32>::new(); (blocks.x * blocks.y).max(0) as usize];
+    for (index, stamp) in stamps.iter().enumerate() {
+        let first = (stamp.corner - clip.0).max(IVec2::ZERO);
+        let last = (stamp.corner + stamp.size - clip.0).min(size);
+        if last.cmple(first).any() {
+            continue;
+        }
+        let first_block = first / BLOCK;
+        let last_block = (last - IVec2::ONE) / BLOCK;
+        for by in first_block.y..=last_block.y {
+            for bx in first_block.x..=last_block.x {
+                block_stamps[(by * blocks.x + bx) as usize].push(index as u32);
             }
         }
     }
+    // Stamps are smaller than their textures, so a texel offset wraps at most
+    // once; the remainder covers any that are not.
+    let wrap = |base: u32, offset: u32, extent: u32| {
+        let texel = base + offset;
+        if texel < extent {
+            texel
+        } else if texel < extent * 2 {
+            texel - extent
+        } else {
+            texel % extent
+        }
+    };
+    // Bands of block rows write disjoint image rows, so they composite in
+    // parallel.
+    let extent = layout.extent as usize;
+    let row_bytes = extent * 4;
+    let mut bands = Vec::with_capacity(blocks.y.max(0) as usize);
+    let mut rest = output.get_mut(clip.0.y as usize * row_bytes..)?;
+    for by in 0..blocks.y {
+        let rows = BLOCK.min(size.y - by * BLOCK) as usize;
+        let (band, remainder) = std::mem::take(&mut rest).split_at_mut(rows * row_bytes);
+        rest = remainder;
+        bands.push((by, band));
+    }
+    let (stamps, block_stamps) = (&stamps, &block_stamps);
+    bevy::tasks::ComputeTaskPool::get_or_init(bevy::tasks::TaskPool::default).scope(|scope| {
+        for (by, band) in bands {
+            scope.spawn(async move {
+                let row = clip.0.y + by * BLOCK;
+                for bx in 0..blocks.x {
+                    let list = &block_stamps[(by * blocks.x + bx) as usize];
+                    let block = IVec2::new(bx, by) * BLOCK;
+                    for y in block.y..(block.y + BLOCK).min(size.y) {
+                        for x in block.x..(block.x + BLOCK).min(size.x) {
+                            let pixel = clip.0 + IVec2::new(x, y);
+                            let mut left = 1.0_f32;
+                            let mut colour = [0.0_f32; 4];
+                            for &index in list {
+                                let stamp = &stamps[index as usize];
+                                let local = pixel - stamp.corner;
+                                if local.cmplt(IVec2::ZERO).any() || local.cmpge(stamp.size).any() {
+                                    continue;
+                                }
+                                let local = local.as_uvec2();
+                                let coverage = stamp.coverage[(stamp.brush_rows[local.y as usize]
+                                    + stamp.brush_columns[local.x as usize])
+                                    as usize];
+                                if coverage <= threshold {
+                                    continue;
+                                }
+                                let texel =
+                                    (wrap(stamp.texture_base.y, local.y, stamp.texture_extent.y)
+                                        * stamp.texture_extent.x
+                                        + wrap(
+                                            stamp.texture_base.x,
+                                            local.x,
+                                            stamp.texture_extent.x,
+                                        )) as usize
+                                        * 4;
+                                let texel = &stamp.texture[texel..texel + 4];
+                                let source = if stamp.texture_bgra {
+                                    [texel[2], texel[1], texel[0], texel[3]]
+                                } else {
+                                    [texel[0], texel[1], texel[2], texel[3]]
+                                };
+                                let alpha = if !full_alpha || coverage >= 246 {
+                                    1.0
+                                } else {
+                                    f32::from(coverage) / 255.0
+                                };
+                                let weight = left * alpha;
+                                for (sum, source) in colour.iter_mut().zip(source) {
+                                    *sum += f32::from(source) * weight;
+                                }
+                                // Below half a level of 8-bit colour, nothing beneath shows.
+                                left -= weight;
+                                if left * 255.0 < 0.5 {
+                                    break;
+                                }
+                            }
+                            let target = ((pixel.y - row) as usize * extent + pixel.x as usize) * 4;
+                            for (destination, sum) in
+                                band[target..target + 4].iter_mut().zip(colour)
+                            {
+                                *destination = sum.round().clamp(0.0, 255.0) as u8;
+                            }
+                        }
+                    }
+                }
+            });
+        }
+    });
     Some(())
 }
 
@@ -441,6 +742,18 @@ mod ground_path_mask_tests {
         assert_eq!(read_ground_path_mask_coverage(&image, 0, 1), Some(128));
         assert_eq!(read_ground_path_mask_coverage(&image, 3, 3), Some(255));
     }
+}
+
+/// An RGBA or BGRA image's bytes, whether it is BGRA, and that it holds the
+/// whole extent; other formats aren't composed.
+fn rgba_image_bytes(image: &Image, extent: UVec2) -> Option<(&[u8], bool)> {
+    let bgra = match image.texture_descriptor.format {
+        TextureFormat::Rgba8Unorm | TextureFormat::Rgba8UnormSrgb => false,
+        TextureFormat::Bgra8Unorm | TextureFormat::Bgra8UnormSrgb => true,
+        _ => return None,
+    };
+    let data = image.data.as_deref()?;
+    (data.len() >= extent.x as usize * extent.y as usize * 4).then_some((data, bgra))
 }
 
 fn read_rgba_image_extent(image: &Image) -> Option<UVec2> {
@@ -701,5 +1014,166 @@ mod painted_texture_tests {
             [0, 255, 128, 0]
         );
         assert_eq!([red(1, 0), red(1, 3)], [0, 0]);
+    }
+}
+
+#[cfg(test)]
+mod region_recomposition_tests {
+    use super::*;
+    use openzt2_game_assets::terrain::terrain_test_asset::{
+        terrain_test_asset, terrain_test_textures_mut,
+    };
+    use openzt2_game_data::terrain::{
+        TerrainGrid, TerrainPresentation, TerrainSample, TerrainSlopeTile, TerrainUnits,
+    };
+    use openzt2_zoo_state::terrain::terrain_edit_rectangle_operations::materialize_complete_edited_terrain_sample_overlay;
+
+    fn rgba_image(side: u32, pixel: impl Fn(u32, u32) -> [u8; 4]) -> Image {
+        let data = (0..side * side)
+            .flat_map(|index| pixel(index % side, index / side))
+            .collect();
+        Image::new(
+            Extent3d {
+                width: side,
+                height: side,
+                depth_or_array_layers: 1,
+            },
+            TextureDimension::D2,
+            data,
+            TextureFormat::Rgba8Unorm,
+            RenderAssetUsages::MAIN_WORLD,
+        )
+    }
+
+    fn biome(texture: &str, draw_order: i16) -> TerrainBiome {
+        TerrainBiome {
+            name: String::new(),
+            ground_texture: texture.into(),
+            cover_texture: texture.into(),
+            mix_mask: String::new(),
+            cliff_textures: Default::default(),
+            ground_brushes: std::array::from_fn(|_| "blend.dds".into()),
+            cover_brushes: std::array::from_fn(|_| "blend.dds".into()),
+            ground_no_blend_brushes: std::array::from_fn(|_| "solid.dds".into()),
+            cover_no_blend_brushes: std::array::from_fn(|_| "solid.dds".into()),
+            draw_order,
+            shallow_water_depth_mm: None,
+            deep_water_depth_mm: None,
+            water_shore_offset_mm: None,
+            water_presentation: None,
+        }
+    }
+
+    #[test]
+    fn recomposing_the_changed_region_matches_composing_the_whole_chunk() {
+        let mut images = Assets::<Image>::default();
+        let mut asset = terrain_test_asset(TerrainGrid {
+            width: 17,
+            height: 17,
+            sector_columns: 1,
+            sector_rows: 1,
+            units: TerrainUnits {
+                cell_size_metres: 1.0,
+                base_height_metres: 0.0,
+                maximum_height_metres: f32::MAX,
+                minimum_water_height_metres: None,
+            },
+            presentation: TerrainPresentation {
+                water_distance_fade: Default::default(),
+                water_editing: Default::default(),
+                detail_texture: String::new(),
+                detail_texture_repetition: 1.0,
+                cliff_rise_per_metre: [0.0; 2],
+                surface_resolution: 128,
+                surface_margin_cells: 1,
+                full_alpha_composition: true,
+            },
+            biomes: vec![biome("red.dds", 0), biome("blue.dds", 1)],
+            samples: (0..17 * 17)
+                .map(|_| TerrainSample {
+                    height_relative_to_base_metres: 0.0,
+                    biome_index: 0,
+                    has_ground_cover: false,
+                    water_depth: TerrainWaterDepth::Dry,
+                    water_surface_flag: false,
+                    excludes_elevated_path: false,
+                    support_floor_metres: None,
+                    height_cap_metres: None,
+                    height_is_linked: false,
+                    has_child_height_link: false,
+                })
+                .collect(),
+            water_regions: Vec::new(),
+            waterfall: None,
+            slope_tiles: vec![
+                TerrainSlopeTile {
+                    uses_alternate_diagonal: false
+                };
+                16
+            ],
+        });
+        let textures = terrain_test_textures_mut(&mut asset);
+        // A soft round brush, so neighbouring stamps overlap and blend.
+        let round = |x: u32, y: u32| {
+            let distance = (x as f32 - 7.5).hypot(y as f32 - 7.5);
+            let value = (255.0 * (1.0 - distance / 9.0)).clamp(0.0, 255.0) as u8;
+            [value, value, value, 255]
+        };
+        textures.insert("blend.dds".into(), images.add(rgba_image(16, round)));
+        textures.insert(
+            "solid.dds".into(),
+            images.add(rgba_image(16, |_, _| [255; 4])),
+        );
+        textures.insert(
+            "red.dds".into(),
+            images.add(rgba_image(32, |x, y| {
+                [200, (x * 7) as u8, (y * 5) as u8, 255]
+            })),
+        );
+        textures.insert(
+            "blue.dds".into(),
+            images.add(rgba_image(32, |x, y| {
+                [(x * 3) as u8, (y * 6) as u8, 220, 255]
+            })),
+        );
+        let chunk = TerrainChunk {
+            source_coord: IVec2::ZERO,
+            coord: IVec2::new(0, -1),
+            asset: Handle::default(),
+            origin: Vec2::ZERO,
+            spacing_m: 1.0,
+            side: 17,
+        };
+        let mut edited = materialize_complete_edited_terrain_sample_overlay(&chunk, &asset);
+        let before = compose_terrain_surface_image(
+            &chunk,
+            &asset,
+            &[(chunk.asset.clone(), chunk.coord, edited.clone())],
+            &images,
+        )
+        .expect("unedited surface");
+        let (min, max) = (UVec2::new(5, 6), UVec2::new(7, 8));
+        for z in min.y..=max.y {
+            for x in min.x..=max.x {
+                let sample = (z * 17 + x) as usize;
+                edited.blend_weights[sample * 16..sample * 16 + 16].fill(0);
+                edited.blend_weights[sample * 16 + 1] = 255;
+            }
+        }
+        let edited_chunks = [(chunk.asset.clone(), chunk.coord, edited)];
+        let whole = compose_terrain_surface_image(&chunk, &asset, &edited_chunks, &images)
+            .expect("whole surface");
+        let region = recompose_terrain_surface_image_region(
+            &chunk,
+            &asset,
+            &edited_chunks,
+            &images,
+            &before,
+            min,
+            max,
+        )
+        .expect("region surface");
+        assert_ne!(before.data, whole.data, "the edit changes the surface");
+        assert_eq!(region.data, whole.data);
     }
 }

@@ -230,6 +230,9 @@ pub struct CampaignScenarioRecord {
     pub starting_cash_cents: i64,
     pub difficulty: AssetId,
     pub name_key: AssetId,
+    /// The short title the map selection screen shows for the scenario.
+    #[serde(default)]
+    pub short_name_key: AssetId,
     pub description_key: AssetId,
 }
 

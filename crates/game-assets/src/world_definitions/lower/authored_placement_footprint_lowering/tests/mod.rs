@@ -64,18 +64,22 @@ fn zero_cardinal_footprint_occupies_the_cell_containing_the_object() {
 }
 
 #[test]
-fn ground_paths_block_only_grid_snapped_objects_whose_stomp_rules_prevent_paths() {
+fn ground_paths_block_grid_snapped_objects_whose_nearest_path_rule_prevents_them() {
     let documents = [
         ("entities/entity.xml", r#"<BFTypedBinder binderType="entity" abstract="true"><shared><ZTPlacementData><stompData><allow><path/></allow><prevent/></stompData></ZTPlacementData></shared></BFTypedBinder>"#),
         ("entities/scenery.xml", r#"<BFTypedBinder binderType="scenery" abstract="true"><types><entity><scenery/></entity></types><shared><ZTPlacementData gridSnap="true"><stompData><delete><grass/></delete><prevent/><allow/></stompData></ZTPlacementData></shared></BFTypedBinder>"#),
         ("entities/bin.xml", r#"<BFTypedBinder binderType="bin"><types><entity><scenery><bin/></scenery></entity></types></BFTypedBinder>"#),
         ("entities/toy.xml", r#"<BFTypedBinder binderType="toy"><types><entity><toy/></entity></types><shared><ZTPlacementData gridSnap="true"/></shared></BFTypedBinder>"#),
         ("entities/egg.xml", r#"<BFTypedBinder binderType="egg"><types><entity><egg/></entity></types><shared><ZTPlacementData><stompData><prevent><path/></prevent></stompData></ZTPlacementData></shared></BFTypedBinder>"#),
+        ("entities/statue.xml", r#"<BFTypedBinder binderType="statue"><types><entity><scenery><statue/></scenery></entity></types><shared><ZTPlacementData><stompData><prevent><path/></prevent></stompData></ZTPlacementData></shared></BFTypedBinder>"#),
     ].map(|(path, source)| parse_blue_fang_source_document(AssetPath::new(path), source.as_bytes()).unwrap());
     let index = SourceIndex::build(&documents).unwrap();
     let blocks =
         |key: &str| authored_ground_paths_block_placement(&index.find(key).unwrap()).unwrap();
-    assert!(blocks("bin"));
+    // Scenery's rules don't mention paths, so the root family's allow applies,
+    // as the original lets a trash bin sit on a path.
+    assert!(!blocks("bin"));
+    assert!(blocks("statue"));
     assert!(!blocks("toy"));
     assert!(!blocks("egg"));
 }

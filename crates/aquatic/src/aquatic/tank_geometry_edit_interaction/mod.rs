@@ -60,12 +60,15 @@ pub(super) fn update_tank_geometry_gesture(
         &HabitatSummary,
         &WorldMember,
     )>,
-    mut previews: Query<(
-        Entity,
-        &mut TankGeometryEdit,
-        &mut TankGeometryGesture,
-        &mut ConstructionPreview,
-    )>,
+    mut previews: Query<
+        (
+            Entity,
+            &mut TankGeometryEdit,
+            &mut TankGeometryGesture,
+            &mut ConstructionPreview,
+        ),
+        Without<openzt2_zoo_state::aquatic::tank_geometry_edit_types::ScriptedTankGeometryEdit>,
+    >,
     height_queries: TankHeightBoundsQueries,
     (mut cancellations, mut commits): (
         MessageReader<CancelConstruction>,

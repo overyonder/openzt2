@@ -197,15 +197,14 @@ fn minimum_zoom_retains_and_then_consumes_the_close_in_residual() {
 }
 
 #[test]
-fn overhead_pose_flattens_the_authored_radial_node_chain() {
+fn overhead_pose_pitches_only_the_zoom_arm_behind_the_look_at_pivot() {
     let overhead_camera_rig = overhead_camera_rig_for_calculation_tests();
     let overhead_camera_pose = overhead_pose(&overhead_camera_rig);
-    let authored_radial_distance =
-        overhead_camera_rig.distance + overhead_camera_rig.look_at_distance_m;
     let expected_eye = Vec3::new(
         0.0,
-        authored_radial_distance * overhead_camera_rig.pitch.sin(),
-        authored_radial_distance * overhead_camera_rig.pitch.cos(),
+        overhead_camera_rig.distance * overhead_camera_rig.pitch.sin(),
+        overhead_camera_rig.look_at_distance_m
+            + overhead_camera_rig.distance * overhead_camera_rig.pitch.cos(),
     );
     let expected_focus = Vec3::new(0.0, 0.2, 0.0);
 
@@ -228,9 +227,7 @@ fn terrain_fit_lift_remains_independent_of_close_in_zoom_demand() {
     overhead_camera_rig.target_ground_fit_offset_m = 4.0;
 
     let overhead_camera_pose = overhead_pose(&overhead_camera_rig);
-    let authored_radial_distance =
-        overhead_camera_rig.distance + overhead_camera_rig.look_at_distance_m;
-    let expected_eye_height = 1.0 + authored_radial_distance * overhead_camera_rig.pitch.sin();
+    let expected_eye_height = 1.0 + overhead_camera_rig.distance * overhead_camera_rig.pitch.sin();
 
     assert!((overhead_camera_pose.translation.y - expected_eye_height).abs() < 1e-5);
 }

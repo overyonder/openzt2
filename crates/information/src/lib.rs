@@ -148,6 +148,7 @@ impl Plugin for InformationPlugin {
                     projection::staff_status_projection::project_maintenance_worker_duties_to_information_panel_controls,
                     projection::staff_status_projection::project_live_staff_status_to_visible_information_panels,
                     projection::zoo_status_projection::project_live_zoo_status_to_authored_information_bindings,
+                    projection::animal_alert_button_projection::project_animal_alerts_to_find_animal_buttons,
                     (
                         projection::information_list_projection::project_live_world_entities_to_visible_information_list_rows,
                         projection::information_list_row_identity_projection::project_world_subject_identity_to_information_list_rows,

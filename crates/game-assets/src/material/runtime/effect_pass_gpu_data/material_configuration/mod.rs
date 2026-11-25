@@ -212,6 +212,14 @@ impl EffectPassMaterial {
         self.fixed_transform_bindings
             .retain(|binding| binding.stage() != target_stage);
         self.model_reflection_projections[target_stage] = None;
+        let gpu_stages = &mut self.fixed_function.values
+            [super::super::gpu_texture_transforms::GPU_TRANSFORM_STAGE_REGISTER]
+            .w;
+        let remaining = (*gpu_stages as u32) & !(1 << target_stage);
+        if remaining as f32 != *gpu_stages {
+            *gpu_stages = remaining as f32;
+            self.dirty_fixed_function = true;
+        }
         Ok(true)
     }
 
@@ -428,19 +436,15 @@ impl EffectPassMaterial {
         projected.fixed_function.values[47].x = world_light_context as f32;
         projected.uniform_buffer_assets.fixed_function =
             buffers.add(shader_buffer_from_uniform_value(&projected.fixed_function));
+        // Animations and owners write these per material asset.
         if !projected.texture_coordinate_animations.is_empty()
-            || projected
-                .model_reflection_projections
-                .iter()
-                .any(Option::is_some)
-            || projected
-                .fixed_transform_bindings
-                .iter()
-                .any(|binding| binding.input_dependencies() != 0)
+            || !projected.fixed_transform_bindings.is_empty()
         {
             projected.uniform_buffer_assets.fixed_transforms = buffers.add(
                 shader_buffer_from_uniform_value(&projected.fixed_transforms),
             );
+            projected.uniform_buffer_assets.transform_inputs =
+                buffers.add(ShaderBuffer::from(projected.transform_inputs.clone()));
         }
         Some(projected)
     }

@@ -184,8 +184,9 @@ pub(super) fn collect_authored_typed_binder_family_references(
             .find(|attribute| attribute.name().eq_ignore_ascii_case("binderType"))
             .map(OrderedSourceDocumentAttribute::value)
             .unwrap_or_default();
-        let mut family_names = Vec::new();
-        // All declared ancestors can supply inherited defaults.
+        // All declared ancestors can supply inherited defaults, including the
+        // root `entity` family itself (its `allow path` stomp rule, for one).
+        let mut family_names = vec![entity.name.to_string()];
         append_descendant_names(entity, &mut family_names);
         family_names
             .into_iter()
@@ -202,7 +203,7 @@ mod typed_binder_family_reference_tests {
     use super::*;
 
     #[test]
-    fn building_type_ancestors_are_loaded_without_loading_the_concrete_type_again() {
+    fn building_type_ancestors_and_the_root_entity_family_are_loaded_without_the_concrete_type() {
         let document = parse_blue_fang_source_document(
             AssetPath::new("entities/objects/buildings/ai/stage.xml"),
             br#"<BFTypedBinder binderType="stage"><types><entity><building><stage/></building></entity></types></BFTypedBinder>"#,
@@ -210,10 +211,10 @@ mod typed_binder_family_reference_tests {
         let references = collect_authored_typed_binder_family_references(&[document]);
         assert_eq!(
             references.into_iter().collect::<Vec<_>>(),
-            vec![(
+            ["building", "entity"].map(|family| (
                 "entities/objects/buildings/ai/stage.xml".to_owned(),
-                "building".to_owned(),
-            )]
+                family.to_owned(),
+            ))
         );
     }
 

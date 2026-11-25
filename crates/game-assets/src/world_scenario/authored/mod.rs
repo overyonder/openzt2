@@ -700,6 +700,11 @@ fn lower_campaign(document: &OrderedSourceDocument) -> io::Result<ScenarioCampai
                 name_key: AssetId::from_key(&canonicalize_source_document_record_key(required(
                     document, entry, "name",
                 )?)),
+                short_name_key: AssetId::from_key(&canonicalize_source_document_record_key(
+                    entry
+                        .attribute("short")
+                        .map_or_else(|| required(document, entry, "name"), Ok)?,
+                )),
                 description_key: AssetId::from_key(&canonicalize_source_document_record_key(
                     entry.attribute("description").unwrap_or(id),
                 )),

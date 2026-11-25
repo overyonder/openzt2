@@ -12,6 +12,7 @@ impl PluginGroup for OpenZt2GamePluginGroup {
             .add(openzt2_session::persistence::PersistencePlugin)
             .add(openzt2_ui::GameUiPlugin)
             .add(openzt2_session::mod_manager::ModManagerPlugin)
+            .add(openzt2_session::blender_link::BlenderLinkPlugin)
             .add(openzt2_session::shell::ShellPlugin)
             .add(openzt2_world::world_spawn::WorldSpawnPlugin)
             .add(openzt2_world::animation_graph::AnimationGraphPlugin)

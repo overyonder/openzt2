@@ -7,7 +7,6 @@ use bevy::prelude::*;
 use bevy::render::storage::ShaderBuffer;
 use bevy::transform::helper::TransformHelper;
 use openzt2_game_assets::material::runtime::effect_pass_gpu_data::EffectPassMaterial;
-use openzt2_game_assets::material::runtime::resolved_effect_transform_bindings::EffectRenderViewTransforms;
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use openzt2_interface_state::camera::camera_runtime_state_types::ZooCamera;
 use openzt2_world_state::model_render::authored_model_material_pass_projection::WATER_FALLBACK_REFLECTION_EFFECT_PASS_RENDER_VIEW_LAYER;
@@ -363,14 +362,6 @@ pub(super) fn update_authored_terrain_water_renderer_inputs(
             visibility.set_if_neq(Visibility::Hidden);
         }
     }
-    let render_view = camera.as_ref().and_then(|(_, projection, transform)| {
-        zoo_camera.single().ok().map(|(entity, _, _)| {
-            (
-                entity,
-                EffectRenderViewTransforms::from_camera(transform, projection),
-            )
-        })
-    });
     for (handle, _, key, _, mut visibility, kind) in &mut water_surfaces {
         if !kind.uses_stitch_geometry() || *visibility == Visibility::Hidden {
             continue;
@@ -391,21 +382,7 @@ pub(super) fn update_authored_terrain_water_renderer_inputs(
                 visibility.set_if_neq(Visibility::Hidden);
                 continue;
             };
-            let Some((view_entity, render_view)) = &render_view else {
-                visibility.set_if_neq(Visibility::Hidden);
-                continue;
-            };
             material.replace_texture_asset_at_d3d9_stage(0, texture.clone());
-            material.bind_fixed_function_transform_expressions(
-                Mat4::from_cols(Vec4::X, -Vec4::Z, Vec4::Y, Vec4::W),
-                *view_entity,
-                render_view,
-                true,
-                true,
-                None,
-                None,
-                None,
-            );
         } else {
             material.set_fixed_function_ambient_colour(light.raw_base_rgba());
             material.set_fixed_function_texture_transform(0, textures.transforms[0]);
@@ -603,10 +580,7 @@ pub(super) fn update_authored_terrain_water_renderer_inputs(
     if let Some((_, _, extent)) = &refraction_capture {
         targets.refraction_world_extent = *extent;
     }
-    let clip_from_view = zoo_projection.get_clip_from_view();
     let source_from_local = Mat4::from_cols(Vec4::X, -Vec4::Z, Vec4::Y, Vec4::W);
-    let world_to_view = zoo_transform.to_matrix().inverse();
-    let source_to_clip = clip_from_view * world_to_view * source_from_local;
     let source_to_refraction_clip =
         refraction_capture
             .as_ref()
@@ -623,21 +597,6 @@ pub(super) fn update_authored_terrain_water_renderer_inputs(
         Vec4::new(0.0, -0.5, 0.0, 0.0),
         Vec4::Z,
         Vec4::new(0.5, 0.5, 0.0, 1.0),
-    );
-    let camera_position_source = Vec3::new(
-        zoo_transform.translation.x,
-        -zoo_transform.translation.z,
-        zoo_transform.translation.y,
-    );
-    let camera_across_source = Vec3::new(
-        zoo_transform.right().x,
-        -zoo_transform.right().z,
-        zoo_transform.right().y,
-    );
-    let camera_up_source = Vec3::new(
-        zoo_transform.up().x,
-        -zoo_transform.up().z,
-        zoo_transform.up().y,
     );
     for (material_handle, surface, wave_key, parent, mut visibility, pass_kind) in
         &mut water_surfaces
@@ -770,7 +729,6 @@ pub(super) fn update_authored_terrain_water_renderer_inputs(
                 }
             }
         }
-        material.bind_float_matrix_effect_semantic("WorldToNDC", source_to_clip);
         material.bind_float_matrix_effect_semantic(
             "WorldToRefract",
             clip_to_uv * source_to_refraction_clip,
@@ -798,10 +756,6 @@ pub(super) fn update_authored_terrain_water_renderer_inputs(
                 targets.reflection.clone()
             },
         );
-        material.bind_float_vector_effect_semantic("CameraPos", camera_position_source.extend(1.0));
-        material
-            .bind_float_vector_effect_semantic("CameraAcross", camera_across_source.extend(0.0));
-        material.bind_float_vector_effect_semantic("CameraUp", camera_up_source.extend(0.0));
         geometric_wave_state
             .bind_wave_channels_to_effect_pass(surface.surface_plane_height, material);
         material

@@ -11,6 +11,7 @@ use crate::authored_globe_presentation_types::UiGlobeSceneAssets;
 use bevy::gltf::Gltf;
 use bevy::prelude::*;
 use openzt2_interface_state::shell::shell_selection_types::GlobeMarker;
+use openzt2_interface_state::shell::shell_selection_types::ShellSelection;
 use openzt2_interface_state::shell::shell_selection_types::WorldChoiceView;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner;
 use openzt2_interface_state::ui::authored_ui_selection_state::UiSelected;
@@ -126,19 +127,25 @@ pub(crate) fn project_globe_markers(
     }
 }
 
+/// The campaign globe marks only the selected scenario's location; the other
+/// modes flag every map and ring the selected one.
 pub(crate) fn present_globe_marker_selection(
+    selection: Option<Res<ShellSelection>>,
     anchors: Query<(&WorldChoiceView, &UiSelected), With<UiGlobeMarkerAnchor>>,
     mut visuals: Query<
         (&WorldChoiceView, &UiGlobeMarkerVisual, &mut Visibility),
         Without<PrefabModel>,
     >,
 ) {
+    let campaign = selection.is_some_and(|selection| {
+        selection.mode == Some(openzt2_world_state::game_session_types::WorldSessionMode::Campaign)
+    });
     for (view, selected) in &anchors {
         for (visual_view, visual, mut visibility) in &mut visuals {
             if visual_view.0 != view.0 {
                 continue;
             }
-            let requested = if !visual.selected || selected.0 {
+            let requested = if selected.0 || !(visual.selected || campaign) {
                 Visibility::Inherited
             } else {
                 Visibility::Hidden

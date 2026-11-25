@@ -131,6 +131,26 @@ unsafe extern "C" {
         index: u32,
         layout: *mut u32,
     );
+    pub(crate) fn openzt2_effect_transform_preshader(
+        effect: *const NativeEffect,
+        technique: u32,
+        pass: u32,
+        index: u32,
+    ) -> *const c_void;
+    pub(crate) fn openzt2_preshader_counts(preshader: *const c_void, counts: *mut u32);
+    pub(crate) fn openzt2_preshader_literal(preshader: *const c_void, index: u32) -> f64;
+    pub(crate) fn openzt2_preshader_register(preshader: *const c_void, component: u32) -> f32;
+    pub(crate) fn openzt2_preshader_symbol(preshader: *const c_void, index: u32, symbol: *mut u32);
+    pub(crate) fn openzt2_preshader_instruction(
+        preshader: *const c_void,
+        index: u32,
+        instruction: *mut u32,
+    );
+    pub(crate) fn openzt2_effect_parameter_layout(
+        effect: *const NativeEffect,
+        parameter: u32,
+        layout: *mut u32,
+    );
     pub(crate) fn openzt2_effect_evaluate_transform(
         program: *const NativeEffect,
         scratch: *const NativeEffect,

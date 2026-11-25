@@ -263,6 +263,54 @@ pub(super) fn install_scenario_game_query_and_command_functions<'scope, 'env: 's
             Ok(queries.guest_admission_price.0 .0 / 100)
         })?,
     )?;
+    // The shipped `getIsTankInWorld` asks this; the first Marine Mania
+    // tutorial waits on it after the tank's walls are placed.
+    let tank_manager = lua.create_table()?;
+    tank_manager.set(
+        "ZT_IS_TANK_IN_WORLD",
+        scope.create_function(move |_, _: MultiValue| Ok(queries.tank_in_world))?,
+    )?;
+    // One `{value = height}` per tank, in world units, as the shipped
+    // `getTankWaterHeightList` and `getTankFloorHeightList` read them.
+    for (method, height) in [
+        (
+            "ZT_GET_TANK_WATER_HEIGHT",
+            (|geometry| geometry.water_height)
+                as fn(&openzt2_zoo_state::aquatic::aquatic_simulation_types::TankGeometry) -> f32,
+        ),
+        ("ZT_GET_TANK_FLOOR_HEIGHT", |geometry| geometry.floor_height),
+    ] {
+        tank_manager.set(
+            method,
+            scope.create_function(move |lua, _: MultiValue| {
+                let mut tanks = queries.tanks.iter().collect::<Vec<_>>();
+                tanks.sort_by_key(|(entity, _)| *entity);
+                let list = lua.create_table()?;
+                for (_, geometry) in tanks {
+                    let entry = lua.create_table()?;
+                    entry.set("value", height(geometry))?;
+                    list.raw_push(entry)?;
+                }
+                Ok(list)
+            })?,
+        )?;
+    }
+    tank_manager.set(
+        "ZT_SET_TANK_WALL_HEIGHT",
+        scope.create_function(move |_, (_, height): (Table, String)| {
+            let height = height
+                .trim()
+                .parse::<f32>()
+                .ok()
+                .filter(|height| height.is_finite())
+                .ok_or_else(|| mlua::Error::runtime("tank wall height must be a number"))?;
+            ui.borrow_mut()
+                .push(super::scenario_lua_ui::ScenarioUiCommand::TankWallHeight(
+                    height,
+                ));
+            Ok(())
+        })?,
+    )?;
     economy_manager.set(
         "ZT_GET_ZOO_CASH",
         scope.create_function(move |_, _: MultiValue| Ok(queries.zoo_cash.0 .0 / 100))?,
@@ -321,6 +369,21 @@ pub(super) fn install_scenario_game_query_and_command_functions<'scope, 'env: 's
         queries,
         entity_operations,
     )?;
+    // `displayZooMessage` passes a `ZTZooMessageData` table whose `display`
+    // field is already localized text and whose `timeout` is in seconds.
+    world_manager.set(
+        "ZT_DISPLAY_ZOO_MESSAGE",
+        scope.create_function(move |_, (_, message): (Table, Table)| {
+            let text: String = message.get("display")?;
+            let timeout_seconds = message.get::<Option<f64>>("timeout")?.unwrap_or(0.0);
+            ui.borrow_mut()
+                .push(super::scenario_lua_ui::ScenarioUiCommand::ZooMessage {
+                    text,
+                    timeout_seconds,
+                });
+            Ok(())
+        })?,
+    )?;
     globals.set(
         "queryObject",
         scope.create_function(move |_, name: String| match name.as_str() {
@@ -330,6 +393,7 @@ pub(super) fn install_scenario_game_query_and_command_functions<'scope, 'env: 's
             "ZTStatus" => Ok(Value::Table(status.clone())),
             "BFGManager" => Ok(Value::Table(entity_manager.clone())),
             "ZTWorldMgr" => Ok(Value::Table(world_manager.clone())),
+            "ZTTankMgr" => Ok(Value::Table(tank_manager.clone())),
             "UIRoot" => Ok(Value::Table(ui_root.clone())),
             "ZTMode" => Ok(Value::Table(mode.clone())),
             "ZTPhotoChallengesComponent" => Ok(Value::Table(photo_challenges.clone())),

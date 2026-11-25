@@ -140,8 +140,7 @@ pub(super) fn register_world_definition_presentation_dependencies(
                 });
             }
             Some(extension)
-                if extension.eq_ignore_ascii_case("nif")
-                    || extension.eq_ignore_ascii_case("bfb") =>
+                if crate::model_source::gltf_model_source::is_model_source_extension(extension) =>
             {
                 let scene_path = native_model_scene_labelled_asset_path(&referenced);
                 let Some(model_path) =

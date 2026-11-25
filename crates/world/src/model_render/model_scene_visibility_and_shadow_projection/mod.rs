@@ -8,8 +8,6 @@ use openzt2_world_state::model_render::ModelExpanded;
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabModel;
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabShadowPolicy;
 
-use super::authored_model_material_pass_projection::EffectPassMaterialRenderViewProjection;
-
 #[cfg(test)]
 mod tests;
 
@@ -76,11 +74,7 @@ pub(super) fn project_model_scene_visibility_and_shadow_policy_onto_late_primiti
             Has<NotShadowCaster>,
             Has<NotShadowReceiver>,
         ),
-        (
-            With<Mesh3d>,
-            Without<EffectPassMaterialRenderViewProjection>,
-            Or<(Added<Mesh3d>, Changed<ChildOf>)>,
-        ),
+        (With<Mesh3d>, Or<(Added<Mesh3d>, Changed<ChildOf>)>),
     >,
     parents: Query<&ChildOf>,
     roots: Query<

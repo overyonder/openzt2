@@ -110,6 +110,7 @@ impl Plugin for TerrainPlugin {
             .add_message::<TerrainPresentationRestored>()
             .add_message::<TerrainNavigationChanged>()
             .add_message::<TerrainWaterChanged>()
+            .add_message::<water_regions::authored_membership::TerrainWaterMembershipChanged>()
             .add_message::<ActivateTerrainWaterImpactWave>()
             .add_message::<openzt2_zoo_state::terrain::terrain_water_geometric_wave_shader_state::WaterSurfaceSpraySample>()
             .add_message::<openzt2_zoo_state::terrain::terrain_water_geometric_wave_shader_state::WaterSurfaceWakeSample>()

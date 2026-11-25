@@ -15,6 +15,11 @@ use bevy::{
     tasks::futures_lite::stream,
 };
 
+use crate::model_source::gltf_model_source::{
+    gltf_model_asset_path_for_source_path, gltf_model_replacement_source_paths,
+    gltf_model_source_path_for_asset_path, is_gltf_model_source_path,
+};
+
 pub fn create_bevy_asset_source_for_enabled_z2f_archives(
     enabled_archive_paths: Vec<PathBuf>,
 ) -> std::io::Result<(AssetSourceBuilder, AssetArchives)> {
@@ -34,6 +39,7 @@ pub fn create_bevy_asset_source_for_enabled_z2f_archives(
         events,
         resolved,
         shared_source_byte_cache,
+        live_model_replacements: Arc::default(),
     };
     let reader_archives = archives.clone();
     Ok((
@@ -59,6 +65,9 @@ pub struct AssetArchives {
     events: Arc<Mutex<Option<async_channel::Sender<AssetSourceEvent>>>>,
     resolved: Arc<Mutex<ResolvedPaths>>,
     shared_source_byte_cache: Arc<RwLock<SharedSourceByteCache>>,
+    /// glTF models sent from an editor while the game runs, by the native
+    /// model path they replace. They last until restored or the game exits.
+    live_model_replacements: Arc<RwLock<BTreeMap<PathBuf, Arc<[u8]>>>>,
 }
 
 const MAXIMUM_SHARED_SOURCE_BYTE_CACHE_BYTES: usize = 64 * 1024 * 1024;
@@ -354,6 +363,134 @@ impl AssetArchives {
         Ok(physical)
     }
 
+    /// The glTF model that replaces a native model, if any: a live
+    /// replacement first, then `foo.glb` or `foo.gltf` beside `foo.bfb` or
+    /// `foo.nif` in the same or a higher-priority archive. Loose files rank
+    /// below every archive, as they do for ordinary reads.
+    pub fn gltf_model_replacement(
+        &self,
+        native_model_path: &Path,
+    ) -> std::io::Result<Option<Arc<[u8]>>> {
+        if let Some(bytes) = self.live_model_replacement(native_model_path) {
+            return Ok(Some(bytes));
+        }
+        let native_model_path =
+            z2f::paths::normalize_asset_path_for_case_insensitive_archive_lookup(native_model_path);
+        let native_archive_priority = self
+            .files
+            .resolved_winning_entry(&native_model_path)
+            .map(|entry| entry.archive_priority_index);
+        for replacement_path in gltf_model_replacement_source_paths(&native_model_path) {
+            let replaces_native_model = match self.files.resolved_winning_entry(&replacement_path) {
+                Some(entry) => native_archive_priority
+                    .is_none_or(|priority| entry.archive_priority_index >= priority),
+                None => {
+                    native_archive_priority.is_none()
+                        && self
+                            .resolve_loose_path(&replacement_path)
+                            .is_ok_and(|path| path.is_file())
+                }
+            };
+            if replaces_native_model {
+                return self
+                    .read_source(&replacement_path)
+                    .map(|bytes| Some(bytes.into()));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Reads the source file behind a Bevy asset path, such as `foo.dds` for
+    /// `foo.z2dds`.
+    pub fn read_asset_source(&self, asset_path: &Path) -> std::io::Result<Vec<u8>> {
+        self.read_source(&source_path_for_asset_path(asset_path))
+    }
+
+    /// The folder holding the game's Z2F archives.
+    pub fn installation_root(&self) -> &Path {
+        &self.installation_root
+    }
+
+    /// Every model replaced from an editor, with the glTF replacing it.
+    pub fn live_model_replacements(&self) -> Vec<(PathBuf, Arc<[u8]>)> {
+        self.live_model_replacements
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .map(|(path, bytes)| (path.clone(), Arc::clone(bytes)))
+            .collect()
+    }
+
+    /// The glTF sent from an editor to replace a model while the game runs.
+    pub fn live_model_replacement(&self, model_path: &Path) -> Option<Arc<[u8]>> {
+        self.live_model_replacements
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&z2f::paths::normalize_asset_path_for_case_insensitive_archive_lookup(model_path))
+            .cloned()
+    }
+
+    /// Replaces a model with glTF until it is restored, and reloads it.
+    pub fn replace_model_live(
+        &self,
+        native_model_path: &Path,
+        gltf_bytes: Vec<u8>,
+    ) -> std::io::Result<()> {
+        let native_model_path =
+            z2f::paths::normalize_asset_path_for_case_insensitive_archive_lookup(native_model_path);
+        self.live_model_replacements
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(native_model_path.clone(), gltf_bytes.into());
+        self.notify_modified_asset(native_model_path)
+    }
+
+    /// Restores one live-replaced model and reloads it.
+    /// Returns whether the model had been replaced.
+    pub fn restore_live_model_replacement(&self, model_path: &Path) -> std::io::Result<bool> {
+        let model_path =
+            z2f::paths::normalize_asset_path_for_case_insensitive_archive_lookup(model_path);
+        let removed = self
+            .live_model_replacements
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&model_path);
+        if removed.is_some() {
+            self.notify_modified_asset(model_path)?;
+        }
+        Ok(removed.is_some())
+    }
+
+    /// Restores every live-replaced model and reloads it, returning the
+    /// models restored.
+    pub fn restore_live_model_replacements(&self) -> std::io::Result<Vec<PathBuf>> {
+        let restored = std::mem::take(
+            &mut *self
+                .live_model_replacements
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
+        let restored = restored.into_keys().collect::<Vec<_>>();
+        for model_path in &restored {
+            self.notify_modified_asset(model_path.clone())?;
+        }
+        Ok(restored)
+    }
+
+    fn notify_modified_asset(&self, path: PathBuf) -> std::io::Result<()> {
+        let sender = self
+            .events
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        if let Some(sender) = sender {
+            sender
+                .try_send(AssetSourceEvent::ModifiedAsset(path))
+                .map_err(std::io::Error::other)?;
+        }
+        Ok(())
+    }
+
     /// Changes one archive and returns every physical or compatibility Bevy
     /// asset path notified through the source watcher.
     pub fn set_archive_enabled(
@@ -374,11 +511,11 @@ impl AssetArchives {
         let changed_bevy_asset_paths = changed
             .iter()
             .flat_map(|change| {
-                std::iter::once(change.normalized_asset_path.clone()).chain(
-                    compatible_bevy_image_asset_path_for_changed_source_path(
+                asset_paths_reading_source_path(&change.normalized_asset_path)
+                    .into_iter()
+                    .chain(native_model_asset_paths_replaced_by_source_path(
                         &change.normalized_asset_path,
-                    ),
-                )
+                    ))
             })
             .collect::<Vec<_>>();
         let sender = self
@@ -388,10 +525,15 @@ impl AssetArchives {
             .clone();
         if let Some(sender) = sender {
             for change in &changed {
-                for changed_bevy_asset_path in std::iter::once(change.normalized_asset_path.clone())
-                    .chain(compatible_bevy_image_asset_path_for_changed_source_path(
-                        &change.normalized_asset_path,
-                    ))
+                for replaced_native_model_path in
+                    native_model_asset_paths_replaced_by_source_path(&change.normalized_asset_path)
+                {
+                    sender
+                        .try_send(AssetSourceEvent::ModifiedAsset(replaced_native_model_path))
+                        .map_err(std::io::Error::other)?;
+                }
+                for changed_bevy_asset_path in
+                    asset_paths_reading_source_path(&change.normalized_asset_path)
                 {
                     let event = match change.change_kind {
                         z2f::ResolvedAssetChangeKind::Added => {
@@ -427,7 +569,7 @@ struct Z2fAssetReader {
 
 impl AssetReader for Z2fAssetReader {
     async fn read<'a>(&'a self, path: &'a Path) -> Result<impl Reader + 'a, AssetReaderError> {
-        let source_path = compatible_image_source_path(path);
+        let source_path = source_path_for_asset_path(path);
         self.archives
             .read_source(&source_path)
             .map(VecReader::new)
@@ -483,19 +625,37 @@ impl AssetReader for Z2fAssetReader {
     }
 }
 
-fn compatible_image_source_path(path: &Path) -> PathBuf {
+/// Source file read for a Bevy asset path. Distinct extensions route some
+/// sources through OpenZT2's loaders instead of Bevy's built-in ones.
+fn source_path_for_asset_path(path: &Path) -> PathBuf {
     match path.extension().and_then(|extension| extension.to_str()) {
         Some("z2cur") => path.with_extension("cur"),
         Some("z2dds") => path.with_extension("dds"),
-        _ => path.to_owned(),
+        _ => gltf_model_source_path_for_asset_path(path),
     }
 }
 
-fn compatible_bevy_image_asset_path_for_changed_source_path(path: &Path) -> Option<PathBuf> {
+/// Bevy asset paths that read a source file: the file itself and its routed
+/// asset path.
+fn asset_paths_reading_source_path(path: &Path) -> Vec<PathBuf> {
+    let mut paths = vec![path.to_owned()];
     match path.extension().and_then(|extension| extension.to_str()) {
-        Some("cur") => Some(path.with_extension("z2cur")),
-        Some("dds") => Some(path.with_extension("z2dds")),
-        _ => None,
+        Some("cur") => paths.push(path.with_extension("z2cur")),
+        Some("dds") => paths.push(path.with_extension("z2dds")),
+        _ if is_gltf_model_source_path(path) => {
+            paths.push(gltf_model_asset_path_for_source_path(path));
+        }
+        _ => {}
+    }
+    paths
+}
+
+/// Native model asset paths that a glTF model source may replace.
+fn native_model_asset_paths_replaced_by_source_path(path: &Path) -> Vec<PathBuf> {
+    if is_gltf_model_source_path(path) {
+        vec![path.with_extension("bfb"), path.with_extension("nif")]
+    } else {
+        Vec::new()
     }
 }
 

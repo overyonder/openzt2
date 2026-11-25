@@ -5,6 +5,7 @@ use openzt2_zoo_state::construction::construction_transaction_types::EditApplica
 
 use crate::terrain::terrain_change_tracking_types::TerrainDirty;
 use crate::terrain::terrain_change_tracking_types::TerrainDirtyFlags;
+use crate::terrain::terrain_sample_change_calculations::changed_terrain_sample_bounds;
 use crate::terrain::terrain_sample_change_calculations::determine_terrain_dirty_flags_from_changed_samples;
 use crate::terrain::terrain_sample_change_calculations::merge_terrain_dirty_sample_rectangle_and_advance_revision;
 use openzt2_zoo_state::terrain::terrain_chunk_identity_type::TerrainChunkId;
@@ -23,12 +24,18 @@ use openzt2_zoo_state::terrain::terrain_edit_types::TerrainEditAcknowledged;
 use openzt2_zoo_state::terrain::terrain_edit_types::TerrainWaterChanged;
 use openzt2_zoo_state::terrain::terrain_navigation_change_types::TerrainNavigationChanged;
 use openzt2_zoo_state::terrain::terrain_sample_grid_queries::read_materialized_terrain_sample;
+/// Marks a transaction whose edit a held brush applied live, so its initial
+/// commit has nothing left to write.
+#[derive(Component)]
+pub(super) struct LiveAppliedTerrainEdit;
+
 pub(super) fn apply_committed_terrain_sample_deltas_and_publish_changed_regions(
     mut commands: Commands,
     mut requests: MessageReader<CommitTerrainEdit>,
     edits: Query<(
         &TerrainEdit,
         Option<&openzt2_zoo_state::construction::construction_transaction_types::RollbackContext>,
+        Has<LiveAppliedTerrainEdit>,
     )>,
     entities: Query<Entity>,
     mut chunks: Query<(
@@ -45,7 +52,7 @@ pub(super) fn apply_committed_terrain_sample_deltas_and_publish_changed_regions(
     mut acknowledged: MessageWriter<TerrainEditAcknowledged>,
 ) {
     for request in requests.read() {
-        let Ok((edit, rollback)) = edits.get(request.transaction) else {
+        let Ok((edit, rollback, live_applied)) = edits.get(request.transaction) else {
             acknowledged.write(TerrainEditAcknowledged {
                 transaction: request.transaction,
                 application: request.application,
@@ -115,6 +122,15 @@ pub(super) fn apply_committed_terrain_sample_deltas_and_publish_changed_regions(
             continue;
         }
 
+        // A held brush already wrote its samples and water regions dab by dab.
+        if live_applied && request.application == EditApplication::InitialCommit {
+            acknowledged.write(TerrainEditAcknowledged {
+                transaction: request.transaction,
+                application: request.application,
+                accepted: true,
+            });
+            continue;
+        }
         let owner_changes: Box<[_]> = if use_after {
             edit.water_regions
                 .iter()
@@ -174,16 +190,23 @@ pub(super) fn apply_water_region_edit_changes(
 ) {
     commands.queue(move |world: &mut World| {
         for (owner, state, active) in changes {
+            use openzt2_zoo_state::terrain::terrain_water_presentation_types::{
+                TerrainWaterRegionEdit, TerrainWaterRegionRetired,
+            };
             let Ok(mut entity) = world.get_entity_mut(owner) else { continue; };
+            // Held dabs restate an unchanged region on every step; inserting
+            // it again would mark the region changed.
             if let Some(state) = state {
-                entity.insert(state);
+                if entity.get::<TerrainWaterRegionEdit>() != Some(&state) {
+                    entity.insert(state);
+                }
             } else {
-                entity.remove::<openzt2_zoo_state::terrain::terrain_water_presentation_types::TerrainWaterRegionEdit>();
+                entity.remove::<TerrainWaterRegionEdit>();
             }
             if active {
-                entity.remove::<openzt2_zoo_state::terrain::terrain_water_presentation_types::TerrainWaterRegionRetired>();
-            } else {
-                entity.insert(openzt2_zoo_state::terrain::terrain_water_presentation_types::TerrainWaterRegionRetired);
+                entity.remove::<TerrainWaterRegionRetired>();
+            } else if !entity.contains::<TerrainWaterRegionRetired>() {
+                entity.insert(TerrainWaterRegionRetired);
             }
         }
     });
@@ -220,6 +243,9 @@ pub(super) fn apply_validated_terrain_edit_delta_and_publish_changed_region(
         &delta.before
     };
     let flags = determine_terrain_dirty_flags_from_changed_samples(&delta.before, &delta.after);
+    let (changed_min, changed_max) =
+        changed_terrain_sample_bounds(&delta.before, &delta.after, delta.min, delta.max)
+            .unwrap_or((delta.min, delta.max));
     if let Some(mut overlay) = existing {
         apply_terrain_sample_rectangle(&mut overlay, chunk.side, delta.min, delta.max, samples);
     } else {
@@ -230,15 +256,18 @@ pub(super) fn apply_validated_terrain_edit_delta_and_publish_changed_region(
     if let Some(mut dirty) = dirty {
         *dirty = merge_terrain_dirty_sample_rectangle_and_advance_revision(
             Some(*dirty),
-            delta.min,
-            delta.max,
+            changed_min,
+            changed_max,
             flags,
         );
     } else {
         commands
             .entity(entity)
             .insert(merge_terrain_dirty_sample_rectangle_and_advance_revision(
-                None, delta.min, delta.max, flags,
+                None,
+                changed_min,
+                changed_max,
+                flags,
             ));
     }
     if flags.contains(TerrainDirtyFlags::COLLISION) {

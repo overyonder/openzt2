@@ -1,0 +1,16 @@
+schema_version = "1.0.0"
+
+id = "openzt2_link"
+version = "1.2.0"
+name = "OpenZT2 Link"
+tagline = "Edit OpenZT2 models and see them in the running game"
+maintainer = "OpenZT2 contributors"
+type = "add-on"
+website = "https://github.com/overyonder/openzt2"
+tags = ["Import-Export", "Game Engine"]
+blender_version_min = "4.2.0"
+license = ["SPDX:MIT"]
+
+[permissions]
+network = "Talks to OpenZT2 running on this computer"
+files = "Opens models from OpenZT2 and saves edited models for it"

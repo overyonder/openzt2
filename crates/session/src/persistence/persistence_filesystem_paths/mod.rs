@@ -60,6 +60,11 @@ impl PersistenceFilesystemPaths {
         Ok(save_slot_file_paths)
     }
 
+    /// Where models opened in Blender are written.
+    pub fn blender_model_export_directory_path(&self) -> PathBuf {
+        self.persistence_root_directory.join("blender")
+    }
+
     pub fn profile_index_file_path(&self) -> PathBuf {
         self.persistence_root_directory
             .join("profiles")
