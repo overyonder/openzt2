@@ -2789,7 +2789,7 @@ checksum = "f27ae1dd37df86211c42e150270f82743308803d90a6f6e6651cd730d5e1732f"
 
 [[package]]
 name = "d3d9-effects"
-version = "1.2.0-beta"
+version = "1.2.1-beta"
 dependencies = [
  "cc",
  "naga",
@@ -5162,7 +5162,7 @@ dependencies = [
 
 [[package]]
 name = "openzt2_animals"
-version = "1.2.0-beta"
+version = "1.2.1-beta"
 dependencies = [
  "arrayvec",
  "avian3d",
@@ -5181,7 +5181,7 @@ dependencies = [
 
 [[package]]
 name = "openzt2_aquatic"
-version = "1.2.0-beta"
+version = "1.2.1-beta"
 dependencies = [
  "bevy",
  "openzt2_construction",
@@ -5194,7 +5194,7 @@ dependencies = [
 
 [[package]]
 name = "openzt2_audio"
-version = "1.2.0-beta"
+version = "1.2.1-beta"
 dependencies = [
  "bevy",
  "openzt2_game_assets",
@@ -5206,7 +5206,7 @@ dependencies = [
 
 [[package]]
 name = "openzt2_construction"
-version = "1.2.0-beta"
+version = "1.2.1-beta"
 dependencies = [
  "avian3d",
  "bevy",
@@ -5221,7 +5221,7 @@ dependencies = [
 
 [[package]]
 name = "openzt2_economy"
-version = "1.2.0-beta"
+version = "1.2.1-beta"
 dependencies = [
  "bevy",
  "openzt2_game_assets",
@@ -5234,7 +5234,7 @@ dependencies = [
 
 [[package]]
 name = "openzt2_environment"
-version = "1.2.0-beta"
+version = "1.2.1-beta"
 dependencies = [
  "bevy",
  "openzt2_game_assets",
@@ -5247,7 +5247,7 @@ dependencies = [
 
 [[package]]
 name = "openzt2_extinct_animals"
-version = "1.2.0-beta"
+version = "1.2.1-beta"
 dependencies = [
  "bevy",
  "openzt2_game_assets",
@@ -5259,7 +5259,7 @@ dependencies = [
 
 [[package]]
 name = "openzt2_game"
-version = "1.2.0-beta"
+version = "1.2.1-beta"
 dependencies = [
  "avian3d",
  "bevy",
@@ -5300,7 +5300,7 @@ dependencies = [
 
 [[package]]
 name = "openzt2_game_assets"
-version = "1.2.0-beta"
+version = "1.2.1-beta"
 dependencies = [
  "anyhow",
  "arrayvec",
@@ -5340,7 +5340,7 @@ dependencies = [
 
 [[package]]
 name = "openzt2_game_data"
-version = "1.2.0-beta"
+version = "1.2.1-beta"
 dependencies = [
  "blake3",
  "serde",
@@ -5348,7 +5348,7 @@ dependencies = [
 
 [[package]]
 name = "openzt2_information"
-version = "1.2.0-beta"
+version = "1.2.1-beta"
 dependencies = [
  "arrayvec",
  "bevy",
@@ -5365,7 +5365,7 @@ dependencies = [
 
 [[package]]
 name = "openzt2_interface_state"
-version = "1.2.0-beta"
+version = "1.2.1-beta"
 dependencies = [
  "bevy",
  "openzt2_game_assets",
@@ -5376,7 +5376,7 @@ dependencies = [
 
 [[package]]
 name = "openzt2_navigation"
-version = "1.2.0-beta"
+version = "1.2.1-beta"
 dependencies = [
  "avian3d",
  "bevy",
@@ -5388,7 +5388,7 @@ dependencies = [
 
 [[package]]
 name = "openzt2_photos"
-version = "1.2.0-beta"
+version = "1.2.1-beta"
 dependencies = [
  "avian3d",
  "bevy",
@@ -5403,7 +5403,7 @@ dependencies = [
 
 [[package]]
 name = "openzt2_player_controls"
-version = "1.2.0-beta"
+version = "1.2.1-beta"
 dependencies = [
  "avian3d",
  "bevy",
@@ -5418,7 +5418,7 @@ dependencies = [
 
 [[package]]
 name = "openzt2_progression"
-version = "1.2.0-beta"
+version = "1.2.1-beta"
 dependencies = [
  "bevy",
  "openzt2_game_assets",
@@ -5431,7 +5431,7 @@ dependencies = [
 
 [[package]]
 name = "openzt2_session"
-version = "1.2.0-beta"
+version = "1.2.1-beta"
 dependencies = [
  "arrayvec",
  "avian3d",
@@ -5468,7 +5468,7 @@ dependencies = [
 
 [[package]]
 name = "openzt2_settings"
-version = "1.2.0-beta"
+version = "1.2.1-beta"
 dependencies = [
  "bevy",
  "openzt2_game_assets",
@@ -5481,7 +5481,7 @@ dependencies = [
 
 [[package]]
 name = "openzt2_shows"
-version = "1.2.0-beta"
+version = "1.2.1-beta"
 dependencies = [
  "avian3d",
  "bevy",
@@ -5495,7 +5495,7 @@ dependencies = [
 
 [[package]]
 name = "openzt2_simulation_time"
-version = "1.2.0-beta"
+version = "1.2.1-beta"
 dependencies = [
  "bevy",
  "openzt2_game_assets",
@@ -5507,7 +5507,7 @@ dependencies = [
 
 [[package]]
 name = "openzt2_staff_requests"
-version = "1.2.0-beta"
+version = "1.2.1-beta"
 dependencies = [
  "bevy",
  "openzt2_game_assets",
@@ -5518,7 +5518,7 @@ dependencies = [
 
 [[package]]
 name = "openzt2_terrain"
-version = "1.2.0-beta"
+version = "1.2.1-beta"
 dependencies = [
  "avian3d",
  "bevy",
@@ -5534,7 +5534,7 @@ dependencies = [
 
 [[package]]
 name = "openzt2_transport"
-version = "1.2.0-beta"
+version = "1.2.1-beta"
 dependencies = [
  "avian3d",
  "bevy",
@@ -5549,7 +5549,7 @@ dependencies = [
 
 [[package]]
 name = "openzt2_ui"
-version = "1.2.0-beta"
+version = "1.2.1-beta"
 dependencies = [
  "bevy",
  "image",
@@ -5565,7 +5565,7 @@ dependencies = [
 
 [[package]]
 name = "openzt2_visitors"
-version = "1.2.0-beta"
+version = "1.2.1-beta"
 dependencies = [
  "arrayvec",
  "avian3d",
@@ -5580,7 +5580,7 @@ dependencies = [
 
 [[package]]
 name = "openzt2_world"
-version = "1.2.0-beta"
+version = "1.2.1-beta"
 dependencies = [
  "avian3d",
  "bevy",
@@ -5593,7 +5593,7 @@ dependencies = [
 
 [[package]]
 name = "openzt2_world_state"
-version = "1.2.0-beta"
+version = "1.2.1-beta"
 dependencies = [
  "bevy",
  "num-integer",
@@ -5603,7 +5603,7 @@ dependencies = [
 
 [[package]]
 name = "openzt2_zoo_staff"
-version = "1.2.0-beta"
+version = "1.2.1-beta"
 dependencies = [
  "arrayvec",
  "avian3d",
@@ -5618,7 +5618,7 @@ dependencies = [
 
 [[package]]
 name = "openzt2_zoo_state"
-version = "1.2.0-beta"
+version = "1.2.1-beta"
 dependencies = [
  "arrayvec",
  "avian3d",
@@ -8597,7 +8597,7 @@ dependencies = [
 
 [[package]]
 name = "z2f"
-version = "1.2.0-beta"
+version = "1.2.1-beta"
 dependencies = [
  "roxmltree 0.20.0",
  "zip",
