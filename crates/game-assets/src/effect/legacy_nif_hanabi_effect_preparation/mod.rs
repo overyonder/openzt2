@@ -1,12 +1,15 @@
 //! Converts legacy NIF particle records to a Hanabi effect asset.
 
+use std::borrow::Cow;
+
 use bevy::prelude::*;
 use bevy_hanabi::prelude::{
     AccelModifier, Attribute, BoxedModifier, ColorOverLifetimeModifier,
-    EffectAsset as HanabiEffectAsset, ExprWriter, Gradient, ModifierContext, OrientMode,
-    OrientModifier, RenderModifier, ScalarType, SetAttributeModifier, SetColorModifier,
-    SetSizeModifier, SizeOverLifetimeModifier, SpawnerSettings, ValueType, VectorType,
+    EffectAsset as HanabiEffectAsset, ExprError, ExprWriter, Gradient, Modifier, ModifierContext,
+    Module, RenderContext, RenderModifier, ScalarType, SetAttributeModifier, SetColorModifier,
+    ShaderWriter, SpawnerSettings, ValueType, VectorType,
 };
+use bevy_hanabi::ToWgslString;
 use openzt2_game_data::particle::legacy_nif_particle_effect::{
     LegacyNifParticleEffect, LegacyNifParticleModifier,
 };
@@ -64,33 +67,48 @@ pub(super) fn prepare_legacy_nif_particle_effect_as_hanabi_effect_asset(
             Attribute::VELOCITY,
             (randomized_velocity_direction * randomized_initial_speed).expr(),
         )),
+        Box::new(SetAttributeModifier::new(
+            Attribute::SIZE,
+            expression_writer
+                .lit(legacy_nif_particle_effect.initial_size)
+                .expr(),
+        )),
     ];
     let mut update_modifiers: Vec<BoxedModifier> = Vec::new();
-    let mut render_modifiers: Vec<Box<dyn RenderModifier>> = vec![
-        Box::new(SetColorModifier::new(Vec4::from_array(
-            legacy_nif_particle_effect.initial_color,
-        ))),
-        Box::new(SetSizeModifier {
-            size: Vec3::splat(legacy_nif_particle_effect.initial_size).into(),
-        }),
-    ];
+    let mut render_modifiers: Vec<Box<dyn RenderModifier>> = vec![Box::new(SetColorModifier::new(
+        Vec4::from_array(legacy_nif_particle_effect.initial_color),
+    ))];
 
     for modifier in &legacy_nif_particle_effect.modifiers {
         match modifier {
             LegacyNifParticleModifier::Rotation {
-                radians_per_second, ..
+                random_initial_axis,
+                initial_axis,
+                radians_per_second,
             } => {
+                let axis = if *random_initial_axis {
+                    let height = expression_writer.rand(ScalarType::Float)
+                        * expression_writer.lit(2.0)
+                        - expression_writer.lit(1.0);
+                    let azimuth = expression_writer.rand(ScalarType::Float)
+                        * expression_writer.lit(std::f32::consts::TAU);
+                    let radius =
+                        (expression_writer.lit(1.0) - height.clone() * height.clone()).sqrt();
+                    (radius.clone() * azimuth.clone().cos()).vec3(radius * azimuth.sin(), height)
+                } else {
+                    let axis = Vec3::from_array(*initial_axis)
+                        .try_normalize()
+                        .unwrap_or(Vec3::Z);
+                    expression_writer.lit(axis)
+                };
                 initialization_modifiers.push(Box::new(SetAttributeModifier::new(
-                    Attribute::F32_0,
-                    expression_writer.lit(*radians_per_second).expr(),
+                    Attribute::AXIS_Z,
+                    axis.expr(),
                 )));
-                render_modifiers.push(Box::new(
-                    OrientModifier::new(OrientMode::ParallelCameraDepthPlane).with_rotation(
-                        (expression_writer.attr(Attribute::F32_0)
-                            * expression_writer.attr(Attribute::AGE))
-                        .expr(),
-                    ),
-                ));
+                render_modifiers.push(Box::new(ParticleAxisRotation {
+                    radians_per_second: *radians_per_second,
+                    billboard: !legacy_nif_particle_effect.mesh_particles,
+                }));
             }
             LegacyNifParticleModifier::ColorOverLifetime { keys, .. } => {
                 let mut gradient = Gradient::new();
@@ -103,23 +121,37 @@ pub(super) fn prepare_legacy_nif_particle_effect_as_hanabi_effect_asset(
                 grow_seconds,
                 fade_seconds,
             } => {
-                let randomized_particle_lifetime =
-                    legacy_nif_particle_effect.lifetime_seconds[1].max(f32::EPSILON);
-                let mut gradient = Gradient::new();
-                gradient.add_key(0.0, Vec3::ZERO);
-                gradient.add_key(
-                    (grow_seconds / randomized_particle_lifetime).clamp(0.0, 1.0),
-                    Vec3::ONE,
-                );
-                gradient.add_key(
-                    (1.0 - fade_seconds / randomized_particle_lifetime).clamp(0.0, 1.0),
-                    Vec3::ONE,
-                );
-                gradient.add_key(1.0, Vec3::ZERO);
-                render_modifiers.push(Box::new(SizeOverLifetimeModifier {
-                    gradient,
-                    screen_space_size: false,
-                }));
+                let zero = expression_writer.lit(0.0);
+                let one = expression_writer.lit(1.0);
+                let age = expression_writer.attr(Attribute::AGE);
+                let grow = if *grow_seconds > 0.0 {
+                    (age.clone() / expression_writer.lit(*grow_seconds))
+                        .clamp(zero.clone(), one.clone())
+                } else {
+                    one.clone()
+                };
+                let fade = if *fade_seconds > 0.0 {
+                    ((expression_writer.attr(Attribute::LIFETIME) - age)
+                        / expression_writer.lit(*fade_seconds))
+                    .clamp(zero, one)
+                } else {
+                    one
+                };
+                let initial_size = if *grow_seconds > 0.0 {
+                    0.0
+                } else {
+                    legacy_nif_particle_effect.initial_size
+                };
+                initialization_modifiers.push(Box::new(SetAttributeModifier::new(
+                    Attribute::SIZE,
+                    expression_writer.lit(initial_size).expr(),
+                )));
+                update_modifiers.push(Box::new(SetAttributeModifier::new(
+                    Attribute::SIZE,
+                    (expression_writer.lit(legacy_nif_particle_effect.initial_size)
+                        * grow.min(fade))
+                    .expr(),
+                )));
             }
             LegacyNifParticleModifier::DirectionalGravity {
                 direction: gravity_direction,
@@ -143,10 +175,20 @@ pub(super) fn prepare_legacy_nif_particle_effect_as_hanabi_effect_asset(
                 die_on_collide,
                 plane_normal,
                 plane_constant,
+                position,
+                x_axis,
+                y_axis,
+                width,
+                height,
                 ..
             } => update_modifiers.push(Box::new(PlaneCollisionParticleUpdateModifier {
-                plane_normal: Vec3::from_array(*plane_normal).normalize_or_zero(),
+                plane_normal: Vec3::from_array(*plane_normal),
                 plane_constant: *plane_constant,
+                center: Vec3::from_array(*position),
+                x_axis: Vec3::from_array(*x_axis).normalize_or_zero(),
+                y_axis: Vec3::from_array(*y_axis).normalize_or_zero(),
+                half_width: *width * 0.5,
+                half_height: *height * 0.5,
                 velocity_rebound: *bounce,
                 kill_after_contact: *die_on_collide,
             })),
@@ -174,4 +216,65 @@ pub(super) fn prepare_legacy_nif_particle_effect_as_hanabi_effect_asset(
         hanabi_effect_asset = hanabi_effect_asset.add_render_modifier(modifier);
     }
     hanabi_effect_asset
+}
+
+#[derive(Clone, Debug, Reflect)]
+struct ParticleAxisRotation {
+    radians_per_second: f32,
+    billboard: bool,
+}
+
+impl Modifier for ParticleAxisRotation {
+    fn context(&self) -> ModifierContext {
+        ModifierContext::Render
+    }
+
+    fn attributes(&self) -> Cow<'_, [Attribute]> {
+        Cow::Borrowed(&[Attribute::AGE, Attribute::AXIS_Z])
+    }
+
+    fn boxed_clone(&self) -> BoxedModifier {
+        Box::new(self.clone())
+    }
+
+    fn apply(&self, _: &mut Module, _: &mut ShaderWriter) -> Result<(), ExprError> {
+        Err(ExprError::TypeError("Wrong modifier context".to_owned()))
+    }
+}
+
+impl RenderModifier for ParticleAxisRotation {
+    fn apply_render(&self, _: &mut Module, context: &mut RenderContext) -> Result<(), ExprError> {
+        context.vertex_code += "{\n";
+        if self.billboard {
+            context.vertex_code += "let base = get_camera_rotation_effect_space();\n";
+        } else {
+            context.vertex_code += "let base = mat3x3<f32>(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(0.0, 0.0, 1.0));\n";
+        }
+        context.vertex_code += &format!(
+            "let angle = particle.age * {};\n",
+            self.radians_per_second.to_wgsl_string()
+        );
+        context.vertex_code += r#"
+let axis = particle.axis_z;
+let c = cos(angle);
+let s = sin(angle);
+let skew = mat3x3<f32>(vec3<f32>(0.0, axis.z, -axis.y), vec3<f32>(-axis.z, 0.0, axis.x), vec3<f32>(axis.y, -axis.x, 0.0));
+let projection = mat3x3<f32>(axis * axis.x, axis * axis.y, axis * axis.z);
+let identity = mat3x3<f32>(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(0.0, 0.0, 1.0));
+let rotated = base * (identity * c + skew * s + projection * (1.0 - c));
+axis_x = rotated[0];
+axis_y = rotated[1];
+axis_z = rotated[2];
+}
+"#;
+        Ok(())
+    }
+
+    fn boxed_render_clone(&self) -> Box<dyn RenderModifier> {
+        Box::new(self.clone())
+    }
+
+    fn as_modifier(&self) -> &dyn Modifier {
+        self
+    }
 }

@@ -22,7 +22,7 @@ use openzt2_world_state::{
     world_spawn::{
         persistent_id_types::{PersistentId, PersistentIdAllocator},
         world_entity_crating::WorldEntityIsCrated,
-        world_membership_types::{DefinitionId, WorldMember, WorldRoot},
+        world_membership_types::{WorldMember, WorldRoot},
     },
 };
 use openzt2_zoo_state::{
@@ -40,7 +40,6 @@ pub(super) enum ScenarioEntityCommand {
     Spawn(ScriptedAnimalSpawnRequest),
     Need(SetAnimalNeed),
     Crate(Entity),
-    Name(Entity),
     Remove(Entity),
 }
 
@@ -65,16 +64,33 @@ impl EntityOperations {
 #[derive(SystemParam)]
 pub(super) struct ScenarioAnimalSpawnSources<'w, 's> {
     commands: Commands<'w, 's>,
-    roots: Query<'w, 's, (Entity, &'static mut PersistentIdAllocator, &'static ZooSeed, &'static ZooClock, &'static TerrainIndex), With<WorldRoot>>,
+    roots: Query<
+        'w,
+        's,
+        (
+            Entity,
+            &'static mut PersistentIdAllocator,
+            &'static ZooSeed,
+            &'static ZooClock,
+            &'static TerrainIndex,
+        ),
+        With<WorldRoot>,
+    >,
     species: Res<'w, SpeciesAssets>,
     species_assets: Res<'w, Assets<SpeciesAsset>>,
     definitions: Res<'w, WorldDefinitions>,
     definition_assets: Res<'w, Assets<WorldDefinitionAsset>>,
     terrain_assets: Res<'w, Assets<TerrainAsset>>,
     chunks: Query<'w, 's, (&'static TerrainChunk, Option<&'static EditedTerrainSamples>)>,
-    animals: Query<'w, 's, (&'static openzt2_zoo_state::animal_lifecycle::types::AnimalVariant, &'static Transform), With<Animal>>,
-    localization: Res<'w, openzt2_game_assets::localization::localization_precedence_index::LocalizationPrecedenceIndex>,
-    localized_assets: Res<'w, Assets<openzt2_game_assets::localization::localization_asset_types::LocalizationAsset>>,
+    animals: Query<
+        'w,
+        's,
+        (
+            &'static openzt2_zoo_state::animal_lifecycle::types::AnimalVariant,
+            &'static Transform,
+        ),
+        With<Animal>,
+    >,
     obstacles: placement::ScriptedAnimalPlacementObstacles<'w, 's>,
 }
 
@@ -225,20 +241,9 @@ impl ScenarioAnimalSpawnSources<'_, '_> {
             mlua::Error::runtime("no dry unoccupied animal placement site near authored position")
         })?;
         let born_tick = clock.tick;
-        let name = definitions
-            .find_object(components.definition)
-            .and_then(|definition| {
-                self.localization
-                    .borrow_loaded_localization_view(&self.localized_assets)?
-                    .find_plain_localized_text(AssetId(definition.name_key.0))
-            })
-            .ok_or_else(|| {
-                mlua::Error::runtime("animal placement definition has no localized name")
-            })?;
         let persistent_id = allocator.allocate().map_err(|error| {
             mlua::Error::runtime(format!("animal identity allocation failed: {error:?}"))
         })?;
-        let name = Some(format!("{name} {}", persistent_id.0));
         let entity = self.commands.spawn(world).id();
         Ok(ScriptedAnimalSpawnRequest {
             entity,
@@ -251,7 +256,7 @@ impl ScenarioAnimalSpawnSources<'_, '_> {
             born_tick,
             initial_needs: Vec::new(),
             crated: false,
-            name,
+            name: None,
         })
     }
 }
@@ -272,16 +277,7 @@ fn apply_entity_commands(
         openzt2_zoo_state::construction::construction_interaction_types::DeleteEntity,
     >,
     animals: Query<(), (With<Animal>, With<WorldMember>)>,
-    entities: Query<(&DefinitionId, &PersistentId, Option<&Name>), With<WorldMember>>,
-    definitions: Res<WorldDefinitions>,
-    assets: Res<Assets<WorldDefinitionAsset>>,
-    localization: Res<openzt2_game_assets::localization::localization_precedence_index::LocalizationPrecedenceIndex>,
-    localized_assets: Res<
-        Assets<openzt2_game_assets::localization::localization_asset_types::LocalizationAsset>,
-    >,
 ) {
-    let definitions = definitions.get(&assets);
-    let localization = localization.borrow_loaded_localization_view(&localized_assets);
     for operation in operations.read() {
         match operation {
             ScenarioEntityCommand::Spawn(request) => {
@@ -299,20 +295,6 @@ fn apply_entity_commands(
             }
             ScenarioEntityCommand::Crate(entity) if animals.contains(*entity) => {
                 commands.entity(*entity).insert(WorldEntityIsCrated);
-            }
-            ScenarioEntityCommand::Name(entity) => {
-                if let Ok((definition, id, None)) = entities.get(*entity) {
-                    if let Some(label) = definitions
-                        .and_then(|v| v.find_object(definition.0))
-                        .and_then(|v| {
-                            localization?.find_plain_localized_text(AssetId(v.name_key.0))
-                        })
-                    {
-                        commands
-                            .entity(*entity)
-                            .insert(Name::new(format!("{label} {}", id.0)));
-                    }
-                }
             }
             _ => {}
         }

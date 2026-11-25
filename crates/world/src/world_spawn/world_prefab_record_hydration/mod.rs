@@ -29,6 +29,7 @@ use openzt2_world_state::physics::fitting_surface_types::TerrainFittingSurface;
 use openzt2_interface_state::information::entity_selection_types::Inspectable;
 
 use crate::world_spawn::prefab_world_instance_spawning::spawn_loaded_scene_prefab_as_world_instance;
+use openzt2_world_state::world_spawn::persistent_id_index::PersistentIdIndex;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 use openzt2_world_state::world_spawn::prefab_model_readiness::first_missing_prefab_collider_model_asset_id;
 use openzt2_world_state::world_spawn::prefab_transform_conversion::transform_from_authored;
@@ -338,6 +339,7 @@ pub(super) fn commit_ready_starting_prefab_rows_in_source_order(
             With<WorldLoadFailure>,
         )>,
     >,
+    persistent_ids: Res<PersistentIdIndex>,
     scenarios: Res<Assets<WorldScenarioDocumentAsset>>,
     prefabs: Res<Assets<ScenePrefabAsset>>,
     active_definitions: Res<WorldDefinitions>,
@@ -372,6 +374,8 @@ pub(super) fn commit_ready_starting_prefab_rows_in_source_order(
                 }
             }
         }
+        // Spawns in this batch are indexed once their commands are applied.
+        let mut batch_entities = [None; MAXIMUM_PREFAB_WORK_IN_FLIGHT];
         for (index, entry) in (first..).zip(ready_prefix) {
             let Some((job, dependencies, failure)) = entry else {
                 break;
@@ -394,9 +398,18 @@ pub(super) fn commit_ready_starting_prefab_rows_in_source_order(
             {
                 None
             } else {
-                let Some(parent) =
-                    progress.spawned_world_prefab_root_at_record_index(record.parent)
-                else {
+                let parent_index = record.parent as usize;
+                let parent = if parent_index < first {
+                    start
+                        .entities
+                        .get(parent_index)
+                        .and_then(|row| persistent_ids.get(root, PersistentId(row.persistent_id)))
+                } else if parent_index < index {
+                    batch_entities[parent_index - first]
+                } else {
+                    None
+                };
+                let Some(parent) = parent else {
                     commands
                         .entity(root)
                         .insert_if_new(WorldLoadFailure::InvalidRecord(index as u32));
@@ -414,7 +427,8 @@ pub(super) fn commit_ready_starting_prefab_rows_in_source_order(
                 &prefabs,
             ) {
                 Ok(entity) => {
-                    progress.record_world_prefab_spawn_completion(entity);
+                    batch_entities[index - first] = Some(entity);
+                    progress.advance_prefab_loading_progress();
                     commands.entity(job).despawn();
                 }
                 Err(reason) => {

@@ -34,7 +34,7 @@ use openzt2_world_state::world_spawn::{
 };
 
 use super::{
-    photo_album_types::{PHOTO_CAMERA_ROLL_CAPACITY, PhotoCameraRoll},
+    photo_album_types::{PHOTO_CAMERA_ROLL_CAPACITY, PhotoCameraRoll, WorldPhotoCameraRoll},
     photo_capture_types::{
         CapturedPhotoEvidence, PendingPhotoCapture, PendingPhotoEvidence, PendingPhotoScore,
         PhotoCaptureFailed, PhotoFailure, PhotoSubjectsCollected, PhotoView,
@@ -60,8 +60,10 @@ pub(super) fn begin_requested_album_photo_captures(
     primary_window: Query<Entity, With<PrimaryWindow>>,
     camera_sessions: Query<&ImmersiveCameraSessions>,
     presentations: Query<&PhotoModePresentation, With<PhotoControl>>,
-    loaded_worlds: Query<Entity, (With<WorldRoot>, With<WorldLoadCompleted>)>,
-    camera_rolls: Query<(Entity, &WorldMember), (With<PhotoCameraRoll>, With<PhotoAlbum>)>,
+    loaded_worlds: Query<
+        (Entity, &WorldPhotoCameraRoll),
+        (With<WorldRoot>, With<WorldLoadCompleted>),
+    >,
     selected_sets: Query<(&PhotoChallengeSet, &WorldMember), With<CurrentPhotoChallengeSet>>,
     mut commands: Commands,
     mut failed: MessageWriter<PhotoCaptureFailed>,
@@ -103,12 +105,10 @@ pub(super) fn begin_requested_album_photo_captures(
                 continue;
             }
         };
-        let destination = loaded_worlds.single().ok().and_then(|world| {
-            camera_rolls
-                .iter()
-                .find(|(_, member)| member.root == world)
-                .map(|(roll, _)| (world, roll))
-        });
+        let destination = loaded_worlds
+            .single()
+            .ok()
+            .and_then(|(world, roll)| roll.iter().next().map(|roll| (world, roll)));
         let Some((world, camera_roll)) = destination else {
             failed.write(PhotoCaptureFailed {
                 reason: PhotoFailure::Storage,

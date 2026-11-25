@@ -58,7 +58,7 @@ const DEFAULT_LOCOMOTION_RATE_FACTORS:
         decaffeinated: 3.0,
     };
 
-fn gait_rate_reset_timer(seconds: f32) -> Timer {
+fn fixed_interval_timer(seconds: f32) -> Timer {
     let duration = if seconds <= 0.0 {
         std::time::Duration::ZERO
     } else {
@@ -72,6 +72,9 @@ pub struct LocomotionPlugin;
 impl Plugin for LocomotionPlugin {
     fn build(&self, game_application: &mut App) {
         game_application
+            .register_required_components::<openzt2_zoo_state::locomotion::locomotion_types::ContactSteering, contact_steering_projection::ContactRecovery>()
+            .register_required_components::<openzt2_zoo_state::locomotion::locomotion_types::MotionProgress, spatial_index_and_docking_operations::RouteStallTimer>()
+            .register_required_components::<openzt2_zoo_state::animal_lifecycle::types::AnimalVariant, animal_navigation_policy::AnimalCollisionProfile>()
             .init_resource::<changed_destination_route_planning::ReusableRouteSearchScratch>()
             .register_required_components::<openzt2_world_state::world_spawn::world_membership_types::WorldRoot, FenceNavigationCrossingIndex>()
             .add_observer(fence_navigation_crossing_types::mark_crossing_inserted)
@@ -139,9 +142,12 @@ impl Plugin for LocomotionPlugin {
             .add_systems(
                 FixedUpdate,
                 (
+                    locomotion_clip_dependencies::project_gait_rig_joint_lookup,
                     crate::locomotion::animal_animation_locomotion::project_animal_animation_motion_to_navigation
+                        .after(locomotion_clip_dependencies::project_gait_rig_joint_lookup)
                         .in_set(AnimalAnimationNavigationProjection),
                     person_walk_animation::project_person_motion_to_walk_animation
+                        .after(locomotion_clip_dependencies::project_gait_rig_joint_lookup)
                         .in_set(AnimalAnimationNavigationProjection),
                     terrain_edit_navigation_refresh::refresh_navigation_graph_after_terrain_edits,
                     path_surface_navigation_projection::project_elevated_path_colliders,
@@ -157,12 +163,15 @@ impl Plugin for LocomotionPlugin {
                         .run_if(in_state(GamePhase::InGame)),
                     navigation_agent_initialization::initialize_navigation_agents_with_bounded_runtime_state
                         .after(AnimalAnimationNavigationProjection),
+                    animal_navigation_policy::project_animal_collision_profiles,
                     navigation_reachability_testing::test_requested_navigation_destination_reachability
+                        .after_ignore_deferred(animal_navigation_policy::project_animal_collision_profiles)
                         .after(navigation_agent_initialization::initialize_navigation_agents_with_bounded_runtime_state)
                         .after_ignore_deferred(tank_water_navigation_overlay::project_tank_water_onto_navigation_cells)
                         .after(topology_navigation_edge_invalidation::synchronize_fence_navigation_crossings)
                         .run_if(on_message::<TestReachability>),
                     entity_pursuit_execution::accept_entity_pursuit_requests
+                        .after_ignore_deferred(animal_navigation_policy::project_animal_collision_profiles)
                         .after(openzt2_zoo_state::behavior_task_execution_types::running_actions::BehaviorStepFixedSet::Think)
                         .after(navigation_agent_initialization::initialize_navigation_agents_with_bounded_runtime_state)
                         .after_ignore_deferred(tank_water_navigation_overlay::project_tank_water_onto_navigation_cells)

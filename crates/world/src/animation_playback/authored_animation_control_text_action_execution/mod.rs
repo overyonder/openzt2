@@ -4,8 +4,6 @@ use openzt2_world_state::animation_graph::animation_graph_playback_message_types
 use openzt2_world_state::animation_graph::animation_graph_playback_state_types::AnimationGraphEnabled;
 
 use crate::animation_playback::authored_animation_text_action_execution_context::AuthoredAnimationControlTextActionExecutionContext;
-use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackController;
-use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackRepetitionPolicy;
 
 impl AuthoredAnimationControlTextActionExecutionContext<'_, '_> {
     pub(super) fn request_authored_animation_graph_node(
@@ -39,24 +37,6 @@ impl AuthoredAnimationControlTextActionExecutionContext<'_, '_> {
         );
     }
 
-    pub(super) fn start_authored_animation_with_looping_policy(
-        &mut self,
-        animation_playback_controller_entity: Entity,
-        animation_playback_controller: &mut AnimationPlaybackController,
-        animation_graph_node_asset_key: &str,
-        playback_loops: bool,
-    ) {
-        animation_playback_controller.playback_repetition_policy = if playback_loops {
-            AnimationPlaybackRepetitionPolicy::Loop
-        } else {
-            AnimationPlaybackRepetitionPolicy::UseAuthoredClipPolicy
-        };
-        self.request_authored_animation_graph_node(
-            animation_playback_controller_entity,
-            animation_graph_node_asset_key,
-        );
-    }
-
     pub(super) fn set_authored_animation_graph_enabled(
         &mut self,
         animation_playback_controller_entity: Entity,
@@ -76,12 +56,27 @@ impl AuthoredAnimationControlTextActionExecutionContext<'_, '_> {
     }
 }
 
-pub(super) fn set_animation_playback_controller_speed_from_authored_percent(
-    animation_playback_controller: &mut AnimationPlaybackController,
-    playback_speed_percent: i32,
-) {
-    animation_playback_controller.playback_speed_permille = playback_speed_percent
-        .saturating_mul(10)
-        .clamp(i32::from(i16::MIN), i32::from(i16::MAX))
-        as i16;
+impl AuthoredAnimationControlTextActionExecutionContext<'_, '_> {
+    pub(super) fn configure_authored_traversal_segment_timing(
+        &mut self,
+        controller: Entity,
+        playback_generation: u64,
+        completion_percent: i32,
+        segment_count: i32,
+    ) {
+        let Ok(segment_count) = u32::try_from(segment_count) else {
+            return;
+        };
+        if segment_count == 0 {
+            return;
+        }
+        self.traversal_timing.write(
+            crate::animation_playback::traversal_animation_path_binding::ConfigureTraversalSegmentTiming {
+                controller,
+                playback_generation,
+                completion_fraction: completion_percent as f32 / 100.0,
+                segment_count,
+            },
+        );
+    }
 }

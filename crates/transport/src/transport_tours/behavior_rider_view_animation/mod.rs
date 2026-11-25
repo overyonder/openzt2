@@ -1,3 +1,4 @@
+use super::transport_route_position_calculations::TrackTravelDistances;
 use bevy::prelude::*;
 use openzt2_game_assets::world_definitions::{
     world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions,
@@ -17,7 +18,8 @@ use openzt2_zoo_state::{
     },
     transport_tours::{
         transport_rider_types::{TransportRider, TransportSeat, TransportSeatRider},
-        transport_vehicle_types::TransportVehicle,
+        transport_topology_types::TrackSegment,
+        transport_vehicle_types::{RoutePosition, TransportVehicle, VehicleOnTrack},
     },
 };
 
@@ -29,7 +31,12 @@ pub(super) fn animate_rider_for_authored_view(
         &RunBehaviorAnimateForViewFromTransport,
         Option<(&TransportRider, &TransportSeatRider)>,
     )>,
-    vehicles: Query<(&TransportVehicle, &GlobalTransform)>,
+    vehicles: Query<(
+        &TransportVehicle,
+        &GlobalTransform,
+        Option<(&VehicleOnTrack, &RoutePosition)>,
+    )>,
+    tracks: Query<(&TrackSegment, &TrackTravelDistances)>,
     seats: Query<&TransportSeat>,
     targets: Query<&GlobalTransform>,
     definitions: Res<WorldDefinitions>,
@@ -47,23 +54,41 @@ pub(super) fn animate_rider_for_authored_view(
     let clip_key = (|| {
         let target = targets.get(task.target?).ok()?;
         let (ride, seat) = seat_rider?;
-        let (vehicle, vehicle_pose) = vehicles.get(ride.vehicle).ok()?;
+        let (vehicle, vehicle_pose, track) = vehicles.get(ride.vehicle).ok()?;
         let seat = seats.get(seat.0).ok()?;
         let definitions = definitions.get(&assets)?;
         let definition = definitions.find_vehicle_seat_by_index(vehicle.definition, seat.index)?;
-        let offset =
-            vehicle_pose.rotation().inverse() * (target.translation() - vehicle_pose.translation());
-        let offset = if seat.back_facing { -offset } else { offset };
-        let degrees = offset.x.atan2(offset.z).to_degrees();
-        let first = if degrees > 0.0 { 2 } else { 0 };
-        let angle = degrees.abs();
-        let prefix = definition
-            .animation_states
-            .iter()
-            .find(|state| {
-                state.present_limits & (0b11 << first) == 0b11 << first
-                    && f32::from(state.angle_limits_degrees[first]) <= angle
-                    && angle < f32::from(state.angle_limits_degrees[first + 1])
+        let prefix = track
+            .and_then(|(track, route)| {
+                let (segment, distances) = tracks.get(track.0).ok()?;
+                let (position, tangent) =
+                    distances.translation_and_tangent(segment, route.distance);
+                let vehicle_forward = vehicle_pose.rotation() * Vec3::Z;
+                let forward = if tangent.dot(vehicle_forward) < 0.0 {
+                    -tangent
+                } else {
+                    tangent
+                };
+                let heading = forward.xz().try_normalize()?;
+                let offset = target.translation() - position;
+                let right = Vec2::new(heading.y, -heading.x);
+                let side = offset.xz().dot(right);
+                let angle = side.abs().atan2(offset.xz().dot(heading)).to_degrees();
+                let vertical_angle = offset.xz().length().atan2(offset.y).to_degrees();
+                let first = if side > 0.0 { 2 } else { 0 };
+                definition.animation_states.iter().find(|state| {
+                    let limit = |index, default| {
+                        if state.present_limits & (1 << index) == 0 {
+                            default
+                        } else {
+                            f32::from(state.angle_limits_degrees[index])
+                        }
+                    };
+                    limit(first, 180.0) < angle
+                        && angle <= limit(first + 1, 0.0)
+                        && state.up_degrees.unwrap_or(0.0) < vertical_angle
+                        && vertical_angle <= state.down_degrees.unwrap_or(180.0)
+                })
             })
             .map_or("", |state| state.clip_prefix.as_str());
         Some(format!("{prefix}{}", action.0))

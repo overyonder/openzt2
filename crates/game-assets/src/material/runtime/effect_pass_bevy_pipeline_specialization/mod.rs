@@ -7,8 +7,8 @@ use bevy::{
     pbr::{Material, MaterialPipeline, MaterialPipelineKey},
     render::render_resource::{
         DepthBiasState, PrimitiveTopology, RenderPipelineDescriptor, SpecializedMeshPipelineError,
-        TextureFormat,
     },
+    shader::ShaderDefVal,
 };
 
 use super::{
@@ -57,9 +57,27 @@ impl Material for EffectPassMaterial {
                 .collect::<Vec<_>>();
             descriptor.vertex.buffers = vec![layout.0.get_layout(&attributes)?];
         }
+        let triangle_depth_bias = descriptor.depth_stencil.is_some()
+            && matches!(
+                descriptor.primitive.topology,
+                PrimitiveTopology::TriangleList | PrimitiveTopology::TriangleStrip
+            );
+        let constant_depth_bias = triangle_depth_bias && key.bind_group_data.depth_bias_bits != 0;
         if let Some(fragment) = descriptor.fragment.as_mut() {
             fragment.shader = key.bind_group_data.fragment_shader;
             fragment.entry_point = Some(Cow::Borrowed(key.bind_group_data.fragment_entry_point));
+            if constant_depth_bias {
+                fragment.shader_defs.extend([
+                    ShaderDefVal::UInt(
+                        "D3D9_DEPTH_BIAS_BITS".into(),
+                        key.bind_group_data.depth_bias_bits,
+                    ),
+                    ShaderDefVal::UInt(
+                        "D3D9_SLOPE_BIAS_BITS".into(),
+                        key.bind_group_data.slope_scale_depth_bias_bits,
+                    ),
+                ]);
+            }
             fragment.targets.iter_mut().flatten().for_each(|target| {
                 target.blend = key.bind_group_data.blend_state;
                 target.write_mask = key.bind_group_data.color_writes;
@@ -70,25 +88,14 @@ impl Material for EffectPassMaterial {
         if let Some(depth) = descriptor.depth_stencil.as_mut() {
             depth.depth_write_enabled = Some(key.bind_group_data.depth_write_enabled);
             depth.depth_compare = Some(key.bind_group_data.depth_compare);
-            if matches!(
-                descriptor.primitive.topology,
-                PrimitiveTopology::TriangleList | PrimitiveTopology::TriangleStrip
-            ) && (key.bind_group_data.depth_bias_bits != 0
-                || key.bind_group_data.slope_scale_depth_bias_bits != 0)
-            {
-                // Float depth bias has a primitive-dependent unit. Convert at depth 1.
-                let units_per_depth = match depth.format {
-                    TextureFormat::Depth16Unorm => 65_535.0,
-                    TextureFormat::Depth32Float | TextureFormat::Depth32FloatStencil8 => {
-                        8_388_608.0
-                    }
-                    _ => 16_777_215.0,
-                };
-                let constant = f64::from(f32::from_bits(key.bind_group_data.depth_bias_bits));
-                let slope_scale = f32::from_bits(key.bind_group_data.slope_scale_depth_bias_bits);
+            if triangle_depth_bias {
                 depth.bias = DepthBiasState {
-                    constant: (-constant * units_per_depth).round() as i32,
-                    slope_scale: -slope_scale,
+                    constant: 0,
+                    slope_scale: if constant_depth_bias {
+                        0.0
+                    } else {
+                        -f32::from_bits(key.bind_group_data.slope_scale_depth_bias_bits)
+                    },
                     clamp: 0.0,
                 };
             }

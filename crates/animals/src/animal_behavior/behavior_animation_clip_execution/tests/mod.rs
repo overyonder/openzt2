@@ -25,7 +25,6 @@ fn restarted_clip_ignores_old_outcomes_and_consumes_its_completion_once() {
                 .pipe(start_current_behavior_animation_clip_actions),
         )
         .add_message::<AnimationClipPlaybackRequest>()
-        .add_message::<AnimationClipActionOptions>()
         .add_message::<AnimationClipPlaybackRequestRejected>()
         .add_message::<AnimationCompleted>()
         .add_systems(

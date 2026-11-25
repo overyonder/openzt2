@@ -1,16 +1,16 @@
 use bevy::{
     asset::RenderAssetUsages,
     camera::{
-        visibility::RenderLayers, ClearColorConfig, PerspectiveProjection, RenderTarget,
-        SubCameraView,
+        ClearColorConfig, PerspectiveProjection, RenderTarget, SubCameraView,
+        visibility::RenderLayers,
     },
     ecs::{entity_disabling::Disabled, query::Allow, relationship::RelationshipTarget},
     prelude::*,
     render::render_resource::{TextureFormat, TextureUsages},
 };
 use openzt2_game_data::{
-    ui_document::node_property_binding::UiImagePropertyBindingSource,
-    world_definitions::world_objects::WorldObjectKind, AssetId,
+    AssetId, ui_document::node_property_binding::UiImagePropertyBindingSource,
+    world_definitions::world_objects::WorldObjectKind,
 };
 
 use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
@@ -35,13 +35,50 @@ pub(super) const CATALOGUE_PREVIEW_SCENE_RENDER_LAYER: usize = 29;
 
 #[cfg(test)]
 mod tests;
-// `buyinfo.xml` defines this exact sub-view in the original 1024-by-768 UI
-// surface. The native preview stays attached to `buy_panel_fist` in
-// `cameraobject.xml`; it is not reframed from each selected mesh's bounds.
-const AUTHORED_BUY_INFORMATION_VIEW_SIZE: UVec2 = UVec2::new(1024, 768);
-const AUTHORED_BUY_INFORMATION_PREVIEW_OFFSET: Vec2 = Vec2::new(727.0, 624.0);
-const AUTHORED_BUY_INFORMATION_PREVIEW_SIZE: UVec2 = UVec2::new(97, 85);
-const AUTHORED_BUY_PANEL_CAMERA_RELATIVE_ANCHOR: Vec3 = Vec3::new(19.5, -7.85, 6.37);
+use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
+use openzt2_game_data::ui_document::{
+    document::UiDocument, node_layout::UiNodeRegionMetric, node_presentation::UiNodeVisualState,
+};
+use openzt2_interface_state::ui::authored_ui_node_projection_components::{
+    UiDocumentOwner, UiDocumentRoot, UiNodeId,
+};
+
+use super::catalogue_preview_camera_anchor::{
+    CataloguePreviewCameraAnchor, CataloguePreviewCameraAnchorSource,
+};
+
+#[derive(Component, PartialEq)]
+pub(crate) enum CataloguePreviewProjection {
+    Icon {
+        image: Handle<Image>,
+        source_rect: Option<Rect>,
+    },
+    Scene {
+        definition: AssetId,
+        view: SubCameraView,
+        anchor: Option<Vec3>,
+        prefab: Option<Handle<ScenePrefabAsset>>,
+        object_transform: Transform,
+        attach_object_presentation: bool,
+        path_width_cm: Option<u16>,
+        path_texture: Option<Handle<Image>>,
+        path_curb: Option<Handle<ScenePrefabAsset>>,
+    },
+}
+
+fn accept_preview_projection(
+    commands: &mut Commands,
+    owner: Entity,
+    current: Option<Mut<CataloguePreviewProjection>>,
+    projection: CataloguePreviewProjection,
+) -> bool {
+    if let Some(mut current) = current {
+        current.set_if_neq(projection)
+    } else {
+        commands.entity(owner).insert(projection);
+        true
+    }
+}
 
 #[derive(Component)]
 pub(crate) struct CataloguePreviewPrefab(Handle<ScenePrefabAsset>);
@@ -79,11 +116,19 @@ pub(crate) fn project_selected_catalogue_entry_into_preview_scene(
     active_definitions: Res<WorldDefinitions>,
     selected_entry: Single<Ref<SelectedCatalogueEntry>>,
     mut asset_changes: Option<MessageReader<AssetEvent<WorldDefinitionAsset>>>,
+    mut prefab_changes: Option<MessageReader<AssetEvent<ScenePrefabAsset>>>,
+    documents: Option<Res<Assets<UiDocumentAsset>>>,
+    document_roots: Query<Ref<UiDocumentRoot>>,
+    anchor_source: Option<Res<CataloguePreviewCameraAnchorSource>>,
+    anchors: Option<Res<Assets<CataloguePreviewCameraAnchor>>>,
     mut nodes: Query<(
         Entity,
         Ref<UiImageBinding>,
+        Option<&UiDocumentOwner>,
+        Option<&UiNodeId>,
         &InheritedVisibility,
         Option<&CataloguePreviewScenes>,
+        Option<&mut CataloguePreviewProjection>,
         Option<&mut ImageNode>,
     )>,
 ) {
@@ -102,21 +147,40 @@ pub(crate) fn project_selected_catalogue_entry_into_preview_scene(
             .count()
             != 0
     });
+    let changed_prefabs: std::collections::BTreeSet<_> = prefab_changes
+        .as_mut()
+        .into_iter()
+        .flat_map(|reader| reader.read())
+        .filter_map(|event| match *event {
+            AssetEvent::Modified { id } | AssetEvent::Removed { id } => Some(id),
+            _ => None,
+        })
+        .collect();
     let refresh = selected_entry.is_changed()
         || active_definitions.is_changed()
         || definitions.is_changed()
-        || assets_changed;
+        || assets_changed
+        || !changed_prefabs.is_empty()
+        || anchors.as_ref().is_some_and(|anchors| anchors.is_changed())
+        || documents
+            .as_ref()
+            .is_some_and(|documents| documents.is_changed());
     let definitions = active_definitions.get(&definitions);
-    for (node, binding, inherited_visibility, scenes, mut image_node) in &mut nodes {
+    let anchor = anchor_source
+        .as_deref()
+        .zip(anchors.as_deref())
+        .and_then(|(source, anchors)| anchors.get(&source.0))
+        .map(|anchor| anchor.0);
+    for (node, binding, owner, id, inherited_visibility, scenes, current, mut image_node) in
+        &mut nodes
+    {
+        let root = owner.and_then(|owner| document_roots.get(owner.0).ok());
         if !matches!(
             &binding.0,
             UiImagePropertyBindingSource::CatalogueEntryPreview
-        ) || (!refresh && !binding.is_changed())
+        ) || (!refresh && !binding.is_changed() && !root.as_ref().is_some_and(Ref::is_changed))
         {
             continue;
-        }
-        if let Some(scene) = scenes.and_then(|scenes| scenes.iter().next()) {
-            commands.entity(scene).try_despawn();
         }
         let Some((definition, definitions, object)) =
             selected_entry
@@ -130,6 +194,7 @@ pub(crate) fn project_selected_catalogue_entry_into_preview_scene(
                     ))
                 })
         else {
+            retire_preview(&mut commands, node, scenes, current.is_some());
             if let Some(image_node) = image_node.as_deref_mut() {
                 if image_node.image != Handle::default() {
                     image_node.image = Handle::default();
@@ -137,12 +202,47 @@ pub(crate) fn project_selected_catalogue_entry_into_preview_scene(
             }
             continue;
         };
-        // The original draws no 3D preview for a transport track: the buy
-        // panel's `Entity Image Display` shows the source rectangle 3,5,57,48
-        // of its icon, the normal-state cell.
+        let authored_node = root.as_ref().zip(id).and_then(|(root, id)| {
+            let document = documents
+                .as_deref()?
+                .get(&root.document)?
+                .canonical_ui_document();
+            Some((document, id.index as usize))
+        });
         if definitions.find_track(definition).is_some() {
             let icon = definitions.texture_image(object.icon).unwrap_or_default();
-            let rect = Some(Rect::new(3.0, 5.0, 60.0, 53.0));
+            let rect = authored_node.and_then(|(document, index)| {
+                let visual = document.nodes.get(index)?.visuals.iter().find(|visual| {
+                    matches!(
+                        visual.visual_state,
+                        UiNodeVisualState::Normal | UiNodeVisualState::Default
+                    )
+                })?;
+                let [
+                    UiNodeRegionMetric::Pixels(x),
+                    UiNodeRegionMetric::Pixels(y),
+                    UiNodeRegionMetric::Pixels(w),
+                    UiNodeRegionMetric::Pixels(h),
+                ] = visual.source_rect.metrics
+                else {
+                    return None;
+                };
+                (w > 0.0 && h > 0.0).then(|| Rect::new(x, y, x + w, y + h))
+            });
+            if !accept_preview_projection(
+                &mut commands,
+                node,
+                current,
+                CataloguePreviewProjection::Icon {
+                    image: icon.clone(),
+                    source_rect: rect,
+                },
+            ) {
+                continue;
+            }
+            if let Some(scene) = scenes.and_then(|scenes| scenes.iter().next()) {
+                commands.entity(scene).try_despawn();
+            }
             if let Some(image_node) = image_node.as_deref_mut() {
                 if image_node.image != icon {
                     image_node.image = icon;
@@ -190,6 +290,7 @@ pub(crate) fn project_selected_catalogue_entry_into_preview_scene(
             ground_path.and_then(|path| definitions.texture_image(path.surface_texture));
         let prefab = prefab.and_then(|prefab| definitions.scene(prefab));
         if prefab.is_none() && path_texture.is_none() {
+            retire_preview(&mut commands, node, scenes, current.is_some());
             if let Some(image_node) = image_node.as_deref_mut() {
                 if image_node.image != Handle::default() {
                     image_node.image = Handle::default();
@@ -197,9 +298,55 @@ pub(crate) fn project_selected_catalogue_entry_into_preview_scene(
             }
             continue;
         }
+        let Some(view) = authored_node.and_then(|(document, index)| preview_view(document, index))
+        else {
+            continue;
+        };
+        if ground_path.is_none() && anchor.is_none() {
+            continue;
+        }
+        let offset = object
+            .preview_offset_cm
+            .map(|value| f32::from(value) * 0.01);
+        let object_transform = Transform::from_translation(
+            anchor.unwrap_or_default()
+                + Vec3::from_array(convert_source_z_up_vector_to_bevy_y_up_coordinates(offset)),
+        )
+        .with_rotation(Quat::from_rotation_y(-std::f32::consts::FRAC_PI_2))
+        .with_scale(Vec3::splat(object.preview_scale * object.prefab_scale));
+        let path_curb = ground_path
+            .and_then(|path| definitions.find_fence(path.curb))
+            .and_then(|curb| definitions.scene(curb.segments.cardinal_straight));
+        let geometry_changed = prefab
+            .as_ref()
+            .into_iter()
+            .chain(path_curb.as_ref())
+            .any(|prefab| changed_prefabs.contains(&prefab.id()));
+        let accepted = accept_preview_projection(
+            &mut commands,
+            node,
+            current,
+            CataloguePreviewProjection::Scene {
+                definition,
+                view,
+                anchor,
+                prefab: prefab.clone(),
+                object_transform,
+                attach_object_presentation: object.catalogue_preview_prefab.is_none(),
+                path_width_cm: ground_path.map(|path| path.width_cm),
+                path_texture: path_texture.clone(),
+                path_curb,
+            },
+        );
+        if !accepted && !geometry_changed {
+            continue;
+        }
+        if let Some(scene) = scenes.and_then(|scenes| scenes.iter().next()) {
+            commands.entity(scene).try_despawn();
+        }
         let mut target = Image::new_target_texture(
-            AUTHORED_BUY_INFORMATION_PREVIEW_SIZE.x,
-            AUTHORED_BUY_INFORMATION_PREVIEW_SIZE.y,
+            view.size.x,
+            view.size.y,
             TextureFormat::Rgba8UnormSrgb,
             None,
         );
@@ -215,9 +362,6 @@ pub(crate) fn project_selected_catalogue_entry_into_preview_scene(
                 CataloguePreviewOwner(node),
             ))
             .id();
-        let offset = object
-            .preview_offset_cm
-            .map(|value| f32::from(value) * 0.01);
         if let (Some(path), Some(texture)) = (ground_path, path_texture) {
             super::catalogue_ground_path_preview_construction::spawn_ground_path_catalogue_preview(
                 &mut commands,
@@ -232,14 +376,7 @@ pub(crate) fn project_selected_catalogue_entry_into_preview_scene(
             let mut preview = commands.spawn((
                 Name::new("catalogue object preview prefab"),
                 CataloguePreviewPrefab(prefab),
-                Transform::from_translation(
-                    AUTHORED_BUY_PANEL_CAMERA_RELATIVE_ANCHOR
-                        + Vec3::from_array(convert_source_z_up_vector_to_bevy_y_up_coordinates(
-                            offset,
-                        )),
-                )
-                .with_rotation(Quat::from_rotation_y(-std::f32::consts::FRAC_PI_2))
-                .with_scale(Vec3::splat(object.preview_scale * object.prefab_scale)),
+                object_transform,
                 Visibility::Inherited,
                 ChildOf(scene),
             ));
@@ -269,11 +406,7 @@ pub(crate) fn project_selected_catalogue_entry_into_preview_scene(
             Camera {
                 is_active: inherited_visibility.get(),
                 clear_color: ClearColorConfig::Custom(Color::NONE),
-                sub_camera_view: ground_path.is_none().then_some(SubCameraView {
-                    full_size: AUTHORED_BUY_INFORMATION_VIEW_SIZE,
-                    offset: AUTHORED_BUY_INFORMATION_PREVIEW_OFFSET,
-                    size: AUTHORED_BUY_INFORMATION_PREVIEW_SIZE,
-                }),
+                sub_camera_view: ground_path.is_none().then_some(view),
                 ..default()
             },
             if let Some(path) = ground_path {
@@ -288,7 +421,7 @@ pub(crate) fn project_selected_catalogue_entry_into_preview_scene(
                     // The winning overhead camera authors frustum slopes of
                     // -0.48 and +0.48 at a fixed 4:3 aspect.
                     fov: 2.0 * 0.48_f32.atan(),
-                    aspect_ratio: 4.0 / 3.0,
+                    aspect_ratio: view.full_size.x as f32 / view.full_size.y as f32,
                     near: 0.3,
                     far: 800.0,
                     ..default()
@@ -353,6 +486,45 @@ pub(crate) fn synchronize_catalogue_preview_camera_activity_with_authored_image_
             }
         }
     }
+}
+
+fn retire_preview(
+    commands: &mut Commands,
+    owner: Entity,
+    scenes: Option<&CataloguePreviewScenes>,
+    source_exists: bool,
+) {
+    if let Some(scene) = scenes.and_then(|scenes| scenes.iter().next()) {
+        commands.entity(scene).try_despawn();
+    }
+    if source_exists {
+        commands
+            .entity(owner)
+            .remove::<CataloguePreviewProjection>();
+    }
+}
+
+fn preview_view(document: &UiDocument, mut index: usize) -> Option<SubCameraView> {
+    let node = document.nodes.get(index)?;
+    let size = Vec2::new(node.rect[2], node.rect[3]);
+    let canvas = Vec2::from_array(document.logical_size);
+    if size.min_element() < 1.0 || canvas.min_element() < 1.0 {
+        return None;
+    }
+    let mut offset = Vec2::ZERO;
+    for _ in 0..document.nodes.len() {
+        let node = document.nodes.get(index)?;
+        offset += Vec2::new(node.rect[0], node.rect[1]);
+        if node.parent as usize == index || node.parent == u32::MAX {
+            return Some(SubCameraView {
+                full_size: canvas.as_uvec2(),
+                offset,
+                size: size.as_uvec2(),
+            });
+        }
+        index = node.parent as usize;
+    }
+    None
 }
 
 pub(crate) fn hydrate_catalogue_preview_scene_prefab_render_trees(

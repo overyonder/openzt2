@@ -75,6 +75,32 @@ impl From<String> for AssetPath {
     }
 }
 
+pub(crate) fn authored_source_reference_paths(
+    from: &str,
+    reference: &str,
+) -> impl Iterator<Item = AssetPath> {
+    let reference = reference.trim().replace('\\', "/");
+    let parent = from.rsplit_once('/').map_or("", |(parent, _)| parent);
+    let relative = AssetPath::new(format!("{parent}/{reference}"));
+    let rooted = AssetPath::new(&reference);
+    let (rooted, relative) = match reference.as_str() {
+        path if path.starts_with('/') || parent.is_empty() => (Some(rooted), None),
+        path if path.starts_with("./") || path.starts_with("../") => (None, Some(relative)),
+        _ => (Some(rooted), Some(relative)),
+    };
+    rooted.into_iter().chain(relative).flat_map(|candidate| {
+        let with_extension = Path::new(candidate.as_str())
+            .extension()
+            .is_none()
+            .then(|| AssetPath::new(format!("{}.xml", candidate.as_str())));
+        std::iter::once(candidate).chain(with_extension)
+    })
+}
+
+pub(crate) fn is_authored_file_reference(reference: &str) -> bool {
+    reference.contains(['/', '\\']) || Path::new(reference.trim()).extension().is_some()
+}
+
 fn canonicalize(path: &str) -> String {
     let mut canonical = String::with_capacity(path.len());
     for component in path.split(['/', '\\']) {

@@ -2,7 +2,7 @@ use super::configured_model_effect_materials::{
     AuthoredModelEffectMaterial, ModelMaterialInputOwner,
 };
 use super::model_scene_visibility_and_shadow_projection::ProjectedModelDrawShadowPolicy;
-use bevy::asset::AssetEvent;
+use bevy::asset::{asset_changed::AssetChanged, AsAssetId, AssetEvent};
 use bevy::camera::visibility::RenderLayers;
 use bevy::gltf::GltfMaterialName;
 use bevy::light::NotShadowCaster;
@@ -49,10 +49,54 @@ pub(super) struct AdditionalAuthoredModelMaterialPass(usize);
 pub(super) struct AuthoredModelStandardMaterial {
     pub(super) source: Handle<StandardMaterial>,
     pub(super) rendered_material: bevy::asset::AssetId<StandardMaterial>,
+    pub(super) fading: bool,
+}
+
+impl AsAssetId for AuthoredModelStandardMaterial {
+    type Asset = StandardMaterial;
+
+    fn as_asset_id(&self) -> bevy::asset::AssetId<StandardMaterial> {
+        self.source.id()
+    }
+}
+
+#[derive(Component)]
+pub(super) struct PendingAuthoredModelMaterialPasses(
+    Box<[bevy::asset::AssetId<EffectPassMaterial>]>,
+);
+
+#[derive(bevy::ecs::system::SystemParam)]
+pub(super) struct AuthoredPassInvalidation<'w, 's> {
+    changed: Query<
+        'w,
+        's,
+        Entity,
+        (
+            With<GltfMaterialName>,
+            Without<AdditionalAuthoredModelMaterialPass>,
+            Or<(
+                Changed<GltfMaterialName>,
+                Changed<Mesh3d>,
+                Changed<SkinnedMesh>,
+                Changed<ProjectedModelDrawShadowPolicy>,
+                Changed<ModelMaterialInputOwner<ModelExpanded>>,
+            )>,
+        ),
+    >,
+    owners: Query<
+        'w,
+        's,
+        Entity,
+        Or<(
+            Changed<PrefabMaterialOverrides>,
+            Changed<PrefabClothingTextures>,
+        )>,
+    >,
 }
 
 pub(super) fn project_authored_model_material_passes(
     mut commands: Commands,
+    invalidation: AuthoredPassInvalidation,
     mut primitives: Query<
         (
             Entity,
@@ -69,6 +113,7 @@ pub(super) fn project_authored_model_material_passes(
             Option<&AuthoredModelStandardMaterial>,
             Option<&mut PrefabPrimitiveMaterial>,
             Has<AuthoredModelEffectMaterial>,
+            Option<&mut PendingAuthoredModelMaterialPasses>,
         ),
         Without<AdditionalAuthoredModelMaterialPass>,
     >,
@@ -87,11 +132,13 @@ pub(super) fn project_authored_model_material_passes(
     material_assets: Res<Assets<MaterialAsset>>,
     graphics_settings: Res<GraphicsSettings>,
     draw_materials: Res<Assets<EffectPassMaterial>>,
-    (mut visibility, mut authored_effects, mut orderings, mut extra_meshes): (
+    (mut visibility, mut effect_draws, mut orderings): (
         Query<&mut Visibility, With<GltfMaterialName>>,
-        Query<&mut AuthoredModelEffectMaterial>,
+        ParamSet<(
+            Query<&AuthoredModelEffectMaterial, AssetChanged<AuthoredModelEffectMaterial>>,
+            Query<&mut AuthoredModelEffectMaterial>,
+        )>,
         Query<&mut AuthoredEffectTechniquePassSubmissionOrder>,
-        Query<&mut Mesh3d, With<AdditionalAuthoredModelMaterialPass>>,
     ),
 ) {
     let changed_materials = material_events
@@ -119,7 +166,31 @@ pub(super) fn project_authored_model_material_passes(
         })
         .collect::<HashSet<_>>();
 
-    for (
+    let mut affected = invalidation
+        .changed
+        .iter()
+        .collect::<bevy::ecs::entity::EntityHashSet>();
+    affected.extend(effect_draws.p0().iter().map(|draw| draw.geometry));
+    for owner in invalidation.owners.iter().chain(removed_sources) {
+        affected.extend(std::iter::once(owner).chain(children.iter_descendants::<Children>(owner)));
+    }
+    if !changed_materials.is_empty() || !changed_passes.is_empty() {
+        affected.extend(primitives.iter().filter_map(
+            |(entity, _, _, _, _, _, _, _, _, _, _, _, material, _, waiting)| {
+                let source_changed =
+                    material.is_some_and(|material| changed_materials.contains(&material.0.id()));
+                let pass_ready = waiting
+                    .is_some_and(|waiting| waiting.0.iter().any(|id| changed_passes.contains(id)));
+                (source_changed || pass_ready).then_some(entity)
+            },
+        ));
+    }
+    if graphics_settings.is_changed() {
+        affected.extend(primitives.iter().map(|(entity, ..)| entity));
+    }
+    let mut primitives = primitives.iter_many_mut(affected).matched();
+    let mut authored_effects = effect_draws.p1();
+    while let Some((
         entity,
         name,
         mesh,
@@ -134,47 +205,10 @@ pub(super) fn project_authored_model_material_passes(
         authored_standard,
         previous_material,
         has_effect_binding,
-    ) in &mut primitives
+        waiting,
+    )) = primitives.fetch_next()
     {
         let root = owner.as_ref().and_then(|owner| roots.get(owner.0).ok());
-        let source_changed = name.is_changed()
-            || removed_sources.contains(&entity)
-            || owner
-                .as_ref()
-                .is_some_and(|owner| owner.is_changed() || removed_sources.contains(&owner.0))
-            || root.as_ref().is_some_and(|(overrides, clothing)| {
-                overrides.is_changed()
-                    || clothing
-                        .as_ref()
-                        .is_some_and(|clothing| clothing.is_changed())
-            });
-        if !source_changed
-            && !graphics_settings.is_changed()
-            && changed_materials.is_empty()
-            && changed_passes.is_empty()
-        {
-            continue;
-        }
-        if !source_changed
-            && !graphics_settings.is_changed()
-            && previous_material
-                .as_ref()
-                .is_some_and(|material| !changed_materials.contains(&material.0.id()))
-            && !std::iter::once(entity)
-                .chain(
-                    children
-                        .get(entity)
-                        .into_iter()
-                        .flat_map(|children| children.iter()),
-                )
-                .any(|draw| {
-                    authored_effects
-                        .get(draw)
-                        .is_ok_and(|effect| changed_passes.contains(&effect.template.id()))
-                })
-        {
-            continue;
-        }
         let override_material = root.as_ref().and_then(|(overrides, _)| {
             overrides.0.iter().find(|material_override| {
                 name.0.eq_ignore_ascii_case(
@@ -197,6 +231,7 @@ pub(super) fn project_authored_model_material_passes(
                     PrefabPrimitiveMaterial,
                     AuthoredEffectTechniquePassSubmissionOrder,
                     AuthoredModelStandardMaterial,
+                    PendingAuthoredModelMaterialPasses,
                 )>();
                 if let Some(standard) = authored_standard {
                     target.insert(MeshMaterial3d(standard.source.clone()));
@@ -210,27 +245,54 @@ pub(super) fn project_authored_model_material_passes(
         let Some(handle) = override_material.handle.as_ref() else {
             continue;
         };
+        let source_exists = previous_material.is_some();
+        if let Some(mut current) = previous_material {
+            current
+                .map_unchanged(|material| &mut material.0)
+                .set_if_neq(handle.clone());
+        } else {
+            commands
+                .entity(entity)
+                .try_insert(PrefabPrimitiveMaterial(handle.clone()));
+        }
         let Some(material) = material_assets.get(handle) else {
+            if source_exists && has_effect_binding {
+                despawn_authored_material_pass_children(
+                    &mut commands,
+                    entity,
+                    &children,
+                    &additional_passes,
+                );
+                if let Ok(mut visibility) = visibility.get_mut(entity) {
+                    visibility.set_if_neq(Visibility::Hidden);
+                }
+            }
             continue;
         };
         let Some(owner) = owner else { continue };
         let clothing = root.as_ref().and_then(|(_, clothing)| clothing.as_ref());
         let passes =
             material.evaluated_pass_material_assets_for_effect_quality(graphics_settings.effects);
-        if !source_changed
-            && !graphics_settings.is_changed()
-            && !changed_materials.contains(&handle.id())
-            && !passes
-                .iter()
-                .any(|pass| changed_passes.contains(&pass.id()))
-        {
-            continue;
-        }
         if passes
             .iter()
             .any(|pass| !draw_materials.contains(pass.id()))
         {
+            let pending = passes.iter().map(Handle::id).collect::<Box<[_]>>();
+            if let Some(mut waiting) = waiting {
+                waiting
+                    .map_unchanged(|waiting| &mut waiting.0)
+                    .set_if_neq(pending);
+            } else {
+                commands
+                    .entity(entity)
+                    .try_insert(PendingAuthoredModelMaterialPasses(pending));
+            }
             continue;
+        }
+        if waiting.is_some() {
+            commands
+                .entity(entity)
+                .try_remove::<PendingAuthoredModelMaterialPasses>();
         }
 
         let mut retained_passes = children
@@ -244,15 +306,6 @@ pub(super) fn project_authored_model_material_passes(
                     .map(|pass| (pass.0, child))
             })
             .collect::<HashMap<_, _>>();
-        if let Some(previous_material) = previous_material {
-            previous_material
-                .map_unchanged(|material| &mut material.0)
-                .set_if_neq(handle.clone());
-        } else {
-            commands
-                .entity(entity)
-                .insert(PrefabPrimitiveMaterial(handle.clone()));
-        }
         if passes.is_empty() {
             for child in retained_passes.into_values() {
                 commands.entity(child).try_despawn();
@@ -302,6 +355,7 @@ pub(super) fn project_authored_model_material_passes(
                         target.insert(AuthoredModelStandardMaterial {
                             source: standard.0.clone(),
                             rendered_material: standard.id(),
+                            fading: false,
                         });
                     }
                     target.remove::<MeshMaterial3d<StandardMaterial>>();
@@ -329,9 +383,6 @@ pub(super) fn project_authored_model_material_passes(
                     if current.hierarchy_order() != ordering.hierarchy_order() {
                         *current = current.with_source_hierarchy_order(owner_parent, owner_index);
                     }
-                }
-                if let Ok(mut current) = extra_meshes.get_mut(child) {
-                    current.set_if_neq(mesh.clone());
                 }
                 continue;
             }
@@ -383,6 +434,178 @@ fn despawn_authored_material_pass_children(
     {
         if additional_passes.contains(child) {
             commands.entity(child).try_despawn();
+        }
+    }
+}
+
+#[derive(bevy::ecs::system::SystemParam)]
+pub(super) struct AdditionalPassGeometryChanges<'w, 's> {
+    changed: Query<
+        'w,
+        's,
+        Entity,
+        (
+            With<GltfMaterialName>,
+            Without<AdditionalAuthoredModelMaterialPass>,
+            Or<(
+                Changed<Mesh3d>,
+                Changed<SkinnedMesh>,
+                Changed<MeshMorphWeights>,
+                Changed<RenderLayers>,
+                Changed<NotShadowCaster>,
+                Changed<NotShadowReceiver>,
+                Changed<ProjectedModelDrawShadowPolicy>,
+            )>,
+        ),
+    >,
+    skins: RemovedComponents<'w, 's, SkinnedMesh>,
+    morphs: RemovedComponents<'w, 's, MeshMorphWeights>,
+    layers: RemovedComponents<'w, 's, RenderLayers>,
+    shadow_casters: RemovedComponents<'w, 's, NotShadowCaster>,
+    shadow_receivers: RemovedComponents<'w, 's, NotShadowReceiver>,
+    lighting: RemovedComponents<'w, 's, ProjectedModelDrawShadowPolicy>,
+}
+
+#[allow(clippy::type_complexity)]
+pub(super) fn synchronize_additional_pass_geometry(
+    mut commands: Commands,
+    mut changes: AdditionalPassGeometryChanges,
+    primitives: Query<
+        (
+            &Children,
+            &Mesh3d,
+            Option<&SkinnedMesh>,
+            Option<&MeshMorphWeights>,
+            Option<&RenderLayers>,
+            Has<NotShadowCaster>,
+            Has<NotShadowReceiver>,
+            Option<&ProjectedModelDrawShadowPolicy>,
+        ),
+        Without<AdditionalAuthoredModelMaterialPass>,
+    >,
+    mut passes: Query<
+        (
+            Entity,
+            &mut Mesh3d,
+            Option<&mut SkinnedMesh>,
+            Option<&mut MeshMorphWeights>,
+            Option<&mut RenderLayers>,
+            Has<NotShadowCaster>,
+            Has<NotShadowReceiver>,
+            Option<&mut ProjectedModelDrawShadowPolicy>,
+        ),
+        With<AdditionalAuthoredModelMaterialPass>,
+    >,
+) {
+    let affected = changes
+        .changed
+        .iter()
+        .chain(changes.skins.read())
+        .chain(changes.morphs.read())
+        .chain(changes.layers.read())
+        .chain(changes.shadow_casters.read())
+        .chain(changes.shadow_receivers.read())
+        .chain(changes.lighting.read())
+        .collect::<bevy::ecs::entity::EntityHashSet>();
+    for (children, mesh, skin, morph, layers, no_cast, no_receive, shadow) in
+        primitives.iter_many(affected).matched()
+    {
+        let mut passes = passes.iter_many_mut(children.iter()).matched();
+        while let Some((
+            pass,
+            mut current_mesh,
+            current_skin,
+            current_morph,
+            current_layers,
+            had_no_cast,
+            had_no_receive,
+            current_shadow,
+        )) = passes.fetch_next()
+        {
+            current_mesh.set_if_neq(mesh.clone());
+            let mut pass = commands.entity(pass);
+            match (current_skin, skin) {
+                (Some(mut current), Some(skin)) => {
+                    if current.inverse_bindposes != skin.inverse_bindposes
+                        || current.joints != skin.joints
+                    {
+                        *current = skin.clone();
+                    }
+                }
+                (None, Some(skin)) => {
+                    pass.try_insert(skin.clone());
+                }
+                (Some(_), None) => {
+                    pass.try_remove::<SkinnedMesh>();
+                }
+                (None, None) => {}
+            }
+            match (current_morph, morph) {
+                (Some(mut current), Some(morph)) => {
+                    let equal = match (&*current, morph) {
+                        (
+                            MeshMorphWeights::Value { weights: old },
+                            MeshMorphWeights::Value { weights: new },
+                        ) => old == new,
+                        (MeshMorphWeights::Reference(old), MeshMorphWeights::Reference(new)) => {
+                            old == new
+                        }
+                        _ => false,
+                    };
+                    if !equal {
+                        *current = morph.clone();
+                    }
+                }
+                (None, Some(morph)) => {
+                    pass.try_insert(morph.clone());
+                }
+                (Some(_), None) => {
+                    pass.try_remove::<MeshMorphWeights>();
+                }
+                (None, None) => {}
+            }
+            match (current_layers, layers) {
+                (Some(mut current), Some(layers)) => {
+                    current.set_if_neq(layers.clone());
+                }
+                (None, Some(layers)) => {
+                    pass.try_insert(layers.clone());
+                }
+                (Some(_), None) => {
+                    pass.try_remove::<RenderLayers>();
+                }
+                (None, None) => {}
+            }
+            match (current_shadow, shadow) {
+                (Some(mut current), Some(shadow)) => {
+                    current.set_if_neq(*shadow);
+                }
+                (None, Some(shadow)) => {
+                    pass.try_insert(*shadow);
+                }
+                (Some(_), None) => {
+                    pass.try_remove::<ProjectedModelDrawShadowPolicy>();
+                }
+                (None, None) => {}
+            }
+            match (no_cast, had_no_cast) {
+                (true, false) => {
+                    pass.try_insert(NotShadowCaster);
+                }
+                (false, true) => {
+                    pass.try_remove::<NotShadowCaster>();
+                }
+                _ => {}
+            }
+            match (no_receive, had_no_receive) {
+                (true, false) => {
+                    pass.try_insert(NotShadowReceiver);
+                }
+                (false, true) => {
+                    pass.try_remove::<NotShadowReceiver>();
+                }
+                _ => {}
+            }
         }
     }
 }

@@ -22,7 +22,6 @@ use openzt2_game_assets::application_lifecycle::GamePhase;
 use openzt2_game_assets::openzt2_asset_loading_plugin_group::OpenZt2AssetLoadingPluginGroup;
 use openzt2_game_plugin_group::OpenZt2GamePluginGroup;
 use openzt2_world_state::application_schedule::FixedGameSet;
-use openzt2_world_state::application_schedule::GameSet;
 
 /// Reads the executable arguments, assembles the Bevy application, and runs
 /// OpenZT2 until its normal application exit.
@@ -187,17 +186,6 @@ fn add_openzt2_game_states_and_update_schedules(game_application: &mut App) {
             std::time::Duration::from_millis(250),
         ))
         .configure_sets(
-            Update,
-            (
-                GameSet::Input,
-                GameSet::Intent,
-                GameSet::Ui,
-                GameSet::Presentation,
-                GameSet::Diagnostics,
-            )
-                .chain(),
-        )
-        .configure_sets(
             FixedUpdate,
             (
                 FixedGameSet::Clock,
@@ -207,7 +195,6 @@ fn add_openzt2_game_states_and_update_schedules(game_application: &mut App) {
                 FixedGameSet::Economy,
                 FixedGameSet::Cleanup,
             )
-                .chain()
                 .run_if(in_state(GamePhase::InGame))
                 .run_if(
                     openzt2_world_state::simulation_time::simulation_control_queries::simulation_is_running,

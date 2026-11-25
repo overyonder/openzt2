@@ -12,6 +12,12 @@ const WORLD_SCENARIO_DOCUMENT_SOURCE_HEADER_BYTE_COUNT: usize = 16;
 pub fn encode_world_scenario_document_source(
     source: &WorldScenarioDocumentSource,
 ) -> io::Result<Vec<u8>> {
+    if source.authored.legacy_script_references {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "resolve legacy world script paths before encoding",
+        ));
+    }
     validate_world_scenario_document_source(source)?;
     let payload = postcard::to_allocvec(source).map_err(io::Error::other)?;
     let mut bytes =
@@ -48,7 +54,10 @@ pub fn decode_world_scenario_document_source(
                 terrains,
                 scenes,
                 textures,
-                authored: Default::default(),
+                authored: super::authored_world_scenario_state::AuthoredWorldScenarioState {
+                    legacy_script_references: true,
+                    ..Default::default()
+                },
             },
             remaining,
         )

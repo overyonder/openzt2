@@ -25,6 +25,13 @@ pub fn resolve_animation_graph_route<'a>(
     if source as usize >= node_count || target as usize >= node_count {
         return None;
     }
+    if source == target {
+        return Some(AnimationGraphRoute {
+            source_node: source,
+            target_node: target,
+            steps: Default::default(),
+        });
+    }
     let mut entered_by = vec![None; node_count];
     let mut queue = std::collections::VecDeque::from([source]);
     while let Some(current) = queue.pop_front() {
@@ -95,7 +102,10 @@ pub fn begin_resolved_animation_graph_route(
                 .transition_animation_clip_asset_keys
                 .iter()
                 .any(|clip| clip_ready(clip)))
-            || select_preferred_animation_clip_from_graph_node(asset, clip_ready, target).is_none()
+            || !target
+                .animation_clip_asset_keys
+                .iter()
+                .any(|clip| clip_ready(clip))
         {
             return Err(MissingAnimationAsset);
         }

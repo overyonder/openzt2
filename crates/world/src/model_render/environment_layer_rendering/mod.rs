@@ -17,7 +17,10 @@ use openzt2_world_state::{
 pub(super) const FIRST_ENVIRONMENT_RENDER_LAYER: usize = 64;
 
 #[derive(Component)]
-struct EnvironmentStackCamera(Option<u16>);
+struct EnvironmentStackCamera {
+    layer: Option<u16>,
+    order_offset: isize,
+}
 
 #[derive(Component)]
 struct EnvironmentWorldCameraState {
@@ -42,7 +45,9 @@ pub(super) fn register_inherited_environment_render_layers(app: &mut App) {
                 .before(super::model_scene_visibility_and_shadow_projection::publish_model_draw_shadow_policy_sources),
             project_environment_world_layers.before(synchronize_environment_camera_stack),
             synchronize_environment_camera_stack
-                .before(super::active_model_view_cameras::refresh_active_model_view_cameras)
+                .before(synchronize_environment_camera_optics),
+            synchronize_environment_camera_optics
+                .before(super::active_model_view_cameras::publish_model_camera_view_inputs)
                 .before(CameraUpdateSystems)
                 .before(TransformSystems::Propagate),
         ),
@@ -137,12 +142,10 @@ fn route_authored_environment_layers(
 fn synchronize_environment_camera_stack(
     mut commands: Commands,
     layers: Query<Ref<EnvironmentWorldLayers>>,
-    mut removed_fog: RemovedComponents<DistanceFog>,
-    mut removed_hdr: RemovedComponents<Hdr>,
     mut world_cameras: Query<
         (
             Entity,
-            &WorldMember,
+            Ref<WorldMember>,
             &mut Camera,
             &mut Camera3d,
             Ref<Projection>,
@@ -156,25 +159,8 @@ fn synchronize_environment_camera_stack(
         ),
         (With<ZooCamera>, Without<EnvironmentStackCamera>),
     >,
-    mut stacked_cameras: Query<
-        (
-            &EnvironmentStackCamera,
-            &mut Camera,
-            &mut Camera3d,
-            &mut Projection,
-            &mut RenderTarget,
-            &mut Exposure,
-            &mut Msaa,
-            Has<Hdr>,
-            Option<&mut DistanceFog>,
-        ),
-        Without<ZooCamera>,
-    >,
+    mut stacked_cameras: Query<(&mut EnvironmentStackCamera, &mut Camera3d), Without<ZooCamera>>,
 ) {
-    let emptied = removed_fog
-        .read()
-        .chain(removed_hdr.read())
-        .collect::<EntityHashSet>();
     for (
         world_camera,
         member,
@@ -191,17 +177,10 @@ fn synchronize_environment_camera_stack(
     ) in &mut world_cameras
     {
         let authored = layers.get(member.root).ok();
-        let inputs_changed = view.is_changed()
-            || view_3d.is_changed()
-            || projection.is_changed()
-            || target.is_changed()
-            || exposure.is_changed()
-            || msaa.is_changed()
-            || hdr.as_ref().is_some_and(Ref::is_changed)
-            || fog.as_ref().is_some_and(Ref::is_changed)
-            || children.as_ref().is_some_and(Ref::is_changed)
-            || emptied.contains(&world_camera);
-        if !inputs_changed && !authored.as_ref().is_some_and(Ref::is_changed) {
+        if !member.is_changed()
+            && !children.as_ref().is_some_and(Ref::is_changed)
+            && !authored.as_ref().is_some_and(Ref::is_changed)
+        {
             continue;
         }
         let empty = BTreeMap::new();
@@ -209,7 +188,7 @@ fn synchronize_environment_camera_stack(
         let mut existing = BTreeMap::new();
         for child in children.as_deref().into_iter().flatten() {
             if let Ok((layer, ..)) = stacked_cameras.get(*child) {
-                existing.insert(layer.0, *child);
+                existing.insert(layer.layer, *child);
             }
         }
         if authored_layers.is_empty() {
@@ -256,60 +235,21 @@ fn synchronize_environment_camera_stack(
             } else {
                 background
             };
-            let mut camera_entity;
+            let offset = order - view.order;
             if let Some(child) = existing.remove(&layer) {
-                let Ok((
-                    _,
-                    mut camera,
-                    mut camera_3d,
-                    mut child_projection,
-                    mut child_target,
-                    mut child_exposure,
-                    mut child_msaa,
-                    child_hdr,
-                    child_fog,
-                )) = stacked_cameras.get_mut(child)
-                else {
+                let Ok((mut binding, mut camera_3d)) = stacked_cameras.get_mut(child) else {
                     continue;
                 };
-                if view.is_changed() || camera.order != order {
-                    camera.order = order;
-                    camera.viewport = view.viewport.clone();
-                    camera.is_active = view.is_active;
-                    camera.sub_camera_view = view.sub_camera_view;
+                if binding.order_offset != offset {
+                    binding.order_offset = offset;
                 }
                 set_depth_boundary(&mut camera_3d, clear_depth);
-                if projection.is_changed() {
-                    *child_projection = (*projection).clone();
-                }
-                if target.is_changed() {
-                    *child_target = (*target).clone();
-                }
-                if child_exposure.ev100.to_bits() != exposure.ev100.to_bits() {
-                    *child_exposure = *exposure;
-                }
-                child_msaa.set_if_neq(*msaa);
-                camera_entity = commands.entity(child);
-                match (fog.as_ref(), child_fog) {
-                    (Some(fog), Some(mut current)) if fog.is_changed() => {
-                        *current = (**fog).clone()
-                    }
-                    (Some(fog), None) => {
-                        camera_entity.insert((**fog).clone());
-                    }
-                    (None, Some(_)) => {
-                        camera_entity.remove::<DistanceFog>();
-                    }
-                    _ => {}
-                }
-                if hdr.is_some() && !child_hdr {
-                    camera_entity.insert(Hdr);
-                } else if hdr.is_none() && child_hdr {
-                    camera_entity.remove::<Hdr>();
-                }
             } else {
-                camera_entity = commands.spawn((
-                    EnvironmentStackCamera(layer),
+                let mut camera_entity = commands.spawn((
+                    EnvironmentStackCamera {
+                        layer,
+                        order_offset: offset,
+                    },
                     Camera {
                         order,
                         clear_color: color,
@@ -344,6 +284,141 @@ fn synchronize_environment_camera_stack(
         set_depth_boundary(&mut view_3d, clear_depth);
         for child in existing.into_values() {
             commands.entity(child).despawn();
+        }
+    }
+}
+
+#[allow(clippy::type_complexity)]
+fn synchronize_environment_camera_optics(
+    mut commands: Commands,
+    mut removed_fog: RemovedComponents<DistanceFog>,
+    mut removed_hdr: RemovedComponents<Hdr>,
+    adjusted_stacked_cameras: Query<&ChildOf, Changed<EnvironmentStackCamera>>,
+    world_cameras: Query<
+        (
+            Entity,
+            Ref<Camera>,
+            Ref<Camera3d>,
+            Ref<Projection>,
+            Ref<RenderTarget>,
+            Ref<Exposure>,
+            Ref<Msaa>,
+            Option<Ref<Hdr>>,
+            Option<Ref<DistanceFog>>,
+            &Children,
+        ),
+        With<ZooCamera>,
+    >,
+    mut stacked: Query<
+        (
+            &EnvironmentStackCamera,
+            &mut Camera,
+            &mut Camera3d,
+            &mut Projection,
+            &mut RenderTarget,
+            &mut Exposure,
+            &mut Msaa,
+            Has<Hdr>,
+            Option<&mut DistanceFog>,
+        ),
+        Without<ZooCamera>,
+    >,
+) {
+    let removed = removed_fog
+        .read()
+        .chain(removed_hdr.read())
+        .collect::<EntityHashSet>();
+    let changed_stacks = adjusted_stacked_cameras
+        .iter()
+        .map(ChildOf::parent)
+        .collect::<EntityHashSet>();
+    for (entity, view, view_3d, projection, target, exposure, msaa, hdr, fog, children) in
+        &world_cameras
+    {
+        if !view.is_changed()
+            && !view_3d.is_changed()
+            && !projection.is_changed()
+            && !target.is_changed()
+            && !exposure.is_changed()
+            && !msaa.is_changed()
+            && !hdr.as_ref().is_some_and(Ref::is_changed)
+            && !fog.as_ref().is_some_and(Ref::is_changed)
+            && !removed.contains(&entity)
+            && !changed_stacks.contains(&entity)
+        {
+            continue;
+        }
+        for child in children.iter() {
+            let Ok((
+                binding,
+                mut camera,
+                mut camera_3d,
+                mut lens,
+                mut output,
+                mut light_exposure,
+                mut samples,
+                has_hdr,
+                current_fog,
+            )) = stacked.get_mut(child)
+            else {
+                continue;
+            };
+            let order = view.order + binding.order_offset;
+            if camera.order != order {
+                camera.order = order;
+            }
+            if view.is_changed() {
+                let viewport_changed = match (&camera.viewport, &view.viewport) {
+                    (Some(current), Some(source)) => {
+                        current.physical_position != source.physical_position
+                            || current.physical_size != source.physical_size
+                            || current.depth != source.depth
+                    }
+                    (None, None) => false,
+                    _ => true,
+                };
+                if viewport_changed {
+                    camera.viewport = view.viewport.clone();
+                }
+                if camera.is_active != view.is_active {
+                    camera.is_active = view.is_active;
+                }
+                if camera.sub_camera_view != view.sub_camera_view {
+                    camera.sub_camera_view = view.sub_camera_view;
+                }
+            }
+            if view_3d.is_changed()
+                && camera_3d.depth_texture_usages.0 != view_3d.depth_texture_usages.0
+            {
+                camera_3d.depth_texture_usages = view_3d.depth_texture_usages;
+            }
+            if projection.is_changed() {
+                *lens = (*projection).clone();
+            }
+            if target.is_changed() {
+                *output = (*target).clone();
+            }
+            if light_exposure.ev100.to_bits() != exposure.ev100.to_bits() {
+                *light_exposure = *exposure;
+            }
+            samples.set_if_neq(*msaa);
+            if hdr.is_some() && !has_hdr {
+                commands.entity(child).try_insert(Hdr);
+            } else if hdr.is_none() && has_hdr && removed.contains(&entity) {
+                commands.entity(child).try_remove::<Hdr>();
+            }
+            match (fog.as_ref(), current_fog) {
+                (Some(fog), Some(mut current)) if fog.is_changed() => {
+                    *current = (**fog).clone();
+                }
+                (Some(fog), None) => {
+                    commands.entity(child).try_insert((**fog).clone());
+                }
+                (None, Some(_)) if removed.contains(&entity) => {
+                    commands.entity(child).try_remove::<DistanceFog>();
+                }
+                _ => {}
+            }
         }
     }
 }

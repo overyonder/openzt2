@@ -1,4 +1,3 @@
-use super::guest_arrival_calculations::choose_guest_definition;
 use super::guest_arrival_calculations::choose_guest_rarity;
 use super::guest_definition_queries::find_guest_definition;
 use super::guest_arrival_calculations::generation_delay_ticks;
@@ -7,7 +6,8 @@ use super::guest_definition_queries::guest_need_rows;
 use super::guest_arrival_calculations::guest_spawn_probability;
 use super::guest_arrival_calculations::random_unit;
 use bevy::ecs::system::SystemParam;
-use bevy::platform::collections::HashSet;
+use super::guest_arrival_population::ArrivalPopulation;
+use super::guest_need_execution::GuestArchetypeTables;
 use bevy::prelude::*;
 use openzt2_game_data::world_definitions::guest_simulation_definitions::GuestNeedDefinition;
 use openzt2_game_data::AssetId;
@@ -15,7 +15,7 @@ use openzt2_game_assets::world_definitions::world_definition_document_asset_and_
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_zoo_state::{
     animal_health::types::Dead,
-    animal_lifecycle::types::{Animal, SpeciesHandle},
+    animal_lifecycle::types::Animal,
     habitat::habitat_types::HabitatMember,
     topology::topology_graph_types::PathTile,
 };
@@ -138,6 +138,7 @@ pub(crate) struct GuestArrivalParams<'w, 's> {
     admissions_open: Single<'w, 's, &'static ZooAdmissionsOpen>,
     definitions: Res<'w, Assets<WorldDefinitionAsset>>,
     active_definitions: Res<'w, WorldDefinitions>,
+    archetypes: Res<'w, GuestArchetypeTables>,
     ids: Query<'w, 's, &'static mut PersistentIdAllocator>,
     roots: Query<
         'w,
@@ -147,6 +148,7 @@ pub(crate) struct GuestArrivalParams<'w, 's> {
             &'static mut GuestArrivalState,
             &'static mut GuestFavouriteAnimalTrend,
             &'static Fame,
+            &'static ArrivalPopulation,
         ),
         (With<WorldRoot>, With<WorldLoadCompleted>),
     >,
@@ -161,13 +163,6 @@ pub(crate) struct GuestArrivalParams<'w, 's> {
         ),
     >,
     grid: Single<'w, 's, &'static SpatialGrid>,
-    guests: Query<'w, 's, &'static WorldMember, With<Guest>>,
-    animals: Query<
-        'w,
-        's,
-        (&'static SpeciesHandle, &'static WorldMember),
-        (With<Animal>, Without<Dead>, Without<WorldEntityIsCrated>),
-    >,
     viewable_animals: Query<
         'w,
         's,
@@ -193,7 +188,6 @@ pub(crate) struct GuestArrivalParams<'w, 's> {
             &'static Visibility,
         ),
     >,
-    seen_species: Local<'s, HashSet<AssetId>>,
     commands: Commands<'w, 's>,
     navigate: MessageWriter<'w, NavigateTo>,
     failed: MessageWriter<'w, GuestArrivalFailed>,
@@ -207,22 +201,20 @@ pub(crate) fn spawn_arriving_guests(params: GuestArrivalParams) {
         admissions_open,
         definitions,
         active_definitions,
+        archetypes,
         mut ids,
         mut roots,
         entrances,
         grid,
-        guests,
-        animals,
         viewable_animals,
         paths,
         viewing_slots,
-        mut seen_species,
         mut commands,
         mut navigate,
         mut failed,
         mut requested_arrivals,
     } = params;
-    let Ok((root, mut state, mut favourite_trend, fame)) = roots.single_mut() else {
+    let Ok((root, mut state, mut favourite_trend, fame, counts)) = roots.single_mut() else {
         return;
     };
     let Some(definitions) = active_definitions.get(&definitions) else {
@@ -277,21 +269,11 @@ pub(crate) fn spawn_arriving_guests(params: GuestArrivalParams) {
     if scheduled_due {
         state.next_tick = clock.tick.saturating_add(interval.max(1));
     }
-    let population = guests.iter().filter(|guest| guest.root == root).count() as u32;
+    let population = counts.guests;
     let cap = policy.maximum_guests_at_fame(fame.half_stars);
     let scheduled_count = if scheduled_due && policy.enabled && population < cap && {
-        seen_species.clear();
-        seen_species.extend(
-            animals
-                .iter()
-                .filter_map(|(animal, member)| (member.root == root).then_some(animal.species)),
-        );
-        let probability = guest_spawn_probability(
-            policy,
-            fame.half_stars,
-            admission.adult.0,
-            u32::try_from(seen_species.len()).unwrap_or(u32::MAX),
-        );
+        let probability =
+            guest_spawn_probability(policy, fame.half_stars, admission.adult.0, counts.species());
         random_unit(&mut state.rng) < probability
     } {
         1
@@ -336,7 +318,10 @@ pub(crate) fn spawn_arriving_guests(params: GuestArrivalParams) {
 
     for _ in 0..count {
         let rarity = choose_guest_rarity(policy.rarity_thresholds, &mut state.rng);
-        let Some(definition) = choose_guest_definition(definitions, rarity, &mut state.rng) else {
+        let Some(definition) = archetypes
+            .choose_archetype(rarity, &mut state.rng)
+            .and_then(|id| definitions.find_guest(id))
+        else {
             break;
         };
         let guest_id = definition.id;

@@ -23,7 +23,9 @@ use openzt2_zoo_state::construction::construction_tool_and_placement_policy_type
 use openzt2_zoo_state::construction::construction_transaction_types::EditApplication;
 use openzt2_zoo_state::construction::construction_transaction_types::PrepareConstruction;
 
-use crate::terrain::authored_terrain_brush_modes::{TerrainBrushMode, TerrainBrushModeHandles};
+use crate::terrain::authored_terrain_brush_modes::{
+    TerrainBrushControls, TerrainBrushMode, TerrainBrushModeHandles,
+};
 use crate::terrain::terrain_brush_interaction::update_terrain_brush_preview_and_commit_completed_pointer_strokes;
 use crate::terrain::terrain_edit_application::apply_committed_terrain_sample_deltas_and_publish_changed_regions;
 use crate::terrain::terrain_edit_preparation::prepare_terrain_sample_deltas_for_construction_transactions;
@@ -129,10 +131,10 @@ fn flatten_offsets_hold_the_press_height_through_drag_commit_undo_and_redo() {
             .init_resource::<PointerMap>()
         .add_message::<PointerInput>()
             .init_resource::<UiPointerCapture>()
-            .insert_resource(ConstructionPlacementPolicy {
-                terrain_deformation_brush_radius_half_metre_steps: 2,
-                terrain_flatten_strength_tenths_per_second: 0,
-                ..default()
+            .init_resource::<ConstructionPlacementPolicy>()
+            .insert_resource(TerrainBrushControls {
+                radius: [Some(1.0), None, None],
+                flatten_speed: Some(0.0),
             })
             .insert_resource(ConstructionTool::Terrain(TerrainBrushKind::Flatten {
                 height_cm: offset_cm,

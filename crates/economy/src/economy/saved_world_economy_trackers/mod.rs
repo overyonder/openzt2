@@ -2,14 +2,11 @@ use bevy::{ecs::relationship::RelationshipTarget, prelude::*};
 use openzt2_game_assets::{
     asset_source::AssetArchives,
     world_definitions::world_definition_asset_set_refresh_and_indexing::saved_world_economy_asset::SavedWorldEconomyAsset,
-    world_scenario::{
-        world_scenario_asset_set_state_and_borrowing_queries::WorldScenarios,
-        world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset,
-    },
 };
 use openzt2_world_state::{
     game_session_types::WorldSessionMode,
     world_spawn::{
+        selected_world_document_handles::SelectedWorldDocumentHandles,
         selected_world_identity::SelectedWorldIdentity,
         world_membership_types::{WorldMember, WorldRoot},
     },
@@ -29,11 +26,13 @@ pub(super) struct AuthoredWorldEconomyTracker;
 
 pub(super) fn load_selected_world_economy(
     roots: Query<
-        (Entity, &SelectedWorldIdentity),
+        (
+            Entity,
+            &SelectedWorldIdentity,
+            &SelectedWorldDocumentHandles,
+        ),
         (With<WorldRoot>, Without<WorldEconomyConfiguration>),
     >,
-    scenarios: Res<WorldScenarios>,
-    scenario_assets: Res<Assets<WorldScenarioDocumentAsset>>,
     server: Res<AssetServer>,
     archives: Res<AssetArchives>,
     mut commands: Commands,
@@ -41,14 +40,9 @@ pub(super) fn load_selected_world_economy(
     if roots.is_empty() {
         return;
     }
-    let view = scenarios.get(&scenario_assets);
-    for (root, identity) in &roots {
-        let path = view
-            .as_ref()
-            .and_then(|view| view.start_path(identity.start))
-            .map(str::to_owned);
-        let handle = if let Some(path) = path {
-            server.load::<SavedWorldEconomyAsset>(path)
+    for (root, identity, documents) in &roots {
+        let handle = if let Some(path) = documents.start.path().or_else(|| documents.map.path()) {
+            server.load::<SavedWorldEconomyAsset>(path.without_label().into_owned())
         } else {
             let template = match identity.mode {
                 WorldSessionMode::Freeform => "config/freeform_mode.xml",

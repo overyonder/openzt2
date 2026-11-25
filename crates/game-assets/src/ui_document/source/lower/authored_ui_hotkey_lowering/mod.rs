@@ -21,24 +21,31 @@ pub(super) fn add_lowered_hotkey_definitions_to_current_ui_node(
     confirmation_scope: Option<&str>,
 ) -> io::Result<()> {
     for hotkey in &node.hotkeys {
-        let first = output.actions.len();
-        let receiver = flatten_event(
-            UiTrigger::Press,
-            &hotkey.event,
-            role,
-            node_id_value,
-            node.name.as_deref().unwrap_or_default(),
-            node_id_value,
-            None,
-            output,
-            input,
-            confirmation_scope,
-            &[],
-        )?;
-        if output.actions.len() == first {
+        let mut actions = Vec::new();
+        let mut receivers = Vec::new();
+        for event in &hotkey.events {
+            let first = output.actions.len();
+            let receiver = flatten_event(
+                UiTrigger::Press,
+                event,
+                role,
+                node_id_value,
+                node.name.as_deref().unwrap_or_default(),
+                node_id_value,
+                None,
+                output,
+                input,
+                confirmation_scope,
+                &[],
+            )?;
+            if output.actions.len() != first {
+                receivers.push((actions.len(), receiver));
+                actions.extend(output.actions.drain(first..));
+            }
+        }
+        if actions.is_empty() {
             continue;
         }
-        let action = output.actions.pop().expect("action emitted by lowering");
         // Keys are matched without Shift, so `<char key="c">` and `key="C">` are one binding.
         let character = hotkey
             .character
@@ -69,17 +76,32 @@ pub(super) fn add_lowered_hotkey_definitions_to_current_ui_node(
             character,
             control_state,
             allow_repeat: hotkey.allow_repeat.unwrap_or(false),
-            action,
+            actions,
         };
-        if !output.hotkeys.contains(&definition) {
-            if !receiver.nodes.is_empty() {
-                let record = output.nodes[node_index as usize].actions.len() + output.hotkeys.len();
+        let mut action_start = output.nodes[node_index as usize].actions.len();
+        let duplicate = output.hotkeys.iter().any(|previous| {
+            let previous_start = action_start;
+            action_start += previous.actions.len();
+            previous == &definition
+                && receivers.iter().all(|(index, receiver)| {
+                    let has_scope = receiver.from_root || !receiver.nodes.is_empty();
+                    output
+                        .action_receivers
+                        .get(&(node_index, previous_start + index))
+                        == has_scope.then_some(receiver)
+                })
+        });
+        if duplicate {
+            continue;
+        }
+        for (index, receiver) in receivers {
+            if receiver.from_root || !receiver.nodes.is_empty() {
                 output
                     .action_receivers
-                    .insert((node_index, record), receiver);
+                    .insert((node_index, action_start + index), receiver);
             }
-            output.hotkeys.push(definition);
         }
+        output.hotkeys.push(definition);
     }
     Ok(())
 }
@@ -167,7 +189,7 @@ mod tests {
             (
                 hotkeys[0].key_code,
                 hotkeys[0].control_state,
-                &hotkeys[0].action
+                &hotkeys[0].actions[0]
             ),
             (
                 0x4d,
@@ -181,7 +203,7 @@ mod tests {
             )
         );
         assert_eq!(
-            (hotkeys[1].key_code, &hotkeys[1].action),
+            (hotkeys[1].key_code, &hotkeys[1].actions[0]),
             (
                 27,
                 &UiActionRecord::Shell(UiShellActionRecord {

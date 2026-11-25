@@ -7,8 +7,15 @@ use super::netimmerse_nif_source::{
 };
 
 pub(super) struct NetImmerseBoneLod {
+    pub(super) controllers: BTreeMap<u32, NetImmerseBoneLodController>,
     pub(super) nodes: BTreeMap<i32, NetImmerseNodeBoneLod>,
     pub(super) shapes: BTreeMap<i32, NetImmerseShapeBoneLod>,
+}
+
+pub(super) struct NetImmerseBoneLodController {
+    pub(super) target_ref: i32,
+    pub(super) initial: u16,
+    pub(super) tier_count: u16,
 }
 
 pub(super) struct NetImmerseNodeBoneLod {
@@ -26,6 +33,7 @@ pub(super) struct NetImmerseShapeBoneLod {
 impl NetImmerseBoneLod {
     pub(super) fn from_document(document: &NetImmerseNifDocument) -> Self {
         let mut lod = Self {
+            controllers: BTreeMap::new(),
             nodes: BTreeMap::new(),
             shapes: BTreeMap::new(),
         };
@@ -34,6 +42,18 @@ impl NetImmerseBoneLod {
                 continue;
             };
             let initial = u16::try_from(controller.lod).unwrap_or(u16::MAX);
+            let tier_count = controller.lod_count;
+            if tier_count == 0 {
+                continue;
+            }
+            lod.controllers.insert(
+                block.index,
+                NetImmerseBoneLodController {
+                    target_ref: controller.controller.target_ref,
+                    initial,
+                    tier_count: u16::try_from(tier_count).unwrap_or(u16::MAX),
+                },
+            );
             for (ordinal, nodes) in controller.node_groups.iter().enumerate() {
                 let Ok(ordinal) = u16::try_from(ordinal) else {
                     break;

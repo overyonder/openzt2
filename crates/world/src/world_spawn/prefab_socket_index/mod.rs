@@ -3,7 +3,7 @@ use openzt2_game_data::AssetId;
 use openzt2_world_state::world_spawn::prefab_authored_attachment_identifier::PrefabAuthoredAttachmentIdentifier;
 
 use super::{
-    named_physical_presentation_projection::PendingNamedPresentationNodeAttachment,
+    named_physical_presentation_projection::NamedPresentationNodeAttachment,
     physical_presentation_state::ObjectPhysicalPresentationControllers,
 };
 
@@ -25,10 +25,7 @@ impl PrefabSocketIndex {
 
 pub(super) fn project_prefab_socket_indexes(
     mut commands: Commands,
-    new_holders: Query<
-        &PendingNamedPresentationNodeAttachment,
-        Changed<PendingNamedPresentationNodeAttachment>,
-    >,
+    new_holders: Query<&NamedPresentationNodeAttachment, Changed<NamedPresentationNodeAttachment>>,
     new_controllers: Query<Entity, Added<ObjectPhysicalPresentationControllers>>,
     changed_nodes: Query<
         Entity,

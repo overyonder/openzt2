@@ -28,3 +28,11 @@ pub enum WaterPresentationSet {
     Environment,
     Rendering,
 }
+
+/// Fixed-update consumers of the authored slow simulation interval.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ZooSlowTick;
+
+/// Real-time consumers that run before the frame's fixed simulation steps.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ZooHeartbeat;

@@ -20,8 +20,8 @@ use super::authored_ui_node_projection_components::{UiNodeId, UiSliderValueChang
 use bevy::input_focus::InputFocus;
 
 #[derive(Component, Debug, Clone, Copy, PartialEq)]
-pub(crate) struct UiSliderPolicy {
-    pub(crate) increment: f32,
+pub struct UiSliderPolicy {
+    pub increment: f32,
     pub(crate) minimum_thumb_size: f32,
     pub(crate) axis: UiSliderAxis,
 }

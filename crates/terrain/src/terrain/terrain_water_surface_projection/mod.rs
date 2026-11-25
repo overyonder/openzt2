@@ -569,6 +569,16 @@ pub(super) fn publish_terrain_water_surfaces(
                     presentation,
                     mesh_group.surface_plane_height,
                 );
+                if matches!(
+                    pass_kind,
+                    TerrainWaterSurfacePassKind::FallbackReflection
+                        | TerrainWaterSurfacePassKind::Scum
+                ) {
+                    pass.replace_texture_asset_for_effect_semantic(
+                        "EnvReflect",
+                        renderer_targets.fallback_reflection.clone(),
+                    );
+                }
                 pass.recreate_uniform_buffers_for_runtime_material(&mut effect_uniform_buffers);
                 draw_passes.push((
                     pass_index,

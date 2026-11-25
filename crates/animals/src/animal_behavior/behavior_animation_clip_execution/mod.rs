@@ -1,17 +1,17 @@
 use bevy::prelude::*;
+use openzt2_game_assets::animation::animation_set_asset_types::AnimationSetAsset;
 use openzt2_game_data::behavior::action::animation::{
     BehaviorAnimationClipAction, BehaviorAnimationPlaybackSpeed,
 };
-use openzt2_game_assets::animation::animation_set_asset_types::AnimationSetAsset;
+use openzt2_world_state::animation_graph::animation_graph_playback_message_types::{
+    AnimationClipPlaybackRequestStarted, AnimationReturnRouteOutcome, AnimationReturnRouteRequest,
+    CancelAnimationClipPlaybackRequest,
+};
 use openzt2_world_state::animation_graph::{
     animation_graph_playback_state_types::AnimationGraphPlaybackState,
     animation_presentation_relationship_types::AnimationPresentations,
 };
 use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackController;
-use openzt2_world_state::animation_graph::animation_graph_playback_message_types::{
-    AnimationClipPlaybackRequestStarted, AnimationReturnRouteOutcome, AnimationReturnRouteRequest,
-    CancelAnimationClipPlaybackRequest,
-};
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::behavior_action_actors;
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
     RunBehaviorAnimationClip, RunBehaviorAnimationSwitch, RunningBehaviorInstruction,
@@ -21,7 +21,7 @@ use openzt2_game_assets::world_definitions::{
     world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions,
     world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
 };
-use openzt2_world_state::animation_graph::animation_graph_playback_message_types::AnimationClipActionOptions;
+use openzt2_world_state::animation_graph::animation_graph_playback_message_types::AnimationClipActionSettings;
 use openzt2_world_state::animation_graph::animation_graph_playback_message_types::AnimationClipPlaybackRequest;
 use openzt2_world_state::animation_graph::animation_graph_playback_message_types::AnimationClipPlaybackRequestRejected;
 use openzt2_world_state::animation_graph::animation_presentation_relationship_types::AnimationPresentationOwner;
@@ -62,11 +62,13 @@ pub(super) fn start_current_behavior_animation_clip_actions(
             Without<PendingBehaviorAnimationClipCompletion>,
             Without<PendingBehaviorTaskFailure>,
             Without<TimedBehaviorAnimationClip>,
-            Or<(With<RunBehaviorAnimationClip>, With<RunBehaviorAnimationSwitch>)>,
+            Or<(
+                With<RunBehaviorAnimationClip>,
+                With<RunBehaviorAnimationSwitch>,
+            )>,
         ),
     >,
     mut animation_clip_playback_requests: MessageWriter<AnimationClipPlaybackRequest>,
-    mut presentation_selections: MessageWriter<AnimationClipActionOptions>,
     definitions: Option<Res<WorldDefinitions>>,
     definition_assets: Option<Res<Assets<WorldDefinitionAsset>>>,
     animation_sources: (
@@ -104,9 +106,16 @@ pub(super) fn start_current_behavior_animation_clip_actions(
                 .find_map(|presentation| controllers.get(presentation).ok())
                 .and_then(|(controller, state)| {
                     let set = sets.as_ref()?.get(&controller.animation_set_asset)?;
-                    let node = set.animation_graph_nodes.get(state.current_animation_graph_node_index as usize)?;
-                    switch.0.clips_by_node.iter()
-                        .find(|(name, _)| name.eq_ignore_ascii_case(&node.animation_graph_node_asset_key))
+                    let node = set
+                        .animation_graph_nodes
+                        .get(state.current_animation_graph_node_index as usize)?;
+                    switch
+                        .0
+                        .clips_by_node
+                        .iter()
+                        .find(|(name, _)| {
+                            name.eq_ignore_ascii_case(&node.animation_graph_node_asset_key)
+                        })
                         .map(|(_, clip)| clip)
                 })
                 .or(switch.0.default_clip.as_ref());
@@ -183,6 +192,10 @@ pub(super) fn start_current_behavior_animation_clip_actions(
         let blend_duration_milliseconds = animation.blend_duration_seconds.map_or(0, |seconds| {
             (seconds * 1000.0).round().min(u32::MAX as f32) as u32
         });
+        let binder = animation.physical_object.as_deref().map(|name| {
+            let name = openzt2_game_assets::source_document::source_document_semantic_name::canonicalize_source_document_record_key(name);
+            openzt2_game_data::AssetId::from_key(&name)
+        });
         let request_id = animation_clip_playback_requests.write(AnimationClipPlaybackRequest {
             animation_subject_entity: actor,
             animation_clip_asset_key: animation.animation_clip_asset_key.clone(),
@@ -193,17 +206,12 @@ pub(super) fn start_current_behavior_animation_clip_actions(
             } else {
                 AnimationPlaybackRepetitionPolicy::PlayOnce
             },
-        });
-        let binder = animation.physical_object.as_deref().map(|name| {
-            let name = openzt2_game_assets::source_document::source_document_semantic_name::canonicalize_source_document_record_key(name);
-            openzt2_game_data::AssetId::from_key(&name)
-        });
-        presentation_selections.write(AnimationClipActionOptions {
-            request_id: request_id.id,
-            binder,
-            ground_fit: animation.ground_fit,
-            interrupts_current_animation: animation.interrupts_current_animation,
-            interruptible: animation.interruptible,
+            action_settings: Some(AnimationClipActionSettings {
+                binder,
+                ground_fit: animation.ground_fit,
+                interrupts_current_animation: animation.interrupts_current_animation,
+                interruptible: animation.interruptible,
+            }),
         });
         if let Some(until_tick) = play_until_tick {
             commands.entity(actor).insert(TimedBehaviorAnimationClip {

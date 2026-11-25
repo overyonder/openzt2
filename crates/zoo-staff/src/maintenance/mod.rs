@@ -27,7 +27,7 @@ use openzt2_world_state::application_schedule::FixedGameSet;
 
 use self::{
     animal_waste_production::{
-        produce_due_animal_habitat_waste, synchronize_animal_waste_production_deadlines,
+        bind_animal_waste_timers, produce_due_animal_habitat_waste, AnimalWasteTimer,
     },
     authored_maintenance_facts_and_service_effects::{
         apply_completed_service_maintenance_effects_to_facilities,
@@ -41,8 +41,9 @@ use self::{
     },
     waste_container_emptying_staff_job_execution::advance_active_staff_waste_container_emptying_jobs,
     zoo_cleanliness_projection::{
-        aggregate_changed_waste_into_zoo_cleanliness_totals,
-        project_zoo_cleanliness_from_totals_and_policy, ZooCleanlinessTotals,
+        add_waste_contribution, project_zoo_cleanliness_from_totals_and_policy,
+        publish_changed_waste_contributions, remove_waste_contribution,
+        withdraw_disabled_waste_contribution, ZooCleanlinessTotals,
     },
 };
 
@@ -56,6 +57,10 @@ impl Plugin for MaintenancePlugin {
             .register_required_components::<maintenance_types::AnimalHabitatWaste, WasteConsumptionClaim>()
             .register_required_components::<WorldRoot, ZooCleanlinessPermille>()
             .register_required_components::<WorldRoot, ZooCleanlinessTotals>();
+        game_application
+            .add_observer(add_waste_contribution)
+            .add_observer(remove_waste_contribution)
+            .add_observer(withdraw_disabled_waste_contribution);
 
         game_application.add_systems(
             Update,
@@ -103,11 +108,11 @@ impl Plugin for MaintenancePlugin {
             .add_systems(
                 FixedUpdate,
                 (
-                    synchronize_animal_waste_production_deadlines,
+                    bind_animal_waste_timers,
                     apply_completed_service_maintenance_effects_to_facilities.after(BehaviorStepFixedSet::Act),
                     produce_due_animal_habitat_waste
-                        .after(synchronize_animal_waste_production_deadlines)
-                        .run_if(any_with_component::<maintenance_types::AnimalWasteProductionSchedule>),
+                        .after(bind_animal_waste_timers)
+                        .run_if(any_with_component::<AnimalWasteTimer>),
                 )
                     .in_set(FixedGameSet::Act)
                     .run_if(in_state(GamePhase::InGame)),
@@ -125,9 +130,9 @@ impl Plugin for MaintenancePlugin {
             .add_systems(
                 FixedUpdate,
                 (
-                    aggregate_changed_waste_into_zoo_cleanliness_totals,
+                    publish_changed_waste_contributions,
                     project_zoo_cleanliness_from_totals_and_policy
-                        .after_ignore_deferred(aggregate_changed_waste_into_zoo_cleanliness_totals),
+                        .after(publish_changed_waste_contributions),
                 )
                     .in_set(ZooCleanlinessProjection)
                     .in_set(FixedGameSet::Economy)

@@ -4,7 +4,7 @@ pub(crate) mod fitting_surface_operations;
 pub(crate) mod interaction_execution;
 mod behavior_fall_execution;
 pub(crate) mod interaction_types;
-mod water_surface_disturbance_projection;
+pub mod water_surface_disturbance_projection;
 
 use crate::physics::authored_water_surface_impact_projection::bind_authored_water_impact_bodies;
 use crate::physics::authored_water_surface_impact_projection::project_authored_body_water_surface_crossings_into_impact_waves;

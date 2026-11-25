@@ -66,6 +66,7 @@ mod graph_generated_geometry;
 mod graph_history_series_rendering;
 mod graph_presentation;
 mod graph_presentation_types;
+mod graph_tick_projection;
 mod held_button_repeat;
 pub mod localized_ui_text_writing;
 mod main_toolbar;
@@ -330,10 +331,21 @@ impl Plugin for GameUiPlugin {
                     .in_set(UiSet::Commands),
             )
             .add_systems(
+                PostUpdate,
+                (
+                    authored_fame_star_presentation::isolate_fame_star_particles,
+                    authored_fame_star_presentation::set_fame_star_camera_visibility
+                        .after(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate),
+                )
+                    .before(bevy::camera::visibility::VisibilitySystems::CheckVisibility),
+            )
+            .add_systems(
                 Update,
                 (
                     (
                         graph_presentation::update_visible_authored_graph_drawings,
+                        graph_tick_projection::write_graph_tick_text
+                            .after(graph_presentation::update_visible_authored_graph_drawings),
                         held_button_repeat::repeat_held_buttons,
                         authored_wheel_scroll::scroll_captured_authored_list_or_window_from_mouse_wheel,
                         authored_window_interaction::move_authored_windows_from_pointer_drags,
@@ -348,10 +360,14 @@ impl Plugin for GameUiPlugin {
                         ).chain(),
                         authored_multi_icon_presentation::present_multi_icons
                             .after(projection::ui_document_opening::project_ui_documents),
-                        (authored_fame_star_presentation::create_fame_star_scenes,
-                         authored_fame_star_presentation::hydrate_fame_stars,
-                         authored_fame_star_presentation::frame_fame_star_models,
-                         authored_fame_star_presentation::present_fame_stars).chain(),
+                        (
+                            authored_fame_star_presentation::create_fame_star_scenes,
+                            authored_fame_star_presentation::present_fame_stars
+                                .after(authored_fame_star_presentation::create_fame_star_scenes),
+                            authored_fame_star_presentation::reveal_delayed_fame_stars
+                                .after(authored_fame_star_presentation::present_fame_stars),
+                            authored_fame_star_presentation::expire_fame_star_transients,
+                        ),
                         authored_rail_camera_presentation::hydrate_rail_cameras,
                         authored_rail_camera_presentation::route_rail_developer_hotkeys
                             .after(authored_rail_camera_presentation::hydrate_rail_cameras),

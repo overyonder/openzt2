@@ -8,14 +8,11 @@ use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdError;
 pub(crate) use openzt2_interface_state::photos::photo_capture_types::PhotoView;
 
 /// Visual facts recorded when the shutter fires.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct PhotoSubjectFacts {
-    pub screen_permille: u16,
-    /// Fraction of the projected collision rectangle inside the viewport.
-    pub viewport_visible_permille: u16,
-    pub center_permille: u16,
-    pub facing_permille: u16,
-    pub behavior_permille: u16,
+    pub screen_fraction: f32,
+    pub visible_fraction: f32,
+    pub camera_distance_squared: f32,
     pub unoccluded: bool,
 }
 
@@ -117,7 +114,7 @@ pub(crate) struct PendingPhotoCapture {
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ScreenshotCaptureOwner(pub Entity);
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct PhotoEvidence {
     pub entity: Entity,
     pub definition: DomainAssetId,
@@ -125,7 +122,7 @@ pub(crate) struct PhotoEvidence {
     pub semantics: PhotoSemanticEvidence,
 }
 
-#[derive(Component, Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Component, Debug, Clone, Default, PartialEq)]
 pub(crate) struct PendingPhotoEvidence(pub Vec<PhotoEvidence>);
 
 #[derive(Component, Debug, Clone, Default, PartialEq)]

@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
+use super::tank_water_surfaces::{TankWaterDraw, TankWaterMaterial};
 use super::terrain_water_renderer_targets::WaterCaptureAge;
 use crate::terrain::terrain_water_material_binding::bind_authored_water_frame_base_tints;
 use bevy::camera::primitives::Aabb;
@@ -18,9 +19,17 @@ use openzt2_world_state::model_render::authored_model_material_pass_projection::
 use openzt2_world_state::model_render::authored_model_material_pass_projection::WATER_REFLECTION_EFFECT_PASS_RENDER_VIEW_LAYER;
 use openzt2_world_state::model_render::authored_model_material_pass_projection::WATER_REFRACTION_EFFECT_PASS_RENDER_VIEW_LAYER;
 use openzt2_world_state::simulation_time::native_visual_random_stream::NativeVisualRandomStream;
-use openzt2_zoo_state::environment::environment_state_types::WaterEnvironmentMapSample;
+use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
+use openzt2_zoo_state::aquatic::aquatic_simulation_types::{Tank, TankGeometry};
+use openzt2_zoo_state::environment::environment_state_types::EnvironmentMapSamples;
+use openzt2_zoo_state::habitat::{
+    habitat_membership_and_containment::locate_habitat_at_world_position,
+    habitat_types::HabitatIndex,
+};
 use openzt2_zoo_state::terrain::terrain_chunk_presentation_types::TERRAIN_RENDER_LAYER;
-use openzt2_zoo_state::terrain::terrain_water_geometric_wave_shader_state::NativeTerrainWaterGeometricWaveShaderState;
+use openzt2_zoo_state::terrain::terrain_water_geometric_wave_shader_state::{
+    NativeTerrainWaterGeometricWaveShaderState, TerrainWaterWaveRegisters,
+};
 use openzt2_zoo_state::terrain::terrain_water_presentation_types::TerrainWaterRegionQuery;
 use openzt2_zoo_state::terrain::terrain_water_renderer_types::AuthoredTerrainWaterSurfaceEffectPass;
 use openzt2_zoo_state::terrain::terrain_water_renderer_types::TerrainWaterScumScroll;
@@ -31,6 +40,7 @@ use openzt2_zoo_state::terrain::terrain_water_renderer_types::{
     AuthoredTerrainWaterRendererTargets, TerrainWaterCaptureExtent, TerrainWaterCaptureRole,
     TerrainWaterSurfaceCoverage, TerrainWaterSurfaceLocalFromWorld,
 };
+use openzt2_zoo_state::topology::topology_graph_types::TopologyGrid;
 
 #[derive(Component)]
 pub(super) struct TerrainWaterLowDetailTextureState {
@@ -185,6 +195,7 @@ pub(super) fn sample_terrain_water_capture_demand(
             &TerrainWaterCaptureSelection,
             Option<&TerrainWaterCaptureRegion>,
             &mut WaterCaptureDemand,
+            &WorldMember,
         ),
         With<ZooCamera>,
     >,
@@ -201,8 +212,13 @@ pub(super) fn sample_terrain_water_capture_demand(
     terrains: Res<Assets<TerrainAsset>>,
     materials: Res<Assets<EffectPassMaterial>>,
     waves: Query<(), With<NativeTerrainWaterGeometricWaveShaderState>>,
+    (tank_draws, tanks, habitats): (
+        Query<(&TankWaterDraw, &TerrainWaterSurfacePassKind)>,
+        Query<(&TankGeometry, &WorldMember), With<Tank>>,
+        Query<(&HabitatIndex, &TopologyGrid)>,
+    ),
 ) {
-    let Ok((pose, selection, target, mut demand)) = cameras.single_mut() else {
+    let Ok((pose, selection, target, mut demand, world)) = cameras.single_mut() else {
         return;
     };
     let primary_plane = target.filter(|_| selection.resolved).and_then(|target| {
@@ -213,7 +229,42 @@ pub(super) fn sample_terrain_water_capture_demand(
         primary_plane,
         ..default()
     };
-    if pose.0.is_some() {
+    if let Some(pose) = pose.0 {
+        if let Ok((habitats, grid)) = habitats.get(world.root) {
+            let origin = pose.translation();
+            let direction = *pose.forward();
+            let mut distance =
+                primary_plane.map_or(f32::INFINITY, |height| (height - origin.y) / direction.y);
+            for (draw, kind) in &tank_draws {
+                if !matches!(
+                    kind,
+                    TerrainWaterSurfacePassKind::Refraction | TerrainWaterSurfacePassKind::Scum
+                ) {
+                    continue;
+                }
+                let Ok((tank, owner)) = tanks.get(draw.tank) else {
+                    continue;
+                };
+                if owner.root != world.root || tank.depth() <= 0.0 {
+                    continue;
+                }
+                next.high_detail = true;
+                next.fallback = true;
+                let t = (tank.water_height - origin.y) / direction.y;
+                if t.is_finite()
+                    && t >= 0.0
+                    && (t < distance || distance < 0.0)
+                    && locate_habitat_at_world_position(
+                        habitats,
+                        (origin + direction * t).xz(),
+                        *grid,
+                    ) == Some(draw.tank)
+                {
+                    next.primary_plane = Some(tank.water_height);
+                    distance = t;
+                }
+            }
+        }
         for (material, key, parent, kind, coverage) in &surfaces {
             if kind.uses_stitch_geometry()
                 || !coverage.0
@@ -370,26 +421,33 @@ pub(super) fn advance_authored_terrain_water_surface_effect_state(
     regions: TerrainWaterRegionQuery,
     mut scrolls: Query<(Entity, &mut TerrainWaterScumScroll)>,
     mut low_textures: Query<(Entity, &mut TerrainWaterLowDetailTextureState)>,
+    tanks: Query<&TankWaterMaterial, With<Tank>>,
 ) {
     let Ok(mut capture_age) = capture_ages.single_mut() else {
         return;
     };
     capture_age.0.tick(time.delta());
     for (entity, mut wave_state) in &mut waves {
-        if regions.get(entity).is_none() {
+        if regions.get(entity).is_none() && !tanks.contains(entity) {
             continue;
         }
         wave_state.advance_wave_channels(time.delta_secs(), &mut || random.unit_f64());
     }
+    let water_for = |entity| {
+        if let Ok(appearance) = tanks.get(entity) {
+            let (water, ..) = terrain_assets
+                .get(&appearance.terrain)?
+                .tank_water_material_presentation(appearance.id)?;
+            return Some(water);
+        }
+        let source = regions.get(entity)?;
+        source
+            .biome(terrain_assets.get(source.terrain())?)?
+            .water_presentation
+            .as_ref()
+    };
     for (entity, mut state) in &mut low_textures {
-        let Some(source) = regions.get(entity) else {
-            continue;
-        };
-        let Some(water) = terrain_assets
-            .get(source.terrain())
-            .and_then(|asset| source.biome(asset))
-            .and_then(|biome| biome.water_presentation.as_ref())
-        else {
+        let Some(water) = water_for(entity) else {
             continue;
         };
         for (index, animation) in water.texture_animations.iter().enumerate() {
@@ -441,13 +499,7 @@ pub(super) fn advance_authored_terrain_water_surface_effect_state(
         }
     }
     for (entity, mut scroll) in &mut scrolls {
-        let Some(source) = regions.get(entity) else {
-            continue;
-        };
-        let Some(scum) = terrain_assets
-            .get(source.terrain())
-            .and_then(|asset| source.biome(asset))
-            .and_then(|biome| biome.water_presentation.as_ref())
+        let Some(scum) = water_for(entity)
             .and_then(|presentation| presentation.surface_material.configuration.scum.as_ref())
         else {
             continue;
@@ -482,7 +534,7 @@ pub(super) fn project_authored_terrain_water_surface_coverage(
         (&Projection, Option<&TerrainWaterCameraPose>),
         (With<ZooCamera>, With<Camera>),
     >,
-    waves: Query<&NativeTerrainWaterGeometricWaveShaderState>,
+    waves: Query<&TerrainWaterWaveRegisters>,
     groups: Query<&TerrainWaterSurfaceRegion>,
     region_sources: TerrainWaterRegionQuery,
     mut regions: Query<(Entity, &mut TerrainWaterRegionVisibility)>,
@@ -567,8 +619,8 @@ pub(super) fn project_authored_terrain_water_surface_coverage(
 
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(super) fn update_authored_terrain_water_renderer_inputs(
-    environment_map: Option<Res<WaterEnvironmentMapSample>>,
-    waves: Query<&NativeTerrainWaterGeometricWaveShaderState>,
+    environment_maps: Query<(&WorldMember, Ref<EnvironmentMapSamples>)>,
+    waves: Query<&TerrainWaterWaveRegisters>,
     phase: Res<State<openzt2_game_assets::application_lifecycle::GamePhase>>,
     targets: Query<(
         &AuthoredTerrainWaterRendererTargets,
@@ -582,6 +634,8 @@ pub(super) fn update_authored_terrain_water_renderer_inputs(
             &WaterCaptureDemand,
             &PreparedWaterCapture,
             Option<&TerrainWaterTrainingFade>,
+            Ref<WorldMember>,
+            Ref<Camera>,
         ),
         With<ZooCamera>,
     >,
@@ -607,7 +661,7 @@ pub(super) fn update_authored_terrain_water_renderer_inputs(
     surface_groups: Query<&TerrainWaterSurfaceRegion>,
     mut water_surfaces: Query<
         (
-            &MeshMaterial3d<EffectPassMaterial>,
+            Ref<MeshMaterial3d<EffectPassMaterial>>,
             &AuthoredTerrainWaterSurfaceEffectPass,
             &TerrainWaterWaveStateKey,
             &ChildOf,
@@ -617,41 +671,83 @@ pub(super) fn update_authored_terrain_water_renderer_inputs(
         ),
         With<AuthoredTerrainWaterSurfaceEffectPass>,
     >,
+    (mut tank_draws, tanks): (
+        Query<
+            (
+                &TankWaterDraw,
+                &TerrainWaterSurfacePassKind,
+                Ref<MeshMaterial3d<EffectPassMaterial>>,
+                &mut Visibility,
+            ),
+            Without<AuthoredTerrainWaterSurfaceEffectPass>,
+        >,
+        Query<
+            (
+                &TankGeometry,
+                &WorldMember,
+                &TankWaterMaterial,
+                Option<&TerrainWaterScumScroll>,
+                Option<&TerrainWaterRegionLight>,
+                Option<&TerrainWaterLowDetailTextureState>,
+            ),
+            With<Tank>,
+        >,
+    ),
 ) {
     let Ok((targets, captures, age)) = targets.single() else {
         return;
     };
-    let selected_camera = zoo_camera.single().ok();
+    let active_camera = zoo_camera
+        .iter()
+        .find(|(_, _, _, _, _, camera)| camera.is_active);
+    let selected_camera = active_camera
+        .as_ref()
+        .map(|(pose, demand, prepared, fade, world, _)| {
+            (*pose, *demand, *prepared, *fade, &**world)
+        });
     let training_opacity_mix = selected_camera
-        .and_then(|(_, _, _, fade)| fade)
+        .and_then(|(_, _, _, fade, _)| fade)
         .map_or(0.0, |fade| fade.0);
     let camera = selected_camera.and_then(|(pose, ..)| pose?.0);
+    let environment_map = active_camera
+        .as_ref()
+        .and_then(|(_, _, _, _, owner, camera)| {
+            let (_, maps) = environment_maps
+                .iter()
+                .find(|(member, _)| member.root == owner.root)?;
+            let changed = maps.is_changed() || owner.is_changed() || camera.is_changed();
+            Some((maps.into_inner().water.texture()?, changed))
+        });
     let mut visible_count = 0;
     for (handle, surface, key, parent, mut visibility, kind, coverage) in &mut water_surfaces {
         let visible = (|| {
             if !coverage.0 {
                 return None;
             }
-            let (_, fade, Some(light), textures) = regions
+            let (_, fade, light, textures) = regions
                 .get(surface_groups.get(parent.parent()).ok()?.0)
                 .ok()?
             else {
                 return None;
             };
-            let material = effect_pass_materials.get_mut_untracked(handle)?;
+            if *kind == TerrainWaterSurfacePassKind::MediumEnvironment {
+                let (texture, changed) = environment_map?;
+                if changed || handle.is_changed() || *visibility == Visibility::Hidden {
+                    effect_pass_materials
+                        .get_mut(handle.id())?
+                        .replace_texture_asset_at_d3d9_stage(0, texture.clone());
+                }
+                return Some(true);
+            }
             if kind.uses_stitch_geometry() {
                 let textures = textures?;
-                if *kind == TerrainWaterSurfacePassKind::MediumEnvironment {
-                    material.replace_texture_asset_at_d3d9_stage(
-                        0,
-                        environment_map.as_deref()?.texture()?.clone(),
-                    );
-                } else {
-                    material.set_fixed_function_ambient_colour(light.raw_base_rgba());
-                    material.set_fixed_function_texture_transform(0, textures.transforms[0]);
-                    if *kind == TerrainWaterSurfacePassKind::MediumDetail {
-                        material.set_fixed_function_texture_transform(1, textures.transforms[1]);
-                    }
+                let material = effect_pass_materials.get_mut_untracked(handle.id())?;
+                material.set_fixed_function_ambient_colour(
+                    light.map_or(Vec4::ONE, TerrainWaterRegionLight::raw_base_rgba),
+                );
+                material.set_fixed_function_texture_transform(0, textures.transforms[0]);
+                if *kind == TerrainWaterSurfacePassKind::MediumDetail {
+                    material.set_fixed_function_texture_transform(1, textures.transforms[1]);
                 }
                 material.write_changed_fixed_function_registers_to_persistent_buffer(
                     &mut effect_uniform_buffers,
@@ -690,8 +786,63 @@ pub(super) fn update_authored_terrain_water_renderer_inputs(
             Visibility::Hidden
         });
     }
+    for (draw, kind, handle, mut visibility) in &mut tank_draws {
+        let visible = (|| {
+            let (tank, world, appearance, _, light, textures) = tanks.get(draw.tank).ok()?;
+            let (_, demand, _, _, camera_world) = selected_camera?;
+            if tank.depth() <= 0.0 || world.root != camera_world.root {
+                return None;
+            }
+            if *kind == TerrainWaterSurfacePassKind::MediumEnvironment {
+                let (texture, changed) = environment_map?;
+                if changed || handle.is_changed() || *visibility == Visibility::Hidden {
+                    effect_pass_materials
+                        .get_mut(handle.id())?
+                        .replace_texture_asset_at_d3d9_stage(0, texture.clone());
+                }
+                return Some(true);
+            }
+            if kind.uses_stitch_geometry() {
+                let material = effect_pass_materials.get_mut_untracked(handle.id())?;
+                let textures = textures?;
+                material.set_fixed_function_ambient_colour(
+                    light.map_or(Vec4::ONE, TerrainWaterRegionLight::raw_base_rgba),
+                );
+                material.set_fixed_function_texture_transform(0, textures.transforms[0]);
+                if *kind == TerrainWaterSurfacePassKind::MediumDetail {
+                    material.set_fixed_function_texture_transform(1, textures.transforms[1]);
+                }
+                material.write_changed_fixed_function_registers_to_persistent_buffer(
+                    &mut effect_uniform_buffers,
+                );
+                material.write_changed_fixed_function_transforms_to_persistent_buffer(
+                    &mut effect_uniform_buffers,
+                );
+                return Some(true);
+            }
+            let above = camera?.translation().y > tank.water_height;
+            let primary = demand.primary_plane == Some(tank.water_height);
+            let (water, ..) = terrain_assets
+                .get(&appearance.terrain)?
+                .tank_water_material_presentation(appearance.id)?;
+            let reflection = water.surface_material.reflection.strength_percent > 5.0;
+            Some(match kind {
+                TerrainWaterSurfacePassKind::Scum => true,
+                TerrainWaterSurfacePassKind::Reflection => primary && reflection,
+                TerrainWaterSurfacePassKind::FallbackReflection => !primary && reflection,
+                TerrainWaterSurfacePassKind::Refraction => primary && above,
+                _ => false,
+            })
+        })()
+        .unwrap_or(false);
+        visibility.set_if_neq(if visible {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        });
+    }
     let Some((demand, prepared, zoo_transform)) = selected_camera
-        .and_then(|(_, demand, prepared, _)| Some((demand, prepared, prepared.pose?)))
+        .and_then(|(_, demand, prepared, ..)| Some((demand, prepared, prepared.pose?)))
     else {
         let mut frames = camera_transforms.iter_many_mut(captures.iter());
         while let Some(item) = frames.fetch_next() {
@@ -803,6 +954,80 @@ pub(super) fn update_authored_terrain_water_renderer_inputs(
         Vec4::Z,
         Vec4::new(0.5, 0.5, 0.0, 1.0),
     );
+    let fallback_clip =
+        fallback_capture
+            .as_ref()
+            .map_or(Mat4::IDENTITY, |(frame, projection, _)| {
+                projection.get_clip_from_view() * frame.to_matrix().inverse() * source_from_local
+            });
+    for (draw, kind, handle, visibility) in &tank_draws {
+        if kind.uses_stitch_geometry() || *visibility == Visibility::Hidden {
+            continue;
+        }
+        let (Ok((geometry, _, appearance, scroll, light, _)), Ok(wave_state)) =
+            (tanks.get(draw.tank), waves.get(draw.tank))
+        else {
+            continue;
+        };
+        let Some((presentation, ..)) = terrain_assets
+            .get(&appearance.terrain)
+            .and_then(|terrain| terrain.tank_water_material_presentation(appearance.id))
+        else {
+            continue;
+        };
+        let Some(material) = effect_pass_materials.get_mut_untracked(handle.id()) else {
+            continue;
+        };
+        let fallback = matches!(
+            kind,
+            TerrainWaterSurfacePassKind::FallbackReflection | TerrainWaterSurfacePassKind::Scum
+        );
+        let above = zoo_transform.translation.y > geometry.water_height;
+        let reflection_size = Vec2::splat(25.0)
+            / if fallback {
+                fallback_extent
+            } else {
+                reflection_extent
+            };
+        let refraction_size = Vec2::splat(25.0) / refraction_extent;
+        material.bind_float_vector_effect_semantic(
+            "ReflectSize",
+            Vec4::new(reflection_size.x, reflection_size.y, 1.0, 0.0),
+        );
+        material.bind_float_vector_effect_semantic(
+            "RefractSize",
+            Vec4::new(refraction_size.x, refraction_size.y, 1.0, 0.0),
+        );
+        let ambient = light.map_or(Vec3::ONE, |light| light.raw_base_rgba().truncate());
+        bind_authored_water_frame_base_tints(
+            material,
+            presentation,
+            ambient,
+            !above || fallback,
+            (!fallback).then_some(1.0),
+            (!above && !fallback && scroll.is_none()).then_some(1.0),
+            training_opacity_mix,
+        );
+        if let (Some(scroll), Some(light)) = (scroll, light) {
+            bind_water_scum(material, presentation, scroll, light, training_opacity_mix);
+        }
+        material.bind_float_matrix_effect_semantic(
+            "WorldToRefract",
+            clip_to_uv * source_to_refraction_clip,
+        );
+        material.bind_float_matrix_effect_semantic(
+            "WorldToReflect",
+            clip_to_uv
+                * if fallback {
+                    fallback_clip
+                } else {
+                    source_to_reflection_clip
+                },
+        );
+        wave_state.bind_wave_channels_to_effect_pass(geometry.water_height, material);
+        material
+            .write_programmable_float_registers_to_persistent_buffers(&mut effect_uniform_buffers);
+    }
     for (material_handle, surface, wave_key, parent, visibility, pass_kind, _) in
         &mut water_surfaces
     {
@@ -815,7 +1040,7 @@ pub(super) fn update_authored_terrain_water_renderer_inputs(
         if *visibility == Visibility::Hidden {
             continue;
         }
-        let Some(material) = effect_pass_materials.get_mut_untracked(material_handle) else {
+        let Some(material) = effect_pass_materials.get_mut_untracked(material_handle.id()) else {
             continue;
         };
         let fallback = *pass_kind == TerrainWaterSurfacePassKind::FallbackReflection
@@ -844,10 +1069,7 @@ pub(super) fn update_authored_terrain_water_renderer_inputs(
         else {
             continue;
         };
-        let Some(light) = light else {
-            continue;
-        };
-        let ambient_colour = light.raw_base_rgba().truncate();
+        let ambient_colour = light.map_or(Vec3::ONE, |light| light.raw_base_rgba().truncate());
         let Some(source) = region_sources.get(wave_key.0) else {
             continue;
         };
@@ -867,37 +1089,8 @@ pub(super) fn update_authored_terrain_water_renderer_inputs(
                 (!above && scroll.is_none() && fraction > 0.0).then_some(fraction),
                 training_opacity_mix,
             );
-            if let Some(scroll) = scroll {
-                let offsets = scroll.offsets;
-                if let Some((bottom, top)) = presentation
-                    .surface_material
-                    .configuration
-                    .scum
-                    .as_ref()
-                    .and_then(|scum| scum.bottom_size.zip(scum.top_size))
-                {
-                    material.bind_float_vector_effect_semantic(
-                        "ScumOffsetLo",
-                        Vec4::new(bottom[0].recip(), bottom[1].recip(), offsets.x, offsets.y),
-                    );
-                    material.bind_float_vector_effect_semantic(
-                        "ScumOffsetHi",
-                        Vec4::new(top[0].recip(), top[1].recip(), offsets.z, offsets.w),
-                    );
-                    material.bind_float_vector_effect_semantic("ScumAmbient", Vec4::W);
-                    material.bind_float_vector_effect_semantic(
-                        "ScumLightDir",
-                        light.source_light_direction().extend(0.0),
-                    );
-                    material.bind_float_vector_effect_semantic(
-                        "ScumDiffuse",
-                        ambient_colour.extend(1.0),
-                    );
-                    material.bind_float_vector_effect_semantic(
-                        "ReflectOpacity",
-                        Vec4::new(1.0, 0.5 - 1.5 * training_opacity_mix, 0.0, 0.05),
-                    );
-                }
+            if let (Some(scroll), Some(light)) = (scroll, light) {
+                bind_water_scum(material, presentation, scroll, light, training_opacity_mix);
             }
         }
         material.bind_float_matrix_effect_semantic(
@@ -919,19 +1112,51 @@ pub(super) fn update_authored_terrain_water_renderer_inputs(
                     source_to_reflection_clip
                 },
         );
-        material.replace_texture_asset_for_effect_semantic(
-            "EnvReflect",
-            if fallback {
-                targets.fallback_reflection.clone()
-            } else {
-                targets.reflection.clone()
-            },
-        );
         geometric_wave_state
             .bind_wave_channels_to_effect_pass(surface.surface_plane_height, material);
         material
             .write_programmable_float_registers_to_persistent_buffers(&mut effect_uniform_buffers);
     }
+}
+
+fn bind_water_scum(
+    material: &mut EffectPassMaterial,
+    presentation: &openzt2_game_data::terrain::TerrainBiomeWaterPresentation,
+    scroll: &TerrainWaterScumScroll,
+    light: &TerrainWaterRegionLight,
+    training_opacity_mix: f32,
+) {
+    let Some((bottom, top)) = presentation
+        .surface_material
+        .configuration
+        .scum
+        .as_ref()
+        .and_then(|scum| scum.bottom_size.zip(scum.top_size))
+    else {
+        return;
+    };
+    let offsets = scroll.offsets;
+    material.bind_float_vector_effect_semantic(
+        "ScumOffsetLo",
+        Vec4::new(bottom[0].recip(), bottom[1].recip(), offsets.x, offsets.y),
+    );
+    material.bind_float_vector_effect_semantic(
+        "ScumOffsetHi",
+        Vec4::new(top[0].recip(), top[1].recip(), offsets.z, offsets.w),
+    );
+    material.bind_float_vector_effect_semantic("ScumAmbient", Vec4::W);
+    material.bind_float_vector_effect_semantic(
+        "ScumLightDir",
+        light.source_light_direction().extend(0.0),
+    );
+    material.bind_float_vector_effect_semantic(
+        "ScumDiffuse",
+        light.raw_base_rgba().truncate().extend(1.0),
+    );
+    material.bind_float_vector_effect_semantic(
+        "ReflectOpacity",
+        Vec4::new(1.0, 0.5 - 1.5 * training_opacity_mix, 0.0, 0.05),
+    );
 }
 
 #[derive(Clone, Debug)]

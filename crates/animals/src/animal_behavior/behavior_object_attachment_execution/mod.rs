@@ -3,8 +3,8 @@
 use super::behavior_animation_key_execution::CrossedBehaviorAnimationEffect;
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::behavior_action_actors;
 use openzt2_zoo_state::behavior_task_execution_types::{
-    PendingBehaviorAnimationClipCompletion,
     running_actions::{BehaviorAnimationEffect, TimedBehaviorAnimationEffect},
+    PendingBehaviorAnimationClipCompletion,
 };
 
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
@@ -77,9 +77,14 @@ struct AttachmentPrefabEvents<'w, 's> {
 impl AttachmentPrefabEvents<'_, '_> {
     fn definitions_changed(&mut self, definitions: &Res<WorldDefinitions>) -> bool {
         let changed = self.definitions.as_mut().is_some_and(|events| {
-            let changed = events.read().any(|event| matches!(event,
-                AssetEvent::Added { .. } | AssetEvent::Modified { .. } | AssetEvent::LoadedWithDependencies { .. }
-            ));
+            let changed = events.read().any(|event| {
+                matches!(
+                    event,
+                    AssetEvent::Added { .. }
+                        | AssetEvent::Modified { .. }
+                        | AssetEvent::LoadedWithDependencies { .. }
+                )
+            });
             events.clear();
             changed
         });
@@ -90,7 +95,8 @@ impl AttachmentPrefabEvents<'_, '_> {
         self.loaded
             .read()
             .filter_map(|event| match *event {
-                AssetEvent::Added { id } | AssetEvent::LoadedWithDependencies { id }
+                AssetEvent::Added { id }
+                | AssetEvent::LoadedWithDependencies { id }
                 | AssetEvent::Modified { id } => Some(id),
                 _ => None,
             })
@@ -233,7 +239,8 @@ fn cancel_object_attachment_demand(
     removed: On<Remove<openzt2_zoo_state::behavior_task_execution_types::running_actions::RunBehaviorAttachObject>>,
     mut commands: Commands,
 ) {
-    commands.entity(removed.entity)
+    commands
+        .entity(removed.entity)
         .try_remove::<(PendingObjectAttachment, WaitingForAttachmentDefinitions)>();
 }
 
@@ -241,7 +248,8 @@ fn cancel_failed_object_attachment_demand(
     added: On<Add<PendingBehaviorTaskFailure>>,
     mut commands: Commands,
 ) {
-    commands.entity(added.entity)
+    commands
+        .entity(added.entity)
         .try_remove::<(PendingObjectAttachment, WaitingForAttachmentDefinitions)>();
 }
 
@@ -254,7 +262,9 @@ fn wait_for_attachment_definition(
     if definitions.is_complete() {
         mark_behavior_task_for_failure_and_stop_navigation(actor, commands);
     } else if !waiting {
-        commands.entity(actor).try_insert(WaitingForAttachmentDefinitions);
+        commands
+            .entity(actor)
+            .try_insert(WaitingForAttachmentDefinitions);
     }
 }
 
@@ -295,8 +305,14 @@ fn start_or_finish_object_attachment(
     let Some(definitions) = assets.definitions.get(&assets.definition_assets) else {
         return;
     };
-    for (actor, (task, instruction, running_action), actor_definition, world, mut pending, waiting) in
-        behavior_action_actors(&mut actors, activation.0)
+    for (
+        actor,
+        (task, instruction, running_action),
+        actor_definition,
+        world,
+        mut pending,
+        waiting,
+    ) in behavior_action_actors(&mut actors, activation.0)
     {
         if pending
             .as_ref()
@@ -306,11 +322,13 @@ fn start_or_finish_object_attachment(
             continue;
         }
         if let Some(pending) = pending.as_mut() {
-            if !pending.prefab_settled && let Some(prefab) = &pending.prefab {
-                if !settled.contains(&prefab.id()) {
-                    continue;
+            if !pending.prefab_settled {
+                if let Some(prefab) = &pending.prefab {
+                    if !settled.contains(&prefab.id()) {
+                        continue;
+                    }
+                    pending.prefab_settled = true;
                 }
-                pending.prefab_settled = true;
             }
             if pending.request_id.is_some() && pending.joint.is_none() {
                 continue;
@@ -379,7 +397,9 @@ fn start_or_finish_object_attachment(
                 continue;
             };
             if waiting {
-                commands.entity(actor).try_remove::<WaitingForAttachmentDefinitions>();
+                commands
+                    .entity(actor)
+                    .try_remove::<WaitingForAttachmentDefinitions>();
             }
             let Some(prefab) = assets.prefabs.get(&prefab_handle) else {
                 // Definitions retain source paths, not handles. Keep this demand
@@ -404,7 +424,9 @@ fn start_or_finish_object_attachment(
             Some((prefab_handle, prefab))
         };
         if waiting && presentation.is_none() {
-            commands.entity(actor).try_remove::<WaitingForAttachmentDefinitions>();
+            commands
+                .entity(actor)
+                .try_remove::<WaitingForAttachmentDefinitions>();
         }
         let prefab_handle = presentation.as_ref().map(|(handle, _)| handle.clone());
         // A holder without animated presentation, such as a food stand's
@@ -426,6 +448,7 @@ fn start_or_finish_object_attachment(
                     blend_duration_milliseconds: 0,
                     playback_speed_permille: 1000,
                     playback_repetition_policy: AnimationPlaybackRepetitionPolicy::PlayOnce,
+                    action_settings: None,
                 });
                 if let Some(mut pending) = pending {
                     pending.request_id = Some(request.id);

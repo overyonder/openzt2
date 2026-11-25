@@ -14,8 +14,11 @@ use openzt2_game_assets::world_definitions::world_definition_document_asset_and_
 use openzt2_game_data::world_definitions::world_objects::{
     WorldObjectFadeRange, WorldObjectNamedPhysicalPresentationDefinition,
 };
-use openzt2_zoo_state::feeding::container_quantity::{DrinkContainer, FoodContainer};
-use openzt2_zoo_state::aquatic::aquatic_simulation_types::WaterFilter;
+use bevy::app::Propagate;
+use openzt2_zoo_state::authored_float_attributes::AuthoredFloatAttributes;
+use std::{collections::BTreeMap, time::Duration};
+
+use super::prefab_world_instance_spawning::morph_fade_projection::NamedPrefabOpacity;
 use openzt2_game_data::AssetId;
 
 pub(super) mod animation_key_commands;
@@ -221,7 +224,7 @@ pub(super) fn spawn_required_named_physical_presentations<'a>(
                 Transform::IDENTITY,
                 Visibility::Hidden,
                 ChildOf(owner),
-                PendingNamedPresentationNodeAttachment {
+                NamedPresentationNodeAttachment {
                     owner,
                     node: node.clone(),
                 },
@@ -246,7 +249,18 @@ pub(super) fn spawn_required_named_physical_presentations<'a>(
             child.insert(PrefabPresentation::new(prefab));
         }
         if let Some(fade) = presentation.fade {
-            child.insert(NamedPresentationFade(fade));
+            child.insert((
+                NamedPresentationFade {
+                    range: fade,
+                    selected: presentation.initially_visible,
+                    accepted_value: None,
+                },
+                Propagate(NamedPrefabOpacity(if presentation.initially_visible {
+                    fade.max_alpha
+                } else {
+                    0.0
+                })),
+            ));
         }
     }
     commands
@@ -254,86 +268,191 @@ pub(super) fn spawn_required_named_physical_presentations<'a>(
         .insert(NamedPhysicalPresentationsHydrated);
 }
 
-/// A `BFAIFadeController` state binder, shown while its owner's attribute
-/// lies in its range.
 #[derive(Component)]
-pub(super) struct NamedPresentationFade(WorldObjectFadeRange);
+pub(super) struct NamedPresentationFade {
+    range: WorldObjectFadeRange,
+    selected: bool,
+    accepted_value: Option<f32>,
+}
 
-/// Shows each fade state binder whose range holds its owner's attribute and
-/// hides the others. Binders whose attribute has no live value here keep their
-/// authored visibility.
+#[derive(Component)]
+pub(super) struct NamedPresentationOpacityTransition {
+    timer: Timer,
+    from: f32,
+    to: f32,
+}
+
+type NamedFadeBinder = (
+    Entity,
+    &'static mut NamedPresentationFade,
+    &'static mut Visibility,
+    &'static mut Propagate<NamedPrefabOpacity>,
+    Option<&'static mut NamedPresentationOpacityTransition>,
+);
+
 pub(super) fn select_named_presentation_fade_states(
-    owners: Query<(
-        &NamedPhysicalPresentations,
-        Option<&FoodContainer>,
-        Option<&DrinkContainer>,
-        Option<&WaterFilter>,
-    )>,
-    changed_values: Query<
-        Entity,
-        (
-            With<NamedPhysicalPresentations>,
-            Or<(
-                Changed<FoodContainer>,
-                Changed<DrinkContainer>,
-                Changed<WaterFilter>,
-            )>,
-        ),
-    >,
-    mut removed_food: RemovedComponents<FoodContainer>,
-    mut states: ParamSet<(
+    mut commands: Commands,
+    mut work: ParamSet<(
         Query<
-            &NamedPhysicalPresentation,
+            Entity,
             (
-                With<NamedPresentationFade>,
-                Or<(
-                    Changed<NamedPhysicalPresentation>,
-                    Changed<NamedPresentationFade>,
-                    Changed<Visibility>,
-                )>,
+                With<NamedPhysicalPresentations>,
+                Changed<AuthoredFloatAttributes>,
             ),
         >,
-        Query<(&NamedPresentationFade, &mut Visibility)>,
+        Query<&NamedPhysicalPresentation, Added<NamedPresentationFade>>,
+        (
+            Query<(&NamedPhysicalPresentations, &mut AuthoredFloatAttributes)>,
+            Query<NamedFadeBinder>,
+        ),
     )>,
 ) {
-    let food_level = AssetId::from_key("f_foodlevel");
-    let filter_dirty_level = AssetId::from_key("f_filterdirtylevel");
-    let changed_owners = changed_values
+    let mut affected_owners = work
+        .p0()
         .iter()
-        .chain(states.p0().iter().map(|owner| owner.0))
-        .chain(removed_food.read())
-        .collect::<HashSet<_>>();
-    let mut states = states.p1();
-    for (presentations, food, drink, filter) in owners.iter_many(changed_owners).matched() {
-        // Container amounts are authored points in Q16.
-        let food_amount = food
-            .map(|food| food.amount_q16)
-            .or(drink.map(|drink| drink.amount_q16))
-            .map(|amount| amount as f32 / 65_536.0);
-        let mut binders = states.iter_many_mut(&presentations.0).matched();
-        while let Some((fade, mut visibility)) = binders.fetch_next() {
-            let value = if fade.0.attribute == food_level {
-                food_amount
-            } else if fade.0.attribute == filter_dirty_level {
-                filter.map(|filter| filter.dirt_percent)
-            } else {
-                None
+        .collect::<bevy::ecs::entity::EntityHashSet>();
+    affected_owners.extend(work.p1().iter().map(|owner| owner.0));
+    let (mut owners, mut binders) = work.p2();
+    for owner in affected_owners {
+        let Ok((children, mut values)) = owners.get_mut(owner) else {
+            continue;
+        };
+        let mut controllers = BTreeMap::<u32, Vec<_>>::new();
+        for (entity, state, ..) in binders.iter_many(&children.0).matched() {
+            controllers
+                .entry(state.range.controller_ordinal)
+                .or_default()
+                .push((entity, state.range, state.selected, state.accepted_value));
+        }
+        for states in controllers.values_mut() {
+            states.sort_unstable_by_key(|(_, range, ..)| range.state_ordinal);
+            let Some((first, first_range, ..)) = states.first().copied() else {
+                continue;
             };
-            if let Some(value) = value {
-                visibility.set_if_neq(if fade.0.contains(value) {
-                    Visibility::Inherited
-                } else {
-                    Visibility::Hidden
-                });
+            let Some(value) = values
+                .get(first_range.attribute)
+                .filter(|value| value.is_finite())
+            else {
+                continue;
+            };
+            let active = states.iter().find(|(_, _, selected, _)| *selected);
+            if first_range.fade_hold {
+                if let Some((_, _, _, Some(previous))) = active {
+                    if value != *previous {
+                        values.set(first_range.attribute, *previous);
+                    }
+                } else if let Some((entity, ..)) = active {
+                    if let Ok((_, mut state, ..)) = binders.get_mut(*entity) {
+                        state.accepted_value = Some(value);
+                    }
+                }
+                continue;
             }
+            let selected = active
+                .filter(|(_, range, ..)| range.contains(value))
+                .or_else(|| states.iter().find(|(_, range, ..)| range.contains(value)));
+            let highest = states
+                .iter()
+                .map(|(_, range, ..)| range.maximum)
+                .fold(f32::NEG_INFINITY, f32::max);
+            let (target, accepted_value) = if let Some((entity, ..)) = selected {
+                (*entity, value)
+            } else if first_range.wrap_value && value >= highest {
+                let wrapped = first_range.maximum - 1.0;
+                values.set(first_range.attribute, wrapped);
+                (first, wrapped)
+            } else {
+                continue;
+            };
+            if let Ok((_, mut state, ..)) = binders.get_mut(target) {
+                if state.accepted_value != Some(accepted_value) {
+                    state.accepted_value = Some(accepted_value);
+                }
+            }
+            if active.is_some_and(|(entity, ..)| *entity == target) {
+                continue;
+            }
+            if let Some((entity, ..)) = active {
+                change_named_presentation_fade_target(&mut commands, &mut binders, *entity, false);
+            }
+            change_named_presentation_fade_target(&mut commands, &mut binders, target, true);
+        }
+    }
+}
+
+fn change_named_presentation_fade_target(
+    commands: &mut Commands,
+    binders: &mut Query<NamedFadeBinder>,
+    entity: Entity,
+    selected: bool,
+) {
+    let Ok((_, mut state, mut visibility, mut opacity, transition)) = binders.get_mut(entity)
+    else {
+        return;
+    };
+    state.selected = selected;
+    let from = if selected { 0.0 } else { state.range.max_alpha };
+    let to = if selected { state.range.max_alpha } else { 0.0 };
+    let seconds = state.range.fade_period_seconds;
+    if from == to || !seconds.is_finite() || seconds <= 0.0 {
+        opacity.set_if_neq(Propagate(NamedPrefabOpacity(to)));
+        visibility.set_if_neq(if selected {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        });
+        if transition.is_some() {
+            commands
+                .entity(entity)
+                .try_remove::<NamedPresentationOpacityTransition>();
+        }
+    } else {
+        opacity.set_if_neq(Propagate(NamedPrefabOpacity(from)));
+        visibility.set_if_neq(Visibility::Inherited);
+        let next = NamedPresentationOpacityTransition {
+            timer: Timer::new(Duration::from_secs_f32(seconds), TimerMode::Once),
+            from,
+            to,
+        };
+        if let Some(mut transition) = transition {
+            *transition = next;
+        } else {
+            commands.entity(entity).try_insert(next);
+        }
+    }
+}
+
+pub(super) fn advance_named_presentation_opacity(
+    time: Res<Time>,
+    mut commands: Commands,
+    mut transitions: Query<(
+        Entity,
+        &NamedPresentationFade,
+        &mut NamedPresentationOpacityTransition,
+        &mut Propagate<NamedPrefabOpacity>,
+        &mut Visibility,
+    )>,
+) {
+    for (entity, state, mut transition, mut opacity, mut visibility) in &mut transitions {
+        transition.timer.tick(time.delta());
+        let alpha =
+            transition.from + (transition.to - transition.from) * transition.timer.fraction();
+        opacity.set_if_neq(Propagate(NamedPrefabOpacity(alpha)));
+        if transition.timer.is_finished() {
+            if !state.selected {
+                visibility.set_if_neq(Visibility::Hidden);
+            }
+            commands
+                .entity(entity)
+                .try_remove::<NamedPresentationOpacityTransition>();
         }
     }
 }
 
 /// A binder holder waiting for the node of its owner's model to exist.
 #[derive(Component, Debug, Clone)]
-pub(super) struct PendingNamedPresentationNodeAttachment {
-    pub(super) owner: Entity,
+pub(crate) struct NamedPresentationNodeAttachment {
+    pub(crate) owner: Entity,
     node: String,
 }
 
@@ -346,17 +465,18 @@ pub(super) fn attach_named_presentations_to_model_nodes(
     mut commands: Commands,
     mut pending: Query<(
         Entity,
-        Ref<PendingNamedPresentationNodeAttachment>,
+        Ref<NamedPresentationNodeAttachment>,
         Option<&mut Visibility>,
     )>,
     indexes: Query<Ref<PrefabSocketIndex>>,
     parents: Query<&ChildOf>,
+    changed_parents: Query<(), Changed<ChildOf>>,
 ) {
     for (holder, attachment, visibility) in &mut pending {
         let Ok(index) = indexes.get(attachment.owner) else {
             continue;
         };
-        if !index.is_changed() && !attachment.is_changed() {
+        if !index.is_changed() && !attachment.is_changed() && !changed_parents.contains(holder) {
             continue;
         }
         let key = AssetId::from_key(&attachment.node.trim().to_ascii_lowercase());
@@ -368,6 +488,12 @@ pub(super) fn attach_named_presentations_to_model_nodes(
         }) else {
             continue;
         };
+        if parents
+            .get(holder)
+            .is_ok_and(|parent| parent.parent() == node_entity)
+        {
+            continue;
+        }
         let mut holder = commands.entity(holder);
         holder.insert(ChildOf(node_entity));
         if let Some(mut visibility) = visibility {
@@ -375,7 +501,6 @@ pub(super) fn attach_named_presentations_to_model_nodes(
         } else {
             holder.insert(Visibility::Inherited);
         }
-        holder.remove::<PendingNamedPresentationNodeAttachment>();
     }
 }
 

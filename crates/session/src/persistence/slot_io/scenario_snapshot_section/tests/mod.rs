@@ -60,6 +60,43 @@ fn initialize_world() -> (World, Entity, AssetId, [AssetId; 2]) {
 }
 
 #[test]
+fn scenario_group_status_survives_the_snapshot_extension() {
+    let group = AssetId::from_key("saved-group");
+    let saved = ScenarioSnapshot {
+        timing: ScenarioScriptTiming::from_elapsed_seconds(2.5, 0.25),
+        challenge: None,
+        groups: ScenarioGroupSnapshots {
+            session: BTreeMap::from([(group, 2)]),
+            offer: BTreeMap::new(),
+        },
+        version: 1,
+        definition: AssetId::from_key("saved-scenario"),
+        started_tick: 0,
+        state: 0,
+        objectives: Vec::new(),
+        lua: None,
+        ui: Default::default(),
+    };
+    let bytes = encode(Some(&saved)).unwrap();
+    let records = record_count(Some(&saved));
+    let decode_bytes = |bytes: &[u8]| {
+        decode(
+            bytes,
+            WorldSnapshotSectionDirectoryEntry {
+                encoded_record_count: records,
+                payload_start_byte_offset: 0,
+                payload_byte_count: bytes.len() as u64,
+            },
+        )
+        .unwrap()
+        .unwrap()
+    };
+    assert_eq!(decode_bytes(&bytes), saved);
+    let previous = postcard::to_allocvec(&saved).unwrap();
+    assert!(decode_bytes(&previous).groups.session.is_empty());
+}
+
+#[test]
 fn campaign_state_round_trip_keeps_completed_rules_and_live_deadlines() {
     let (mut source, root, definition, _) = initialize_world();
     source
@@ -237,6 +274,7 @@ fn original_objective_planning_preserves_baseline_ids_and_applies_only_after_val
     let source = ScenarioSnapshot {
         timing: ScenarioScriptTiming::from_elapsed_seconds(2.0, 0.5),
         challenge: None,
+        groups: Default::default(),
         version: 1,
         definition,
         started_tick: 318,
@@ -342,6 +380,7 @@ fn challenge_only_save_restores_offer_expiry_and_selection_stream() {
     });
     let saved = ScenarioSnapshot {
         timing: None,
+        groups: Default::default(),
         version: 2,
         definition: AssetId::default(),
         started_tick: 0,

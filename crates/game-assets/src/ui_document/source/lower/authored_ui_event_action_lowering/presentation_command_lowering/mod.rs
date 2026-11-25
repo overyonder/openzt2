@@ -40,6 +40,17 @@ pub(super) fn lower_presentation_command(
         .as_deref()
         .map_or(current, |name| UiDocumentRole::node_id(role, name));
     let result = match event.message.as_str() {
+        "UI_EDIT_WATCH" => {
+            let source = event.string.as_deref()
+                .ok_or_else(|| invalid_at(input, "UI_EDIT_WATCH requires a text edit name"))?;
+            Ok(UiActionRecord::Presentation(UiPresentationActionRecord {
+                trigger,
+                action: UiPresentationAction::WatchTextEdit {
+                    target_node: property_receiver,
+                    source_node: UiDocumentRole::node_id(role, source),
+                },
+            }))
+        }
         "UI_COPY_TEXT" if event.string.as_deref() == Some("zooname") => Ok(UiActionRecord::Information(UiInformationActionRecord {
             trigger,
             action: UiInformationAction::RenameZoo,

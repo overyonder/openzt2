@@ -1,8 +1,8 @@
 //! Direct UI document camera controls for the one live Bevy camera.
 
-use openzt2_game_data::ui_document::action::camera::UiCameraAction;
 use openzt2_game_data::ui_document::action::camera::UiCameraPanDirection;
 use openzt2_game_data::ui_document::action::camera::UiCameraSignedAxisDirection;
+use openzt2_game_data::ui_document::action::camera::{UiCameraAction, UiFirstPersonCommand};
 
 use bevy::picking::pointer::{PointerId, PointerLocation};
 use bevy::prelude::*;
@@ -116,6 +116,28 @@ pub(super) fn route_camera_ui_actions(
                                 transition_seconds: None,
                             });
                         }
+                    }
+                }
+                UiCameraAction::SetFirstPersonCommandState { command, pressed } => {
+                    for (_, _, mut intent, _) in &mut cameras {
+                        intent
+                            .reborrow()
+                            .map_unchanged(|intent| {
+                                let commands = &mut intent.first_person_commands;
+                                match command {
+                                    UiFirstPersonCommand::Forward => &mut commands.forward,
+                                    UiFirstPersonCommand::Backward => &mut commands.backward,
+                                    UiFirstPersonCommand::TurnLeft => &mut commands.turn_left,
+                                    UiFirstPersonCommand::TurnRight => &mut commands.turn_right,
+                                    UiFirstPersonCommand::Up => &mut commands.up,
+                                    UiFirstPersonCommand::Down => &mut commands.down,
+                                    UiFirstPersonCommand::Crouch => &mut commands.crouch,
+                                    UiFirstPersonCommand::FreeMouseLook => {
+                                        &mut commands.free_mouse_look
+                                    }
+                                }
+                            })
+                            .set_if_neq(*pressed);
                     }
                 }
                 UiCameraAction::SetCameraPanDirection { direction } => {

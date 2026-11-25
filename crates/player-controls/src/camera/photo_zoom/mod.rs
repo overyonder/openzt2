@@ -20,7 +20,7 @@ use super::fixed_aspect_perspective_projection::FixedAspectPerspectiveProjection
 use crate::input::input_execution_types::DeviceControlAxes;
 
 #[derive(Component, PartialEq)]
-pub(super) struct PhotoCameraZoom(f32);
+pub(crate) struct PhotoCameraZoom(pub(crate) f32);
 
 #[derive(Component, PartialEq, Eq)]
 #[relationship(relationship_target = PhotoZoomSliders)]

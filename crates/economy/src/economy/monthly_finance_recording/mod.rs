@@ -10,13 +10,9 @@ use openzt2_world_state::simulation_time::simulation_clock_types::ZooMonth;
 use openzt2_world_state::world_spawn::world_membership_types::{WorldMember, WorldRoot};
 
 use super::{
-    account_transaction_types::{
-        Account, TransactionCompleted, TransactionKind, TransactionSettlement,
-    },
-    facility_economy_types::ServiceFacility,
-    money_types::Money,
-    monthly_finance_types::MonthlyFinanceHistory,
-    zoo_cash_types::ZooCash,
+    account_transaction_settlement::RecordedAccountMovement,
+    account_transaction_types::TransactionKind, facility_economy_types::ServiceFacility,
+    money_types::Money, monthly_finance_types::MonthlyFinanceHistory, zoo_cash_types::ZooCash,
 };
 
 pub(super) fn enter_published_zoo_finance_month(
@@ -41,39 +37,20 @@ pub(super) fn enter_published_zoo_finance_month(
     }
 }
 
-pub(super) fn record_completed_transactions_and_guest_counts_in_monthly_finance_history<
-    const PLAYER: bool,
->(
+pub(super) fn record_completed_transactions_in_monthly_finance_history<const PLAYER: bool>(
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,
     facilities: Query<&ServiceFacility>,
-    named_payments: Query<&super::behavior_transaction_state::BehaviorTransactionPayment>,
     object_definitions: Query<
         &openzt2_world_state::world_spawn::world_membership_types::DefinitionId,
     >,
-    mut completed_transactions: MessageReader<TransactionCompleted>,
-    settlements: Query<&TransactionSettlement>,
-    mut guest_arrivals: MessageReader<GuestArrived>,
-    mut guest_departures: MessageReader<GuestDeparted>,
+    mut completed_transactions: MessageReader<RecordedAccountMovement<PLAYER>>,
     mut histories: Query<(&ZooCash, &mut MonthlyFinanceHistory), With<WorldRoot>>,
-    members: Query<&WorldMember>,
 ) {
     let world_definitions = active_world_definitions.get(&world_definition_assets);
     for transaction in completed_transactions.read() {
-        let Some(root) = settlements
-            .get(transaction.operation)
-            .ok()
-            .and_then(|state| state.settled_world_in_domain(PLAYER))
-        else {
-            continue;
-        };
-        let zoo_cash_change = match (transaction.debit, transaction.credit) {
-            (Account::Zoo, Account::Zoo) => 0,
-            (Account::Zoo, _) => -transaction.amount.0,
-            (_, Account::Zoo) => transaction.amount.0,
-            _ => continue,
-        };
-        let Ok((zoo_cash, mut finance_history)) = histories.get_mut(root) else {
+        let zoo_cash_change = transaction.zoo_delta.0;
+        let Ok((zoo_cash, mut finance_history)) = histories.get_mut(transaction.root) else {
             continue;
         };
         if !finance_history.has_initialized_month() {
@@ -84,17 +61,12 @@ pub(super) fn record_completed_transactions_and_guest_counts_in_monthly_finance_
             continue;
         }
 
-        if let Ok(payment) = named_payments.get(transaction.operation) {
+        if let Some((facility, name)) = transaction.named_payment {
             let category = object_definitions
-                .get(payment.facility)
+                .get(facility)
                 .ok()
                 .and_then(|id| world_definitions?.find_object(id.0))
-                .and_then(|object| {
-                    object
-                        .transactions
-                        .iter()
-                        .find(|entry| entry.name == payment.transaction)
-                })
+                .and_then(|object| object.transactions.iter().find(|entry| entry.name == name))
                 .map(|entry| entry.category);
             if category
                 == Some(openzt2_game_data::AssetId::from_key(
@@ -127,26 +99,31 @@ pub(super) fn record_completed_transactions_and_guest_counts_in_monthly_finance_
             _ => {}
         }
     }
+}
 
-    if !PLAYER {
-        for arrival in guest_arrivals.read() {
-            let Ok(member) = members.get(arrival.guest) else {
-                continue;
-            };
-            let Ok((_, mut history)) = histories.get_mut(member.root) else {
-                continue;
-            };
-            if history.has_initialized_month() {
-                history.record_guest_arrival();
-            }
+pub(super) fn record_monthly_guest_counts(
+    mut guest_arrivals: MessageReader<GuestArrived>,
+    mut guest_departures: MessageReader<GuestDeparted>,
+    mut histories: Query<&mut MonthlyFinanceHistory, With<WorldRoot>>,
+    members: Query<&WorldMember>,
+) {
+    for arrival in guest_arrivals.read() {
+        let Ok(member) = members.get(arrival.guest) else {
+            continue;
+        };
+        let Ok(mut history) = histories.get_mut(member.root) else {
+            continue;
+        };
+        if history.has_initialized_month() {
+            history.record_guest_arrival();
         }
-        for departure in guest_departures.read() {
-            let Ok((_, mut history)) = histories.get_mut(departure.root) else {
-                continue;
-            };
-            if history.has_initialized_month() {
-                history.record_guest_departure();
-            }
+    }
+    for departure in guest_departures.read() {
+        let Ok(mut history) = histories.get_mut(departure.root) else {
+            continue;
+        };
+        if history.has_initialized_month() {
+            history.record_guest_departure();
         }
     }
 }

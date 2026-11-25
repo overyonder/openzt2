@@ -127,6 +127,7 @@ fn lower_bfm_animation_graph_node_edges(
                 transition_animation_clip_asset_keys: collect_bfm_animation_graph_table_members(
                     edge_source_node,
                 ),
+                kfm_transition: None,
                 authored_animation_attributes: collect_unrecognized_bfm_animation_attributes(
                     edge_source_node,
                     &["name"],

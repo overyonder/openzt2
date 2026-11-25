@@ -103,6 +103,8 @@ pub struct ParticleEffectAssetAndRuntimePlugin;
 impl Plugin for ParticleEffectAssetAndRuntimePlugin {
     fn build(&self, app: &mut App) {
         app.init_asset::<ParticleEffectDocumentAsset>()
+            .init_resource::<bevy_hanabi::EffectParticleBudget>()
+            .add_systems(PostUpdate, project_particle_budget)
             .add_observer(effect_instance_runtime_systems::retire_drained_particle_effect_tree)
             .add_plugins(particle_plane_binding::ParticleEffectPlaneBindingPlugin)
             .add_systems(
@@ -180,4 +182,19 @@ impl Plugin for ParticleEffectAssetAndRuntimePlugin {
                 ),
             );
     }
+}
+
+fn project_particle_budget(
+    settings: Option<Res<crate::graphics_settings_types::GraphicsSettings>>,
+    source: Option<Res<crate::graphics_settings_presets::GraphicsSettingsPresetSource>>,
+    presets: Option<Res<Assets<crate::graphics_settings_presets::GraphicsSettingsPresets>>>,
+    mut budget: ResMut<bevy_hanabi::EffectParticleBudget>,
+) {
+    let next = source.zip(presets).and_then(|(source, presets)| {
+        let tier = settings
+            .as_ref()
+            .and_then(|settings| settings.particle_budget_tier);
+        source.get(&presets)?.particle_budget(tier)
+    });
+    budget.set_if_neq(bevy_hanabi::EffectParticleBudget(next));
 }

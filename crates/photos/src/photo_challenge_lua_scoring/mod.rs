@@ -185,13 +185,14 @@ pub(super) fn create_lua_photo_exposure<'scope, 'env: 'scope>(
                 })?,
             )?;
             for (name, value) in [
-                ("percentOfScreen", subject.facts.screen_permille),
-                ("percentSeen", subject.facts.viewport_visible_permille),
-                ("percentSeenInCenter", subject.facts.center_permille),
-                ("getPercentOfScreen", subject.facts.screen_permille),
+                ("percentOfScreen", subject.facts.screen_fraction),
+                ("percentSeen", subject.facts.visible_fraction),
+                ("percentSeenInCenter", 0.0),
+                ("getPercentOfScreen", subject.facts.screen_fraction),
             ] {
-                entity.set(name, f32::from(value) * 0.001)?;
+                entity.set(name, value)?;
             }
+            entity.set("distFromCamera", subject.facts.camera_distance_squared)?;
             entity.set("obscured", !subject.facts.unoccluded)?;
             entity.set(
                 "getCurrentPlaySet",

@@ -1,10 +1,12 @@
 //! Fossil recovery and assembly as focused ECS facts and operations.
 
 mod extinct_animal_world_hydration;
+mod behavior_artifact_execution;
 mod fossil_assembly;
 mod fossil_definition_index;
 mod fossil_dig_target_geometry;
 mod fossil_discovery;
+mod fossil_find_effect;
 mod fossil_sonar;
 mod fossil_sonar_scoring;
 mod fossil_world_objects;
@@ -26,11 +28,14 @@ pub struct ExtinctAnimalsPlugin;
 impl Plugin for ExtinctAnimalsPlugin {
     fn build(&self, app: &mut App) {
         fossil_sonar::register_fossil_sonar_projection(app);
+        fossil_find_effect::register(app);
+        behavior_artifact_execution::register(app);
         app.init_resource::<fossil_definition_index::FossilDefinitionIndex>()
             .add_message::<DiscoverFossilAtSiteRequest>()
             .add_message::<PlaceFossilPieceInAssemblyRequest>()
             .add_message::<ActivateFossilSiteMarkersRequest>()
             .add_message::<CompletedFossilSetAssembly>()
+            .add_message::<crate::fossil_site_types::SetFossilPuzzleToFind>()
             .add_observer(fossil_assembly::clear_assembly_when_table_marker_is_removed)
             .add_observer(fossil_discovery::present_fossil_find_feedback)
             .add_systems(
@@ -41,9 +46,13 @@ impl Plugin for ExtinctAnimalsPlugin {
                     fossil_world_objects::bind_live_fossil_assembly_tables
                         .before(extinct_animal_world_hydration::hydrate_extinct_animal_world_state_from_loaded_definitions),
                     fossil_world_objects::spawn_world_fossil_recovery_sites
-                        .after(fossil_definition_index::index_winning_fossil_definitions),
+                        .after(fossil_definition_index::index_winning_fossil_definitions)
+                        .after(fossil_world_objects::reset_requested_fossil_search),
+                    fossil_world_objects::reset_requested_fossil_search
+                        .run_if(on_message::<crate::fossil_site_types::SetFossilPuzzleToFind>),
                     fossil_assembly::place_requested_fossil_pieces
                         .after(fossil_definition_index::index_winning_fossil_definitions)
+                        .after(fossil_world_objects::reset_requested_fossil_search)
                         .after(extinct_animal_world_hydration::hydrate_extinct_animal_world_state_from_loaded_definitions)
                         .run_if(on_message::<PlaceFossilPieceInAssemblyRequest>),
                     fossil_assembly::unlock_catalogue_after_fossil_assembly

@@ -163,7 +163,10 @@ pub(super) fn enter_authored_interaction_containers_and_play_selected_behavior_s
                 };
                 let actor_position = actor_transform.translation();
                 let slots = memberships.service_slot_candidates(
-                    target, actor, &target_object.interaction_slots, reservation_tag,
+                    target,
+                    actor,
+                    &target_object.interaction_slots,
+                    reservation_tag,
                     |name| {
                         let position = if name.is_empty() {
                             transforms.get(target).ok()?.translation()

@@ -15,7 +15,10 @@ use openzt2_world_state::animation_graph::animation_graph_transition_operations:
 use openzt2_world_state::animation_graph::animation_presentation_relationship_types::AnimationPresentations;
 use openzt2_world_state::animation_graph::model_animation_asset_binding_types::ModelAnimationAssetLibrary;
 
-pub(crate) fn execute_animation_graph_node_playback_requests(
+pub(crate) fn execute_animation_graph_node_playback_requests<
+    Lane: Component,
+    const RENDER: bool,
+>(
     animation_set_assets: Res<Assets<AnimationSetAsset>>,
     clip_sources: AnimationClipSources,
     mut animation_graph_node_playback_requests: MessageReader<AnimationGraphNodePlaybackRequest>,
@@ -23,22 +26,25 @@ pub(crate) fn execute_animation_graph_node_playback_requests(
         AnimationGraphNodePlaybackRequestRejected,
     >,
     presentations: Query<&AnimationPresentations>,
-    mut animation_playback_controllers: Query<(
-        &ModelAnimationAssetLibrary,
-        &mut AnimationPlaybackController,
-        &mut AnimationGraphPlaybackState,
-        Option<&AnimationGraphEnabled>,
-    )>,
+    all_controllers: Query<(), With<AnimationPlaybackController>>,
+    mut animation_playback_controllers: Query<
+        (
+            &ModelAnimationAssetLibrary,
+            &mut AnimationPlaybackController,
+            &mut AnimationGraphPlaybackState,
+            Option<&AnimationGraphEnabled>,
+        ),
+        With<Lane>,
+    >,
 ) {
     for animation_graph_node_playback_request in animation_graph_node_playback_requests.read() {
         let mut matching_animation_playback_controller_was_found = false;
         let mut rejection_reason = None;
         let subject = animation_graph_node_playback_request.animation_subject_entity;
+        let presentations = presentations.get(subject).ok();
+        let candidates = || AnimationPresentations::for_subject(subject, presentations);
         let mut controllers = animation_playback_controllers
-            .iter_many_mut(AnimationPresentations::for_subject(
-                subject,
-                presentations.get(subject).ok(),
-            ))
+            .iter_many_mut(candidates())
             .matched();
         while let Some((
             animation_library,
@@ -78,7 +84,10 @@ pub(crate) fn execute_animation_graph_node_playback_requests(
                 let duration = animation_graph_node_playback_request.blend_duration_milliseconds;
                 let ready =
                     |key: &str| clip_sources.get(current_animation_set_asset, key).is_some();
-                let result = if animation_graph_node_playback_request.enters_immediately
+                let result = if animation_playback_controller
+                    .animation_clip_asset_key
+                    .is_empty()
+                    || animation_graph_node_playback_request.enters_immediately
                     || source == requested_animation_graph_node_index
                 {
                     enter_animation_graph_node_playback(
@@ -189,7 +198,10 @@ pub(crate) fn execute_animation_graph_node_playback_requests(
                 &mut rejected_animation_graph_node_playback_requests,
                 animation_graph_node_playback_request.animation_subject_entity,
             );
-        } else if !matching_animation_playback_controller_was_found {
+        } else if !RENDER
+            && !matching_animation_playback_controller_was_found
+            && !candidates().any(|entity| all_controllers.contains(entity))
+        {
             reject_animation_graph_node_playback_request(
                 &mut rejected_animation_graph_node_playback_requests,
                 animation_graph_node_playback_request.animation_subject_entity,

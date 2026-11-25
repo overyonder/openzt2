@@ -17,8 +17,7 @@ pub(super) fn parse_and_normalize_blue_fang_ui_source_document(
 ) -> Result<SourceUiDocument, UiSourceDocumentGap> {
     let normalized = normalize_observed_authored_ui_widget_source_shapes(document)?;
     let document = &normalized;
-    if let Some(mut source) = SourceUiDocument::parse_hotkey_modes(document) {
-        remove_source_only_bindings(&mut source.root);
+    if let Some(source) = SourceUiDocument::parse_hotkey_modes(document) {
         return Ok(source);
     }
     if !matches!(
@@ -67,31 +66,5 @@ pub(super) fn parse_and_normalize_blue_fang_ui_source_document(
 fn parse_normalized_blue_fang_ui_source_document(
     document: &OrderedSourceDocument,
 ) -> SourceUiDocument {
-    let mut source = SourceUiDocument::parse(document);
-    remove_source_only_bindings(&mut source.root);
-    source
-}
-
-/// Bevy's input plugin owns engine-level held-key state directly. Authored
-/// developer commands remain in the document and compile to native developer
-/// actions; being hidden in the retail UI does not make them source-only.
-fn remove_source_only_bindings(node: &mut crate::source_document::ui::model::SourceUiNode) {
-    node.hotkeys
-        .retain(|hotkey| !source_only_event(&hotkey.event));
-    node.events.iter_mut().for_each(|block| {
-        block.events.retain(|event| !source_only_event(event));
-    });
-    node.children
-        .iter_mut()
-        .for_each(remove_source_only_bindings);
-}
-
-fn source_only_event(event: &crate::source_document::ui::model::SourceUiEvent) -> bool {
-    matches!(
-        event.message.as_str(),
-        "ZT_SET_COMMAND_STATE" | "ZT_CLEAR_COMMAND_STATE"
-    ) && !matches!(
-        event.string.as_deref(),
-        Some("photoZoomIn" | "photoZoomOut")
-    )
+    SourceUiDocument::parse(document)
 }

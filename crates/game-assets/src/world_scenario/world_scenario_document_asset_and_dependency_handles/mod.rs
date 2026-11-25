@@ -100,6 +100,13 @@ impl WorldScenarioDocumentAsset {
         asset
     }
 
+    pub fn former_fence_type(&self, starting_zoo: AssetId, persistent_id: u64) -> Option<AssetId> {
+        self.authored
+            .former_fence_types
+            .get(&(starting_zoo, persistent_id))
+            .copied()
+    }
+
     pub fn terrain_path(&self, id: AssetId) -> Option<&str> {
         self.terrains
             .binary_search_by_key(&id, |candidate| candidate.id)
@@ -130,6 +137,18 @@ impl WorldScenarioDocumentAsset {
             .iter()
             .find(|(candidate, _, _)| candidate == binding)
             .map(|(_, path, handle)| (path.as_str(), handle))
+    }
+
+    pub fn validation_script(
+        &self,
+        scenario: AssetId,
+    ) -> Option<(&ScenarioScriptBinding, &str, &Handle<LuaScriptAsset>)> {
+        self.scripts.iter().find_map(|(binding, path, handle)| {
+            (binding.scenario == scenario
+                && binding.phase
+                    == openzt2_game_data::world_scenario::ScenarioScriptPhase::Validate)
+                .then_some((binding, path.as_str(), handle))
+        })
     }
 
     pub fn photo_script(

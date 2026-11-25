@@ -4,8 +4,9 @@ use std::collections::BTreeSet;
 
 use bevy::math::Quat;
 use openzt2_game_data::scene_prefab::{
-    PrefabControllerClock, PrefabRotationCurve, PrefabRotationKey, PrefabScalarCurve,
-    PrefabScalarCurveSegment, PrefabTransformAnimation,
+    PrefabControllerClock, PrefabRotationCurve, PrefabRotationCycle, PrefabRotationKey,
+    PrefabScalarCurve, PrefabScalarCurveSegment, PrefabTransformAnimation,
+    PrefabVisibilityAnimation,
 };
 
 use super::{
@@ -38,8 +39,9 @@ pub(super) struct NetImmerseObjectTransformMotion {
     pub(super) translation_m: Option<[f32; 3]>,
     pub(super) rotation_xyzw: Option<[f32; 4]>,
     pub(super) uniform_scale: Option<f32>,
-    pub(super) spin: Option<[f32; 3]>,
+    pub(super) rotation_cycle: Option<PrefabRotationCycle>,
     pub(super) animations: Vec<PrefabTransformAnimation>,
+    pub(super) visibility: Vec<(i32, PrefabVisibilityAnimation)>,
 }
 
 pub(super) fn lower_netimmerse_object_transform_motion(
@@ -87,10 +89,44 @@ pub(super) fn lower_netimmerse_object_transform_motion(
                 }
                 uv.controller.next_controller_ref
             }
-            NetImmerseNifBlockPayload::NiVisController(visibility)
-                if visibility.controller.flags & NETIMMERSE_CONTROLLER_ACTIVE_FLAG == 0 =>
-            {
-                visibility.controller.next_controller_ref
+            NetImmerseNifBlockPayload::NiVisController(visibility) => {
+                let clock = &visibility.controller;
+                if clock.is_active() && visibility.data_ref >= 0 {
+                    let Some(NetImmerseNifBlockPayload::NiVisData(data)) = document
+                        .block(visibility.data_ref)
+                        .map(|block| &block.payload)
+                    else {
+                        return Err(NativeSceneLoweringError::new(
+                            &document.source_path,
+                            "visibility controller does not reference NiVisData",
+                        ));
+                    };
+                    if data.keys.iter().any(|key| !key.time.is_finite())
+                        || data.keys.windows(2).any(|keys| keys[1].time < keys[0].time)
+                    {
+                        return Err(NativeSceneLoweringError::new(
+                            &document.source_path,
+                            "invalid visibility key times",
+                        ));
+                    }
+                    if !data.keys.is_empty() {
+                        motion.visibility.push((
+                            clock.target_ref,
+                            PrefabVisibilityAnimation {
+                                clock: clock.prefab_clock(),
+                                keys: data
+                                    .keys
+                                    .iter()
+                                    .map(|key| (key.time, key.value != 0))
+                                    .collect(),
+                            },
+                        ));
+                    }
+                }
+                clock.next_controller_ref
+            }
+            NetImmerseNifBlockPayload::NiGeomMorpherController(morph) => {
+                morph.controller.next_controller_ref
             }
             NetImmerseNifBlockPayload::NiBoneLODController(lod) => {
                 lod.controller.next_controller_ref
@@ -138,11 +174,8 @@ impl NetImmerseObjectTransformMotion {
                 ),
             ));
         };
-        let duration = keyframe.controller.stop_time - keyframe.controller.start_time;
-        let spin = (duration > 0.0)
-            .then(|| constant_xyz_rotation_cycle(keyframe, data, duration))
-            .flatten();
-        let animation =
+        let rotation_cycle = full_turn_xyz_rotation_cycle(keyframe, data);
+        let mut animation =
             lower_netimmerse_keyframe_data_transform_motion(&document.source_path, keyframe, data)?;
         let replaces_translation = animation.translation_m.is_some();
         let replaces_rotation = animation.rotation.is_some();
@@ -162,10 +195,10 @@ impl NetImmerseObjectTransformMotion {
             }
         }
         if replaces_rotation {
-            self.spin = spin;
-        }
-        if spin.is_some() {
-            return Ok(());
+            if rotation_cycle.is_some() {
+                animation.rotation = None;
+            }
+            self.rotation_cycle = rotation_cycle;
         }
 
         let fixed_translation = animation.translation_m.as_ref().map(|[x, y, z]| {
@@ -206,24 +239,41 @@ impl NetImmerseObjectTransformMotion {
     }
 }
 
-/// The globe models author one XYZ rotation key per axis as one full turn
-/// per controller cycle.
-fn constant_xyz_rotation_cycle(
+/// A single explicit revolution drives the cloud layer relative to its rest pose.
+fn full_turn_xyz_rotation_cycle(
     controller: &NetImmerseNiKeyframeController,
     data: &NetImmerseNiKeyframeData,
-    duration: f32,
-) -> Option<[f32; 3]> {
+) -> Option<PrefabRotationCycle> {
     if data.rotation_type != Some(NETIMMERSE_XYZ_ROTATION_KEY_TYPE)
         || data.xyz_rotations.len() != 3
         || data.xyz_rotations.iter().any(|axis| axis.keys.len() != 1)
-        || !data.translations.keys.is_empty()
-        || !data.scales.keys.is_empty()
     {
         return None;
     }
-    let turn: [f32; 3] = std::array::from_fn(|axis| data.xyz_rotations[axis].keys[0].value);
-    let scale = controller.controller.frequency / duration;
-    Some([-turn[0] * scale, -turn[2] * scale, -turn[1] * scale])
+    let [x, y, z] = std::array::from_fn(|axis| data.xyz_rotations[axis].keys[0].value);
+    let time = data.xyz_rotations[0].keys[0].time;
+    let turns = [x, y, z].map(f32::abs);
+    let clock = controller.controller.prefab_clock();
+    if !time.is_finite()
+        || time >= clock.stop_time_s
+        || data
+            .xyz_rotations
+            .iter()
+            .any(|axis| axis.keys[0].time != time)
+        || turns
+            .iter()
+            .filter(|&&angle| (angle - std::f32::consts::TAU).abs() < 0.001)
+            .count()
+            != 1
+        || turns.iter().filter(|&&angle| angle == 0.0).count() != 2
+    {
+        return None;
+    }
+    Some(PrefabRotationCycle {
+        clock,
+        key_time_s: time,
+        angles_xzy: [-x, y, -z],
+    })
 }
 
 fn lower_netimmerse_keyframe_data_transform_motion(
@@ -290,7 +340,7 @@ fn lower_netimmerse_keyframe_data_transform_motion(
     })
 }
 
-fn float_key_group_from_vector3_component(
+pub(in crate::model_source) fn float_key_group_from_vector3_component(
     group: &NetImmerseVector3KeyGroup,
     axis: usize,
 ) -> NetImmerseFloatKeyGroup {
@@ -310,7 +360,7 @@ fn float_key_group_from_vector3_component(
     }
 }
 
-fn lower_netimmerse_float_key_group_to_prefab_curve(
+pub(in crate::model_source) fn lower_netimmerse_float_key_group_to_prefab_curve(
     source_path: &str,
     group: &NetImmerseFloatKeyGroup,
 ) -> Result<PrefabScalarCurve> {

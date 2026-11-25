@@ -6,14 +6,14 @@ use openzt2_world_state::simulation_time::deterministic_random_stream::Determini
 use openzt2_world_state::simulation_time::deterministic_random_stream::RngDomain;
 use openzt2_world_state::simulation_time::deterministic_random_stream::ZooSeed;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
-use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
+use openzt2_world_state::world_spawn::world_membership_types::{WorldMember, WorldRoot};
 
 use crate::fossil_site_types::FossilSiteKind;
 use openzt2_zoo_state::extinct_animals::{
     fossil_collection_and_assembly_types::{
         FossilAssemblyTable, FossilPlacementScope, FossilPlacementSurface,
     },
-    fossil_recovery_types::{FossilDiscoveryRandomStream, FossilRecoverySite},
+    fossil_recovery_types::FossilDiscoveryRandomStream,
 };
 
 pub(super) fn hydrate_extinct_animal_world_state_from_loaded_definitions(
@@ -21,10 +21,9 @@ pub(super) fn hydrate_extinct_animal_world_state_from_loaded_definitions(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     mut definition_events: MessageReader<AssetEvent<WorldDefinitionAsset>>,
-    seed: Single<&ZooSeed>,
-    restored_sites: Query<Entity, With<FossilRecoverySite>>,
+    seeds: Query<&ZooSeed>,
     sites: Query<
-        (Entity, &PersistentId),
+        (Entity, &PersistentId, &WorldMember),
         (With<FossilSiteKind>, Without<FossilDiscoveryRandomStream>),
     >,
     mut tables: Query<(
@@ -37,14 +36,8 @@ pub(super) fn hydrate_extinct_animal_world_state_from_loaded_definitions(
     mut roots: Query<(Entity, Option<&mut FossilPlacementScope>), With<WorldRoot>>,
     new_roots: Query<Entity, Added<WorldRoot>>,
 ) {
-    let seed = seed.into_inner();
-    for site in &restored_sites {
-        commands
-            .entity(site)
-            .remove::<FossilRecoverySite>()
-            .insert(FossilSiteKind::Puzzle);
-    }
-    for (entity, persistent_identifier) in &sites {
+    for (entity, persistent_identifier, member) in &sites {
+        let Ok(seed) = seeds.get(member.root) else { continue; };
         commands
             .entity(entity)
             .insert(FossilDiscoveryRandomStream(DeterministicRng::from_entity(

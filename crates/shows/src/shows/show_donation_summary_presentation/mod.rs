@@ -1,13 +1,15 @@
-use bevy::prelude::*;
+use bevy::{ecs::relationship::RelationshipTarget, prelude::*};
+use openzt2_economy::economy::WorldShowDonationTotal;
+use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 use openzt2_game_data::ui_document::{
     document::UiDocumentRole, node_property_binding::UiIntegerPropertyBindingSource,
 };
-
-use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
-use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner;
-use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentRoot;
-use openzt2_interface_state::ui::authored_ui_node_projection_components::UiValue;
-use openzt2_interface_state::ui::authored_ui_node_projection_components::UiValueBinding;
+use openzt2_interface_state::ui::authored_ui_node_projection_components::{
+    UiDocumentMembers, UiDocumentRoot, UiValue, UiValueBinding,
+};
+use openzt2_world_state::world_spawn::{
+    world_load_completion_marker::WorldLoadCompleted, world_membership_types::WorldRoot,
+};
 use openzt2_zoo_state::donations::donation_payment_types::DonationTotal;
 
 use super::{
@@ -15,66 +17,80 @@ use super::{
     show_stage_types::ShowStage,
 };
 
-/// Displays donations for the selected show, or all live stages when no row is selected.
 pub(super) fn project_selected_or_all_show_donation_summary_into_authored_controls(
     documents: Res<Assets<UiDocumentAsset>>,
-    roots: Query<(Entity, &UiDocumentRoot, Option<&ChildOf>)>,
-    selections: Query<&SelectedShowScheduleRow>,
-    scheduled: Query<&ScheduledShowRow>,
-    totals: Query<&DonationTotal, With<ShowStage>>,
-    mut values: Query<(&UiDocumentOwner, &UiValueBinding, &mut UiValue)>,
+    roots: Query<(
+        Entity,
+        Ref<UiDocumentRoot>,
+        Option<Ref<ChildOf>>,
+        Ref<UiDocumentMembers>,
+    )>,
+    selections: Query<Ref<SelectedShowScheduleRow>>,
+    scheduled: Query<Ref<ScheduledShowRow>>,
+    stages: Query<Ref<DonationTotal>, With<ShowStage>>,
+    zoo: Query<Ref<WorldShowDonationTotal>, (With<WorldRoot>, With<WorldLoadCompleted>)>,
+    mut removed: (
+        RemovedComponents<SelectedShowScheduleRow>,
+        RemovedComponents<DonationTotal>,
+    ),
+    mut values: Query<(Ref<UiValueBinding>, &mut UiValue)>,
 ) {
-    for (root, document_root, parent) in &roots {
+    let zoo = zoo.single().ok();
+    let removed_selections: bevy::ecs::entity::EntityHashSet = removed.0.read().collect();
+    let removed_totals: bevy::ecs::entity::EntityHashSet = removed.1.read().collect();
+    for (root, document_root, parent, members) in &roots {
         let Some(document) = documents.get(&document_root.document) else {
             continue;
         };
-        if !matches!(
-            &document.canonical_ui_document().role,
-            UiDocumentRole::ShowEditor
-        ) {
+        if document.canonical_ui_document().role != UiDocumentRole::ShowEditor {
             continue;
         }
-        let controller = parent.map_or(root, ChildOf::parent);
-        let selected_stage = selections
-            .get(controller)
-            .ok()
-            .and_then(|selection| scheduled.get(selection.0).ok())
-            .map(|show| show.stage);
-        let aggregate = selected_stage.map_or_else(
-            || {
-                totals
-                    .iter()
-                    .try_fold(DonationTotal::default(), |aggregate, total| {
-                        Some(DonationTotal {
-                            amount: openzt2_zoo_state::economy::money_types::Money(
-                                aggregate.amount.0.checked_add(total.amount.0)?,
-                            ),
-                            count: aggregate.count.checked_add(total.count)?,
-                        })
-                    })
-            },
-            |stage| Some(totals.get(stage).copied().unwrap_or_default()),
-        );
-        let Some(aggregate) = aggregate else {
+        let controller = parent.as_ref().map_or(root, |parent| parent.parent());
+        let selection = selections.get(controller).ok();
+        let row = selection
+            .as_ref()
+            .and_then(|selection| scheduled.get(selection.0).ok());
+        let stage = row.as_ref().and_then(|row| stages.get(row.stage).ok());
+        let changed = documents.is_changed()
+            || document_root.is_changed()
+            || members.is_changed()
+            || parent.as_ref().is_some_and(Ref::is_changed)
+            || selection.as_ref().is_some_and(Ref::is_changed)
+            || row.as_ref().is_some_and(Ref::is_changed)
+            || removed_selections.contains(&controller)
+            || row.as_ref().map_or_else(
+                || zoo.as_ref().is_some_and(Ref::is_changed),
+                |row| {
+                    stage.as_ref().is_some_and(Ref::is_changed)
+                        || removed_totals.contains(&row.stage)
+                },
+            );
+        let aggregate = if row.is_some() {
+            stage.as_deref().copied().unwrap_or_default()
+        } else if let Some(total) = zoo.as_ref().and_then(|zoo| zoo.0) {
+            total
+        } else {
             continue;
         };
-        for (owner, binding, mut value) in &mut values {
-            if owner.0 != root {
+        let mut fields = values.iter_many_mut(members.iter());
+        while let Some(field) = fields.fetch_next() {
+            let Ok((binding, mut value)) = field else {
+                continue;
+            };
+            if !changed && !binding.is_changed() && !value.is_added() {
                 continue;
             }
-            let next = match &binding.0 {
-                UiIntegerPropertyBindingSource::DonationCount => Some(i64::from(aggregate.count)),
-                UiIntegerPropertyBindingSource::DonationTotalCents => Some(aggregate.amount.0),
-                UiIntegerPropertyBindingSource::DonationAverageCents => Some(
-                    (aggregate.count != 0)
-                        .then(|| aggregate.amount.0 / i64::from(aggregate.count))
-                        .unwrap_or(0),
-                ),
-                _ => None,
+            let next = match binding.0 {
+                UiIntegerPropertyBindingSource::DonationCount => i64::from(aggregate.count),
+                UiIntegerPropertyBindingSource::DonationTotalCents => aggregate.amount.0,
+                UiIntegerPropertyBindingSource::DonationAverageCents => aggregate
+                    .amount
+                    .0
+                    .checked_div(i64::from(aggregate.count))
+                    .unwrap_or_default(),
+                _ => continue,
             };
-            if let Some(next) = next {
-                value.0 = next;
-            }
+            value.set_if_neq(UiValue(next));
         }
     }
 }

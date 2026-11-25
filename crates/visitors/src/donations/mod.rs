@@ -22,7 +22,7 @@ use self::{
     donation_interaction_progression::{
         advance_donation_interactions_and_request_completed_payments,
         begin_donation_interactions_after_guests_reach_acceptors,
-        cancel_donation_interactions_with_missing_subjects_or_acceptors,
+        reconcile_donation_phase_relationships,
         reject_donation_candidates_after_navigation_failure,
     },
     donation_opportunity_observation::{
@@ -43,7 +43,8 @@ use self::{
         project_donation_acceptors_and_docking_points,
     },
     zoo_donation_summary_presentation::{
-        aggregate_zoo_donations_by_category, project_zoo_donation_summary, ZooDonationSummary,
+        add_booked_donations, project_zoo_donation_summary, reconcile_donation_contributors,
+        remove_booked_donations, withdraw_disabled_donations, ZooDonationSummary,
     },
 };
 
@@ -56,9 +57,21 @@ impl Plugin for GuestDonationDecisionAndPaymentPlugin {
             .add_message::<DonationCompleted>()
             .add_message::<DonationRejected>()
             .register_required_components::<WorldRoot, ZooDonationSummary>()
+            .add_observer(add_booked_donations)
+            .add_observer(remove_booked_donations)
+            .add_observer(withdraw_disabled_donations)
             .add_systems(
                 Update,
-                (aggregate_zoo_donations_by_category, project_zoo_donation_summary.after_ignore_deferred(aggregate_zoo_donations_by_category)),
+                (
+                    reconcile_donation_contributors,
+                    project_zoo_donation_summary.after(reconcile_donation_contributors),
+                ),
+            )
+            .add_systems(
+                FixedUpdate,
+                reconcile_donation_contributors
+                    .after(settle_completed_donation_transactions_and_update_acceptor_totals)
+                    .in_set(FixedGameSet::Cleanup),
             )
             .add_systems(
                 Update,
@@ -111,7 +124,7 @@ impl Plugin for GuestDonationDecisionAndPaymentPlugin {
                         settle_completed_donation_transactions_and_update_acceptor_totals,
                         settle_rejected_donation_transactions_and_clear_guest_payment_state,
                         reject_donation_candidates_after_navigation_failure,
-                        cancel_donation_interactions_with_missing_subjects_or_acceptors,
+                        reconcile_donation_phase_relationships,
                     )
                         .chain(),
                     clear_donation_observations_for_ended_views,

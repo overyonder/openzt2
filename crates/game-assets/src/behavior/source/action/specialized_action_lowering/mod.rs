@@ -1,11 +1,11 @@
 use std::io;
 
 use openzt2_game_data::{
+    AssetId,
     behavior::{
         action::{specialized::*, wander::BehaviorGroundLocomotionSpeed},
         action_record::BehaviorAction,
     },
-    AssetId,
 };
 
 use super::{
@@ -38,6 +38,38 @@ pub(super) fn lower_specialized_action(node: &DataNode) -> io::Result<Option<Beh
         )
     };
     let action = match node.name.as_str() {
+        "BFBehEscapeObstacle" => {
+            let default = BehaviorEscapeObstacleAction::default();
+            let time = number("escapeTime")?
+                .map(std::time::Duration::try_from_secs_f32)
+                .transpose()
+                .map_err(|_| invalid_behavior_source_data("invalid escapeTime"))?
+                .unwrap_or(default.time);
+            let radius = read_optional_float_attribute(node, "escapeRadius")?;
+            if radius.is_some_and(|radius| !radius.is_finite() || (radius < 0.0 && radius != -1.0))
+            {
+                return Err(invalid_behavior_source_data("invalid escapeRadius"));
+            }
+            BehaviorAction::EscapeObstacle(BehaviorEscapeObstacleAction {
+                speed: speed(),
+                time,
+                radius_metres: radius.filter(|radius| *radius >= 0.0),
+            })
+        }
+        "BFBehExit" => BehaviorAction::ExitInteractionContainer {
+            exit_behavior_set: id("exitBehSet"),
+        },
+        "ZTBehFindArtifact" => BehaviorAction::FindArtifact,
+        "ZTBehDigArtifact" => BehaviorAction::DigArtifact,
+        "ZTBehTour" => BehaviorAction::Tour,
+        "ZTBehTeleportToLoc" => {
+            BehaviorAction::TeleportToLocation(BehaviorTeleportToLocationAction {
+                position: text("position")
+                    .map(|value| parse_splash_vector(&value))
+                    .transpose()?,
+                reset_prop: boolean("resetProp")?,
+            })
+        }
         "ZTBehKickOffRider" => BehaviorAction::KickOffRider,
         "ZTBehAnimateForViewFromTransport" => BehaviorAction::AnimateForViewFromTransport {
             animation_type: text("animationType").ok_or_else(|| {
@@ -201,7 +233,7 @@ fn parse_disease_attribute(value: &str) -> io::Result<(AssetId, bool)> {
         _ => {
             return Err(invalid_behavior_source_data(
                 "invalid disease qualifier value",
-            ))
+            ));
         }
     };
     Ok((AssetId::from_key(name.trim()), value))

@@ -1,6 +1,7 @@
+use bevy::prelude::Component;
 use openzt2_game_data::{
-    world_definitions::catalogue_and_progression::catalogue_definition_types::CatalogueEntry,
     AssetId,
+    world_definitions::catalogue_and_progression::catalogue_definition_types::CatalogueEntry,
 };
 
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
@@ -47,6 +48,16 @@ pub(crate) fn catalogue_entry_is_included_by_authored_type_list(
         ))
 }
 
+/// Authored kinds that can be selected without replacing list memory.
+#[derive(Component)]
+pub struct CatalogueTypeListMemoryPolicy(pub Box<[AssetId]>);
+
+impl CatalogueTypeListMemoryPolicy {
+    pub(super) fn remembers(&self, entry: &CatalogueEntry) -> bool {
+        !catalogue_entry_contains_any_authored_kind(entry, &self.0)
+    }
+}
+
 fn catalogue_entry_contains_any_authored_kind(
     catalogue_entry: &CatalogueEntry,
     wanted_kind_identifiers: &[AssetId],
@@ -86,8 +97,6 @@ fn catalogue_entry_matches_authored_type_and_kind_filters(
 }
 
 /// Returns whether a catalogue entry may be selected by an activated TypeList.
-/// Visibility and availability are the existing catalogue policy; activation
-/// does not invent a separate `nonRememberedKinds` interpretation here.
 fn catalogue_entry_is_selectable_for_type_list(
     type_list_policy: &UiTypeListPolicy,
     type_list_filter: TypeListFilter,
@@ -119,11 +128,11 @@ fn catalogue_entry_is_selectable_for_type_list(
 
 /// Native activation first retains a still-valid selected child; when no such
 /// child exists, the activation body scans the populated children in order.
-/// Gate policy selection is not implemented yet.
 pub(crate) fn choose_remembered_or_first_included_catalogue_entry<'a>(
     type_list_policy: &UiTypeListPolicy,
     type_list_filter: TypeListFilter,
     remembered_definition: Option<AssetId>,
+    memory: Option<&CatalogueTypeListMemoryPolicy>,
     world_definitions: WorldDefinitionsView<'a>,
     world_session_mode: Option<WorldSessionMode>,
     scenario_availability: Option<&ScenarioContentAvailability>,
@@ -138,6 +147,7 @@ pub(crate) fn choose_remembered_or_first_included_catalogue_entry<'a>(
             .catalogue_in_authored_purchase_order()
             .find(|&(catalogue_index, catalogue_entry)| {
                 AssetId(catalogue_entry.definition.0) == remembered_definition
+                    && memory.is_none_or(|memory| memory.remembers(catalogue_entry))
                     && scenario_allows(catalogue_entry)
                     && catalogue_entry_is_selectable_for_type_list(
                         type_list_policy,

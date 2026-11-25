@@ -1,3 +1,4 @@
+use bevy::asset::{asset_changed::AssetChanged, AsAssetId, AssetLoadFailedEvent};
 use bevy::prelude::*;
 
 use openzt2_game_assets::effect::ParticleEffectDocumentAsset;
@@ -10,6 +11,14 @@ use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 #[derive(Component, Debug, Clone)]
 pub(super) struct PrefabEffectTrigger {
     handle: Handle<ParticleEffectDocumentAsset>,
+}
+
+impl AsAssetId for PrefabEffectTrigger {
+    type Asset = ParticleEffectDocumentAsset;
+
+    fn as_asset_id(&self) -> bevy::asset::AssetId<Self::Asset> {
+        self.handle.id()
+    }
 }
 
 #[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -53,6 +62,15 @@ pub(super) fn hydrate_prefab_effect_triggers(
     >,
     effects: Res<Assets<ParticleEffectDocumentAsset>>,
     mut asset_events: MessageReader<AssetEvent<ParticleEffectDocumentAsset>>,
+    mut failures: MessageReader<AssetLoadFailedEvent<ParticleEffectDocumentAsset>>,
+    changed: Query<
+        Entity,
+        (
+            Without<PrefabEffectHydrated>,
+            AssetChanged<PrefabEffectTrigger>,
+        ),
+    >,
+    server: Res<AssetServer>,
     mut spawn: MessageWriter<SpawnCompleteParticleEffectDocument>,
 ) {
     let ready_assets = asset_events
@@ -64,11 +82,29 @@ pub(super) fn hydrate_prefab_effect_triggers(
             _ => None,
         })
         .collect::<bevy::platform::collections::HashSet<_>>();
+    let failed = failures
+        .read()
+        .map(|event| event.id)
+        .collect::<bevy::platform::collections::HashSet<_>>();
     for (entity, trigger, _) in &triggers {
-        if !trigger.is_changed() && !ready_assets.contains(&trigger.handle.id()) {
+        if !trigger.is_changed()
+            && !ready_assets.contains(&trigger.handle.id())
+            && !failed.contains(&trigger.handle.id())
+            && !changed.contains(entity)
+        {
             continue;
         }
         if effects.get(&trigger.handle).is_none() {
+            if failed.contains(&trigger.handle.id())
+                || trigger.is_added()
+                    && matches!(
+                        server.load_state(trigger.handle.id()),
+                        bevy::asset::LoadState::Failed(_)
+                    )
+            {
+                warn!(?entity, asset = ?trigger.handle.id(), "prefab effect could not be loaded");
+                commands.entity(entity).try_despawn();
+            }
             continue;
         }
         spawn.write(SpawnCompleteParticleEffectDocument {

@@ -19,6 +19,18 @@ struct SimParams {
     /// compute pipeline to cap the compute thread to the actual number of
     /// effects to process.
     num_effects: u32,
+    particle_budget: u32,
+}
+
+struct SpawnPoint {
+    position: vec4<f32>,
+    velocity: vec4<f32>,
+}
+
+struct SpawnInputs {
+    remaining_budget: atomic<u32>,
+    padding: array<u32, 7>,
+    points: array<SpawnPoint>,
 }
 
 struct Spawner {

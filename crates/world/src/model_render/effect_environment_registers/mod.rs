@@ -1,6 +1,7 @@
 //! The wind, light rig and fog distances every programmable effect reads,
 //! expressed in the original game's z-up world.
 
+use super::world_light_inputs::{DirectionalWorldLightInput, LinearWorldAmbient};
 use bevy::pbr::{DistanceFog, FogFalloff};
 use bevy::prelude::*;
 use bevy::render::storage::ShaderBuffer;
@@ -37,32 +38,23 @@ pub(super) fn upload_programmable_environment_registers(
 /// The shipped `lightFromRig` lights by `dot(-direction, normal)`: each
 /// direction is the way its light travels, unlike the fixed-function registers.
 pub(super) fn light_rig<'a>(
-    ambient_light: &GlobalAmbientLight,
-    lights: impl IntoIterator<
-        Item = (
-            &'a DirectionalLight,
-            &'a GlobalTransform,
-            bool,
-            &'a EnvironmentLight,
-        ),
-    >,
+    ambient: Vec4,
+    lights: impl IntoIterator<Item = (&'a DirectionalWorldLightInput, bool, &'a EnvironmentLight)>,
 ) -> [Vec4; 7] {
     let mut rig = [Vec4::ZERO; 7];
-    for (light, transform, visible, authored_light) in lights {
+    for (light, visible, authored_light) in lights {
         let Some(index) = authored_light.kind_rank.checked_sub(1).map(usize::from) else {
             continue;
         };
         if !visible || index >= 3 {
             continue;
         }
-        let mut color = Vec4::from_array(light.color.to_linear().to_f32_array());
-        color *= light.illuminance / light_consts::lux::DIRECT_SUNLIGHT;
+        let mut color = light.color * (light.illuminance / light_consts::lux::DIRECT_SUNLIGHT);
         color.w = 1.0;
         rig[index] = color;
-        rig[index + 3] = Vec3::from(transform.forward()).extend(1.0);
+        rig[index + 3] = (-light.back).extend(1.0);
     }
-    rig[6] =
-        Vec4::from_array(ambient_light.color.to_linear().to_f32_array()) * ambient_light.brightness;
+    rig[6] = ambient;
     rig[6].w = 1.0;
     rig
 }
@@ -72,10 +64,9 @@ fn source_from_world(direction: Vec4) -> Vec4 {
 }
 
 pub(super) fn project_effect_environment_registers(
-    ambient_light: Res<GlobalAmbientLight>,
+    ambient: Single<Ref<LinearWorldAmbient>>,
     directional_lights: Query<(
-        Ref<DirectionalLight>,
-        Ref<GlobalTransform>,
+        Ref<DirectionalWorldLightInput>,
         Ref<ViewVisibility>,
         Ref<EnvironmentLight>,
     )>,
@@ -89,8 +80,7 @@ pub(super) fn project_effect_environment_registers(
     fogs: Query<(Ref<DistanceFog>, Ref<ZooCamera>)>,
     cameras: Query<(), With<ZooCamera>>,
     mut removed_lights: RemovedComponents<EnvironmentLight>,
-    mut removed_directional_lights: RemovedComponents<DirectionalLight>,
-    mut removed_light_transforms: RemovedComponents<GlobalTransform>,
+    mut removed_directional_lights: RemovedComponents<DirectionalWorldLightInput>,
     mut removed_light_visibility: RemovedComponents<ViewVisibility>,
     mut removed_fogs: RemovedComponents<DistanceFog>,
     mut removed_cameras: RemovedComponents<ZooCamera>,
@@ -100,11 +90,6 @@ pub(super) fn project_effect_environment_registers(
 ) {
     let removed_light_inputs = (removed_lights.read().count() != 0)
         | (removed_directional_lights
-            .read()
-            .filter(|entity| authored_lights.contains(*entity))
-            .count()
-            != 0)
-        | (removed_light_transforms
             .read()
             .filter(|entity| authored_lights.contains(*entity))
             .count()
@@ -126,27 +111,19 @@ pub(super) fn project_effect_environment_registers(
     let mut registers = published.0;
     if published.is_added()
         || removed_light_inputs
-        || ambient_light.is_changed()
+        || ambient.is_changed()
         || directional_lights
             .iter()
-            .any(|(light, transform, visibility, authored)| {
-                light.is_changed()
-                    || transform.is_changed()
-                    || visibility.is_changed()
-                    || authored.is_changed()
+            .any(|(light, visibility, authored)| {
+                light.is_changed() || visibility.is_changed() || authored.is_changed()
             })
     {
         registers.light_rig = light_rig(
-            &ambient_light,
+            ambient.0,
             directional_lights
                 .iter()
-                .map(|(light, transform, visibility, authored)| {
-                    (
-                        light.into_inner(),
-                        transform.into_inner(),
-                        visibility.get(),
-                        authored.into_inner(),
-                    )
+                .map(|(light, visibility, authored)| {
+                    (light.into_inner(), visibility.get(), authored.into_inner())
                 }),
         );
         for direction in &mut registers.light_rig[3..6] {

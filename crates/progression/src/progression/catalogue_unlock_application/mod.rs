@@ -92,13 +92,14 @@ pub(super) fn apply_authored_catalogue_unlock_requirements_from_progression_fact
     members: Query<&WorldMember>,
     mut changed: MessageWriter<ProgressionFactChanged>,
 ) {
+    let definitions_changed = definitions.is_changed() || active_definitions.is_changed();
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };
 
     let profile_changes = profile_variables.filter(|variables| variables.is_changed());
     for (root, fame) in &fame {
-        if profile_changes.is_none() && !fame.is_changed() {
+        if profile_changes.is_none() && !fame.is_changed() && !definitions_changed {
             continue;
         }
         let Ok(mut unlocks) = root_unlocks.get_mut(root) else {
@@ -117,7 +118,20 @@ pub(super) fn apply_authored_catalogue_unlock_requirements_from_progression_fact
                 }
             }
         }
-        if fame.is_changed() {
+        if fame.is_changed() || definitions_changed {
+            if fame.current_percent.is_some() {
+                for threshold in definitions
+                    .fame_thresholds()
+                    .filter(|threshold| threshold.level <= u16::from(fame.half_stars))
+                {
+                    apply_catalogue_unlock_targets(
+                        definitions,
+                        &threshold.unlocks,
+                        &mut unlocks,
+                        &mut changed,
+                    );
+                }
+            }
             for definition in definitions.unlocks() {
                 if matches!(definition.requirement, UnlockRequirement::Fame(required) if u16::from(fame.half_stars) >= required)
                 {
@@ -172,6 +186,28 @@ pub(super) fn apply_authored_catalogue_unlock_requirements_from_progression_fact
             }
         }
     }
+}
+
+pub(super) fn apply_catalogue_unlock_targets(
+    definitions: WorldDefinitionsView<'_>,
+    targets: &[openzt2_game_data::AssetId],
+    unlocks: &mut UnlockedCatalogueDefinitionSet,
+    changed: &mut MessageWriter<ProgressionFactChanged>,
+) -> bool {
+    if targets
+        .iter()
+        .any(|&target| find_catalogue_definition_index(definitions, target).is_none())
+    {
+        return false;
+    }
+    for &target in targets {
+        if let Some(index) = find_catalogue_definition_index(definitions, target) {
+            if mark_catalogue_definition_unlocked_at_index(unlocks, index) == Some(true) {
+                changed.write(ProgressionFactChanged::Unlock(target));
+            }
+        }
+    }
+    true
 }
 
 fn mark_authored_catalogue_definition_target_unlocked(

@@ -20,20 +20,23 @@ use openzt2_interface_state::immersive_modes::immersive_mode_state_types::Immers
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentRoot;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator;
-use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
+use openzt2_world_state::world_spawn::{
+    world_load_completion_marker::WorldLoadCompleted,
+    world_membership_types::{WorldMember, WorldRoot},
+};
 
 use super::album_operations::{
     calculate_active_photo_album_page_offset, deselect_photo_in_album_display_slot,
-    find_photo_camera_roll_album, find_photo_in_album_display_slot,
-    reorder_photos_for_insertion_at_album_position, request_deletion_of_selected_photo_from_album,
-    request_deletion_of_selected_photo_from_any_album, select_photo_album_by_list_index,
+    find_photo_in_album_display_slot, reorder_photos_for_insertion_at_album_position,
+    request_deletion_of_selected_photo_from_album, select_photo_album_by_list_index,
     select_photo_in_album_display_slot,
 };
 use super::photo_album_types::{
     ActivePhotoAlbum, DeletePhotoRequest, EnlargedAlbumPhoto, INITIAL_PHOTO_ALBUM_SPREADS,
     MAX_PHOTO_ALBUM_SPREADS, PHOTO_ALBUM_PAGE_SIZE, PhotoAlbumCapacityPages, PhotoAlbumChoiceRow,
     PhotoAlbumPage, PhotoCameraRoll, PhotoCameraRollRow, PhotoHelpShown, PhotoMove,
-    PhotoMoveTarget, PhotoPointerDrag, SelectedAlbumPhoto,
+    PhotoMoveTarget, PhotoPointerDrag, SelectedAlbumPhoto, WorldActivePhotoAlbum,
+    WorldPhotoCameraRoll,
 };
 use super::photo_configuration::{PhotoConfiguration, PhotoConfigurationSource};
 use openzt2_interface_state::ui::authored_ui_action_projection_components::UiPhotoActions;
@@ -48,17 +51,18 @@ pub(super) fn select_photo_storage_entity_from_authored_row_activation(
     parents: Query<&ChildOf>,
     camera_roll_rows: Query<&PhotoCameraRollRow>,
     album_choice_rows: Query<&PhotoAlbumChoiceRow>,
-    albums: Query<
-        (
-            Entity,
-            Option<&SelectedAlbumPhoto>,
-            Has<ActivePhotoAlbum>,
-            Has<PhotoCameraRoll>,
-        ),
-        With<PhotoAlbum>,
+    mut world: Query<
+        (Entity, &WorldPhotoCameraRoll, &mut SelectedAlbumPhoto),
+        (With<WorldRoot>, With<WorldLoadCompleted>),
     >,
+    photo_memberships: Query<&AlbumMember>,
+    albums: Query<&WorldMember, (With<PhotoAlbum>, Without<PhotoCameraRoll>)>,
     mut commands: Commands,
 ) {
+    let Ok((root, roll, mut selection)) = world.single_mut() else {
+        return;
+    };
+    let camera_roll = *roll.collection();
     for activation in activations.read() {
         let mut row = std::iter::successors(Some(activation.node), |entity| {
             parents.get(*entity).ok().map(ChildOf::parent)
@@ -67,27 +71,18 @@ pub(super) fn select_photo_storage_entity_from_authored_row_activation(
             .clone()
             .find_map(|entity| camera_roll_rows.get(entity).ok())
         {
-            let Some(camera_roll) = albums.iter().find(|row| row.3).map(|row| row.0) else {
+            if !photo_memberships
+                .get(photo.0)
+                .is_ok_and(|member| member.0 == camera_roll)
+            {
                 continue;
-            };
+            }
             match activation.trigger {
                 UiTrigger::On => {
-                    for (album, ..) in &albums {
-                        commands.entity(album).remove::<SelectedAlbumPhoto>();
-                    }
-                    commands
-                        .entity(camera_roll)
-                        .insert(SelectedAlbumPhoto(photo.0));
+                    selection.set_if_neq(SelectedAlbumPhoto(Some((camera_roll, photo.0))));
                 }
-                UiTrigger::Off => {
-                    if albums
-                        .get(camera_roll)
-                        .ok()
-                        .and_then(|row| row.1)
-                        .is_some_and(|selected| selected.0 == photo.0)
-                    {
-                        commands.entity(camera_roll).remove::<SelectedAlbumPhoto>();
-                    }
+                UiTrigger::Off if selection.0 == Some((camera_roll, photo.0)) => {
+                    selection.set_if_neq(SelectedAlbumPhoto(None));
                 }
                 _ => {}
             }
@@ -97,10 +92,9 @@ pub(super) fn select_photo_storage_entity_from_authored_row_activation(
             continue;
         }
         if let Some(choice) = row.find_map(|entity| album_choice_rows.get(entity).ok()) {
-            for (album, ..) in &albums {
-                commands.entity(album).remove::<ActivePhotoAlbum>();
+            if albums.get(choice.0).is_ok_and(|member| member.root == root) {
+                commands.entity(choice.0).insert(ActivePhotoAlbum(root));
             }
-            commands.entity(choice.0).insert(ActivePhotoAlbum);
         }
     }
 }
@@ -116,20 +110,31 @@ pub(super) fn route_photo_ui_actions(
             &PhotoAlbum,
             Option<&WorldMember>,
             Option<&PhotoAlbumPage>,
-            Option<&SelectedAlbumPhoto>,
             Option<&PhotoMove>,
             Option<&PhotoCameraRoll>,
         )>,
         Query<&mut PhotoAlbumPage>,
     )>,
     names: Query<&Name, With<PhotoAlbum>>,
-    active_albums: Query<Entity, (With<PhotoAlbum>, With<ActivePhotoAlbum>)>,
-    mut capacities: Query<&mut PhotoAlbumCapacityPages, With<PhotoAlbum>>,
-    (members, mut orders, configuration, configurations): (
+    mut storage: Query<
+        (
+            Entity,
+            Option<&WorldActivePhotoAlbum>,
+            Option<&WorldPhotoCameraRoll>,
+            &mut SelectedAlbumPhoto,
+        ),
+        (With<WorldRoot>, With<WorldLoadCompleted>),
+    >,
+    (mut capacities, mut hover_slots): (
+        Query<&mut PhotoAlbumCapacityPages, With<PhotoAlbum>>,
+        Query<&mut PhotoMoveTarget>,
+    ),
+    (members, mut orders, configuration, configurations, album_options): (
         Query<&AlbumPhotos>,
         Query<&mut PhotoAlbumOrder>,
         Res<PhotoConfigurationSource>,
         Res<Assets<PhotoConfiguration>>,
+        Option<Res<super::PhotoAlbumProfileOptions>>,
     ),
     mut allocators: Query<&mut PersistentIdAllocator>,
     mut deletions: MessageWriter<DeletePhotoRequest>,
@@ -139,11 +144,20 @@ pub(super) fn route_photo_ui_actions(
     active_photo_modes: Query<(Entity, &ImmersiveCamera), With<PhotoControl>>,
     mut commands: Commands,
 ) {
-    let default_album_spreads = configurations
-        .get(&configuration.0)
-        .map_or(INITIAL_PHOTO_ALBUM_SPREADS, |configuration| {
-            configuration.album_spreads
-        });
+    let default_album_spreads = album_options
+        .as_ref()
+        .and_then(|options| options.get_default_spreads())
+        .or_else(|| {
+            configurations
+                .get(&configuration.0)
+                .map(|configuration| configuration.album_spreads)
+        })
+        .unwrap_or(INITIAL_PHOTO_ALBUM_SPREADS);
+    let Ok((world, active, roll, mut selection)) = storage.single_mut() else {
+        return;
+    };
+    let active = active.and_then(|album| album.iter().next());
+    let roll = roll.and_then(|album| album.iter().next());
     for activation in activations.read() {
         let Ok((range, owner)) = action_nodes.get(activation.node) else {
             continue;
@@ -160,10 +174,6 @@ pub(super) fn route_photo_ui_actions(
                 continue;
             }
             let albums = album_queries.p0();
-            let active = active_albums
-                .iter()
-                .next()
-                .or_else(|| albums.iter().next().map(|row| row.0));
             match &record.action {
                 UiPhotoAction::CapturePhotoFromActivePhotoModeCamera => {
                     if let Ok((_, active_photo_mode)) = active_photo_modes.single() {
@@ -190,10 +200,8 @@ pub(super) fn route_photo_ui_actions(
                 }
                 UiPhotoAction::EnlargeSelectedPhotoInActiveAlbum => {
                     if let Some(album) = active {
-                        if let Ok((_, _, _, _, Some(selected), ..)) = albums.get(album) {
-                            commands
-                                .entity(album)
-                                .insert(EnlargedAlbumPhoto(selected.0));
+                        if let Some(selected) = selection.in_album(album) {
+                            commands.entity(album).insert(EnlargedAlbumPhoto(selected));
                         }
                     }
                 }
@@ -244,13 +252,10 @@ pub(super) fn route_photo_ui_actions(
                                         Name::new(name.as_str().to_owned()),
                                         *member,
                                         id,
-                                        ActivePhotoAlbum,
+                                        ActivePhotoAlbum(world),
                                         PhotoAlbumPage::default(),
                                     ))
                                     .id();
-                                if let Some(previous) = active {
-                                    commands.entity(previous).remove::<ActivePhotoAlbum>();
-                                }
                                 commands
                                     .entity(album)
                                     .insert(PhotoAlbumCapacityPages(default_album_spreads));
@@ -273,19 +278,29 @@ pub(super) fn route_photo_ui_actions(
                                 deletions.write(DeletePhotoRequest { photo });
                             });
                         commands.entity(album).despawn();
-                        if let Some((candidate, ..)) =
-                            albums.iter().find(|(candidate, ..)| *candidate != album)
+                        if selection.in_album(album).is_some() {
+                            selection.set_if_neq(SelectedAlbumPhoto(None));
+                        }
+                        if let Some((candidate, ..)) = albums
+                            .iter()
+                            .filter(|(candidate, _, member, _, _, roll)| {
+                                *candidate != album
+                                    && member.is_some_and(|member| member.root == world)
+                                    && roll.is_none()
+                            })
+                            .min_by_key(|(candidate, ..)| candidate.to_bits())
                         {
-                            commands.entity(candidate).insert(ActivePhotoAlbum);
+                            commands.entity(candidate).insert(ActivePhotoAlbum(world));
                         }
                     }
                 }
                 UiPhotoAction::StartMovingSelectedPhotoToActiveAlbum => {
                     if let Some(album) = active {
-                        if let Some((from, selected)) = albums
-                            .iter()
-                            .find_map(|row| row.4.map(|selected| (row.0, selected.0)))
-                        {
+                        if let Some((from, selected)) = selection.0.filter(|(from, photo)| {
+                            members
+                                .get(*from)
+                                .is_ok_and(|members| members.collection().contains(photo))
+                        }) {
                             commands.entity(album).insert(PhotoMove {
                                 photo: selected,
                                 from,
@@ -314,7 +329,7 @@ pub(super) fn route_photo_ui_actions(
                     *index,
                     &albums,
                     &members,
-                    &mut commands,
+                    &mut selection,
                 ),
                 UiPhotoAction::DeselectPhotoInActiveAlbumSlot {
                     album_slot_index: index,
@@ -323,7 +338,7 @@ pub(super) fn route_photo_ui_actions(
                     *index,
                     &albums,
                     &members,
-                    &mut commands,
+                    &mut selection,
                 ),
                 UiPhotoAction::EnlargePhotoInActiveAlbumSlot {
                     album_slot_index: index,
@@ -339,24 +354,24 @@ pub(super) fn route_photo_ui_actions(
                 UiPhotoAction::SelectPhotoInCameraRollSlot {
                     camera_roll_slot_index: index,
                 } => select_photo_in_album_display_slot(
-                    find_photo_camera_roll_album(&albums),
+                    roll,
                     *index,
                     &albums,
                     &members,
-                    &mut commands,
+                    &mut selection,
                 ),
                 UiPhotoAction::DeselectPhotoInCameraRollSlot {
                     camera_roll_slot_index: index,
                 } => deselect_photo_in_album_display_slot(
-                    find_photo_camera_roll_album(&albums),
+                    roll,
                     *index,
                     &albums,
                     &members,
-                    &mut commands,
+                    &mut selection,
                 ),
                 UiPhotoAction::SelectPhotoAlbumByListIndex {
                     album_list_index: index,
-                } => select_photo_album_by_list_index(*index, &albums, &mut commands),
+                } => select_photo_album_by_list_index(*index, world, &albums, &mut commands),
                 UiPhotoAction::AddOnePageToActivePhotoAlbumCapacity => {
                     if let Some(album) = active {
                         if let Ok(mut capacity) = capacities.get_mut(album) {
@@ -376,7 +391,12 @@ pub(super) fn route_photo_ui_actions(
                 } => {
                     if let Some(album) = active {
                         if let Ok(slot) = u8::try_from(*index) {
-                            commands.entity(album).insert(PhotoMoveTarget(slot));
+                            let next = PhotoMoveTarget(slot);
+                            if let Ok(mut current) = hover_slots.get_mut(album) {
+                                current.set_if_neq(next);
+                            } else {
+                                commands.entity(album).insert(next);
+                            }
                         }
                     }
                 }
@@ -384,9 +404,11 @@ pub(super) fn route_photo_ui_actions(
                     album_slot_index: index,
                 } => {
                     if let Some(album) = active {
-                        if albums.get(album).ok().and_then(|row| row.5).is_some()
-                            && u8::try_from(*index).is_ok()
-                        {
+                        if u8::try_from(*index).ok().is_some_and(|slot| {
+                            hover_slots
+                                .get(album)
+                                .is_ok_and(|current| current.0 == slot)
+                        }) {
                             commands.entity(album).remove::<PhotoMoveTarget>();
                         }
                     }
@@ -395,7 +417,18 @@ pub(super) fn route_photo_ui_actions(
                     album_slot_index: index,
                 } => {
                     if let Some(album) = active {
-                        if let Ok((_, _, _, _, _, Some(moving), _)) = albums.get(album) {
+                        if let Ok((_, _, _, _, Some(moving), _)) = albums.get(album) {
+                            if !members
+                                .get(moving.from)
+                                .is_ok_and(|members| members.collection().contains(&moving.photo))
+                            {
+                                commands.entity(album).remove::<(
+                                    PhotoMove,
+                                    PhotoPointerDrag,
+                                    PhotoMoveTarget,
+                                )>();
+                                continue;
+                            }
                             let target = albums
                                 .get(album)
                                 .ok()
@@ -421,20 +454,17 @@ pub(super) fn route_photo_ui_actions(
                                 .entity(moving.photo)
                                 .insert(AlbumMember(album))
                                 .remove::<CameraRollPhoto>();
-                            if moving.from != album {
-                                commands.entity(moving.from).remove::<SelectedAlbumPhoto>();
-                            }
                             commands
                                 .entity(album)
                                 .remove::<PhotoMove>()
                                 .remove::<PhotoPointerDrag>()
-                                .remove::<PhotoMoveTarget>()
-                                .insert(SelectedAlbumPhoto(moving.photo));
+                                .remove::<PhotoMoveTarget>();
+                            selection.set_if_neq(SelectedAlbumPhoto(Some((album, moving.photo))));
                         }
                     }
                 }
                 UiPhotoAction::DeleteAllPhotosFromCameraRoll => {
-                    if let Some(roll) = find_photo_camera_roll_album(&albums) {
+                    if let Some(roll) = roll {
                         members
                             .get(roll)
                             .into_iter()
@@ -445,15 +475,24 @@ pub(super) fn route_photo_ui_actions(
                     }
                 }
                 UiPhotoAction::DeleteSelectedPhotoFromAnyAlbum => {
-                    request_deletion_of_selected_photo_from_any_album(&albums, &mut deletions)
+                    let album = selection.0.map(|(album, _)| album);
+                    request_deletion_of_selected_photo_from_album(
+                        album,
+                        &mut selection,
+                        &mut deletions,
+                    )
                 }
                 UiPhotoAction::DeleteSelectedPhotoFromActiveAlbum => {
-                    request_deletion_of_selected_photo_from_album(active, &albums, &mut deletions)
+                    request_deletion_of_selected_photo_from_album(
+                        active,
+                        &mut selection,
+                        &mut deletions,
+                    )
                 }
                 UiPhotoAction::DeleteSelectedPhotoFromCameraRoll => {
                     request_deletion_of_selected_photo_from_album(
-                        find_photo_camera_roll_album(&albums),
-                        &albums,
+                        roll,
+                        &mut selection,
                         &mut deletions,
                     )
                 }

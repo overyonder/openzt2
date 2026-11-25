@@ -93,6 +93,7 @@ pub(crate) fn begin_camera_transition(
         With<ZooCamera>,
     >,
     immersive_subjects: Query<&ImmersiveSubject, With<ActiveImmersiveMode>>,
+    mut intents: Query<&mut CameraIntent>,
 ) {
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
@@ -136,6 +137,15 @@ pub(crate) fn begin_camera_transition(
             has_return_state = true;
         }
         entered_overhead = request.mode == CameraMode::Overhead;
+        if let Ok(mut intent) = intents.get_mut(camera.0) {
+            intent
+                .reborrow()
+                .map_unchanged(|intent| &mut intent.first_person_commands)
+                .set_if_neq(default());
+            intent
+                .map_unchanged(|intent| &mut intent.ui_pan)
+                .set_if_neq(Vec2::ZERO);
+        }
         camera.2.set_if_neq(request.mode);
         camera.3.set_if_neq(CameraDefinition(request.definition));
         next_standalone = if matches!(request.mode, CameraMode::Follow | CameraMode::FirstPerson) {

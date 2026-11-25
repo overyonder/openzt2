@@ -1,11 +1,10 @@
 use std::{
     cell::{Cell, RefCell},
     collections::BTreeSet,
-    rc::Rc,
 };
 
-use super::zoo_rating_input_types::{GuestRatingFacts, LivingAnimalPopulation};
-use bevy::{ecs::{entity_disabling::Disabled, query::Allow}, prelude::*};
+use super::zoo_rating_input_types::GuestSpeciesSeen;
+use bevy::{ecs::{entity_disabling::Disabled, query::Allow, relationship::RelationshipTarget, system::SystemParam}, prelude::*};
 use mlua::{Function, Lua, MultiValue, Scope, Table, Value};
 use openzt2_game_assets::lua_script::{
     lua_script_asset_loading::LuaScriptAsset,
@@ -19,12 +18,50 @@ use openzt2_game_assets::asset_source::ArchiveOverlayChanged;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
 use openzt2_game_data::AssetId;
 use openzt2_world_state::world_spawn::world_membership_types::{
-    DefinitionId, WorldMember, WorldRoot,
+    DefinitionId, WorldMembers, WorldRoot,
 };
 use openzt2_zoo_state::progression::{
     fame_types::{Fame, FameAuthoredPresentation, FameGateAppearanceRequested},
     profile_scenario_variables::ProfileScenarioVariables,
 };
+
+use openzt2_world_state::world_spawn::zoo_entrance_anchor_synchronization::ZooEntrance;
+use openzt2_zoo_state::{
+    animal_health::types::Dead,
+    animal_lifecycle::types::{Animal, SpeciesHandle},
+    animal_welfare::types::NeedPoints,
+    guests::guest_simulation_types::{Guest, GuestEducation, GuestSatisfaction},
+    progression::fame_types::PendingFameGatePrefab,
+};
+
+#[derive(SystemParam)]
+pub(super) struct FameEntityFacts<'w, 's> {
+    animals: Query<
+        'w,
+        's,
+        (&'static SpeciesHandle, Option<&'static NeedPoints>),
+        (With<Animal>, Without<Dead>),
+    >,
+    guests: Query<
+        'w,
+        's,
+        (
+            Option<&'static GuestSatisfaction>,
+            Option<&'static GuestEducation>,
+        ),
+        With<Guest>,
+    >,
+    gates: Query<
+        'w,
+        's,
+        (
+            Entity,
+            &'static DefinitionId,
+            Option<&'static PendingFameGatePrefab>,
+        ),
+        (With<ZooEntrance>, Allow<Disabled>),
+    >,
+}
 
 const FAME_SCRIPT_PATH: &str = "scripts/ZooFame.lua";
 
@@ -71,7 +108,7 @@ pub(super) fn resolve_winning_fame_script(
     for (root, existing) in &mut roots {
         match (winner.as_ref(), existing) {
             (Some((path, handle)), Some(mut current)) => {
-                if current.handle != *handle || current.path != path {
+                if current.handle != *handle || current.path != *path {
                     current.path.clone_from(path);
                     current.handle = handle.clone();
                     current.lua = None;
@@ -118,14 +155,16 @@ impl AuthoredFameScript {
         &mut self,
         sources: &LuaScriptSources,
         assets: &Assets<LuaScriptAsset>,
-        animals: &LivingAnimalPopulation,
-        guests: &GuestRatingFacts,
+        views: Option<&GuestSpeciesSeen>,
         old: Fame,
         award_points: u32,
         scenario_points: u32,
         animals_released: u32,
-        gates: &[(Entity, Option<&str>)],
+        entities: &FameEntityFacts,
+        members: Option<&WorldMembers>,
+        definitions: WorldDefinitionsView<'_>,
         variables: Option<&ProfileScenarioVariables>,
+        award_globals: Option<&super::AwardGlobalVariables>,
     ) -> mlua::Result<FameScriptOutput> {
         if !assets.contains(self.handle.id()) {
             return Ok(FameScriptOutput::default());
@@ -192,7 +231,16 @@ impl AuthoredFameScript {
                 })?,
             )?;
             install_fame_scene(
-                lua, scope, &status, animals, guests, gates, variables, &output,
+                lua,
+                scope,
+                &status,
+                views,
+                entities,
+                members,
+                definitions,
+                variables,
+                award_globals,
+                &output,
             )?;
             let calculate = globals.get::<Function>("adjustZooFame")?;
             calculate.call::<()>(status)
@@ -229,84 +277,96 @@ fn install_fame_scene<'scope, 'env: 'scope>(
     lua: &Lua,
     scope: &'scope Scope<'scope, 'env>,
     status: &Table,
-    animals: &'env LivingAnimalPopulation,
-    guests: &'env GuestRatingFacts,
-    gates: &'env [(Entity, Option<&'env str>)],
+    views: Option<&'env GuestSpeciesSeen>,
+    facts: &'env FameEntityFacts<'_, '_>,
+    members: Option<&'env WorldMembers>,
+    definitions: WorldDefinitionsView<'env>,
     variables: Option<&'env ProfileScenarioVariables>,
+    award_globals: Option<&'env super::AwardGlobalVariables>,
     output: &'env RefCell<FameScriptOutput>,
 ) -> mlua::Result<()> {
     let globals = lua.globals();
-    let animal_rows = lua.create_table()?;
-    for (index, animal) in animals.observations.iter().enumerate() {
-        let value = lua.create_table()?;
-        let happiness = animal.happiness;
-        value.set(
-            "BFG_GET_ATTR_FLOAT",
-            lua.create_function(move |_, (_, name): (Table, String)| {
-                Ok((name == "f_needPointsGood").then_some(happiness))
-            })?,
-        )?;
-        let species = animal.species.to_lowercase_hexadecimal_string();
-        value.set(
-            "BFG_GET_ATTR_STRING",
-            lua.create_function(move |_, (_, name): (Table, String)| {
-                Ok((name == "s_Species").then(|| species.clone()))
-            })?,
-        )?;
-        let item = lua.create_table()?;
-        item.set("value", value)?;
-        animal_rows.set(index + 1, item)?;
-    }
-    let guest_rows = lua.create_table()?;
-    for (index, guest) in guests.observations.iter().enumerate() {
-        let value = lua.create_table()?;
-        let (happiness, education) = (guest.happiness, guest.education);
-        value.set(
-            "BFG_GET_ATTR_FLOAT",
-            lua.create_function(move |_, (_, name): (Table, String)| {
-                Ok(match name.as_str() {
-                    "happiness" => Some(happiness),
-                    "f_Education" => Some(education),
-                    _ => None,
-                })
-            })?,
-        )?;
-        let item = lua.create_table()?;
-        item.set("value", value)?;
-        guest_rows.set(index + 1, item)?;
-    }
-    let gate_rows = lua.create_table()?;
-    for (index, &(gate, binder)) in gates.iter().enumerate() {
-        let value = lua.create_table()?;
-        let binder = Rc::new(RefCell::new(binder.map(str::to_owned)));
-        let current_binder = Rc::clone(&binder);
-        value.set(
-            "BFG_GET_BINDER_TYPE",
-            scope.create_function(move |_, _: Table| Ok(current_binder.borrow().clone()))?,
-        )?;
-        value.set(
-            "BFG_ENTITY_MORPH_TO_NEW_ENTITY",
-            scope.create_function(move |_, (_, args): (Table, Table)| {
-                let requested: String = args.get(1)?;
-                let definition = AssetId::from_key(&requested.to_ascii_lowercase());
-                *binder.borrow_mut() = Some(requested);
-                output.borrow_mut().effects.push(FameScriptEffect::Gate(
-                    FameGateAppearanceRequested { gate, definition },
-                ));
-                Ok(())
-            })?,
-        )?;
-        let item = lua.create_table()?;
-        item.set("value", value)?;
-        gate_rows.set(index + 1, item)?;
-    }
+    let methods = lua.create_table()?;
+    methods.set("__index", methods.clone())?;
+    methods.set(
+        "BFG_GET_ATTR_FLOAT",
+        scope.create_function(move |_, (row, name): (Table, String)| {
+            let entity = Entity::try_from_bits(row.get::<i64>("entity")? as u64);
+            Ok(entity.and_then(|entity| match name.as_str() {
+                "f_needPointsGood" => facts
+                    .animals
+                    .get(entity)
+                    .ok()
+                    .map(|(_, need)| need.map_or(0.0, |need| need.good)),
+                "happiness" => facts.guests.get(entity).ok().map(|(value, _)| {
+                    value.map_or(0.0, |value| value.source_q16() as f32 / 65_536.0)
+                }),
+                "f_Education" => facts
+                    .guests
+                    .get(entity)
+                    .ok()
+                    .map(|(_, value)| value.map_or(0.0, |value| f32::from(value.0) / 10.0)),
+                _ => None,
+            }))
+        })?,
+    )?;
+    methods.set(
+        "BFG_GET_ATTR_STRING",
+        scope.create_function(move |_, (row, name): (Table, String)| {
+            let entity = Entity::try_from_bits(row.get::<i64>("entity")? as u64);
+            Ok(entity.filter(|_| name == "s_Species").and_then(|entity| {
+                facts
+                    .animals
+                    .get(entity)
+                    .ok()
+                    .map(|(species, _)| species.species.to_lowercase_hexadecimal_string())
+            }))
+        })?,
+    )?;
+    let gate_methods = lua.create_table()?;
+    gate_methods.set("__index", gate_methods.clone())?;
+    gate_methods.set(
+        "BFG_GET_BINDER_TYPE",
+        lua.create_function(|_, row: Table| row.get::<Option<String>>("binder"))?,
+    )?;
+    gate_methods.set(
+        "BFG_ENTITY_MORPH_TO_NEW_ENTITY",
+        scope.create_function(move |_, (row, args): (Table, Table)| {
+            let Some(gate) = Entity::try_from_bits(row.get::<i64>("entity")? as u64) else {
+                return Ok(());
+            };
+            let requested: String = args.get(1)?;
+            let definition = AssetId::from_key(&requested.to_ascii_lowercase());
+            row.set("binder", requested)?;
+            output
+                .borrow_mut()
+                .effects
+                .push(FameScriptEffect::Gate(FameGateAppearanceRequested {
+                    gate,
+                    definition,
+                }));
+            Ok(())
+        })?,
+    )?;
     let entities = lua.create_table()?;
     entities.set(
         "BFG_GET_ENTITIES",
-        scope.create_function(move |_, (_, kind): (Table, String)| {
-            Ok(kind
-                .eq_ignore_ascii_case("entrance")
-                .then(|| gate_rows.clone()))
+        scope.create_function(move |lua, (_, kind): (Table, String)| {
+            if !kind.eq_ignore_ascii_case("entrance") {
+                return Ok(None);
+            }
+            let rows = lua.create_table()?;
+            for (index, (gate, definition, pending)) in facts
+                .gates
+                .iter_many(members.into_iter().flat_map(RelationshipTarget::iter))
+                .flatten()
+                .enumerate()
+            {
+                let binder = definitions
+                    .object_binder_type(pending.map_or(definition.0, |pending| pending.definition));
+                append_fame_entity(lua, &rows, &gate_methods, index, gate, binder)?;
+            }
+            Ok(Some(rows))
         })?,
     )?;
     let ui = create_fame_ui_root(lua, scope, output)?;
@@ -325,13 +385,21 @@ fn install_fame_scene<'scope, 'env: 'scope>(
     globals.set(
         "findType",
         scope.create_function(move |lua, name: String| {
-            if name.eq_ignore_ascii_case("animal") {
-                Ok(animal_rows.clone())
-            } else if name.eq_ignore_ascii_case("guest") {
-                Ok(guest_rows.clone())
-            } else {
-                lua.create_table()
+            let rows = lua.create_table()?;
+            let animal = name.eq_ignore_ascii_case("animal");
+            let guest = name.eq_ignore_ascii_case("guest");
+            for (index, entity) in members
+                .into_iter()
+                .flat_map(RelationshipTarget::iter)
+                .filter(|&entity| {
+                    animal && facts.animals.contains(entity)
+                        || guest && facts.guests.contains(entity)
+                })
+                .enumerate()
+            {
+                append_fame_entity(lua, &rows, &methods, index, entity, None)?;
             }
+            Ok(rows)
         })?,
     )?;
     globals.set(
@@ -342,7 +410,7 @@ fn install_fame_scene<'scope, 'env: 'scope>(
         "getSpeciesSeenData",
         scope.create_function(move |lua, _: Table| {
             let result = lua.create_table()?;
-            for (species, seen) in &guests.species_seen {
+            for (species, seen) in views.into_iter().flat_map(|views| views.0.iter()) {
                 let record = lua.create_table()?;
                 record.set("guestViews", seen.guests)?;
                 record.set("viewEvents", seen.events)?;
@@ -366,8 +434,10 @@ fn install_fame_scene<'scope, 'env: 'scope>(
     globals.set(
         "getglobalvar",
         scope.create_function(move |_, key: String| {
-            Ok(variables
-                .and_then(|variables| variables.get(AssetId::from_key(&key)))
+            let key = AssetId::from_key(&key);
+            Ok(award_globals
+                .and_then(|globals| globals.0.get(&key).map(String::as_str))
+                .or_else(|| variables.and_then(|variables| variables.get(key)))
                 .map(str::to_owned))
         })?,
     )?;
@@ -429,32 +499,21 @@ fn create_fame_ui_root<'scope, 'env: 'scope>(
     Ok(root)
 }
 
-pub(super) fn entrance_gate_definitions<'a>(
-    world: Entity,
-    definitions: WorldDefinitionsView<'a>,
-    gates: &Query<
-        (
-            Entity,
-            &WorldMember,
-            &DefinitionId,
-            Option<&openzt2_zoo_state::progression::fame_types::PendingFameGatePrefab>,
-        ),
-        (
-            With<
-                openzt2_world_state::world_spawn::zoo_entrance_anchor_synchronization::ZooEntrance,
-            >,
-            Allow<Disabled>,
-        ),
-    >,
-) -> Vec<(Entity, Option<&'a str>)> {
-    gates
-        .iter()
-        .filter(|(_, member, _, _)| member.root == world)
-        .map(|(gate, _, applied, pending)| {
-            let definition = pending.map_or(applied.0, |pending| pending.definition);
-            (gate, definitions.object_binder_type(definition))
-        })
-        .collect()
+fn append_fame_entity(
+    lua: &Lua,
+    rows: &Table,
+    methods: &Table,
+    index: usize,
+    entity: Entity,
+    binder: Option<&str>,
+) -> mlua::Result<()> {
+    let value = lua.create_table()?;
+    value.set("entity", entity.to_bits() as i64)?;
+    value.set("binder", binder)?;
+    value.set_metatable(Some(methods.clone()))?;
+    let item = lua.create_table()?;
+    item.set("value", value)?;
+    rows.set(index + 1, item)
 }
 
 #[cfg(test)]

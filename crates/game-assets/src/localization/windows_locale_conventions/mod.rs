@@ -4,25 +4,28 @@ use std::{fmt, sync::OnceLock};
 
 use serde::Deserialize;
 
-#[derive(Deserialize)]
+#[cfg(windows)]
+mod host_locale_conventions;
+
+#[derive(Deserialize, PartialEq, Eq)]
 pub(super) struct WindowsLocaleConventions {
     pub(super) currency: CurrencyConventions,
     pub(super) calendar: CalendarConventions,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, PartialEq, Eq)]
 pub(super) struct CurrencyConventions {
     pub(super) symbol: String,
     decimal_separator: String,
     grouping_separator: String,
-    repeating_group_width: u32,
-    fractional_digits: u32,
+    group_width: u32,
+    leading_zero: bool,
     positive_order: usize,
     negative_order: usize,
     negative_sign: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, PartialEq, Eq)]
 pub(super) struct CalendarConventions {
     pub(super) month_names: [String; 12],
     pub(super) abbreviated_month_names: [String; 12],
@@ -31,12 +34,34 @@ pub(super) struct CalendarConventions {
     pub(super) am_designator: String,
     pub(super) pm_designator: String,
     pub(super) era: String,
+    pub(super) short_date: String,
+    pub(super) time_format: String,
+    pub(super) genitive_month_names: Option<[String; 12]>,
+    pub(super) genitive_abbreviated_month_names: Option<[String; 12]>,
+}
+
+impl CalendarConventions {
+    pub(super) fn month_name(&self, index: usize, abbreviated: bool, genitive: bool) -> &str {
+        let (names, genitive_names) = if abbreviated {
+            (
+                &self.abbreviated_month_names,
+                &self.genitive_abbreviated_month_names,
+            )
+        } else {
+            (&self.month_names, &self.genitive_month_names)
+        };
+        let names = genitive_names
+            .as_ref()
+            .filter(|_| genitive)
+            .unwrap_or(names);
+        &names[index]
+    }
 }
 
 #[derive(Deserialize)]
 struct LocaleTable(Vec<WindowsLocaleConventions>, Vec<(u32, usize)>);
 
-pub(super) fn windows_locale_conventions(locale: &str) -> &'static WindowsLocaleConventions {
+pub(super) fn bundled_locale_conventions(locale: u32) -> &'static WindowsLocaleConventions {
     static LOCALES: OnceLock<LocaleTable> = OnceLock::new();
     let locales = LOCALES.get_or_init(|| {
         serde_json::from_str(include_str!("locale_conventions.json"))
@@ -46,12 +71,19 @@ pub(super) fn windows_locale_conventions(locale: &str) -> &'static WindowsLocale
         let row = locales.1.binary_search_by_key(&id, |(id, _)| *id).ok()?;
         locales.0.get(locales.1[row].1)
     };
-    locale
-        .parse::<u32>()
-        .ok()
-        .and_then(find)
+    find(locale)
         .or_else(|| find(1033))
         .expect("bundled Windows locale conventions contain US English")
+}
+
+pub(super) fn host_locale_conventions(locale: u32) -> Option<WindowsLocaleConventions> {
+    #[cfg(windows)]
+    return host_locale_conventions::read_windows_locale_conventions(locale);
+    #[cfg(not(windows))]
+    {
+        let _ = locale;
+        None
+    }
 }
 
 impl CurrencyConventions {
@@ -68,35 +100,30 @@ impl CurrencyConventions {
             "($#)", "-$#", "$-#", "$#-", "(#$)", "-#$", "#-$", "#$-", "-# $", "-$ #", "# $-",
             "$ #-", "$ -#", "#- $", "($ #)", "(# $)", "$- #",
         ];
-        let pattern = if cents < 0 {
+        let negative = if include_cents {
+            cents < 0
+        } else {
+            cents / 100 < 0
+        };
+        let pattern = if negative {
             NEGATIVE[self.negative_order]
         } else {
             POSITIVE[self.positive_order]
         };
 
-        let digits = if include_cents {
-            self.fractional_digits
-        } else {
-            0
-        };
-        let absolute_cents = u128::from(cents.unsigned_abs());
-        let scale = 10_u128.pow(digits);
-        let rounding = if include_cents { 50 } else { 0 };
-        let amount = (absolute_cents * scale + rounding) / 100;
+        let absolute_cents = cents.unsigned_abs();
+        let whole = absolute_cents / 100;
         for token in pattern.chars() {
             match token {
                 '$' => target.write_str(symbol)?,
                 '-' => target.write_str(&self.negative_sign)?,
                 '#' => {
-                    self.write_grouped_whole_amount(amount / scale, target)?;
-                    if digits != 0 {
+                    if whole != 0 || self.leading_zero || !include_cents {
+                        self.write_grouped_whole_amount(whole, target)?;
+                    }
+                    if include_cents {
                         target.write_str(&self.decimal_separator)?;
-                        write!(
-                            target,
-                            "{:0width$}",
-                            amount % scale,
-                            width = digits as usize
-                        )?;
+                        write!(target, "{:02}", absolute_cents % 100)?;
                     }
                 }
                 other => target.write_char(other)?,
@@ -105,32 +132,26 @@ impl CurrencyConventions {
         Ok(())
     }
 
-    fn write_grouped_whole_amount(
-        &self,
-        amount: u128,
-        target: &mut impl fmt::Write,
-    ) -> fmt::Result {
-        if amount < 1_000 {
+    fn write_grouped_whole_amount(&self, amount: u64, target: &mut impl fmt::Write) -> fmt::Result {
+        if self.group_width == 0 {
             return write!(target, "{amount}");
         }
-        let group_base = 10_u128.pow(self.repeating_group_width);
-        let upper = amount / 1_000;
+        let base = 10_u64.pow(self.group_width);
         let mut divisor = 1;
-        while upper / divisor >= group_base {
-            divisor *= group_base;
+        while amount / divisor >= base {
+            divisor *= base;
         }
-        write!(target, "{}", upper / divisor)?;
+        write!(target, "{}", amount / divisor)?;
         while divisor > 1 {
-            divisor /= group_base;
+            divisor /= base;
             target.write_str(&self.grouping_separator)?;
             write!(
                 target,
                 "{:0width$}",
-                upper / divisor % group_base,
-                width = self.repeating_group_width as usize,
+                amount / divisor % base,
+                width = self.group_width as usize
             )?;
         }
-        target.write_str(&self.grouping_separator)?;
-        write!(target, "{:03}", amount % 1_000)
+        Ok(())
     }
 }

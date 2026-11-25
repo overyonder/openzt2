@@ -2,6 +2,7 @@ use bevy::prelude::*;
 use openzt2_game_data::AssetId;
 use openzt2_interface_state::ui::authored_ui_focus_state::UiFocusable;
 use openzt2_interface_state::ui::authored_ui_visual_types::UiVisualPicking;
+use openzt2_progression::progression::ResearchCompletionBasisPoints;
 
 use openzt2_game_assets::localization::localization_asset_types::LocalizationAsset;
 use openzt2_game_assets::localization::localization_precedence_index::LocalizationPrecedenceIndex;
@@ -191,7 +192,7 @@ pub(crate) fn project_catalogue_research_overlays(
     research_items: Query<(
         Ref<ResearchProjectAvailability>,
         Option<Ref<ResearchItemPayments>>,
-        Option<Ref<ResearchProject>>,
+        Option<Ref<ResearchCompletionBasisPoints>>,
     )>,
     mut removals: (
         RemovedComponents<ResearchProject>,
@@ -318,11 +319,7 @@ pub(crate) fn project_catalogue_research_overlays(
                     Visibility::Hidden
                 });
                 if let Some(mut value) = value {
-                    value.set_if_neq(UiValue(project.as_ref().map_or(0, |project| {
-                        ((u128::from(project.elapsed_ticks.min(project.required_ticks)) * 10_000)
-                            / u128::from(project.required_ticks.max(1)))
-                            as i64
-                    })));
+                    value.set_if_neq(UiValue(project.as_ref().map_or(0, |project| project.0)));
                 }
             }
         }

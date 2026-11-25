@@ -5,8 +5,12 @@ use super::world_definition_source_value_reading_and_conversion::{
     element_bool, element_number, parse, required, required_element_number, required_number,
 };
 use crate::source_document::resolved_source_record_index::{BindError, RecordView};
-use crate::source_document::source_document_semantic_name::canonicalize_source_document_record_key;
-use crate::world_definitions::timing::{AuthoredTimekeeperPolicy, TimekeeperEventTiming};
+use crate::source_document::source_document_semantic_name::{
+    canonicalize_source_document_record_key, source_document_names_are_semantically_equal,
+};
+use crate::world_definitions::timing::{
+    AuthoredTimekeeperPolicy, TimekeeperEvent, TimekeeperEventTiming,
+};
 use openzt2_game_data::world_definitions::simulation_time::{
     SimulationCalendarLeapPolicy, SimulationCalendarPolicy, SimulationSpeedMultiplier,
     SimulationTimingDefinition,
@@ -17,32 +21,53 @@ pub(super) fn bind_timing(
     _output: &mut WorldDefinitionLoweringTables,
 ) -> Result<(SimulationTimingDefinition, Option<AuthoredTimekeeperPolicy>), BindError> {
     if canonicalize_source_document_record_key(&record.semantic_type()) == "bftimekeeper" {
-        let event = |name: &str| -> Result<TimekeeperEventTiming, BindError> {
-            let events = record.children_named(&[name]);
-            let [event] = &events[..] else {
-                return Err(BindError::record(
-                    record,
-                    format!("BFTimeKeeper requires one {name}"),
-                ));
-            };
+        use TimekeeperEvent::{Heartbeat, Simulation, Slow};
+        let mut event_order = [Heartbeat, Simulation, Slow];
+        let authored = record.children_named(&event_order.map(TimekeeperEvent::source_name));
+        let order = |kind: TimekeeperEvent| -> Result<usize, BindError> {
+            let name = kind.source_name();
+            authored
+                .iter()
+                .position(|event| {
+                    source_document_names_are_semantically_equal(event.name.as_str(), name)
+                })
+                .ok_or_else(|| BindError::record(record, format!("BFTimeKeeper requires {name}")))
+        };
+        let event = |kind: TimekeeperEvent| -> Result<(usize, TimekeeperEventTiming), BindError> {
+            let index = order(kind)?;
+            let event = authored[index];
             let seconds = required_element_number::<f64>(event, &["interval"])?;
             let interval = Duration::try_from_secs_f64(seconds)
                 .ok()
                 .filter(|duration| !duration.is_zero())
-                .ok_or_else(|| BindError::record(record, format!("invalid {name} interval")))?;
-            Ok(TimekeeperEventTiming {
-                interval,
-                pauses_with_simulation: element_bool(event, &["paused"], false)?,
-            })
+                .ok_or_else(|| {
+                    BindError::record(record, format!("invalid {} interval", kind.source_name()))
+                })?;
+            Ok((
+                index,
+                TimekeeperEventTiming {
+                    interval,
+                    initially_paused: element_bool(event, &["paused"], false)?,
+                },
+            ))
         };
         let time_scale: f64 = required_number(record, &["timeScale"])?;
         if !time_scale.is_finite() || time_scale <= 0.0 {
             return Err(BindError::record(record, "invalid BFTimeKeeper timeScale"));
         }
+        let (heartbeat_order, heartbeat) = event(Heartbeat)?;
+        let (simulation_order, simulation) = event(Simulation)?;
+        let (slow_order, slow) = event(Slow)?;
+        event_order.sort_by_key(|&kind| match kind {
+            Heartbeat => heartbeat_order,
+            Simulation => simulation_order,
+            Slow => slow_order,
+        });
         let policy = AuthoredTimekeeperPolicy {
-            heartbeat: event("BFTIME_HEARTBEAT")?,
-            simulation: event("BFTIME_SIMTICK")?,
-            slow: event("BFTIME_SLOWTICK")?,
+            heartbeat,
+            simulation,
+            slow,
+            event_order,
             time_scale,
         };
         let seconds = policy.simulation.interval.as_secs_f64();

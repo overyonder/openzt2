@@ -32,21 +32,18 @@ use openzt2_zoo_state::terrain::terrain_water_presentation_types::{
 #[derive(Component)]
 pub(super) struct LiveAppliedTerrainEdit;
 
-#[derive(Event)]
-pub(super) struct ApplyTerrainEdit(CommitTerrainEdit);
-
 pub(super) fn dispatch_committed_terrain_edits(
     mut commands: Commands,
     mut requests: MessageReader<CommitTerrainEdit>,
 ) {
     for &request in requests.read() {
-        commands.trigger(ApplyTerrainEdit(request));
+        commands.trigger(request);
     }
 }
 
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(super) fn apply_committed_terrain_sample_deltas_and_publish_changed_regions(
-    request: On<ApplyTerrainEdit>,
+    request: On<CommitTerrainEdit>,
     mut commands: Commands,
     edits: Query<(
         &TerrainEdit,
@@ -73,7 +70,7 @@ pub(super) fn apply_committed_terrain_sample_deltas_and_publish_changed_regions(
     mut render_changed: MessageWriter<TerrainRenderInvalidated>,
     mut acknowledged: MessageWriter<TerrainEditAcknowledged>,
 ) {
-    let request = request.0;
+    let request = *request;
     let Some(((edit, _, rollback, live_applied), chunk_ids)) = edits
         .get(request.transaction)
         .ok()

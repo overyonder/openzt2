@@ -383,6 +383,15 @@ impl<'a> WorldDefinitionsView<'a> {
             .timekeeper
     }
 
+    pub fn simulation_timestep(self) -> Option<std::time::Duration> {
+        self.authored_timekeeper_policy()
+            .map(|policy| policy.simulation.interval)
+            .or_else(|| {
+                let hertz = self.simulation_timing()?.fixed_hz;
+                std::time::Duration::try_from_secs_f64(f64::from(hertz).recip()).ok()
+            })
+    }
+
     pub fn handle_for_path(self, id: AssetId) -> Option<&'a Handle<WorldDefinitionAsset>> {
         self.records
             .get(&(DefinitionKind::Path, id))

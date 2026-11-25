@@ -39,7 +39,7 @@ pub(super) fn encode_original_saved_game_snapshot(
     let context = unique_child(&saved.document.root, "BFContext")?;
     let status = unique_child(context, "ZTStatus")?;
     let economy_manager = unique_child(context, "ZTEconomyMgr")?;
-    validate_saved_status_progression(status)?;
+    let award_points = read_saved_status_progression(status)?;
     validate_inactive_managers(context)?;
     let start = saved
         .source
@@ -168,7 +168,7 @@ pub(super) fn encode_original_saved_game_snapshot(
         zoo_rating: Default::default(),
         unlocked_catalogue_definition_count: 0,
         unlocked_catalogue_definition_bit_words: Vec::new(),
-        scenario_award_points: 0,
+        scenario_award_points: award_points,
         endangered_animal_birth_count: 0,
         animal_adoption_availability_policy: Default::default(),
         research_projects: Vec::new(),
@@ -312,7 +312,7 @@ fn validate_inactive_managers(context: &OrderedSourceDocumentNode) -> io::Result
     }
     Ok(())
 }
-fn validate_saved_status_progression(status: &OrderedSourceDocumentNode) -> io::Result<()> {
+fn read_saved_status_progression(status: &OrderedSourceDocumentNode) -> io::Result<u32> {
     for name in ["releasedAnimals", "animalsPutUpForAdoption"] {
         if unique_child(status, name)?
             .element_children()
@@ -329,6 +329,7 @@ fn validate_saved_status_progression(status: &OrderedSourceDocumentNode) -> io::
         .and_then(|value| value.parse::<f32>().ok())
         .ok_or_else(|| invalid("saved half-star value is invalid"))?;
     let mut fields = std::collections::BTreeSet::new();
+    let mut award_points = None;
     for field in unique_child(status, "script")?.element_children() {
         let name = field
             .attribute("name")
@@ -339,6 +340,20 @@ fn validate_saved_status_progression(status: &OrderedSourceDocumentNode) -> io::
         if !fields.insert(name) {
             return Err(invalid(format!("saved Status script repeats {name}")));
         }
+        if name == "awardPoints" {
+            let value = field
+                .attribute("value")
+                .and_then(|value| value.parse::<f64>().ok())
+                .filter(|value| {
+                    value.is_finite()
+                        && value.fract() == 0.0
+                        && (0.0..=f64::from(u32::MAX)).contains(value)
+                })
+                .filter(|_| field.name == "number")
+                .ok_or_else(|| invalid("saved award points are invalid"))?;
+            award_points = Some(value as u32);
+            continue;
+        }
         let expected = match name {
             "currentHalfStars" => half_stars,
             "currentNumAnimalFame"
@@ -347,8 +362,7 @@ fn validate_saved_status_progression(status: &OrderedSourceDocumentNode) -> io::
             | "currentNumSpeciesFame"
             | "currentEntertainmentFame"
             | "averageAnimalHappiness"
-            | "scenarioPoints"
-            | "awardPoints" => 0.0,
+            | "scenarioPoints" => 0.0,
             _ => {
                 return Err(invalid(format!(
                     "saved Status script field {name} has no conversion"
@@ -367,7 +381,7 @@ fn validate_saved_status_progression(status: &OrderedSourceDocumentNode) -> io::
     if fields.len() != 9 {
         return Err(invalid("saved Status script omits its fame/point fields"));
     }
-    Ok(())
+    award_points.ok_or_else(|| invalid("saved Status script omits award points"))
 }
 
 fn unique_child<'a>(

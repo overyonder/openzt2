@@ -16,6 +16,14 @@ pub(super) struct FossilDefinitionIndex {
     pub(super) pieces: Vec<FossilPieceDefinition>,
     pub(super) slots: Vec<FossilSlotDefinition>,
     pub(super) sets: Vec<AssetId>,
+    pub(super) placeable_rewards: Vec<Vec<FossilRewardCandidate>>,
+    pub(super) cash_rewards: Vec<Vec<FossilRewardCandidate>>,
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct FossilRewardCandidate {
+    pub(super) definition: AssetId,
+    pub(super) developer_only: bool,
 }
 
 impl FossilDefinitionIndex {
@@ -59,4 +67,27 @@ pub(super) fn index_winning_fossil_definitions(
         .enumerate()
         .map(|(position, piece)| (piece.id, position))
         .collect();
+    index.placeable_rewards.clear();
+    index.cash_rewards.clear();
+    if let Some(policy) = definitions.fossil_placement() {
+        let objects = definitions.objects().collect::<Vec<_>>();
+        let parents = objects.iter().flat_map(|object| {
+            object.behavior_type_identifiers.iter().copied().filter(|&kind| kind != object.id)
+        }).collect::<HashSet<_>>();
+        let developer = AssetId::from_key("ztdevcomponent");
+        let groups = |types: &[AssetId], needs_placement| {
+            types.iter().map(|&kind| {
+                objects.iter().copied().filter(|object| {
+                    (object.id == kind || object.behavior_type_identifiers.contains(&kind))
+                        && !parents.contains(&object.id)
+                        && (!needs_placement || definitions.find_placeable(object.id).is_some())
+                }).map(|object| FossilRewardCandidate {
+                    definition: object.id,
+                    developer_only: object.behavior_type_identifiers.contains(&developer),
+                }).collect::<Vec<_>>()
+            }).collect::<Vec<_>>()
+        };
+        index.placeable_rewards = groups(&policy.placeable_objects, true);
+        index.cash_rewards = groups(&policy.non_placeable_objects, false);
+    }
 }

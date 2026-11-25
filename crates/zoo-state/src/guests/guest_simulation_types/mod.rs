@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use arrayvec::ArrayVec;
 use bevy::prelude::*;
 use openzt2_game_data::world_definitions::guest_simulation_definitions::{
@@ -125,6 +127,20 @@ pub struct VisitTime {
 
 #[derive(Component, Debug, Clone, Default)]
 pub struct GuestNeedAdjustmentTimer(pub Timer);
+
+impl GuestNeedAdjustmentTimer {
+    #[must_use]
+    pub fn from_saved_remaining(remaining_ns: u64) -> Self {
+        Self(Timer::new(
+            Duration::from_nanos(remaining_ns),
+            TimerMode::Once,
+        ))
+    }
+
+    pub fn remaining_ns(&self) -> u64 {
+        u64::try_from(self.0.remaining().as_nanos()).unwrap_or(u64::MAX)
+    }
+}
 
 #[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GuestNeedAdjustmentDue(pub Entity);

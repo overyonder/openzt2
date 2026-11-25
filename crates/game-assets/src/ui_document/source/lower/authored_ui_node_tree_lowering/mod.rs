@@ -435,22 +435,6 @@ pub(super) fn lower_node(
     }
     let name = stable_name.clone();
     let mut flags = node_flags(&effective);
-    let obsolete_eight_bit_sound_control = effective
-        .events
-        .iter()
-        .flat_map(|block| &block.events)
-        .any(|event| {
-            event.message == "ZT_EVENT"
-                && event.string.as_deref().is_some_and(|value| {
-                    matches!(
-                        value.to_ascii_lowercase().as_str(),
-                        "use8bitsoundson" | "use8bitsoundsoff"
-                    )
-                })
-        });
-    if obsolete_eight_bit_sound_control {
-        flags.0 &= !(UiNodeFlags::VISIBLE.0 | UiNodeFlags::ENABLED.0);
-    }
     let authoring_layout_control =
         effective
             .events

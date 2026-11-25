@@ -1,6 +1,5 @@
 use std::io;
 
-use super::transport_fare_types::PendingTransportFare;
 use bevy::{
     asset::{io::Reader, AssetLoader, LoadContext},
     prelude::*,
@@ -16,27 +15,33 @@ use openzt2_world_state::{
 };
 use openzt2_zoo_state::{
     animal_behavior::behavior_token_types::BehaviorSelfToken,
-    donations::{
-        donation_opportunity_types::DonationOpportunity,
-        donation_payment_types::{
-            DonationPaymentRequested, DonationPaymentState, PendingDonationPayment,
-        },
-    },
-    economy::{
-        account_transaction_types::{Account, TransactionKind, TransactionRequest},
-        authored_transaction_amount::authored_currency_to_money,
-        money_types::Money,
-    },
+    donations::donation_opportunity_types::DonationOpportunity,
+    economy::{authored_transaction_amount::authored_currency_to_money, money_types::Money},
     transport_tours::transport_circuit_types::TransportCircuit,
 };
 
 const GUEST_SOURCE: &str = "entities/units/guests/ai/guest.xml";
+
+/// Transaction arguments attached to the guest's timed donation token.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TourDonationOffer {
+    pub cost_override: Money,
+    pub transaction_tracker: AssetId,
+    pub circuit: Entity,
+}
 
 #[derive(Asset, TypePath)]
 pub(super) struct TourDonationPolicy {
     timeout_seconds: f64,
     factor: f32,
     cap: f32,
+    feedback: Vec<TourFeedbackBand>,
+}
+
+struct TourFeedbackBand {
+    score: [f32; 2],
+    happiness_q16: i32,
+    departure_q16: i32,
 }
 
 #[derive(Default, TypePath)]
@@ -81,11 +86,48 @@ impl AssetLoader for TourDonationPolicyLoader {
                     )
                 })
         };
+        let mut feedback = Vec::new();
+        for row in policy
+            .element_children()
+            .filter(|node| node.name.eq_ignore_ascii_case("ZTAITourTakerData"))
+            .flat_map(|node| node.element_children())
+            .filter(|node| node.name.eq_ignore_ascii_case("range"))
+        {
+            let number = |name| {
+                row.attribute_named_any(&[name])
+                    .and_then(parse_blue_fang_source_numeric_lexeme::<f32>)
+            };
+            if let Some(effect) = row
+                .element_children()
+                .find(|node| node.name.eq_ignore_ascii_case("BFAISubjectData"))
+            {
+                let q16 = |name| {
+                    effect
+                        .attribute_named_any(&[name])
+                        .and_then(parse_blue_fang_source_numeric_lexeme::<f32>)
+                        .filter(|value| value.is_finite())
+                        .map_or(0, |value| (value * 65_536.0).round() as i32)
+                };
+                feedback.push(TourFeedbackBand {
+                    score: [
+                        number("Min").unwrap_or(f32::NEG_INFINITY),
+                        number("Max").unwrap_or(f32::INFINITY),
+                    ],
+                    happiness_q16: q16("happiness"),
+                    departure_q16: q16("f_DeparturePoints"),
+                });
+            }
+        }
         Ok(TourDonationPolicy {
             timeout_seconds: f64::from(read("tourTokenTimeOut")?),
             factor: read("donationScaleFactor")?,
             cap: read("donationCap")?,
+            feedback,
         })
+    }
+
+    fn extensions(&self) -> &[&str] {
+        &["xml"]
     }
 }
 
@@ -115,22 +157,27 @@ pub(super) struct TourDonation<'w, 's> {
 }
 
 impl TourDonation<'_, '_> {
-    pub(super) fn request_at_station(
+    pub(super) fn ride_feedback(&self, score: f32) -> Option<(i32, i32)> {
+        let band = self
+            .policies
+            .get(&self.source.0)?
+            .feedback
+            .iter()
+            .find(|band| band.score[0] <= score && score < band.score[1])?;
+        Some((band.happiness_q16, band.departure_q16))
+    }
+
+    pub(super) fn offer(
         &self,
         commands: &mut Commands,
-        transactions: &mut MessageWriter<TransactionRequest>,
         (guest, world, budget): (Entity, WorldMember, Money),
-        fare: PendingTransportFare,
+        circuit: Entity,
+        contributions: [f32; 2],
     ) {
-        let PendingTransportFare {
-            station,
-            circuit,
-            score,
-            ..
-        } = fare;
         let Some(policy) = self.policies.get(&self.source.0) else {
             return;
         };
+        let score = contributions[0] + contributions[1];
         if !score.is_finite()
             || !self
                 .subjects
@@ -149,37 +196,20 @@ impl TourDonation<'_, '_> {
             return;
         };
         let tick = clock.tick;
-        let operation = commands
-            .spawn((
-                world,
-                PendingDonationPayment {
-                    guest,
-                    acceptor: station,
-                    subject: circuit,
-                    amount,
-                },
-                DonationPaymentState::Pending,
-            ))
-            .id();
-        commands
-            .entity(guest)
-            .insert(DonationPaymentRequested { submitted: true });
-        transactions.write(TransactionRequest {
-            operation,
-            debit: Account::Entity(guest),
-            credit: Account::Zoo,
-            amount,
-            kind: TransactionKind::Donation,
-            subject: Some(station),
-        });
         let lifetime = (policy.timeout_seconds / self.time.timestep().as_secs_f64()).ceil() as u64;
         commands.spawn((
+            world,
             ChildOf(guest),
+            TourDonationOffer {
+                cost_override: amount,
+                transaction_tracker: AssetId::from_key("donate_tour"),
+                circuit,
+            },
             BehaviorSelfToken {
                 name: AssetId::from_key("t_donationtour"),
                 available_at: tick,
                 expires_at: tick.saturating_add(lifetime),
-                payload: Some(station),
+                payload: None,
                 retain_on_failure: false,
             },
         ));

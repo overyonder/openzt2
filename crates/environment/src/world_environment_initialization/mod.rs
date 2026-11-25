@@ -135,6 +135,10 @@ pub(super) fn initialize_world_environment_from_loaded_scenario_and_definitions(
                 definition: environment_id,
             },
             Daylight { fraction },
+            (
+                openzt2_zoo_state::environment::environment_presentation_types::EnvironmentTerrainAmbientLight::default(),
+                openzt2_zoo_state::environment::environment_state_types::EnvironmentMapSamples::default(),
+            ),
             EnvironmentOfWorld(root),
             AudioSoundscape {
                 biome: biome_id,

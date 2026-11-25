@@ -8,7 +8,10 @@ use crate::{
         model_source::native_model_source_lowering::native_model_scene_labelled_asset_path,
         source_document::{
             blue_fang_source_dependency_reference_discovery::source_scene_component_prefers_available_blue_fang_model,
-            ordered_source_document_types::{OrderedSourceDocument, OrderedSourceDocumentNode},
+            ordered_source_document_types::{
+                OrderedSourceDocument, OrderedSourceDocumentAttribute, OrderedSourceDocumentChild,
+                OrderedSourceDocumentChildren, OrderedSourceDocumentNode,
+            },
             path::AssetPath,
         },
         ui_document::source::lower::authored_ui_document_lowering::{
@@ -21,6 +24,55 @@ use crate::{
     },
 };
 
+pub(in crate::ui_document::source) const SELECTED_SCRIPT_PATH_ATTRIBUTE: &str =
+    "openzt2SelectedScriptPath";
+
+pub(super) fn annotate_ui_source_script_dependencies(
+    document: &OrderedSourceDocument,
+    scripts: &BTreeMap<String, String>,
+) -> Option<OrderedSourceDocument> {
+    fn annotate(
+        node: &mut OrderedSourceDocumentNode,
+        prefix: &str,
+        scripts: &BTreeMap<String, String>,
+    ) {
+        if node.attribute("msg") == Some("ZT_RUN_SCRIPT") {
+            if let Some(reference) = node.attribute("string").and_then(ui_script_reference) {
+                let key = AssetPath::new(reference).key();
+                if let Some(winner) = scripts.get(&format!("{prefix}{key}")) {
+                    node.attributes
+                        .retain(|attribute| attribute.name() != SELECTED_SCRIPT_PATH_ATTRIBUTE);
+                    node.attributes.push(OrderedSourceDocumentAttribute::new_synthetic_ordered_source_document_attribute(
+                        SELECTED_SCRIPT_PATH_ATTRIBUTE, winner.as_str(),
+                    ));
+                }
+            }
+        }
+        if !node.child_items().is_empty() {
+            let mut children = node.child_items().to_vec();
+            for child in &mut children {
+                if let OrderedSourceDocumentChild::Element(child) = child {
+                    annotate(child, prefix, scripts);
+                }
+            }
+            node.children =
+                OrderedSourceDocumentChildren::from_ordered_source_document_child_items(children);
+        }
+    }
+    let prefix = format!("{}\0", document.path.key());
+    let (first, _) = scripts.range(prefix.clone()..).next()?;
+    if !first.starts_with(&prefix) {
+        return None;
+    }
+    let mut annotated = document.clone();
+    annotate(&mut annotated.root, &prefix, scripts);
+    Some(annotated)
+}
+
+fn ui_script_reference(command: &str) -> Option<&str> {
+    command.split(' ').filter(|token| !token.is_empty()).nth(1)
+}
+
 pub(super) fn plan_selected_ui_source_dependency_winners_and_image_dimensions(
     ordered_ui_source_documents: &[OrderedSourceDocument],
     asset_archives: &AssetArchives,
@@ -31,6 +83,22 @@ pub(super) fn plan_selected_ui_source_dependency_winners_and_image_dimensions(
         asset_archives: &AssetArchives,
         resolved_dependencies: &mut UiResolvedDependencies,
     ) {
+        if source_document_node.attribute("msg") == Some("ZT_RUN_SCRIPT") {
+            if let Some(reference) = source_document_node
+                .attribute("string")
+                .and_then(ui_script_reference)
+            {
+                if let Some(winner) = asset_archives
+                    .resolve_script_reference(Path::new(source_document_path), reference)
+                {
+                    let key = AssetPath::new(reference).key();
+                    resolved_dependencies.scripts.insert(
+                        format!("{source_document_path}\0{key}"),
+                        winner.to_string_lossy().replace('\\', "/"),
+                    );
+                }
+            }
+        }
         let mut insert_selected_dependency_winner =
             |authored_reference: &str, selected_winner_path: String| {
                 let lookup_keys = [
@@ -92,6 +160,22 @@ pub(super) fn plan_selected_ui_source_dependency_winners_and_image_dimensions(
                     _ => {}
                 }
             };
+        if source_document_node.attribute("msg") == Some("ZT_GRAPH_SELECTION") {
+            if let Some(layout) = source_document_node
+                .attribute("string")
+                .or_else(|| source_document_node.attribute("value"))
+                .and_then(|payload| payload.split_ascii_whitespace().nth(2))
+            {
+                if let Some(winner) =
+                    asset_archives.resolve_ui_reference(Path::new(source_document_path), layout)
+                {
+                    insert_selected_dependency_winner(
+                        layout,
+                        winner.to_string_lossy().replace('\\', "/"),
+                    );
+                }
+            }
+        }
 
         for source_attribute in &source_document_node.attributes {
             let authored_reference = source_attribute.value().trim();

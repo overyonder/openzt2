@@ -7,13 +7,13 @@ use std::{
 use bevy::{
     app::TaskPoolPlugin,
     asset::{
-        io::{memory::MemoryAssetReader, AssetSourceBuilder, AssetSourceId},
         AssetApp, AssetPlugin,
+        io::{AssetSourceBuilder, AssetSourceId, memory::MemoryAssetReader},
     },
     ecs::message::Messages,
 };
 use openzt2_game_assets::{
-    asset_source::{create_bevy_asset_source_for_enabled_z2f_archives, ArchiveOverlayChanged},
+    asset_source::{ArchiveOverlayChanged, create_bevy_asset_source_for_enabled_z2f_archives},
     lua_script::LuaScriptAssetLoadingPlugin,
     world_definitions::{
         world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions,
@@ -21,7 +21,7 @@ use openzt2_game_assets::{
     },
 };
 use openzt2_world_state::world_spawn::{
-    world_load_completion_marker::WorldLoadCompleted,
+    world_load_completion_marker::WorldLoadCompleted, world_membership_types::WorldMember,
     zoo_entrance_anchor_synchronization::zoo_entrance_from_authored_gate_anchor,
 };
 use openzt2_zoo_state::{
@@ -36,9 +36,9 @@ use openzt2_zoo_state::{
 };
 
 use super::super::{
-    fame_progression::{publish_world_maximum_fame, update_fame_and_apply_authored_fame_unlocks},
-    zoo_rating_input_types::EarnedAwardFamePoints,
-    zoo_rating_recomputation::reduce_living_animal_population,
+    fame_progression::{publish_world_maximum_fame, update_authored_fame},
+    zoo_rating_input_types::{AnimalWelfareRating, GuestRatingFacts, LivingAnimalPopulation},
+    zoo_rating_recomputation::reduce_living_animal_population_and_welfare,
 };
 use super::*;
 
@@ -120,8 +120,8 @@ fn authored_fame_changes_as_the_zoo_grows() -> io::Result<()> {
     app.add_systems(
         Update,
         (
-            reduce_living_animal_population,
-            update_fame_and_apply_authored_fame_unlocks,
+            reduce_living_animal_population_and_welfare,
+            update_authored_fame,
             publish_world_maximum_fame,
         )
             .chain(),
@@ -136,8 +136,9 @@ fn authored_fame_changes_as_the_zoo_grows() -> io::Result<()> {
             Fame::default(),
             ZooMaximumFame::default(),
             LivingAnimalPopulation::default(),
+            AnimalWelfareRating::default(),
             GuestRatingFacts::default(),
-            EarnedAwardFamePoints::default(),
+            super::super::authored_award_programs::AuthoredAwardPoints::default(),
             ZooRating::default(),
             AuthoredFameScript {
                 handle,

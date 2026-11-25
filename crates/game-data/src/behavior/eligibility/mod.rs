@@ -196,4 +196,5 @@ pub enum BehaviorConditionEligibilityFact {
     DeparturePoints,
     NeedPointsBad,
     NeedPointsGood,
+    ObjectContainer,
 }

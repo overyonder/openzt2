@@ -6,11 +6,10 @@ use crate::ui_document::source::lower::authored_ui_document_lowering::AuthoredUi
 use crate::ui_document::source::lower::authored_ui_scalar_value_lowering::{
     invalid_at, parse_bool,
 };
-use openzt2_game_data::ui_document::action::camera::{
-    UiCameraAction, UiCameraActionRecord, UiCameraSignedAxisDirection,
-};
+use openzt2_game_data::ui_document::action::camera::{UiCameraAction, UiCameraActionRecord};
 use openzt2_game_data::ui_document::action::{UiActionRecord, UiTrigger};
 use openzt2_game_data::ui_document::document::UiDocumentRole;
+use openzt2_game_data::AssetId;
 use std::io;
 
 pub(super) fn lower_camera_command(
@@ -20,22 +19,17 @@ pub(super) fn lower_camera_command(
     input: &AuthoredUiDocument,
 ) -> io::Result<Option<UiActionRecord>> {
     let result = match event.message.as_str() {
-        "ZT_SET_COMMAND_STATE" | "ZT_CLEAR_COMMAND_STATE"
-            if matches!(
-                event.string.as_deref(),
-                Some("photoZoomIn" | "photoZoomOut")
-            ) =>
-        {
+        "ZT_SET_COMMAND_STATE" | "ZT_CLEAR_COMMAND_STATE" => {
+            let command = event
+                .string
+                .as_deref()
+                .or(event.value.as_deref())
+                .filter(|value| !value.trim().is_empty())
+                .ok_or_else(|| invalid_at(input, "command state requires an authored command"))?;
             Ok(UiActionRecord::Camera(UiCameraActionRecord {
                 trigger,
-                action: UiCameraAction::SetPhotoZoomCommandState {
-                    // The source calls the positive scale command "photoZoomIn";
-                    // its authored key is Minus. Preserve the authored pairing.
-                    direction: if event.string.as_deref() == Some("photoZoomIn") {
-                        UiCameraSignedAxisDirection::Positive
-                    } else {
-                        UiCameraSignedAxisDirection::Negative
-                    },
+                action: UiCameraAction::SetCommandState {
+                    command: AssetId::from_key(&command.trim().to_ascii_lowercase()),
                     pressed: event.message == "ZT_SET_COMMAND_STATE",
                 },
             }))

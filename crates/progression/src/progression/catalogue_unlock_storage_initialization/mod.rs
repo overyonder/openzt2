@@ -103,7 +103,7 @@ pub(super) fn reconcile_authored_research_items(
                 current
                     .definitions
                     .iter()
-                    .filter(|(_, &item)| research_availability.contains(item))
+                    .filter(|&(_, &item)| research_availability.contains(item))
                     .map(|(&definition, &item)| (definition, item))
                     .collect()
             } else {

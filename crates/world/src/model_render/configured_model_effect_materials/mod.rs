@@ -1,6 +1,10 @@
+use super::scoped_prefab_lighting::ScopedPrefabLightInputs;
 use crate::animation_playback::authored_decal_texture_cycles::AnimationDecalFrames;
-use crate::world_spawn::prefab_world_instance_spawning::morph_fade_projection::PrefabMorphOpacity;
+use crate::world_spawn::prefab_world_instance_spawning::morph_fade_projection::{
+    projected_prefab_opacity, NamedPrefabOpacity, PrefabMorphOpacity,
+};
 use bevy::app::{HierarchyPropagatePlugin, Propagate, PropagateSet};
+use bevy::asset::{asset_changed::AssetChanged, AsAssetId};
 use bevy::asset::{AssetEvent, AssetId};
 use bevy::ecs::entity::EntityHashSet;
 use bevy::ecs::system::SystemParam;
@@ -32,6 +36,14 @@ pub(super) struct AuthoredModelEffectMaterial {
     pub(super) geometry: Entity,
 }
 
+impl AsAssetId for AuthoredModelEffectMaterial {
+    type Asset = EffectPassMaterial;
+
+    fn as_asset_id(&self) -> AssetId<Self::Asset> {
+        self.template.id()
+    }
+}
+
 #[derive(Component)]
 pub(super) struct ModelMaterialInputOwner<T: Component>(pub(super) Entity, PhantomData<fn() -> T>);
 
@@ -58,6 +70,7 @@ struct ModelEffectMaterialVariant {
     animation_geometry: Option<Entity>,
     ordered_environment: bool,
     fading_draw: Option<Entity>,
+    scoped_lighting_draw: Option<Entity>,
     animated_decals: Box<[(Option<usize>, Option<u32>, AssetId<Image>)]>,
 }
 
@@ -74,12 +87,15 @@ pub(super) fn register_configured_model_effect_materials(app: &mut App) {
                 .before(project_authored_model_material_passes),
             PropagateSet::<PrefabMorphOpacity>::default()
                 .after(project_authored_model_material_passes),
+            PropagateSet::<NamedPrefabOpacity>::default()
+                .after(project_authored_model_material_passes),
         ),
     );
     app.add_systems(
         PostUpdate,
         project_configured_model_effect_materials
             .after(PropagateSet::<PrefabMorphOpacity>::default())
+            .after(PropagateSet::<NamedPrefabOpacity>::default())
             .after(project_mirrored_and_tinted_model_primitive_meshes)
             .after(PropagateSet::<PrefabCameraRenderLayers>::default())
             .in_set(ModelRenderPresentationSet::SourceMaterials)
@@ -124,13 +140,67 @@ fn publish_model_material_input_owners<T: Component>(
 }
 
 #[derive(SystemParam)]
-struct AnimatedMaterialInputs<'w, 's> {
+pub(super) struct AnimatedMaterialInputs<'w, 's> {
     decals: Query<'w, 's, Ref<'static, AnimationDecalFrames>>,
     removed_decals: RemovedComponents<'w, 's, ModelMaterialInputOwner<AnimationDecalFrames>>,
     removed_morph: RemovedComponents<'w, 's, PrefabMorphOpacity>,
+    removed_named: RemovedComponents<'w, 's, NamedPrefabOpacity>,
 }
 
-fn project_configured_model_effect_materials(
+#[derive(SystemParam)]
+pub(super) struct ConfiguredMaterialChanges<'w, 's> {
+    draws: Query<
+        'w,
+        's,
+        Entity,
+        (
+            With<AuthoredModelEffectMaterial>,
+            Or<(
+                Changed<AuthoredModelEffectMaterial>,
+                AssetChanged<AuthoredModelEffectMaterial>,
+                Changed<Mesh3d>,
+                AssetChanged<Mesh3d>,
+                Changed<PrefabCameraRenderLayers>,
+                Changed<ModelMaterialInputOwner<ModelExpanded>>,
+                Changed<ModelMaterialInputOwner<PrefabTextureReplacements>>,
+                Changed<ModelMaterialInputOwner<AnimationDecalFrames>>,
+                Changed<ModelMaterialInputOwner<PrefabFixedFunctionWorldLightingPolicy>>,
+                Changed<InheritedPrimitiveTint>,
+                Changed<PrefabMorphOpacity>,
+                Changed<NamedPrefabOpacity>,
+            )>,
+        ),
+    >,
+    owners: Query<
+        'w,
+        's,
+        Entity,
+        Or<(
+            Changed<PrefabModel>,
+            Changed<PrefabTextureReplacements>,
+            Changed<PrefabFixedFunctionWorldLightingPolicy>,
+            Changed<AnimationDecalFrames>,
+            Changed<ScopedPrefabLightInputs>,
+        )>,
+    >,
+    scoped_lights: Query<'w, 's, &'static ScopedPrefabLightInputs>,
+    parents: Query<'w, 's, &'static ChildOf>,
+    removed_lights: RemovedComponents<'w, 's, ScopedPrefabLightInputs>,
+    children: Query<'w, 's, &'static Children>,
+    texture_overrides: Query<
+        'w,
+        's,
+        Entity,
+        (
+            With<AuthoredModelEffectMaterial>,
+            With<ModelMaterialInputOwner<PrefabTextureReplacements>>,
+        ),
+    >,
+    asset_dependencies: Query<'w, 's, (Entity, &'static AuthoredModelEffectMaterial)>,
+}
+
+pub(super) fn project_configured_model_effect_materials(
+    mut dirty_draws: ConfiguredMaterialChanges,
     mut draws: Query<(
         Entity,
         Ref<AuthoredModelEffectMaterial>,
@@ -139,7 +209,8 @@ fn project_configured_model_effect_materials(
         Option<Ref<ModelMaterialInputOwner<ModelExpanded>>>,
         Option<Ref<ModelMaterialInputOwner<PrefabTextureReplacements>>>,
         Option<Ref<InheritedPrimitiveTint>>,
-        Option<Ref<PrefabMorphOpacity>>,
+        Option<&PrefabMorphOpacity>,
+        Option<&NamedPrefabOpacity>,
         Option<Ref<ModelMaterialInputOwner<AnimationDecalFrames>>>,
         Option<&bevy::gltf::GltfMaterialName>,
         &mut MeshMaterial3d<EffectPassMaterial>,
@@ -167,10 +238,13 @@ fn project_configured_model_effect_materials(
     mut animation: AnimatedMaterialInputs,
     mut variants: Local<HashMap<ModelEffectMaterialVariant, AssetId<EffectPassMaterial>>>,
 ) {
+    let mut removed_assets = HashSet::new();
     let changed_assets = material_events
         .read()
         .filter_map(|event| match *event {
-            AssetEvent::Added { id } | AssetEvent::Modified { id } | AssetEvent::Removed { id } => {
+            AssetEvent::Added { id } | AssetEvent::Modified { id } => Some(id),
+            AssetEvent::Removed { id } => {
+                removed_assets.insert(id);
                 Some(id)
             }
             _ => None,
@@ -188,6 +262,7 @@ fn project_configured_model_effect_materials(
         .chain(removed_light_owners.read())
         .chain(removed_layers.read())
         .chain(animation.removed_morph.read())
+        .chain(animation.removed_named.read())
         .chain(animation.removed_decals.read())
         .collect::<EntityHashSet>();
     let texture_replacement_enabled = graphics
@@ -197,7 +272,34 @@ fn project_configured_model_effect_materials(
         .as_ref()
         .is_some_and(|graphics| graphics.is_changed());
 
-    for (
+    let mut affected = removed_inputs;
+    affected.extend(dirty_draws.draws.iter());
+    for owner in dirty_draws
+        .owners
+        .iter()
+        .chain(dirty_draws.removed_lights.read())
+    {
+        affected.extend(
+            std::iter::once(owner).chain(dirty_draws.children.iter_descendants::<Children>(owner)),
+        );
+    }
+    if changed_settings {
+        affected.extend(dirty_draws.texture_overrides.iter());
+    }
+    if !removed_assets.is_empty() {
+        affected.extend(
+            dirty_draws
+                .asset_dependencies
+                .iter()
+                .filter_map(|(entity, material)| {
+                    removed_assets
+                        .contains(&material.template.id())
+                        .then_some(entity)
+                }),
+        );
+    }
+    let mut draws = draws.iter_many_mut(affected).matched();
+    while let Some((
         entity,
         authored,
         mesh,
@@ -205,12 +307,14 @@ fn project_configured_model_effect_materials(
         model_owner,
         replacement_owner,
         tint,
-        morph_opacity,
+        morph,
+        named,
         decal_owner,
         material_name,
         mut binding,
-    ) in &mut draws
+    )) = draws.fetch_next()
     {
+        let opacity = projected_prefab_opacity(morph, named);
         let model = model_owner
             .as_ref()
             .and_then(|owner| models.get(owner.0).ok());
@@ -224,40 +328,15 @@ fn project_configured_model_effect_materials(
         let decals = decal_owner
             .as_ref()
             .and_then(|owner| animation.decals.get(owner.0).ok());
-        let changed = authored.is_changed()
-            || mesh.is_changed()
-            || removed_inputs.contains(&entity)
-            || changed_assets.contains(&authored.template.id())
-            || layers.as_ref().is_some_and(|layers| layers.is_changed())
-            || model_owner
-                .as_ref()
-                .is_some_and(|owner| owner.is_changed() || removed_inputs.contains(&owner.0))
-            || replacement_owner
-                .as_ref()
-                .is_some_and(|owner| owner.is_changed())
-            || model.as_ref().is_some_and(|(model, policy_owner)| {
-                model.is_changed()
-                    || policy_owner
-                        .as_ref()
-                        .is_some_and(|owner| owner.is_changed())
-            })
-            || replacement
-                .as_ref()
-                .is_some_and(|replacement| replacement.is_changed())
-            || light_policy
-                .as_ref()
-                .is_some_and(|policy| policy.is_changed())
-            || tint.as_ref().is_some_and(|tint| tint.is_changed())
-            || morph_opacity
-                .as_ref()
-                .is_some_and(|opacity| opacity.is_changed())
-            || decal_owner.as_ref().is_some_and(|owner| owner.is_changed())
-            || decals.as_ref().is_some_and(|decals| decals.is_changed())
-            || (replacement.is_some() && changed_settings);
-        if !changed {
-            continue;
-        }
-
+        let scoped_lights = std::iter::once(authored.geometry)
+            .chain(
+                dirty_draws
+                    .parents
+                    .iter_ancestors::<ChildOf>(authored.geometry),
+            )
+            .filter_map(|entity| dirty_draws.scoped_lights.get(entity).ok())
+            .flat_map(|lights| lights.0.iter().copied())
+            .collect::<Vec<_>>();
         let texture = if texture_replacement_enabled {
             model
                 .as_ref()
@@ -294,6 +373,7 @@ fn project_configured_model_effect_materials(
             })
             .map(|tint| tint.0.to_srgba().to_vec4());
         let Some(source) = materials.get(&authored.template) else {
+            binding.set_if_neq(MeshMaterial3d(authored.template.clone()));
             continue;
         };
         let animated_decals = decals
@@ -331,8 +411,9 @@ fn project_configured_model_effect_materials(
             && authored.clothing_decal.is_none()
             && animation_geometry.is_none()
             && !ordered_environment
-            && morph_opacity.is_none()
+            && opacity.is_none()
             && animated_decals.is_empty()
+            && scoped_lights.is_empty()
         {
             binding.set_if_neq(MeshMaterial3d(authored.template.clone()));
             continue;
@@ -351,7 +432,8 @@ fn project_configured_model_effect_materials(
             tint: tint.map(|color| color.to_array().map(f32::to_bits)),
             animation_geometry,
             ordered_environment,
-            fading_draw: morph_opacity.as_ref().map(|_| entity),
+            fading_draw: opacity.map(|_| entity),
+            scoped_lighting_draw: (!scoped_lights.is_empty()).then_some(entity),
             animated_decals: animated_decals
                 .iter()
                 .map(|decal| (decal.layer, decal.texture_coordinates, decal.image.id()))
@@ -411,20 +493,28 @@ fn project_configured_model_effect_materials(
             if let Some(geometry) = animation_geometry {
                 derived.bind_texture_coordinate_animation_geometry(geometry, &mut buffers);
             }
-            if morph_opacity.is_some() {
+            if opacity.is_some() {
                 derived.configure_for_morph_fade();
+            }
+            if !scoped_lights.is_empty() {
+                derived.bind_scoped_prefab_lighting(&scoped_lights, &mut buffers);
             }
             let handle = materials.add(derived);
             variants.insert(key, handle.id());
             handle
         };
-        if let Some(opacity) = morph_opacity {
+        if !scoped_lights.is_empty() {
+            if let Some(material) = materials.get(&handle) {
+                material.update_scoped_prefab_lighting(&scoped_lights, &mut buffers);
+            }
+        }
+        if let Some(opacity) = opacity {
             if materials
                 .get(&handle)
-                .is_some_and(|material| material.morph_opacity() != opacity.0)
+                .is_some_and(|material| material.morph_opacity() != opacity)
             {
                 if let Some(mut material) = materials.get_mut(&handle) {
-                    material.set_morph_opacity(opacity.0);
+                    material.set_morph_opacity(opacity);
                 }
             }
         }

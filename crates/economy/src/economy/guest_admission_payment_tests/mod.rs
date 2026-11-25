@@ -34,6 +34,9 @@ fn create_application_with_guest_admission_payment(admission_price: Money) -> Ap
         .add_message::<GuestReachedEntrance>()
         .add_message::<GuestArrived>()
         .add_message::<TransactionRequest>()
+        .init_resource::<super::account_transaction_settlement::AccountRequestCursor>()
+        .add_message::<super::account_transaction_settlement::RecordedAccountMovement<true>>()
+        .add_message::<super::account_transaction_settlement::RecordedAccountMovement<false>>()
         .add_message::<TransactionCompleted>()
         .add_message::<TransactionRejected>()
         .add_systems(
@@ -150,10 +153,12 @@ fn closed_admissions_turn_gate_arrival_away_without_payment() {
             .0,
         Money(1_000)
     );
-    assert!(application
-        .world()
-        .resource::<Messages<GuestArrived>>()
-        .is_empty());
+    assert!(
+        application
+            .world()
+            .resource::<Messages<GuestArrived>>()
+            .is_empty()
+    );
 }
 
 #[test]
@@ -182,8 +187,10 @@ fn unaffordable_admission_preserves_balances_and_routes_guest_out() {
             .0,
         Money(1_000)
     );
-    assert!(application
-        .world()
-        .resource::<Messages<GuestArrived>>()
-        .is_empty());
+    assert!(
+        application
+            .world()
+            .resource::<Messages<GuestArrived>>()
+            .is_empty()
+    );
 }

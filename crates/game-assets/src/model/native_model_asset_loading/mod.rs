@@ -211,6 +211,7 @@ impl AssetLoader for NativeModelAssetLoader {
                 &lowered_material.reflection_projections,
             )?;
             material.netimmerse_texture_binding = Some(lowered_material.texture_binding);
+            material.netimmerse_material_animations = lowered_material.material_animations;
             native_model_load_context.add_labeled_asset(label, material);
         }
 

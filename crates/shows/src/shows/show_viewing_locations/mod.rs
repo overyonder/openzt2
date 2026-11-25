@@ -15,6 +15,8 @@ use openzt2_world_state::world_spawn::{
     world_terrain_hydration::WorldTerrainHorizontalBounds,
 };
 use openzt2_zoo_state::{
+    animal_lifecycle::types::Animal,
+    guests::guest_simulation_types::Guest,
     placement::{
         placed_object_types::IndexedObjectPlacementCells,
         placement_occupancy_index::PlacedObjectFootprintQueries,
@@ -28,15 +30,24 @@ use openzt2_zoo_state::{
     topology::topology_graph_types::{PathTile, TopologyGrid, TopologyIndex},
 };
 
+#[derive(Component, Default, PartialEq, Eq)]
+pub(super) struct ShowViewingDependencies(EntityHashSet);
+
 #[derive(SystemParam)]
 pub(super) struct ShowViewingChanges<'w, 's> {
     candidates: Query<
         'w,
         's,
-        (),
+        (Entity, &'static WorldMember, &'static GlobalTransform),
         (
-            Or<(With<PathTile>, With<IndexedObjectPlacementCells>)>,
             Or<(
+                With<PathTile>,
+                With<IndexedObjectPlacementCells>,
+                With<DefinitionId>,
+            )>,
+            Or<(
+                Changed<PathTile>,
+                Changed<IndexedObjectPlacementCells>,
                 Changed<GlobalTransform>,
                 Changed<Visibility>,
                 Changed<WorldMember>,
@@ -44,16 +55,17 @@ pub(super) struct ShowViewingChanges<'w, 's> {
             )>,
         ),
     >,
-    blockers: Query<'w, 's, (), Changed<ColliderAabb>>,
+    blockers: Query<'w, 's, (Entity, &'static ColliderAabb), Changed<ColliderAabb>>,
     retired_blockers: RemovedComponents<'w, 's, ColliderAabb>,
     retired_paths: RemovedComponents<'w, 's, PathTile>,
     retired_footprints: RemovedComponents<'w, 's, IndexedObjectPlacementCells>,
+    retired_definitions: RemovedComponents<'w, 's, DefinitionId>,
     retired_open_state: RemovedComponents<'w, 's, ShowStageOpenState>,
 }
 
 pub(super) fn refresh_stage_viewing_locations(
     runs: Query<&RunningShow>,
-    stages: Query<
+    mut stages: Query<
         (
             Entity,
             Ref<GlobalTransform>,
@@ -61,6 +73,7 @@ pub(super) fn refresh_stage_viewing_locations(
             Option<&ShowViewingLocations>,
             Option<Ref<StageRunningShow>>,
             Option<Ref<ShowStageOpenState>>,
+            Option<&mut ShowViewingDependencies>,
         ),
         With<ShowStage>,
     >,
@@ -75,12 +88,13 @@ pub(super) fn refresh_stage_viewing_locations(
         ),
         Or<(With<PathTile>, With<DefinitionId>)>,
     >,
-    parents: Query<(Option<&ChildOf>, Option<&DefinitionId>)>,
-    roots: Query<(
-        &TopologyGrid,
-        Ref<TopologyIndex>,
-        &WorldTerrainHorizontalBounds,
+    parents: Query<(
+        Option<&ChildOf>,
+        Option<&DefinitionId>,
+        Has<Animal>,
+        Has<Guest>,
     )>,
+    roots: Query<(&TopologyGrid, &TopologyIndex, &WorldTerrainHorizontalBounds)>,
     footprints: PlacedObjectFootprintQueries,
     mut changes: ShowViewingChanges,
     definitions: Res<WorldDefinitions>,
@@ -97,36 +111,65 @@ pub(super) fn refresh_stage_viewing_locations(
     };
     let range_squared = view.ground_range_m * view.ground_range_m;
     let seating = ["bench", "viewingarea", "b_grandstand"].map(AssetId::from_key);
-    let removed_geometry = !changes.retired_blockers.is_empty()
-        || !changes.retired_paths.is_empty()
-        || !changes.retired_footprints.is_empty();
-    changes.retired_blockers.clear();
-    changes.retired_paths.clear();
-    changes.retired_footprints.clear();
+    let is_seat = |definition: Option<&DefinitionId>| {
+        definition
+            .and_then(|definition| definitions.find_object(definition.0))
+            .is_some_and(|object| {
+                seating.iter().any(|kind| {
+                    object.id == *kind || object.behavior_type_identifiers.contains(kind)
+                })
+            })
+    };
+    let retired: EntityHashSet = changes
+        .retired_blockers
+        .read()
+        .chain(changes.retired_paths.read())
+        .chain(changes.retired_footprints.read())
+        .chain(changes.retired_definitions.read())
+        .collect();
     let reopened = changes.retired_open_state.read().collect::<EntityHashSet>();
-    let geometry_changed =
-        removed_geometry || !changes.candidates.is_empty() || !changes.blockers.is_empty();
-    for (stage, stage_pose, world, locations, run, open) in &stages {
+    for (stage, stage_pose, world, locations, run, open, mut dependencies) in &mut stages {
         let running = open.as_deref() != Some(&ShowStageOpenState::Closed)
             && run.as_ref().is_some_and(|run| {
                 runs.get(*run.collection())
                     .is_ok_and(|run| run.phase != ShowPhase::BetweenShows)
             });
-        if !running && locations.is_none() {
+        if !running && locations.is_none() && dependencies.is_none() {
             continue;
         }
-        let neighborhood = roots.get(world.root).ok();
+        let focus = stage_pose.translation() + Vec3::Y * view.guest_eye_height_m;
+        let extent = Vec2::splat(view.ground_range_m.max(0.0));
+        let minimum = focus.xz() - extent;
+        let maximum = focus.xz() + extent;
+        let existing_affected = dependencies.as_ref().is_some_and(|known| {
+            known.0.iter().any(|entity| {
+                retired.contains(entity)
+                    || changes.blockers.contains(*entity)
+                    || changes.candidates.contains(*entity)
+            })
+        });
+        let intersection = |aabb: &ColliderAabb| {
+            aabb.max.xz().cmpge(minimum).all() && aabb.min.xz().cmple(maximum).all()
+        };
         if running
+            && dependencies.is_some()
             && !definitions_changed
-            && !geometry_changed
             && !stage_pose.is_changed()
             && !run.as_ref().is_some_and(Ref::is_changed)
             && !open.as_ref().is_some_and(Ref::is_changed)
             && !reopened.contains(&stage)
-            && !neighborhood
-                .as_ref()
-                .is_some_and(|(_, topology, _)| topology.is_changed())
-            && !footprints.index_changed(world.root)
+            && !existing_affected
+            && !changes.candidates.iter().any(|(entity, member, pose)| {
+                member.root == world.root
+                    && pose.translation().xz().distance_squared(focus.xz()) <= range_squared
+                    && targets
+                        .get(entity)
+                        .is_ok_and(|(_, _, _, definition, path, _)| path || is_seat(definition))
+            })
+            && !changes.blockers.iter().any(|(entity, aabb)| {
+                intersection(aabb)
+                    && blocks_view(entity, Entity::PLACEHOLDER, stage, &parents, definitions)
+            })
         {
             continue;
         }
@@ -136,13 +179,11 @@ pub(super) fn refresh_stage_viewing_locations(
             .filter_map(|location| Some((parents.get(location).ok()?.0?.parent(), location)))
             .collect();
         if running {
-            let focus = stage_pose.translation() + Vec3::Y * view.guest_eye_height_m;
-            let Some((grid, topology, bounds)) = neighborhood else {
+            let Ok((grid, topology, bounds)) = roots.get(world.root) else {
                 continue;
             };
-            let extent = Vec2::splat(view.ground_range_m.max(0.0));
-            let minimum = (focus.xz() - extent).max(bounds.min);
-            let maximum = (focus.xz() + extent).min(bounds.max);
+            let minimum = minimum.max(bounds.min);
+            let maximum = maximum.min(bounds.max);
             let min = grid
                 .position_cell(Vec3::new(minimum.x, 0.0, minimum.y))
                 .truncate();
@@ -155,10 +196,31 @@ pub(super) fn refresh_stage_viewing_locations(
                     footprints.entities_occupying_cell(world.root, IVec2::new(x, y))
                 })
             });
+            let blocker_bounds = ColliderAabb {
+                min: Vec3::new(minimum.x, f32::MIN, minimum.y),
+                max: Vec3::new(maximum.x, f32::MAX, maximum.y),
+            };
+            let colliders = spatial.aabb_intersections_with_aabb(blocker_bounds);
+            let mut nearby_dependencies = ShowViewingDependencies(
+                colliders
+                    .iter()
+                    .copied()
+                    .filter(|&entity| {
+                        blocks_view(entity, Entity::PLACEHOLDER, stage, &parents, definitions)
+                    })
+                    .collect(),
+            );
+            let unindexed_seats = colliders.into_iter().filter_map(|entity| {
+                std::iter::successors(Some(entity), |entity| {
+                    parents.get(*entity).ok()?.0.map(ChildOf::parent)
+                })
+                .find(|entity| targets.contains(*entity))
+            });
             let mut seen = EntityHashSet::default();
             let nearby = topology
                 .paths_within(min, max)
                 .chain(seats)
+                .chain(unindexed_seats)
                 .filter(move |&entity| seen.insert(entity));
             for (target, pose, member, definition, is_path, visibility) in
                 targets.iter_many(nearby).filter_map(Result::ok)
@@ -167,18 +229,11 @@ pub(super) fn refresh_stage_viewing_locations(
                     || target == stage
                     || visibility == Some(&Visibility::Hidden)
                     || pose.translation().xz().distance_squared(focus.xz()) > range_squared
-                    || !(is_path
-                        || definition
-                            .and_then(|definition| definitions.find_object(definition.0))
-                            .is_some_and(|object| {
-                                seating.iter().any(|kind| {
-                                    object.id == *kind
-                                        || object.behavior_type_identifiers.contains(kind)
-                                })
-                            }))
+                    || !(is_path || is_seat(definition))
                 {
                     continue;
                 }
+                nearby_dependencies.0.insert(target);
                 let clear = |ground| {
                     let eye = ground + Vec3::Y * view.guest_eye_height_m;
                     let offset = focus - eye;
@@ -218,6 +273,13 @@ pub(super) fn refresh_stage_viewing_locations(
                     ));
                 }
             }
+            if let Some(dependencies) = dependencies.as_mut() {
+                dependencies.set_if_neq(nearby_dependencies);
+            } else {
+                commands.entity(stage).insert(nearby_dependencies);
+            }
+        } else if dependencies.is_some() {
+            commands.entity(stage).remove::<ShowViewingDependencies>();
         }
         for (_, location) in previous {
             commands.entity(location).try_despawn();
@@ -229,7 +291,12 @@ fn blocks_view(
     mut entity: Entity,
     target: Entity,
     stage: Entity,
-    parents: &Query<(Option<&ChildOf>, Option<&DefinitionId>)>,
+    parents: &Query<(
+        Option<&ChildOf>,
+        Option<&DefinitionId>,
+        Has<Animal>,
+        Has<Guest>,
+    )>,
     definitions: WorldDefinitionsView<'_>,
 ) -> bool {
     let see_through = AssetId::from_key("b_seethrough");
@@ -237,12 +304,14 @@ fn blocks_view(
         if entity == target || entity == stage {
             return false;
         }
-        let Ok((parent, definition)) = parents.get(entity) else {
+        let Ok((parent, definition, animal, guest)) = parents.get(entity) else {
             return true;
         };
-        if definition
-            .and_then(|definition| definitions.find_object(definition.0))
-            .is_some_and(|object| object.behavior_type_identifiers.contains(&see_through))
+        if animal
+            || guest
+            || definition
+                .and_then(|definition| definitions.find_object(definition.0))
+                .is_some_and(|object| object.behavior_type_identifiers.contains(&see_through))
         {
             return false;
         }

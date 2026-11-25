@@ -187,6 +187,7 @@ pub(super) fn translate_connected_gamepad_input(
                     (-pan.x).max(0.0),
                 ],
                 look: Vec2::ZERO,
+                mouse_look: Vec2::ZERO,
                 zoom,
             },
             meaningful: pan != Vec2::ZERO

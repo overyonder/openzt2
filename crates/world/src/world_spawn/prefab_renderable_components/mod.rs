@@ -67,3 +67,39 @@ pub(super) fn create_prefab_renderable_components(
         },
     )
 }
+
+#[derive(bevy::prelude::Component)]
+pub(crate) struct PrefabAnimationBinding {
+    pub(crate) clock: openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackClock,
+    pub(crate) start: Option<openzt2_game_data::scene_prefab::PrefabAnimationStart>,
+}
+
+pub(super) fn attach_prefab_renderable_animations(
+    entity: &mut bevy::ecs::system::EntityCommands<'_>,
+    prefab: &openzt2_game_assets::scene_prefab::ScenePrefabAsset,
+    row: usize,
+    renderable: &openzt2_game_data::scene_prefab::PrefabRenderable,
+    clock: openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackClock,
+) {
+    use openzt2_world_state::animation_graph::model_animation_asset_binding_types::PendingModelAnimationAssets;
+
+    let animations = prefab
+        .loaded_animation_set_asset_handles_for_renderable(row, renderable)
+        .cloned()
+        .collect::<Box<[_]>>();
+    if animations.is_empty() {
+        return;
+    }
+    let start = prefab
+        .authored_animation_start_for_renderable(row, renderable)
+        .cloned();
+    entity.insert((
+        PendingModelAnimationAssets {
+            pending_model_animation_set_asset_handles: animations,
+            requested_initial_animation_clip_asset_key: start
+                .as_ref()
+                .map(|start| start.clip_key.clone()),
+        },
+        PrefabAnimationBinding { clock, start },
+    ));
+}

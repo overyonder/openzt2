@@ -5,7 +5,8 @@ use super::{
     },
 };
 use openzt2_game_data::animation::{
-    animation_clip_metadata::AuthoredAnimationMarker, animation_text_key::AuthoredAnimationTextKey,
+    animation_clip_metadata::AuthoredAnimationMarker,
+    animation_text_key::{AuthoredAnimationTextAction, AuthoredAnimationTextKey},
 };
 
 pub(super) fn extract_netimmerse_kf_text_keys(
@@ -43,11 +44,17 @@ pub(super) fn extract_netimmerse_kf_text_keys(
                 .iter()
                 .any(|marker| text.eq_ignore_ascii_case(marker))
         {
-            embedded_commands.extend(
-                crate::source_document::animation_text_keys::parse_blue_fang_embedded_animation_text_key(
-                    key.time, text,
-                ),
-            );
+            if let Some(mut key) =
+                crate::source_document::animation_text_keys::parse_blue_fang_embedded_animation_text_key(key.time, text)
+            {
+                key.animation_text_commands.retain(|command| !matches!(
+                    command.animation_text_action,
+                    AuthoredAnimationTextAction::UnrecognizedAuthoredCommand(_)
+                ));
+                if !key.animation_text_commands.is_empty() {
+                    embedded_commands.push(key);
+                }
+            }
         }
     }
     let commands = if sidecar.is_empty() {

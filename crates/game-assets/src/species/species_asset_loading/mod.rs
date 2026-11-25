@@ -12,13 +12,15 @@ use crate::{
             ARCHIVE_ENTRY_ASSET_EXTENSION, archive_entry_asset_source_path,
         },
     },
+    world_definitions::world_definition_asset_loading::authored_binder_reference_resolution::resolve_binder_file_reference,
     {
         source_document::{
             blue_fang_actor_manifest_model_and_scene_resolution_index::BlueFangActorManifestModelAndSceneResolutionIndex,
             blue_fang_source_dependency_reference_discovery::collect_blue_fang_actor_manifest_source_references,
             blue_fang_source_document_parsing::parse_blue_fang_source_document,
             ordered_source_document_collection_precedence::reorder_ordered_source_documents_by_requested_normalized_path_keys_and_last_definition_precedence,
-            ordered_source_document_types::OrderedSourceDocument, path::AssetPath,
+            ordered_source_document_types::OrderedSourceDocument,
+            path::{AssetPath, is_authored_file_reference},
         },
         species::source::{
             collect_authored_species_type_source_references,
@@ -76,17 +78,15 @@ impl AssetLoader for SpeciesAssetLoader {
         documents.push(primary);
         let mut loaded = std::collections::BTreeSet::from([primary_path.clone()]);
         while let Some((from, reference)) = type_references.pop_first() {
-            let dependency =
-                if Path::new(&reference).extension().is_some() || reference.contains(['/', '\\']) {
-                    self.archives
-                        .resolve_source_reference(Path::new(&from), &reference)
-                } else {
-                    binders.resolve_binder_type_source_path(&self.archives, &from, &reference)?
-                };
+            let dependency = if is_authored_file_reference(&reference) {
+                resolve_binder_file_reference(&self.archives, &from, &reference)
+            } else {
+                binders.resolve_binder_type_source_path(&self.archives, &from, &reference)?
+            };
             let Some(dependency) = dependency else {
                 continue;
             };
-            let dependency_path = dependency.to_string_lossy().replace('\\', "/");
+            let dependency_path = AssetPath::new(dependency.to_string_lossy()).key();
             if !loaded.insert(dependency_path.clone()) {
                 continue;
             }
@@ -134,10 +134,12 @@ impl AssetLoader for SpeciesAssetLoader {
                 .insert_parsed_blue_fang_actor_model_manifest(&actor_manifest);
         }
 
+        let mut variant_need_adjustments = Box::default();
         let document = lower_resolved_species_source_document_closure_to_canonical_document(
             &documents,
             &actor_manifest_resolution_index,
             &primary_path,
+            &mut variant_need_adjustments,
         )
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
         let mut animation_sets = actor_manifest_resolution_index
@@ -154,6 +156,7 @@ impl AssetLoader for SpeciesAssetLoader {
         animation_sets.dedup_by_key(|dependency| dependency.id);
         Ok(SpeciesAsset {
             document,
+            variant_need_adjustments,
             animation_sets: animation_sets.into_boxed_slice(),
         })
     }

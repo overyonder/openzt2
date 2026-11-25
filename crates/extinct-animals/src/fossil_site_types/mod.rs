@@ -12,6 +12,13 @@ pub enum FossilSiteKind {
 #[derive(Component)]
 pub struct DigPit;
 
-/// Restricts the fossil search to one puzzle while the request is active.
-#[derive(Component)]
+/// Supplies the puzzle requested by the scenario while there are unfound pieces.
+#[derive(Component, PartialEq, Eq)]
 pub struct RequestedFossilPuzzle(pub AssetId);
+
+/// Starts a fresh fossil search with an optional named puzzle.
+#[derive(Message)]
+pub struct SetFossilPuzzleToFind {
+    pub root: Entity,
+    pub puzzle: Option<AssetId>,
+}

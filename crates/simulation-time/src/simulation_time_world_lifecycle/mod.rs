@@ -19,7 +19,7 @@ use openzt2_world_state::world_spawn::world_load_failure::WorldLoadFailure;
 use super::{
     deterministic_random_stream::{derive_zoo_seed_from_scenario_and_profile, ZooSeed},
     simulation_clock_types::{ZooCalendar, ZooClock, ZooDay, ZooDayCadence, ZooMonth},
-    simulation_control_types::SimulationControl,
+    simulation_control_types::{SimulationControl, SimulationPaused, SimulationSpeedTier},
     zoo_calendar_calculation::calculate_zoo_calendar_for_absolute_day,
 };
 
@@ -77,11 +77,8 @@ pub fn initialize_simulation_time_from_selected_world(
     let absolute_day = starting_zoo.absolute_day;
     let tick = starting_zoo.start_tick;
     let timekeeper = definitions.authored_timekeeper_policy();
-    let fixed_step = timekeeper.map_or_else(
-        || Duration::try_from_secs_f64(f64::from(timing.fixed_hz).recip()).ok(),
-        |policy| Some(policy.simulation.interval),
-    );
-    let Some((step, cadence, mut clock)) = fixed_step
+    let Some((step, cadence, mut clock)) = definitions
+        .simulation_timestep()
         .zip(zoo_day_cadence_from_world_definitions(definitions))
         .and_then(|(step, cadence)| {
             cadence
@@ -127,7 +124,9 @@ pub fn initialize_simulation_time_from_selected_world(
         calculated_calendar,
         ZooDay(absolute_day),
         ZooMonth::from(calculated_calendar),
-        SimulationControl::new(0, false),
+        SimulationControl::new(false),
+        SimulationPaused::default(),
+        SimulationSpeedTier::default(),
         zoo_seed,
     ));
     if let Some(policy) = timekeeper {
@@ -135,7 +134,7 @@ pub fn initialize_simulation_time_from_selected_world(
             super::timekeeper_cadence::ZooSlowTickTimer::new(policy.slow.interval),
             super::timekeeper_cadence::ZooHeartbeatTimer::new(
                 policy.heartbeat.interval,
-                policy.heartbeat.pauses_with_simulation,
+                policy.heartbeat.initially_paused,
             ),
         ));
     }

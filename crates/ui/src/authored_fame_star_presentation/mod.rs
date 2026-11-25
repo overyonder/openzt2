@@ -1,14 +1,23 @@
 use bevy::{
-    camera::primitives::Aabb,
     camera::{visibility::RenderLayers, ClearColorConfig, RenderTarget, ScalingMode},
     prelude::*,
     render::render_resource::TextureFormat,
 };
-use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
-use openzt2_interface_state::ui::authored_ui_node_projection_components::UiNodeId;
+use openzt2_game_assets::{
+    effect::{
+        effect_instance_spawning_and_preparation::spawn_complete_particle_effect_document,
+        LiveParticleEffectInstance, ParticleEffectDocumentAsset,
+        SpawnCompleteParticleEffectDocument,
+    },
+    scene_prefab::ScenePrefabAsset,
+    ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset,
+};
+use openzt2_interface_state::ui::authored_ui_node_projection_components::{
+    UiDocumentOwner, UiDocumentRoot, UiNodeId,
+};
 use openzt2_world::world_spawn::prefab_presentation_render_tree::spawn_prefab_render_tree;
-use openzt2_world_state::world_spawn::prefab_fixed_function_world_lighting_policy::PrefabFixedFunctionWorldLightingPolicy;
 use openzt2_world_state::world_spawn::{
+    prefab_fixed_function_world_lighting_policy::PrefabFixedFunctionWorldLightingPolicy,
     world_load_completion_marker::WorldLoadCompleted, world_membership_types::WorldRoot,
 };
 use openzt2_zoo_state::progression::fame_types::Fame;
@@ -24,30 +33,51 @@ pub(super) struct FameStarSceneFor(Entity);
 pub(super) struct FameStarTarget(Vec<Entity>);
 
 #[derive(Component)]
-pub(super) struct FameStarScene {
-    full: Handle<ScenePrefabAsset>,
-    half: Handle<ScenePrefabAsset>,
+pub(super) struct FameStarScene(Handle<UiDocumentAsset>);
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+enum Filling {
+    #[default]
+    Empty,
+    Half,
+    Full,
 }
-#[derive(Component)]
-pub(super) struct UnframedFameStars;
 
 #[derive(Component)]
-pub(super) struct FameStar {
-    index: u8,
-    half: bool,
+pub(super) struct FameStarWell {
+    index: usize,
+    filling: Filling,
+    stable: Option<Entity>,
+    reveal: Timer,
 }
+
+#[derive(Component)]
+pub(super) struct FameStarTransient(Timer);
 
 pub(super) fn create_fame_star_scenes(
     mut commands: Commands,
-    server: Res<AssetServer>,
+    documents: Res<Assets<UiDocumentAsset>>,
     mut images: ResMut<Assets<Image>>,
-    nodes: Query<(Entity, &Name), (With<UiNodeId>, Without<FameStarTarget>)>,
+    nodes: Query<(Entity, Ref<UiNodeId>, &UiDocumentOwner), Without<FameStarTarget>>,
+    roots: Query<&UiDocumentRoot>,
 ) {
-    for (owner, name) in &nodes {
-        if name.as_str() != "famestarwells" {
+    for (owner, node, document_owner) in &nodes {
+        if !node.is_added() && !documents.is_changed() {
             continue;
         }
-        debug!(?owner, "creating authored fame-star render target");
+        let Ok(binding) = roots.get(document_owner.0) else {
+            continue;
+        };
+        let Some(display) = documents
+            .get(&binding.document)
+            .and_then(UiDocumentAsset::fame_star_display)
+        else {
+            continue;
+        };
+        if node.index != display.wells_node_index {
+            continue;
+        }
+
         let target = images.add(Image::new_target_texture(
             320,
             64,
@@ -70,15 +100,13 @@ pub(super) fn create_fame_star_scenes(
             .spawn((
                 Transform::IDENTITY,
                 Visibility::Inherited,
+                RenderLayers::layer(STAR_RENDER_LAYER),
                 PrefabFixedFunctionWorldLightingPolicy {
                     enabled: false,
                     preserve_authored_material_lighting: true,
                 },
                 FameStarSceneFor(owner),
-                FameStarScene {
-                    full: server.load("ui/fx/zoofame/star_full.nif#Scene"),
-                    half: server.load("ui/fx/zoofame/star_half_full.nif#Scene"),
-                },
+                FameStarScene(binding.document.clone()),
             ))
             .id();
         commands.spawn((
@@ -90,152 +118,232 @@ pub(super) fn create_fame_star_scenes(
             },
             Projection::Orthographic(OrthographicProjection {
                 scaling_mode: ScalingMode::Fixed {
-                    width: 10.0,
-                    height: 2.0,
+                    width: display.viewport_size_m.x,
+                    height: display.viewport_size_m.y,
                 },
                 ..OrthographicProjection::default_3d()
             }),
-            Transform::from_xyz(0.0, 0.0, 10.0).looking_at(Vec3::ZERO, Vec3::Y),
+            display.viewport_transform,
             RenderTarget::Image(target.into()),
             RenderLayers::layer(STAR_RENDER_LAYER),
             ChildOf(scene),
         ));
-    }
-}
-
-pub(super) fn hydrate_fame_stars(
-    mut commands: Commands,
-    prefabs: Res<Assets<ScenePrefabAsset>>,
-    scenes: Query<(Entity, &FameStarScene)>,
-) {
-    for (scene, state) in &scenes {
-        let (Some(full), Some(half)) = (prefabs.get(&state.full), prefabs.get(&state.half)) else {
-            continue;
-        };
-        for index in 0..5 {
-            for (is_half, prefab) in [(false, full), (true, half)] {
-                let position = Vec3::new(f32::from(index) * 2.0 - 4.0, 0.0, 0.0);
-                let parent = commands
-                    .spawn((
-                        FameStar {
-                            index,
-                            half: is_half,
-                        },
-                        Transform {
-                            translation: position,
-                            ..default()
-                        },
-                        Visibility::Inherited,
-                        ChildOf(scene),
-                    ))
-                    .id();
-                let (_, renderables, lights) =
-                    spawn_prefab_render_tree(&mut commands, prefab, parent, false);
-                for entity in renderables.into_iter().chain(lights) {
-                    commands
-                        .entity(entity)
-                        .insert(RenderLayers::layer(STAR_RENDER_LAYER));
-                }
-            }
+        for (index, &transform) in display.well_transforms.iter().enumerate() {
+            commands.spawn((
+                FameStarWell {
+                    index,
+                    filling: Filling::Empty,
+                    stable: None,
+                    reveal: Timer::from_seconds(0.0, TimerMode::Once),
+                },
+                ChildOf(scene),
+                transform,
+                Visibility::Inherited,
+            ));
         }
-        commands
-            .entity(scene)
-            .remove::<FameStarScene>()
-            .insert(UnframedFameStars);
     }
 }
 
 pub(super) fn present_fame_stars(
-    fame: Query<&Fame, (With<WorldRoot>, With<WorldLoadCompleted>)>,
-    owners: Query<&InheritedVisibility, With<FameStarTarget>>,
-    scenes: Query<(&FameStarSceneFor, Has<UnframedFameStars>)>,
-    mut stars: Query<(&FameStar, &mut Visibility, &ChildOf)>,
+    mut commands: Commands,
+    graphics: Res<openzt2_game_assets::graphics_settings_types::GraphicsSettings>,
+    documents: Res<Assets<UiDocumentAsset>>,
+    prefabs: Res<Assets<ScenePrefabAsset>>,
+    effects: Res<Assets<ParticleEffectDocumentAsset>>,
+    fame: Single<Ref<Fame>, (With<WorldRoot>, With<WorldLoadCompleted>)>,
+    scenes: Query<&FameStarScene>,
+    mut wells: Query<(Entity, &ChildOf, &mut FameStarWell)>,
 ) {
-    let half_stars = fame.single().map_or(0, |fame| fame.half_stars);
-    for (star, mut visibility, parent) in &mut stars {
-        let visible = scenes
+    let animate = graphics.object_detail
+        != openzt2_game_assets::graphics_settings_types::ThreeLevelGraphicsDetail::Low;
+    for (entity, parent, mut well) in &mut wells {
+        let Some(display) = scenes
             .get(parent.parent())
             .ok()
-            .and_then(|(owner, _)| owners.get(owner.0).ok())
-            .is_some_and(|visible| visible.get());
-        let full_count = half_stars.min(10) / 2;
-        let framing = scenes
-            .get(parent.parent())
-            .is_ok_and(|(_, unframed)| unframed)
-            && star.index == 0
-            && !star.half;
-        let filled = if star.half {
-            star.index == full_count && half_stars % 2 == 1
-        } else {
-            star.index < full_count
+            .and_then(|scene| documents.get(&scene.0))
+            .and_then(UiDocumentAsset::fame_star_display)
+        else {
+            continue;
         };
-        visibility.set_if_neq(if visible && (filled || framing) {
-            Visibility::Inherited
+        let full = usize::from(fame.half_stars / 2);
+        let filling = if well.index < full {
+            Filling::Full
+        } else if well.index == full && fame.half_stars % 2 != 0 {
+            Filling::Half
         } else {
-            Visibility::Hidden
-        });
+            Filling::Empty
+        };
+        let steady_model = match filling {
+            Filling::Empty => None,
+            Filling::Half => Some(&display.half.model),
+            Filling::Full => Some(&display.full.model),
+        };
+        if fame.is_changed()
+            || well.is_added()
+            || prefabs.is_changed()
+            || effects.is_changed()
+            || documents.is_changed()
+        {
+            if filling != well.filling {
+                let steady = steady_model.and_then(|model| prefabs.get(model));
+                if steady_model.is_some() && steady.is_none() {
+                    continue;
+                }
+                let transition = if filling > well.filling {
+                    &display.appear
+                } else {
+                    &display.disappear
+                };
+                let transition_model = if animate {
+                    let Some(model) = prefabs.get(&transition.model) else {
+                        continue;
+                    };
+                    if transition
+                        .effects
+                        .iter()
+                        .any(|cue| !effects.contains(&cue.effect))
+                    {
+                        continue;
+                    }
+                    Some(model)
+                } else {
+                    None
+                };
+                if let Some(previous) = well.stable.take() {
+                    commands.entity(previous).try_despawn();
+                }
+                let has_transition = transition_model.is_some();
+                if let Some(prefab) = transition_model {
+                    let model =
+                        spawn_fame_star_model(&mut commands, entity, prefab, Visibility::Inherited);
+                    commands
+                        .entity(model)
+                        .insert(FameStarTransient(Timer::from_seconds(
+                            transition.duration_seconds.max(0.0),
+                            TimerMode::Once,
+                        )));
+                    for cue in &transition.effects {
+                        let effect = spawn_complete_particle_effect_document(
+                            &mut commands,
+                            &SpawnCompleteParticleEffectDocument {
+                                particle_effect_asset: cue.effect.clone(),
+                                parent_entity: Some(entity),
+                                inherit_parent_rotation: true,
+                                effect_transform: Transform::IDENTITY,
+                                manual_particle_count: 0,
+                            },
+                        );
+                        commands.entity(effect).insert((
+                            RenderLayers::layer(STAR_RENDER_LAYER),
+                            FameStarTransient(Timer::from_seconds(
+                                cue.duration_seconds.max(0.0),
+                                TimerMode::Once,
+                            )),
+                        ));
+                    }
+                }
+                well.filling = filling;
+                let delay = if has_transition {
+                    display.animation_delay_seconds.max(0.0)
+                } else {
+                    0.0
+                };
+                well.reveal = Timer::from_seconds(delay, TimerMode::Once);
+                well.stable = steady.map(|prefab| {
+                    spawn_fame_star_model(
+                        &mut commands,
+                        entity,
+                        prefab,
+                        if delay > 0.0 {
+                            Visibility::Hidden
+                        } else {
+                            Visibility::Inherited
+                        },
+                    )
+                });
+            }
+        }
     }
 }
 
-pub(super) fn frame_fame_star_models(
-    mut commands: Commands,
-    mesh_nodes: Query<(&Aabb, &GlobalTransform), With<Mesh3d>>,
-    children: Query<&Children>,
-    transforms: Query<&GlobalTransform>,
-    scenes: Query<(Entity, &Children), With<UnframedFameStars>>,
-    mut stars: Query<(&FameStar, &mut Transform)>,
+pub(super) fn reveal_delayed_fame_stars(
+    time: Res<Time<Real>>,
+    mut wells: Query<&mut FameStarWell>,
+    mut visibility: Query<&mut Visibility>,
 ) {
-    for (scene, scene_children) in &scenes {
-        let Some(root) = scene_children.iter().find(|child| {
-            stars
-                .get(*child)
-                .is_ok_and(|(star, _)| star.index == 0 && !star.half)
-        }) else {
+    for mut well in &mut wells {
+        if well.reveal.duration().is_zero() || well.reveal.is_finished() {
             continue;
-        };
-        let Ok(parent) = transforms.get(root) else {
-            continue;
-        };
-        let inverse = parent.affine().inverse();
-        let bounds = children
-            .iter_descendants(root)
-            .filter_map(|entity| {
-                let (aabb, transform) = mesh_nodes.get(entity).ok()?;
-                Some((
-                    inverse * transform.affine(),
-                    Vec3::from(aabb.center),
-                    Vec3::from(aabb.half_extents),
-                ))
-            })
-            .flat_map(|(transform, center, half)| {
-                (0..8).map(move |corner| {
-                    let sign = Vec3::new(
-                        if corner & 1 == 0 { -1.0 } else { 1.0 },
-                        if corner & 2 == 0 { -1.0 } else { 1.0 },
-                        if corner & 4 == 0 { -1.0 } else { 1.0 },
-                    );
-                    transform.transform_point3(center + half * sign)
-                })
-            })
-            .fold(None, |bounds: Option<(Vec3, Vec3)>, point| {
-                Some(bounds.map_or((point, point), |(minimum, maximum)| {
-                    (minimum.min(point), maximum.max(point))
-                }))
-            });
-        let Some((minimum, maximum)) = bounds else {
-            continue;
-        };
-        let center = (minimum + maximum) * 0.5;
-        let extent = maximum - minimum;
-        let scale = 1.8 / extent.x.max(extent.y).max(f32::EPSILON);
-        for entity in children.get(scene).into_iter().flatten().copied() {
-            if let Ok((star, mut transform)) = stars.get_mut(entity) {
-                transform.translation =
-                    Vec3::new(f32::from(star.index) * 2.0 - 4.0, 0.0, 0.0) - center * scale;
-                transform.scale = Vec3::splat(scale);
+        }
+        if well.reveal.tick(time.delta()).just_finished() {
+            if let Some(mut visible) = well.stable.and_then(|model| visibility.get_mut(model).ok())
+            {
+                visible.set_if_neq(Visibility::Inherited);
             }
         }
-        debug!(?minimum, ?maximum, "framed authored fame-star models");
-        commands.entity(scene).remove::<UnframedFameStars>();
+    }
+}
+
+fn spawn_fame_star_model(
+    commands: &mut Commands,
+    well: Entity,
+    prefab: &ScenePrefabAsset,
+    visibility: Visibility,
+) -> Entity {
+    let holder = commands
+        .spawn((ChildOf(well), Transform::IDENTITY, visibility))
+        .id();
+    let (_, renderables, _) = spawn_prefab_render_tree(commands, prefab, holder, false);
+    for entity in renderables {
+        commands
+            .entity(entity)
+            .insert(RenderLayers::layer(STAR_RENDER_LAYER));
+    }
+    holder
+}
+
+pub(super) fn expire_fame_star_transients(
+    mut commands: Commands,
+    time: Res<Time<Real>>,
+    mut transients: Query<(Entity, &mut FameStarTransient)>,
+) {
+    for (entity, mut transient) in &mut transients {
+        if transient.0.tick(time.delta()).is_finished() {
+            commands.entity(entity).try_despawn();
+        }
+    }
+}
+
+pub(super) fn isolate_fame_star_particles(
+    mut commands: Commands,
+    emitters: Query<Entity, (Added<LiveParticleEffectInstance>, Without<RenderLayers>)>,
+    scenes: Query<(), With<FameStarScene>>,
+    parents: Query<&ChildOf>,
+) {
+    for entity in &emitters {
+        if parents
+            .iter_ancestors::<ChildOf>(entity)
+            .any(|ancestor| scenes.contains(ancestor))
+        {
+            commands
+                .entity(entity)
+                .insert(RenderLayers::layer(STAR_RENDER_LAYER));
+        }
+    }
+}
+
+pub(super) fn set_fame_star_camera_visibility(
+    mut cameras: Query<(&ChildOf, &mut Camera)>,
+    scenes: Query<&FameStarSceneFor>,
+    owners: Query<&InheritedVisibility>,
+) {
+    for (parent, mut camera) in &mut cameras {
+        let Ok(owner) = scenes.get(parent.parent()) else {
+            continue;
+        };
+        let visible = owners.get(owner.0).is_ok_and(|visibility| visibility.get());
+        camera
+            .map_unchanged(|camera| &mut camera.is_active)
+            .set_if_neq(visible);
     }
 }

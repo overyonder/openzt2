@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use bevy::ecs::system::SystemParam;
+use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use openzt2_game_data::AssetId;
@@ -177,7 +178,15 @@ impl TerrainWaterRegionSource {
     }
 }
 
-pub type TerrainWaterSupportLimits = bevy::platform::collections::HashMap<u32, [f32; 2]>;
+pub type TerrainWaterSupportLimits = HashMap<u32, [f32; 2]>;
+type FenceProbeSegments = Box<[[Vec2; 2]]>;
+pub type TerrainWaterSelectorTilePatch = (UVec2, [u8; 4], [FenceProbeSegments; 8]);
+
+#[derive(Debug, Clone)]
+struct TerrainWaterSelectorTile {
+    codes: [u8; 4],
+    probes: [FenceProbeSegments; 8],
+}
 
 pub fn unconstrained_terrain_water_height() -> [f32; 2] {
     [-1000.0, 1000.0]
@@ -192,11 +201,10 @@ pub struct TerrainWaterMembershipIndex {
     point_owners: Box<[Option<Entity>]>,
     side_owners: Box<[[Option<Entity>; 4]]>,
     wet_side_tile_count: usize,
-    regions: Box<[TerrainWaterRegionSpatialIndex]>,
+    regions: Vec<TerrainWaterRegionSpatialIndex>,
     empty_selector_topology: bool,
-    selector_projection: Arc<[Option<[u8; 4]>]>,
-    fence_probes: Arc<[[Box<[[Vec2; 2]]>; 8]]>,
-    height_support_limits: Arc<TerrainWaterSupportLimits>,
+    selectors: Option<HashMap<UVec2, TerrainWaterSelectorTile>>,
+    height_support_limits: TerrainWaterSupportLimits,
     tank_minimum_depth: Option<f32>,
     edited_point_heights: Option<Box<[f32]>>,
 }
@@ -291,11 +299,8 @@ impl TerrainWaterMembershipIndex {
             side_owners,
             regions,
             empty_selector_topology,
-            selector_projection: vec![empty_selector_topology.then_some([0; 4]); tiles].into(),
-            fence_probes: (0..tiles)
-                .map(|_| std::array::from_fn(|_| Box::default()))
-                .collect(),
-            height_support_limits: Arc::default(),
+            selectors: empty_selector_topology.then(HashMap::default),
+            height_support_limits: TerrainWaterSupportLimits::default(),
             tank_minimum_depth: None,
             edited_point_heights: None,
         })
@@ -313,39 +318,42 @@ impl TerrainWaterMembershipIndex {
         self.empty_selector_topology
     }
 
-    pub fn with_selector_projection(mut self, projection: Box<[Option<[u8; 4]>]>) -> Option<Self> {
-        if projection.len() != self.side_owners.len() {
-            return None;
-        }
-        self.selector_projection = projection.into();
-        Some(self)
-    }
-
-    pub fn with_fence_probes(mut self, probes: Box<[[Box<[[Vec2; 2]]>; 8]]>) -> Option<Self> {
-        if probes.len() != self.side_owners.len() {
-            return None;
-        }
-        self.fence_probes = probes.into();
-        Some(self)
-    }
-
-    pub fn replace_selector_geometry(
+    pub fn patch_selector_geometry(
         &mut self,
-        projection: Arc<[Option<[u8; 4]>]>,
-        probes: Arc<[[Box<[[Vec2; 2]]>; 8]]>,
+        patches: Vec<TerrainWaterSelectorTilePatch>,
         empty_topology: bool,
     ) -> Option<()> {
-        if projection.len() != self.side_owners.len() || probes.len() != self.side_owners.len() {
+        let dimensions = (UVec2::new(self.width, self.height) - UVec2::ONE) / 4;
+        if patches
+            .iter()
+            .any(|(tile, _, _)| !tile.cmplt(dimensions).all())
+        {
             return None;
         }
-        self.selector_projection = projection;
-        self.fence_probes = probes;
+        let selectors = self.selectors.get_or_insert_with(HashMap::default);
+        for (tile, codes, probes) in patches {
+            if codes == [0; 4] && probes.iter().all(|segments| segments.is_empty()) {
+                selectors.remove(&tile);
+            } else {
+                selectors.insert(tile, TerrainWaterSelectorTile { codes, probes });
+            }
+        }
         self.empty_selector_topology = empty_topology;
         Some(())
     }
 
     pub fn replace_height_support_limits(&mut self, limits: Arc<TerrainWaterSupportLimits>) {
-        self.height_support_limits = limits;
+        self.height_support_limits = Arc::unwrap_or_clone(limits);
+    }
+
+    pub fn patch_height_support_limits(&mut self, patches: &[(u32, Option<[f32; 2]>)]) {
+        for &(point, bounds) in patches {
+            if let Some(bounds) = bounds {
+                self.height_support_limits.insert(point, bounds);
+            } else {
+                self.height_support_limits.remove(&point);
+            }
+        }
     }
 
     pub fn with_tank_minimum_depth(mut self, depth: Option<f32>) -> Self {
@@ -416,9 +424,7 @@ impl TerrainWaterMembershipIndex {
         {
             return None;
         }
-        self.selector_projection
-            .clone_from(&source.selector_projection);
-        self.fence_probes.clone_from(&source.fence_probes);
+        self.selectors.clone_from(&source.selectors);
         self.height_support_limits
             .clone_from(&source.height_support_limits);
         self.tank_minimum_depth = source.tank_minimum_depth;
@@ -516,25 +522,25 @@ impl TerrainWaterMembershipIndex {
             points.retain(|point| {
                 self.point_owners[(point.y * width + point.x) as usize] == Some(owner)
             });
-            points.extend(gained.remove(&owner).unwrap_or_default());
+            points.extend(gained.remove(&owner).into_iter().flatten().filter(|point| {
+                self.point_owners[(point.y * width + point.x) as usize] == Some(owner)
+            }));
             points.sort_unstable_by_key(|point| (point.y, point.x));
             points.dedup();
-            let mut regions = std::mem::take(&mut self.regions).into_vec();
             match (position, points.is_empty()) {
                 (Ok(position), true) => {
-                    regions.remove(position);
+                    self.regions.remove(position);
                 }
                 (Ok(position), false) => {
-                    regions[position] =
+                    self.regions[position] =
                         TerrainWaterRegionSpatialIndex::new(owner, points, width, self.height);
                 }
-                (Err(position), false) => regions.insert(
+                (Err(position), false) => self.regions.insert(
                     position,
                     TerrainWaterRegionSpatialIndex::new(owner, points, width, self.height),
                 ),
                 (Err(_), true) => {}
             }
-            self.regions = regions.into_boxed_slice();
         }
         Some(changed)
     }
@@ -584,7 +590,12 @@ impl TerrainWaterMembershipIndex {
 
     pub fn selector_codes(&self, tile: UVec2) -> Option<&[u8; 4]> {
         self.side_owners(tile)?;
-        self.selector_projection[(tile.y * ((self.width - 1) / 4) + tile.x) as usize].as_ref()
+        Some(
+            self.selectors
+                .as_ref()?
+                .get(&tile)
+                .map_or(&[0; 4], |entry| &entry.codes),
+        )
     }
 
     pub fn source_point_height(&self, point: UVec2, terrain: &TerrainAsset) -> Option<f32> {
@@ -685,23 +696,26 @@ impl TerrainWaterMembershipIndex {
         } else {
             3
         };
-        let probes = &self.fence_probes[(tile.y * ((self.width - 1) / 4) + tile.x) as usize];
+        let probes = self.selectors.as_ref()?.get(&tile);
         let position = Vec2::new(world.x, -world.y);
         let origin = (tile * 4).as_vec2() * spacing;
         let centre = origin + Vec2::splat(2.0 * spacing);
         let intersects = |start: Vec2, direction: usize| {
-            probes[direction].iter().any(|segment| {
-                let ray = position - start;
-                let edge = segment[1] - segment[0];
-                let denominator = ray.perp_dot(edge);
-                if f64::from(denominator.abs()) < 0.0001 {
-                    return false;
-                }
-                let difference = segment[0] - start;
-                let distance = difference.perp_dot(edge) / denominator;
-                let along_edge = difference.perp_dot(ray) / denominator;
-                distance > 0.0 && distance < 1.0 && (0.0..=1.0).contains(&along_edge)
-            })
+            probes
+                .into_iter()
+                .flat_map(|entry| entry.probes[direction].iter())
+                .any(|segment| {
+                    let ray = position - start;
+                    let edge = segment[1] - segment[0];
+                    let denominator = ray.perp_dot(edge);
+                    if f64::from(denominator.abs()) < 0.0001 {
+                        return false;
+                    }
+                    let difference = segment[0] - start;
+                    let distance = difference.perp_dot(edge) / denominator;
+                    let along_edge = difference.perp_dot(ray) / denominator;
+                    distance > 0.0 && distance < 1.0 && (0.0..=1.0).contains(&along_edge)
+                })
         };
         if intersects(centre, cardinal * 2) {
             let neighbour =
@@ -833,3 +847,6 @@ pub struct NaturalWaterRegionCells {
 /// Marks a chunk after spawning the water regions that begin in it.
 #[derive(Component, Debug, Clone, Copy, Default)]
 pub struct TerrainWaterRegionsProjected;
+
+#[cfg(test)]
+mod tests;

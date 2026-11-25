@@ -10,7 +10,8 @@ pub(super) fn create_fixed_function_fragment_shader_for_programmable_vertex_outp
     source_path: String,
 ) -> io::Result<Shader> {
     let mut source = String::from(
-        "import openzt2::fixed_function::{FixedFunctionFragmentInputs, evaluate_fixed_function_texture_stages, openzt2_apply_morph_opacity};\n\
+        "import openzt2::fixed_function::{FixedFunctionFragmentInputs, D3d9ColourOutput, evaluate_fixed_function_texture_stages, openzt2_apply_morph_opacity};\n\
+         @if(D3D9_DEPTH_BIAS_BITS) import openzt2::fixed_function::d3d9_biased_fragment_depth;\n\
          struct ProgrammableVertexOutputs {\n",
     );
     for output in &vertex.vertex_output_signature_elements {
@@ -36,7 +37,9 @@ pub(super) fn create_fixed_function_fragment_shader_for_programmable_vertex_outp
     source.push_str(
         "    @builtin(position) position: vec4<f32>,\n\
          };\n\
-         @fragment fn fragment(input: ProgrammableVertexOutputs) -> @location(0) vec4<f32> {\n\
+         @fragment fn fragment(input: ProgrammableVertexOutputs) -> D3d9ColourOutput {\n\
+             var output: D3d9ColourOutput;\n\
+             @if(D3D9_DEPTH_BIAS_BITS) output.depth = d3d9_biased_fragment_depth(input.position);\n\
              var fixed: FixedFunctionFragmentInputs;\n\
              fixed.diffuse = vec4(1.0);\n",
     );
@@ -68,6 +71,6 @@ pub(super) fn create_fixed_function_fragment_shader_for_programmable_vertex_outp
         }
         .map_err(io::Error::other)?;
     }
-    source.push_str("    return openzt2_apply_morph_opacity(evaluate_fixed_function_texture_stages(fixed, true), input.position);\n}\n");
+    source.push_str("    output.colour = openzt2_apply_morph_opacity(evaluate_fixed_function_texture_stages(fixed, true), input.position);\n    return output;\n}\n");
     Ok(Shader::from_wesl(source, source_path))
 }

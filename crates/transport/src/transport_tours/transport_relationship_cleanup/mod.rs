@@ -139,9 +139,11 @@ fn detach_removed_track(
     close_owner(removed.entity, &members, &mut circuits);
     if let Ok(vehicles) = vehicles_on_track.get(removed.entity) {
         for vehicle in vehicles.iter() {
-            commands
-                .entity(vehicle)
-                .try_remove::<(RoutePosition, VehicleOnTrack)>();
+            commands.entity(vehicle).try_remove::<(
+                RoutePosition,
+                VehicleOnTrack,
+                super::transport_vehicle_movement::SkyStationCrossing,
+            )>();
             close_owner(vehicle, &members, &mut circuits);
             if let Ok(riders) = riders.get(vehicle) {
                 dismount(riders.iter(), &mut commands);
@@ -188,6 +190,7 @@ fn return_rider_to_ground(
         BoardedAtStation,
         TransportSeatRider,
         TourScore,
+        super::tour_view_scoring::RideTourContributions,
         TourObservationMemory,
         super::tour_view_scoring::TourObservationDwell,
         PlayerRidingSeatIndex,

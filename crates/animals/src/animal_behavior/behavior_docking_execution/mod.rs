@@ -516,7 +516,6 @@ fn request_behavior_dock(
 ) {
     let DockBehaviorGeometry {
         target_entrances,
-        fences,
         authored_attachment_transforms,
         entity_global_transforms,
         memberships,
@@ -755,7 +754,11 @@ fn fence_dock_pose(
     let second_passable = traversable(second.0);
     let position = actor_transform.translation();
     let (point, facing) = if first_passable != second_passable {
-        if first_passable { first } else { second }
+        if first_passable {
+            first
+        } else {
+            second
+        }
     } else if position.distance_squared(first.0) < position.distance_squared(second.0) {
         first
     } else {
@@ -903,18 +906,14 @@ mod tests {
             1.5,
             0.0,
         );
-        assert!(
-            target
-                .transform_point(point)
-                .abs_diff_eq(Vec3::new(10.0, 2.0, 21.5), 1.0e-5)
-        );
-        assert!(
-            target
-                .affine()
-                .transform_vector3(forward)
-                .normalize()
-                .abs_diff_eq(Vec3::NEG_Z, 1.0e-5)
-        );
+        assert!(target
+            .transform_point(point)
+            .abs_diff_eq(Vec3::new(10.0, 2.0, 21.5), 1.0e-5));
+        assert!(target
+            .affine()
+            .transform_vector3(forward)
+            .normalize()
+            .abs_diff_eq(Vec3::NEG_Z, 1.0e-5));
     }
 
     #[test]

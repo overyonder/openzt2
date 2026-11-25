@@ -110,22 +110,44 @@ pub(super) fn project_particle_renderer_materials(
                     }
                     None => None,
                 };
-                let textures = if is_wave {
+                let (textures, samplers): (Vec<_>, Vec<_>) = if is_wave {
+                    let mut bindings = pass
+                        .into_iter()
+                        .flat_map(EffectPassMaterial::particle_texture_bindings);
                     ["Texture0", "Texture1"]
+                        .into_iter()
                         .map(|name| {
-                            material
-                                .bound_texture_asset(name)
-                                .cloned()
-                                .unwrap_or_default()
+                            if let Some((texture, sampler)) = bindings.next().flatten() {
+                                (texture.clone(), Some(sampler))
+                            } else {
+                                (
+                                    material
+                                        .bound_texture_asset(name)
+                                        .cloned()
+                                        .unwrap_or_default(),
+                                    None,
+                                )
+                            }
                         })
-                        .to_vec()
+                        .unzip()
                 } else {
-                    vec![pass
-                        .and_then(EffectPassMaterial::bound_particle_texture)
-                        .or_else(|| material.bound_texture_asset("Texture0"))
-                        .or_else(|| material.first_bound_texture_asset())
-                        .cloned()
-                        .unwrap_or_default()]
+                    let binding = pass
+                        .into_iter()
+                        .flat_map(EffectPassMaterial::particle_texture_bindings)
+                        .flatten()
+                        .next();
+                    if let Some((texture, sampler)) = binding {
+                        (vec![texture.clone()], vec![Some(sampler)])
+                    } else {
+                        (
+                            vec![material
+                                .bound_texture_asset("Texture0")
+                                .or_else(|| material.first_bound_texture_asset())
+                                .cloned()
+                                .unwrap_or_default()],
+                            Vec::new(),
+                        )
+                    }
                 };
                 if ordinal == 0 && simulation_textures.is_empty() {
                     simulation_textures.clone_from(&textures);
@@ -137,6 +159,7 @@ pub(super) fn project_particle_renderer_materials(
                 draws.push(EffectRenderPass {
                     effect: effect.clone(),
                     textures,
+                    samplers,
                     sort_by_distance: renderer.sort_by_distance,
                     state: draw_state.map(|state| EffectRenderPassState {
                         blend: state.blend,
@@ -146,6 +169,7 @@ pub(super) fn project_particle_renderer_materials(
                         color_writes: state.color_writes,
                     }),
                     stencil_reference,
+                    alpha_test: pass.and_then(EffectPassMaterial::particle_alpha_test),
                 });
             }
         }

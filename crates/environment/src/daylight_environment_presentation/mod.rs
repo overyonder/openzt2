@@ -225,7 +225,6 @@ pub(super) fn project_current_daylight_weather_and_sky_into_bevy_renderer(
     active_definitions: Res<WorldDefinitions>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    mut terrain_ambient: ResMut<EnvironmentTerrainAmbientLight>,
     mut environments: Query<(
         Entity,
         Ref<Daylight>,
@@ -240,6 +239,7 @@ pub(super) fn project_current_daylight_weather_and_sky_into_bevy_renderer(
         &mut AboveWaterFog,
         Ref<ObjectAmbientLight>,
         Option<&mut PrefabAmbientLightContribution>,
+        &mut EnvironmentTerrainAmbientLight,
     )>,
     mut lights: Query<
         (
@@ -290,6 +290,7 @@ pub(super) fn project_current_daylight_weather_and_sky_into_bevy_renderer(
         mut fog,
         ambient,
         contribution,
+        mut terrain_ambient,
     ) in &mut environments
     {
         let Some(definition) = definitions.find_environment(environment.definition) else {

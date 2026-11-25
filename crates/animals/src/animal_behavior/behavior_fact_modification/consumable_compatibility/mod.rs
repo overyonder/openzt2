@@ -15,7 +15,7 @@ use openzt2_game_assets::{
         world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
     },
 };
-use openzt2_world_state::world_spawn::world_entity_crating::WorldEntityIsCrated;
+use openzt2_world_state::world_spawn::world_entity_crating::UncratedWorldEntity;
 use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 use openzt2_zoo_state::animal_behavior::behavior_candidate_selection::candidate_requirements_are_satisfied;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionPhase;
@@ -33,7 +33,7 @@ pub(crate) struct AnimalConsumableCompatibility<'w, 's> {
     world_assets: Option<Res<'w, Assets<WorldDefinitionAsset>>>,
     world_definitions: Option<Res<'w, WorldDefinitions>>,
     animals: Query<'w, 's, AnimalCandidateFacts>,
-    sources: Query<'w, 's, &'static DefinitionId, Without<WorldEntityIsCrated>>,
+    sources: Query<'w, 's, &'static DefinitionId, UncratedWorldEntity>,
 }
 
 impl AnimalConsumableCompatibility<'_, '_> {

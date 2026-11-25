@@ -16,7 +16,9 @@ use openzt2_interface_state::photos::photo_capture_types::{
 use openzt2_world_state::animation_graph::animation_graph_playback_state_types::AnimationGraphPlaybackState;
 use openzt2_world_state::animation_graph::animation_presentation_relationship_types::AnimationPresentations;
 use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackController;
-use openzt2_world_state::world_spawn::world_membership_types::{DefinitionId, WorldMember};
+use openzt2_world_state::world_spawn::world_membership_types::{
+    DefinitionId, WorldMember, WorldMembers,
+};
 use openzt2_zoo_state::animal_behavior::animal_lineage::AnimalLineage;
 use openzt2_zoo_state::animal_behavior::interaction_container_membership::InteractionContainerMemberships;
 use openzt2_zoo_state::animal_health::types::Disease;
@@ -125,6 +127,7 @@ pub(super) fn collect_visible_photo_subjects_and_semantic_evidence_for_pending_c
         ),
         Without<PhotoSubjectsCollected>,
     >,
+    worlds: Query<&WorldMembers>,
     subjects: Query<
         (
             Entity,
@@ -202,8 +205,13 @@ pub(super) fn collect_visible_photo_subjects_and_semantic_evidence_for_pending_c
             vehicle: view.vehicle,
         };
         // Include stationary objects as well as moving animals.
+        let live = worlds
+            .get(capture.world)
+            .ok()
+            .into_iter()
+            .flat_map(RelationshipTarget::iter);
         for (entity, member, species, definition, transform, visible, colliders, behavior_task) in
-            &subjects
+            subjects.iter_many(live).flatten()
         {
             if member.root != capture.world || !visible.get() {
                 continue;
@@ -214,19 +222,29 @@ pub(super) fn collect_visible_photo_subjects_and_semantic_evidence_for_pending_c
             else {
                 continue;
             };
-            let Some(coverage) = colliders.and_then(|colliders| {
-                calculate_collision_bounds_screen_coverage_for_photo_camera(
-                    camera,
-                    camera_transform,
-                    colliders,
-                    &collider_bounds,
-                )
-            }) else {
+            let fence = openzt2_game_data::AssetId::from_key("fence");
+            let path = openzt2_game_data::AssetId::from_key("path");
+            let excluded = semantic_queries
+                .world_definitions
+                .get(&semantic_queries.world_definition_assets)
+                .and_then(|view| view.find_object(definition))
+                .is_some_and(|object| {
+                    [fence, path]
+                        .into_iter()
+                        .any(|kind| object.behavior_type_identifiers.contains(&kind))
+                });
+            if excluded {
                 continue;
-            };
+            }
+            let coverage = calculate_collision_bounds_screen_coverage_for_photo_camera(
+                camera,
+                camera_transform,
+                colliders,
+                &collider_bounds,
+            );
             let distance_squared = capture
                 .camera_position
-                .distance_squared(coverage.world_center);
+                .distance_squared(transform.translation());
             if distance_squared > policy.maximum_subject_distance_squared
                 || coverage.visible_fraction < policy.minimum_visible_fraction
                 || (distance_squared > policy.close_distance_squared
@@ -234,16 +252,18 @@ pub(super) fn collect_visible_photo_subjects_and_semantic_evidence_for_pending_c
             {
                 continue;
             }
-            let facts = calculate_photo_subject_visual_facts(
-                camera,
-                camera_transform,
-                transform,
-                colliders.expect("coverage requires colliders"),
-                coverage,
-                &collider_bounds,
-                &spatial_query,
-                behavior_task.is_some(),
-            );
+            let facts = PhotoSubjectFacts {
+                camera_distance_squared: distance_squared,
+                screen_fraction: coverage.screen_fraction,
+                visible_fraction: coverage.visible_fraction,
+                unoccluded: photo_subject_is_unoccluded(
+                    capture.camera_position,
+                    transform.translation(),
+                    coverage.bounds,
+                    colliders,
+                    &spatial_query,
+                ),
+            };
             if !facts.unoccluded {
                 continue;
             }
@@ -588,135 +608,97 @@ fn capture_photo_subject_task_evidence_from_resolved_name<'w, 's>(
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
 struct CollisionScreenCoverage {
     screen_fraction: f32,
     visible_fraction: f32,
-    world_center: Vec3,
+    bounds: Option<ColliderAabb>,
 }
 
-/// Projects each collider's bounding corners and clips their union
-/// to the viewport. Screen coverage and the visible fraction of the subject
-/// are separate scoring inputs.
 fn calculate_collision_bounds_screen_coverage_for_photo_camera(
     camera: &Camera,
     camera_transform: &GlobalTransform,
-    colliders: &RigidBodyColliders,
+    colliders: Option<&RigidBodyColliders>,
     bounds: &Query<&ColliderAabb>,
-) -> Option<CollisionScreenCoverage> {
-    let mut ndc_min = Vec2::splat(f32::INFINITY);
-    let mut ndc_max = Vec2::splat(f32::NEG_INFINITY);
-    let mut world_min = Vec3::splat(f32::INFINITY);
-    let mut world_max = Vec3::splat(f32::NEG_INFINITY);
-
-    for collider in colliders {
-        let bounds = bounds.get(collider).ok()?;
-        if !bounds.min.is_finite() || !bounds.max.is_finite() {
-            return None;
+) -> CollisionScreenCoverage {
+    let mut rectangle = None;
+    let mut world_bounds: Option<ColliderAabb> = None;
+    let mut colliders = colliders.into_iter().flatten().peekable();
+    let first = colliders.next();
+    let single = first.is_some() && colliders.peek().is_none();
+    for collider in first.into_iter().chain(colliders) {
+        let Ok(aabb) = bounds.get(collider) else {
+            continue;
+        };
+        if !aabb.min.is_finite() || !aabb.max.is_finite() {
+            continue;
         }
-        for x in [bounds.min.x, bounds.max.x] {
-            for y in [bounds.min.y, bounds.max.y] {
-                for z in [bounds.min.z, bounds.max.z] {
-                    let corner = camera.world_to_ndc(camera_transform, Vec3::new(x, y, z))?;
-                    if !(0.0..=1.0).contains(&corner.z) {
-                        return None;
-                    }
-                    ndc_min = ndc_min.min(corner.truncate());
-                    ndc_max = ndc_max.max(corner.truncate());
-                }
-            }
+        world_bounds = Some(world_bounds.map_or(*aabb, |previous| ColliderAabb {
+            min: previous.min.min(aabb.min),
+            max: previous.max.max(aabb.max),
+        }));
+        let projected = camera
+            .world_to_ndc(camera_transform, aabb.min)
+            .zip(camera.world_to_ndc(camera_transform, aabb.max))
+            .filter(|(a, b)| a.z > 0.0 && b.z > 0.0 && a.z <= 1.0 && b.z <= 1.0);
+        if let Some((a, b)) = projected {
+            rectangle = Some((
+                a.truncate().min(b.truncate()),
+                a.truncate().max(b.truncate()),
+            ));
+        } else if single {
+            return CollisionScreenCoverage {
+                screen_fraction: 0.0,
+                visible_fraction: 0.0,
+                bounds: world_bounds,
+            };
         }
-        world_min = world_min.min(bounds.min);
-        world_max = world_max.max(bounds.max);
     }
-
-    if !ndc_min.is_finite() || !ndc_max.is_finite() {
-        return None;
-    }
-    let clipped_min = ndc_min.max(Vec2::NEG_ONE).min(Vec2::ONE);
-    let clipped_max = ndc_max.max(Vec2::NEG_ONE).min(Vec2::ONE);
-    let clipped_extent = (clipped_max - clipped_min).max(Vec2::ZERO);
-    let screen_area = clipped_extent.element_product() * 0.25;
-    let projected_extent = (ndc_max - ndc_min).max(Vec2::ZERO);
-    let projected_area = projected_extent.element_product();
-
-    Some(CollisionScreenCoverage {
-        screen_fraction: screen_area,
-        visible_fraction: (projected_area > 0.0)
-            .then(|| clipped_extent.element_product() / projected_area)
-            .unwrap_or(0.0),
-        world_center: world_min.midpoint(world_max),
-    })
-}
-
-fn calculate_photo_subject_visual_facts(
-    camera: &Camera,
-    camera_transform: &GlobalTransform,
-    subject_transform: &GlobalTransform,
-    colliders: &RigidBodyColliders,
-    coverage: CollisionScreenCoverage,
-    bounds: &Query<&ColliderAabb>,
-    spatial_query: &SpatialQuery,
-    has_behavior: bool,
-) -> PhotoSubjectFacts {
-    let center_permille = camera
-        .world_to_ndc(camera_transform, coverage.world_center)
-        .map(|ndc| 1.0 - ndc.truncate().length() / Vec2::ONE.length())
-        .map_or(0, convert_fraction_to_rounded_permille);
-    let toward_camera =
-        (camera_transform.translation() - coverage.world_center).normalize_or_zero();
-    let facing_permille = convert_fraction_to_rounded_permille(
-        (subject_transform.forward().as_vec3().dot(toward_camera) + 1.0) * 0.5,
-    );
-    PhotoSubjectFacts {
-        screen_permille: convert_fraction_to_rounded_permille(coverage.screen_fraction),
-        viewport_visible_permille: convert_fraction_to_rounded_permille(coverage.visible_fraction),
-        center_permille,
-        facing_permille,
-        behavior_permille: if has_behavior { 1000 } else { 0 },
-        unoccluded: photo_subject_collision_bounds_are_unoccluded_from_camera(
-            camera_transform.translation(),
-            coverage.world_center,
-            colliders,
-            bounds,
-            spatial_query,
-        ),
+    let (minimum, maximum) = rectangle.unwrap_or((Vec2::NEG_ONE, Vec2::ONE));
+    let clipped = maximum.clamp(Vec2::NEG_ONE, Vec2::ONE) - minimum.clamp(Vec2::NEG_ONE, Vec2::ONE);
+    let screen_fraction = clipped.element_product() * 0.25;
+    let projected_fraction = (maximum - minimum).element_product() * 0.25;
+    CollisionScreenCoverage {
+        screen_fraction,
+        visible_fraction: if projected_fraction >= 0.0001 {
+            screen_fraction / projected_fraction
+        } else {
+            0.0
+        },
+        bounds: world_bounds,
     }
 }
 
-fn photo_subject_collision_bounds_are_unoccluded_from_camera(
+fn photo_subject_is_unoccluded(
     origin: Vec3,
-    target: Vec3,
-    colliders: &RigidBodyColliders,
-    bounds: &Query<&ColliderAabb>,
+    position: Vec3,
+    bounds: Option<ColliderAabb>,
+    colliders: Option<&RigidBodyColliders>,
     spatial_query: &SpatialQuery,
 ) -> bool {
-    let displacement = target - origin;
-    let distance = displacement.length();
-    let Ok(direction) = Dir3::new(displacement) else {
-        return false;
-    };
-    spatial_query
-        .cast_ray(
-            origin,
-            direction,
-            distance + 0.001,
-            false,
-            &SpatialQueryFilter::DEFAULT,
-        )
-        .is_some_and(|hit| {
-            colliders.into_iter().any(|collider| {
-                collider == hit.entity
-                    && bounds
-                        .get(collider)
-                        .is_ok_and(|aabb| aabb.min.is_finite() && aabb.max.is_finite())
-            })
+    let clear = |target: Vec3| {
+        let displacement = target - origin;
+        Dir3::new(displacement).map_or(true, |direction| {
+            spatial_query
+                .cast_ray_predicate(
+                    origin,
+                    direction,
+                    displacement.length(),
+                    false,
+                    &SpatialQueryFilter::DEFAULT,
+                    &|hit| {
+                        !colliders.is_some_and(|colliders| {
+                            colliders.into_iter().any(|collider| hit == collider)
+                        })
+                    },
+                )
+                .is_none()
         })
-}
-
-#[inline]
-fn convert_fraction_to_rounded_permille(value: f32) -> u16 {
-    (value.clamp(0.0, 1.0) * 1000.0).round() as u16
+    };
+    clear(position)
+        || bounds.is_some_and(|bounds| {
+            let top = Vec3::new(position.x, bounds.max.y, position.z);
+            clear(position.midpoint(top)) || clear(top)
+        })
 }
 
 fn is_strictly_above_path_tile(

@@ -31,7 +31,7 @@ use openzt2_zoo_state::behavior_task_execution_types::{allocate_behavior_executi
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
 use openzt2_zoo_state::locomotion::locomotion_types::Destination;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
-use openzt2_world_state::world_spawn::world_entity_crating::WorldEntityIsCrated;
+use openzt2_world_state::world_spawn::world_entity_crating::UncratedWorldEntity;
 use bevy::{ecs::system::ParallelCommands, prelude::*};
 use target_types::BehaviorTargetTypeMemberships;
 use openzt2_zoo_state::animal_behavior::behavior_natural_water_target_types::SelectedNaturalWaterTarget;
@@ -64,7 +64,7 @@ pub(super) type IdleAnimalTaskFilter = (
     Without<Dead>,
     Without<Frozen>,
     Without<Tranquilized>,
-    Without<WorldEntityIsCrated>,
+    UncratedWorldEntity,
     Without<Destination>,
     Without<openzt2_zoo_state::behavior_task_execution_types::SynchronizedBehaviorParticipant>,
 );

@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use openzt2_game_data::AssetId;
 
-use super::{attach_named_presentations_to_model_nodes, PendingNamedPresentationNodeAttachment};
+use super::{attach_named_presentations_to_model_nodes, NamedPresentationNodeAttachment};
 use openzt2_world_state::world_spawn::{
     prefab_authored_attachment_identifier::PrefabAuthoredAttachmentIdentifier,
     prefab_source_asset_handle::PrefabSourceAssetHandle,
@@ -22,7 +22,7 @@ fn spawn_holder(world: &mut World, owner: Entity, node: &str) -> Entity {
     world
         .spawn((
             ChildOf(owner),
-            PendingNamedPresentationNodeAttachment {
+            NamedPresentationNodeAttachment {
                 owner,
                 node: node.to_owned(),
             },
@@ -53,8 +53,8 @@ fn holder_moves_onto_the_prefab_node_with_its_authored_name() {
         Some(node)
     );
     assert!(world
-        .get::<PendingNamedPresentationNodeAttachment>(holder)
-        .is_none());
+        .get::<NamedPresentationNodeAttachment>(holder)
+        .is_some());
 }
 
 #[test]
@@ -126,6 +126,6 @@ fn holder_waits_for_a_node_from_a_model_that_loads_later() {
         Some(smokestack_node)
     );
     assert!(world
-        .get::<PendingNamedPresentationNodeAttachment>(holder)
-        .is_none());
+        .get::<NamedPresentationNodeAttachment>(holder)
+        .is_some());
 }

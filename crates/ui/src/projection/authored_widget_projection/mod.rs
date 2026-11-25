@@ -332,6 +332,7 @@ pub(super) fn project_widget(
                 policy,
                 openzt2_interface_state::information::information_graph_types::InformationGraph {
                     graph: None,
+                    label_document: None,
                     graph_type: policy.graph_type(),
                 },
             ));

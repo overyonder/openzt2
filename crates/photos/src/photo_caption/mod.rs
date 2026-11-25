@@ -30,7 +30,7 @@ use super::{
 };
 
 #[derive(Component)]
-pub(super) struct PhotoCaption(pub(super) String);
+pub struct PhotoCaption(pub String);
 
 #[derive(Resource, Default, PartialEq, Eq)]
 pub(super) struct PhotoCaptionSource(Option<(String, Handle<LuaScriptAsset>)>);

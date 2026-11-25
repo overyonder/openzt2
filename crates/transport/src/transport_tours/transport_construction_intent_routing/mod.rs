@@ -9,7 +9,7 @@ use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator;
 
-use openzt2_zoo_state::transport_tours::transport_circuit_types::CircuitMembers;
+use openzt2_zoo_state::transport_tours::transport_circuit_types::CircuitMember;
 use openzt2_zoo_state::transport_tours::transport_circuit_types::TransportCircuit;
 use openzt2_zoo_state::transport_tours::transport_topology_types::AttachTransportStationRequest;
 use openzt2_zoo_state::transport_tours::transport_topology_types::TransportStation;
@@ -17,13 +17,14 @@ use openzt2_zoo_state::transport_tours::transport_topology_types::TransportStati
 /// Routes an ordinary committed station into the canonical circuit graph.
 /// The source placement transaction remains the object owner; this system
 /// emits only the transport mutation established by the authored station kind.
-pub(super) fn attach_committed_transport_stations_to_compatible_or_new_circuits(
+pub(super) fn create_circuits_for_new_transport_stations(
     mut committed_objects: MessageReader<ObjectPlacementCommitted>,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,
-    placed_stations: Query<(&TransportStation, &WorldMember, Option<&Price>)>,
-    transport_circuits: Query<(Entity, &WorldMember, &CircuitMembers), With<TransportCircuit>>,
-    existing_station_members: Query<&TransportStation>,
+    placed_stations: Query<
+        (&TransportStation, &WorldMember, Option<&Price>),
+        Without<CircuitMember>,
+    >,
     mut station_attachments: MessageWriter<AttachTransportStationRequest>,
     mut ids: Query<&mut PersistentIdAllocator>,
     mut commands: Commands,
@@ -31,60 +32,47 @@ pub(super) fn attach_committed_transport_stations_to_compatible_or_new_circuits(
     let Some(world_definitions) = active_world_definitions.get(&world_definition_assets) else {
         return;
     };
+    let mut assigned = bevy::ecs::entity::EntityHashSet::default();
     for committed_object in committed_objects.read() {
+        if assigned.contains(&committed_object.entity) {
+            continue;
+        }
         let Ok((transport_station, station_world_member, fare)) =
             placed_stations.get(committed_object.entity)
         else {
             continue;
         };
-        let Some(station_definition) = world_definitions.find_station(transport_station.definition)
+        if world_definitions
+            .find_station(transport_station.definition)
+            .is_none()
+        {
+            continue;
+        }
+        let Some(id) = ids
+            .get_mut(station_world_member.root)
+            .ok()
+            .and_then(|mut allocator| allocator.allocate().ok())
         else {
             continue;
         };
-        let compatible_circuit = transport_circuits.iter().find_map(
-            |(transport_circuit_entity, circuit_world_member, members)| {
-                (circuit_world_member.root == station_world_member.root
-                    && existing_station_members
-                        .iter_many(members.iter())
-                        .filter_map(Result::ok)
-                        .any(|existing_station| {
-                            world_definitions
-                                .find_station(existing_station.definition)
-                                .is_some_and(|existing_definition| {
-                                    existing_definition.kind == station_definition.kind
-                                })
-                        }))
-                .then_some(transport_circuit_entity)
-            },
-        );
-        let circuit = if let Some(circuit) = compatible_circuit {
-            circuit
-        } else {
-            let Some(id) = ids
-                .get_mut(station_world_member.root)
-                .ok()
-                .and_then(|mut allocator| allocator.allocate().ok())
-            else {
-                continue;
-            };
-            commands
-                .spawn((
-                    id,
-                    DefinitionId(transport_station.definition),
-                    fare.copied().unwrap_or_else(|| {
-                        Price(
-                            station_fare(world_definitions, transport_station.definition, None)
-                                .unwrap_or(Money::ZERO),
-                        )
-                    }),
-                    TransportCircuit {
-                        definition: transport_station.definition,
-                        closed: true,
-                    },
-                    *station_world_member,
-                ))
-                .id()
-        };
+        let circuit = commands
+            .spawn((
+                id,
+                DefinitionId(transport_station.definition),
+                fare.copied().unwrap_or_else(|| {
+                    Price(
+                        station_fare(world_definitions, transport_station.definition, None)
+                            .unwrap_or(Money::ZERO),
+                    )
+                }),
+                TransportCircuit {
+                    definition: transport_station.definition,
+                    closed: true,
+                },
+                *station_world_member,
+            ))
+            .id();
+        assigned.insert(committed_object.entity);
         station_attachments.write(AttachTransportStationRequest {
             station: committed_object.entity,
             circuit,

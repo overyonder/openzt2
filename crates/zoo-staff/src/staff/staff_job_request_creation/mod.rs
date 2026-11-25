@@ -14,7 +14,12 @@ type StaffJobRequestKey = (Option<u8>, Entity, Option<AssetId>, StaffJobRouting)
 pub(crate) fn create_or_raise_priority_of_requested_staff_jobs(
     mut commands: Commands,
     mut requests: MessageReader<StaffJobRequest>,
-    mut jobs: Query<(&mut StaffJob, Option<&StaffJobRouting>, Has<JobClaim>)>,
+    mut jobs: Query<(
+        Entity,
+        &mut StaffJob,
+        Option<&StaffJobRouting>,
+        Has<JobClaim>,
+    )>,
     members: Query<&WorldMember>,
     mut identifiers: Query<&mut PersistentIdAllocator>,
     mut batched_requests: Local<Vec<StaffJobRequest>>,
@@ -38,13 +43,23 @@ pub(crate) fn create_or_raise_priority_of_requested_staff_jobs(
         }
     }
 
-    for request in batched_requests.drain(..) {
-        if let Some((job, _, claimed)) = jobs.iter_mut().find(|(job, routing, _)| {
-            job.kind == request.kind
-                && job.target == request.target
-                && job.token == request.token
-                && routing.copied().unwrap_or_default() == request.routing
-        }) {
+    if batched_requests.is_empty() {
+        return;
+    }
+    let mut existing = vec![None; batched_requests.len()];
+    for (entity, job, routing, _) in &jobs {
+        let key = (
+            job.kind.map(|kind| kind as u8),
+            job.target,
+            job.token,
+            routing.copied().unwrap_or_default(),
+        );
+        if let Some(&index) = request_indices.get(&key) {
+            let _ = existing[index].get_or_insert(entity);
+        }
+    }
+    for (request, existing) in batched_requests.drain(..).zip(existing) {
+        if let Some((_, job, _, claimed)) = existing.and_then(|entity| jobs.get_mut(entity).ok()) {
             if !claimed && request.urgency > job.urgency {
                 job.map_unchanged(|job| &mut job.urgency)
                     .set_if_neq(request.urgency);

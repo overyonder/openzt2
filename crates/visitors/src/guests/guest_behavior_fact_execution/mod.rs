@@ -6,12 +6,13 @@ use openzt2_game_data::behavior::action::modification::{
 };
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::WhenBehaviorAction;
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
-    RunBehaviorFactModifications, RunningBehaviorInstruction,
+    GuestTourDepartureGate, RunBehaviorFactModifications, RunningBehaviorInstruction,
 };
 use openzt2_zoo_state::locomotion::locomotion_types::CaffeineFlags;
 
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_zoo_state::animal_behavior::behavior_entity_role_resolution::resolve_behavior_entity_role_to_live_entity;
+use openzt2_zoo_state::animal_behavior::behavior_token_types::EducationDonationBonus;
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::mark_behavior_task_for_failure_and_stop_navigation;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
 use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorTaskFailure;
@@ -54,6 +55,7 @@ pub(super) fn apply_authored_guest_behavior_fact_modifications(
         With<Guest>,
     >,
     mut viewing_needs: Query<&mut GuestViewingNeed, With<Guest>>,
+    mut tour_needs: Query<&mut GuestTourDepartureGate, With<Guest>>,
     mut experiences: Query<&mut GuestSurveyExperience>,
     mut food_purchases: Query<&mut GuestFoodPurchaseCounts>,
     mut containers: Query<&mut FacilityContainedWaste>,
@@ -93,6 +95,8 @@ pub(super) fn apply_authored_guest_behavior_fact_modifications(
                         | BehaviorFact::DeparturePoints
                         | BehaviorFact::Happiness
                         | BehaviorFact::Education
+                        | BehaviorFact::EducationDonationBonus
+                        | BehaviorFact::Tour
                         | BehaviorFact::FoundDonationBox
                         | BehaviorFact::MissedDonationBox
                         | BehaviorFact::AteFavoriteFood
@@ -118,6 +122,7 @@ pub(super) fn apply_authored_guest_behavior_fact_modifications(
                             || viewing_needs.contains(subject))
                         && match modification.modified_fact {
                             BehaviorFact::Happiness => satisfaction.contains(subject),
+                            BehaviorFact::Tour => tour_needs.contains(subject),
                             BehaviorFact::Education
                             | BehaviorFact::FoundDonationBox
                             | BehaviorFact::MissedDonationBox => experiences.contains(subject),
@@ -149,6 +154,19 @@ pub(super) fn apply_authored_guest_behavior_fact_modifications(
             if modification.modified_fact == BehaviorFact::ViewAnimals {
                 if let Ok(mut need) = viewing_needs.get_mut(subject) {
                     need.add_source_delta(authored_delta);
+                }
+                continue;
+            }
+            if modification.modified_fact == BehaviorFact::Tour {
+                tour_needs.get_mut(subject).expect("validated guest tour need")
+                    .adjust(authored_delta as f32 / 65_536.0);
+                continue;
+            }
+            if modification.modified_fact == BehaviorFact::EducationDonationBonus {
+                if authored_delta == 0 {
+                    commands.entity(subject).try_remove::<EducationDonationBonus>();
+                } else {
+                    commands.entity(subject).insert_if_new(EducationDonationBonus);
                 }
                 continue;
             }

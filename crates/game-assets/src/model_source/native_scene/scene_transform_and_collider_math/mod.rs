@@ -50,13 +50,3 @@ pub(super) fn translated_prefab_transform(translation_m: [f32; 3]) -> PrefabTran
 pub(super) fn identity_prefab_transform() -> PrefabTransform {
     translated_prefab_transform([0.0; 3])
 }
-pub(super) fn netimmerse_point_light_range(c: f32, l: f32, q: f32) -> f32 {
-    if q > 0.0 {
-        q.recip().sqrt().clamp(1.0, 100.0)
-    } else if l > 0.0 {
-        l.recip().clamp(1.0, 100.0)
-    } else {
-        let _ = c;
-        20.0
-    }
-}

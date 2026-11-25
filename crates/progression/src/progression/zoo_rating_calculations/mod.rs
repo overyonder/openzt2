@@ -1,5 +1,5 @@
 use openzt2_game_data::world_definitions::catalogue_and_progression::zoo_rating_fame_and_award_definition_types::{
-    Comparison, RatingInputKind,
+    RatingInputKind,
 };
 
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
@@ -89,19 +89,6 @@ pub(crate) fn normalize_zoo_rating_input_for_kind(
         .map_or(0, |input| {
             normalize_value_to_permille(source_value, input.minimum, input.maximum)
         })
-}
-
-pub(crate) fn zoo_rating_satisfies_authored_comparison(
-    current_rating: u16,
-    authored_value: i32,
-    comparison: &Comparison,
-) -> bool {
-    let current_rating = i32::from(current_rating);
-    match comparison {
-        Comparison::AtLeast => current_rating >= authored_value,
-        Comparison::AtMost => current_rating <= authored_value,
-        Comparison::Equal => current_rating == authored_value,
-    }
 }
 
 #[cfg(test)]

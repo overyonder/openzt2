@@ -11,7 +11,10 @@ use openzt2_game_assets::{
 };
 use openzt2_game_data::world_scenario::{ScenarioDefinitionRecord, ScenarioScriptBinding};
 
-use super::{ScenarioObjectiveSnapshot, ScenarioSnapshot};
+use super::super::original_saved_game_scenario_conversion::{
+    read_original_saved_scenario_lua_state, read_saved_scenario_ui, saved_scenario_nodes,
+};
+use super::{ScenarioGroupSnapshots, ScenarioObjectiveSnapshot, ScenarioSnapshot};
 
 pub(in crate::persistence::slot_io) fn read_original_saved_scenario_snapshot(
     manager: &OrderedSourceDocumentNode,
@@ -39,60 +42,35 @@ pub(in crate::persistence::slot_io) fn read_original_saved_scenario_snapshot(
         }
         None => return Err(invalid("saved scenario manager has no state")),
     };
-    let containers = manager
-        .element_children()
-        .filter(|node| node.name == "children")
-        .collect::<Vec<_>>();
-    let [children] = containers.as_slice() else {
-        return Err(invalid("saved scenario requires one children list"));
-    };
     let mut objectives = Vec::new();
-    for rule in children.element_children() {
-        if rule.name != "BFScenarioRule" {
-            return Err(invalid(format!(
-                "saved scenario contains unsupported group {}",
-                rule.name
-            )));
-        }
-        let name = rule
-            .attribute("name")
-            .ok_or_else(|| invalid("saved scenario rule has no name"))?;
-        let matching = definition
-            .objectives
-            .iter()
-            .filter(|objective| objective.name == Some(openzt2_game_data::AssetId::from_key(name)))
-            .collect::<Vec<_>>();
-        let [objective] = matching.as_slice() else {
-            return Err(invalid(format!(
-                "saved rule {name} has no unique definition"
-            )));
-        };
-        let status = match rule.attribute("state") {
+    let mut groups = ScenarioGroupSnapshots::default();
+    for (id, node) in saved_scenario_nodes(manager, definition)? {
+        let status = match node.attribute("state") {
             Some("2") => 0,
             Some("0") => 1,
             Some("1") => 2,
             Some("-1") => 3,
-            _ => return Err(invalid(format!("saved rule {name} has an invalid state"))),
+            _ => return Err(invalid("saved scenario node has an invalid state")),
         };
-        let visible = match rule.attribute("hidden") {
-            Some("true") => false,
-            Some("false") => true,
-            _ => {
-                return Err(invalid(format!(
-                    "saved rule {name} has no boolean hidden state"
-                )))
-            }
+        if node.name != "BFScenarioRule" {
+            groups.session.insert(id, status);
+            continue;
+        }
+        let visible = match node.attribute("hidden") {
+            Some("true" | "1") => false,
+            Some("false" | "0") => true,
+            _ => return Err(invalid("saved scenario rule has no boolean hidden state")),
         };
         objectives.push(ScenarioObjectiveSnapshot {
             id: allocate_identifier()?,
-            definition: objective.id,
+            definition: id,
             status,
             progress: [0, 0],
             deadline: None,
             visible,
         });
     }
-    let overlay = super::super::original_saved_game_scenario_conversion::read_original_saved_scenario_lua_state(manager,definition,bindings)?;
+    let overlay = read_original_saved_scenario_lua_state(manager, definition, bindings)?;
     let lua = crate::scenario::scenario_lua_snapshot::normalize_original_saved_scenario_lua_state(
         &overlay,
         document,
@@ -107,13 +85,14 @@ pub(in crate::persistence::slot_io) fn read_original_saved_scenario_snapshot(
     let snapshot = ScenarioSnapshot {
         timing: Some(Default::default()),
         challenge: None,
+        groups,
         version: 1,
         definition: definition.id,
         started_tick: activation_tick,
         state,
         objectives,
         lua: Some(lua),
-        ui: Default::default(),
+        ui: read_saved_scenario_ui(manager)?,
     };
     super::validate(&snapshot)
         .map_err(|error| invalid(format!("invalid converted scenario: {error:?}")))?;

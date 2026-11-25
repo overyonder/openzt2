@@ -526,22 +526,67 @@ fn lower_guest_view_meter_decay_per_second(record: &RecordView<'_, '_>) -> Resul
 }
 
 fn lower_guest_view_scoring_policy(record: &RecordView<'_, '_>) -> Result<openzt2_game_data::world_definitions::guest_simulation_definitions::GuestAnimalViewScoringPolicy, BindError>{
-    let number = |name, default| {
+    use openzt2_game_data::world_definitions::guest_simulation_definitions::{
+        GuestAnimalViewScoringPolicy, GuestEducationDonationPolicy, GuestTourNeedPolicy,
+    };
+    let optional = |name| {
         let value = authored_type_family_component_attribute(record, "BFAIEntityDataShared", name)
             .or_else(|| record.value(&[name]))
             .map(|value| parse::<f32>(value, record, name))
-            .transpose()?
-            .unwrap_or(default);
-        if !value.is_finite() {
+            .transpose()?;
+        if value.is_some_and(|value| !value.is_finite()) {
             return Err(BindError::record(record, format!("{name} is nonfinite")));
         }
         Ok(value)
     };
-    Ok(openzt2_game_data::world_definitions::guest_simulation_definitions::GuestAnimalViewScoringPolicy {
+    let number = |name, default| Ok::<_, BindError>(optional(name)?.unwrap_or(default));
+    let education_donation = if let Some(divisor) = optional("f_DonationDivisor")?.filter(|divisor| *divisor > 0.0) {
+        Some(GuestEducationDonationPolicy {
+            divisor,
+            minimum: number("f_MinDonation", 0.0)?,
+            maximum: optional("f_MaxDonation")?,
+            happiness_threshold: optional("f_DonationThreshold")?,
+            bonus_factor: number("f_EdDonationBonusFactor", 1.0)?,
+            timeout: optional("f_DonationTimeout")?,
+        })
+    } else {
+        None
+    };
+    let tour_state = authored_type_family_elements_named(record, "BFAIStateVar").into_iter()
+        .find(|state| state.attribute_named_any(&["Name"])
+            .is_some_and(|name| source_document_names_are_semantically_equal(name, "tour")));
+    let tour_need = tour_state.map(|state| {
+        let state_value = |name, default| {
+            state.attribute_named_any(&[name]).filter(|value| !value.trim().is_empty())
+                .map(|value| parse::<f32>(value, record, name)).transpose()
+                .map(|value| value.unwrap_or(default))
+        };
+        let minimum = state_value("Value", state_value("ValueMin", 0.0)?)?;
+        let maximum = state_value("Value", state_value("ValueMax", minimum)?)?;
+        let adjustment = authored_type_family_elements_named(record, "BFAINeedAdjusts").into_iter()
+            .filter(|adjustment| adjustment.attribute_named_any(&["Name"]).is_none())
+            .find_map(|adjustment| adjustment.attribute_named_any(&["tour"]))
+            .map(|value| parse::<f32>(value, record, "tour adjustment"))
+            .transpose()?.unwrap_or_default();
+        Ok::<_, BindError>(GuestTourNeedPolicy {
+            start: [minimum, maximum],
+            adjustment,
+            trigger: state_value("TriggerThreshold", 0.0)?,
+            cessation: state_value("CessationThreshold", -100.0)?,
+        })
+    }).transpose()?;
+    Ok(GuestAnimalViewScoringPolicy {
         species_discount: number("f_ViewSpeciesDiscount", 1.0)?,
         minimum_species_discount: number("f_ViewSpeciesDiscountCap", 0.0)?,
         near_distance_factor: number("f_ViewDistanceMin", 1.0)?,
         far_distance_factor: number("f_ViewDistanceMax", 1.0)?,
+        viewpoint_swap_chance: optional("f_vpSwapChance")?,
+        viewpoint_swap_distance: [
+            number("f_vpMinSwapDistance", 0.0)?,
+            number("f_vpMaxSwapDistance", 0.0)?,
+        ],
+        education_donation,
+        tour_need,
     })
 }
 

@@ -1,6 +1,5 @@
 use bevy::prelude::*;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
-use openzt2_zoo_state::animal_lifecycle::types::AnimalVariant;
 use openzt2_zoo_state::aquatic::tank_navigation_water::TankNavigationWater;
 
 use crate::locomotion::animal_navigation_policy::AnimalNavigationPolicy;
@@ -26,13 +25,7 @@ pub(super) fn test_requested_navigation_destination_reachability(
         Option<&TankNavigationWater>,
     )>,
     fence_crossing_index: FenceNavigationCrossingQueries,
-    navigation_agents: Query<(
-        &NavAgent,
-        &WorldMember,
-        &LocomotionMode,
-        &GlobalTransform,
-        Option<&AnimalVariant>,
-    )>,
+    navigation_agents: Query<(&NavAgent, &WorldMember, &LocomotionMode, &GlobalTransform)>,
     animal_policy: AnimalNavigationPolicy,
     fence_policy: FenceNavigationPolicy,
 ) {
@@ -65,7 +58,6 @@ pub(super) fn test_requested_navigation_destination_reachability(
                                     member,
                                     locomotion_mode,
                                     navigation_agent_transform,
-                                    animal_variant,
                                 )| {
                                     let (graph, capacity, tank_water) = roots
                                         .get(member.root)
@@ -79,9 +71,9 @@ pub(super) fn test_requested_navigation_destination_reachability(
                                         capacity.max_route_points,
                                     );
                                     let (navigation_agent, maximum_ground_slope_radians) =
-                                        animal_policy.agent_with_authored_collision_limits(
+                                        animal_policy.agent_with_collision_limits(
+                                            reachability_test_request.entity,
                                             navigation_agent,
-                                            animal_variant,
                                         )?;
                                     plan_route(
                                         terrain_derived_navigation_graph,

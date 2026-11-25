@@ -194,21 +194,75 @@ pub struct RunBehaviorFeedback(pub action::feedback::BehaviorFeedbackAction);
 #[derive(Component)]
 pub struct RunBehaviorViewAnimals(pub action::view_animals::BehaviorViewAnimalsAction);
 
+/// Source tour need and the current zoo's tour limit for departure.
+#[derive(Component, Clone, Copy, PartialEq)]
+pub struct GuestTourDepartureGate {
+    pub need: f32,
+    pub threshold: f32,
+    pub policy: openzt2_game_data::world_definitions::guest_simulation_definitions::GuestTourNeedPolicy,
+    pub triggered: bool,
+}
+
+impl GuestTourDepartureGate {
+    pub fn adjust(&mut self, amount: f32) {
+        self.need = (self.need + amount).min(100.0);
+        if self.need >= self.policy.trigger {
+            self.triggered = true;
+        } else if self.need <= self.policy.cessation {
+            self.triggered = false;
+        }
+    }
+
+    pub fn source_need(&self) -> (i32, bool) {
+        ((self.need * 65_536.0).round() as i32, self.triggered)
+    }
+}
+
 #[derive(Component)]
 pub struct BehaviorViewingProgress {
     pub instruction: BehaviorInstructionId,
+    pub execution: u64,
+    pub at: BehaviorTaskReturnFrame,
+    pub depth: usize,
     pub remaining: f32,
     pub maximum: f32,
+    pub emote_score: Option<f32>,
 }
 
 impl BehaviorViewingProgress {
     pub fn apply_view_score(&mut self, score: f32) {
         self.remaining = (self.remaining + score).min(self.maximum);
+        if self.emote_score.is_none_or(|previous| previous.abs() < score.abs()) {
+            self.emote_score = Some(score);
+        }
     }
 }
 
 #[derive(Component)]
 pub struct RunBehaviorViewEvent(pub action::view_event::BehaviorViewEventAction);
+
+#[derive(EntityEvent)]
+pub struct AuthoredRadiusViewEvent {
+    #[event_target]
+    pub recipient: Entity,
+    pub source: Entity,
+    pub view_key: AssetId,
+    pub education: f32,
+    pub donation: f32,
+    pub feedback: Option<action::feedback::BehaviorFeedbackAction>,
+    pub source_target: Option<Entity>,
+    pub source_object: Option<Entity>,
+}
+
+/// A guest thought delivered by a view event. The guest owns it as a child.
+#[derive(Component)]
+pub struct AuthoredViewThought {
+    pub localization_key: openzt2_game_data::AssetId,
+    pub priority: i16,
+    pub globally_visible: bool,
+    pub source: Entity,
+    pub arguments: [Option<Entity>; 5],
+}
 
 #[derive(Component)]
 pub struct RunBehaviorWatchShow(pub action::watch_show::BehaviorWatchShowAction);
@@ -309,6 +363,34 @@ pub struct RunBehaviorDockSpline(pub action::specialized::BehaviorDockSplineActi
 pub struct RunBehaviorFall(pub action::specialized::BehaviorFallAction);
 
 #[derive(Component)]
+pub struct RunBehaviorEscapeObstacle(pub action::specialized::BehaviorEscapeObstacleAction);
+
+/// Escape steering considers the strongest blocking obstacles in range.
+#[derive(Component, Clone, Copy, PartialEq)]
+pub struct BehaviorObstaclePriority(pub u32);
+
+#[derive(Component)]
+pub struct RunBehaviorExitInteractionContainer(pub Option<AssetId>);
+
+#[derive(Component)]
+pub struct RunBehaviorFindArtifact;
+
+#[derive(Component)]
+pub struct RunBehaviorDigArtifact;
+
+#[derive(Component)]
+pub struct RunBehaviorTour;
+
+#[derive(Component, Clone, Copy)]
+pub struct AuthoredTourRide {
+    pub source: Entity,
+    pub destination: Entity,
+}
+
+#[derive(Component)]
+pub struct RunBehaviorTeleportToLocation(pub action::specialized::BehaviorTeleportToLocationAction);
+
+#[derive(Component)]
 pub struct RunBehaviorKickOffRider;
 
 #[derive(Component)]
@@ -321,6 +403,25 @@ pub struct RunBehaviorFollowEntity(pub action::specialized::BehaviorFollowEntity
 pub struct RunBehaviorSplashGuest(pub action::specialized::BehaviorSplashGuestAction);
 
 #[derive(Component)]
+pub struct SplashAnimation {
+    pub step: BehaviorInstructionId,
+    pub request: usize,
+    pub emitted: bool,
+}
+
+#[derive(Component, Clone, Copy)]
+pub struct RestoredSplashAnimation {
+    pub seek_seconds: f32,
+    pub emitted: bool,
+}
+
+#[derive(Component)]
+pub struct SplashAnimationSeek {
+    pub request: usize,
+    pub seconds: f32,
+}
+
+#[derive(Component)]
 pub struct RunBehaviorUsePortal(pub action::specialized::BehaviorUsePortalAction);
 
 #[derive(Component)]
@@ -328,6 +429,10 @@ pub struct RunBehaviorDockTankWall(pub action::specialized::BehaviorDockTankWall
 
 #[derive(Component)]
 pub struct RunBehaviorStaffTrainAnimal(pub action::specialized::BehaviorStaffTrainAnimalAction);
+
+/// Authored training choices enabled for a particular trainer assignment.
+#[derive(Component, Clone, PartialEq, Eq)]
+pub struct TrainerEnabledTricks(pub Vec<AssetId>);
 
 #[derive(Component)]
 pub struct RunBehaviorAddSubjectAsDiseaseTarget(
@@ -394,6 +499,9 @@ pub struct SplineDockMotion {
     pub phase: SplineDockPhase,
     pub owns_disabled_collider: bool,
 }
+
+#[derive(Component, Debug)]
+pub struct SplineDockRetry(pub Timer);
 
 #[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 pub enum SplineDockPhase {
@@ -969,6 +1077,8 @@ fn lower_behavior_instruction(world: &mut World, actor: Entity, force: bool) {
     let speed = match &action {
         Some(BehaviorAction::Wander(action)) => Some(action.locomotion_speed),
         Some(BehaviorAction::DockSpline(action)) => Some(action.speed),
+        Some(BehaviorAction::EscapeObstacle(action)) => Some(action.speed),
+        Some(BehaviorAction::ExitInteractionContainer { .. }) => Some(BehaviorGroundLocomotionSpeed::Slow),
         Some(BehaviorAction::FollowEntity(action)) => Some(action.speed),
         Some(BehaviorAction::UsePortal(action)) => Some(action.speed),
         Some(BehaviorAction::DockTankWall(action)) => Some(action.speed),
@@ -1234,6 +1344,18 @@ fn lower_behavior_instruction(world: &mut World, actor: Entity, force: bool) {
         }
         BehaviorAction::Fall(action) => {
             insert_action(world, actor, instruction, RunBehaviorFall(action))
+        }
+        BehaviorAction::EscapeObstacle(action) => {
+            insert_action(world, actor, instruction, RunBehaviorEscapeObstacle(action))
+        }
+        BehaviorAction::ExitInteractionContainer { exit_behavior_set } => {
+            insert_action(world, actor, instruction, RunBehaviorExitInteractionContainer(exit_behavior_set))
+        }
+        BehaviorAction::FindArtifact => insert_action(world, actor, instruction, RunBehaviorFindArtifact),
+        BehaviorAction::DigArtifact => insert_action(world, actor, instruction, RunBehaviorDigArtifact),
+        BehaviorAction::Tour => insert_action(world, actor, instruction, RunBehaviorTour),
+        BehaviorAction::TeleportToLocation(action) => {
+            insert_action(world, actor, instruction, RunBehaviorTeleportToLocation(action))
         }
         BehaviorAction::KickOffRider => {
             insert_action(world, actor, instruction, RunBehaviorKickOffRider)

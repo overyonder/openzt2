@@ -10,27 +10,9 @@ use bevy::{ecs::relationship::RelationshipTarget, prelude::*};
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
 use super::photo_album_types::{
-    ActivePhotoAlbum, DeletePhotoRequest, PhotoAlbumCapacityPages, PhotoAlbumPage, PhotoCameraRoll,
-    PhotoMove, SelectedAlbumPhoto, PHOTO_ALBUM_PAGE_SIZE, PHOTO_CAMERA_ROLL_CAPACITY,
+    ActivePhotoAlbum, DeletePhotoRequest, PHOTO_ALBUM_PAGE_SIZE, PHOTO_CAMERA_ROLL_CAPACITY,
+    PhotoAlbumCapacityPages, PhotoAlbumPage, PhotoCameraRoll, PhotoMove, SelectedAlbumPhoto,
 };
-
-pub(super) fn find_photo_camera_roll_album(
-    albums: &Query<(
-        Entity,
-        &PhotoAlbum,
-        Option<&WorldMember>,
-        Option<&PhotoAlbumPage>,
-        Option<&SelectedAlbumPhoto>,
-        Option<&PhotoMove>,
-        Option<&PhotoCameraRoll>,
-    )>,
-) -> Option<Entity> {
-    albums
-        .iter()
-        .find(|row| row.6.is_some())
-        .or_else(|| albums.iter().min_by_key(|row| row.0.to_bits()))
-        .map(|row| row.0)
-}
 
 pub(super) fn calculate_active_photo_album_page_offset(
     album: Option<Entity>,
@@ -40,7 +22,6 @@ pub(super) fn calculate_active_photo_album_page_offset(
         &PhotoAlbum,
         Option<&WorldMember>,
         Option<&PhotoAlbumPage>,
-        Option<&SelectedAlbumPhoto>,
         Option<&PhotoMove>,
         Option<&PhotoCameraRoll>,
     )>,
@@ -70,7 +51,6 @@ pub(super) fn find_photo_in_album_display_slot(
         &PhotoAlbum,
         Option<&WorldMember>,
         Option<&PhotoAlbumPage>,
-        Option<&SelectedAlbumPhoto>,
         Option<&PhotoMove>,
         Option<&PhotoCameraRoll>,
     )>,
@@ -78,7 +58,7 @@ pub(super) fn find_photo_in_album_display_slot(
 ) -> Option<Entity> {
     let album = album?;
     let album_state = albums.get(album).ok()?;
-    let rank = photo_rank_for_album_display_slot(slot, album_state.6.is_some(), album_state.3)?;
+    let rank = photo_rank_for_album_display_slot(slot, album_state.5.is_some(), album_state.3)?;
     members.get(album).ok()?.collection().get(rank).copied()
 }
 
@@ -154,10 +134,11 @@ mod camera_roll_slot_tests {
     #[test]
     fn camera_roll_exposes_all_twenty_four_photos_without_album_pagination() {
         let mut world = World::new();
+        let root = world.spawn_empty().id();
         let roll = world
             .spawn((
                 PhotoAlbum { profile: default() },
-                PhotoCameraRoll,
+                PhotoCameraRoll(root),
                 PhotoAlbumPage(4),
             ))
             .id();
@@ -184,7 +165,6 @@ mod camera_roll_slot_tests {
                 &PhotoAlbum,
                 Option<&WorldMember>,
                 Option<&PhotoAlbumPage>,
-                Option<&SelectedAlbumPhoto>,
                 Option<&PhotoMove>,
                 Option<&PhotoCameraRoll>,
             )>,
@@ -214,23 +194,17 @@ pub(super) fn select_photo_in_album_display_slot(
         &PhotoAlbum,
         Option<&WorldMember>,
         Option<&PhotoAlbumPage>,
-        Option<&SelectedAlbumPhoto>,
         Option<&PhotoMove>,
         Option<&PhotoCameraRoll>,
     )>,
     members: &Query<&AlbumPhotos>,
-    commands: &mut Commands,
+    selection: &mut Mut<SelectedAlbumPhoto>,
 ) {
     if let (Some(album), Some(photo)) = (
         album,
         find_photo_in_album_display_slot(album, slot, albums, members),
     ) {
-        for row in albums {
-            if row.0 != album {
-                commands.entity(row.0).remove::<SelectedAlbumPhoto>();
-            }
-        }
-        commands.entity(album).insert(SelectedAlbumPhoto(photo));
+        selection.set_if_neq(SelectedAlbumPhoto(Some((album, photo))));
     }
 }
 
@@ -242,92 +216,57 @@ pub(super) fn deselect_photo_in_album_display_slot(
         &PhotoAlbum,
         Option<&WorldMember>,
         Option<&PhotoAlbumPage>,
-        Option<&SelectedAlbumPhoto>,
         Option<&PhotoMove>,
         Option<&PhotoCameraRoll>,
     )>,
     members: &Query<&AlbumPhotos>,
-    commands: &mut Commands,
+    selection: &mut Mut<SelectedAlbumPhoto>,
 ) {
     if let (Some(album), Some(photo)) = (
         album,
         find_photo_in_album_display_slot(album, slot, albums, members),
     ) {
-        if albums
-            .get(album)
-            .ok()
-            .and_then(|row| row.4)
-            .is_some_and(|selected| selected.0 == photo)
-        {
-            commands.entity(album).remove::<SelectedAlbumPhoto>();
+        if selection.0 == Some((album, photo)) {
+            selection.set_if_neq(SelectedAlbumPhoto(None));
         }
     }
 }
 
 pub(super) fn select_photo_album_by_list_index(
     index: i32,
+    root: Entity,
     albums: &Query<(
         Entity,
         &PhotoAlbum,
         Option<&WorldMember>,
         Option<&PhotoAlbumPage>,
-        Option<&SelectedAlbumPhoto>,
         Option<&PhotoMove>,
         Option<&PhotoCameraRoll>,
     )>,
     commands: &mut Commands,
 ) {
     if let Some(selected) = usize::try_from(index).ok().and_then(|index| {
-        ordered_photo_album_entities(albums.iter().filter(|row| row.6.is_none()).map(|row| row.0))
-            .get(index)
-            .copied()
+        ordered_photo_album_entities(
+            albums
+                .iter()
+                .filter(|row| row.5.is_none() && row.2.is_some_and(|member| member.root == root))
+                .map(|row| row.0),
+        )
+        .get(index)
+        .copied()
     }) {
-        albums.iter().for_each(|row| {
-            commands.entity(row.0).remove::<ActivePhotoAlbum>();
-        });
-        commands.entity(selected).insert(ActivePhotoAlbum);
+        commands.entity(selected).insert(ActivePhotoAlbum(root));
     }
 }
 
 pub(super) fn request_deletion_of_selected_photo_from_album(
     album: Option<Entity>,
-    albums: &Query<(
-        Entity,
-        &PhotoAlbum,
-        Option<&WorldMember>,
-        Option<&PhotoAlbumPage>,
-        Option<&SelectedAlbumPhoto>,
-        Option<&PhotoMove>,
-        Option<&PhotoCameraRoll>,
-    )>,
+    selection: &mut Mut<SelectedAlbumPhoto>,
     deletions: &mut MessageWriter<DeletePhotoRequest>,
 ) {
-    if let Some(photo) = album
-        .and_then(|album| albums.get(album).ok())
-        .and_then(|row| row.4)
-        .map(|selected| selected.0)
-    {
+    if let Some(photo) = album.and_then(|album| selection.in_album(album)) {
         deletions.write(DeletePhotoRequest { photo });
-    }
-}
-
-pub(super) fn request_deletion_of_selected_photo_from_any_album(
-    albums: &Query<(
-        Entity,
-        &PhotoAlbum,
-        Option<&WorldMember>,
-        Option<&PhotoAlbumPage>,
-        Option<&SelectedAlbumPhoto>,
-        Option<&PhotoMove>,
-        Option<&PhotoCameraRoll>,
-    )>,
-    deletions: &mut MessageWriter<DeletePhotoRequest>,
-) {
-    if let Some(photo) = albums
-        .iter()
-        .find_map(|row| row.4.map(|selected| selected.0))
-    {
-        deletions.write(DeletePhotoRequest { photo });
+        selection.set_if_neq(SelectedAlbumPhoto(None));
     }
 }
 

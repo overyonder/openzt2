@@ -1,8 +1,6 @@
 use bevy::prelude::*;
 use openzt2_game_data::world_definitions::staff_management::StaffRoleKind;
-use openzt2_zoo_state::animal_behavior::behavior_target_placement_types::{
-    BehaviorPlacementTravelTargets,
-};
+use openzt2_zoo_state::animal_behavior::behavior_target_placement_types::BehaviorPlacementTravelTargets;
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::behavior_action_actors;
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
     RunBehaviorMove, RunningBehaviorInstruction,
@@ -92,12 +90,7 @@ pub(super) fn start_current_supported_behavior_move_actions(
     animal_actors: Query<(), With<openzt2_zoo_state::animal_lifecycle::types::Animal>>,
     water_targets: Query<&openzt2_zoo_state::animal_behavior::behavior_natural_water_target_types::SelectedNaturalWaterTarget>,
     waters: super::natural_water_targets::NaturalWaterTargets,
-    (
-        programs,
-        guests,
-        entrances,
-        grids,
-    ): (
+    (programs, guests, entrances, grids): (
         Res<Assets<openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset>>,
         Query<(), With<openzt2_zoo_state::guests::guest_simulation_types::Guest>>,
         Query<&openzt2_world_state::world_spawn::zoo_entrance_anchor_synchronization::ZooEntrance>,
@@ -153,8 +146,9 @@ pub(super) fn start_current_supported_behavior_move_actions(
             .target_node_name
             .as_deref()
             .map(|target_node_name| {
-                authored_attachment_transforms.pose(target, target_node_name)
-                .map(|transform| transform.translation())
+                authored_attachment_transforms
+                    .pose(target, target_node_name)
+                    .map(|transform| transform.translation())
             });
         let mut destination = match resolve_behavior_move_destination(
             target_transform.translation(),
@@ -250,17 +244,23 @@ pub(super) fn start_current_supported_behavior_move_actions(
             continue;
         };
         let request_id = generation.advance();
-        if move_action.target_node_name.is_none() && guests.contains(actor)
-            && programs.get(&behavior_task.document)
+        if move_action.target_node_name.is_none()
+            && guests.contains(actor)
+            && programs
+                .get(&behavior_task.document)
                 .and_then(|document| document.behavior_task_at_index(behavior_task.declaration))
                 .is_some_and(|task| {
-                    task.scores.iter().any(|score| matches!(
-                        score, openzt2_game_data::behavior::score::BehaviorScore::LeaveZooPressure
-                    ))
+                    task.scores.iter().any(|score| {
+                        matches!(
+                            score,
+                            openzt2_game_data::behavior::score::BehaviorScore::LeaveZooPressure
+                        )
+                    })
                 })
         {
             if let Ok(entrance) = entrances.get(target) {
-                destination = definitions.and_then(|definitions| definitions.guest_generation())
+                destination = definitions
+                    .and_then(|definitions| definitions.guest_generation())
                     .map_or(entrance.exit, |policy| {
                         let [x, y] = policy.departure_offset_m;
                         entrance.exit + target_transform.rotation() * Vec3::new(x, 0.0, -y)

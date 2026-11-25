@@ -6,7 +6,7 @@ use gltf::json::{
     accessor::Type,
     buffer::Target,
     material::{Material, PbrMetallicRoughness, StrengthFactor},
-    mesh::{Mesh, Mode, Primitive, Semantic},
+    mesh::{Mesh, Mode, MorphTarget, Primitive, Semantic},
     scene::{Node, Scene, UnitQuaternion},
     skin::Skin,
     validation::Checked,
@@ -288,17 +288,35 @@ impl NativeModelGltfWriter {
             attributes.insert(Checked::Valid(Semantic::Joints(0)), joints);
             attributes.insert(Checked::Valid(Semantic::Weights(0)), weights);
         }
+        let targets = mesh
+            .position_morph_targets
+            .iter()
+            .map(|target| MorphTarget {
+                positions: Some(self.binary_buffer.add_f32_accessor(
+                    &mut self.root,
+                    &target.iter().flatten().copied().collect::<Vec<_>>(),
+                    Type::Vec3,
+                    true,
+                    Some(Target::ArrayBuffer),
+                )),
+                normals: None,
+                tangents: None,
+            })
+            .collect::<Vec<_>>();
+        let targets = (!targets.is_empty()).then_some(targets);
         let primitives = mesh
             .submeshes
             .iter()
-            .map(|submesh| self.add_submesh_primitive(mesh, submesh, attributes.clone()))
+            .map(|submesh| {
+                self.add_submesh_primitive(mesh, submesh, attributes.clone(), targets.clone())
+            })
             .collect::<Result<Vec<_>, _>>()?;
         let mesh_index = self.root.push(Mesh {
             extensions: None,
             extras: gltf_extras(&serde_json::json!({ "openzt2Lods": mesh.lods }))?,
             name: None,
             primitives,
-            weights: None,
+            weights: targets.as_ref().map(|targets| vec![0.0; targets.len()]),
         });
         Ok(mesh_index)
     }
@@ -308,6 +326,7 @@ impl NativeModelGltfWriter {
         mesh: &MeshSource,
         submesh: &SubmeshSource,
         attributes: BTreeMap<Checked<Semantic>, Index<gltf::json::accessor::Accessor>>,
+        targets: Option<Vec<MorphTarget>>,
     ) -> Result<Primitive, ConversionError> {
         let start = usize::try_from(submesh.first_index)
             .map_err(|_| ConversionError::InvalidValue("submesh index exceeds usize"))?;
@@ -333,7 +352,7 @@ impl NativeModelGltfWriter {
             indices: Some(indices),
             material: Some(material),
             mode: Checked::Valid(Mode::Triangles),
-            targets: None,
+            targets,
         })
     }
 

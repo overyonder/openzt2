@@ -4,7 +4,6 @@ pub mod authored_buy_information_panel_source_normalization;
 mod authored_credits_composition;
 mod authored_expansion_icon_composition;
 pub mod authored_money_text_source_normalization;
-pub mod authored_profile_name_edit_watch_binding_normalization;
 pub mod authored_rail_camera_ui_surface_source_normalization;
 pub mod authored_scenario_objective_collection_source_normalization;
 pub mod authored_ui_source_skin_image_resolution;

@@ -5,8 +5,9 @@ use std::{collections::BTreeMap, path::Path};
 use openzt2_game_data::{
     scene_prefab::{
         PrefabBillboard, PrefabCollider, PrefabColliderSource, PrefabEffect, PrefabEntity,
-        PrefabLight, PrefabLod, PrefabRenderable, PrefabRenderableMaterialOverride,
-        PrefabRotationCycle, PrefabTransform, PrefabTransformAnimation, ScenePrefabAssetDependency,
+        PrefabLight, PrefabLod, PrefabMorphAnimation, PrefabRenderable,
+        PrefabRenderableMaterialOverride, PrefabRotationCycle, PrefabTransform,
+        PrefabTransformAnimation, PrefabVisibilityAnimation, ScenePrefabAssetDependency,
         ScenePrefabAssetDependencyKind, ScenePrefabColliderLayerFlags, ScenePrefabDocument,
         ScenePrefabEntityFlags, ScenePrefabRenderableVisibilityFlags,
     },
@@ -43,6 +44,7 @@ pub(super) struct ScenePrefabDocumentAssembler {
     effects: Vec<(u32, PrefabEffect)>,
     lods: Vec<(u32, PrefabLod)>,
     pending_lods: Vec<PendingLod>,
+    pending_visibility: Vec<(i32, PrefabVisibilityAnimation)>,
     dependencies: BTreeMap<(AssetId, u8), ScenePrefabAssetDependency>,
 }
 
@@ -62,6 +64,7 @@ impl ScenePrefabDocumentAssembler {
             effects: Vec::new(),
             lods: Vec::new(),
             pending_lods: Vec::new(),
+            pending_visibility: Vec::new(),
             dependencies: BTreeMap::new(),
         }
     }
@@ -112,6 +115,9 @@ impl ScenePrefabDocumentAssembler {
             },
             rotation_cycles: Vec::new(),
             transform_animations: Vec::new(),
+            visibility_animation: None,
+            morph_animation: None,
+            render_lod_policy: None,
             renderables: Vec::new(),
             colliders: Vec::new(),
             lods: Vec::new(),
@@ -153,6 +159,9 @@ impl ScenePrefabDocumentAssembler {
     }
     pub(super) fn contains_netimmerse_entity(&self, block: i32) -> bool {
         self.nif_entities.contains_key(&block)
+    }
+    pub(super) fn netimmerse_entity(&self, block: i32) -> Option<u32> {
+        self.nif_entities.get(&block).copied()
     }
     pub(super) fn remember_netimmerse_entity(&mut self, block: i32, entity: u32) {
         self.nif_entities.insert(block, entity);
@@ -253,6 +262,23 @@ impl ScenePrefabDocumentAssembler {
             .transform_animations
             .push(transform_animation);
     }
+    pub(super) fn pending_visibility_animation(
+        &mut self,
+        target: i32,
+        animation: PrefabVisibilityAnimation,
+    ) {
+        self.pending_visibility.push((target, animation));
+    }
+    pub(super) fn morph_animation(&mut self, entity: u32, animation: PrefabMorphAnimation) {
+        self.entities[entity as usize].morph_animation = Some(animation);
+    }
+    pub(super) fn render_lod_policy(
+        &mut self,
+        entity: u32,
+        policy: openzt2_game_data::scene_prefab::PrefabRenderLodPolicy,
+    ) {
+        self.entities[entity as usize].render_lod_policy = Some(policy);
+    }
     pub(super) fn billboard(&mut self, entity: u32, billboard: PrefabBillboard) {
         self.billboards.push((entity, billboard));
     }
@@ -305,6 +331,15 @@ impl ScenePrefabDocumentAssembler {
         );
     }
     pub(super) fn finish(mut self) -> Result<ScenePrefabDocument> {
+        for (target, animation) in self.pending_visibility {
+            let &entity = self.nif_entities.get(&target).ok_or_else(|| {
+                NativeSceneLoweringError::new(
+                    &self.model_path,
+                    format!("visibility controller references non-scene target {target}"),
+                )
+            })?;
+            self.entities[entity as usize].visibility_animation = Some(animation);
+        }
         let pending_lods = std::mem::take(&mut self.pending_lods);
         let mut lods = pending_lods
             .into_iter()

@@ -94,7 +94,9 @@ fn resolve_relative_cursor_paths_in_ui_source_node(node: &mut SourceUiNode, dire
         resolve_relative_cursor_path_in_ui_source_event(event, directory);
     }
     for hotkey in &mut node.hotkeys {
-        resolve_relative_cursor_path_in_ui_source_event(&mut hotkey.event, directory);
+        for event in &mut hotkey.events {
+            resolve_relative_cursor_path_in_ui_source_event(event, directory);
+        }
     }
     if let SourceUiWidgetData::TimedEvents(events) = &mut node.widget {
         for timed in events {
@@ -134,14 +136,12 @@ fn expand_named_events_in_ui_source_node(
             .flatten()
             .collect();
     }
-    let hotkeys = std::mem::take(&mut node.hotkeys);
-    for hotkey in hotkeys {
-        let events = expand_named_ui_source_event(hotkey.event.clone(), registry, stack)?;
-        for event in events {
-            let mut binding = hotkey.clone();
-            binding.event = event;
-            node.hotkeys.push(binding);
+    for hotkey in &mut node.hotkeys {
+        let mut expanded = Vec::new();
+        for event in std::mem::take(&mut hotkey.events) {
+            expanded.extend(expand_named_ui_source_event(event, registry, stack)?);
         }
+        hotkey.events = expanded;
     }
     if let SourceUiWidgetData::TimedEvents(records) = &mut node.widget {
         for timed in std::mem::take(records) {

@@ -130,6 +130,7 @@ impl ScenarioLuaQueryFactSources<'_, '_> {
             world_definitions: self.world_definitions.get(&self.world_definition_assets),
             scenario_document_assets: &self.scenario_document_assets,
             current_photo_challenge_sets,
+            selected_photo_set: None,
             photo_challenges,
             selected_entity: self.selected_entity.subject(),
             fence_edges,

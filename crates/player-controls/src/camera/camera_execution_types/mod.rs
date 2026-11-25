@@ -131,6 +131,7 @@ pub(crate) struct CameraIntent {
     pub(crate) edge_pan: Option<(Entity, Vec2)>,
     pub(crate) ui_turn: f32,
     pub(crate) ui_zoom: f32,
+    pub(crate) first_person_commands: FirstPersonCommands,
     /// Independent held states of the authored photo commands.
     pub(crate) photo_zoom_in_command: bool,
     pub(crate) photo_zoom_out_command: bool,
@@ -150,3 +151,25 @@ fn valid_range(range: &RangeInclusive<f32>) -> bool {
 /// Definition supplied by the active map when its overhead camera was created.
 #[derive(Component, Clone, Copy)]
 pub(crate) struct MapOverheadCameraDefinition(pub(crate) openzt2_game_data::AssetId);
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct FirstPersonCommands {
+    pub(crate) forward: bool,
+    pub(crate) backward: bool,
+    pub(crate) turn_left: bool,
+    pub(crate) turn_right: bool,
+    pub(crate) up: bool,
+    pub(crate) down: bool,
+    pub(crate) crouch: bool,
+    pub(crate) free_mouse_look: bool,
+}
+
+impl FirstPersonCommands {
+    pub(crate) fn forward_axis(self) -> f32 {
+        f32::from(self.forward) - f32::from(self.backward)
+    }
+
+    pub(crate) fn turn_axis(self) -> f32 {
+        f32::from(self.turn_right) - f32::from(self.turn_left)
+    }
+}

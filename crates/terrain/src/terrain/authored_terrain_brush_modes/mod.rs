@@ -9,13 +9,20 @@ use openzt2_game_assets::source_document::{
     blue_fang_source_document_parsing::parse_blue_fang_source_document,
     blue_fang_source_numeric_lexeme::parse_blue_fang_source_numeric_lexeme, path::AssetPath,
 };
+use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
+use openzt2_game_data::ui_document::action::construction::UiConstructionAction;
 use openzt2_game_data::{
     terrain::TerrainWaterDepth,
     world_definitions::biomes_locations_and_details::BiomeAutomaticPlacementVariationKind,
 };
+use openzt2_interface_state::ui::{
+    authored_ui_action_projection_components::UiConstructionActions,
+    authored_ui_activation_contracts::UiNodeActivated,
+    authored_ui_node_projection_components::{UiDocumentOwner, UiDocumentRoot},
+};
 use openzt2_zoo_state::{
     construction::construction_tool_and_placement_policy_types::{
-        BiomeSurface, ConstructionPlacementPolicy,
+        BiomeSurface, ConstructionPlacementPolicy, ConstructionTool,
     },
     terrain::terrain_brush_types::TerrainBrushKind,
 };
@@ -64,14 +71,9 @@ impl AuthoredTerrainBrushModes<'_> {
         }
     }
 
-    pub(super) fn brush_dimensions_and_speed(
-        &self,
-        kind: TerrainBrushKind,
-        policy: &ConstructionPlacementPolicy,
-    ) -> Option<(f32, f32)> {
-        if let Some(index) = deformation_slot(kind) {
+    fn cursor_size_policy(&self, kind: TerrainBrushKind) -> Option<(usize, [f32; 2], f32, f32)> {
+        if deformation_slot(kind).is_some() {
             let TerrainBrushMode::Deformation {
-                speeds,
                 width,
                 initial,
                 increment,
@@ -80,51 +82,61 @@ impl AuthoredTerrainBrushModes<'_> {
             else {
                 return None;
             };
-            let radius = brush_width(
-                *width,
-                *initial,
-                *increment,
-                policy.terrain_deformation_brush_radius_half_metre_steps,
-            );
-            let speed = if index == 2
-                && policy.terrain_flatten_strength_tenths_per_second
-                    != ConstructionPlacementPolicy::default()
-                        .terrain_flatten_strength_tenths_per_second
-            {
-                f32::from(policy.terrain_flatten_strength_tenths_per_second) * 0.1
-            } else {
-                speeds[index]
-            };
-            return Some((radius, speed));
+            return Some((0, *width, *initial, *increment));
         }
         let TerrainBrushMode::Paint {
             ground_width,
             water_width,
             initial,
             increment,
-            automatic_water_radius,
             ..
         } = self.assets.get(&self.handles.paint)?
         else {
             return None;
         };
-        let radius = match kind {
-            TerrainBrushKind::Paint { .. } => brush_width(
-                *ground_width,
-                *initial,
-                *increment,
-                policy.biome_texture_brush_radius_half_metre_steps,
-            ),
-            TerrainBrushKind::PaintWater { .. } => brush_width(
-                *water_width,
-                *initial,
-                *increment,
-                policy.biome_water_brush_radius_half_metre_steps,
-            ),
-            TerrainBrushKind::AddWater | TerrainBrushKind::RemoveWater => *automatic_water_radius,
-            _ => return None,
+        match kind {
+            TerrainBrushKind::Paint { .. } => Some((1, *ground_width, *initial, *increment)),
+            TerrainBrushKind::PaintWater { .. } => Some((2, *water_width, *initial, *increment)),
+            _ => None,
+        }
+    }
+
+    pub(super) fn brush_dimensions_and_speed(
+        &self,
+        kind: TerrainBrushKind,
+        controls: &TerrainBrushControls,
+    ) -> Option<(f32, f32)> {
+        if matches!(
+            kind,
+            TerrainBrushKind::AddWater | TerrainBrushKind::RemoveWater
+        ) {
+            let TerrainBrushMode::Paint {
+                automatic_water_radius,
+                ..
+            } = self.assets.get(&self.handles.paint)?
+            else {
+                return None;
+            };
+            return Some((*automatic_water_radius, 1.0));
+        }
+        let (slot, bounds, initial, _) = self.cursor_size_policy(kind)?;
+        let radius = controls.radius[slot]
+            .unwrap_or(initial)
+            .clamp(bounds[0], bounds[1]);
+        let Some(index) = deformation_slot(kind) else {
+            return Some((radius, 1.0));
         };
-        Some((radius, 1.0))
+        let TerrainBrushMode::Deformation { speeds, .. } =
+            self.assets.get(&self.handles.deformation)?
+        else {
+            return None;
+        };
+        let speed = if matches!(kind, TerrainBrushKind::Flatten { .. }) {
+            controls.flatten_speed.unwrap_or(speeds[index])
+        } else {
+            speeds[index]
+        };
+        Some((radius, speed))
     }
 
     pub(super) fn cursor(
@@ -181,17 +193,71 @@ fn deformation_slot(kind: TerrainBrushKind) -> Option<usize> {
     }
 }
 
-fn brush_width(bounds: [f32; 2], initial: f32, increment: f32, control_steps: u8) -> f32 {
-    let steps = i16::from(control_steps)
-        - i16::from(
-            ConstructionPlacementPolicy::default()
-                .terrain_deformation_brush_radius_half_metre_steps,
-        );
-    // A scenario can supply a width directly outside the interactive UI's range.
-    if !(2..=16).contains(&control_steps) {
-        return f32::from(control_steps) * 0.5;
+#[derive(Resource, Default)]
+pub(super) struct TerrainBrushControls {
+    pub(super) radius: [Option<f32>; 3],
+    pub(super) flatten_speed: Option<f32>,
+}
+
+pub(super) fn apply_authored_terrain_brush_controls(
+    mut activations: MessageReader<UiNodeActivated>,
+    documents: Res<Assets<UiDocumentAsset>>,
+    action_nodes: Query<(&UiConstructionActions, &UiDocumentOwner)>,
+    roots: Query<&UiDocumentRoot>,
+    tool: Res<ConstructionTool>,
+    modes: AuthoredTerrainBrushModes,
+    mut controls: ResMut<TerrainBrushControls>,
+) {
+    for activation in activations.read() {
+        let Ok((actions, owner)) = action_nodes.get(activation.node) else {
+            continue;
+        };
+        let Some(document) = roots
+            .get(owner.0)
+            .ok()
+            .and_then(|root| documents.get(&root.document))
+        else {
+            continue;
+        };
+        for record in actions
+            .authored_action_records(document)
+            .filter(|record| record.trigger == activation.trigger)
+        {
+            match &record.action {
+                UiConstructionAction::SetTerrainCursorSize { direction } => {
+                    let ConstructionTool::Terrain(kind) = *tool else {
+                        continue;
+                    };
+                    let Some((slot, bounds, initial, increment)) = modes.cursor_size_policy(kind)
+                    else {
+                        continue;
+                    };
+                    let radius = controls.radius[slot]
+                        .unwrap_or(initial)
+                        .clamp(bounds[0], bounds[1]);
+                    let radius = (radius + direction.signum() as f32 * increment)
+                        .clamp(bounds[0], bounds[1]);
+                    controls
+                        .reborrow()
+                        .map_unchanged(|controls| &mut controls.radius[slot])
+                        .set_if_neq(Some(radius));
+                }
+                UiConstructionAction::SetTerrainFlattenSpeed {
+                    strength_tenths_per_second,
+                } => {
+                    let value = strength_tenths_per_second
+                        .unsigned_abs()
+                        .min(u32::from(u16::MAX)) as f32
+                        * 0.1;
+                    controls
+                        .reborrow()
+                        .map_unchanged(|controls| &mut controls.flatten_speed)
+                        .set_if_neq(Some(value));
+                }
+                _ => {}
+            }
+        }
     }
-    (initial + f32::from(steps) * increment).clamp(bounds[0], bounds[1])
 }
 
 pub(super) fn load_authored_terrain_brush_modes(mut commands: Commands, server: Res<AssetServer>) {
@@ -244,6 +310,9 @@ impl AssetLoader for TerrainBrushModeLoader {
         };
         let initial = read("startCursorWidth")?;
         let increment = read("cursorSizeIncrement")?;
+        if increment < 0.0 {
+            return Err(invalid("cursorSizeIncrement"));
+        }
         let cursors = doc
             .root
             .element_children()

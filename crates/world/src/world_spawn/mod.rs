@@ -8,7 +8,7 @@ pub mod prefab_world_instance_spawning;
 pub mod challenge_economy_initialization;
 pub mod expanding_column_presentation;
 mod generated_entity_name_application;
-mod named_physical_presentation_projection;
+pub(crate) mod named_physical_presentation_projection;
 mod persistent_id_assignment;
 mod physical_presentation_state;
 mod prefab_attachment_independent_rotation;
@@ -242,6 +242,12 @@ impl Plugin for WorldSpawnPlugin {
                     finish_rebuilding_world_instance_renderables
                         .after(begin_rebuilding_world_instance_renderables_after_prefab_reload),
                     hydrate_prefab_presentations
+                        .run_if(
+                            any_match_filter::<Changed<openzt2_world_state::world_spawn::prefab_presentation_types::PrefabPresentation>>
+                                .or_eager(on_message::<AssetEvent<ScenePrefabAsset>>)
+                                .or_eager(on_message::<AssetLoadFailedEvent<ScenePrefabAsset>>)
+                                .or_eager(any_component_removed::<openzt2_world_state::world_spawn::prefab_presentation_types::PrefabPresentationHydrated>),
+                        )
                         .after(prefab_presentation_render_tree::rebuild_prefab_presentations_after_prefab_reload),
                     crate::world_spawn::expanding_column_presentation::align_expanding_column_piece_attachments
                         .run_if(
@@ -272,11 +278,21 @@ impl Plugin for WorldSpawnPlugin {
                     project_physical_presentation_caustic_policies
                         .after(attach_named_presentations_to_model_nodes)
                         .after(project_pending_physical_presentation_children),
-                    crate::world_spawn::prefab_effect_trigger_hydration::hydrate_prefab_effect_triggers,
+                    prefab_effect_trigger_hydration::hydrate_prefab_effect_triggers.run_if(
+                        any_match_filter::<Changed<prefab_effect_trigger_hydration::PrefabEffectTrigger>>
+                            .or_eager(on_message::<AssetEvent<openzt2_game_assets::effect::ParticleEffectDocumentAsset>>)
+                            .or_eager(on_message::<AssetLoadFailedEvent<openzt2_game_assets::effect::ParticleEffectDocumentAsset>>),
+                    ),
                     synchronize_zoo_entrance_anchor_after_transform_changes
                         .after(commit_ready_starting_prefab_rows_in_source_order),
                 )
                     .in_set(GameSet::Intent),
+            )
+            .add_systems(
+                PostUpdate,
+                named_physical_presentation_projection::advance_named_presentation_opacity
+                    .before(bevy::app::PropagateSet::<prefab_world_instance_spawning::morph_fade_projection::NamedPrefabOpacity>::default())
+                    .before(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate),
             )
             .add_systems(
                 PostUpdate,
@@ -294,6 +310,7 @@ impl Plugin for WorldSpawnPlugin {
             .add_systems(
                 FixedUpdate,
                 crate::world_spawn::physical_presentation_state::child_lifecycle::advance_authored_child_lifetimes
+                    .after(openzt2_world_state::simulation_time::simulation_clock_types::ZooClockAdvance)
                     .in_set(FixedGameSet::Act)
                     .run_if(in_state(GamePhase::InGame)),
             )

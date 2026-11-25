@@ -3,9 +3,11 @@ use openzt2_world_state::simulation_time::{
     simulation_control_types, zoo_calendar_calculation,
 };
 
+mod authored_simulation_control_bindings;
 mod simulation_control_action_routing;
 mod simulation_control_application;
 mod simulation_control_ui_presentation;
+mod simulation_pause_claim_projection;
 mod simulation_speed_override;
 pub mod simulation_time_world_lifecycle;
 mod timekeeper_cadence;
@@ -15,9 +17,12 @@ mod zoo_date_ui_presentation;
 use bevy::prelude::*;
 
 use openzt2_game_assets::application_lifecycle::GamePhase;
-use openzt2_interface_state::{input::input_types::ActionRequest, ui::UiSet};
+use openzt2_interface_state::{
+    input::input_types::ActionRequest,
+    ui::{authored_ui_activation_contracts::UiNodeActivated, UiSet},
+};
 use openzt2_world_state::{
-    application_schedule::{FixedGameSet, GameSet},
+    application_schedule::{FixedGameSet, GameSet, ZooHeartbeat, ZooSlowTick},
     world_spawn::world_load_completion_marker::WorldLoadPreparationSet,
 };
 use openzt2_zoo_state::environment::environment_state_types::ZooTickAdvanced;
@@ -38,12 +43,12 @@ impl Plugin for SimulationTimePlugin {
             route_pause_game_action_to_simulation_control_requests,
         };
         use simulation_control_application::{
-            apply_simulation_control_requests, pause_claim_inputs_changed,
-            project_active_simulation_pause_claims, project_simulation_speed,
+            apply_simulation_control_requests, project_simulation_speed,
             simulation_speed_inputs_changed,
         };
         use simulation_time_world_lifecycle::initialize_simulation_time_from_selected_world;
 
+        simulation_pause_claim_projection::configure_pause_claim_projection(app);
         app.init_resource::<simulation_speed_override::SimulationSpeedOverride>()
             .add_message::<SetSimulationSpeed>()
             .add_message::<SimulationPauseRequest>()
@@ -53,6 +58,19 @@ impl Plugin for SimulationTimePlugin {
             .add_message::<ZooYearAdvanced>()
             .add_message::<ZooSlowTickElapsed>()
             .add_message::<ZooHeartbeatElapsed>()
+            .configure_sets(
+                FixedUpdate,
+                ZooSlowTick
+                    .after(timekeeper_cadence::advance_slow_tick)
+                    .run_if(on_message::<ZooSlowTickElapsed>),
+            )
+            .configure_sets(
+                RunFixedMainLoop,
+                ZooHeartbeat
+                    .in_set(RunFixedMainLoopSystems::BeforeFixedMainLoop)
+                    .after(timekeeper_cadence::advance_heartbeat)
+                    .run_if(on_message::<ZooHeartbeatElapsed>),
+            )
             .add_systems(
                 Update,
                 initialize_simulation_time_from_selected_world
@@ -82,21 +100,22 @@ impl Plugin for SimulationTimePlugin {
             .add_systems(
                 Update,
                 route_authored_ui_simulation_actions_to_simulation_control_requests
-                    .in_set(UiSet::Routing),
-            )
-            .add_systems(
-                PostUpdate,
-                project_active_simulation_pause_claims
-                    .after(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate)
-                    .run_if(pause_claim_inputs_changed),
+                    .in_set(UiSet::Routing)
+                    .run_if(on_message::<ActionRequest>.or_eager(on_message::<UiNodeActivated>)),
             )
             .add_systems(
                 Update,
                 (
+                    authored_simulation_control_bindings::bind_authored_zoo_date_text,
+                    authored_simulation_control_bindings::bind_authored_pause_toggles,
                     zoo_date_ui_presentation::project_localized_zoo_date
+                        .after(authored_simulation_control_bindings::bind_authored_zoo_date_text)
                         .run_if(zoo_date_ui_presentation::zoo_date_inputs_changed),
-                    simulation_control_ui_presentation::project_simulation_paused_node_visibility,
-                    simulation_control_ui_presentation::project_simulation_pause_toggle_selection,
+                    simulation_control_ui_presentation::project_simulation_paused_node_visibility
+                        .run_if(simulation_control_ui_presentation::pause_indicators_changed),
+                    simulation_control_ui_presentation::project_simulation_pause_toggle_selection
+                        .after(authored_simulation_control_bindings::bind_authored_pause_toggles)
+                        .run_if(simulation_control_ui_presentation::pause_toggles_changed),
                 )
                     .in_set(UiSet::DomainProjection)
                     .run_if(in_state(GamePhase::InGame)),
@@ -112,9 +131,9 @@ impl Plugin for SimulationTimePlugin {
                     .run_if(simulation_control_queries::simulation_is_running),
             )
             .add_systems(
-                Update,
+                RunFixedMainLoop,
                 timekeeper_cadence::advance_heartbeat
-                    .after(initialize_simulation_time_from_selected_world),
+                    .in_set(RunFixedMainLoopSystems::BeforeFixedMainLoop),
             );
     }
 }

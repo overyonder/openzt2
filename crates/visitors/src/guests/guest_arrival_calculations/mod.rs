@@ -1,63 +1,18 @@
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
 use openzt2_world_state::simulation_time::deterministic_random_stream::DeterministicRng;
 use bevy::prelude::*;
-use openzt2_game_data::world_definitions::guest_simulation_definitions::GuestDefinition;
 use openzt2_game_data::world_definitions::guest_simulation_definitions::GuestGenerationPolicy;
 use openzt2_game_data::world_definitions::guest_simulation_definitions::GuestRarity;
 
-pub(super) fn choose_guest_definition<'a>(
-    definitions: WorldDefinitionsView<'a>,
-    rarity: GuestRarityBucket,
-    rng: &mut DeterministicRng,
-) -> Option<&'a GuestDefinition> {
-    [
-        rarity,
-        GuestRarityBucket::Common,
-        GuestRarityBucket::Uncommon,
-        GuestRarityBucket::Rare,
-    ]
-    .into_iter()
-    .find_map(|rarity| {
-        let matching = definitions
-            .guest_definitions()
-            .filter(|definition| guest_definition_matches_rarity(definition, rarity))
-            .count();
-        let selected = (matching != 0).then(|| rng.next_u32() as usize % matching)?;
-        definitions
-            .guest_definitions()
-            .filter(|definition| guest_definition_matches_rarity(definition, rarity))
-            .nth(selected)
-    })
-}
-
-#[derive(Clone, Copy)]
-pub(super) enum GuestRarityBucket {
-    Common,
-    Uncommon,
-    Rare,
-}
-
-pub(super) fn choose_guest_rarity(
-    thresholds: [u16; 2],
-    rng: &mut DeterministicRng,
-) -> GuestRarityBucket {
+pub(super) fn choose_guest_rarity(thresholds: [u16; 2], rng: &mut DeterministicRng) -> GuestRarity {
     let roll = (rng.next_u32() % 100) as u16;
     if roll < thresholds[0] {
-        GuestRarityBucket::Rare
+        GuestRarity::Rare
     } else if roll < thresholds[1] {
-        GuestRarityBucket::Uncommon
+        GuestRarity::Uncommon
     } else {
-        GuestRarityBucket::Common
+        GuestRarity::Common
     }
-}
-
-fn guest_definition_matches_rarity(guest: &GuestDefinition, rarity: GuestRarityBucket) -> bool {
-    matches!(
-        (&guest.rarity, rarity),
-        (GuestRarity::Common, GuestRarityBucket::Common)
-            | (GuestRarity::Uncommon, GuestRarityBucket::Uncommon)
-            | (GuestRarity::Rare, GuestRarityBucket::Rare)
-    )
 }
 
 pub(super) fn generation_delay_ticks(

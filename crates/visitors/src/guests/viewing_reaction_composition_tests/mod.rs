@@ -1,6 +1,6 @@
 use super::{
-    guest_simulation_types::*, view_event_execution::apply_guest_reactions,
-    view_event_execution::BehaviorViewEventEmitted,
+    guest_simulation_types::*, view_event_execution::BehaviorViewEventEmitted,
+    view_event_execution::apply_guest_reactions,
 };
 use bevy::prelude::*;
 use openzt2_game_assets::world_definitions::{
@@ -8,10 +8,10 @@ use openzt2_game_assets::world_definitions::{
     world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
 };
 use openzt2_game_data::{
+    AssetId,
     world_definitions::{
         document::WorldDefinitionDocument, guest_simulation_definitions::*, world_objects::*,
     },
-    AssetId,
 };
 use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
@@ -203,6 +203,9 @@ fn emit(app: &mut App, subject: Entity) {
     app.world_mut().write_message(BehaviorViewEventEmitted {
         education: 0.0,
         education_donation: 0.0,
+        feedback: None,
+        source_target: None,
+        source_object: None,
         source: subject,
         source_definition: id,
         view_key: id,

@@ -7,30 +7,35 @@ use openzt2_world_state::{
     model_render::ModelRenderPresentationSet,
     world_spawn::prefab_authored_billboard_orientation_mode::PrefabBillboardProjection,
 };
-use std::{cmp::Reverse, collections::BTreeMap};
+use std::collections::BTreeMap;
+
+#[derive(Component, Clone, Copy)]
+pub struct PrefabLodCameraViewFactor(pub f32);
+
+#[derive(Component, Clone, PartialEq)]
+struct ModelCameraViewInput {
+    pose: GlobalTransform,
+    order: isize,
+    layers: RenderLayers,
+    lod_view_factor: f32,
+}
 
 #[derive(Clone, Copy, PartialEq)]
 pub(super) struct ActiveModelCamera {
     pub(super) entity: Entity,
     pub(super) pose: GlobalTransform,
+    pub(super) lod_view_factor: f32,
     order: isize,
     query_index: usize,
 }
 
 #[derive(Default, Resource, PartialEq)]
 pub(super) struct ActiveModelViewCameras {
-    lod: BTreeMap<usize, ActiveModelCamera>,
+    pub(super) views: Vec<(ActiveModelCamera, RenderLayers)>,
     billboard: BTreeMap<usize, ActiveModelCamera>,
 }
 
 impl ActiveModelViewCameras {
-    pub(super) fn for_level_of_detail(&self, layers: &RenderLayers) -> Option<&ActiveModelCamera> {
-        layers
-            .iter()
-            .filter_map(|layer| self.lod.get(&layer))
-            .max_by_key(|camera| (camera.order, Reverse(camera.entity)))
-    }
-
     pub(super) fn for_billboard(&self, layers: &RenderLayers) -> Option<&ActiveModelCamera> {
         layers
             .iter()
@@ -42,21 +47,28 @@ impl ActiveModelViewCameras {
 pub(super) fn register_active_model_view_cameras(app: &mut App) {
     app.init_resource::<ActiveModelViewCameras>().add_systems(
         PostUpdate,
-        refresh_active_model_view_cameras
-            .after(AnimationSystems)
+        (
+            publish_model_camera_view_inputs.after(AnimationSystems),
+            refresh_active_model_view_cameras,
+        )
+            .chain()
             .before(PrefabBillboardProjection)
             .before(ModelRenderPresentationSet::LevelOfDetail),
     );
 }
 
-pub(super) fn refresh_active_model_view_cameras(
-    mut views: ResMut<ActiveModelViewCameras>,
-    cameras: Query<(
-        Entity,
-        Ref<Camera>,
-        Ref<Camera3d>,
-        Option<Ref<RenderLayers>>,
-    )>,
+pub(super) fn publish_model_camera_view_inputs(
+    mut commands: Commands,
+    mut cameras: Query<
+        (
+            Entity,
+            Ref<Camera>,
+            Option<Ref<RenderLayers>>,
+            Option<Ref<PrefabLodCameraViewFactor>>,
+            Option<&mut ModelCameraViewInput>,
+        ),
+        With<Camera3d>,
+    >,
     changed_hierarchy: Query<(), Or<(Changed<Transform>, Changed<ChildOf>)>>,
     parents: Query<&ChildOf>,
     transforms: TransformHelper,
@@ -64,56 +76,86 @@ pub(super) fn refresh_active_model_view_cameras(
     mut removed_camera_types: RemovedComponents<Camera3d>,
     mut removed_cameras: RemovedComponents<Camera>,
     mut removed_layers: RemovedComponents<RenderLayers>,
-    mut separated: Local<EntityHashSet>,
+    mut removed_factors: RemovedComponents<PrefabLodCameraViewFactor>,
 ) {
-    separated.clear();
-    separated.extend(removed_parents.read());
-    let removed_inputs = (removed_camera_types.read().count() != 0)
-        | (removed_cameras.read().count() != 0)
-        | (removed_layers
-            .read()
-            .filter(|&entity| cameras.contains(entity))
-            .count()
-            != 0);
-    if !views.is_added()
-        && !removed_inputs
-        && !cameras.iter().any(|(entity, camera, kind, layers)| {
-            camera.is_changed()
-                || kind.is_added()
-                || layers.is_some_and(|layers| layers.is_changed())
-                || (camera.is_active
-                    && std::iter::once(entity)
-                        .chain(parents.iter_ancestors(entity))
-                        .any(|node| changed_hierarchy.contains(node) || separated.contains(&node)))
-        })
-    {
-        return;
+    let separated = removed_parents.read().collect::<EntityHashSet>();
+    let removed_layers = removed_layers
+        .read()
+        .chain(removed_factors.read())
+        .collect::<EntityHashSet>();
+    for entity in removed_camera_types.read().chain(removed_cameras.read()) {
+        if !cameras.contains(entity) {
+            commands.entity(entity).try_remove::<ModelCameraViewInput>();
+        }
     }
-
-    let mut active = ActiveModelViewCameras::default();
-    for (query_index, (entity, camera, _, layers)) in cameras.iter().enumerate() {
+    for (entity, camera, layers, factor, input) in &mut cameras {
         if !camera.is_active {
+            if input.is_some() {
+                commands.entity(entity).try_remove::<ModelCameraViewInput>();
+            }
             continue;
         }
-        let Ok(pose) = transforms.compute_global_transform(entity) else {
+        let moved = std::iter::once(entity)
+            .chain(parents.iter_ancestors::<ChildOf>(entity))
+            .any(|node| changed_hierarchy.contains(node) || separated.contains(&node));
+        if input.is_some()
+            && !moved
+            && !camera.is_changed()
+            && !layers.as_ref().is_some_and(Ref::is_changed)
+            && !factor.as_ref().is_some_and(Ref::is_changed)
+            && !removed_layers.contains(&entity)
+        {
             continue;
+        }
+        let pose = if let Some(input) = input.as_ref().filter(|_| !moved) {
+            input.pose
+        } else {
+            let Ok(pose) = transforms.compute_global_transform(entity) else {
+                continue;
+            };
+            pose
         };
-        let view = ActiveModelCamera {
-            entity,
+        let next = ModelCameraViewInput {
             pose,
             order: camera.order,
+            layers: layers.as_deref().cloned().unwrap_or_default(),
+            lod_view_factor: factor
+                .filter(|factor| factor.0.is_finite() && factor.0 > 0.0)
+                .map_or(1.0, |factor| factor.0),
+        };
+        if let Some(mut input) = input {
+            input.set_if_neq(next);
+        } else {
+            commands.entity(entity).try_insert(next);
+        }
+    }
+}
+
+fn refresh_active_model_view_cameras(
+    mut views: ResMut<ActiveModelViewCameras>,
+    cameras: Query<(Entity, &ModelCameraViewInput)>,
+    changed: Query<(), Changed<ModelCameraViewInput>>,
+    mut removed: RemovedComponents<ModelCameraViewInput>,
+) {
+    if removed.read().count() == 0 && changed.is_empty() {
+        return;
+    }
+    let mut active = ActiveModelViewCameras::default();
+    for (query_index, (entity, input)) in cameras.iter().enumerate() {
+        let view = ActiveModelCamera {
+            entity,
+            pose: input.pose,
+            lod_view_factor: input.lod_view_factor,
+            order: input.order,
             query_index,
         };
-        for layer in layers.as_deref().unwrap_or_default().iter() {
-            let lod = active.lod.entry(layer).or_insert(view);
-            if (view.order, Reverse(view.entity)) > (lod.order, Reverse(lod.entity)) {
-                *lod = view;
-            }
+        for layer in input.layers.iter() {
             let billboard = active.billboard.entry(layer).or_insert(view);
             if view.order >= billboard.order {
                 *billboard = view;
             }
         }
+        active.views.push((view, input.layers.clone()));
     }
     views.set_if_neq(active);
 }

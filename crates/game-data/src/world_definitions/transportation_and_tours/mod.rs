@@ -141,6 +141,10 @@ pub struct TransportationVehicleSeatAnimationState {
     pub clip_prefix: String,
     pub angle_limits_degrees: [i16; 4],
     pub present_limits: u8,
+    #[serde(default)]
+    pub up_degrees: Option<f32>,
+    #[serde(default)]
+    pub down_degrees: Option<f32>,
 }
 // This schema record may contain floating-point members and therefore cannot derive `Eq`.
 #[allow(

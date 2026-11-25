@@ -10,6 +10,9 @@ use crate::source_document::ui::{
 use super::super::ui_source_document_gap::{
     UiSourceDocumentFamily, UiSourceDocumentGap, UiSourceDocumentGapKind,
 };
+use super::authored_scenario_objective_collection_source_normalization::{
+    OBJECTIVE_GROUP_TEMPLATE_FIELD, OBJECTIVE_GROUP_TEMPLATE_PREFIX, OBJECTIVE_ROW_TEMPLATE_PREFIX,
+};
 
 pub(super) fn select_transitively_referenced_ui_source_templates(
     root: &SourceUiNode,
@@ -82,21 +85,21 @@ pub(super) fn collect_named_ui_source_templates(
 pub(super) fn remove_inline_ui_source_templates_lowered_as_reusable_row_documents(
     source_documents: &mut BTreeMap<String, SourceUiDocument>,
 ) {
-    fn remove_inline_template_by_name(node: &mut SourceUiNode, template_name: &str) {
-        node.children
-            .retain(|child| child.template_name.as_deref() != Some(template_name));
+    fn remove_inline_row_templates(node: &mut SourceUiNode) {
+        node.children.retain(|child| {
+            child.template_name.as_deref().is_none_or(|name| {
+                name != "openzt2_zoopedia_toc_entry"
+                    && !name.starts_with(OBJECTIVE_GROUP_TEMPLATE_PREFIX)
+                    && !name.starts_with(OBJECTIVE_ROW_TEMPLATE_PREFIX)
+            })
+        });
         node.children
             .iter_mut()
-            .for_each(|child| remove_inline_template_by_name(child, template_name));
+            .for_each(remove_inline_row_templates);
     }
 
     source_documents.values_mut().for_each(|source_document| {
-        for reusable_row_template_name in [
-            "openzt2_zoopedia_toc_entry",
-            "openzt2_scenario_objective_row",
-        ] {
-            remove_inline_template_by_name(&mut source_document.root, reusable_row_template_name);
-        }
+        remove_inline_row_templates(&mut source_document.root);
     });
 }
 
@@ -112,6 +115,11 @@ pub(super) fn collect_reusable_ui_list_row_template_names(
         match &node.widget {
             SourceUiWidgetData::List(list) | SourceUiWidgetData::DropList { list, .. } => {
                 reusable_row_template_names.extend(list.row_template.iter().cloned());
+                reusable_row_template_names.extend(node.fields.iter().filter_map(|field| {
+                    (field.name.as_deref() == Some(OBJECTIVE_GROUP_TEMPLATE_FIELD))
+                        .then_some(field.format.as_ref()?)
+                        .cloned()
+                }));
             }
             SourceUiWidgetData::TypeList(_) => {
                 if all_named_templates.contains_key("purchaseicon") {

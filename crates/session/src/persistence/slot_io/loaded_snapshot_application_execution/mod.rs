@@ -190,10 +190,13 @@ pub(in crate::persistence) fn restore_pending_snapshots() -> ScheduleConfigs<Sch
                 .run_if(any_with_component::<AwaitingSnapshotDomainBaseline>),
             sections::apply_snapshot_sections
                 .run_if(sections::snapshot_section_dependencies_changed),
-            sections::prepare_transport_identities
-                .run_if(any_with_component::<RestoreTransportIdentities>),
             (
-                sections::apply_saved_fence_edges,
+                sections::prepare_transport_identities
+                    .run_if(any_with_component::<RestoreTransportIdentities>),
+                sections::apply_saved_fence_edges
+                    .run_if(any_with_component::<AttachSavedWorldState>),
+            ),
+            (
                 sections::attach_saved_economy,
                 sections::attach_saved_maintenance,
                 sections::attach_saved_donations,

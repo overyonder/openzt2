@@ -1,17 +1,20 @@
 //! Destination observations have no authority over a replacement activity.
 
-use bevy::prelude::*;
+use bevy::{
+    ecs::{entity::EntityHashSet, entity_disabling::Disabled, system::SystemParam},
+    prelude::*,
+};
 use openzt2_game_data::world_definitions::guest_simulation_definitions::GuestVisitPurpose;
 
 use super::guest_simulation_types::{
-    Guest, GuestDestination, GuestNavigationRequest, GuestPhase, GuestViewingTarget, Viewing,
-    ViewingOpportunity,
+    Guest, GuestDestination, GuestNavigationRequest, GuestPhase, GuestViewers, GuestViewingTarget,
+    Viewing, ViewingOpportunity,
 };
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_zoo_state::animal_behavior::behavior_set_start_request_types::PendingBehaviorSet;
 use openzt2_zoo_state::animal_lifecycle::types::Animal;
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
-    RunBehaviorViewAnimals, RunningBehaviorInstruction,
+    BehaviorViewingProgress, RunBehaviorViewAnimals, RunningBehaviorInstruction,
 };
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
 use openzt2_zoo_state::economy::service_types::ServiceReservation;
@@ -28,8 +31,103 @@ pub(super) fn viewing_owned_by_current_view_action(
         && instruction.is_current(task)
 }
 
+#[derive(Component)]
+#[relationship(relationship_target = ObservationAreaViewers, allow_self_referential)]
+pub(super) struct ObservationAreaOf(Entity);
+
+#[derive(Component)]
+#[relationship_target(relationship = ObservationAreaOf)]
+pub(super) struct ObservationAreaViewers(Vec<Entity>);
+
+#[derive(SystemParam)]
+pub(super) struct ObservationChanges<'w, 's> {
+    changed_guests: Query<
+        'w,
+        's,
+        Entity,
+        (
+            With<Guest>,
+            Or<(
+                Changed<Viewing>,
+                Changed<GuestDestination>,
+                Changed<GuestNavigationRequest>,
+                Changed<GuestViewingTarget>,
+                Changed<GuestPhase>,
+                Changed<WorldMember>,
+                Changed<BehaviorTaskExecutionState>,
+                Changed<RunningBehaviorInstruction>,
+                Added<PendingBehaviorSet>,
+                Added<ServiceReservation>,
+                Added<Destination>,
+                Added<BehaviorViewingProgress>,
+                Added<RunBehaviorViewAnimals>,
+            )>,
+        ),
+    >,
+    changed_owners: Query<
+        'w,
+        's,
+        Entity,
+        (
+            Allow<Disabled>,
+            Or<(With<GuestViewers>, With<ObservationAreaViewers>)>,
+            Or<(Changed<WorldMember>, Added<Disabled>)>,
+        ),
+    >,
+    subjects: Query<'w, 's, &'static GuestViewers, Allow<Disabled>>,
+    areas: Query<'w, 's, &'static ObservationAreaViewers, Allow<Disabled>>,
+    ended_viewing: RemovedComponents<'w, 's, Viewing>,
+    ended_area: RemovedComponents<'w, 's, ObservationAreaOf>,
+    ended_task: RemovedComponents<'w, 's, BehaviorTaskExecutionState>,
+    ended_view_action: RemovedComponents<'w, 's, RunBehaviorViewAnimals>,
+    lost_member: RemovedComponents<'w, 's, WorldMember>,
+    lost_animal: RemovedComponents<'w, 's, Animal>,
+    lost_opportunity: RemovedComponents<'w, 's, ViewingOpportunity>,
+    lost_destination: RemovedComponents<'w, 's, GuestDestination>,
+    lost_request: RemovedComponents<'w, 's, GuestNavigationRequest>,
+    lost_target: RemovedComponents<'w, 's, GuestViewingTarget>,
+    lost_phase: RemovedComponents<'w, 's, GuestPhase>,
+    enabled: RemovedComponents<'w, 's, Disabled>,
+}
+
+impl ObservationChanges<'_, '_> {
+    fn affected(&mut self) -> EntityHashSet {
+        let mut affected: EntityHashSet = self
+            .changed_guests
+            .iter()
+            .chain(self.ended_viewing.read())
+            .chain(self.ended_area.read())
+            .chain(self.ended_task.read())
+            .chain(self.ended_view_action.read())
+            .chain(self.lost_destination.read())
+            .chain(self.lost_request.read())
+            .chain(self.lost_target.read())
+            .chain(self.lost_phase.read())
+            .chain(self.enabled.read())
+            .collect();
+        for owner in self
+            .changed_owners
+            .iter()
+            .chain(self.lost_member.read())
+            .chain(self.lost_animal.read())
+            .chain(self.lost_opportunity.read())
+        {
+            affected.insert(owner);
+            if let Ok(viewers) = self.subjects.get(owner) {
+                affected.extend(viewers.iter());
+            }
+            if let Ok(viewers) = self.areas.get(owner) {
+                affected.extend(viewers.iter());
+            }
+        }
+        affected
+    }
+}
+
+#[allow(clippy::type_complexity)]
 pub(super) fn revoke_unowned_guest_observations(
     mut commands: Commands,
+    mut changes: ObservationChanges,
     guests: Query<
         (
             Entity,
@@ -39,14 +137,16 @@ pub(super) fn revoke_unowned_guest_observations(
             Option<&GuestViewingTarget>,
             Option<&GuestPhase>,
             Option<&WorldMember>,
-            Has<openzt2_zoo_state::behavior_task_execution_types::running_actions::BehaviorViewingProgress>,
+            Has<BehaviorViewingProgress>,
+            Option<&ObservationAreaOf>,
         ),
         (
             With<Guest>,
             Or<(
                 With<Viewing>,
                 With<GuestDestination>,
-                With<openzt2_zoo_state::behavior_task_execution_types::running_actions::BehaviorViewingProgress>,
+                With<BehaviorViewingProgress>,
+                With<ObservationAreaOf>,
             )>,
         ),
     >,
@@ -66,13 +166,16 @@ pub(super) fn revoke_unowned_guest_observations(
         With<RunBehaviorViewAnimals>,
     >,
 ) {
-    for (guest, viewing, destination, request, target, phase, world, meter) in &guests {
+    for (guest, viewing, destination, request, target, phase, world, meter, area_link) in
+        guests.iter_many(changes.affected()).matched()
+    {
         let navigating = request.is_some_and(|request| request.0.is_some());
         let Some(viewing) = viewing else {
+            if area_link.is_some() {
+                commands.entity(guest).remove::<ObservationAreaOf>();
+            }
             if meter {
-                commands
-                    .entity(guest)
-                    .remove::<openzt2_zoo_state::behavior_task_execution_types::running_actions::BehaviorViewingProgress>();
+                commands.entity(guest).remove::<BehaviorViewingProgress>();
             }
             // Removing the subject removes the relationship through Bevy's hook.
             // Release only an arrived observation, never a replacement route.
@@ -118,12 +221,16 @@ pub(super) fn revoke_unowned_guest_observations(
             && same_world
             && !replacement_activities.contains(guest)
         {
+            if let Some(area) = viewing.area {
+                if area_link.is_none_or(|link| link.0 != area) {
+                    commands.entity(guest).insert(ObservationAreaOf(area));
+                }
+            }
             continue;
         }
-        commands.entity(guest).remove::<(
-            Viewing,
-            openzt2_zoo_state::behavior_task_execution_types::running_actions::BehaviorViewingProgress,
-        )>();
+        commands
+            .entity(guest)
+            .remove::<(Viewing, BehaviorViewingProgress, ObservationAreaOf)>();
         if owns_destination && !navigating {
             commands
                 .entity(guest)

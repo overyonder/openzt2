@@ -110,11 +110,14 @@ fn spawn_authored_scenario_objectives(
 ) {
     let mut spawned = Vec::with_capacity(scenario.objectives.len());
     for (index, record) in scenario.objectives.iter().enumerate() {
-        let status = if record.prerequisite_objectives.is_empty() {
-            ScenarioObjectiveStatus::Active
-        } else {
-            ScenarioObjectiveStatus::Inactive
-        };
+        let status = super::scenario_group_completion::initial_node_status(authored, record.id)
+            .unwrap_or_else(|| {
+                if record.prerequisite_objectives.is_empty() {
+                    ScenarioObjectiveStatus::Active
+                } else {
+                    ScenarioObjectiveStatus::Inactive
+                }
+            });
         let Ok(id) = allocator.allocate() else {
             return;
         };
@@ -164,6 +167,10 @@ fn spawn_authored_scenario_objectives(
         commands,
         owner,
         &scenario.objective_groups,
+        spawned
+            .into_iter()
+            .map(|(index, entity)| (scenario.objectives[index].id, entity))
+            .collect(),
         Default::default(),
         authored,
     );

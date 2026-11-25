@@ -18,13 +18,9 @@ pub fn resolve_animation_clip_or_graph_node_asset_key(
     {
         return Some(key.to_owned());
     }
-    animation_set_asset
-        .animation_graph_nodes
-        .iter()
-        .find(|node| node.animation_graph_node_asset_key == key)
-        .and_then(|node| {
-            select_initial_animation_clip_asset_key_from_graph_node(animation_set_asset, node)
-        })
+    let node_index = animation_set_asset.find_animation_graph_node_index_by_asset_key(key)?;
+    let node = animation_set_asset.animation_graph_nodes.get(node_index)?;
+    select_initial_animation_clip_asset_key_from_graph_node(animation_set_asset, node)
 }
 
 /// The clip a model starts in when it enters `graph_node`, loaded or not.
@@ -93,13 +89,15 @@ mod tests {
             Vec::new(),
             None,
         );
-        set.animation_clip_source_references = ["Stand_Growl", "Stand_Idle"]
-            .map(|key| AuthoredAnimationSetClipReference {
-                animation_clip_asset_key: key.to_owned(),
-                animation_clip_asset_path: String::new(),
-                playback_policy: Default::default(),
-            })
-            .to_vec();
+        set.set_animation_clip_source_references(
+            ["Stand_Growl", "Stand_Idle"]
+                .map(|key| AuthoredAnimationSetClipReference {
+                    animation_clip_asset_key: key.to_owned(),
+                    animation_clip_asset_path: String::new(),
+                    playback_policy: Default::default(),
+                })
+                .to_vec(),
+        );
         let resolve = |key| resolve_animation_clip_or_graph_node_asset_key(&set, key);
         assert_eq!(resolve("Stand").as_deref(), Some("Stand_Idle"));
         assert_eq!(resolve("Stand_Growl").as_deref(), Some("Stand_Growl"));

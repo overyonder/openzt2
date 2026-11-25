@@ -15,6 +15,7 @@ use openzt2_zoo_state::construction::construction_tool_and_placement_policy_type
 use openzt2_zoo_state::economy::money_types::Money;
 
 use super::authored_terrain_brush_modes::AuthoredTerrainBrushModes;
+use super::authored_terrain_brush_modes::TerrainBrushControls;
 use openzt2_zoo_state::terrain::terrain_brush_interaction_state::ActiveTerrainBrush;
 use openzt2_zoo_state::terrain::terrain_brush_interaction_state::PendingTerrainBrushCommit;
 use openzt2_zoo_state::terrain::terrain_brush_types::TerrainBrushFalloff;
@@ -37,6 +38,7 @@ pub(super) fn update_terrain_brush_preview_and_commit_completed_pointer_strokes(
     tool: Res<ConstructionTool>,
     policy: Res<ConstructionPlacementPolicy>,
     modes: AuthoredTerrainBrushModes,
+    controls: Res<TerrainBrushControls>,
     time: Res<Time>,
     pointer: MousePointer,
     mut pointer_inputs: MessageReader<PointerInput>,
@@ -79,7 +81,7 @@ pub(super) fn update_terrain_brush_preview_and_commit_completed_pointer_strokes(
     let Ok(index) = terrain.get(root) else {
         return;
     };
-    let Some((radius_m, strength_per_s)) = modes.brush_dimensions_and_speed(kind, &policy) else {
+    let Some((radius_m, strength_per_s)) = modes.brush_dimensions_and_speed(kind, &controls) else {
         return;
     };
     let paint_trees = policy.biome_paint_trees && matches!(kind, TerrainBrushKind::Paint { .. });

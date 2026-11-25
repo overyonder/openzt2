@@ -1,11 +1,15 @@
 //! Projects person navigation onto animation. Staff use their authored gait
 //! tables and sampled clip speeds; guests retain their configured walk speed.
 
-use super::locomotion_clip_dependencies::LocomotionClipDependencies;
+use super::locomotion_clip_dependencies::{
+    GaitClipBinding, GaitRigJoints, LocomotionClipDependencies,
+};
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use openzt2_game_assets::animation::animation_clip_source_queries::AnimationClipSources;
-use openzt2_game_assets::animation::animation_set_asset_types::AnimationSetAsset;
+use openzt2_game_assets::animation::animation_set_asset_types::{
+    AnimationClipSourceAsset, AnimationSetAsset,
+};
 use openzt2_game_assets::world_definitions::{
     world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions,
     world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
@@ -51,6 +55,7 @@ pub(super) struct PersonGaitPlayback {
 #[derive(SystemParam)]
 pub(super) struct PersonAnimationAssets<'w> {
     sets: Res<'w, Assets<AnimationSetAsset>>,
+    clip_assets: Res<'w, Assets<AnimationClipSourceAsset>>,
     sources: AnimationClipSources<'w>,
     definitions: Option<Res<'w, WorldDefinitions>>,
     definition_assets: Option<Res<'w, Assets<WorldDefinitionAsset>>>,
@@ -58,10 +63,7 @@ pub(super) struct PersonAnimationAssets<'w> {
 }
 
 use super::sampled_animation_motion_projection::LocomotionAnimationSource;
-use openzt2_world_state::animation_playback::{
-    animation_joint_target_types::{AnimationJointTarget, AnimationRigJoints},
-    locomotion_root_motion::{clip_motion_velocity, ConsumedLocomotionRootMotion},
-};
+use openzt2_world_state::animation_playback::locomotion_root_motion::ConsumedLocomotionRootMotion;
 use openzt2_zoo_state::locomotion::locomotion_types::{CaffeineFlags, NavAgent};
 
 pub(super) fn project_person_motion_to_walk_animation(
@@ -72,13 +74,14 @@ pub(super) fn project_person_motion_to_walk_animation(
         &AnimationPlaybackController,
         &AnimationPresentationOwner,
         Option<&AnimationPlayer>,
-        Option<&AnimationRigJoints>,
+        Option<&GaitRigJoints>,
         Option<&mut LocomotionClipDependencies>,
+        Option<&mut GaitClipBinding>,
         Option<&AnimationGraphEnabled>,
         Option<&mut ConsumedLocomotionRootMotion>,
         Option<&mut PersonGaitPlayback>,
     )>,
-    joints: Query<(&AnimationJointTarget, &ChildOf)>,
+    parents: Query<&ChildOf>,
     transforms: Query<&GlobalTransform>,
     mut people: Query<
         (
@@ -108,6 +111,7 @@ pub(super) fn project_person_motion_to_walk_animation(
         player,
         rig,
         dependencies,
+        clip_binding,
         enabled,
         mut consumed,
         mut gait,
@@ -198,17 +202,11 @@ pub(super) fn project_person_motion_to_walk_animation(
         let node_key =
             row.map(|row| row.node.as_str())
                 .unwrap_or(if moving { WALK_CLIP } else { STAND_CLIP });
-        let has_locomotion_node = assets
-            .sets
-            .get(&controller.animation_set_asset)
-            .is_some_and(|set| {
-                set.animation_graph_nodes
-                    .iter()
-                    .any(|node| node.animation_graph_node_asset_key == node_key)
-                    || set.embedded_clip(node_key).is_some()
-                    || set
-                        .find_animation_clip_source_reference_by_asset_key(node_key)
-                        .is_some()
+        let assets_changed = assets.sets.is_changed() || assets.clip_assets.is_changed();
+        let resolved_node = !assets_changed
+            && moving
+            && clip_binding.as_ref().is_some_and(|binding| {
+                binding.matches(controller.animation_set_asset.id(), node_key, false)
             });
         if !has_locomotion_node {
             if let Some(agent) = agent.filter(|_| moving && row.is_some()) {
@@ -255,7 +253,7 @@ pub(super) fn project_person_motion_to_walk_animation(
                     .map_or(0.0, |random| random.0.unit_f32());
                 let reset_seconds = row.reset_seconds_range[0]
                     + sample * (row.reset_seconds_range[1] - row.reset_seconds_range[0]);
-                current.rate_reset = super::gait_rate_reset_timer(reset_seconds);
+                current.rate_reset = super::fixed_interval_timer(reset_seconds);
                 current.binder = table.binder;
                 current.row = row.key;
                 current.node.clone_from(&row.node);
@@ -283,14 +281,29 @@ pub(super) fn project_person_motion_to_walk_animation(
             stationary_clip.unwrap_or(node_key),
             set,
             &assets.sources,
+            assets.sets.is_changed(),
         );
-        let selected = set.animation_graph_nodes.iter()
-            .find(|node| node.animation_graph_node_asset_key == node_key)
-            .and_then(|node| openzt2_world_state::animation_graph::animation_graph_transition_operations::select_preferred_animation_clip_from_graph_node(
-                set, |key| assets.sources.get(set, key).is_some(), node,
-            ));
-        let wanted = stationary_clip.or(selected.as_deref()).unwrap_or(node_key);
-        let Some(clip) = assets.sources.get(set, wanted) else {
+        let resolved = GaitClipBinding::resolve(
+            &mut commands,
+            controller_entity,
+            clip_binding,
+            controller.animation_set_asset.id(),
+            stationary_clip.unwrap_or(node_key),
+            stationary_clip.is_some(),
+            assets_changed,
+            set,
+            &assets.sources,
+            || {
+                let selected = stationary_clip.map(str::to_owned).or_else(|| {
+                    let node = set.animation_graph_nodes.iter().find(|node| node.animation_graph_node_asset_key == node_key)?;
+                    openzt2_world_state::animation_graph::animation_graph_transition_operations::select_preferred_animation_clip_from_graph_node(
+                        set, |key| assets.sources.get(set, key).is_some(), node,
+                    )
+                });
+                Ok(selected.unwrap_or_else(|| node_key.to_owned()))
+            },
+        );
+        let Ok(clip) = resolved else {
             if let Some(agent) = agent.filter(|_| moving && row.is_some()) {
                 agent
                     .map_unchanged(|agent| &mut agent.max_speed_mps)
@@ -298,49 +311,39 @@ pub(super) fn project_person_motion_to_walk_animation(
             }
             continue;
         };
+        let wanted = clip.key.as_ref();
         let binding = moving
             .then(|| {
-                let root = clip.metadata?.root_motion_joint.as_ref()?;
-                let joint = AssetId::from_key(&root.joint_asset_key);
-                let parent =
-                    joints
-                        .iter_many(rig?.joints())
-                        .matched()
-                        .find_map(|(binding, parent)| {
-                            (binding.authored_joint_id == joint)
-                                .then(|| transforms.get(parent.parent()).ok())
-                                .flatten()
-                        },
-                    )?;
-                    let actor = transforms.get(person).ok()?;
-                    let speed = clip_motion_velocity(&clip, parent, 1000)?.length();
-                    if speed <= 0.0 {
-                        return None;
-                    }
-                    // A gait row's rate also sets the agent's speed below, so
-                    // scaling it speeds the person up or slows them down.
-                    // People without a gait row move at their
-                    // NavAgent speed and keep it; scale that too if one appears.
-                    let rate = if let Some(rate) = sampled_rate {
-                        caffeine_flags
-                            .get(person)
-                            .copied()
-                            .unwrap_or_default()
-                            .apply_to_rate(f32::from(rate), super::DEFAULT_LOCOMOTION_RATE_FACTORS)
-                            .round()
-                            .clamp(1.0, f32::from(i16::MAX)) as i16
-                    } else {
-                        (agent.as_deref()?.max_speed_mps / speed * 1000.0)
-                            .round()
-                            .clamp(1.0, f32::from(i16::MAX)) as i16
-                    };
-                    Some((
-                        actor.affine().inverse() * parent.affine(),
-                        rate,
-                        speed * f32::from(rate) / 1000.0,
-                    ))
-                })
-                .flatten();
+                let parent = rig?.root_parent(clip.joint?, &parents, &transforms)?;
+                let actor = transforms.get(person).ok()?;
+                let speed = clip.velocity(parent)?.length();
+                if speed <= 0.0 {
+                    return None;
+                }
+                // A gait row's rate also sets the agent's speed below, so
+                // scaling it speeds the person up or slows them down.
+                // People without a gait row move at their
+                // NavAgent speed and keep it; scale that too if one appears.
+                let rate = if let Some(rate) = sampled_rate {
+                    caffeine_flags
+                        .get(person)
+                        .copied()
+                        .unwrap_or_default()
+                        .apply_to_rate(f32::from(rate), super::DEFAULT_LOCOMOTION_RATE_FACTORS)
+                        .round()
+                        .clamp(1.0, f32::from(i16::MAX)) as i16
+                } else {
+                    (agent.as_deref()?.max_speed_mps / speed * 1000.0)
+                        .round()
+                        .clamp(1.0, f32::from(i16::MAX)) as i16
+                };
+                Some((
+                    actor.affine().inverse() * parent.affine(),
+                    rate,
+                    speed * f32::from(rate) / 1000.0,
+                ))
+            })
+            .flatten();
         let rate = binding.map_or(1000, |(_, rate, _)| rate);
         if row.is_some() {
             if let Some(agent) = agent.take() {

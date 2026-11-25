@@ -2,8 +2,8 @@
 
 use bevy::prelude::*;
 use openzt2_game_data::{
-    behavior::document::{BehaviorDocument, BehaviorSet, BehaviorTask},
     AssetId,
+    behavior::document::{BehaviorDocument, BehaviorSet, BehaviorTask},
 };
 
 use super::behavior_asset_types::{
@@ -35,20 +35,26 @@ impl LoadedBehaviorDocumentCollection {
         self.index_ready.then_some(BehaviorDeclarationIndexView {
             behavior_sets_by_identifier: &self.behavior_sets_by_identifier,
             behavior_tasks_by_unique_identifier: &self.behavior_tasks_by_unique_identifier,
+            behavior_task_order: &self.behavior_task_order,
             behavior_document_assets,
         })
     }
 }
 
 impl<'a> BehaviorDeclarationIndexView<'a> {
-    /// Borrows one winning declaration per authored UniqueID in stable key order.
+    /// Borrows one winning declaration per authored UniqueID in source order.
     pub fn behavior_tasks(
         self,
     ) -> impl Iterator<Item = (&'a Handle<BehaviorDocumentAsset>, usize, &'a BehaviorTask)> {
-        self.behavior_tasks_by_unique_identifier
-            .values()
-            .filter_map(move |locations| {
-                let location = locations.last()?;
+        self.behavior_task_order
+            .iter()
+            .filter_map(move |((_, index), (key, document))| {
+                let location = self.behavior_tasks_by_unique_identifier.get(key)?.last()?;
+                if location.declaration_index != *index
+                    || location.behavior_document_asset.id() != *document
+                {
+                    return None;
+                }
                 let task = self
                     .behavior_document_assets
                     .get(&location.behavior_document_asset)?

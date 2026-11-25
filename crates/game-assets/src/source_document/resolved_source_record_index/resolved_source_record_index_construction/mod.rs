@@ -1,10 +1,8 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
-use crate::source_document::ordered_source_document_types::{
-    OrderedSourceDocument, OrderedSourceDocumentSpan,
-};
+use crate::source_document::ordered_source_document_types::OrderedSourceDocument;
 
-use super::{canonicalize_source_document_record_key, BindError, IndexedElement};
+use super::{BindError, IndexedElement, canonicalize_source_document_record_key};
 use crate::source_document::ordered_source_document_types::OrderedSourceDocumentNode;
 
 pub(super) fn build_precedence_resolved_source_record_index<'a>(
@@ -31,53 +29,7 @@ pub(super) fn build_precedence_resolved_source_record_index<'a>(
             additional_named_record_element_types,
         )?;
     }
-    validate_resolved_source_record_inheritance(&records)?;
     Ok(records)
-}
-
-fn validate_resolved_source_record_inheritance(
-    records: &BTreeMap<String, IndexedElement<'_>>,
-) -> Result<(), BindError> {
-    for start in records.keys() {
-        let mut current = start;
-        let mut visiting = BTreeSet::new();
-        loop {
-            if !visiting.insert(current.as_str()) {
-                let indexed = records.get(current).ok_or_else(|| BindError {
-                    virtual_path: "<world-catalogue-index>".to_owned(),
-                    span: OrderedSourceDocumentSpan::default(),
-                    message: format!("missing indexed inheritance key {current}"),
-                })?;
-                return Err(BindError::at(
-                    indexed.document,
-                    indexed.element,
-                    format!("source inheritance cycle at {current}"),
-                ));
-            }
-            let indexed = records.get(current).ok_or_else(|| BindError {
-                virtual_path: "<world-catalogue-index>".to_owned(),
-                span: OrderedSourceDocumentSpan::default(),
-                message: format!("missing indexed inheritance key {current}"),
-            })?;
-            let Some(base) =
-                indexed
-                    .element
-                    .attribute_named_any(&["extends", "base", "parentType", "inherit"])
-            else {
-                break;
-            };
-            let base = canonicalize_source_document_record_key(base);
-            let Some((key, _)) = records.get_key_value(&base) else {
-                return Err(BindError::at(
-                    indexed.document,
-                    indexed.element,
-                    format!("unresolved source base {base}"),
-                ));
-            };
-            current = key;
-        }
-    }
-    Ok(())
 }
 
 fn index_source_document_descendants<'a>(

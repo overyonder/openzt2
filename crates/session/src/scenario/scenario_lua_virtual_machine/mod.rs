@@ -18,7 +18,9 @@ use super::{
         convert_lua_rule_result_to_objective_status,
         install_scenario_game_query_and_command_functions,
     },
-    scenario_lua_snapshot_types::{saved_scenario_action_key, SAVED_SCENARIO_ACTION_ARGUMENTS},
+    scenario_lua_snapshot_types::{
+        saved_scenario_action_key, SAVED_SCENARIO_ACTION_ARGUMENTS, SCENARIO_GLOBAL_VARIABLES,
+    },
     scenario_lua_types::{
         ScenarioLuaContext, ScenarioLuaQueryFacts, ScenarioLuaScriptResult,
         ScenarioLuaVirtualMachine,
@@ -31,9 +33,8 @@ impl ScenarioLuaContext {
             return Ok(());
         };
         let globals = context.lua_virtual_machine.globals();
-        globals.set("__openzt2_rule_arguments", Value::Nil)?;
         globals.set(SAVED_SCENARIO_ACTION_ARGUMENTS, Value::Nil)?;
-        if let Some(state) = globals.get::<Option<mlua::Table>>("__openzt2_scenario_state")? {
+        if let Some(state) = globals.get::<Option<mlua::Table>>(SCENARIO_GLOBAL_VARIABLES)? {
             state.set("challenge", Value::Nil)?;
         }
         Ok(())
@@ -47,7 +48,7 @@ impl ScenarioLuaContext {
         let state: mlua::Table = context
             .lua_virtual_machine
             .globals()
-            .get("__openzt2_scenario_state")?;
+            .get(SCENARIO_GLOBAL_VARIABLES)?;
         state.set("challenge", if accepted { "accept" } else { "decline" })
     }
 
@@ -105,7 +106,6 @@ impl ScenarioLuaVirtualMachine {
         let requested_challenge_offer_source_paths = RefCell::new(Vec::new());
         let shown_rules = RefCell::new(Vec::new());
         let available_content = RefCell::new(Vec::new());
-        let requested_challenge_panel = RefCell::new(None);
         let current_photo_challenge_set = RefCell::new(None);
         let ui = RefCell::new(Vec::new());
         let entity_operations =
@@ -152,7 +152,6 @@ impl ScenarioLuaVirtualMachine {
                     scenario_script_binding.scenario,
                     &shown_rules,
                     &available_content,
-                    &requested_challenge_panel,
                     &current_photo_challenge_set,
                     &persist_profile_variables,
                     &ui,
@@ -179,33 +178,18 @@ impl ScenarioLuaVirtualMachine {
                             .call::<Value>(mlua::MultiValue::from_vec(arguments))?,
                     ));
                 }
-                // Each native rule owns the argument table shared by its Evaluate,
-                // Success and Failure calls. Authored scripts store fields such as
-                // `data.accept` here across ticks; calling with nil loses that state.
                 let globals = self.lua_virtual_machine.globals();
-                if let Some(arguments) =
-                    globals.get::<Option<mlua::Table>>(SAVED_SCENARIO_ACTION_ARGUMENTS)?
-                {
-                    let key = self
-                        .lua_virtual_machine
-                        .create_string(saved_scenario_action_key(scenario_script_binding).0)?;
-                    if let Some(argument) = arguments.raw_get::<Option<mlua::Table>>(key)? {
-                        return Ok(convert_lua_rule_result_to_objective_status(
-                            scenario_lua_function.call::<Value>(argument)?,
-                        ));
-                    }
-                }
                 let arguments = globals
-                    .get::<Option<mlua::Table>>("__openzt2_rule_arguments")?
+                    .get::<Option<mlua::Table>>(SAVED_SCENARIO_ACTION_ARGUMENTS)?
                     .unwrap_or(self.lua_virtual_machine.create_table()?);
-                globals.set("__openzt2_rule_arguments", arguments.clone())?;
+                globals.set(SAVED_SCENARIO_ACTION_ARGUMENTS, arguments.clone())?;
                 let key = self
                     .lua_virtual_machine
-                    .create_string(scenario_script_binding.objective.0)?;
+                    .create_string(saved_scenario_action_key(scenario_script_binding).0)?;
                 let argument = arguments
-                    .get::<Option<mlua::Table>>(key.clone())?
+                    .raw_get::<Option<mlua::Table>>(key.clone())?
                     .unwrap_or(self.lua_virtual_machine.create_table()?);
-                arguments.set(key, argument.clone())?;
+                arguments.raw_set(key, argument.clone())?;
                 Ok(convert_lua_rule_result_to_objective_status(
                     scenario_lua_function.call::<Value>(argument)?,
                 ))
@@ -216,6 +200,11 @@ impl ScenarioLuaVirtualMachine {
                 Ok(condition_status) => (condition_status, None),
                 Err(failure) => (ScenarioObjectiveStatus::Active, Some(failure)),
             };
+            let challenge_panel = super::challenge_offer_presentation::authored_panel_request(
+                scenario_script_binding.scenario,
+                scenario_lua_query_facts.ui_documents,
+                &ui.borrow(),
+            );
             Ok(ScenarioLuaScriptResult {
                 entities: std::mem::take(&mut *entity_operations.borrow_mut()).finish(),
                 persist_profile_variables: persist_profile_variables.get(),
@@ -226,7 +215,7 @@ impl ScenarioLuaVirtualMachine {
                 available_content: available_content.borrow_mut().drain(..).collect(),
                 condition_status,
                 shown_rules: shown_rules.borrow_mut().drain(..).collect(),
-                challenge_panel: requested_challenge_panel.borrow_mut().take(),
+                challenge_panel,
                 economy_operations: requested_economy_operations
                     .borrow_mut()
                     .drain(..)

@@ -18,6 +18,7 @@ pub mod terrain_water_shoreline_geometry_types;
 pub mod terrain_water_shoreline_presentation_types;
 pub mod terrain_water_underwater_particle_types;
 pub mod terrain_water_view_state;
+pub mod terrain_water_wave_register_projection;
 pub mod terrain_world_sampling;
 pub mod terrain_world_sampling_types;
 

@@ -1,8 +1,8 @@
+use super::world_light_inputs::{DirectionalWorldLightInput, LinearWorldAmbient};
 use bevy::camera::visibility::RenderLayers;
 use bevy::prelude::*;
 use bevy::render::storage::ShaderBuffer;
 use openzt2_game_assets::graphics_settings_types::GraphicsSettings;
-use openzt2_zoo_state::environment::environment_presentation_types::EnvironmentSpecularLightColor;
 
 use openzt2_game_assets::material::runtime::effect_pass_gpu_data::D3d9FixedFunctionWorldLightContexts;
 use openzt2_game_assets::material::runtime::effect_pass_gpu_data::D3d9FixedFunctionWorldLightRegisters;
@@ -44,7 +44,7 @@ pub(super) fn upload_fixed_function_world_light_registers(
 
 pub(super) fn project_fixed_function_world_light_registers(
     graphics: Res<GraphicsSettings>,
-    ambient_light: Res<GlobalAmbientLight>,
+    ambient_light: Single<Ref<LinearWorldAmbient>>,
     terrain_ambient: Res<EnvironmentTerrainAmbientLight>,
     camera_ambient_lights: Query<(
         Ref<Camera>,
@@ -53,32 +53,23 @@ pub(super) fn project_fixed_function_world_light_registers(
         Option<Ref<RenderLayers>>,
     )>,
     directional_lights: Query<(
-        Ref<DirectionalLight>,
-        Ref<GlobalTransform>,
+        Ref<DirectionalWorldLightInput>,
         Option<Ref<RenderLayers>>,
         Ref<ViewVisibility>,
-        Option<Ref<EnvironmentSpecularLightColor>>,
     )>,
     light_entities: Query<(), With<DirectionalLight>>,
     mut removed_cameras: RemovedComponents<Camera3d>,
     mut removed_camera_components: RemovedComponents<Camera>,
     mut removed_ambient_lights: RemovedComponents<AmbientLight>,
-    mut removed_directional_lights: RemovedComponents<DirectionalLight>,
-    mut removed_light_transforms: RemovedComponents<GlobalTransform>,
+    mut removed_directional_lights: RemovedComponents<DirectionalWorldLightInput>,
     mut removed_light_visibility: RemovedComponents<ViewVisibility>,
     mut removed_layers: RemovedComponents<RenderLayers>,
-    mut removed_specular_colors: RemovedComponents<EnvironmentSpecularLightColor>,
     mut published: Single<&mut FixedFunctionWorldLightRegisters>,
 ) {
     let removed_inputs = (removed_cameras.read().count() != 0)
         | (removed_camera_components.read().count() != 0)
         | (removed_ambient_lights.read().count() != 0)
         | (removed_directional_lights.read().count() != 0)
-        | (removed_light_transforms
-            .read()
-            .filter(|entity| light_entities.contains(*entity))
-            .count()
-            != 0)
         | (removed_light_visibility
             .read()
             .filter(|entity| light_entities.contains(*entity))
@@ -90,8 +81,7 @@ pub(super) fn project_fixed_function_world_light_registers(
                 camera_ambient_lights.contains(*entity) || directional_lights.contains(*entity)
             })
             .count()
-            != 0)
-        | (removed_specular_colors.read().count() != 0);
+            != 0);
     if !published.is_added()
         && !removed_inputs
         && !ambient_light.is_changed()
@@ -107,18 +97,15 @@ pub(super) fn project_fixed_function_world_light_registers(
             })
         && !directional_lights
             .iter()
-            .any(|(light, transform, layers, visibility, specular)| {
+            .any(|(light, layers, visibility)| {
                 light.is_changed()
-                    || transform.is_changed()
                     || visibility.is_changed()
                     || layers.is_some_and(|layers| layers.is_changed())
-                    || specular.is_some_and(|color| color.is_changed())
             })
     {
         return;
     }
-    let default_ambient =
-        Vec4::from_array(ambient_light.color.to_linear().to_f32_array()) * ambient_light.brightness;
+    let default_ambient = ambient_light.0;
     let specular_enabled = f32::from(u8::from(graphics.specular_effects));
     let mut contexts = D3d9FixedFunctionWorldLightContexts {
         values: [D3d9FixedFunctionWorldLightRegisters {
@@ -152,18 +139,13 @@ pub(super) fn project_fixed_function_world_light_registers(
     }
 
     let mut directional_counts = [0; FIXED_FUNCTION_WORLD_LIGHT_CONTEXT_COUNT];
-    for (light, transform, layers, visibility, specular) in &directional_lights {
+    for (light, layers, visibility) in &directional_lights {
         if !visibility.get() {
             continue;
         }
-        let direction = Vec3::from(transform.back()).extend(0.0);
-        let color = Vec4::from_array(light.color.to_linear().to_f32_array()) * light.illuminance;
-        let specular = Vec4::from_array(
-            specular
-                .map_or(light.color, |color| color.0)
-                .to_linear()
-                .to_f32_array(),
-        ) * light.illuminance;
+        let direction = light.back.extend(0.0);
+        let color = light.color * light.illuminance;
+        let specular = light.specular * light.illuminance;
         for layer in layers.as_deref().unwrap_or_default().iter() {
             let Some(count) = directional_counts.get_mut(layer) else {
                 continue;

@@ -19,6 +19,7 @@ mod experience_donation_payment;
 mod facility_accounting;
 mod facility_economy_ui;
 mod finance_donation_reports;
+pub use finance_donation_reports::WorldShowDonationTotal;
 pub mod finance_table_ui;
 mod guest_admission_payment;
 mod guest_admission_ui;
@@ -59,6 +60,8 @@ impl Plugin for EconomyPlugin {
             WorldRoot,
             finance_donation_reports::FinanceDonationReports,
         >()
+            .register_required_components::<WorldRoot, WorldShowDonationTotal>()
+            .init_resource::<finance_donation_reports::DonationSpeciesCategories>()
             .add_systems(
                 Update,
                 (
@@ -69,6 +72,9 @@ impl Plugin for EconomyPlugin {
             )
             .add_message::<openzt2_zoo_state::transport_tours::transport_circuit_types::SetTransportCircuitFare>()
             .add_message::<TransactionRequest>()
+            .init_resource::<account_transaction_settlement::AccountRequestCursor>()
+            .add_message::<account_transaction_settlement::RecordedAccountMovement<true>>()
+            .add_message::<account_transaction_settlement::RecordedAccountMovement<false>>()
             .add_message::<TransactionCompleted>()
             .add_message::<TransactionRejected>()
             .add_message::<ScenarioEconomyCommand>()
@@ -110,7 +116,9 @@ impl Plugin for EconomyPlugin {
                     guest_admission_ui::project_zoo_admissions_status_into_authored_ui_text
                         .after(guest_admission_ui::apply_zoo_admission_policy_changes_from_authored_ui_actions)
                         .after(openzt2_interface_state::ui::UiSet::Commands),
-                    finance_donation_reports::reduce_donations_for_finance_reports,
+                    finance_donation_reports::resolve_donation_species_categories,
+                    finance_donation_reports::reduce_donations_for_finance_reports
+                        .after_ignore_deferred(finance_donation_reports::resolve_donation_species_categories),
                     finance_donation_reports::project_finance_donation_rows
                         .after(finance_donation_reports::reduce_donations_for_finance_reports),
                     finance_table_ui::request_authored_finance_table_row_counts,
@@ -173,7 +181,8 @@ impl Plugin for EconomyPlugin {
                             guest_admission_payment::reject_guest_admission_after_failed_payment,
                             facility_accounting::record_completed_transaction_results_for_attributed_facilities::<false>,
                             experience_donation_payment::resume_show_donation_instructions_after_payment,
-                            monthly_finance_recording::record_completed_transactions_and_guest_counts_in_monthly_finance_history::<false>,
+                            monthly_finance_recording::record_completed_transactions_in_monthly_finance_history::<false>,
+                            monthly_finance_recording::record_monthly_guest_counts,
                         ),
                     ).chain(),
                     service_inventory_restocking::restock_service_facility_inventories_after_zoo_days_advance,
@@ -187,7 +196,7 @@ impl Plugin for EconomyPlugin {
                     account_transaction_settlement::settle_requested_account_transactions::<true>,
                     (
                         facility_accounting::record_completed_transaction_results_for_attributed_facilities::<true>,
-                        monthly_finance_recording::record_completed_transactions_and_guest_counts_in_monthly_finance_history::<true>,
+                        monthly_finance_recording::record_completed_transactions_in_monthly_finance_history::<true>,
                     ),
                     zoo_cash_ui::remove_resolved_ui_cash_grant_transaction_entities,
                 ).chain().in_set(FixedConstructionSet::SettleEconomy),
@@ -230,6 +239,9 @@ mod guest_admission_payment_tests;
 #[cfg(any(test, feature = "testing"))]
 pub fn add_account_transaction_test_systems(app: &mut App) {
     app.add_message::<TransactionRequest>()
+            .init_resource::<account_transaction_settlement::AccountRequestCursor>()
+            .add_message::<account_transaction_settlement::RecordedAccountMovement<true>>()
+            .add_message::<account_transaction_settlement::RecordedAccountMovement<false>>()
         .add_message::<TransactionCompleted>()
         .add_message::<TransactionRejected>()
 

@@ -23,7 +23,7 @@ use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 use super::{
     photo_album_types::{
         ActivePhotoAlbum, DeletePhotoRequest, INITIAL_PHOTO_ALBUM_SPREADS, PhotoAlbumCapacityPages,
-        PhotoAlbumPage, PhotoCameraRoll,
+        PhotoAlbumPage, PhotoCameraRoll, WorldPhotoCameraRoll,
     },
     photo_capture_types::{PhotoCaptureFailed, PhotoFailure},
     photo_configuration::{PhotoConfiguration, PhotoConfigurationSource},
@@ -31,11 +31,16 @@ use super::{
 
 pub(super) fn initialize_default_photo_album_and_camera_roll_for_loaded_worlds(
     profile: Res<ProfileOptions>,
+    album_options: Option<Res<super::PhotoAlbumProfileOptions>>,
     configuration: Res<PhotoConfigurationSource>,
     configurations: Res<Assets<PhotoConfiguration>>,
     server: Res<AssetServer>,
     mut roots: Query<
-        (Entity, &mut PersistentIdAllocator),
+        (
+            Entity,
+            &mut PersistentIdAllocator,
+            Has<WorldPhotoCameraRoll>,
+        ),
         (
             With<WorldRoot>,
             With<WorldLoadCompleted>,
@@ -57,7 +62,12 @@ pub(super) fn initialize_default_photo_album_and_camera_roll_for_loaded_worlds(
     if roots.is_empty() {
         return;
     }
-    let album_spreads = if let Some(configuration) = configurations.get(&configuration.0) {
+    let album_spreads = if let Some(spreads) = album_options
+        .as_ref()
+        .and_then(|options| options.get_default_spreads())
+    {
+        spreads
+    } else if let Some(configuration) = configurations.get(&configuration.0) {
         configuration.album_spreads
     } else if matches!(
         server.load_state(configuration.0.id()),
@@ -68,7 +78,7 @@ pub(super) fn initialize_default_photo_album_and_camera_roll_for_loaded_worlds(
         return;
     };
     // Allocate at the post-import boundary; pending text must not move this ID.
-    for (root, mut allocator) in &mut roots {
+    for (root, mut allocator, has_roll) in &mut roots {
         let member = WorldMember { root };
         if let Some((album, ..)) = albums
             .iter()
@@ -76,7 +86,7 @@ pub(super) fn initialize_default_photo_album_and_camera_roll_for_loaded_worlds(
         {
             commands.entity(album).insert((
                 DefaultPhotoAlbum,
-                ActivePhotoAlbum,
+                ActivePhotoAlbum(root),
                 PhotoAlbumPage::default(),
                 PhotoAlbumCapacityPages(album_spreads),
             ));
@@ -96,22 +106,19 @@ pub(super) fn initialize_default_photo_album_and_camera_roll_for_loaded_worlds(
                 },
                 member,
                 id,
-                ActivePhotoAlbum,
+                ActivePhotoAlbum(root),
                 DefaultPhotoAlbum,
                 PhotoAlbumPage::default(),
                 PhotoAlbumCapacityPages(album_spreads),
             ));
         }
-        if !albums
-            .iter()
-            .any(|row| row.1.root == root && row.3.is_some())
-        {
+        if !has_roll {
             commands.spawn((
                 PhotoAlbum {
                     profile: profile.profile_identifier,
                 },
                 member,
-                PhotoCameraRoll,
+                PhotoCameraRoll(root),
             ));
         }
         commands
@@ -167,5 +174,31 @@ pub(super) fn delete_requested_photos_and_release_unpersisted_images(
             images.remove(photo.image.id());
             commands.entity(entity).despawn();
         }
+    }
+}
+
+pub(super) fn clear_retired_photo_selection(
+    retired: On<Despawn<Photo>>,
+    membership: Query<&WorldMember>,
+    mut worlds: Query<
+        (
+            &mut super::photo_album_types::SelectedAlbumPhoto,
+            &mut super::photo_album_types::PhotoPointerPress,
+        ),
+        With<WorldRoot>,
+    >,
+) {
+    let Some((mut selected, mut pressed)) = membership
+        .get(retired.entity)
+        .ok()
+        .and_then(|member| worlds.get_mut(member.root).ok())
+    else {
+        return;
+    };
+    if selected.0.is_some_and(|(_, photo)| photo == retired.entity) {
+        selected.set_if_neq(super::photo_album_types::SelectedAlbumPhoto(None));
+    }
+    if pressed.0.is_some_and(|(_, photo)| photo == retired.entity) {
+        pressed.set_if_neq(super::photo_album_types::PhotoPointerPress(None));
     }
 }

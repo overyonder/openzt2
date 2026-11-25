@@ -175,6 +175,7 @@ pub(in crate::ui_document::source) struct UiResolvedDependencies {
     pub models: BTreeMap<String, String>,
     pub audio: BTreeMap<String, String>,
     pub documents: BTreeMap<String, String>,
+    pub scripts: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Debug)]
@@ -303,6 +304,13 @@ fn ui_dependencies(
     }
 
     let mut dependencies = BTreeMap::<[u8; 16], UiDependency>::new();
+    input
+        .resolved_dependencies
+        .scripts
+        .values()
+        .for_each(|path| {
+            insert_dependency(&mut dependencies, used, path, UiDependencyKind::Script)
+        });
     input
         .resolved_dependencies
         .images

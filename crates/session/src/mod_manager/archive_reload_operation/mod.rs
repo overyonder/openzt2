@@ -169,17 +169,17 @@ fn finish_archive_reload(
         return;
     };
     for notice in notices.read().filter(|notice| notice.operation == entity) {
-        if notice.ready {
+        let Some(asset) = operation.pending.get_mut(&notice.asset) else {
+            continue;
+        };
+        asset.published |= !notice.ready;
+        if !asset.published {
+            continue;
+        }
+        let state = server.recursive_dependency_load_state(notice.asset);
+        if state.is_loaded() || state.is_failed() {
+            operation.failed |= state.is_failed();
             operation.pending.remove(&notice.asset);
-        } else if let Some(asset) = operation.pending.get_mut(&notice.asset) {
-            asset.published = true;
-            if server
-                .recursive_dependency_load_state(notice.asset)
-                .is_failed()
-            {
-                operation.pending.remove(&notice.asset);
-                operation.failed = true;
-            }
         }
     }
     let mut dependency_failed = false;

@@ -180,6 +180,26 @@ pub(crate) fn lower_authored_world_object_runtime(
         })
         .transpose()?
         .unwrap_or_default();
+    for portal in authored_type_family_elements_named(record, "ZTTankPortal") {
+        for name in ["gateHeight", "waterSurfaceOffset"] {
+            if let Some(value) = portal.attribute_named_any(&[name]) {
+                let value = parse_blue_fang_source_numeric_lexeme::<f32>(value)
+                    .filter(|value| value.is_finite())
+                    .ok_or_else(|| BindError::record(record, format!("invalid tank portal {name}")))?;
+                numeric_behavior_properties.entry(id(name)).or_insert(value);
+            }
+        }
+    }
+    for group in authored_type_family_elements_named(record, "BFAIEntityDataInstance") {
+        for attribute in &group.attributes {
+            let name = attribute.name();
+            if name.eq_ignore_ascii_case("f_ConstructionLevel") || name.eq_ignore_ascii_case("f_Damage") {
+                if let Some(value) = parse_blue_fang_source_numeric_lexeme::<f32>(attribute.value()).filter(|value| value.is_finite()) {
+                    numeric_behavior_properties.entry(id(name)).or_insert(value);
+                }
+            }
+        }
+    }
     for group in shared {
         for attribute in &group.attributes {
             let name = attribute.name();

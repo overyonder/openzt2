@@ -750,10 +750,19 @@ pub(super) fn bind_authored_vehicle_seats(
                     present_limits |= 1 << index;
                 }
             }
+            let pitch_limit = |name| {
+                state.attribute_named_any(&[name]).map(|value| {
+                    parse_blue_fang_source_numeric_lexeme::<f32>(value)
+                        .filter(|angle| angle.is_finite())
+                        .ok_or_else(|| BindError::record(record, format!("invalid vehicle seat angle {name}: {value}")))
+                }).transpose()
+            };
             resolved_animation_states.push(TransportationVehicleSeatAnimationState {
                 clip_prefix: prefix.to_owned(),
                 angle_limits_degrees: limits,
                 present_limits,
+                up_degrees: pitch_limit("Up")?,
+                down_degrees: pitch_limit("Down")?,
             });
         }
         if resolved_animation_states.is_empty() {

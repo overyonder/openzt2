@@ -7,7 +7,7 @@ use bevy::{
     prelude::*,
 };
 use openzt2_game_assets::{
-    animation::animation_set_asset_types::{AnimationClipSourceAsset, AnimationSetAsset},
+    animation::animation_set_asset_types::AnimationSetAsset,
     world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
 };
 use openzt2_game_data::{
@@ -25,7 +25,7 @@ use openzt2_world_state::{
     animation_playback::{
         animation_joint_target_types::{AnimationJointTarget, AnimationRigJoints},
         animation_playback_controller_types::{
-            AnimationGroundFitControls, AnimationPlaybackController, RetainedAnimationClipSource,
+            AnimationGroundFitControls, AnimationPlaybackController,
         },
     },
 };
@@ -36,6 +36,8 @@ use openzt2_zoo_state::{
 use std::cell::RefCell;
 
 use super::authored_binder_rig_binding::BoundAnimationBinderRig;
+use super::managed_clip_binding::{FixedAnimationPlayer, ManagedAnimationClip};
+use openzt2_zoo_state::terrain::terrain_edit_types::{TerrainChanged, TerrainWaterChanged};
 
 #[derive(Component, Default)]
 pub(super) struct GroundFitPose {
@@ -129,11 +131,11 @@ pub(super) fn index_ground_fit_joints(
 }
 
 pub(super) fn clear_procedural_ground_fit_pose(
-    mut poses: Query<&mut GroundFitPose>,
+    poses: Query<&GroundFitPose>,
     mut joints: Query<&mut Transform>,
 ) {
-    for mut pose in &mut poses {
-        for offset in pose.offsets.drain(..).rev() {
+    for pose in &poses {
+        for offset in pose.offsets.iter().rev() {
             if let Ok(mut joint) = joints.get_mut(offset.joint) {
                 joint.translation -= offset.translation;
                 joint.rotation = offset.rotation.inverse() * joint.rotation;
@@ -146,19 +148,20 @@ pub(super) fn clear_procedural_ground_fit_pose(
 pub(super) struct GroundFitAssets<'w> {
     rigs: Res<'w, Assets<WorldDefinitionAsset>>,
     sets: Res<'w, Assets<AnimationSetAsset>>,
-    clips: Res<'w, Assets<AnimationClipSourceAsset>>,
 }
 
 #[derive(bevy::ecs::query::QueryData)]
 #[query_data(mutable)]
 pub(super) struct GroundFitController {
-    owner: &'static AnimationPresentationOwner,
-    playback: &'static AnimationPlaybackController,
-    controls: &'static AnimationGroundFitControls,
-    options: Option<&'static ActiveAnimationClipOptions>,
-    clip: Option<&'static RetainedAnimationClipSource>,
-    binding: &'static BoundAnimationBinderRig,
-    joints: &'static GroundFitJointIndex,
+    owner: Ref<'static, AnimationPresentationOwner>,
+    playback: Ref<'static, AnimationPlaybackController>,
+    controls: Ref<'static, AnimationGroundFitControls>,
+    options: Option<Ref<'static, ActiveAnimationClipOptions>>,
+    clip: Option<Ref<'static, ManagedAnimationClip>>,
+    binding: Ref<'static, BoundAnimationBinderRig>,
+    joints: Ref<'static, GroundFitJointIndex>,
+    player: &'static AnimationPlayer,
+    fixed: Has<FixedAnimationPlayer>,
     pose: &'static mut GroundFitPose,
 }
 
@@ -167,12 +170,54 @@ pub(super) fn apply_procedural_ground_fit_pose(
     time: Res<Time>,
     assets: GroundFitAssets,
     terrain: DrySurfaceEligibility,
-    locomotion: Query<(&LocomotionMode, Option<&SwimLayer>)>,
+    locomotion: Query<(Ref<LocomotionMode>, Option<Ref<SwimLayer>>)>,
+    mut ground_edits: MessageReader<TerrainChanged>,
+    mut water_edits: MessageReader<TerrainWaterChanged>,
+    simulation: Query<
+        &openzt2_world_state::simulation_time::simulation_control_types::SimulationPaused,
+        With<openzt2_world_state::world_spawn::world_membership_types::WorldRoot>,
+    >,
     members: Query<&WorldMember>,
-    mut transforms: ParamSet<(Query<(&Transform, Option<&ChildOf>)>, Query<&mut Transform>)>,
+    mut transforms: ParamSet<(
+        Query<(Ref<Transform>, Option<Ref<ChildOf>>)>,
+        Query<&mut Transform>,
+    )>,
 ) {
+    let terrain_changed = (ground_edits.read().count() != 0) | (water_edits.read().count() != 0);
+    let simulation_running =
+        openzt2_world_state::simulation_time::simulation_control_queries::simulation_is_running(
+            simulation,
+        );
     let locals = transforms.p0();
     controllers.par_iter_mut().for_each(|mut controller| {
+        let gameplay = controller.owner.gameplay_entity;
+        let animation_paused = controller.fixed && !simulation_running
+            || controller.clip.as_ref().is_some_and(|clip| {
+                controller
+                    .player
+                    .animation(clip.node)
+                    .is_some_and(|active| active.is_paused())
+            });
+        let swim_input = locomotion.get(gameplay).ok();
+        if animation_paused
+            && !terrain_changed
+            && !controller.owner.is_changed()
+            && !controller.playback.is_changed()
+            && !controller.controls.is_changed()
+            && !controller.joints.is_changed()
+            && !controller.binding.is_changed()
+            && !controller.options.as_ref().is_some_and(Ref::is_changed)
+            && !controller.clip.as_ref().is_some_and(Ref::is_changed)
+            && !swim_input.as_ref().is_some_and(|(mode, layer)| {
+                mode.is_changed() || layer.as_ref().is_some_and(Ref::is_changed)
+            })
+            && !locals.get(gameplay).is_ok_and(|(transform, parent)| {
+                transform.is_changed() || parent.as_ref().is_some_and(Ref::is_changed)
+            })
+        {
+            return;
+        }
+        controller.pose.offsets.clear();
         let Some(rig) = controller
             .binding
             .source
@@ -182,10 +227,11 @@ pub(super) fn apply_procedural_ground_fit_pose(
         };
         let enabled = controller
             .options
+            .as_ref()
             .filter(|options| {
-                Some(options.0.request_id) == controller.playback.explicit_clip_request_id
+                Some(options.request_id) == controller.playback.explicit_clip_request_id
             })
-            .and_then(|options| options.0.ground_fit)
+            .and_then(|options| options.settings.ground_fit)
             .unwrap_or(true);
         let active_policy = assets
             .sets
@@ -207,30 +253,21 @@ pub(super) fn apply_procedural_ground_fit_pose(
             let Some(actor) = world_pose(controller.owner.gameplay_entity) else {
                 return;
             };
-            let gameplay = controller.owner.gameplay_entity;
-            let swim = locomotion.get(gameplay).ok().and_then(|(mode, layer)| {
-                (*mode == LocomotionMode::Swim).then(|| layer.copied().unwrap_or_default())
+            let swim = swim_input.and_then(|(mode, layer)| {
+                (*mode == LocomotionMode::Swim)
+                    .then(|| layer.map_or_else(SwimLayer::default, |layer| *layer))
             });
             let local_parent = |joint| {
                 locals
                     .get(joint)
                     .ok()
-                    .and_then(|(_, parent)| parent)
-                    .and_then(|parent| world_pose(parent.parent()))
+                    .and_then(|(_, parent)| world_pose(parent?.parent()))
             };
             let root = controller
                 .clip
-                .and_then(|clip| assets.clips.get(&clip.0))
-                .and_then(|clip| {
-                    clip.authored_animation_clip_metadata
-                        .root_motion_joint
-                        .as_ref()
-                })
-                .and_then(|root| {
-                    lookup(AssetId::from_key(
-                        &root.joint_asset_key.to_ascii_lowercase(),
-                    ))
-                })
+                .as_ref()
+                .and_then(|clip| clip.root_motion.as_ref())
+                .and_then(|root| lookup(root.joint))
                 .or(controller.joints.root);
             let quadruped = rig.quadruped_ground_fit.as_ref();
             let biped = rig.biped_ground_fit.as_ref();
@@ -314,7 +351,7 @@ pub(super) fn apply_procedural_ground_fit_pose(
 
 fn sample_ground_fit_world_pose(
     entity: Entity,
-    locals: &Query<(&Transform, Option<&ChildOf>)>,
+    locals: &Query<(Ref<Transform>, Option<Ref<ChildOf>>)>,
     snapshots: &mut EntityHashMap<GlobalTransform>,
 ) -> Option<GlobalTransform> {
     if let Some(&pose) = snapshots.get(&entity) {
@@ -621,12 +658,19 @@ fn fit_spine_bend(
     let Some(base) = joint(rig.base).and_then(position) else {
         return;
     };
-    let body_length = rig
-        .spine
+    let chains = [&rig.spine, &rig.tail].map(|chain| {
+        chain
+            .iter()
+            .filter_map(|&name| {
+                let joint = joint(name)?;
+                Some((joint, position(joint)?))
+            })
+            .collect::<Vec<_>>()
+    });
+    let body_length = chains
         .iter()
-        .chain(&rig.tail)
-        .filter_map(|&name| joint(name).and_then(position))
-        .map(|point| point.distance(base))
+        .flatten()
+        .map(|&(_, point)| point.distance(base))
         .fold(0.0_f32, f32::max);
     if body_length <= f32::EPSILON {
         return;
@@ -654,15 +698,9 @@ fn fit_spine_bend(
     if axis == Vec3::ZERO || curvature <= 0.0 {
         return;
     }
-    for chain in [&rig.spine, &rig.tail] {
+    for chain in chains {
         let mut previous = base;
-        for &name in chain {
-            let Some(joint) = joint(name) else {
-                continue;
-            };
-            let Some(point) = position(joint) else {
-                continue;
-            };
+        for (joint, point) in chain {
             let distance = point.distance(previous);
             previous = point;
             let parent_axis =

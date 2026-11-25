@@ -18,6 +18,7 @@ pub(super) struct SpeciesAnimationSetDependencyPath {
 #[derive(Asset, TypePath, Debug)]
 pub struct SpeciesAsset {
     pub(super) document: SpeciesDocument,
+    pub(super) variant_need_adjustments: Box<[(AssetId, i32)]>,
     pub(super) animation_sets: Box<[SpeciesAnimationSetDependencyPath]>,
 }
 
@@ -26,6 +27,7 @@ impl SpeciesAsset {
     pub fn from_test_document(document: SpeciesDocument) -> Self {
         Self {
             document,
+            variant_need_adjustments: Box::default(),
             animation_sets: Box::new([]),
         }
     }

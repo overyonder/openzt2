@@ -188,13 +188,20 @@ pub(super) fn bind_staff_request_rows_on_definition_change(
     jobs: Query<(Entity, &StaffJob, Option<&StaffJobRouting>)>,
     mut cancellations: MessageWriter<CancelStaffJobRequest>,
 ) {
+    let mut cancellation_index = None;
     for entity in removed_definitions.read() {
         let Ok(binding) = orphaned.get(entity) else {
             continue;
         };
         for state in &binding.rows {
             if let Some(key) = state.job_key(entity) {
-                cancel_staff_jobs(key, Some(key.routing), &jobs, &mut cancellations);
+                cancel_staff_jobs(
+                    key,
+                    Some(key.routing),
+                    &jobs,
+                    &mut cancellation_index,
+                    &mut cancellations,
+                );
             }
         }
         commands
@@ -270,7 +277,13 @@ pub(super) fn bind_staff_request_rows_on_definition_change(
                     continue;
                 }
                 if let Some(key) = old.job_key(entity) {
-                    cancel_staff_jobs(key, Some(key.routing), &jobs, &mut cancellations);
+                    cancel_staff_jobs(
+                        key,
+                        Some(key.routing),
+                        &jobs,
+                        &mut cancellation_index,
+                        &mut cancellations,
+                    );
                 }
             }
             if next.is_empty() {
@@ -411,6 +424,7 @@ pub(super) fn evaluate_staff_request_rows(
             .filter(|&entity| seen.insert(entity))
             .collect()
     };
+    let mut cancellation_index = None;
     for candidate in candidates {
         let Ok((
             entity,
@@ -471,7 +485,13 @@ pub(super) fn evaluate_staff_request_rows(
                     // care work. Resume with a fresh sample if it returns.
                     state.previous = None;
                     if let Some(key) = state.job_key(entity) {
-                        cancel_staff_jobs(key, None, &jobs, &mut cancellations);
+                        cancel_staff_jobs(
+                            key,
+                            None,
+                            &jobs,
+                            &mut cancellation_index,
+                            &mut cancellations,
+                        );
                     }
                     continue;
                 };
@@ -500,7 +520,13 @@ pub(super) fn evaluate_staff_request_rows(
                         });
                     }
                     StaffRequestJobEvent::Cancelled { key } => {
-                        cancel_staff_jobs(key, None, &jobs, &mut cancellations);
+                        cancel_staff_jobs(
+                            key,
+                            None,
+                            &jobs,
+                            &mut cancellation_index,
+                            &mut cancellations,
+                        );
                     }
                 }
             }
@@ -538,19 +564,33 @@ impl StaffRequestRuntimeState {
     }
 }
 
+type CancellationIndex =
+    bevy::platform::collections::HashMap<(Entity, AssetId), Vec<(Entity, StaffJobRouting)>>;
+
 fn cancel_staff_jobs(
     key: StaffRequestJobKey,
     required_routing: Option<StaffJobRouting>,
     jobs: &Query<(Entity, &StaffJob, Option<&StaffJobRouting>)>,
+    index: &mut Option<CancellationIndex>,
     cancellations: &mut MessageWriter<CancelStaffJobRequest>,
 ) {
-    for (entity, job, routing) in jobs.iter() {
-        if job.target == key.target
-            && job.token == Some(key.token)
-            && required_routing
-                .is_none_or(|required| routing.copied().unwrap_or_default() == required)
-        {
-            cancellations.write(CancelStaffJobRequest { job: entity });
+    let index = index.get_or_insert_with(|| {
+        let mut result = CancellationIndex::default();
+        for (entity, job, routing) in jobs.iter() {
+            if let Some(token) = job.token {
+                result
+                    .entry((job.target, token))
+                    .or_default()
+                    .push((entity, routing.copied().unwrap_or_default()));
+            }
+        }
+        result
+    });
+    if let Some(candidates) = index.get(&(key.target, key.token)) {
+        for &(job, routing) in candidates {
+            if required_routing.is_none_or(|required| routing == required) {
+                cancellations.write(CancelStaffJobRequest { job });
+            }
         }
     }
 }

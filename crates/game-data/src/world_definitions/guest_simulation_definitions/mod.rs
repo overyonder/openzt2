@@ -109,6 +109,14 @@ pub struct GuestAnimalViewScoringPolicy {
     pub minimum_species_discount: f32,
     pub near_distance_factor: f32,
     pub far_distance_factor: f32,
+    #[serde(default)]
+    pub viewpoint_swap_chance: Option<f32>,
+    #[serde(default)]
+    pub viewpoint_swap_distance: [f32; 2],
+    #[serde(default)]
+    pub education_donation: Option<GuestEducationDonationPolicy>,
+    #[serde(default)]
+    pub tour_need: Option<GuestTourNeedPolicy>,
 }
 
 impl Default for GuestAnimalViewScoringPolicy {
@@ -118,8 +126,30 @@ impl Default for GuestAnimalViewScoringPolicy {
             minimum_species_discount: 0.0,
             near_distance_factor: 1.0,
             far_distance_factor: 1.0,
+            viewpoint_swap_chance: None,
+            viewpoint_swap_distance: [0.0; 2],
+            education_donation: None,
+            tour_need: None,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, serde::Deserialize, PartialEq, serde::Serialize)]
+pub struct GuestTourNeedPolicy {
+    pub start: [f32; 2],
+    pub adjustment: f32,
+    pub trigger: f32,
+    pub cessation: f32,
+}
+
+#[derive(Clone, Copy, Debug, serde::Deserialize, PartialEq, serde::Serialize)]
+pub struct GuestEducationDonationPolicy {
+    pub divisor: f32,
+    pub minimum: f32,
+    pub maximum: Option<f32>,
+    pub happiness_threshold: Option<f32>,
+    pub bonus_factor: f32,
+    pub timeout: Option<f32>,
 }
 
 #[derive(Clone, Copy, Debug, serde::Deserialize, PartialEq, serde::Serialize)]

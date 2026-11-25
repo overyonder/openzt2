@@ -16,7 +16,6 @@ use openzt2_zoo_state::extinct_animals::fossil_collection_and_assembly_types::{
 };
 use openzt2_zoo_state::extinct_animals::fossil_recovery_types::FossilRecoverySite;
 use openzt2_zoo_state::guests::guest_simulation_types::Guest;
-use openzt2_zoo_state::locomotion::locomotion_types::NavFlags;
 use openzt2_zoo_state::shows::show_schedule_types::{ScheduledShowPerformancePlan, ShowStageRows};
 use openzt2_zoo_state::shows::show_stage_types::ShowStage;
 use openzt2_zoo_state::transport_tours::transport_vehicle_types::TransportVehicle;
@@ -282,13 +281,7 @@ pub(in crate::immersive_modes) fn validate_staff(
         let bounds = world_bounds
             .get(world.root)
             .map_err(|_| ModeEntryFailure::RuleDenied)?;
-        let navigation = NavAgent {
-            radius_m: f32::from(walking.collision_radius_cm) * 0.01,
-            max_speed_mps: walking.pan_speed_mps,
-            acceleration_mps2: walking.ground_acceleration_mps2,
-            capabilities: NavFlags::STAFF,
-        };
-        if !navigation.is_valid() {
+        if walking.first_person_motion.is_none() {
             return Err(ModeEntryFailure::MissingTool);
         }
         let (heading, _, _) = overhead.rotation.to_euler(EulerRot::YXZ);
@@ -301,7 +294,6 @@ pub(in crate::immersive_modes) fn validate_staff(
         admission.avatar = Some(StaffAvatar {
             transform: Transform::from_translation(position)
                 .with_rotation(Quat::from_rotation_y(heading)),
-            navigation,
             world: *world,
         });
         admission.lock_subject = true;

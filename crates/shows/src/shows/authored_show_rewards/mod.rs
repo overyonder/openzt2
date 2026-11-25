@@ -1,4 +1,6 @@
-use std::io;
+use std::{io, sync::Arc};
+
+use openzt2_game_data::behavior::action::feedback::BehaviorFeedbackEntry;
 
 use bevy::{
     asset::{AssetLoader, LoadContext, io::Reader},
@@ -44,6 +46,13 @@ struct DonationFeedback {
     range: [f32; 2],
     favourite_bonus: f32,
     show_need_update: f32,
+    presentation: Arc<[BehaviorFeedbackEntry]>,
+}
+
+pub(super) struct AudienceFeedback<'a> {
+    pub(super) dollars: f64,
+    pub(super) need_update: f32,
+    pub(super) presentation: &'a Arc<[BehaviorFeedbackEntry]>,
 }
 
 impl AuthoredShowRewards {
@@ -52,7 +61,7 @@ impl AuthoredShowRewards {
         completed: Option<(u16, f32)>,
         favourite: bool,
         mut draw: impl FnMut() -> u32,
-    ) -> (f64, f32) {
+    ) -> Option<AudienceFeedback<'_>> {
         let feedback = if let Some((completed_tricks, score)) = completed {
             self.bands
                 .iter()
@@ -69,7 +78,7 @@ impl AuthoredShowRewards {
             self.cancelled.as_slice()
         };
         if feedback.is_empty() {
-            return (0.0, 0.0);
+            return None;
         }
         let unit_draw = |value| f64::from(value) / f64::from(u32::MAX);
         let total_weight: f64 = feedback.iter().map(|row| f64::from(row.weight)).sum();
@@ -83,13 +92,14 @@ impl AuthoredShowRewards {
                 } else {
                     0.0
                 };
-                return (
-                    minimum + (maximum - minimum) * unit_draw(draw()) + bonus,
-                    row.show_need_update,
-                );
+                return Some(AudienceFeedback {
+                    dollars: minimum + (maximum - minimum) * unit_draw(draw()) + bonus,
+                    need_update: row.show_need_update,
+                    presentation: &row.presentation,
+                });
             }
         }
-        (0.0, 0.0)
+        None
     }
 }
 
@@ -206,6 +216,12 @@ fn donation_feedback(node: &OrderedSourceDocumentNode) -> io::Result<Vec<Donatio
                 range: [value(row, "DonateMin")?, value(row, "DonateMax")?],
                 favourite_bonus: value(row, "FavoriteAnimalBonus")?,
                 show_need_update: value(row, "ShowNeedUpdate").unwrap_or_default(),
+                presentation: row
+                    .element_children()
+                    .filter(|node| node.name.eq_ignore_ascii_case("ZTFeedbackData"))
+                    .flat_map(OrderedSourceDocumentNode::element_children)
+                    .map(feedback_entry)
+                    .collect::<io::Result<Arc<[_]>>>()?,
             };
             if ![
                 feedback.weight,
@@ -227,4 +243,63 @@ fn donation_feedback(node: &OrderedSourceDocumentNode) -> io::Result<Vec<Donatio
             Ok(feedback)
         })
         .collect()
+}
+
+fn feedback_entry(node: &OrderedSourceDocumentNode) -> io::Result<BehaviorFeedbackEntry> {
+    let attribute = |name| node.attribute_named_any(&[name]);
+    let string = |name| attribute(name).map(str::to_owned);
+    let required = |name| {
+        string(name).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("missing show feedback field {name}"),
+            )
+        })
+    };
+    let boolean =
+        |name| attribute(name).map(|value| value == "1" || value.eq_ignore_ascii_case("true"));
+    let flag = |name| boolean(name).unwrap_or_default();
+    let seconds = |name| value(node, name).ok();
+    let use_entity_name = flag("useEntityName");
+    let use_target_name = flag("useTargetName");
+    match node.name.as_str() {
+        "ZTThoughtInfo" => Ok(BehaviorFeedbackEntry::Thought {
+            localization_key: required("locID")?,
+            priority: value(node, "priority").ok(),
+            timeout_seconds: seconds("timeout"),
+            globally_visible: boolean("global"),
+            use_entity_name,
+            use_target_name,
+            use_target_target: flag("useTargetTarget"),
+            use_target_object: flag("useTargetObject"),
+            use_target_species: flag("useTargetSpecies"),
+        }),
+        "ZTActionInfo" => Ok(BehaviorFeedbackEntry::Action {
+            localization_key: required("locID")?,
+            use_entity_name,
+            use_target_name,
+            use_target_contents: flag("useTargetContents"),
+            use_object_name: flag("useObjectName"),
+        }),
+        "ZTMessageInfo" => Ok(BehaviorFeedbackEntry::Message {
+            localization_key: required("locID")?,
+            priority: value(node, "priority").ok(),
+            timeout_seconds: seconds("timeout"),
+            interval_seconds: seconds("interval"),
+            tolerance: value(node, "tolerance").ok(),
+            globally_visible: boolean("global"),
+            use_entity_name,
+            use_target_name,
+            filter_attribute_expression: string("filterAttribute"),
+        }),
+        "ZTEmoticonInfo" => Ok(BehaviorFeedbackEntry::Emoticon {
+            emoticon_name: required("emoticonName")?,
+            emoticon_scale: value(node, "emoticonScale").ok(),
+            emoticon_entity_node: string("emoticonEntityNode"),
+        }),
+        _ => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("unknown show feedback {}", node.name),
+        )),
+    }
 }

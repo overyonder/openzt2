@@ -1,4 +1,4 @@
-use bevy::{asset::AssetId as BevyAssetId, platform::collections::HashMap, prelude::*};
+use bevy::{asset::AssetId as BevyAssetId, prelude::*};
 use openzt2_game_assets::texture::source_image_asset_path_selection::select_bevy_image_asset_path_for_blue_fang_source_image;
 use openzt2_game_assets::world_definitions::{
     world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions,
@@ -72,7 +72,6 @@ pub(super) fn bind_authored_animation_binder_rigs<Lane: Component>(
             _ => None,
         })
         .collect::<bevy::platform::collections::HashSet<_>>();
-    let mut rig_sources = None;
     for (entity, owner, binder, binding, has_pose, decal_playback) in &mut controllers {
         let Ok((definition, variant)) = owners.get(owner.gameplay_entity) else {
             continue;
@@ -95,23 +94,9 @@ pub(super) fn bind_authored_animation_binder_rigs<Lane: Component>(
             continue;
         };
         let binder = binder.map_or(main_object, |binder| binder.0);
-        let sources =
-            rig_sources.get_or_insert_with(|| {
-                assets
-                    .iter()
-                    .flat_map(|(asset, definitions)| {
-                        definitions.animation_binder_rigs().iter().enumerate().map(
-                            move |(row, rig)| {
-                                (
-                                    (rig.definition, rig.binder),
-                                    AnimationBinderRigSource { asset, row },
-                                )
-                            },
-                        )
-                    })
-                    .collect::<HashMap<_, _>>()
-            });
-        let source = sources.get(&(definition, binder)).copied();
+        let source = definitions
+            .and_then(|definitions| definitions.animation_binder_rig_source(definition, binder))
+            .map(|(asset, row)| AnimationBinderRigSource { asset, row });
         if !source_changed
             && binding
                 .as_ref()

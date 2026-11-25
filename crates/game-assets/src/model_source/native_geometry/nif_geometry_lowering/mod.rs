@@ -1,5 +1,6 @@
 //! NetImmerse NIF geometry, topology, shading, and render-record lowering.
 
+use crate::source_coordinate_conversion::convert_source_z_up_vector_to_bevy_y_up_coordinates;
 use openzt2_game_data::AssetId;
 
 use super::super::{
@@ -68,6 +69,52 @@ pub(in crate::model_source) fn lower_netimmerse_geometry_block(
         .vertices
         .as_ref()
         .ok_or_else(|| missing_netimmerse_geometry(document, block))?;
+    let invalid_morph = |detail: String| {
+        native_geometry_lowering_error(
+            NativeGeometrySourceFamily::Nif,
+            &document.source_path,
+            NativeGeometryLoweringErrorKind::InvalidMaterial { detail },
+        )
+    };
+    let morph =
+        super::super::netimmerse_morph_lowering::geometry_morph_controller(document, block as i32)
+            .map_err(|error| invalid_morph(error.to_string()))?;
+    let mut position_morph_targets = Vec::new();
+    let zero_origin;
+    let positions = if let Some((_, morph)) = morph {
+        if morph.num_vertices as usize != positions.len()
+            || morph.morphs.iter().any(|target| {
+                target.vectors.len() != positions.len()
+                    || target
+                        .vectors
+                        .iter()
+                        .flatten()
+                        .any(|value| !value.is_finite())
+            })
+        {
+            return Err(invalid_morph(
+                "morph target vertices differ from geometry".to_owned(),
+            ));
+        }
+        for target in super::super::netimmerse_morph_lowering::animated_morph_targets(morph) {
+            position_morph_targets.push(
+                target
+                    .vectors
+                    .iter()
+                    .copied()
+                    .map(convert_source_z_up_vector_to_bevy_y_up_coordinates)
+                    .collect::<Vec<_>>(),
+            );
+        }
+        if morph.relative_targets != 0 {
+            &morph.morphs[0].vectors
+        } else {
+            zero_origin = vec![[0.0; 3]; positions.len()];
+            &zero_origin
+        }
+    } else {
+        positions
+    };
     let indices = validate_triangle_index_stream(
         &source_indices,
         positions.len(),
@@ -140,6 +187,12 @@ pub(in crate::model_source) fn lower_netimmerse_geometry_block(
     let native_material =
         lower_netimmerse_native_material(document, block, geometry, &mut resolve_texture)?;
     let (vertices, indices) = if flat_shaded {
+        for target in &mut position_morph_targets {
+            *target = indices
+                .iter()
+                .map(|index| target[*index as usize])
+                .collect();
+        }
         flat_shade(vertices, &indices)
     } else {
         (vertices, indices)
@@ -159,6 +212,7 @@ pub(in crate::model_source) fn lower_netimmerse_geometry_block(
                 flat_shaded,
             }],
             lods: Vec::new(),
+            position_morph_targets,
         }],
         skeleton,
         joint_hierarchy_root,

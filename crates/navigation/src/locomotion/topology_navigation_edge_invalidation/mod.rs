@@ -3,7 +3,6 @@ use bevy::prelude::*;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
 use openzt2_zoo_state::topology::topology_edit_types::TopologyChanged;
-use openzt2_zoo_state::topology::topology_graph_types::TopologyGrid;
 use openzt2_zoo_state::topology::topology_graph_types::TopologyNode;
 use openzt2_zoo_state::topology::topology_graph_types::{
     FenceEdge, FenceEnd, FenceSegment, FenceStart, FencesEndingHere, FencesStartingHere,
@@ -77,6 +76,7 @@ pub(super) fn synchronize_fence_navigation_crossings(
         Option<&ActiveTerrainDerivedNavigationGraph>,
         Ref<TopologyGrid>,
         &FenceNavigationCrossingIndex,
+        Option<&TopologyIndex>,
     )>,
     mut sources: FenceNavigationCrossingSources,
     mut installations: MessageReader<super::world_navigation_installation::NavigationGraphReplaced>,
@@ -98,19 +98,43 @@ pub(super) fn synchronize_fence_navigation_crossings(
                 .filter(|change| change.elevated)
                 .map(|change| change.root),
         )
-        .chain(terrain_changes.read().map(|event| event.0))
         .chain(removed_graphs.read())
         .collect();
     refresh_roots.extend(
         roots
             .iter()
-            .filter_map(|(root, _, grid, _)| grid.is_changed().then_some(root)),
+            .filter_map(|(root, _, grid, _, _)| grid.is_changed().then_some(root)),
     );
     let nodes = sources
         .changed_nodes
         .iter()
         .chain(sources.removed_nodes.read());
     let mut affected: EntityHashSet = sources.changed_fences.iter().collect();
+    for edit in terrain_changes.read() {
+        let Ok((_, graph, grid, _, index)) = roots.get(edit.root) else {
+            continue;
+        };
+        let Some(index) = index else {
+            refresh_roots.insert(edit.root);
+            continue;
+        };
+        if refresh_roots.contains(&edit.root) || grid.spacing_m <= 0.0 {
+            continue;
+        }
+        let padding = graph
+            .map(ActiveTerrainDerivedNavigationGraph::terrain_derived_navigation_graph)
+            .map_or(grid.spacing_m, |graph| {
+                // An outgoing edge may start in the neighboring navigation cell.
+                f32::from(graph.terrain_cell_size_centimetres) * 0.02 + grid.spacing_m
+            });
+        let first = ((edit.bounds.min - grid.origin - Vec2::splat(padding)) / grid.spacing_m)
+            .floor()
+            .as_ivec2();
+        let last = ((edit.bounds.max - grid.origin + Vec2::splat(padding)) / grid.spacing_m)
+            .ceil()
+            .as_ivec2();
+        affected.extend(index.fences_within(first, last));
+    }
     for node in nodes {
         let Ok((outgoing, incoming)) = sources.incident.get(node) else {
             continue;
@@ -130,7 +154,7 @@ pub(super) fn synchronize_fence_navigation_crossings(
         let Ok((fence, member)) = sources.fences.get(fence_entity) else {
             continue;
         };
-        let Ok((_, graph, grid, index)) = roots.get(member.root) else {
+        let Ok((_, graph, grid, index, _)) = roots.get(member.root) else {
             continue;
         };
         crossed_edges.clear();

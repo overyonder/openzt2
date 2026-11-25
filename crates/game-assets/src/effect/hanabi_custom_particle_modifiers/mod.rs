@@ -8,6 +8,7 @@ use bevy_hanabi::prelude::{
     Attribute, BoxedModifier, ExprError, ExprHandle, Modifier, ModifierContext, Module,
     ShaderWriter,
 };
+use bevy_hanabi::ToWgslString;
 
 #[derive(Clone)]
 pub(super) struct CollisionSpawnParticleInitialization {
@@ -115,6 +116,11 @@ impl Modifier for PointGravityParticleUpdateModifier {
 pub(super) struct PlaneCollisionParticleUpdateModifier {
     pub(super) plane_normal: Vec3,
     pub(super) plane_constant: f32,
+    pub(super) center: Vec3,
+    pub(super) x_axis: Vec3,
+    pub(super) y_axis: Vec3,
+    pub(super) half_width: f32,
+    pub(super) half_height: f32,
     pub(super) velocity_rebound: f32,
     pub(super) kill_after_contact: bool,
 }
@@ -125,12 +131,7 @@ impl Modifier for PlaneCollisionParticleUpdateModifier {
     }
 
     fn attributes(&self) -> Cow<'_, [Attribute]> {
-        Cow::Borrowed(&[
-            Attribute::POSITION,
-            Attribute::VELOCITY,
-            Attribute::AGE,
-            Attribute::LIFETIME,
-        ])
+        Cow::Borrowed(&[Attribute::POSITION, Attribute::VELOCITY])
     }
 
     fn boxed_clone(&self) -> BoxedModifier {
@@ -142,24 +143,41 @@ impl Modifier for PlaneCollisionParticleUpdateModifier {
         _expression_module: &mut Module,
         shader_writer: &mut ShaderWriter,
     ) -> Result<(), ExprError> {
+        let Some(normal) = self.plane_normal.try_normalize() else {
+            return Ok(());
+        };
+        let normal = normal.to_wgsl_string();
+        let constant = (self.plane_constant / self.plane_normal.length()).to_wgsl_string();
+        let center = self.center.to_wgsl_string();
+        let x_axis = self.x_axis.to_wgsl_string();
+        let y_axis = self.y_axis.to_wgsl_string();
+        let half_width = self.half_width.to_wgsl_string();
+        let half_height = self.half_height.to_wgsl_string();
+        let bounce = self.velocity_rebound.to_wgsl_string();
+        let kill = if self.kill_after_contact {
+            "is_alive = false;"
+        } else {
+            ""
+        };
         shader_writer.main_code += &format!(
-            "let plane_distance = dot(particle.position, vec3<f32>({},{},{})) + {}; if plane_distance < 0.0 {{ particle.position -= vec3<f32>({},{},{}) * plane_distance; particle.velocity = reflect(particle.velocity, vec3<f32>({},{},{})) * {}; {} }}\n",
-            self.plane_normal.x,
-            self.plane_normal.y,
-            self.plane_normal.z,
-            self.plane_constant,
-            self.plane_normal.x,
-            self.plane_normal.y,
-            self.plane_normal.z,
-            self.plane_normal.x,
-            self.plane_normal.y,
-            self.plane_normal.z,
-            self.velocity_rebound,
-            if self.kill_after_contact {
-                "particle.age = particle.lifetime;"
-            } else {
-                ""
-            },
+            r#"
+if is_alive {{
+    let normal = {normal};
+    let previous = position_before_integration;
+    let from_distance = dot(previous, normal) + {constant};
+    let to_distance = dot(particle.position, normal) + {constant};
+    if from_distance >= 0.0 && to_distance < 0.0 {{
+        let fraction = from_distance / (from_distance - to_distance);
+        let contact = mix(previous, particle.position, fraction);
+        let offset = contact - {center};
+        if abs(dot(offset, {x_axis})) <= {half_width} && abs(dot(offset, {y_axis})) <= {half_height} {{
+            particle.velocity = reflect(particle.velocity, normal) * {bounce};
+            particle.position = contact + particle.velocity * effect_delta_time * (1.0 - fraction);
+            {kill}
+        }}
+    }}
+}}
+"#
         );
         Ok(())
     }

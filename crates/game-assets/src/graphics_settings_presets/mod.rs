@@ -2,7 +2,10 @@ use bevy::ecs::schedule::SystemCondition;
 use std::{io, path::Path};
 
 use bevy::{
-    asset::{io::Reader, AssetLoader, LoadContext},
+    asset::{
+        io::{AssetReaderError, Reader},
+        AssetLoader, LoadContext, ReadAssetBytesError,
+    },
     prelude::*,
 };
 
@@ -23,6 +26,7 @@ use crate::{
 };
 
 const SETTINGS_SOURCE_PATH: &str = "ui/options/settings.xml";
+const RENDERER_SOURCE_PATH: &str = "config/graphics.xml";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GraphicsDetailPreset {
@@ -32,7 +36,11 @@ pub enum GraphicsDetailPreset {
 }
 
 #[derive(Asset, TypePath)]
-pub struct GraphicsSettingsPresets([GraphicsSettings; 3]);
+pub struct GraphicsSettingsPresets {
+    settings: [GraphicsSettings; 3],
+    particle_budgets: [Option<u32>; 3],
+    renderer_budget_tier: ThreeLevelGraphicsDetail,
+}
 
 impl GraphicsSettingsPresets {
     #[cfg(feature = "testing")]
@@ -47,8 +55,12 @@ impl GraphicsSettingsPresets {
     ) -> GraphicsSettings {
         GraphicsSettings {
             multisample_count,
-            ..self.0[preset as usize]
+            ..self.settings[preset as usize]
         }
+    }
+
+    pub fn particle_budget(&self, tier: Option<ThreeLevelGraphicsDetail>) -> Option<u32> {
+        self.particle_budgets[tier.unwrap_or(self.renderer_budget_tier) as usize]
     }
 }
 
@@ -76,11 +88,17 @@ impl AssetLoader for GraphicsSettingsPresetLoader {
         &self,
         reader: &mut dyn Reader,
         _: &Self::Settings,
-        _: &mut LoadContext<'_>,
+        load_context: &mut LoadContext<'_>,
     ) -> Result<Self::Asset, Self::Error> {
         let mut bytes = Vec::new();
         reader.read_to_end(&mut bytes).await?;
-        parse_graphics_settings_presets(&bytes)
+        let mut presets = parse_graphics_settings_presets(&bytes)?;
+        match load_context.read_asset_bytes(RENDERER_SOURCE_PATH).await {
+            Ok(renderer) => apply_particle_budgets(&mut presets, &renderer)?,
+            Err(ReadAssetBytesError::AssetReaderError(AssetReaderError::NotFound(_))) => (),
+            Err(error) => return Err(io::Error::other(error)),
+        }
+        Ok(presets)
     }
 
     fn extensions(&self) -> &[&str] {
@@ -92,6 +110,37 @@ fn parse_graphics_settings_presets(bytes: &[u8]) -> io::Result<GraphicsSettingsP
     let document = parse_blue_fang_source_document(AssetPath::new(SETTINGS_SOURCE_PATH), bytes)
         .map_err(io::Error::other)?;
     lower_graphics_settings_presets(&document.root)
+}
+
+fn apply_particle_budgets(presets: &mut GraphicsSettingsPresets, bytes: &[u8]) -> io::Result<()> {
+    let document = parse_blue_fang_source_document(AssetPath::new(RENDERER_SOURCE_PATH), bytes)
+        .map_err(io::Error::other)?;
+    if let Some(tier) = document.root.attribute_named_any(&["graphicsDetail"]) {
+        if tier.eq_ignore_ascii_case("low") {
+            presets.renderer_budget_tier = ThreeLevelGraphicsDetail::Low;
+        } else if tier.eq_ignore_ascii_case("medium") {
+            presets.renderer_budget_tier = ThreeLevelGraphicsDetail::Medium;
+        }
+    }
+    for (budget, field) in presets.particle_budgets.iter_mut().zip([
+        "maxParticlesLow",
+        "maxParticlesMed",
+        "maxParticlesHigh",
+    ]) {
+        *budget = document
+            .root
+            .attribute_named_any(&[field])
+            .map(|value| {
+                value.trim().parse::<u32>().map_err(|_| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("invalid {field}={value:?}"),
+                    )
+                })
+            })
+            .transpose()?;
+    }
+    Ok(())
 }
 
 fn lower_graphics_settings_presets(
@@ -106,20 +155,26 @@ fn lower_graphics_settings_presets(
                 "graphics settings table has no settings rows",
             )
         })?;
-    Ok(GraphicsSettingsPresets([
-        lower_graphics_settings_preset(settings, "low")?,
-        lower_graphics_settings_preset(settings, "medium")?,
-        lower_graphics_settings_preset(settings, "high")?,
-    ]))
+    Ok(GraphicsSettingsPresets {
+        settings: [
+            lower_graphics_settings_preset(settings, "low", ThreeLevelGraphicsDetail::Low)?,
+            lower_graphics_settings_preset(settings, "medium", ThreeLevelGraphicsDetail::Medium)?,
+            lower_graphics_settings_preset(settings, "high", ThreeLevelGraphicsDetail::High)?,
+        ],
+        particle_budgets: [None; 3],
+        renderer_budget_tier: ThreeLevelGraphicsDetail::High,
+    })
 }
 
 fn lower_graphics_settings_preset(
     settings: &OrderedSourceDocumentNode,
     column: &str,
+    tier: ThreeLevelGraphicsDetail,
 ) -> io::Result<GraphicsSettings> {
     use ThreeLevelGraphicsDetail::{High, Low, Medium};
     let mut result = GraphicsSettings {
         water_reflections: false,
+        particle_budget_tier: Some(tier),
         ..GraphicsSettings::default()
     };
     for row in settings.element_children() {
@@ -243,9 +298,18 @@ impl Plugin for GraphicsSettingsPresetAssetPlugin {
 fn resolve_graphics_settings_preset_source(
     archives: Res<AssetArchives>,
     server: Res<AssetServer>,
+    mut changes: MessageReader<crate::asset_source::ArchiveOverlayChanged>,
     mut source: ResMut<GraphicsSettingsPresetSource>,
 ) {
     let path = Path::new(SETTINGS_SOURCE_PATH);
+    let authored_inputs_changed = changes
+        .read()
+        .flat_map(|change| &change.changes)
+        .any(|change| {
+            change.normalized_asset_path == path
+                || change.normalized_asset_path == Path::new(RENDERER_SOURCE_PATH)
+        });
+    changes.clear();
     let selected_path = archives
         .resolved_winning_entry(path)
         .map_or_else(|| path.to_owned(), |entry| archive_entry_asset_path(&entry));
@@ -255,6 +319,9 @@ fn resolve_graphics_settings_preset_source(
         .and_then(Handle::path)
         .is_some_and(|path| path.path() == selected_path)
     {
+        if authored_inputs_changed {
+            server.reload(selected_path);
+        }
         return;
     }
     source.0 = Some(server.load(selected_path));
@@ -263,6 +330,24 @@ fn resolve_graphics_settings_preset_source(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn particle_budgets_follow_preset_columns_independently() -> io::Result<()> {
+        let mut presets =
+            parse_graphics_settings_presets(b"<UserSettings><settings/></UserSettings>")?;
+        apply_particle_budgets(
+            &mut presets,
+            br#"<BFDX9Renderer graphicsDetail="low" maxParticlesLow="0" maxParticlesHigh="137"/>"#,
+        )?;
+        assert_eq!(
+            presets
+                .settings
+                .map(|preset| presets.particle_budget(preset.particle_budget_tier)),
+            [Some(0), None, Some(137)]
+        );
+        assert_eq!(presets.particle_budget(None), Some(0));
+        Ok(())
+    }
 
     #[test]
     fn preset_columns_use_authored_indexes_and_nested_values() -> io::Result<()> {

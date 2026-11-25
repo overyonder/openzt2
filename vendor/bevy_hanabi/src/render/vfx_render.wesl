@@ -319,6 +319,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     var particle = particle_buffer.particles[in.slab_particle_index];
 
 {{FRAGMENT_MODIFIERS}}
+{{AUTHORED_ALPHA_TEST}}
 
     @if(USE_ALPHA_MASK)
     if color.a >= alpha_cutoff {

@@ -175,7 +175,7 @@ pub(super) fn parse_material_colour_controller(
             "NiMaterialColorController target color",
         )?)
     } else {
-        Some(u32::from((controller.flags >> 4) & 0b11))
+        Some(u32::from((controller.flags >> 4) & 0b111))
     };
     Ok(NetImmerseNiMaterialColorController {
         controller,
@@ -438,13 +438,13 @@ pub(super) fn parse_bone_level_of_detail_controller(
         source_path,
         "NiBoneLODController lod count",
     )?;
-    let _declared_node_group_count = read_u32_little_endian(
+    let node_group_count = read_u32_little_endian(
         source_bytes,
         cursor,
         source_path,
         "NiBoneLODController node group count",
     )?;
-    let node_groups = (0..lod_count)
+    let node_groups = (0..node_group_count)
         .map(|_| {
             let node_count = read_u32_little_endian(
                 source_bytes,
@@ -511,6 +511,7 @@ pub(super) fn parse_bone_level_of_detail_controller(
     Ok(NetImmerseNiBoneLodController {
         controller,
         lod,
+        lod_count,
         node_groups,
         shape_groups,
         shape_refs,

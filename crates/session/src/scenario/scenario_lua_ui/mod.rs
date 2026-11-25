@@ -330,26 +330,17 @@ pub(super) fn create_mode_adapter<'scope, 'env: 'scope>(
     Ok(mode)
 }
 
-pub(super) fn extend_ui_root<'scope, 'env: 'scope>(
+pub(super) fn create_ui_root<'scope, 'env: 'scope>(
     lua: &Lua,
     scope: &'scope Scope<'scope, 'env>,
-    root: Table,
     commands: &'env RefCell<Vec<ScenarioUiCommand>>,
     queries: ScenarioLuaQueryFacts<'env>,
 ) -> mlua::Result<Table> {
     install_node_methods(lua, scope, commands, queries)?;
-    let existing: mlua::Function = root.get("UI_GET_CHILD")?;
+    let root = lua.create_table()?;
     root.set(
         "UI_GET_CHILD",
-        scope.create_function(move |lua, (root, name): (Table, String)| {
-            if matches!(
-                name.as_str(),
-                "challenge layout" | "instant challenge layout" | "challenge text"
-            ) {
-                return existing.call::<Table>((root, name));
-            }
-            create_node(lua, &[name])
-        })?,
+        lua.create_function(|lua, (_, name): (Table, String)| create_node(lua, &[name]))?,
     )?;
     root.set(
         "UI_PLAY_SOUND",
@@ -991,10 +982,45 @@ fn run_authored_timed_scenario_scripts(
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ScenarioUiSavedState {
-    enabled: std::collections::BTreeMap<String, bool>,
+    pub(crate) enabled: std::collections::BTreeMap<String, bool>,
     #[serde(default)]
-    shown: std::collections::BTreeMap<String, bool>,
-    continuation: Option<AssetId>,
+    pub(crate) shown: std::collections::BTreeMap<String, bool>,
+    pub(crate) continuation: Option<AssetId>,
+}
+
+impl ScenarioUiSavedState {
+    fn capture_override(&mut self, node: &presentation::ScenarioUiNodeOverride) {
+        if let Some(enabled) = node.enabled {
+            self.enabled.insert(node.name.clone(), enabled);
+        }
+        if let Some(shown) = node.shown {
+            self.shown.insert(node.name.clone(), shown);
+        }
+    }
+
+    fn spawn_overrides(mut self, commands: &mut Commands, owner: Entity) {
+        for (name, enabled) in self.enabled {
+            let shown = self.shown.remove(&name);
+            commands.spawn((
+                presentation::ScenarioUiNodeOverrideOf(owner),
+                presentation::ScenarioUiNodeOverride {
+                    name,
+                    enabled: Some(enabled),
+                    shown,
+                },
+            ));
+        }
+        for (name, shown) in self.shown {
+            commands.spawn((
+                presentation::ScenarioUiNodeOverrideOf(owner),
+                presentation::ScenarioUiNodeOverride {
+                    name,
+                    enabled: None,
+                    shown: Some(shown),
+                },
+            ));
+        }
+    }
 }
 
 #[derive(bevy::ecs::system::SystemParam)]
@@ -1002,21 +1028,28 @@ pub(crate) struct ScenarioUiSnapshotCapture<'w, 's> {
     pending: Query<
         'w,
         's,
-        &'static presentation::ScenarioUiState,
+        (
+            Option<&'static presentation::ScenarioUiState>,
+            Option<&'static presentation::ScenarioUiNodeOverrides>,
+        ),
         With<openzt2_world_state::world_spawn::world_membership_types::WorldRoot>,
     >,
+    overrides: Query<'w, 's, &'static presentation::ScenarioUiNodeOverride>,
 }
 
 impl ScenarioUiSnapshotCapture<'_, '_> {
     pub(crate) fn capture(&self) -> ScenarioUiSavedState {
-        self.pending.single().map_or_else(
-            |_| ScenarioUiSavedState::default(),
-            |pending| ScenarioUiSavedState {
-                enabled: pending.enabled.clone(),
-                shown: pending.shown.clone(),
-                continuation: pending.continuation,
-            },
-        )
+        use bevy::ecs::relationship::RelationshipTarget;
+        let mut saved = ScenarioUiSavedState::default();
+        if let Ok((pending, overrides)) = self.pending.single() {
+            saved.continuation = pending.and_then(|state| state.continuation);
+            if let Some(overrides) = overrides {
+                for node in self.overrides.iter_many(overrides.iter()).flatten() {
+                    saved.capture_override(node);
+                }
+            }
+        }
+        saved
     }
 }
 
@@ -1026,8 +1059,10 @@ pub(crate) fn restore_saved_scenario_ui(
     saved: ScenarioUiSavedState,
 ) {
     let mut state = presentation::ScenarioUiState::default();
-    state.enabled = saved.enabled;
-    state.shown = saved.shown;
     state.continuation = saved.continuation;
-    commands.entity(root).insert(state);
+    commands
+        .entity(root)
+        .despawn_related::<presentation::ScenarioUiNodeOverrides>()
+        .insert(state);
+    saved.spawn_overrides(commands, root);
 }

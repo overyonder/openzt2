@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use bevy::prelude::*;
-use openzt2_game_data::{behavior::document::BehaviorDocument, AssetId};
+use openzt2_game_data::{AssetId, behavior::document::BehaviorDocument};
 
 #[derive(Asset, TypePath, Debug)]
 pub struct BehaviorDocumentAsset {
@@ -68,6 +68,8 @@ pub struct LoadedBehaviorDocumentCollection {
     pub(super) behavior_sets_by_identifier: BTreeMap<AssetId, Vec<BehaviorDeclarationLocation>>,
     pub(super) behavior_tasks_by_unique_identifier:
         BTreeMap<AssetId, Vec<BehaviorDeclarationLocation>>,
+    pub(super) behavior_task_order:
+        BTreeMap<((usize, usize), usize), (AssetId, bevy::asset::AssetId<BehaviorDocumentAsset>)>,
 }
 
 pub(super) struct IndexedBehaviorDocument {
@@ -87,5 +89,9 @@ pub struct BehaviorDeclarationIndexView<'a> {
     pub(super) behavior_sets_by_identifier: &'a BTreeMap<AssetId, Vec<BehaviorDeclarationLocation>>,
     pub(super) behavior_tasks_by_unique_identifier:
         &'a BTreeMap<AssetId, Vec<BehaviorDeclarationLocation>>,
+    pub(super) behavior_task_order: &'a BTreeMap<
+        ((usize, usize), usize),
+        (AssetId, bevy::asset::AssetId<BehaviorDocumentAsset>),
+    >,
     pub(super) behavior_document_assets: &'a Assets<BehaviorDocumentAsset>,
 }

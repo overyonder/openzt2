@@ -17,14 +17,14 @@ use openzt2_zoo_state::{
         DockedAtInteractionContainer, InteractionContainerMember, InteractionContainerMemberships,
     },
     behavior_task_execution_types::{
-        BehaviorTaskExecutionState, BehaviorTaskReturnFrame, PendingBehaviorTaskFailure,
         continuations::BehaviorContinuationFrames,
         running_actions::{
+            activated_behavior_actor, behavior_action_actors, update_waiting_behavior_actors,
             BehaviorObstaclePriority, BehaviorStepFixedSet, BehaviorTaskReplaced,
             RunBehaviorEscapeObstacle, RunBehaviorExitInteractionContainer,
-            RunningBehaviorInstruction, SelectedBehaviorSet, activated_behavior_actor,
-            behavior_action_actors, update_waiting_behavior_actors,
+            RunningBehaviorInstruction, SelectedBehaviorSet,
         },
+        BehaviorTaskExecutionState, BehaviorTaskReturnFrame, PendingBehaviorTaskFailure,
     },
     locomotion::locomotion_types::{DirectLocomotion, NavAgent},
     terrain::terrain_chunk_types::TerrainChunk,

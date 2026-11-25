@@ -1,10 +1,10 @@
 use super::{
-    normalized_species_model_path, SpeciesAsset, SpeciesAssets, SpeciesDocumentRow, SpeciesView,
+    SpeciesAsset, SpeciesAssets, SpeciesDocumentRow, SpeciesView, normalized_species_model_path,
 };
 use bevy::prelude::*;
 use openzt2_game_data::{
-    species::{Species, SpeciesVariant, SpeciesVariantBinding},
     AssetId,
+    species::{NeedKind, Species, SpeciesVariant, SpeciesVariantBinding},
 };
 
 impl SpeciesAssets {
@@ -78,6 +78,23 @@ impl<'a> SpeciesView<'a> {
     ) -> Option<(&'a Species, &'a SpeciesVariant)> {
         let binding = self.find_variant_binding(id)?;
         Some((self.find(binding.species)?, &binding.variant))
+    }
+
+    pub fn variant_need_adjustment(self, variant: AssetId, kind: NeedKind) -> Option<i32> {
+        self.variant_need_adjustment_by_name(
+            variant,
+            crate::species::source::needs::authored_need_identifier(kind),
+        )
+    }
+
+    /// Reads a binder-specific adjustment in wellness permille Q16 per update.
+    pub fn variant_need_adjustment_by_name(self, variant: AssetId, need: AssetId) -> Option<i32> {
+        let row = self.index.by_variant.get(&variant)?.row;
+        let adjustments = &self.document(row.document)?.variant_need_adjustments;
+        let index = adjustments
+            .binary_search_by_key(&need, |(id, _)| *id)
+            .ok()?;
+        Some(adjustments[index].1)
     }
 
     pub fn find_variant_by_model_path(self, model_path: &str) -> Option<&'a SpeciesVariant> {

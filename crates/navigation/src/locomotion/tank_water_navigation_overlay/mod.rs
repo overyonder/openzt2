@@ -6,6 +6,7 @@ use openzt2_zoo_state::aquatic::aquatic_simulation_types::{Tank, TankGeometry};
 use openzt2_zoo_state::aquatic::tank_navigation_water::TankNavigationWater;
 use openzt2_zoo_state::habitat::habitat_types::HabitatRegion;
 use openzt2_zoo_state::locomotion::locomotion_types::ActiveTerrainDerivedNavigationGraph;
+use openzt2_zoo_state::locomotion::terrain_derived_navigation_graph_types::TerrainDerivedNavigationGraph;
 use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainChunk;
 use openzt2_zoo_state::terrain::terrain_navigation_change_types::{
     TerrainNavigationChanged, TerrainNavigationRestored,
@@ -15,7 +16,70 @@ use openzt2_zoo_state::topology::topology_graph_types::TopologyGrid;
 use super::world_navigation_installation::NavigationGraphReplaced;
 
 #[derive(Component, Default, PartialEq)]
-pub(super) struct TankNavigationCells(Vec<(u32, u16)>);
+pub(super) struct TankNavigationCells {
+    covered: Vec<u32>,
+    wet: Vec<(u32, u16)>,
+    bounds: Option<Rect>,
+}
+
+impl TankNavigationCells {
+    fn refresh_edited_cells(
+        mut current: Mut<Self>,
+        navigation: &TerrainDerivedNavigationGraph,
+        world_bounds: &[Rect],
+        cell_size: f32,
+        water_height: f32,
+        affected: &mut HashMap<u32, u16>,
+    ) {
+        let Some(tank_bounds) = current.bounds else {
+            return;
+        };
+        for edit in world_bounds {
+            let min = edit.min.max(tank_bounds.min);
+            let max = edit.max.min(tank_bounds.max);
+            if !min.cmple(max).all() {
+                continue;
+            }
+            let first = (Vec2::new(min.x, -max.y) / cell_size)
+                .max(Vec2::ZERO)
+                .floor()
+                .as_uvec2();
+            let last = (Vec2::new(max.x, -min.y) / cell_size).floor().as_uvec2();
+            for y in first.y..=last.y {
+                for x in first.x..=last.x {
+                    let Some(cell) = navigation.calculate_navigation_node_for_terrain_cell([x, y])
+                    else {
+                        continue;
+                    };
+                    if current.covered.binary_search(&cell).is_err() {
+                        continue;
+                    }
+                    let depth = water_depth(navigation, cell, water_height);
+                    match current.wet.binary_search_by_key(&cell, |&(key, _)| key) {
+                        Ok(slot) if depth == 0 => {
+                            current.wet.remove(slot);
+                        }
+                        Ok(slot) if current.wet[slot].1 != depth => {
+                            current.wet[slot].1 = depth;
+                        }
+                        Err(slot) if depth != 0 => {
+                            current.wet.insert(slot, (cell, depth));
+                        }
+                        _ => continue,
+                    }
+                    affected.insert(cell, 0);
+                }
+            }
+        }
+    }
+}
+
+fn water_depth(navigation: &TerrainDerivedNavigationGraph, cell: u32, water_height: f32) -> u16 {
+    navigation.find_navigation_node(cell).map_or(0, |node| {
+        let depth = ((water_height * 100.0).round() as i32).saturating_sub(node.height_centimetres);
+        u16::try_from(depth.max(0)).unwrap_or(u16::MAX)
+    })
+}
 
 #[derive(Message)]
 pub(super) struct TankNavigationWaterChanged(pub(super) Entity);
@@ -63,9 +127,7 @@ pub(super) fn project_tank_water_onto_navigation_cells(
         .chain(restores.read().map(|edit| (edit.chunk, edit.min, edit.max)))
         .filter_map(|(entity, min, max)| {
             let chunk = chunks.get(entity).ok()?;
-            let min = chunk.origin + min.saturating_sub(UVec2::ONE).as_vec2() * chunk.spacing_m;
-            let max = chunk.origin + (max.as_vec2() + Vec2::ONE) * chunk.spacing_m;
-            Some(Rect::from_corners(min, max))
+            Some(navigation_sample_edit_bounds(chunk, min, max))
         })
         .collect();
     let removed = removed.read().count() != 0;
@@ -91,24 +153,30 @@ pub(super) fn project_tank_water_onto_navigation_cells(
         if member.is_some_and(|member| member.root != world_entity) {
             continue;
         }
-        if current.is_some()
-            && !reset
-            && !geometry.is_changed()
-            && !region.is_changed()
-            && (changed_bounds.is_empty()
-                || !region.topology_cells.iter().any(|cell| {
-                    let origin = grid.cell_translation(cell.extend(0)).xz();
-                    let far = origin + Vec2::splat(count as f32 * cell_size_m);
-                    changed_bounds
-                        .iter()
-                        .any(|bounds| origin.cmple(bounds.max).all() && far.cmpge(bounds.min).all())
-                }))
-        {
-            continue;
+        if !reset && !geometry.is_changed() && !region.is_changed() {
+            if let Some(current) = current.take() {
+                if !changed_bounds.is_empty() {
+                    TankNavigationCells::refresh_edited_cells(
+                        current,
+                        navigation,
+                        &changed_bounds,
+                        cell_size_m,
+                        geometry.water_height,
+                        &mut affected,
+                    );
+                }
+                continue;
+            }
         }
-        let mut cells = Vec::new();
+        let mut next = TankNavigationCells::default();
         for cell in &region.topology_cells {
             let origin = grid.cell_translation(cell.extend(0)).xz();
+            let bounds =
+                Rect::from_corners(origin, origin + Vec2::splat(count as f32 * cell_size_m));
+            next.bounds = Some(
+                next.bounds
+                    .map_or(bounds, |previous| previous.union(bounds)),
+            );
             for x in 0..count {
                 for z in 0..count {
                     let centre = origin + Vec2::new(x as f32 + 0.5, z as f32 + 0.5) * cell_size_m;
@@ -124,28 +192,26 @@ pub(super) fn project_tank_water_onto_navigation_cells(
                     else {
                         continue;
                     };
-                    let Some(node) = navigation.find_navigation_node(index) else {
-                        continue;
-                    };
-                    let depth_cm =
-                        (geometry.water_height * 100.0).round() as i32 - node.height_centimetres;
-                    if depth_cm > 0 {
-                        cells.push((index, u16::try_from(depth_cm).unwrap_or(u16::MAX)));
-                    }
+                    next.covered.push(index);
                 }
             }
         }
-        cells.sort_unstable_by_key(|&(cell, _)| cell);
-        cells.dedup_by_key(|(cell, _)| *cell);
-        if let Some(current) = current.as_mut() {
-            if current.0 != cells {
-                affected.extend(current.0.iter().map(|&(cell, _)| (cell, 0)));
-                affected.extend(cells.iter().map(|&(cell, _)| (cell, 0)));
-                **current = TankNavigationCells(cells);
+        next.covered.sort_unstable();
+        next.covered.dedup();
+        next.wet
+            .extend(next.covered.iter().copied().filter_map(|cell| {
+                let depth = water_depth(navigation, cell, geometry.water_height);
+                (depth != 0).then_some((cell, depth))
+            }));
+        if let Some(mut current) = current {
+            if current.wet != next.wet {
+                affected.extend(current.wet.iter().map(|&(cell, _)| (cell, 0)));
+                affected.extend(next.wet.iter().map(|&(cell, _)| (cell, 0)));
             }
+            current.set_if_neq(next);
         } else {
-            affected.extend(cells.iter().map(|&(cell, _)| (cell, 0)));
-            pending_cells.insert(entity, TankNavigationCells(cells));
+            affected.extend(next.wet.iter().map(|&(cell, _)| (cell, 0)));
+            pending_cells.insert(entity, next);
         }
     }
     let active_tanks = || {
@@ -155,13 +221,13 @@ pub(super) fn project_tank_water_onto_navigation_cells(
             .filter_map(|(entity, _, _, _, cells)| cells.or_else(|| pending_cells.get(&entity)))
     };
     let changed = if rebuild {
-        water.replace_cells(active_tanks().flat_map(|cells| cells.0.iter().copied()));
+        water.replace_cells(active_tanks().flat_map(|cells| cells.wet.iter().copied()));
         true
     } else if !affected.is_empty() {
         for cells in active_tanks() {
             for (&cell, depth) in &mut affected {
-                if let Ok(index) = cells.0.binary_search_by_key(&cell, |&(key, _)| key) {
-                    *depth = cells.0[index].1;
+                if let Ok(index) = cells.wet.binary_search_by_key(&cell, |&(key, _)| key) {
+                    *depth = cells.wet[index].1;
                 }
             }
         }

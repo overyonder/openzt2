@@ -95,34 +95,55 @@ pub(super) fn order_changed_spatial_cell_members(
     });
 }
 
-pub(crate) fn detect_stuck_agents(
+#[derive(Component, Default)]
+pub(super) struct RouteStallTimer(Timer);
+
+pub(super) fn detect_stuck_agents(
+    time: Res<Time<Fixed>>,
     mut agents: Query<
         (
             &GlobalTransform,
             &Route,
             &mut Destination,
             &mut MotionProgress,
+            &mut RouteStallTimer,
         ),
         Without<DirectLocomotion>,
     >,
 ) {
-    for (transform, route, mut destination, mut progress) in &mut agents {
+    let step = time.timestep();
+    let timeout = step.saturating_mul(u32::from(STUCK_TICKS));
+    for (transform, route, mut destination, mut progress, mut stall) in &mut agents {
+        if stall.is_added() || progress.is_changed() || stall.0.duration() != timeout {
+            stall.0 = Timer::new(timeout, TimerMode::Once);
+            stall
+                .0
+                .tick(step.saturating_mul(u32::from(progress.stationary_ticks)));
+        }
         if route.current().is_none() {
-            progress.stationary_ticks = 0;
+            stall.0.reset();
+            progress
+                .map_unchanged(|progress| &mut progress.stationary_ticks)
+                .set_if_neq(0);
             continue;
         }
         let position = transform.translation();
         let moved = position.distance_squared(progress.last_position) > 0.0001;
         if moved {
-            progress.stationary_ticks = 0;
-        } else {
-            progress.stationary_ticks = progress.stationary_ticks.saturating_add(1);
-        }
-        if progress.stationary_ticks >= STUCK_TICKS {
+            stall.0.reset();
+        } else if stall.0.tick(step).is_finished() {
             destination.set_changed();
-            progress.stationary_ticks = 0;
+            stall.0.reset();
         }
-        progress.last_position = position;
+        let elapsed_ticks =
+            u16::try_from(stall.0.elapsed().as_nanos() / step.as_nanos()).unwrap_or(u16::MAX);
+        progress
+            .reborrow()
+            .map_unchanged(|progress| &mut progress.last_position)
+            .set_if_neq(position);
+        progress
+            .map_unchanged(|progress| &mut progress.stationary_ticks)
+            .set_if_neq(elapsed_ticks);
     }
 }
 

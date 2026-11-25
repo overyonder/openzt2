@@ -11,8 +11,7 @@ use openzt2_zoo_state::progression::fame_history_types::FameHistory;
 use super::{
     graph_generated_geometry::{
         record_colored_graph_geometry_element, record_graph_line_segment, record_graph_text_label,
-        record_localized_currency_graph_y_axis_labels, record_numeric_graph_y_axis_labels,
-        GeneratedGraphElementRectangle, GraphDrawings, PLOT_BOTTOM, PLOT_LEFT, PLOT_RIGHT,
+        GeneratedGraphElementRectangle, GraphDrawings, GraphTick, PLOT_BOTTOM, PLOT_RIGHT,
         PLOT_TOP,
     },
     graph_presentation_types::UiGraphPresentationPolicy,
@@ -23,6 +22,7 @@ struct GraphHistorySeriesRenderingContext<'a> {
     policy: UiGraphPresentationPolicy,
     graph_type: InformationGraphType,
     size: Vec2,
+    plot_left: f32,
     localization: LoadedLocalizationView<'a>,
 }
 
@@ -31,6 +31,7 @@ pub(super) fn render_selected_information_graph_series_from_canonical_histories(
     policy: UiGraphPresentationPolicy,
     graph_type: InformationGraphType,
     size: Vec2,
+    plot_left: f32,
     localization: LoadedLocalizationView<'_>,
     series: InformationGraphSeries,
     finance_history: &MonthlyFinanceHistory,
@@ -40,6 +41,7 @@ pub(super) fn render_selected_information_graph_series_from_canonical_histories(
         policy,
         graph_type,
         size,
+        plot_left,
         localization,
     };
     let retained_sample_limit = usize::from(policy.x_labels);
@@ -75,16 +77,11 @@ pub(super) fn render_selected_information_graph_series_from_canonical_histories(
         InformationGraphSeries::Fame => {
             let samples = fame_history.samples();
             let samples = &samples[samples.len().saturating_sub(retained_sample_limit)..];
-            render_graph_history_samples(
-                drawings,
-                graph,
-                || {
-                    samples
-                        .iter()
-                        .map(|sample| (sample.month_index, i64::from(sample.half_stars)))
-                },
-                false,
-            );
+            render_graph_history_samples(drawings, graph, || {
+                samples
+                    .iter()
+                    .map(|sample| (sample.month_index, i64::from(sample.half_stars)))
+            });
         }
         // The shipped graph selector contains this legacy spelling, but the
         // shipped game supplies no corresponding monthly series.
@@ -103,22 +100,17 @@ fn render_monthly_finance_history_series(
         .retained_month_finance_records()
         .len()
         .saturating_sub(retained_sample_limit);
-    render_graph_history_samples(
-        drawings,
-        graph,
-        || {
-            history
-                .retained_month_finance_records()
-                .skip(skip)
-                .map(|sample| {
-                    (
-                        sample.month_ordinal,
-                        monthly_finance_metric_value(sample, metric),
-                    )
-                })
-        },
-        !matches!(metric, FinanceMetric::TotalUsers),
-    );
+    render_graph_history_samples(drawings, graph, || {
+        history
+            .retained_month_finance_records()
+            .skip(skip)
+            .map(|sample| {
+                (
+                    sample.month_ordinal,
+                    monthly_finance_metric_value(sample, metric),
+                )
+            })
+    });
 }
 
 fn monthly_finance_metric_value(sample: &MonthlyFinance, metric: FinanceMetric) -> i64 {
@@ -139,7 +131,6 @@ fn render_graph_history_samples<I>(
     drawings: &mut GraphDrawings,
     graph: GraphHistorySeriesRenderingContext<'_>,
     samples: impl Fn() -> I,
-    values_are_currency: bool,
 ) where
     I: ExactSizeIterator<Item = (u32, i64)>,
 {
@@ -152,7 +143,7 @@ fn render_graph_history_samples<I>(
     });
     let y_axis =
         GraphYAxisRange::from_policy_and_sample_range(graph.policy, minimum as f64, maximum as f64);
-    let plot_width = graph.size.x - PLOT_LEFT - PLOT_RIGHT;
+    let plot_width = graph.size.x - graph.plot_left - PLOT_RIGHT;
     let plot_height = graph.size.y - PLOT_TOP - PLOT_BOTTOM;
     let x_step = if count <= 1 {
         0.0
@@ -164,7 +155,7 @@ fn render_graph_history_samples<I>(
     let mut previous = None;
 
     for (index, (month, value)) in samples().enumerate() {
-        let x = PLOT_LEFT
+        let x = graph.plot_left
             + if count <= 1 {
                 plot_width * 0.5
             } else {
@@ -220,26 +211,13 @@ fn render_graph_history_samples<I>(
         }
     }
 
-    if drawings.labels.is_none() {
-        return;
-    }
-    if values_are_currency {
-        record_localized_currency_graph_y_axis_labels(
-            drawings,
-            graph.policy.y_labels,
-            y_axis.minimum,
-            y_axis.maximum,
-            plot_height,
-            graph.localization,
-        );
-    } else {
-        record_numeric_graph_y_axis_labels(
-            drawings,
-            graph.policy.y_labels,
-            y_axis.minimum,
-            y_axis.maximum,
-            plot_height,
-        );
+    let intervals = f64::from(graph.policy.y_labels - 1);
+    for index in 0..graph.policy.y_labels {
+        let ratio = f64::from(index) / intervals;
+        drawings.ticks.push(GraphTick {
+            value: y_axis.minimum + (y_axis.maximum - y_axis.minimum) * ratio,
+            bottom: PLOT_BOTTOM + ratio as f32 * plot_height - 6.0,
+        });
     }
 }
 

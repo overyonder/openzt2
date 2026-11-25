@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use bevy::prelude::*;
 
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
@@ -9,91 +11,136 @@ use openzt2_zoo_state::animal_lifecycle::types::AnimalWasteCycle;
 
 use super::maintenance_types::{AnimalHabitatWaste, AnimalWasteProductionSchedule};
 
-pub(super) fn synchronize_animal_waste_production_deadlines(
+// The serialized deadline allows a loaded cycle to resume. Runtime timing
+// belongs to this component, including retries after an allocation failure.
+#[derive(Component)]
+pub(super) struct AnimalWasteTimer {
+    timer: Timer,
+    sampled_at_tick: u64,
+}
+
+fn duration_for_ticks(step: Duration, ticks: u64) -> Duration {
+    let nanos = step.as_nanos().saturating_mul(u128::from(ticks));
+    u64::try_from(nanos / 1_000_000_000).map_or(Duration::MAX, |seconds| {
+        Duration::new(seconds, (nanos % 1_000_000_000) as u32)
+    })
+}
+
+#[allow(clippy::type_complexity)]
+pub(super) fn bind_animal_waste_timers(
     mut commands: Commands,
+    time: Res<Time<Fixed>>,
     zoo_clock: Single<&ZooClock>,
-    changed_cycles: Query<
-        (
-            Entity,
-            &AnimalWasteCycle,
-            Has<AnimalWasteProductionSchedule>,
-        ),
-        (With<Animal>, Or<(Added<Animal>, Changed<AnimalWasteCycle>)>),
-    >,
-    mut removed_cycles: RemovedComponents<AnimalWasteCycle>,
-    animals_without_cycle: Query<
+    mut removed: RemovedComponents<AnimalWasteCycle>,
+    without_cycle: Query<
         (),
         (
-            With<AnimalWasteProductionSchedule>,
+            Or<(With<AnimalWasteProductionSchedule>, With<AnimalWasteTimer>)>,
             Without<AnimalWasteCycle>,
         ),
     >,
+    changed: Query<Entity, (With<Animal>, Or<(Added<Animal>, Changed<AnimalWasteCycle>)>)>,
+    waiting: Query<
+        Entity,
+        (
+            With<Animal>,
+            With<AnimalWasteProductionSchedule>,
+            Without<AnimalWasteTimer>,
+        ),
+    >,
+    cycles: Query<
+        (
+            &AnimalWasteCycle,
+            Option<&AnimalWasteProductionSchedule>,
+            Has<AnimalWasteTimer>,
+        ),
+        With<Animal>,
+    >,
 ) {
-    for animal in removed_cycles
+    for entity in removed
         .read()
-        .filter(|&entity| animals_without_cycle.contains(entity))
+        .filter(|&entity| without_cycle.contains(entity))
     {
         commands
-            .entity(animal)
-            .remove::<AnimalWasteProductionSchedule>();
+            .entity(entity)
+            .remove::<(AnimalWasteTimer, AnimalWasteProductionSchedule)>();
     }
-    for (animal, cycle, scheduled) in &changed_cycles {
+    let mut visited = bevy::ecs::entity::EntityHashSet::default();
+    for entity in changed
+        .iter()
+        .chain(waiting.iter())
+        .filter(|entity| visited.insert(*entity))
+    {
+        let Ok((cycle, saved, active)) = cycles.get(entity) else {
+            continue;
+        };
         if cycle.interval_ticks == 0 || cycle.units == 0 {
-            if scheduled {
+            if active || saved.is_some() {
                 commands
-                    .entity(animal)
-                    .remove::<AnimalWasteProductionSchedule>();
+                    .entity(entity)
+                    .remove::<(AnimalWasteTimer, AnimalWasteProductionSchedule)>();
             }
             continue;
         }
-        if scheduled {
+        if active {
             continue;
         }
-        let Some(next_production_tick) =
-            zoo_clock.tick.checked_add(u64::from(cycle.interval_ticks))
+        let Some(deadline) = saved
+            .map(|saved| saved.next_production_tick)
+            .or_else(|| zoo_clock.tick.checked_add(u64::from(cycle.interval_ticks)))
         else {
             continue;
         };
+        let remaining = deadline.saturating_sub(zoo_clock.tick);
         commands
-            .entity(animal)
-            .insert(AnimalWasteProductionSchedule {
-                next_production_tick,
+            .entity(entity)
+            .insert(AnimalWasteTimer {
+                timer: Timer::new(
+                    duration_for_ticks(time.timestep(), remaining),
+                    TimerMode::Once,
+                ),
+                sampled_at_tick: zoo_clock.tick,
+            })
+            .insert_if_new(AnimalWasteProductionSchedule {
+                next_production_tick: deadline,
             });
     }
 }
 
+#[allow(clippy::type_complexity)]
 pub(super) fn produce_due_animal_habitat_waste(
     mut commands: Commands,
+    time: Res<Time<Fixed>>,
     zoo_clock: Single<&ZooClock>,
     mut persistent_identifiers: Query<&mut PersistentIdAllocator>,
-    mut animals_with_waste_production_schedule: Query<
+    mut animals: Query<
         (
             &AnimalWasteCycle,
             &GlobalTransform,
             &WorldMember,
+            &mut AnimalWasteTimer,
             &mut AnimalWasteProductionSchedule,
         ),
         With<Animal>,
     >,
 ) {
-    for (animal_waste_cycle, animal_global_transform, world_member, mut waste_production) in
-        &mut animals_with_waste_production_schedule
-    {
-        if zoo_clock.tick < waste_production.next_production_tick {
+    let step = time.timestep();
+    for (cycle, transform, member, mut production, mut saved) in &mut animals {
+        let elapsed = zoo_clock.tick.saturating_sub(production.sampled_at_tick);
+        production.sampled_at_tick = zoo_clock.tick;
+        if !production
+            .timer
+            .tick(duration_for_ticks(step, elapsed))
+            .is_finished()
+        {
             continue;
         }
-        let waste_production_interval_ticks = u64::from(animal_waste_cycle.interval_ticks);
-        let produced_waste_units = animal_waste_cycle.units;
-        if waste_production_interval_ticks == 0 || produced_waste_units == 0 {
-            continue;
-        }
-        let Some(next_waste_production_tick) =
-            zoo_clock.tick.checked_add(waste_production_interval_ticks)
-        else {
+        let interval = u64::from(cycle.interval_ticks);
+        let Some(deadline) = zoo_clock.tick.checked_add(interval) else {
             continue;
         };
-        let Some(persistent_identifier) = persistent_identifiers
-            .get_mut(world_member.root)
+        let Some(identifier) = persistent_identifiers
+            .get_mut(member.root)
             .ok()
             .and_then(|mut allocator| allocator.allocate().ok())
         else {
@@ -101,13 +148,17 @@ pub(super) fn produce_due_animal_habitat_waste(
         };
         commands.spawn((
             AnimalHabitatWaste {
-                uncontained_waste_units: produced_waste_units,
+                uncontained_waste_units: cycle.units,
             },
-            DefinitionId(animal_waste_cycle.definition),
-            Transform::from_translation(animal_global_transform.translation()),
-            *world_member,
-            persistent_identifier,
+            DefinitionId(cycle.definition),
+            Transform::from_translation(transform.translation()),
+            *member,
+            identifier,
         ));
-        waste_production.next_production_tick = next_waste_production_tick;
+        production
+            .timer
+            .set_duration(duration_for_ticks(step, interval));
+        production.timer.reset();
+        saved.next_production_tick = deadline;
     }
 }

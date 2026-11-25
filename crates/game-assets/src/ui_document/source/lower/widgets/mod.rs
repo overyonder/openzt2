@@ -1,5 +1,6 @@
 //! Blue Fang widget lowering into canonical UI widget records.
 
+use crate::ui_document::source::resolver::authored_scenario_objective_collection_source_normalization::OBJECTIVE_GROUP_TEMPLATE_FIELD;
 use crate::source_document::ui::model::{SourceUiDragAxis, SourceUiNode, SourceUiWidgetData};
 use crate::ui_document::source::lower::authored_ui_asset_dependency_resolution::{
     resolved_asset_dependency, texture_dependency,
@@ -102,6 +103,11 @@ pub(super) fn lower_source_ui_widget_to_canonical_widget_record(
             grid: grid_record(&list.grid),
             source: list_source(input.role, node.name.as_deref(), list),
             row_document: list_row_document(input.role, node.name.as_deref(), list),
+            group_document: node.fields.iter()
+                .find(|field| field.name.as_deref() == Some(OBJECTIVE_GROUP_TEMPLATE_FIELD))
+                .and_then(|field| field.format.as_deref())
+                .map(|template_name| AssetId::from_virtual_path(&list_row_document_path(template_name)))
+                .unwrap_or_default(),
             opener_node: AssetId::default(),
             drop_list_display_node: AssetId::default(),
             count_component: list.count_component.as_ref().map(|value| UiDocumentRole::node_id(input.role, value)).unwrap_or_default(),
@@ -111,6 +117,11 @@ pub(super) fn lower_source_ui_widget_to_canonical_widget_record(
             grid: grid_record(&list.grid),
             source: list_source(input.role, node.name.as_deref(), list),
             row_document: list_row_document(input.role, node.name.as_deref(), list),
+            group_document: node.fields.iter()
+                .find(|field| field.name.as_deref() == Some(OBJECTIVE_GROUP_TEMPLATE_FIELD))
+                .and_then(|field| field.format.as_deref())
+                .map(|template_name| AssetId::from_virtual_path(&list_row_document_path(template_name)))
+                .unwrap_or_default(),
             opener_node: opener.as_ref().map(|value| UiDocumentRole::node_id(input.role, value)).unwrap_or_default(),
             drop_list_display_node: drop_list.as_ref().map(|value| UiDocumentRole::node_id(input.role, value)).unwrap_or_default(),
             count_component: list.count_component.as_ref().map(|value| UiDocumentRole::node_id(input.role, value)).unwrap_or_default(),
@@ -290,6 +301,7 @@ pub(super) fn lower_source_ui_widget_to_canonical_widget_record(
                     grid: grid_record(grid),
                     source: live_collection_source,
                     row_document: AssetId::from_virtual_path(native_row_document),
+                    group_document: AssetId::default(),
                     opener_node: AssetId::default(),
                     drop_list_display_node: AssetId::default(),
                     count_component: AssetId::default(),
@@ -300,6 +312,7 @@ pub(super) fn lower_source_ui_widget_to_canonical_widget_record(
                     grid: grid_record(grid),
                     source: UiWidgetLiveCollectionSource::DisplayResolutions,
                     row_document: AssetId::from_virtual_path(DISPLAY_RESOLUTION_ROW_DOCUMENT),
+                    group_document: AssetId::default(),
                     opener_node: AssetId::default(),
                     drop_list_display_node: AssetId::default(),
                     count_component: AssetId::default(),
@@ -310,6 +323,7 @@ pub(super) fn lower_source_ui_widget_to_canonical_widget_record(
                     grid: grid_record(grid),
                     source: UiWidgetLiveCollectionSource::ProfileIndex,
                     row_document: AssetId::from_virtual_path(PROFILE_ROW_DOCUMENT),
+                    group_document: AssetId::default(),
                     opener_node: AssetId::default(),
                     drop_list_display_node: AssetId::default(),
                     count_component: AssetId::default(),
@@ -410,6 +424,11 @@ pub(super) fn lower_source_ui_widget_to_canonical_widget_record(
             output
                 .dependencies
                 .insert(AssetId::from_virtual_path(path).0);
+        }
+    }
+    if let UiWidgetRecord::List { group_document, .. } = &widget {
+        if *group_document != AssetId::default() {
+            output.dependencies.insert(group_document.0);
         }
     }
     match &widget {

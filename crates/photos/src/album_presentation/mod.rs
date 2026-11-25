@@ -1,7 +1,6 @@
 //! Presentation of photo-album availability, images, selection, and text.
 
 use openzt2_interface_state::photos::photo_album_types::PhotoAlbum;
-use openzt2_interface_state::photos::photo_album_types::PhotoAlbumOrder;
 use openzt2_interface_state::photos::photo_album_types::{AlbumMember, AlbumPhotos};
 use openzt2_interface_state::photos::photo_capture_types::Photo;
 
@@ -28,17 +27,15 @@ use openzt2_interface_state::ui::authored_ui_selection_state::UiSelected;
 use openzt2_ui::authored_ui_image_content_binding::UiImageBinding;
 use openzt2_ui::authored_ui_text_content_binding::UiTextBinding;
 use openzt2_world_state::world_spawn::{
-    world_load_completion_marker::WorldLoadCompleted,
-    world_membership_types::{WorldMember, WorldRoot},
+    world_load_completion_marker::WorldLoadCompleted, world_membership_types::WorldRoot,
 };
 
-use super::album_operations::{
-    find_photo_camera_roll_album, ordered_photo_album_entities, photo_rank_for_album_display_slot,
-};
+use super::album_operations::{ordered_photo_album_entities, photo_rank_for_album_display_slot};
 use super::photo_album_types::{
     ActivePhotoAlbum, EnlargedAlbumPhoto, INITIAL_PHOTO_ALBUM_SPREADS, PHOTO_CAMERA_ROLL_CAPACITY,
     PhotoAlbumCapacityPages, PhotoAlbumChoiceRow, PhotoAlbumPage, PhotoCameraRoll,
-    PhotoCameraRollRow, PhotoMove, PhotoMoveTarget, SelectedAlbumPhoto,
+    PhotoCameraRollRow, PhotoMoveTarget, SelectedAlbumPhoto, WorldActivePhotoAlbum,
+    WorldPhotoCameraRoll,
 };
 use openzt2_interface_state::ui::authored_ui_action_projection_components::UiPhotoActions;
 use openzt2_interface_state::ui::authored_ui_action_projection_components::UiPresentationActions;
@@ -66,7 +63,6 @@ pub(super) fn present_photo_camera_roll_and_album_choices_in_authored_rows(
         (
             Entity,
             Has<PhotoCameraRoll>,
-            Option<Ref<SelectedAlbumPhoto>>,
             Option<Ref<Name>>,
             Has<ActivePhotoAlbum>,
         ),
@@ -74,12 +70,15 @@ pub(super) fn present_photo_camera_roll_and_album_choices_in_authored_rows(
     >,
     photos: Query<Ref<Photo>>,
     members: Query<Ref<AlbumPhotos>>,
+    storage: Query<
+        (Option<&WorldPhotoCameraRoll>, Ref<SelectedAlbumPhoto>),
+        (With<WorldRoot>, With<WorldLoadCompleted>),
+    >,
     new_albums: Query<(), Added<PhotoAlbum>>,
     active_albums: Query<(), Added<ActivePhotoAlbum>>,
     mut removed: (
         RemovedComponents<PhotoAlbum>,
         RemovedComponents<ActivePhotoAlbum>,
-        RemovedComponents<SelectedAlbumPhoto>,
         RemovedComponents<Name>,
         RemovedComponents<AlbumPhotos>,
     ),
@@ -92,32 +91,30 @@ pub(super) fn present_photo_camera_roll_and_album_choices_in_authored_rows(
 ) {
     let membership_changed = !new_albums.is_empty() || !removed.0.is_empty();
     let active_changed = !active_albums.is_empty() || !removed.1.is_empty();
-    let selection_removed = !removed.2.is_empty();
-    let name_removed = removed.3.read().collect::<std::collections::HashSet<_>>();
+    let name_removed = removed.2.read().collect::<std::collections::HashSet<_>>();
     removed.0.clear();
     removed.1.clear();
     removed.2.clear();
 
-    let roll = albums.iter().find(|(_, is_roll, ..)| *is_roll);
-    let roll_members = roll
+    let storage = storage.single().ok();
+    let roll = storage
         .as_ref()
-        .and_then(|(entity, ..)| members.get(*entity).ok());
+        .and_then(|(roll, _)| roll.and_then(|roll| roll.iter().next()));
+    let roll_members = roll.and_then(|entity| members.get(entity).ok());
     let roll_order = roll_members
         .as_ref()
         .map_or(&[][..], |members| members.collection().as_slice());
-    let roll_selection = roll
+    let roll_selection = storage
         .as_ref()
-        .and_then(|(_, _, selection, ..)| selection.as_ref());
-    let roll_members_removed = removed
-        .4
-        .read()
-        .any(|entity| roll.as_ref().is_some_and(|(roll, ..)| *roll == entity));
-    removed.4.clear();
+        .and_then(|(_, selection)| selection.in_album(roll?));
+    let roll_members_removed = removed.3.read().any(|entity| Some(entity) == roll);
+    removed.3.clear();
     let roll_changed = membership_changed
-        || selection_removed
         || roll_members_removed
         || roll_members.as_ref().is_some_and(Ref::is_changed)
-        || roll_selection.is_some_and(Ref::is_changed);
+        || storage
+            .as_ref()
+            .is_some_and(|(_, selection)| selection.is_changed());
     let mut choices = None;
     let exposure_image_node = openzt2_game_data::AssetId::from_key("ui/role/fragment/node/button");
 
@@ -167,7 +164,7 @@ pub(super) fn present_photo_camera_roll_and_album_choices_in_authored_rows(
                 let Ok(photo) = photos.get(subject) else {
                     continue;
                 };
-                let selected = roll_selection.is_some_and(|selection| selection.0 == subject);
+                let selected = roll_selection == Some(subject);
                 if let Some(mut row) = camera_row {
                     refresh |= row.set_if_neq(PhotoCameraRollRow(subject));
                 } else {
@@ -186,7 +183,7 @@ pub(super) fn present_photo_camera_roll_and_album_choices_in_authored_rows(
                     );
                 }
             } else {
-                let Ok((_, _, _, name, active)) = albums.get(subject) else {
+                let Ok((_, _, name, active)) = albums.get(subject) else {
                     continue;
                 };
                 if let Some(mut row) = album_row {
@@ -325,76 +322,74 @@ pub(super) struct AlbumControlAvailability {
 
 pub(super) fn update_album_control_availability_from_album_changes(
     mut worlds: Query<
-        (Entity, &mut AlbumControlAvailability),
+        (
+            Entity,
+            Option<Ref<WorldActivePhotoAlbum>>,
+            Option<Ref<WorldPhotoCameraRoll>>,
+            Ref<SelectedAlbumPhoto>,
+            &mut AlbumControlAvailability,
+        ),
         (With<WorldRoot>, With<WorldLoadCompleted>),
     >,
     albums: Query<
         (
-            &WorldMember,
-            Option<Ref<ActivePhotoAlbum>>,
-            Option<Ref<PhotoCameraRoll>>,
             Option<Ref<PhotoAlbumPage>>,
             Option<Ref<PhotoAlbumCapacityPages>>,
-            Option<Ref<SelectedAlbumPhoto>>,
             Option<Ref<AlbumPhotos>>,
         ),
-        (
-            With<PhotoAlbum>,
-            Or<(With<ActivePhotoAlbum>, With<PhotoCameraRoll>)>,
-        ),
+        With<PhotoAlbum>,
     >,
     mut removed: (
-        RemovedComponents<ActivePhotoAlbum>,
-        RemovedComponents<PhotoCameraRoll>,
+        RemovedComponents<WorldActivePhotoAlbum>,
+        RemovedComponents<WorldPhotoCameraRoll>,
         RemovedComponents<PhotoAlbumPage>,
         RemovedComponents<PhotoAlbumCapacityPages>,
-        RemovedComponents<SelectedAlbumPhoto>,
         RemovedComponents<AlbumPhotos>,
     ),
 ) {
-    let inputs_removed = !removed.0.is_empty()
-        || !removed.1.is_empty()
-        || !removed.2.is_empty()
-        || !removed.3.is_empty()
-        || !removed.4.is_empty()
-        || !removed.5.is_empty();
-    removed.0.clear();
-    removed.1.clear();
-    removed.2.clear();
-    removed.3.clear();
-    removed.4.clear();
-    removed.5.clear();
-
-    for (world, mut current) in &mut worlds {
+    let removed_roots: bevy::ecs::entity::EntityHashSet =
+        removed.0.read().chain(removed.1.read()).collect();
+    let removed_facts: bevy::ecs::entity::EntityHashSet = removed
+        .2
+        .read()
+        .chain(removed.3.read())
+        .chain(removed.4.read())
+        .collect();
+    for (root, active, roll, selection, mut current) in &mut worlds {
+        let mut changed = removed_roots.contains(&root)
+            || current.is_added()
+            || selection.is_changed()
+            || active.as_ref().is_some_and(Ref::is_changed)
+            || roll.as_ref().is_some_and(Ref::is_changed);
         let mut next = AlbumControlAvailability::default();
-        let mut changed = inputs_removed || current.is_added();
-        for (member, active, roll, page, capacity, selection, photos) in &albums {
-            if member.root != world {
+        for (is_roll, album) in [
+            (false, active.and_then(|active| active.iter().next())),
+            (true, roll.and_then(|roll| roll.iter().next())),
+        ] {
+            let Some(album) = album else { continue };
+            let Ok((page, capacity, photos)) = albums.get(album) else {
                 continue;
-            }
-            changed |= active.as_ref().is_some_and(Ref::is_changed)
-                || roll.as_ref().is_some_and(Ref::is_changed)
+            };
+            changed |= removed_facts.contains(&album)
                 || page.as_ref().is_some_and(Ref::is_changed)
                 || capacity.as_ref().is_some_and(Ref::is_changed)
-                || selection.as_ref().is_some_and(Ref::is_changed)
                 || photos.as_ref().is_some_and(Ref::is_changed);
             let has_photos = photos.as_ref().is_some_and(|photos| !photos.is_empty());
-            let has_selection = selection.is_some_and(|selection| {
+            let has_selection = selection.in_album(album).is_some_and(|photo| {
                 photos
                     .as_ref()
-                    .is_some_and(|photos| photos.collection().contains(&selection.0))
+                    .is_some_and(|photos| photos.collection().contains(&photo))
             });
-            if active.is_some() {
+            if is_roll {
+                next.roll_has_photos = has_photos;
+                next.roll_selected = has_selection;
+            } else {
                 let page = page.map_or(0, |page| page.0);
                 let capacity = capacity.map_or(INITIAL_PHOTO_ALBUM_SPREADS, |capacity| capacity.0);
                 next.active_has_photos = has_photos;
                 next.active_selected = has_selection;
                 next.previous_page = page != 0;
                 next.next_page = page.saturating_add(1) < capacity;
-            }
-            if roll.is_some() {
-                next.roll_has_photos = has_photos;
-                next.roll_selected = has_selection;
             }
         }
         if changed {
@@ -533,34 +528,86 @@ pub(super) fn present_active_photo_album_and_camera_roll_image_slots(
     documents: Res<Assets<UiDocumentAsset>>,
     action_nodes: Query<(
         Entity,
-        Option<&UiPhotoActions>,
-        &UiDocumentOwner,
+        Option<Ref<UiPhotoActions>>,
+        Ref<UiDocumentOwner>,
         &mut ImageNode,
-        Option<&UiImageBinding>,
+        Option<Ref<UiImageBinding>>,
         Option<&mut Visibility>,
         Option<&mut UiSelected>,
     )>,
-    roots: Query<&UiDocumentRoot>,
-    albums: Query<(
-        Entity,
-        &PhotoAlbum,
-        Option<&WorldMember>,
-        Option<&PhotoAlbumPage>,
-        Option<&SelectedAlbumPhoto>,
-        Option<&PhotoMove>,
-        Option<&PhotoCameraRoll>,
-    )>,
-    active_albums: Query<(Entity, Ref<PhotoAlbumPage>), (With<PhotoAlbum>, With<ActivePhotoAlbum>)>,
-    enlarged_albums: Query<&EnlargedAlbumPhoto, With<PhotoAlbum>>,
-    move_targets: Query<&PhotoMoveTarget, With<PhotoAlbum>>,
-    photos: Query<(Entity, &Photo, &AlbumMember, Option<&PhotoAlbumOrder>)>,
-    members: Query<&AlbumPhotos>,
+    roots: Query<Ref<UiDocumentRoot>>,
+    storage: Query<
+        (
+            Option<Ref<WorldActivePhotoAlbum>>,
+            Option<Ref<WorldPhotoCameraRoll>>,
+            Ref<SelectedAlbumPhoto>,
+        ),
+        (With<WorldRoot>, With<WorldLoadCompleted>),
+    >,
+    pages: Query<Ref<PhotoAlbumPage>>,
+    enlarged_albums: Query<Ref<EnlargedAlbumPhoto>>,
+    move_targets: Query<Ref<PhotoMoveTarget>>,
+    photos: Query<&Photo>,
+    members: Query<Ref<AlbumPhotos>>,
+    updated_photos: Query<&AlbumMember, Changed<Photo>>,
+    mut removed: (
+        RemovedComponents<WorldActivePhotoAlbum>,
+        RemovedComponents<WorldPhotoCameraRoll>,
+        RemovedComponents<AlbumPhotos>,
+        RemovedComponents<PhotoAlbumPage>,
+        RemovedComponents<EnlargedAlbumPhoto>,
+        RemovedComponents<PhotoMoveTarget>,
+        RemovedComponents<WorldLoadCompleted>,
+        RemovedComponents<UiPhotoActions>,
+        RemovedComponents<UiImageBinding>,
+    ),
 ) {
-    let active = active_albums
-        .iter()
-        .next()
-        .map(|(entity, _)| entity)
-        .or_else(|| albums.iter().next().map(|row| row.0));
+    let storage = storage.single().ok();
+    let (active, roll, selection) =
+        storage
+            .as_ref()
+            .map_or((None, None, None), |(active, roll, selection)| {
+                (
+                    active.as_ref().and_then(|album| album.iter().next()),
+                    roll.as_ref().and_then(|album| album.iter().next()),
+                    Some(&**selection),
+                )
+            });
+    let page = active.and_then(|album| pages.get(album).ok());
+    let active_members = active.and_then(|album| members.get(album).ok());
+    let roll_members = roll.and_then(|album| members.get(album).ok());
+    let enlarged = active.and_then(|album| enlarged_albums.get(album).ok());
+    let hover = active.and_then(|album| move_targets.get(album).ok());
+    let mut storage_changed = storage.as_ref().is_some_and(|(active, roll, selection)| {
+        active.as_ref().is_some_and(Ref::is_changed)
+            || roll.as_ref().is_some_and(Ref::is_changed)
+            || selection.is_changed()
+    }) || !removed.0.is_empty()
+        || !removed.1.is_empty()
+        || !removed.6.is_empty();
+    removed.0.clear();
+    removed.1.clear();
+    removed.6.clear();
+    for album in removed
+        .2
+        .read()
+        .chain(removed.3.read())
+        .chain(removed.4.read())
+        .chain(removed.5.read())
+    {
+        storage_changed |= Some(album) == active || Some(album) == roll;
+    }
+    let changed = storage_changed
+        || page.as_ref().is_some_and(Ref::is_changed)
+        || active_members.as_ref().is_some_and(Ref::is_changed)
+        || roll_members.as_ref().is_some_and(Ref::is_changed)
+        || enlarged.as_ref().is_some_and(Ref::is_changed)
+        || hover.as_ref().is_some_and(Ref::is_changed)
+        || updated_photos
+            .iter()
+            .any(|member| Some(member.0) == active || Some(member.0) == roll);
+    let removed_bindings: bevy::ecs::entity::EntityHashSet =
+        removed.7.read().chain(removed.8.read()).collect();
 
     for (node, range, owner, mut image_node, image_binding, visibility, selected_state) in
         action_nodes
@@ -568,11 +615,22 @@ pub(super) fn present_active_photo_album_and_camera_roll_image_slots(
         let Ok(root) = roots.get(owner.0) else {
             continue;
         };
+        if !changed
+            && !documents.is_changed()
+            && !owner.is_changed()
+            && !root.is_changed()
+            && !range.as_ref().is_some_and(Ref::is_changed)
+            && !image_binding.as_ref().is_some_and(Ref::is_changed)
+            && !removed_bindings.contains(&node)
+        {
+            continue;
+        }
         let Some(document) = documents.get(&root.document) else {
             continue;
         };
         let actions = || {
             range
+                .as_deref()
                 .into_iter()
                 .flat_map(|actions| actions.authored_action_records(document))
         };
@@ -583,9 +641,7 @@ pub(super) fn present_active_photo_album_and_camera_roll_image_slots(
             _ => None,
         });
         if let Some(index) = move_target {
-            let hovered = active
-                .and_then(|album| move_targets.get(album).ok())
-                .is_some_and(|target| target.0 == index);
+            let hovered = hover.as_ref().is_some_and(|target| target.0 == index);
             if let Some(mut state) = selected_state {
                 if state.0 != hovered {
                     state.0 = hovered;
@@ -595,18 +651,14 @@ pub(super) fn present_active_photo_album_and_camera_roll_image_slots(
             }
             continue;
         }
-        let enlarged = actions()
+        let enlarged_photo = actions()
             .any(|record| {
                 matches!(
                     &record.action,
                     UiPhotoAction::StopEnlargingPhotoInActiveAlbum
                 )
             })
-            .then(|| {
-                active
-                    .and_then(|album| enlarged_albums.get(album).ok())
-                    .map(|photo| photo.0)
-            })
+            .then(|| enlarged.as_ref().map(|photo| photo.0))
             .flatten();
         let slot = actions().find_map(|record| match &record.action {
             UiPhotoAction::SelectPhotoInActiveAlbumSlot {
@@ -617,7 +669,7 @@ pub(super) fn present_active_photo_album_and_camera_roll_image_slots(
             } => Some((active, *index)),
             UiPhotoAction::SelectPhotoInCameraRollSlot {
                 camera_roll_slot_index: index,
-            } => Some((find_photo_camera_roll_album(&albums), *index)),
+            } => Some((roll, *index)),
             _ => None,
         });
         let album_picture = image_binding.and_then(|binding| match &binding.0 {
@@ -626,13 +678,16 @@ pub(super) fn present_active_photo_album_and_camera_roll_image_slots(
             }
             _ => None,
         });
-        let photo = enlarged.or_else(|| {
+        let photo = enlarged_photo.or_else(|| {
             let (album, index) = album_picture.or(slot)?;
-            let album = album?;
-            let album_state = albums.get(album).ok()?;
-            let rank =
-                photo_rank_for_album_display_slot(index, album_state.6.is_some(), album_state.3)?;
-            members.get(album).ok()?.collection().get(rank).copied()
+            let is_roll = album.is_some() && album == roll;
+            let rank = photo_rank_for_album_display_slot(index, is_roll, page.as_deref())?;
+            let members = if is_roll {
+                roll_members.as_ref()
+            } else {
+                active_members.as_ref()
+            }?;
+            members.collection().get(rank).copied()
         });
         if slot.is_none()
             && album_picture.is_none()
@@ -646,7 +701,7 @@ pub(super) fn present_active_photo_album_and_camera_roll_image_slots(
             continue;
         }
         let binds_photo_image = album_picture.is_some()
-            || enlarged.is_some()
+            || enlarged_photo.is_some()
             || actions().any(|record| {
                 matches!(
                     &record.action,
@@ -656,7 +711,7 @@ pub(super) fn present_active_photo_album_and_camera_roll_image_slots(
         if binds_photo_image {
             let next = photo
                 .and_then(|photo| photos.get(photo).ok())
-                .map(|row| row.1.image.clone())
+                .map(|photo| photo.image.clone())
                 .unwrap_or_default();
             if image_node.image != next {
                 image_node.image = next;
@@ -674,10 +729,8 @@ pub(super) fn present_active_photo_album_and_camera_roll_image_slots(
         }
         let selected = slot
             .and_then(|(album, _)| album)
-            .and_then(|album| albums.get(album).ok())
-            .and_then(|row| row.4)
             .zip(photo)
-            .is_some_and(|(selected, photo)| selected.0 == photo);
+            .is_some_and(|value| selection.is_some_and(|current| current.0 == Some(value)));
         if let Some(mut state) = selected_state {
             if state.0 != selected {
                 state.0 = selected;
@@ -708,17 +761,40 @@ fn is_ui_node_in_authored_subtree(
 /// Updates the active album's photo count.
 pub(super) fn present_active_photo_album_photo_count(
     documents: Res<Assets<UiDocumentAsset>>,
-    roots: Query<&UiDocumentRoot>,
-    albums: Query<Option<&AlbumPhotos>, (With<PhotoAlbum>, With<ActivePhotoAlbum>)>,
-    mut nodes: Query<(&UiPhotoActions, &UiDocumentOwner, &mut Text)>,
+    roots: Query<Ref<UiDocumentRoot>>,
+    storage: Query<Ref<WorldActivePhotoAlbum>, (With<WorldRoot>, With<WorldLoadCompleted>)>,
+    albums: Query<Ref<AlbumPhotos>>,
+    mut removed: (
+        RemovedComponents<WorldActivePhotoAlbum>,
+        RemovedComponents<AlbumPhotos>,
+        RemovedComponents<WorldLoadCompleted>,
+    ),
+    mut nodes: Query<(Ref<UiPhotoActions>, Ref<UiDocumentOwner>, &mut Text)>,
 ) {
-    let Some(count) = albums.iter().next() else {
-        return;
-    };
+    let active = storage.single().ok();
+    let album = active.as_ref().and_then(|active| active.iter().next());
+    let photos = album.and_then(|album| albums.get(album).ok());
+    let changed = active.as_ref().is_some_and(Ref::is_changed)
+        || photos.as_ref().is_some_and(Ref::is_changed)
+        || !removed.0.is_empty()
+        || !removed.2.is_empty()
+        || removed.1.read().any(|entity| Some(entity) == album);
+    removed.0.clear();
+    removed.1.clear();
+    removed.2.clear();
+    let mut formatted = None;
     for (range, owner, mut text) in &mut nodes {
         let Ok(root) = roots.get(owner.0) else {
             continue;
         };
+        if !changed
+            && !documents.is_changed()
+            && !root.is_changed()
+            && !owner.is_changed()
+            && !range.is_changed()
+        {
+            continue;
+        }
         let Some(document) = documents.get(&root.document) else {
             continue;
         };
@@ -728,60 +804,150 @@ pub(super) fn present_active_photo_album_photo_count(
                 UiPhotoAction::RefreshPresentedActivePhotoAlbumPhotoCount
             )
         }) {
-            let next = count.map_or(0, RelationshipTarget::len).to_string();
-            if text.0 != next {
-                text.0 = next;
+            let next = formatted.get_or_insert_with(|| {
+                photos.as_ref().map_or(0, |photos| photos.len()).to_string()
+            });
+            if text.0 != *next {
+                text.0.clone_from(next);
             }
         }
     }
 }
 
-/// Updates page numbers and camera-roll occupancy.
+/// Updates page numbers and camera-roll occupancy from their authored bindings.
 pub(super) fn present_photo_album_and_photo_mode_camera_roll_text(
-    active_albums: Query<(&PhotoAlbumPage, &Name), (With<PhotoAlbum>, With<ActivePhotoAlbum>)>,
-    camera_rolls: Query<Entity, (With<PhotoAlbum>, With<PhotoCameraRoll>)>,
-    members: Query<&AlbumPhotos>,
-    mut nodes: Query<(&UiTextBinding, &mut Text)>,
+    storage: Query<
+        (
+            Option<Ref<WorldActivePhotoAlbum>>,
+            Option<Ref<WorldPhotoCameraRoll>>,
+        ),
+        (With<WorldRoot>, With<WorldLoadCompleted>),
+    >,
+    albums: Query<(Option<Ref<PhotoAlbumPage>>, Option<Ref<Name>>)>,
+    members: Query<Ref<AlbumPhotos>>,
+    localizations: Res<Assets<LocalizationAsset>>,
+    localization: Res<LocalizationPrecedenceIndex>,
+    mut removed: (
+        RemovedComponents<WorldActivePhotoAlbum>,
+        RemovedComponents<WorldPhotoCameraRoll>,
+        RemovedComponents<PhotoAlbumPage>,
+        RemovedComponents<Name>,
+        RemovedComponents<AlbumPhotos>,
+        RemovedComponents<WorldLoadCompleted>,
+    ),
+    mut nodes: Query<(Ref<UiTextBinding>, &mut Text)>,
 ) {
-    let active = active_albums.iter().next();
-    let page = active.map_or(0, |(page, _)| page.0);
-    let roll = camera_rolls.iter().next();
-    let film_count = roll
-        .and_then(|album| members.get(album).ok())
-        .map_or(0, RelationshipTarget::len);
+    let (active, roll) = storage.single().unwrap_or((None, None));
+    let album = active.as_ref().and_then(|active| active.iter().next());
+    let roll_entity = roll.as_ref().and_then(|roll| roll.iter().next());
+    let (page, name) = album
+        .and_then(|album| albums.get(album).ok())
+        .unwrap_or((None, None));
+    let photos = roll_entity.and_then(|roll| members.get(roll).ok());
+    let retired = !removed.5.is_empty();
+    let page_changed = retired
+        || active.as_ref().is_some_and(Ref::is_changed)
+        || !removed.0.is_empty()
+        || page.as_ref().is_some_and(Ref::is_changed)
+        || name.as_ref().is_some_and(Ref::is_changed)
+        || removed
+            .2
+            .read()
+            .chain(removed.3.read())
+            .any(|entity| Some(entity) == album);
+    let film_changed = retired
+        || roll.as_ref().is_some_and(Ref::is_changed)
+        || !removed.1.is_empty()
+        || photos.as_ref().is_some_and(Ref::is_changed)
+        || removed.4.read().any(|entity| Some(entity) == roll_entity)
+        || localization.is_changed()
+        || localizations.is_changed();
+    removed.0.clear();
+    removed.1.clear();
+    removed.2.clear();
+    removed.3.clear();
+    removed.4.clear();
+    removed.5.clear();
+
+    let mut film = None;
     for (binding, mut text) in &mut nodes {
-        let next = match &binding.0 {
-            UiTextPropertyBindingSource::PhotoAlbumPageNumber { offset } => {
-                (page.saturating_mul(2) + u32::from(*offset)).to_string()
+        match &binding.0 {
+            UiTextPropertyBindingSource::PhotoAlbumPageNumber { offset }
+                if page_changed || binding.is_changed() =>
+            {
+                let page = page.as_ref().map_or(0, |page| page.0);
+                let next = (page.saturating_mul(2) + u32::from(*offset)).to_string();
+                if text.0 != next {
+                    text.0 = next;
+                }
             }
-            UiTextPropertyBindingSource::PhotoAlbumName => {
-                active.map_or_else(String::new, |(_, name)| name.as_str().to_owned())
+            UiTextPropertyBindingSource::PhotoAlbumName if page_changed || binding.is_changed() => {
+                let next = name.as_ref().map_or("", |name| name.as_str());
+                if text.0 != next {
+                    text.0.clear();
+                    text.0.push_str(next);
+                }
             }
-            UiTextPropertyBindingSource::PhotoFilmCount => {
-                format!("{film_count:02} / {PHOTO_CAMERA_ROLL_CAPACITY}")
+            UiTextPropertyBindingSource::PhotoFilmCount if film_changed || binding.is_changed() => {
+                let next = film.get_or_insert_with(|| {
+                    localization
+                        .borrow_loaded_localization_view(&localizations)
+                        .and_then(|localization| {
+                            localization.find_plain_localized_text(
+                                openzt2_game_data::AssetId::from_key("ZTPhotoMode:NumPicsFormat"),
+                            )
+                        })
+                        .and_then(|template| {
+                            format_film_count(
+                                template,
+                                photos.as_ref().map_or(0, |photos| photos.len()),
+                            )
+                        })
+                });
+                if let Some(next) = next {
+                    if text.0 != *next {
+                        text.0.clone_from(next);
+                    }
+                }
             }
-            _ => continue,
-        };
-        if text.0 != next {
-            text.0 = next;
+            _ => {}
         }
     }
+}
+
+fn format_film_count(template: &str, count: usize) -> Option<String> {
+    use std::fmt::Write;
+    let mut output = String::new();
+    let mut values = [count, PHOTO_CAMERA_ROLL_CAPACITY as usize].into_iter();
+    let mut rest = template;
+    while let Some((literal, conversion)) = rest.split_once('%') {
+        output.push_str(literal);
+        if let Some(next) = conversion.strip_prefix('%') {
+            output.push('%');
+            rest = next;
+            continue;
+        }
+        let width_end = conversion.bytes().take_while(u8::is_ascii_digit).count();
+        let (field, next) = conversion.split_at(width_end);
+        rest = next.strip_prefix('d').or_else(|| next.strip_prefix('i'))?;
+        let width = field.parse::<usize>().unwrap_or(0).min(64);
+        let value = values.next()?;
+        if field.starts_with('0') {
+            write!(output, "{value:0width$}").ok()?;
+        } else {
+            write!(output, "{value:width$}").ok()?;
+        }
+    }
+    output.push_str(rest);
+    values.next().is_none().then_some(output)
 }
 
 pub(super) fn present_stored_photo_captions(
-    active_albums: Query<(Entity, Ref<PhotoAlbumPage>), (With<PhotoAlbum>, With<ActivePhotoAlbum>)>,
-    albums: Query<(
-        Entity,
-        &PhotoAlbum,
-        Option<&WorldMember>,
-        Option<&PhotoAlbumPage>,
-        Option<&SelectedAlbumPhoto>,
-        Option<&PhotoMove>,
-        Option<&PhotoCameraRoll>,
-    )>,
+    storage: Query<Ref<WorldActivePhotoAlbum>, (With<WorldRoot>, With<WorldLoadCompleted>)>,
+    pages: Query<Ref<PhotoAlbumPage>>,
     photos: Query<Option<Ref<super::photo_caption::PhotoCaption>>, With<Photo>>,
     album_members: Query<Ref<AlbumPhotos>>,
-    active_changes: Query<(), Added<ActivePhotoAlbum>>,
+    mut removed_active: RemovedComponents<WorldActivePhotoAlbum>,
     mut removed_memberships: RemovedComponents<AlbumPhotos>,
     localization_assets: Res<Assets<LocalizationAsset>>,
     active_localization: Res<LocalizationPrecedenceIndex>,
@@ -792,14 +958,15 @@ pub(super) fn present_stored_photo_captions(
     else {
         return;
     };
-    let active_album = active_albums.iter().next();
-    let active_album_entity = active_album.as_ref().map(|(entity, _)| *entity);
-    let page_changed = active_album.is_some_and(|(_, page)| page.is_changed());
+    let active_album = storage.single().ok();
+    let active_album_entity = active_album.as_ref().and_then(|album| album.iter().next());
+    let page = active_album_entity.and_then(|album| pages.get(album).ok());
+    let page_changed = page.as_ref().is_some_and(Ref::is_changed);
     let membership = active_album_entity.and_then(|album| album_members.get(album).ok());
-    let album_changed = !active_changes.is_empty()
-        || membership
-            .as_ref()
-            .is_some_and(|members| members.is_changed())
+    let mut album_changed =
+        !removed_active.is_empty() || active_album.as_ref().is_some_and(Ref::is_changed);
+    removed_active.clear();
+    album_changed |= membership.as_ref().is_some_and(Ref::is_changed)
         || removed_memberships
             .read()
             .any(|entity| Some(entity) == active_album_entity);
@@ -811,11 +978,7 @@ pub(super) fn present_stored_photo_captions(
         let UiTextPropertyBindingSource::PhotoAlbumCaption { slot } = &binding.0 else {
             continue;
         };
-        let photo = active_album_entity
-            .and_then(|album| albums.get(album).ok())
-            .and_then(|album| {
-                photo_rank_for_album_display_slot(i32::from(*slot), album.6.is_some(), album.3)
-            })
+        let photo = photo_rank_for_album_display_slot(i32::from(*slot), false, page.as_deref())
             .and_then(|rank| ordered_photos.get(rank).copied())
             .and_then(|photo_entity| photos.get(photo_entity).ok());
         if !binding.is_changed()

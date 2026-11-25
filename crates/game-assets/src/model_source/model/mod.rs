@@ -35,6 +35,7 @@ pub struct MeshSource {
     pub indices: Vec<u32>,
     pub submeshes: Vec<SubmeshSource>,
     pub lods: Vec<LodSource>,
+    pub position_morph_targets: Vec<Vec<[f32; 3]>>,
 }
 
 #[derive(Clone, Copy, Debug)]

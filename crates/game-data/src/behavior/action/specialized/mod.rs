@@ -89,3 +89,26 @@ pub struct BehaviorFallAction {
     pub land_impact: Option<String>,
     pub water_impact: Option<String>,
 }
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+pub struct BehaviorEscapeObstacleAction {
+    pub speed: BehaviorGroundLocomotionSpeed,
+    pub time: std::time::Duration,
+    pub radius_metres: Option<f32>,
+}
+
+impl Default for BehaviorEscapeObstacleAction {
+    fn default() -> Self {
+        Self {
+            speed: BehaviorGroundLocomotionSpeed::Slow,
+            time: std::time::Duration::from_secs(10_000),
+            radius_metres: None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+pub struct BehaviorTeleportToLocationAction {
+    pub position: Option<[f32; 3]>,
+    pub reset_prop: bool,
+}

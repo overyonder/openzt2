@@ -285,7 +285,9 @@ fn fixed_function_lit_specular(normal: vec3<f32>, vertex_color: vec4<f32>, world
 }
 
 @fragment
-fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
+fn fragment(input: VertexOutput) -> D3d9ColourOutput {
+    var output: D3d9ColourOutput;
+    @if(D3D9_DEPTH_BIAS_BITS) output.depth = d3d9_biased_fragment_depth(input.position);
     var fragment_inputs: FixedFunctionFragmentInputs;
     fragment_inputs.texture_coordinates[0] = vec4(input.primary_texture_coordinates, 0.0, 1.0);
     fragment_inputs.texture_coordinates[1] = vec4(input.secondary_texture_coordinates, 0.0, 1.0);
@@ -294,7 +296,8 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     fragment_inputs.camera_reflection = input.camera_reflection;
     fragment_inputs.specular = input.lit_specular;
     fragment_inputs.instance_index = input.instance_index;
-    return evaluate_fixed_function_texture_stages(fragment_inputs, false);
+    output.colour = evaluate_fixed_function_texture_stages(fragment_inputs, false);
+    return output;
 }
 
 fn evaluate_fixed_function_texture_stages(input: FixedFunctionFragmentInputs, programmable_vertex: bool) -> vec4<f32> {

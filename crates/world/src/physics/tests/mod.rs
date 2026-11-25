@@ -7,9 +7,7 @@ use openzt2_game_assets::world_definitions::{
     world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
 };
 use openzt2_world_state::{
-    animation_graph::animation_graph_playback_message_types::{
-        AnimationClipActionOptions, AnimationClipPlaybackRequest,
-    },
+    animation_graph::animation_graph_playback_message_types::AnimationClipPlaybackRequest,
     animation_playback::animation_playback_controller_types::AnimationPlaybackRepetitionPolicy,
     world_spawn::world_membership_types::WorldMember,
 };
@@ -128,7 +126,6 @@ fn fall_release_requests_the_authored_airborne_loop() {
         .init_asset::<WorldDefinitionAsset>()
         .init_resource::<WorldDefinitions>()
         .add_message::<AnimationClipPlaybackRequest>()
-        .add_message::<AnimationClipActionOptions>()
         .add_observer(release_behavior_object_into_world);
     let world = app.world_mut();
     let root = world.spawn_empty().id();

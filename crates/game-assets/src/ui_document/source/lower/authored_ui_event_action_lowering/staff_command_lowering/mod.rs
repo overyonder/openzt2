@@ -1,5 +1,5 @@
 use crate::source_document::ui::model::SourceUiEvent;
-use crate::ui_document::source::lower::authored_ui_action_argument_lowering::worker_duty;
+use crate::ui_document::source::lower::authored_ui_action_argument_lowering::worker_task;
 use crate::ui_document::source::lower::authored_ui_document_lowering::AuthoredUiDocument;
 use crate::ui_document::source::lower::authored_ui_scalar_value_lowering::invalid_at;
 use openzt2_game_data::ui_document::action::staff_management::{
@@ -47,11 +47,11 @@ pub(super) fn lower_staff_command(
             action: UiStaffAction::ClearSelectedKeeperAssignmentTarget,
         })),
         "ZT_ASSIGN_WORKER" | "ZT_UNASSIGN_WORKER" => {
-            let duty = worker_duty(event).ok_or_else(|| {
+            let task = worker_task(event).ok_or_else(|| {
                 invalid_at(
                     input,
                     format!(
-                        "{} has an unknown worker task {:?}",
+                        "{} requires a worker task {:?}",
                         event.message, event.string
                     ),
                 )
@@ -59,7 +59,7 @@ pub(super) fn lower_staff_command(
             Ok(UiActionRecord::Staff(UiStaffActionRecord {
                 trigger,
                 action: UiStaffAction::SetWorkerDutyAssignment {
-                    duty,
+                    task,
                     assigned: event.message == "ZT_ASSIGN_WORKER",
                 },
             }))

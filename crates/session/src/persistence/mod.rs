@@ -137,34 +137,38 @@ impl Plugin for PersistencePlugin {
                 Update,
                 (
                     slot_io::original_saved_game_catalogue_execution::begin_original_saved_game_catalogue_loading,
-                    slot_io::original_saved_game_catalogue_execution::complete_original_saved_game_catalogue_loading
-                        .before(profile_filesystem_task_completion_application::apply_completed_profile_filesystem_tasks_to_canonical_profile_state),
+                    slot_io::original_saved_game_catalogue_execution::complete_original_saved_game_catalogue_loading,
                 ).chain(),
             )
             .add_systems(
                 Update,
                 (
-                    profile_request_execution::begin_loading_profile_index,
-                    profile_request_execution::begin_creating_requested_profiles,
-                    profile_request_execution::begin_selecting_requested_profiles.after(GameSet::Intent),
-                    profile_request_execution::begin_deleting_requested_profiles,
-                    profile_filesystem_task_completion_application::
-                        apply_completed_profile_filesystem_tasks_to_canonical_profile_state,
+                    (
+                        profile_request_execution::begin_loading_profile_index,
+                        profile_request_execution::begin_creating_requested_profiles,
+                        profile_request_execution::begin_selecting_requested_profiles.after(GameSet::Intent),
+                        profile_request_execution::begin_deleting_requested_profiles,
+                        profile_filesystem_task_completion_application::
+                            apply_completed_profile_filesystem_tasks_to_canonical_profile_state,
+                        profile_request_execution::begin_persisting_changed_active_profile_options,
+                    ).chain(),
                     (
                         initial_profile_activation::activate_initial_profile_from_loaded_index,
                         initial_profile_activation::create_initial_profile_after_default_name_loads,
                         initial_profile_activation::select_created_profiles,
-                    ),
-                    profile_request_execution::begin_persisting_changed_active_profile_options,
-                    persistence_ui_action_routing::route_authored_persistence_ui_actions_to_domain_requests
-                        .after(openzt2_interface_state::ui::UiSet::Interaction),
-                    save_slot_catalogue_ui_presentation::project_original_save_delete_control_state,
-                    save_slot_catalogue_ui_presentation::load_save_slot_from_submitted_row,
+                    ).after_ignore_deferred(profile_filesystem_task_completion_application::apply_completed_profile_filesystem_tasks_to_canonical_profile_state),
+                    (
+                        persistence_ui_action_routing::route_authored_persistence_ui_actions_to_domain_requests,
+                        save_slot_catalogue_ui_presentation::load_save_slot_from_submitted_row,
+                        save_slot_catalogue_ui_presentation::project_original_save_delete_control_state
+                            .after(save_slot_catalogue_ui_presentation::project_save_slot_catalogue_records_onto_saved_game_list_rows),
+                    ).after(openzt2_interface_state::ui::UiSet::Interaction),
                     save_slot_catalogue_ui_presentation::request_save_slot_catalogue_list_row_count_updates
-                        .after_ignore_deferred(slot_io::original_saved_game_catalogue_execution::complete_original_saved_game_catalogue_loading),
-                    save_slot_catalogue_ui_presentation::project_save_slot_catalogue_records_onto_saved_game_list_rows,
-                )
-                    .chain(),
+                        .after_ignore_deferred(slot_io::original_saved_game_catalogue_execution::complete_original_saved_game_catalogue_loading)
+                        .after_ignore_deferred(slot_io::filesystem_task_completion_application::apply_completed_persistence_slot_filesystem_tasks),
+                    save_slot_catalogue_ui_presentation::project_save_slot_catalogue_records_onto_saved_game_list_rows
+                        .after_ignore_deferred(save_slot_catalogue_ui_presentation::request_save_slot_catalogue_list_row_count_updates),
+                ),
             )
             .add_systems(
                 Update,
@@ -205,7 +209,6 @@ impl Plugin for PersistencePlugin {
                     slot_io::load_snapshot_file_request_execution::
                         begin_loading_requested_world_snapshot_from_save_slot,
                     slot_io::original_saved_game_load_preparation::begin_original_saved_game_loading,
-                    slot_io::original_saved_game_load_preparation::complete_original_saved_game_preparation,
                     slot_io::delete_snapshot_file_request_execution::
                         begin_deleting_requested_save_slot_snapshot_file,
                     slot_io::save_slot_catalogue_load_execution::
@@ -214,7 +217,14 @@ impl Plugin for PersistencePlugin {
                         apply_completed_persistence_slot_filesystem_tasks,
                 )
                     .chain()
-                    .after(persistence_ui_action_routing::route_authored_persistence_ui_actions_to_domain_requests),
+                    .after_ignore_deferred(persistence_ui_action_routing::route_authored_persistence_ui_actions_to_domain_requests)
+                    .after_ignore_deferred(save_slot_catalogue_ui_presentation::load_save_slot_from_submitted_row)
+                    .after(profile_filesystem_task_completion_application::apply_completed_profile_filesystem_tasks_to_canonical_profile_state),
+            )
+            .add_systems(
+                Update,
+                slot_io::original_saved_game_load_preparation::complete_original_saved_game_preparation
+                    .after(slot_io::original_saved_game_load_preparation::begin_original_saved_game_loading),
             )
             .add_systems(
                 Update,

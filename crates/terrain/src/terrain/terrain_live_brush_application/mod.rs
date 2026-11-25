@@ -6,8 +6,8 @@ use openzt2_zoo_state::construction::construction_interaction_types::CancelConst
 use openzt2_zoo_state::construction::construction_interaction_types::ConstructionPreview;
 
 use super::authored_terrain_brush_modes::AuthoredTerrainBrushModes;
+use crate::terrain::terrain_brush_sample_mutation::prepare_smoothed_terrain_heights;
 use crate::terrain::terrain_brush_sample_mutation::prepare_terrain_chunk_sample_delta_from_brush_dabs;
-use crate::terrain::terrain_brush_sample_mutation::TerrainSmoothing;
 use crate::terrain::terrain_chunk_index_cleanup::TerrainChunkIdLookup;
 use crate::terrain::terrain_edit_application::apply_validated_terrain_edit_delta_and_publish_changed_region;
 use openzt2_zoo_state::terrain::terrain_brush_interaction_state::ActiveTerrainBrush;
@@ -101,13 +101,7 @@ pub(super) fn apply_held_terrain_brush_dabs_and_accumulate_one_draft_edit(
             chunk, asset, edited, x, z,
         )
     };
-    let smoothing = modes
-        .smooth_samples()
-        .map(|radius_samples| TerrainSmoothing {
-            radius_samples,
-            terrain: index,
-            read_height: &read_neighbour,
-        });
+
     if !(stroke.center.is_finite()
         && stroke.radius_m.is_finite()
         && stroke.radius_m > 0.0
@@ -166,8 +160,9 @@ pub(super) fn apply_held_terrain_brush_dabs_and_accumulate_one_draft_edit(
     let minimum = stroke.center - Vec2::splat(stroke.radius_m);
     let maximum = stroke.center + Vec2::splat(stroke.radius_m);
     let minimum_chunk = ((minimum - index.origin) / index.chunk_span_m)
-        .floor()
-        .as_ivec2();
+        .ceil()
+        .as_ivec2()
+        .saturating_sub(IVec2::ONE);
     let maximum_chunk = ((maximum - index.origin) / index.chunk_span_m)
         .floor()
         .as_ivec2();
@@ -180,6 +175,21 @@ pub(super) fn apply_held_terrain_brush_dabs_and_accumulate_one_draft_edit(
         }
     }
     candidate_entities.sort_unstable();
+    let smoothing = (preview.kind
+        == openzt2_zoo_state::terrain::terrain_brush_types::TerrainBrushKind::Smooth)
+        .then(|| {
+            let (_, chunk, ..) = chunks.get(*candidate_entities.first()?).ok()?;
+            prepare_smoothed_terrain_heights(
+                index,
+                chunk,
+                assets.get(&chunk.asset)?,
+                modes.smooth_samples()?,
+                &preview,
+                std::slice::from_ref(&dab),
+                read_neighbour,
+            )
+        })
+        .flatten();
 
     let mut water_surface_height_cm =
             crate::terrain::terrain_brush_sample_mutation::resolve_painted_water_surface_height_centimetres(

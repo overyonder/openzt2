@@ -16,7 +16,10 @@ pub(super) fn create_scenario_lua_photo_challenge_component<'scope, 'env: 'scope
 ) -> mlua::Result<Table> {
     let members = move || {
         queries
-            .read_current_photo_challenge_member_stars()
+            .read_photo_challenge_member_stars(
+                (*current_photo_challenge_set.borrow())
+                    .or_else(|| queries.selected_photo_set.and_then(std::cell::Cell::get)),
+            )
             .ok_or_else(|| mlua::Error::runtime("no photo challenge set is current"))
     };
     let member = move |index: usize| -> mlua::Result<ScenarioLuaPhotoChallengeMemberStars> {
@@ -28,7 +31,18 @@ pub(super) fn create_scenario_lua_photo_challenge_component<'scope, 'env: 'scope
     component.set(
         "ZT_PHOTOEVENT_SET_CURRENT_CHALLENGE",
         scope.create_function(move |_, (_, set): (Table, String)| {
-            *current_photo_challenge_set.borrow_mut() = Some(AssetId::from_key(&set));
+            let set = AssetId::from_key(&set);
+            if !queries
+                .current_photo_challenge_sets
+                .iter()
+                .any(|(candidate, _)| candidate.id == set)
+            {
+                return Err(mlua::Error::runtime("unknown photo challenge set"));
+            }
+            *current_photo_challenge_set.borrow_mut() = Some(set);
+            if let Some(current) = queries.selected_photo_set {
+                current.set(Some(set));
+            }
             Ok(())
         })?,
     )?;

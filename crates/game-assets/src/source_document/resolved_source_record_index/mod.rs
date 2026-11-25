@@ -6,6 +6,7 @@ use std::{
 use crate::source_document::{
     ordered_source_document_types::OrderedSourceDocumentNode,
     ordered_source_document_types::{OrderedSourceDocument, OrderedSourceDocumentSpan},
+    path::{authored_source_reference_paths, is_authored_file_reference},
     source_document_semantic_name::{
         canonicalize_source_document_record_key, source_document_names_are_semantically_equal,
     },
@@ -64,13 +65,15 @@ impl<'a> SourceIndex<'a> {
                 )
             })
             .collect();
-        Ok(Self {
+        let index = Self {
             records: build_precedence_resolved_source_record_index(
                 documents,
                 additional_named_record_element_types,
             )?,
             document_roots_by_source_path,
-        })
+        };
+        index.validate_inheritance()?;
+        Ok(index)
     }
 
     pub fn document_root<'index>(
@@ -106,7 +109,43 @@ impl<'a> SourceIndex<'a> {
                 indexed: *indexed,
             })
     }
+
+    fn validate_inheritance(&self) -> Result<(), BindError> {
+        let mut validated = BTreeSet::new();
+        for start in self.records() {
+            let mut current = start;
+            let mut visiting = BTreeSet::new();
+            loop {
+                let element = std::ptr::from_ref(current.indexed.element);
+                if validated.contains(&element) {
+                    break;
+                }
+                if !visiting.insert(element) {
+                    return Err(BindError::record(
+                        &current,
+                        format!("source inheritance cycle at {}", current.key),
+                    ));
+                }
+                let Some(base) = current
+                    .indexed
+                    .element
+                    .attribute_named_any(&INHERITANCE_ATTRIBUTES)
+                else {
+                    break;
+                };
+                current = current
+                    .find_resolved_source_record_by_reference(base)
+                    .ok_or_else(|| {
+                        BindError::record(&current, format!("unresolved source base {base}"))
+                    })?;
+            }
+            validated.append(&mut visiting);
+        }
+        Ok(())
+    }
 }
+
+const INHERITANCE_ATTRIBUTES: [&str; 4] = ["extends", "base", "parentType", "inherit"];
 
 #[derive(Clone, Copy)]
 pub struct RecordView<'index, 'document> {
@@ -137,7 +176,20 @@ impl<'index, 'document> RecordView<'index, 'document> {
     }
 
     pub fn find_resolved_source_record_by_reference(&self, reference: &str) -> Option<Self> {
-        self.index.find(reference)
+        if is_authored_file_reference(reference) {
+            authored_source_reference_paths(self.indexed.document.path.as_str(), reference)
+                .find_map(|path| self.index.document_root(&path.key()))
+                .or_else(|| self.index.find(reference))
+        } else {
+            self.index.find(reference)
+        }
+    }
+
+    fn base_record(&self) -> Option<Self> {
+        self.indexed
+            .element
+            .attribute_named_any(&INHERITANCE_ATTRIBUTES)
+            .and_then(|base| self.find_resolved_source_record_by_reference(base))
     }
 
     pub fn source_path(&self) -> String {
@@ -184,12 +236,11 @@ impl<'index, 'document> RecordView<'index, 'document> {
             }
         }
 
-        let mut output = self
-            .indexed
-            .element
-            .attribute_named_any(&["extends", "base", "parentType", "inherit"])
-            .and_then(|base| self.index.find(base))
-            .map_or_else(Vec::new, |base| base.type_tokens());
+        let mut output = self.base_record().map_or_else(Vec::new, |base| {
+            let mut ancestors = base.type_tokens();
+            ancestors.push(base.key.to_owned());
+            ancestors
+        });
         if let Some(types) = self.indexed.element.element_children().find(|child| {
             source_document_names_are_semantically_equal(child.name.as_str(), "types")
         }) {
@@ -213,12 +264,10 @@ impl<'index, 'document> RecordView<'index, 'document> {
             })
             .is_some_and(|types| contains_named_descendant(types, token));
         let inherited = !direct
-            && self
-                .indexed
-                .element
-                .attribute_named_any(&["extends", "base", "parentType", "inherit"])
-                .and_then(|base| self.index.find(base))
-                .is_some_and(|base| base.has_type_token_inner(token));
+            && self.base_record().is_some_and(|base| {
+                source_document_names_are_semantically_equal(base.key, token)
+                    || base.has_type_token_inner(token)
+            });
         direct || inherited
     }
 
@@ -238,14 +287,7 @@ impl<'index, 'document> RecordView<'index, 'document> {
                     .flatten()
             })
         });
-        let inherited = direct.or_else(|| {
-            self.indexed
-                .element
-                .attribute_named_any(&["extends", "base", "parentType", "inherit"])
-                .and_then(|base| self.index.find(base))
-                .and_then(|base| base.value(names))
-        });
-        inherited
+        direct.or_else(|| self.base_record().and_then(|base| base.value(names)))
     }
 
     pub fn children_named(&self, names: &[&str]) -> Vec<&'document OrderedSourceDocumentNode> {
@@ -260,12 +302,7 @@ impl<'index, 'document> RecordView<'index, 'document> {
             })
             .collect::<Vec<_>>();
         if output.is_empty() {
-            if let Some(base) = self
-                .indexed
-                .element
-                .attribute_named_any(&["extends", "base", "parentType", "inherit"])
-                .and_then(|key| self.index.find(key))
-            {
+            if let Some(base) = self.base_record() {
                 output = base.children_named(names);
             }
         }
@@ -274,10 +311,7 @@ impl<'index, 'document> RecordView<'index, 'document> {
 
     pub fn descendant_named(&self, name: &str) -> Option<&'document OrderedSourceDocumentNode> {
         find_named_descendant(self.indexed.element, name).or_else(|| {
-            self.indexed
-                .element
-                .attribute_named_any(&["extends", "base", "parentType", "inherit"])
-                .and_then(|key| self.index.find(key))
+            self.base_record()
                 .and_then(|base| base.descendant_named(name))
         })
     }
@@ -307,10 +341,7 @@ impl<'index, 'document> RecordView<'index, 'document> {
         }
 
         find(self.indexed.element, name, attribute, value).or_else(|| {
-            self.indexed
-                .element
-                .attribute_named_any(&["extends", "base", "parentType", "inherit"])
-                .and_then(|base| self.index.find(base))
+            self.base_record()
                 .and_then(|base| base.descendant_with_attribute(name, attribute, value))
         })
     }
@@ -389,6 +420,29 @@ mod tests {
     }
 
     #[test]
+    fn inherits_from_a_binder_in_a_different_directory() {
+        let documents = [
+            parse(
+                "registered/parents/other_file.xml",
+                r#"<BFTypedBinder binderType="mod_parent" scale="2" extends="animal"/>"#,
+            ),
+            parse(
+                "registered/children/new_file.xml",
+                r#"<BFTypedBinder binderType="mod_child" extends="..\parents\other_file.xml"/>"#,
+            ),
+            parse(
+                "stock/animal.xml",
+                r#"<BFTypedBinder binderType="animal"><types><animal/></types></BFTypedBinder>"#,
+            ),
+        ];
+        let index = SourceIndex::build(&documents).expect("valid inheritance");
+        let child = index.find("mod_child").expect("indexed child");
+
+        assert!(child.has_type_token("animal"));
+        assert_eq!(child.value(&["scale"]), Some("2"));
+    }
+
+    #[test]
     fn authored_components_remain_structural_descendants() {
         let documents = [parse(
             "world/cameras/overheadcam.xml",
@@ -404,9 +458,11 @@ mod tests {
             .expect("indexed camera");
 
         assert!(!camera.has_type_token("BFOverheadCameraComponent"));
-        assert!(camera
-            .descendant_named("BFOverheadCameraComponent")
-            .is_some());
+        assert!(
+            camera
+                .descendant_named("BFOverheadCameraComponent")
+                .is_some()
+        );
     }
 }
 

@@ -18,6 +18,9 @@ use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use super::photo_capture_types::{CapturedPhotoEvidence, PendingPhotoScore, PhotoCaptured};
 use super::photo_challenge_lua_scoring_types::{PhotoChallengeScorer, PhotoRuleScriptContext};
 
+#[derive(Component)]
+pub struct PhotoChallengeHalfStars(pub u8);
+
 pub(super) fn score_pending_photos_against_incomplete_lua_challenges(
     assets: Res<Assets<WorldScenarioDocumentAsset>>,
     scripts: Res<Assets<LuaScriptAsset>>,
@@ -63,9 +66,10 @@ pub(super) fn score_pending_photos_against_incomplete_lua_challenges(
                 let subject = evidence
                     .subjects
                     .iter()
-                    .max_by_key(|item| {
-                        u32::from(item.facts.screen_permille)
-                            + u32::from(item.facts.center_permille)
+                    .max_by(|left, right| {
+                        left.facts
+                            .screen_fraction
+                            .total_cmp(&right.facts.screen_fraction)
                     })
                     .map_or(AssetId::default(), |item| item.definition);
                 for member in &record.members {
@@ -119,6 +123,10 @@ pub(super) fn score_pending_photos_against_incomplete_lua_challenges(
                     if score == 0 || rating_stars < rule.difficulty {
                         continue;
                     }
+                    let half_stars = (score / 500) as u8;
+                    commands
+                        .entity(entity)
+                        .insert(PhotoChallengeHalfStars(half_stars));
                     *progress = PhotoChallengeProgress {
                         completed: true,
                         completed_by: Some(photo_entity),

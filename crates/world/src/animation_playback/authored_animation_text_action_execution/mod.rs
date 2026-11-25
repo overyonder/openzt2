@@ -8,7 +8,6 @@ use openzt2_world_state::animation_playback::animation_event_message_types::{
 };
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::DispatchBehaviorAnimationTextKeys;
 
-use crate::animation_playback::authored_animation_control_text_action_execution::set_animation_playback_controller_speed_from_authored_percent;
 use crate::animation_playback::authored_animation_text_action_execution_context::AuthoredAnimationTextActionExecutionContext;
 use openzt2_world_state::animation_playback::animation_playback_controller_types::{
     AnimationPlaybackController, AnimationPlaybackRepetitionPolicy,
@@ -122,18 +121,8 @@ impl<const REAL_TIME: bool> AuthoredAnimationTextActionExecutionContext<'_, '_, 
                     animation_playback_controller_entity,
                     animation_graph_node_asset_key,
                 ),
-            AuthoredAnimationTextAction::StartAlignedAnimation {
-                animation_graph_node_asset_key,
-                playback_is_looped,
-                ..
-            } => self
-                .animation_control_text_action_execution
-                .start_authored_animation_with_looping_policy(
-                    animation_playback_controller_entity,
-                    animation_playback_controller,
-                    animation_graph_node_asset_key,
-                    *playback_is_looped,
-                ),
+            // The start marker declares a clip boundary.
+            AuthoredAnimationTextAction::StartAlignedAnimation { .. } => {}
             AuthoredAnimationTextAction::SetAnimationGraphEnabled(enabled) => self
                 .animation_control_text_action_execution
                 .set_authored_animation_graph_enabled(
@@ -217,13 +206,15 @@ impl<const REAL_TIME: bool> AuthoredAnimationTextActionExecutionContext<'_, '_, 
             }
             AuthoredAnimationTextAction::SetAnimationPlaybackSpeed {
                 playback_speed_percent,
-                ..
-            } => {
-                set_animation_playback_controller_speed_from_authored_percent(
-                    animation_playback_controller,
+                authored_speed_mode,
+            } => self
+                .animation_control_text_action_execution
+                .configure_authored_traversal_segment_timing(
+                    animation_playback_controller_entity,
+                    animation_playback_controller.playback_generation,
                     *playback_speed_percent,
-                );
-            }
+                    *authored_speed_mode,
+                ),
             AuthoredAnimationTextAction::RequestTraversalTransition {
                 animation_graph_node_asset_key,
             } => self

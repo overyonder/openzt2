@@ -68,6 +68,9 @@ pub struct GraphicsSettings {
     pub water_reflections: bool,
     /// Selects the prepared effect capacity/LOD policy.
     pub effects: GraphicsEffectQuality,
+    /// Selects the active particle limit from the renderer configuration.
+    #[serde(default)]
+    pub particle_budget_tier: Option<ThreeLevelGraphicsDetail>,
 }
 
 impl Default for GraphicsSettings {
@@ -98,6 +101,7 @@ impl Default for GraphicsSettings {
             shader_detail: ThreeLevelGraphicsDetail::High,
             water_reflections: true,
             effects: GraphicsEffectQuality::High,
+            particle_budget_tier: None,
         }
     }
 }

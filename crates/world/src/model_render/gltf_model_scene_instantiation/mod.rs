@@ -1,10 +1,12 @@
+use crate::world_spawn::named_physical_presentation_projection::NamedPresentationNodeAttachment;
 use bevy::ecs::{entity_disabling::Disabled, query::Allow};
 use bevy::gltf::Gltf;
 use bevy::gltf::GltfMaterialName;
 use bevy::gltf::GltfMesh;
 use bevy::gltf::GltfNode;
 use bevy::prelude::*;
-use bevy::world_serialization::InstanceId;
+use bevy::world_serialization::WorldInstance;
+use openzt2_world_state::animation_playback::model_joint_attachment_binding::ModelJointAttachment;
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabMaterialOverrides;
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabModel;
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabRenderable;
@@ -19,38 +21,25 @@ use super::world_entity_model_suppression::{ModelRenderVisibilityGate, ModelRend
 #[require(ModelRenderVisibilityGate)]
 pub(super) struct ResidentPrefabModel;
 
-#[derive(Component)]
-pub(super) struct ResidentPrefabScene(InstanceId);
-
-#[derive(Message)]
-pub(super) struct RetirePrefabSceneInstance(InstanceId);
-
-pub(super) fn request_scene_retirement_on_removal(
-    removed: On<Remove<ResidentPrefabScene>>,
-    instances: Query<&ResidentPrefabScene, Allow<Disabled>>,
-    mut retirements: MessageWriter<RetirePrefabSceneInstance>,
-) {
-    if let Ok(scene) = instances.get(removed.entity) {
-        retirements.write(RetirePrefabSceneInstance(scene.0));
-    }
-}
-
-pub(super) fn retire_despawned_prefab_scene_instances(
+pub(super) fn retire_removed_prefab_scene_root(
+    removed: On<Remove<WorldAssetRoot>>,
     mut commands: Commands,
-    mut retirements: MessageReader<RetirePrefabSceneInstance>,
+    spawner: Option<ResMut<WorldInstanceSpawner>>,
+    instances: Query<&WorldInstance, (With<ResidentPrefabModel>, Allow<Disabled>)>,
 ) {
-    for &RetirePrefabSceneInstance(instance) in retirements.read() {
-        commands.queue(move |world: &mut World| {
-            world.resource_scope(|world, mut spawner: Mut<WorldInstanceSpawner>| {
-                spawner.despawn_instance_sync(world, &instance);
-            });
-        });
+    let (Some(mut spawner), Ok(instance)) = (spawner, instances.get(removed.entity)) else {
+        return;
+    };
+    // The root's removal hook unregisters the instance. Queue its members
+    // while the spawner can still identify reparented entities.
+    for entity in spawner.iter_instance_entities(**instance) {
+        commands.entity(entity).try_despawn();
     }
+    spawner.despawn_instance(**instance);
 }
 
 pub(super) fn instantiate_visible_gltf_model_scenes(
     mut commands: Commands,
-    mut spawner: ResMut<WorldInstanceSpawner>,
     asset_server: Res<AssetServer>,
     models: Res<Assets<Gltf>>,
     nodes: Res<Assets<GltfNode>>,
@@ -139,10 +128,7 @@ pub(super) fn instantiate_visible_gltf_model_scenes(
         };
         let gate =
             spawn_prefab_model_visibility_root(&mut commands, entity, *transform, suppressed);
-        // Retain the spawner's token so it can retire even reparented scene
-        // entities. Removing WorldAssetRoot would unregister that membership.
-        let instance = spawner.spawn_as_child(scene, gate);
-        commands.entity(gate).insert(ResidentPrefabScene(instance));
+        commands.entity(gate).insert(WorldAssetRoot(scene));
     }
 }
 
@@ -172,6 +158,63 @@ fn spawn_prefab_model_visibility_root(
         .id()
 }
 
+#[derive(bevy::ecs::system::SystemParam)]
+pub(super) struct SceneExternalAttachments<'w, 's> {
+    children: Query<'w, 's, &'static Children>,
+    joint_bindings: Query<'w, 's, &'static ModelJointAttachment>,
+    binders: Query<'w, 's, &'static NamedPresentationNodeAttachment>,
+    binder_visibility:
+        Query<'w, 's, &'static mut Visibility, With<NamedPresentationNodeAttachment>>,
+}
+
+impl SceneExternalAttachments<'_, '_> {
+    fn detach(&mut self, commands: &mut Commands, members: impl IntoIterator<Item = Entity>) {
+        for member in members {
+            let Ok(children) = self.children.get(member) else {
+                continue;
+            };
+            for attachment in children.iter() {
+                if let Ok(binding) = self.joint_bindings.get(attachment) {
+                    commands
+                        .entity(attachment)
+                        .try_insert(ChildOf(binding.instance));
+                } else if let Ok(binding) = self.binders.get(attachment) {
+                    if let Ok(mut visibility) = self.binder_visibility.get_mut(attachment) {
+                        visibility.set_if_neq(Visibility::Hidden);
+                    }
+                    commands
+                        .entity(attachment)
+                        .try_insert(ChildOf(binding.owner));
+                }
+            }
+        }
+    }
+}
+
+pub(super) fn detach_attachments_from_reloading_scenes(
+    mut commands: Commands,
+    mut assets: MessageReader<AssetEvent<WorldAsset>>,
+    spawner: Res<WorldInstanceSpawner>,
+    scenes: Query<(&WorldAssetRoot, &WorldInstance), With<ResidentPrefabModel>>,
+    mut attachments: SceneExternalAttachments,
+) {
+    let reloading = assets
+        .read()
+        .filter_map(|event| match *event {
+            AssetEvent::Modified { id } => Some(id),
+            _ => None,
+        })
+        .collect::<bevy::platform::collections::HashSet<_>>();
+    if reloading.is_empty() {
+        return;
+    }
+    for (asset, instance) in &scenes {
+        if reloading.contains(&asset.0.id()) {
+            attachments.detach(&mut commands, spawner.iter_instance_entities(**instance));
+        }
+    }
+}
+
 pub(super) fn retire_hidden_prefab_model_assets(
     mut commands: Commands,
     mut models: Query<
@@ -194,7 +237,9 @@ pub(super) fn retire_hidden_prefab_model_assets(
             )>,
         ),
     >,
-    residents: Query<(), With<ResidentPrefabModel>>,
+    residents: Query<Option<&WorldInstance>, (With<ResidentPrefabModel>, Allow<Disabled>)>,
+    spawner: Res<WorldInstanceSpawner>,
+    mut attachments: SceneExternalAttachments,
 ) {
     for (entity, mut model, mut overrides, visibility, children, expanded, rebuilding) in
         &mut models
@@ -203,7 +248,19 @@ pub(super) fn retire_hidden_prefab_model_assets(
             continue;
         }
         if let Some(children) = children {
-            for child in children.iter().filter(|&child| residents.contains(child)) {
+            for child in children.iter() {
+                let Ok(instance) = residents.get(child) else {
+                    continue;
+                };
+                if let Some(instance) = instance {
+                    let instance = **instance;
+                    attachments.detach(&mut commands, spawner.iter_instance_entities(instance));
+                    commands.queue(move |world: &mut World| {
+                        world.resource_scope(|world, mut spawner: Mut<WorldInstanceSpawner>| {
+                            spawner.despawn_instance_sync(world, &instance);
+                        });
+                    });
+                }
                 commands.entity(child).try_despawn();
             }
         }

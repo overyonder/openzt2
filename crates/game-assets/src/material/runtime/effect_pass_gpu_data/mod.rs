@@ -154,6 +154,7 @@ pub struct EffectPassMaterial {
     #[dependency]
     pub(super) texture_assets: EffectPassTextureAssets,
     pub(super) evaluated_sampler_states: [EvaluatedD3d9SamplerState; 8],
+    pub(super) particle_alpha_test: Option<bevy_hanabi::EffectAlphaTest>,
     pub(super) pipeline_specialization_key: EffectPassPipelineSpecializationKey,
     pub(super) dynamic_parameter_register_bindings:
         std::sync::Arc<[DynamicEffectParameterRegisterBinding]>,

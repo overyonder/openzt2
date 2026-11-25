@@ -85,7 +85,7 @@ pub(super) fn publish_transport_trip(
         guest,
         subject: pending_fare.circuit,
         kind: GuestMemoryKind::Tour,
-        satisfaction_delta_permille: pending_fare.rating.clamp(0.0, i16::MAX as f32) as i16,
+        satisfaction_delta_permille: 0,
         education_delta_permille: 0,
     });
 }

@@ -1,9 +1,9 @@
-use std::{collections::BTreeMap, io, path::Path};
+use std::{collections::BTreeMap, io, path::Path, time::Duration};
 
 use openzt2_game_data::animation::animation_set::{
-    AuthoredAnimationAttribute, AuthoredAnimationGraphEdge, AuthoredAnimationGraphMetadata,
-    AuthoredAnimationGraphNode, AuthoredAnimationPlaybackPolicy, AuthoredAnimationSetClipReference,
-    AuthoredAnimationSetDocument,
+    AuthoredAnimationGraphEdge, AuthoredAnimationGraphMetadata, AuthoredAnimationGraphNode,
+    AuthoredAnimationPlaybackPolicy, AuthoredAnimationSetClipReference,
+    AuthoredAnimationSetDocument, AuthoredKfmTransition, KfmTransitionKind,
 };
 
 use crate::model_source::native_animation_source_lowering::kf_sequence_label;
@@ -18,15 +18,9 @@ struct KfmAnimationDeclaration {
 struct KfmAnimationTransitionDeclaration {
     target_authored_event_code: u32,
     kind: KfmTransitionKind,
-    authored_blend_duration: String,
+    duration: Duration,
     intermediate_event_codes: Vec<u32>,
-    text_key_pairs: Vec<[String; 2]>,
-}
-
-#[derive(Clone, Copy)]
-enum KfmTransitionKind {
-    Blend,
-    Morph,
+    text_key_pairs: Vec<[Option<String>; 2]>,
 }
 
 pub(super) fn lower_kfm_source_to_animation_set_document(
@@ -36,6 +30,8 @@ pub(super) fn lower_kfm_source_to_animation_set_document(
     let kfm_source = std::str::from_utf8(kfm_source_bytes)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
     let animation_set_parent_path = Path::new(animation_set_asset_path).parent();
+    let mut model_path_prefix = "";
+    let mut clip_path_prefix = "";
     let mut model_asset_path = None;
     let mut kfm_animation_declarations = Vec::<KfmAnimationDeclaration>::new();
 
@@ -49,13 +45,28 @@ pub(super) fn lower_kfm_source_to_animation_set_document(
             .split('#')
             .collect::<Vec<_>>();
         match kfm_record_fields.first().copied() {
-            Some("DEFAULTPATHS") if kfm_record_fields.get(1) == Some(&"1") => {}
-            Some("DEFAULTNIFPATH" | "DEFAULTKFPATH")
-                if kfm_record_fields.get(1) == Some(&"NULL") => {}
+            Some("DEFAULTPATHS")
+                if matches!(kfm_record_fields.get(1).copied(), Some("0" | "1")) => {}
+            Some("DEFAULTNIFPATH" | "DEFAULTKFPATH") => {
+                let prefix = kfm_record_fields
+                    .get(1)
+                    .copied()
+                    .ok_or_else(|| invalid_kfm_record(animation_set_asset_path, kfm_record))?;
+                let prefix = if prefix == "NULL" { "" } else { prefix };
+                if kfm_record_fields[0] == "DEFAULTNIFPATH" {
+                    model_path_prefix = prefix;
+                } else {
+                    clip_path_prefix = prefix;
+                }
+            }
             Some("END_KFM_FILE") => break,
             Some("MODEL") => {
                 model_asset_path = kfm_record_fields.get(1).map(|source_path| {
-                    resolve_kfm_source_reference(animation_set_parent_path, source_path, None)
+                    resolve_kfm_source_reference(
+                        animation_set_parent_path,
+                        &format!("{model_path_prefix}{source_path}"),
+                        None,
+                    )
                 });
             }
             Some("ANIMATION") => {
@@ -77,13 +88,11 @@ pub(super) fn lower_kfm_source_to_animation_set_document(
                     .ok_or_else(|| invalid_kfm_record(animation_set_asset_path, kfm_record))?;
                 let mut animation_clip_asset_path = resolve_kfm_source_reference(
                     animation_set_parent_path,
-                    animation_clip_source_path,
+                    &format!("{clip_path_prefix}{animation_clip_source_path}"),
                     Some("kf"),
                 );
-                if sequence_index != 0 {
-                    animation_clip_asset_path.push('#');
-                    animation_clip_asset_path.push_str(&kf_sequence_label(sequence_index));
-                }
+                animation_clip_asset_path.push('#');
+                animation_clip_asset_path.push_str(&kf_sequence_label(sequence_index));
                 kfm_animation_declarations.push(KfmAnimationDeclaration {
                     authored_event_code,
                     animation_clip_asset_key: (*animation_clip_asset_key).to_owned(),
@@ -155,36 +164,22 @@ pub(super) fn lower_kfm_source_to_animation_set_document(
                 .map(|&code| key_for_event_code(code))
                 .collect::<io::Result<Vec<_>>>()?;
             let kind = if transition_animation_clip_asset_keys.is_empty() {
-                match transition.kind {
-                    KfmTransitionKind::Blend => "blend",
-                    KfmTransitionKind::Morph => "morph",
-                }
+                transition.kind
             } else {
-                "chain"
+                KfmTransitionKind::Chain
             };
-            let mut attributes = vec![
-                AuthoredAnimationAttribute {
-                    attribute_name: "blend".to_owned(),
-                    attribute_value: transition.authored_blend_duration.clone(),
-                },
-                AuthoredAnimationAttribute {
-                    attribute_name: "kfmTransitionKind".to_owned(),
-                    attribute_value: kind.to_owned(),
-                },
-            ];
-            for [source, target] in &transition.text_key_pairs {
-                attributes.push(AuthoredAnimationAttribute {
-                    attribute_name: "kfmTextKeyPair".to_owned(),
-                    attribute_value: format!("{source}#{target}"),
-                });
-            }
             animation_graph_edges.push(AuthoredAnimationGraphEdge {
                 source_animation_graph_node_asset_key: animation.animation_clip_asset_key.clone(),
                 target_animation_graph_node_asset_key: key_for_event_code(
                     transition.target_authored_event_code,
                 )?,
                 transition_animation_clip_asset_keys,
-                authored_animation_attributes: attributes,
+                authored_animation_attributes: Vec::new(),
+                kfm_transition: Some(AuthoredKfmTransition {
+                    kind,
+                    duration: transition.duration,
+                    text_key_pairs: transition.text_key_pairs.clone(),
+                }),
             });
         }
     }
@@ -227,11 +222,12 @@ fn parse_kfm_transition(fields: &[&str]) -> Option<KfmAnimationTransitionDeclara
         "MORPH" => KfmTransitionKind::Morph,
         _ => return None,
     };
-    let duration = duration.strip_prefix("DURATION ")?.trim();
-    let seconds = duration.parse::<f32>().ok()?;
-    if !seconds.is_finite() || seconds < 0.0 {
-        return None;
-    }
+    let seconds = duration
+        .strip_prefix("DURATION ")?
+        .trim()
+        .parse::<f64>()
+        .ok()?;
+    let duration = Duration::try_from_secs_f64(seconds).ok()?;
     let chain_count = chain_count
         .strip_prefix("INTERMEDIATEANIMS ")?
         .trim()
@@ -253,12 +249,13 @@ fn parse_kfm_transition(fields: &[&str]) -> Option<KfmAnimationTransitionDeclara
     }
     let text_key_pairs = pairs
         .chunks_exact(2)
-        .map(|pair| [pair[0].to_owned(), pair[1].to_owned()])
+        .map(|pair| [pair[0], pair[1]].map(|key| (key != "NULL").then(|| key.to_owned())))
+        .filter(|pair| pair.iter().any(Option::is_some))
         .collect();
     Some(KfmAnimationTransitionDeclaration {
         target_authored_event_code,
         kind,
-        authored_blend_duration: duration.to_owned(),
+        duration,
         intermediate_event_codes,
         text_key_pairs,
     })

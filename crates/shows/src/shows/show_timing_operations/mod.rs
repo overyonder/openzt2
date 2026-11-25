@@ -1,3 +1,6 @@
+use std::time::Duration;
+
+use bevy::prelude::*;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
 
 #[inline]
@@ -12,4 +15,17 @@ pub(super) fn convert_authored_nanoseconds_to_fixed_simulation_ticks(
         .checked_div(1_000_000_000)
         .unwrap_or(0)
         .min(u64::from(u32::MAX)) as u32
+}
+
+#[derive(Component)]
+pub struct RunningShowPhaseTimer(pub(super) Timer);
+
+impl RunningShowPhaseTimer {
+    pub(super) fn new(step: Duration, ticks: u32) -> Self {
+        Self(Timer::new(step.saturating_mul(ticks), TimerMode::Once))
+    }
+
+    pub fn remaining_ticks(&self, step: Duration) -> u32 {
+        self.0.remaining().as_nanos().div_ceil(step.as_nanos()) as u32
+    }
 }

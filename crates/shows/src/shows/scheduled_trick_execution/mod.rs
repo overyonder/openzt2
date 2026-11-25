@@ -20,7 +20,9 @@ use openzt2_zoo_state::{
     progression::fame_types::Fame,
     shows::{
         performer_training::PerformerTraining,
-        running_show_types::{BeginScheduledShowTrick, RunningShowTrick, WorldTrickPopularity},
+        running_show_types::{
+            AnimalPerformingShowTrick, BeginScheduledShowTrick, WorldTrickPopularity,
+        },
     },
 };
 
@@ -56,6 +58,7 @@ pub(super) fn start_scheduled_tricks_with_authored_outcome_tokens(
             &WorldMember,
             Option<&PerformerTraining>,
             &mut BehaviorRandomStream,
+            &AnimalPerformingShowTrick,
         ),
         (With<Animal>, Without<Dead>),
     >,
@@ -69,7 +72,7 @@ pub(super) fn start_scheduled_tricks_with_authored_outcome_tokens(
         return;
     };
     for request in requests.read() {
-        let (Some(trick), Some(tokens), Ok((world, training, mut random))) = (
+        let (Some(trick), Some(tokens), Ok((world, training, mut random, active))) = (
             definitions.find_trick(request.trick),
             definitions.find_trick_outcome_tokens(request.trick),
             performers.get_mut(request.performer),
@@ -102,6 +105,7 @@ pub(super) fn start_scheduled_tricks_with_authored_outcome_tokens(
             request.stage,
             request.performer,
             request.show,
+            *active.collection(),
             &mut commands,
         ) else {
             continue;
@@ -114,7 +118,7 @@ pub(super) fn start_scheduled_tricks_with_authored_outcome_tokens(
         .ceil() as u64;
         commands.spawn((
             ChildOf(request.performer),
-            TrickTokenForShow(request.show),
+            TrickTokenForShow(*active.collection()),
             ScheduledTrickToken { slot: request.slot },
             BehaviorSelfToken {
                 name,
@@ -146,16 +150,4 @@ pub(super) fn performance_level<'a>(
         .filter(|level| level.minimum_score <= proficiency(trick.id))
         .max_by_key(|level| level.minimum_score)
         .filter(|level| level.can_perform)
-}
-
-pub(super) fn release_tokens_when_running_show_trick_is_removed(
-    removed: On<Remove<RunningShowTrick>>,
-    runs: Query<&ShowTrickTokens>,
-    mut commands: Commands,
-) {
-    if let Ok(tokens) = runs.get(removed.entity) {
-        for token in tokens.iter() {
-            commands.entity(token).try_despawn();
-        }
-    }
 }

@@ -9,8 +9,6 @@ use self::variants::lower_species_root_actor_to_fallback_canonical_variant;
 use self::variants::lower_species_variant_source_record_to_canonical_variant;
 use crate::source_document::authored_species_purchase_family_queries::find_authored_species_purchase_family_root;
 use crate::source_document::blue_fang_actor_manifest_model_and_scene_resolution_index::BlueFangActorManifestModelAndSceneResolutionIndex;
-use crate::source_document::document_semantics::SourceDocumentKind;
-use crate::source_document::document_semantics::classify_source_document;
 use crate::source_document::ordered_source_document_types::OrderedSourceDocument;
 use crate::source_document::ordered_source_document_types::OrderedSourceDocumentNode;
 use crate::source_document::resolved_source_record_index::BindError;
@@ -81,9 +79,13 @@ pub(super) fn lower_resolved_species_source_document_closure_to_canonical_docume
     source_documents: &[OrderedSourceDocument],
     actor_manifest_resolution_index: &BlueFangActorManifestModelAndSceneResolutionIndex,
     primary_path: &str,
+    variant_need_adjustments: &mut Box<[(AssetId, i32)]>,
 ) -> Result<SpeciesDocument, BindError> {
     let species_source_documents = source_documents.iter().filter(|source_document| {
-        classify_source_document(source_document) == SourceDocumentKind::SpeciesOrEntity
+        source_document
+            .root
+            .name
+            .eq_ignore_ascii_case("BFTypedBinder")
     });
     let index = SourceIndex::build(species_source_documents)?;
     let Some(current) = index.document_root(primary_path) else {
@@ -138,6 +140,9 @@ pub(super) fn lower_resolved_species_source_document_closure_to_canonical_docume
         variant,
     })
     .collect::<Vec<_>>();
+    if !variants.is_empty() {
+        *variant_need_adjustments = needs::lower_variant_need_adjustments(&current, &species)?;
+    }
     if purchase_family.is_some() && current.key == species.key && variants.is_empty() {
         variants.extend(
             lower_species_root_actor_to_fallback_canonical_variant(

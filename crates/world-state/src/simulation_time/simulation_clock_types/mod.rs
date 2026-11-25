@@ -170,6 +170,16 @@ impl ZooDayCadence {
         self.clock_at(tick, fraction)
     }
 
+    /// The fractional tick count in one authored zoo day.
+    pub fn ticks_per_zoo_day(self) -> f64 {
+        self.day_numerator as f64 / self.tick_numerator as f64
+    }
+
+    pub fn day_fraction(self, clock: ZooClock) -> Option<f64> {
+        let elapsed = self.elapsed_numerator(clock.tick, clock.fractional_tick)?;
+        Some((elapsed % self.day_numerator) as f64 / self.day_numerator as f64)
+    }
+
     pub fn next_clock(self, clock: ZooClock) -> Option<ZooClock> {
         let tick = clock.tick.checked_add(1)?;
         let elapsed = self.elapsed_numerator(clock.tick, clock.fractional_tick)?;

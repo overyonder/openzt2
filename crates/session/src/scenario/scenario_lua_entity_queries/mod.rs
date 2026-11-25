@@ -28,6 +28,7 @@ const NEEDS: [(&str, NeedKind); 11] = [
     ("bathroom", NeedKind::Bathroom),
 ];
 
+#[derive(Clone, Copy)]
 struct EntityFacts {
     entity: Entity,
     persistent_id: Option<u64>,
@@ -176,36 +177,135 @@ fn matches_kind(fact: &EntityFacts, kind: &str, queries: ScenarioLuaQueryFacts<'
     matches_entity_type(fact, kind, queries.species, queries.world_definitions)
 }
 
-fn authored_entity_string_attribute(
+fn authored_attribute_id(attribute: &str) -> AssetId {
+    AssetId::from_key(
+        &openzt2_game_assets::source_document::source_document_semantic_name::canonicalize_source_document_record_key(attribute),
+    )
+}
+
+fn entity_string_attribute(
     queries: ScenarioLuaQueryFacts<'_>,
+    fact: EntityFacts,
     attribute: &str,
-    species_id: Option<AssetId>,
-    variant_id: Option<AssetId>,
 ) -> mlua::Result<String> {
-    let species = queries
-        .species
-        .ok_or_else(|| mlua::Error::runtime("species catalogue unavailable"))?;
-    if !matches!(attribute, "s_Species" | "s_Product") {
-        return Err(mlua::Error::runtime(format!(
-            "BFG_GET_ATTR_STRING does not expose {attribute}"
-        )));
+    if let (Some(species), "s_Species" | "s_Product") = (queries.species, attribute) {
+        let is_species = attribute == "s_Species";
+        let name = fact
+            .variant
+            .and_then(|variant| species.find_variant_binding(variant))
+            .and_then(|binding| {
+                if is_species {
+                    binding.authored_species_name_override.as_deref()
+                } else {
+                    binding.authored_product_name_override.as_deref()
+                }
+            })
+            .or_else(|| {
+                let species = species.find(fact.species?)?;
+                Some(if is_species {
+                    species.authored_species_name.as_str()
+                } else {
+                    species.authored_product_name.as_str()
+                })
+            });
+        if let Some(name) = name {
+            return Ok(name.to_owned());
+        }
     }
-    if let Some(name) = variant_id
-        .and_then(|variant| species.find_variant_binding(variant))
-        .and_then(|binding| match attribute {
-            "s_Species" => binding.authored_species_name_override.as_deref(),
-            _ => binding.authored_product_name_override.as_deref(),
+    let key = authored_attribute_id(attribute);
+    queries
+        .world_definitions
+        .and_then(|definitions| {
+            for id in fact.variant.into_iter().chain([fact.definition]) {
+                let Some(definition) = definitions.find_object(id) else {
+                    continue;
+                };
+                let values = &definition.authored_runtime.morph_targets;
+                if let Ok(index) = values.binary_search_by_key(&key, |(attribute, _)| *attribute) {
+                    if let Some(value) = definitions.object_record_key(values[index].1) {
+                        return Some(value.to_owned());
+                    }
+                }
+            }
+            None
         })
-    {
-        return Ok(name.to_owned());
+        .ok_or_else(|| missing_attribute(attribute))
+}
+
+fn entity_float_attribute(
+    queries: ScenarioLuaQueryFacts<'_>,
+    fact: EntityFacts,
+    attribute: &str,
+) -> mlua::Result<f64> {
+    if attribute == "f_TrashLevel" {
+        if let Some(value) = queries.waste.and_then(|waste| waste(fact.entity, None)) {
+            return Ok(f64::from(value));
+        }
     }
-    species_id
-        .and_then(|id| species.find(id))
-        .map(|species| match attribute {
-            "s_Species" => species.authored_species_name.clone(),
-            _ => species.authored_product_name.clone(),
+    if let Some(index) = NEEDS.iter().position(|(name, _)| *name == attribute) {
+        if let Some(wellness) = fact.needs[index] {
+            return Ok(
+                f64::from(MAX_NEED_Q16 - wellness.clamp(0, MAX_NEED_Q16)) / f64::from(10 * Q16_ONE)
+            );
+        }
+    }
+    let key = authored_attribute_id(attribute);
+    queries
+        .world_definitions
+        .and_then(|definitions| {
+            fact.variant
+                .into_iter()
+                .chain([fact.definition])
+                .find_map(|id| {
+                    let values = &definitions
+                        .find_object(id)?
+                        .authored_runtime
+                        .numeric_behavior_properties;
+                    let index = values
+                        .binary_search_by_key(&key, |(attribute, _)| *attribute)
+                        .ok()?;
+                    Some(f64::from(values[index].1))
+                })
         })
-        .ok_or_else(|| mlua::Error::runtime("entity has no authored species"))
+        .ok_or_else(|| missing_attribute(attribute))
+}
+
+fn entity_boolean_attribute(
+    queries: ScenarioLuaQueryFacts<'_>,
+    fact: EntityFacts,
+    attribute: &str,
+) -> mlua::Result<bool> {
+    match attribute {
+        "b_Pregnant" => Ok(fact.pregnant),
+        "b_Adult" => Ok(fact.adult),
+        "b_ExtinctAnimal" => Ok(fact
+            .species
+            .and_then(|species_id| queries.species?.find(species_id))
+            .is_some_and(|species| {
+                species.flags.contains(SpeciesFlags::EXTINCT)
+                    || species.conservation == ConservationStatus::Extinct
+            })),
+        _ => {
+            let key = authored_attribute_id(attribute);
+            let defined = attribute.starts_with("b_")
+                && queries.world_definitions.is_some_and(|definitions| {
+                    fact.variant.into_iter().chain([fact.definition]).any(|id| {
+                        definitions.find_object(id).is_some_and(|definition| {
+                            definition.behavior_type_identifiers.contains(&key)
+                        })
+                    })
+                });
+            if defined {
+                Ok(true)
+            } else {
+                Err(missing_attribute(attribute))
+            }
+        }
+    }
+}
+
+fn missing_attribute(key: &str) -> mlua::Error {
+    mlua::Error::runtime(format!("entity has no attribute {key}"))
 }
 
 fn same_entity(left: &Table, right: &Table) -> mlua::Result<bool> {
@@ -457,8 +557,6 @@ fn create_entity_component<'scope, 'env: 'scope>(
     fact: EntityFacts,
 ) -> mlua::Result<Table> {
     let entity = fact.entity;
-    let species_id = fact.species;
-    let variant_id = fact.variant;
     let component = lua.create_table()?;
     component.set_metatable(Some(entity_component_metatable(lua)?))?;
     component.set(ENTITY_FIELD, entity.to_bits())?;
@@ -498,49 +596,26 @@ fn create_entity_component<'scope, 'env: 'scope>(
             })
         })?,
     )?;
+    let current = move || {
+        entity_fact(queries, pending, entity)
+            .ok_or_else(|| mlua::Error::runtime("attribute requested for absent entity"))
+    };
     component.set(
         "BFG_GET_ATTR_BOOLEAN",
         scope.create_function(move |_, (_, attribute): (Table, String)| {
-            match attribute.as_str() {
-                "b_Pregnant" => Ok(fact.pregnant),
-                "b_Adult" => Ok(fact.adult),
-                "b_ExtinctAnimal" => Ok(fact
-                    .species
-                    .and_then(|species_id| queries.species?.find(species_id))
-                    .is_some_and(|species| {
-                        species.flags.contains(SpeciesFlags::EXTINCT)
-                            || species.conservation == ConservationStatus::Extinct
-                    })),
-                _ => Err(mlua::Error::runtime(format!(
-                    "BFG_GET_ATTR_BOOLEAN does not expose {attribute}"
-                ))),
-            }
+            entity_boolean_attribute(queries, current()?, &attribute)
         })?,
     )?;
     component.set(
         "BFG_GET_ATTR_STRING",
         scope.create_function(move |_, (_, attribute): (Table, String)| {
-            authored_entity_string_attribute(queries, &attribute, species_id, variant_id)
+            entity_string_attribute(queries, current()?, &attribute)
         })?,
     )?;
     component.set(
         "BFG_GET_ATTR_FLOAT",
         scope.create_function(move |_, (_, attribute): (Table, String)| {
-            if attribute == "f_TrashLevel" {
-                return queries
-                    .waste
-                    .and_then(|waste| waste(entity, None))
-                    .map(f64::from)
-                    .ok_or_else(|| mlua::Error::runtime("entity holds no trash"));
-            }
-            let index = NEEDS
-                .iter()
-                .position(|(name, _)| *name == attribute)
-                .ok_or_else(|| mlua::Error::runtime("unsupported animal float attribute"))?;
-            let wellness = entity_fact(queries, pending, entity)
-                .and_then(|v| v.needs[index])
-                .ok_or_else(|| mlua::Error::runtime("animal need has not initialized"))?;
-            Ok(f64::from(MAX_NEED_Q16 - wellness.clamp(0, MAX_NEED_Q16)) / f64::from(10 * Q16_ONE))
+            entity_float_attribute(queries, current()?, &attribute)
         })?,
     )?;
     component.set(
@@ -665,17 +740,32 @@ pub(super) fn create_world_manager<'scope, 'env: 'scope>(
             scope.create_function(move |_, _: Table| Ok(queries.overhead_camera.map(read)))?,
         )?;
     }
+    let attribute_source = move |request: &Table| -> mlua::Result<(EntityFacts, String)> {
+        let binder: Table = request.get("key")?;
+        let entity = resolve_reference_entity(&binder, queries, pending)?;
+        let fact = entity_fact(queries, pending, entity)
+            .ok_or_else(|| mlua::Error::runtime("attribute requested for absent entity"))?;
+        Ok((fact, request.get("val")?))
+    };
     manager.set(
         "BFG_GET_ATTR_STRING",
-        scope.create_function(move |_, (_, attribute): (Table, Table)| {
-            if attribute.get::<String>("val")? != "s_Species" {
-                return Err(mlua::Error::runtime("unsupported world string attribute"));
-            }
-            let binder: Table = attribute.get("key")?;
-            let entity = resolve_reference_entity(&binder, queries, pending)?;
-            let fact = entity_fact(queries, pending, entity)
-                .ok_or_else(|| mlua::Error::runtime("species requested for absent entity"))?;
-            authored_entity_string_attribute(queries, "s_Species", fact.species, fact.variant)
+        scope.create_function(move |_, (_, request): (Table, Table)| {
+            let (fact, key) = attribute_source(&request)?;
+            entity_string_attribute(queries, fact, &key)
+        })?,
+    )?;
+    manager.set(
+        "BFG_GET_ATTR_FLOAT",
+        scope.create_function(move |_, (_, request): (Table, Table)| {
+            let (fact, key) = attribute_source(&request)?;
+            entity_float_attribute(queries, fact, &key)
+        })?,
+    )?;
+    manager.set(
+        "BFG_GET_ATTR_BOOLEAN",
+        scope.create_function(move |_, (_, request): (Table, Table)| {
+            let (fact, key) = attribute_source(&request)?;
+            entity_boolean_attribute(queries, fact, &key)
         })?,
     )?;
     manager.set(
@@ -684,13 +774,6 @@ pub(super) fn create_world_manager<'scope, 'env: 'scope>(
             let entity = resolve_reference_entity(&component, queries, pending)?;
             if entity_fact(queries, pending, entity).is_none() {
                 return Err(mlua::Error::runtime("cannot name an absent entity"));
-            }
-            // Scripted creations already carry their canonical generated Name.
-            if !pending.borrow().spawns.iter().any(|v| v.entity == entity) {
-                pending
-                    .borrow_mut()
-                    .commands
-                    .push(ScenarioEntityCommand::Name(entity));
             }
             Ok(())
         })?,

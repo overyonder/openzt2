@@ -3,8 +3,8 @@
 use std::io;
 
 use openzt2_game_data::{
-    behavior::document::{BehaviorDocument, BehaviorSet, BehaviorTask},
     AssetId,
+    behavior::document::{BehaviorDocument, BehaviorSet, BehaviorTask},
 };
 
 use crate::source_document::ordered_source_document_types::{
@@ -90,6 +90,35 @@ fn lower_behavior_task_declaration(
         .or_else(|| behavior_task_node.attribute("Name"))
         .unwrap_or("<anonymous>")
         .to_owned();
+    let mut candidate_eligibility_requirements =
+        eligibility::lower_behavior_task_candidate_eligibility_requirements(behavior_task_node)?;
+    if let Some(container) = behavior_task_node
+        .attribute("objectContainer")
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+    {
+        use openzt2_game_data::behavior::eligibility::{
+            BehaviorCandidateEligibilityFact, BehaviorCandidateEligibilityRequirements,
+            BehaviorCandidateRole, BehaviorConditionEligibilityFact,
+            BehaviorEligibilityFactComparison, BehaviorEligibilityFactInput,
+            BehaviorEligibilityFactJunction, BehaviorEligibilityFactValue,
+        };
+        candidate_eligibility_requirements.push(BehaviorCandidateEligibilityRequirements {
+            candidate_role: BehaviorCandidateRole::Object,
+            eligibility_fact_junction: BehaviorEligibilityFactJunction::All,
+            candidate_type_identifiers: Vec::new(),
+            candidate_type_junction: BehaviorEligibilityFactJunction::Any,
+            eligibility_facts: vec![BehaviorCandidateEligibilityFact {
+                fact_input: BehaviorEligibilityFactInput::Condition(
+                    BehaviorConditionEligibilityFact::ObjectContainer,
+                ),
+                comparison: BehaviorEligibilityFactComparison::Equal,
+                expected_value: BehaviorEligibilityFactValue::Symbol(AssetId::from_key(
+                    &container.to_ascii_lowercase(),
+                )),
+            }],
+        });
+    }
     Ok(BehaviorTask {
         id: create_behavior_declaration_identifier(
             source_document,
@@ -125,8 +154,7 @@ fn lower_behavior_task_declaration(
         subjects: subject_type_names,
         targets: target_type_names,
         objects: object_type_names,
-        candidate_eligibility_requirements:
-            eligibility::lower_behavior_task_candidate_eligibility_requirements(behavior_task_node)?,
+        candidate_eligibility_requirements,
         scores: find_direct_child_behavior_source_node(behavior_task_node, "BFAIEvalData")
             .map(scoring::lower_behavior_evaluation)
             .transpose()?

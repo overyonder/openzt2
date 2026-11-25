@@ -69,7 +69,6 @@ pub(super) fn refresh_navigation_graph_after_terrain_edits(
     terrain_chunks: Query<(&TerrainChunk, Option<&EditedTerrainSamples>, &WorldMember)>,
     mut changed: MessageWriter<NavigationTerrainGraphChanged>,
 ) {
-    let mut changed_roots = bevy::ecs::entity::EntityHashSet::default();
     for terrain_change in terrain_navigation_changes.read() {
         let Ok((terrain_chunk, edited_terrain_samples, member)) =
             terrain_chunks.get(terrain_change.chunk)
@@ -82,9 +81,14 @@ pub(super) fn refresh_navigation_graph_after_terrain_edits(
         let Ok(mut graph) = graphs.get_mut(member.root) else {
             continue;
         };
-        if changed_roots.insert(member.root) {
-            changed.write(NavigationTerrainGraphChanged(member.root));
-        }
+        changed.write(NavigationTerrainGraphChanged {
+            root: member.root,
+            bounds: navigation_sample_edit_bounds(
+                terrain_chunk,
+                terrain_change.min,
+                terrain_change.max,
+            ),
+        });
         refresh_terrain_derived_navigation_graph_cells_from_changed_terrain_samples(
             graph.terrain_derived_navigation_graph_mut(),
             terrain_chunk,
@@ -97,7 +101,16 @@ pub(super) fn refresh_navigation_graph_after_terrain_edits(
 }
 
 #[derive(Message)]
-pub(super) struct NavigationTerrainGraphChanged(pub(super) Entity);
+pub(super) struct NavigationTerrainGraphChanged {
+    pub(super) root: Entity,
+    pub(super) bounds: Rect,
+}
+
+pub(super) fn navigation_sample_edit_bounds(chunk: &TerrainChunk, min: UVec2, max: UVec2) -> Rect {
+    let min = chunk.origin + min.saturating_sub(UVec2::ONE).as_vec2() * chunk.spacing_m;
+    let max = chunk.origin + (max.as_vec2() + Vec2::ONE) * chunk.spacing_m;
+    Rect::from_corners(min, max)
+}
 
 pub(super) fn invalidate_routes_after_navigation_geometry_changes(
     mut terrain_changes: MessageReader<NavigationTerrainGraphChanged>,
@@ -111,7 +124,7 @@ pub(super) fn invalidate_routes_after_navigation_geometry_changes(
 ) {
     let changed: bevy::ecs::entity::EntityHashSet = terrain_changes
         .read()
-        .map(|event| event.0)
+        .map(|event| event.root)
         .chain(path_changes.read().map(|event| event.root))
         .chain(water_changes.read().map(|event| event.0))
         .collect();

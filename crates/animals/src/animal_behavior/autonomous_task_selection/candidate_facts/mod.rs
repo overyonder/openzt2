@@ -3,9 +3,9 @@
 use crate::animal_welfare::need_latch_types::AnimalNeedLatches;
 use bevy::{ecs::query::QueryData, prelude::*};
 use openzt2_game_data::{
-    AssetId,
     behavior::eligibility::*,
     species::{LifeStage, Sex},
+    AssetId,
 };
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_zoo_state::animal_behavior::animal_lineage::AnimalMate;
@@ -24,14 +24,15 @@ use openzt2_zoo_state::animal_welfare::types::ExerciseNeed;
 use openzt2_zoo_state::animal_welfare::types::HealthNeed;
 use openzt2_zoo_state::animal_welfare::types::Hunger;
 use openzt2_zoo_state::animal_welfare::types::HygieneNeed;
-use openzt2_zoo_state::animal_welfare::types::MAX_NEED_Q16;
 use openzt2_zoo_state::animal_welfare::types::PrivacyNeed;
-use openzt2_zoo_state::animal_welfare::types::Q16_ONE;
 use openzt2_zoo_state::animal_welfare::types::RestNeed;
 use openzt2_zoo_state::animal_welfare::types::SocialNeed;
 use openzt2_zoo_state::animal_welfare::types::StimulationNeed;
 use openzt2_zoo_state::animal_welfare::types::Thirst;
-use openzt2_zoo_state::animal_welfare::types::{REPRODUCTION_TRIGGER_INDEX, ReproductionNeed};
+use openzt2_zoo_state::animal_welfare::types::MAX_NEED_Q16;
+use openzt2_zoo_state::animal_welfare::types::Q16_ONE;
+use openzt2_zoo_state::animal_welfare::types::{ReproductionNeed, REPRODUCTION_TRIGGER_INDEX};
+use openzt2_zoo_state::authored_float_attributes::AuthoredFloatAttributes;
 use openzt2_zoo_state::habitat::habitat_types::HabitatMember;
 use openzt2_zoo_state::locomotion::locomotion_types::LocomotionMode;
 use openzt2_zoo_state::locomotion::locomotion_types::Velocity;
@@ -134,7 +135,7 @@ pub(crate) struct AnimalCandidateFacts {
     need_points: Option<&'static openzt2_zoo_state::animal_welfare::types::NeedPoints>,
     training: Option<&'static openzt2_zoo_state::shows::performer_training::PerformerTraining>,
     rehearsing: Has<openzt2_zoo_state::shows::running_show_types::AnimalPerformingShowTrick>,
-    authored_values: Option<&'static crate::animal_behavior::ScriptFloatAttributes>,
+    authored_values: Option<&'static AuthoredFloatAttributes>,
 }
 
 impl AnimalCandidateFactsItem<'_, '_> {
@@ -332,7 +333,11 @@ impl AnimalCandidateFactsItem<'_, '_> {
                     };
                     authored_types.contains(&AssetId::from_key(key))
                 });
-                if value { Q16_ONE } else { 0 }
+                if value {
+                    Q16_ONE
+                } else {
+                    0
+                }
             }
             BehaviorEligibilityFactInput::Taxonomy(taxonomy) => {
                 let key = match taxonomy {
@@ -393,8 +398,7 @@ impl AnimalCandidateFactsItem<'_, '_> {
     fn authored_value(&self, key: AssetId) -> i32 {
         (self
             .authored_values
-            .and_then(|values| values.0.get(&key))
-            .copied()
+            .and_then(|values| values.get(key))
             .unwrap_or_default()
             * Q16_ONE as f32)
             .round() as i32

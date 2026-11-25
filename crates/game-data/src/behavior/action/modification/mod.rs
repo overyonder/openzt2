@@ -79,4 +79,6 @@ pub enum BehaviorFact {
     Education,
     FoundDonationBox,
     MissedDonationBox,
+    EducationDonationBonus,
+    Tour,
 }

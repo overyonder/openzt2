@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use super::research_duration_calculation::resolve_research_duration_to_simulation_ticks;
 use bevy::ecs::{entity::EntityHashSet, relationship::RelationshipTarget};
 use bevy::prelude::*;
@@ -20,10 +22,8 @@ use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 use super::{
     award_and_progression_fact_types::ProgressionFactChanged,
     catalogue_definition_index_queries::find_catalogue_definition_index,
-    catalogue_unlock_set_operations::{
-        catalogue_definition_is_unlocked_at_index, mark_catalogue_definition_unlocked_at_index,
-    },
-    research_progress_calculations::advance_research_project_by_one_tick,
+    catalogue_unlock_application::apply_catalogue_unlock_targets,
+    catalogue_unlock_set_operations::catalogue_definition_is_unlocked_at_index,
     research_types::{
         PendingResearchProjectPayment, ResearchAvailabilityUnlockCountdown,
         ResearchDurationOverride, ResearchItemPayments, ResearchProject,
@@ -131,7 +131,7 @@ pub(super) fn start_paid_research_projects(
         let Ok((member, availability, duration, current_payment)) = items.get(payment.item) else {
             continue;
         };
-        if current_payment.pending_payment() != result.operation {
+        if current_payment.iter().next() != Some(result.operation) {
             continue;
         }
         let Some(definitions) = definitions else {
@@ -205,9 +205,51 @@ pub(super) fn apply_research_duration_overrides(
     }
 }
 
-pub(super) fn advance_active_research_projects_by_one_tick(
+#[derive(Component)]
+pub(super) struct ResearchProjectClock(Timer);
+
+#[derive(Component)]
+pub(super) struct ResearchAvailabilityClock(Timer);
+
+#[derive(Component, Default, PartialEq, Eq)]
+pub struct ResearchCompletionBasisPoints(pub i64);
+
+fn tick_duration(step: Duration, ticks: u64) -> Duration {
+    let nanos = step.as_nanos().saturating_mul(u128::from(ticks));
+    u64::try_from(nanos / 1_000_000_000).map_or(Duration::MAX, |seconds| {
+        Duration::new(seconds, (nanos % 1_000_000_000) as u32)
+    })
+}
+
+pub(super) fn publish_restored_research_progress(
+    projects: Query<
+        (Entity, &ResearchProject),
+        (
+            Added<ResearchProject>,
+            Without<ResearchCompletionBasisPoints>,
+        ),
+    >,
+    mut commands: Commands,
+) {
+    for (entity, project) in &projects {
+        commands
+            .entity(entity)
+            .insert(ResearchCompletionBasisPoints(
+                ((u128::from(project.elapsed_ticks.min(project.required_ticks)) * 10_000)
+                    / u128::from(project.required_ticks.max(1))) as i64,
+            ));
+    }
+}
+
+pub(super) fn advance_active_research_projects(
+    time: Res<Time<Fixed>>,
     mut projects: Query<
-        (Entity, &mut ResearchProject),
+        (
+            Entity,
+            &mut ResearchProject,
+            Option<&mut ResearchProjectClock>,
+            Option<&mut ResearchCompletionBasisPoints>,
+        ),
         (
             Without<ResearchProjectPaused>,
             Without<ReadyResearchProject>,
@@ -215,27 +257,84 @@ pub(super) fn advance_active_research_projects_by_one_tick(
     >,
     mut commands: Commands,
 ) {
-    for (entity, mut project) in &mut projects {
-        if advance_research_project_by_one_tick(&mut project) {
+    let step = time.timestep();
+    for (entity, mut project, clock, progress_values) in &mut projects {
+        let mut restored = clock.is_none().then(|| {
+            let mut timer =
+                Timer::new(tick_duration(step, project.required_ticks), TimerMode::Once);
+            timer.set_elapsed(tick_duration(
+                step,
+                project.elapsed_ticks.min(project.required_ticks),
+            ));
+            timer
+        });
+        let Some(timer) = clock
+            .map(|clock| &mut clock.into_inner().0)
+            .or(restored.as_mut())
+        else {
+            continue;
+        };
+        timer.tick(step);
+        let elapsed = (timer.elapsed().as_nanos() / step.as_nanos()) as u64;
+        if project.elapsed_ticks != elapsed {
+            project.elapsed_ticks = elapsed;
+        }
+        let progress = ResearchCompletionBasisPoints(
+            ((u128::from(elapsed) * 10_000) / u128::from(project.required_ticks.max(1))) as i64,
+        );
+        if let Some(mut current) = progress_values {
+            current.set_if_neq(progress);
+        } else {
+            commands.entity(entity).insert(progress);
+        }
+        if timer.is_finished() {
             commands.entity(entity).insert(ReadyResearchProject);
+        } else if let Some(timer) = restored {
+            commands.entity(entity).insert(ResearchProjectClock(timer));
         }
     }
 }
 
 pub(super) fn advance_research_availability_unlock_countdowns(
-    mut countdowns: Query<(Entity, &mut ResearchAvailabilityUnlockCountdown)>,
+    time: Res<Time<Fixed>>,
+    mut countdowns: Query<(
+        Entity,
+        &mut ResearchAvailabilityUnlockCountdown,
+        Option<&mut ResearchAvailabilityClock>,
+    )>,
     mut commands: Commands,
 ) {
-    for (entity, mut countdown) in &mut countdowns {
-        countdown.remaining_ticks = countdown.remaining_ticks.saturating_sub(1);
-        if countdown.remaining_ticks != 0 {
+    let step = time.timestep();
+    for (entity, mut countdown, clock) in &mut countdowns {
+        let mut restored = clock.is_none().then(|| {
+            Timer::new(
+                tick_duration(step, countdown.remaining_ticks),
+                TimerMode::Once,
+            )
+        });
+        let Some(timer) = clock
+            .map(|clock| &mut clock.into_inner().0)
+            .or(restored.as_mut())
+        else {
             continue;
+        };
+        timer.tick(step);
+        if timer.is_finished() {
+            commands.entity(entity).remove::<(
+                ResearchAvailabilityClock,
+                ResearchAvailabilityUnlockCountdown,
+            )>();
+        } else {
+            let remaining = timer.remaining().as_nanos().div_ceil(step.as_nanos()) as u64;
+            if countdown.remaining_ticks != remaining {
+                countdown.remaining_ticks = remaining;
+            }
+            if let Some(timer) = restored {
+                commands
+                    .entity(entity)
+                    .insert(ResearchAvailabilityClock(timer));
+            }
         }
-        // Expiry removes only the delay; the availability refresh still owns
-        // the authored fame and game-mode requirements.
-        commands
-            .entity(entity)
-            .remove::<ResearchAvailabilityUnlockCountdown>();
     }
 }
 
@@ -258,23 +357,16 @@ pub(super) fn complete_research_projects_and_apply_authored_unlocks(
         let Some(research) = definitions.find_research(project.definition) else {
             continue;
         };
-        let targets = &research.unlocks;
-        if !targets
-            .iter()
-            .all(|target| find_catalogue_definition_index(definitions, *target).is_some())
-        {
-            continue;
-        }
         let Ok(mut unlocks) = root_unlocks.get_mut(member.root) else {
             continue;
         };
-        for target in targets {
-            let id = *target;
-            if let Some(index) = find_catalogue_definition_index(definitions, id) {
-                if mark_catalogue_definition_unlocked_at_index(&mut unlocks, index) == Some(true) {
-                    changed.write(ProgressionFactChanged::Unlock(id));
-                }
-            }
+        if !apply_catalogue_unlock_targets(
+            definitions,
+            &research.unlocks,
+            &mut unlocks,
+            &mut changed,
+        ) {
+            continue;
         }
         completed.write(ResearchProjectCompleted {
             root: member.root,
@@ -287,6 +379,8 @@ pub(super) fn complete_research_projects_and_apply_authored_unlocks(
             ResearchProjectPaused,
             ResearchProjectPersistentId,
             ReadyResearchProject,
+            ResearchProjectClock,
+            ResearchCompletionBasisPoints,
         )>();
     }
 }

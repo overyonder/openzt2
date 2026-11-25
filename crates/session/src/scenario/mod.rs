@@ -1,4 +1,3 @@
-mod challenge_lua_ui;
 mod challenge_offer_execution;
 mod challenge_offer_lua_validation;
 mod challenge_offer_presentation;
@@ -76,6 +75,7 @@ impl Plugin for ScenarioPlugin {
             .add_message::<ScenarioTerminalResult>()
             .add_message::<ScenarioObjectiveStatusChanged>()
             .add_message::<scenario_objective_lua_execution::EvaluatedScenarioTerminal>()
+            .add_message::<scenario_objective_lua_execution::ScenarioEvaluationDue>()
             .add_message::<openzt2_zoo_state::scenario::scenario_objective_types::ShowScenarioRuleRequest>()
             .add_message::<scenario_photo_challenge_selection::SelectCurrentPhotoChallengeSetRequest>()
             .add_systems(
@@ -138,7 +138,7 @@ impl Plugin for ScenarioPlugin {
                 (
                     scenario_rule_visibility::show_requested_scenario_rules,
                     scenario_ui_modification_presentation::
-                        apply_mode_scenario_ui_modifications_to_projected_nodes,
+                        project_running_scenario_ui_modifications,
                     challenge_offer_presentation::project_authored_challenge_panel_text,
                     challenge_offer_presentation::reopen_restored_challenge_panel,
                     scenario_goal_panel_presentation::size_and_bind_authored_scenario_goal_rows,
@@ -163,9 +163,12 @@ impl Plugin for ScenarioPlugin {
                 (
                     scenario_objective_progression::
                         expire_active_objectives,
-                    scenario_objective_lua_execution::
-                        evaluate_active_scenario_objective_lua_condition_scripts
-                        .before(scenario_objective_progression::expire_active_objectives),
+                    scenario_objective_lua_execution::rebuild_scenario_rule_binding_indexes,
+                    scenario_objective_lua_execution::advance_scenario_script_timers
+                        .after(scenario_objective_lua_execution::rebuild_scenario_rule_binding_indexes),
+                    scenario_objective_lua_execution::evaluate_due_scenario_rules
+                        .after_ignore_deferred(scenario_objective_lua_execution::advance_scenario_script_timers)
+                        .before_ignore_deferred(scenario_objective_progression::expire_active_objectives),
                     scenario_objective_progression::remove_expired_challenge_offers,
                 )
                     .in_set(ScenarioFixedUpdateStage::EvaluateObjectiveAndChallengeScripts)
@@ -175,7 +178,7 @@ impl Plugin for ScenarioPlugin {
                 FixedUpdate,
                 (
                     scenario_objective_lua_execution::
-                        execute_scenario_objective_success_and_failure_lua_scripts,
+                        resolve_external_scenario_rule_transitions,
                     scenario_resolution::queue_completed_scenarios_for_terminal_resolution,
                 )
                     .chain()

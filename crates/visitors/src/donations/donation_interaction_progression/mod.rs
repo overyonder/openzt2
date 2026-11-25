@@ -1,4 +1,7 @@
-use bevy::prelude::*;
+use bevy::{
+    ecs::{entity::EntityHashSet, entity_disabling::Disabled, system::SystemParam},
+    prelude::*,
+};
 use openzt2_zoo_state::donations::donation_guest_decision_types::{
     DonationCandidate, DonationProgress,
 };
@@ -120,28 +123,116 @@ pub(super) fn reject_donation_candidates_after_navigation_failure(
     }
 }
 
-pub(super) fn cancel_donation_interactions_with_missing_subjects_or_acceptors(
+#[derive(Component)]
+#[relationship(relationship_target = ArrivingDonors, allow_self_referential)]
+pub(super) struct DonatingTo(Entity);
+
+#[derive(Component)]
+#[relationship_target(relationship = DonatingTo)]
+pub(super) struct ArrivingDonors(Vec<Entity>);
+
+#[derive(Component)]
+#[relationship(relationship_target = InterestedDonors, allow_self_referential)]
+pub(super) struct DonatingFor(Entity);
+
+#[derive(Component)]
+#[relationship_target(relationship = DonatingFor)]
+pub(super) struct InterestedDonors(Vec<Entity>);
+
+#[derive(SystemParam)]
+pub(super) struct DonationRelationChanges<'w, 's> {
+    new_phase: Query<
+        'w,
+        's,
+        Entity,
+        (
+            With<Guest>,
+            Or<(Changed<DonationCandidate>, Added<DonationProgress>)>,
+        ),
+    >,
+    disabled: Query<
+        'w,
+        's,
+        Entity,
+        (
+            Allow<Disabled>,
+            Added<Disabled>,
+            Or<(With<ArrivingDonors>, With<InterestedDonors>)>,
+        ),
+    >,
+    donors: Query<'w, 's, &'static ArrivingDonors, Allow<Disabled>>,
+    interested: Query<'w, 's, &'static InterestedDonors, Allow<Disabled>>,
+    removed_candidate: RemovedComponents<'w, 's, DonationCandidate>,
+    removed_progress: RemovedComponents<'w, 's, DonationProgress>,
+    lost_acceptor_link: RemovedComponents<'w, 's, DonatingTo>,
+    lost_subject_link: RemovedComponents<'w, 's, DonatingFor>,
+    removed_acceptor: RemovedComponents<'w, 's, DonationAcceptor>,
+    removed_opportunity: RemovedComponents<'w, 's, DonationOpportunity>,
+    reenabled: RemovedComponents<'w, 's, Disabled>,
+}
+
+impl DonationRelationChanges<'_, '_> {
+    fn affected(&mut self) -> EntityHashSet {
+        let mut affected: EntityHashSet = self
+            .new_phase
+            .iter()
+            .chain(self.removed_candidate.read())
+            .chain(self.removed_progress.read())
+            .chain(self.lost_acceptor_link.read())
+            .chain(self.lost_subject_link.read())
+            .chain(self.reenabled.read())
+            .collect();
+        for owner in self
+            .disabled
+            .iter()
+            .chain(self.removed_acceptor.read())
+            .chain(self.removed_opportunity.read())
+        {
+            if let Ok(donors) = self.donors.get(owner) {
+                affected.extend(donors.iter());
+            }
+            if let Ok(donors) = self.interested.get(owner) {
+                affected.extend(donors.iter());
+            }
+        }
+        affected
+    }
+}
+
+#[allow(clippy::type_complexity)]
+pub(super) fn reconcile_donation_phase_relationships(
     mut commands: Commands,
+    mut changes: DonationRelationChanges,
     guests: Query<
         (
             Entity,
             Option<&DonationCandidate>,
             Option<&DonationProgress>,
+            Option<&DonatingTo>,
+            Option<&DonatingFor>,
         ),
         (
             With<Guest>,
-            Or<(With<DonationCandidate>, With<DonationProgress>)>,
+            Or<(
+                With<DonationCandidate>,
+                With<DonationProgress>,
+                With<DonatingTo>,
+                With<DonatingFor>,
+            )>,
         ),
     >,
     acceptors: Query<(), With<DonationAcceptor>>,
     opportunities: Query<(), With<DonationOpportunity>>,
     mut rejected_donations: MessageWriter<DonationRejected>,
 ) {
-    for (guest, candidate, progress) in &guests {
+    for (guest, candidate, progress, acceptor_link, subject_link) in
+        guests.iter_many(changes.affected()).matched()
+    {
         let Some((acceptor, subject)) = candidate
             .map(|candidate| (candidate.acceptor, candidate.subject))
             .or_else(|| progress.map(|progress| (progress.acceptor, progress.subject)))
         else {
+            commands.entity(guest).remove::<(DonatingTo, DonatingFor)>();
             continue;
         };
 
@@ -155,11 +246,20 @@ pub(super) fn cancel_donation_interactions_with_missing_subjects_or_acceptors(
                 acceptor,
                 reason,
             });
-            commands
-                .entity(guest)
-                .remove::<DonationCandidate>()
-                .remove::<DonationProgress>()
-                .remove::<DonationPaymentRequested>();
+            commands.entity(guest).remove::<(
+                DonationCandidate,
+                DonationProgress,
+                DonationPaymentRequested,
+                DonatingTo,
+                DonatingFor,
+            )>();
+            continue;
+        }
+        if acceptor_link.is_none_or(|link| link.0 != acceptor) {
+            commands.entity(guest).insert(DonatingTo(acceptor));
+        }
+        if subject_link.is_none_or(|link| link.0 != subject) {
+            commands.entity(guest).insert(DonatingFor(subject));
         }
     }
 }

@@ -174,9 +174,9 @@ mod tests {
             [0, 0, 2000, 3000, 3500].map(std::time::Duration::from_millis)
         );
         let action = |index: usize| match &events[index].action {
-            openzt2_game_data::ui_document::timed_presentation::UiTimedEventAction::Ui(
-                openzt2_game_data::ui_document::action::UiActionRecord::Presentation(record),
-            ) => &record.action,
+            openzt2_game_data::ui_document::action::UiActionRecord::Presentation(record) => {
+                &record.action
+            }
             _ => panic!("expected presentation action"),
         };
         assert!(matches!(action(0),

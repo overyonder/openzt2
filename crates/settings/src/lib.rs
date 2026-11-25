@@ -6,7 +6,6 @@ mod display_resolution_ui_presentation;
 mod display_settings_application;
 use openzt2_interface_state::settings::display_settings_types;
 mod display_settings_validation;
-mod graphics_detail_setting_types;
 mod graphics_detail_setting_ui_presentation;
 mod graphics_settings_application;
 mod graphics_settings_presentation_types;
@@ -165,5 +164,6 @@ impl Plugin for SettingsPlugin {
 
 #[cfg(test)]
 mod display_and_graphics_settings_tests;
+
 #[cfg(test)]
 mod graphics_detail_setting_tests;

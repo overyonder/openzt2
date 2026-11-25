@@ -6,7 +6,7 @@ use openzt2_interface_state::camera::camera_control_message_types;
 use openzt2_interface_state::camera::camera_runtime_state_types;
 mod fixed_aspect_perspective_projection;
 mod math;
-mod photo_zoom;
+pub(crate) mod photo_zoom;
 pub mod systems;
 mod ui_actions;
 use openzt2_interface_state::camera::world_pointer_ray_types;

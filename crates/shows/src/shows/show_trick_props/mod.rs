@@ -1,10 +1,5 @@
 use avian3d::prelude::{RigidBody, SpatialQuery, SpatialQueryFilter};
-use bevy::{
-    ecs::{relationship::RelationshipTarget, system::SystemParam},
-    gltf::Gltf,
-    platform::collections::HashMap,
-    prelude::*,
-};
+use bevy::{ecs::system::SystemParam, gltf::Gltf, platform::collections::HashMap, prelude::*};
 use openzt2_game_assets::{
     scene_prefab::ScenePrefabAsset,
     world_definitions::{
@@ -15,11 +10,11 @@ use openzt2_game_assets::{
     },
 };
 use openzt2_game_data::{
+    AssetId,
     world_definitions::{
         animal_shows_and_training::TrickDefinition,
         object_placement::{FootprintCellFlags, PlaceableDefinition},
     },
-    AssetId,
 };
 use openzt2_world::world_spawn::prefab_world_instance_spawning::spawn_loaded_scene_prefab_as_world_instance;
 use openzt2_world_state::world_spawn::{
@@ -39,7 +34,7 @@ use openzt2_zoo_state::{
         },
     },
     shows::{
-        running_show_types::{RunningShow, RunningShowTrick, ShowPhase},
+        running_show_types::{RunningShow, ShowPhase},
         show_stage_types::ShowStage,
     },
     topology::topology_graph_types::TopologyGrid,
@@ -55,16 +50,6 @@ pub(super) struct ShowTrickPropOf(Entity);
 #[derive(Component)]
 #[relationship_target(relationship = ShowTrickPropOf, linked_spawn)]
 pub(super) struct ShowTrickProp(Entity);
-
-pub(super) fn remove_completed_prop(
-    removed: On<Remove<RunningShowTrick>>,
-    props: Query<&ShowTrickProp>,
-    mut commands: Commands,
-) {
-    if let Ok(prop) = props.get(removed.entity) {
-        commands.entity(*prop.collection()).try_despawn();
-    }
-}
 
 #[derive(Component)]
 pub(super) struct ShowPropAssets(HashMap<AssetId, Handle<ScenePrefabAsset>>);
@@ -87,7 +72,7 @@ pub(super) fn load_scheduled_prop_prefabs(
             continue;
         }
         let handles: HashMap<_, _> = slots
-            .iter_many(order.0.iter().copied())
+            .iter_many(order.slots())
             .flatten()
             .filter_map(|slot| {
                 let target = definitions.find_trick(slot.trick)?.target;
@@ -140,6 +125,7 @@ impl ShowPropPlacement<'_, '_> {
         stage: Entity,
         performer: Entity,
         show: Entity,
+        action: Entity,
         commands: &mut Commands,
     ) -> Option<Entity> {
         let (stage_pose, member) = self.stages.get(stage).ok()?;
@@ -236,7 +222,7 @@ impl ShowPropPlacement<'_, '_> {
         );
         commands
             .entity(prop)
-            .insert((ShowTrickPropOf(show), *habitat));
+            .insert((ShowTrickPropOf(action), *habitat));
         Some(prop)
     }
 }

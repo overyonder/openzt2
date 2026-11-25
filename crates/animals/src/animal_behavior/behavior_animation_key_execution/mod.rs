@@ -7,8 +7,8 @@ use openzt2_game_assets::world_definitions::{
     world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
 };
 use openzt2_game_data::{
-    AssetId, animation::animation_text_key::AuthoredAnimationTextAction,
-    world_definitions::world_objects::WorldObjectWhapPhysics,
+    animation::animation_text_key::AuthoredAnimationTextAction,
+    world_definitions::world_objects::WorldObjectWhapPhysics, AssetId,
 };
 use openzt2_world_state::{
     animation_graph::{
@@ -40,8 +40,6 @@ use openzt2_zoo_state::{
     animal_health::types::{AnimalDied, Dead, DeathCause},
     animal_lifecycle::types::Animal,
     behavior_task_execution_types::{
-        BehaviorTaskExecutionState, PendingBehaviorAnimationClipCompletion,
-        PendingBehaviorTaskFailure,
         continuations::BehaviorContinuationFrames,
         running_actions::{
             BehaviorAnimationEffect, BehaviorAnimationKeyDelivery, BehaviorAnimationTextKeys,
@@ -50,6 +48,8 @@ use openzt2_zoo_state::{
             RunBehaviorAnimationEffect, RunningBehaviorInstruction, SuspendedBehaviorSetInterrupt,
             TimedBehaviorAnimationEffect,
         },
+        BehaviorTaskExecutionState, PendingBehaviorAnimationClipCompletion,
+        PendingBehaviorTaskFailure,
     },
     guests::guest_simulation_types::GuestRng,
     placement::{
@@ -59,7 +59,7 @@ use openzt2_zoo_state::{
     topology::topology_graph_types::TopologyGrid,
 };
 
-use super::behavior_target_morph_execution::{FenceTopology, resolve_fence_morph};
+use super::behavior_target_morph_execution::{resolve_fence_morph, FenceTopology};
 use crate::animal_health::disease_mortality_execution::finalize_animal_death;
 
 #[derive(Component)]
@@ -691,6 +691,7 @@ impl AnimalAnimationEffectTargets<'_, '_> {
                     blend_duration_milliseconds: 0,
                     playback_speed_permille: 1000,
                     playback_repetition_policy: AnimationPlaybackRepetitionPolicy::PlayOnce,
+                    action_settings: None,
                 });
             }
         }

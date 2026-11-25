@@ -1625,12 +1625,18 @@ fn real_vfx_indirect_contracts() -> Result<(), Box<dyn std::error::Error>> {
         real_delta_time: 1.0,
         real_time: 0.0,
         num_effects: 2,
+        particle_budget: 200,
         ..default()
     };
     let sim_params_buffer = wgpu_device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("hanabi:test:indirect:sim"),
         contents: cast_slice(&[sim_params]),
         usage: wgpu::BufferUsages::UNIFORM,
+    });
+    let spawn_inputs = wgpu_device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("hanabi:test:indirect:spawn-inputs"),
+        contents: &[0; super::SPAWN_INPUT_MIN_SIZE as usize],
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
     });
 
     let metadata_rows = [
@@ -1699,16 +1705,28 @@ fn real_vfx_indirect_contracts() -> Result<(), Box<dyn std::error::Error>> {
 
     let bgl0 = wgpu_device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("hanabi:test:indirect:bgl0"),
-        entries: &[wgpu::BindGroupLayoutEntry {
-            binding: 0,
-            visibility: wgpu::ShaderStages::COMPUTE,
-            ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Uniform,
-                has_dynamic_offset: false,
-                min_binding_size: None,
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
             },
-            count: None,
-        }],
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: false },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+        ],
     });
     let bgl1 = wgpu_device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("hanabi:test:indirect:bgl1"),
@@ -1763,10 +1781,16 @@ fn real_vfx_indirect_contracts() -> Result<(), Box<dyn std::error::Error>> {
     let bg0 = wgpu_device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("hanabi:test:indirect:bg0"),
         layout: &bgl0,
-        entries: &[wgpu::BindGroupEntry {
-            binding: 0,
-            resource: sim_params_buffer.as_entire_binding(),
-        }],
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: sim_params_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: spawn_inputs.as_entire_binding(),
+            },
+        ],
     });
     let bg1 = wgpu_device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("hanabi:test:indirect:bg1"),
@@ -1810,6 +1834,14 @@ fn real_vfx_indirect_contracts() -> Result<(), Box<dyn std::error::Error>> {
         cache: None,
         compilation_options: wgpu::PipelineCompilationOptions::default(),
     });
+    let budget_pipeline = wgpu_device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: Some("hanabi:test:indirect:budget"),
+        layout: Some(&pl),
+        module: &shader,
+        entry_point: Some("reset_particle_budget"),
+        cache: None,
+        compilation_options: wgpu::PipelineCompilationOptions::default(),
+    });
 
     let mut encoder = wgpu_device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
         label: Some("hanabi:test:indirect:enc"),
@@ -1824,11 +1856,14 @@ fn real_vfx_indirect_contracts() -> Result<(), Box<dyn std::error::Error>> {
         pass.set_bind_group(1, &bg1, &[]);
         pass.set_bind_group(2, &bg2, &[]);
         pass.dispatch_workgroups(1, 1, 1);
+        pass.set_pipeline(&budget_pipeline);
+        pass.dispatch_workgroups(1, 1, 1);
     }
     submit_and_wait(&device, &queue, encoder.finish());
 
     let prefix_out = readback_vec::<u32>(&device, &queue, &prefix_buffer, 8);
     assert_eq!(prefix_out, vec![130, 1]);
+    assert_eq!(readback_vec::<u32>(&device, &queue, &spawn_inputs, 4), [69]);
 
     let metadata_raw_out = readback_vec::<u32>(
         &device,

@@ -4,7 +4,7 @@ use bevy::{audio::AudioSource, prelude::*};
 use openzt2_game_data::{ui_document::document::UiDocument, AssetId};
 
 use crate::{
-    scene_prefab::ScenePrefabAsset,
+    lua_script::lua_script_asset_loading::LuaScriptAsset, scene_prefab::ScenePrefabAsset,
     texture::interactive_texture_metadata_asset_and_borrowing_queries::InteractiveTextureMetadataAsset,
 };
 
@@ -18,6 +18,7 @@ pub struct UiDocumentAsset {
     pub(in crate::ui_document) nested_ui_document_handles:
         Box<[(AssetId, Handle<UiDocumentAsset>)]>,
     pub(in crate::ui_document) audio_source_handles: Box<[(AssetId, Handle<AudioSource>)]>,
+    pub(in crate::ui_document) script_handles: Box<[(AssetId, Handle<LuaScriptAsset>)]>,
 }
 
 impl UiDocumentAsset {
@@ -50,6 +51,10 @@ impl UiDocumentAsset {
 
     pub fn audio_source_handle(&self, asset_id: AssetId) -> Option<&Handle<AudioSource>> {
         find_typed_dependency_handle(&self.audio_source_handles, asset_id)
+    }
+
+    pub fn script_handle(&self, asset_id: AssetId) -> Option<&Handle<LuaScriptAsset>> {
+        find_typed_dependency_handle(&self.script_handles, asset_id)
     }
 }
 

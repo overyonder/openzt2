@@ -24,52 +24,49 @@ pub(super) fn queue_completed_scenarios_for_terminal_resolution(
     mut commands: Commands,
     active: Query<
         (
-            Entity,
             &ActiveScenarioSession,
-            &ScenarioObjectives,
+            Option<&ScenarioObjectives>,
             Option<&ScenarioObjectiveGroups>,
         ),
         Without<PendingScenarioTerminalResult>,
     >,
     offers: Query<
         (
-            Entity,
-            Ref<ScenarioChallengeOffer>,
-            &ScenarioObjectives,
+            &ScenarioChallengeOffer,
+            Option<&ScenarioObjectives>,
             Option<&ScenarioObjectiveGroups>,
         ),
         Without<PendingScenarioTerminalResult>,
     >,
+    changed_offers: Query<Entity, Changed<ScenarioChallengeOffer>>,
     objectives: Query<&ScenarioObjectiveStatus>,
     groups: Query<&ScenarioObjectiveGroup, With<ScenarioCompletionGroup>>,
     changed_objectives: Query<&ScenarioObjectiveOf, Changed<ScenarioObjectiveStatus>>,
     changed_groups: Query<&ScenarioObjectiveGroupOf, Changed<ScenarioObjectiveGroup>>,
 ) {
-    let changed: bevy::ecs::entity::EntityHashSet = changed_objectives
+    let changed = changed_objectives
         .iter()
         .map(|owner| owner.0)
         .chain(changed_groups.iter().map(|owner| owner.0))
-        .collect();
-    let owners = active
-        .iter()
-        .filter_map(|(entity, session, members, groups)| {
-            (session.state == ScenarioSessionState::Running && changed.contains(&entity))
-                .then_some((entity, session.definition, members, groups, false))
-        })
-        .chain(
-            offers
-                .iter()
-                .filter_map(|(entity, offer, members, groups)| {
-                    (offer.is_changed() || changed.contains(&entity)).then_some((
-                        entity,
-                        offer.definition,
-                        members,
-                        groups,
-                        offer.state == ScenarioChallengeOfferState::Declined,
-                    ))
-                }),
-        );
-    for (owner, scenario, members, authored_groups, declined) in owners {
+        .chain(changed_offers.iter())
+        .collect::<bevy::ecs::entity::EntityHashSet>();
+    for owner in changed {
+        let (scenario, members, authored_groups, declined) =
+            if let Ok((session, members, groups)) = active.get(owner) {
+                if session.state != ScenarioSessionState::Running {
+                    continue;
+                }
+                (session.definition, members, groups, false)
+            } else if let Ok((offer, members, groups)) = offers.get(owner) {
+                (
+                    offer.definition,
+                    members,
+                    groups,
+                    offer.state == ScenarioChallengeOfferState::Declined,
+                )
+            } else {
+                continue;
+            };
         if let Some(authored_groups) = authored_groups {
             let Some(group) = authored_groups
                 .iter()
@@ -87,6 +84,9 @@ pub(super) fn queue_completed_scenarios_for_terminal_resolution(
                 .insert(PendingScenarioTerminalResult { scenario, state });
             continue;
         }
+        let Some(members) = members else {
+            continue;
+        };
         let mut states = objectives.iter_many(members.iter()).flatten().peekable();
         if states.peek().is_none() {
             continue;

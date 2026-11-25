@@ -1,4 +1,7 @@
-use bevy::{platform::collections::HashMap, prelude::*};
+use bevy::{
+    ecs::{entity::EntityHashSet, entity_disabling::Disabled},
+    prelude::*,
+};
 use openzt2_world_state::world_spawn::world_membership_types::{WorldMember, WorldRoot};
 
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
@@ -16,22 +19,70 @@ pub(super) struct ZooCleanlinessTotals {
     pub(super) uncontained_waste_units: u64,
 }
 
-pub(super) fn aggregate_changed_waste_into_zoo_cleanliness_totals(
-    waste: Query<
-        (
-            &WorldMember,
-            Option<&FacilityContainedWaste>,
-            Option<&LooseLitterWaste>,
-            Option<&AnimalHabitatWaste>,
-        ),
-        Or<(
-            With<FacilityContainedWaste>,
-            With<LooseLitterWaste>,
-            With<AnimalHabitatWaste>,
-        )>,
-    >,
-    changed_waste: Query<
-        (),
+#[derive(Component, Clone, Copy)]
+pub(super) struct WasteContribution {
+    root: Entity,
+    totals: ZooCleanlinessTotals,
+}
+
+impl ZooCleanlinessTotals {
+    fn replace(self, previous: Self, current: Self) -> Self {
+        Self {
+            contained_waste_units: self.contained_waste_units - previous.contained_waste_units
+                + current.contained_waste_units,
+            contained_waste_capacity_units: self.contained_waste_capacity_units
+                - previous.contained_waste_capacity_units
+                + current.contained_waste_capacity_units,
+            uncontained_waste_units: self.uncontained_waste_units
+                - previous.uncontained_waste_units
+                + current.uncontained_waste_units,
+        }
+    }
+}
+
+pub(super) fn add_waste_contribution(
+    event: On<Add<WasteContribution>>,
+    contributors: Query<&WasteContribution, Allow<Disabled>>,
+    mut worlds: Query<&mut ZooCleanlinessTotals, Allow<Disabled>>,
+) {
+    let Ok(contribution) = contributors.get(event.entity) else {
+        return;
+    };
+    if let Ok(mut totals) = worlds.get_mut(contribution.root) {
+        let next = totals.replace(ZooCleanlinessTotals::default(), contribution.totals);
+        totals.set_if_neq(next);
+    }
+}
+
+pub(super) fn remove_waste_contribution(
+    event: On<Remove<WasteContribution>>,
+    contributors: Query<&WasteContribution, Allow<Disabled>>,
+    mut worlds: Query<&mut ZooCleanlinessTotals, Allow<Disabled>>,
+) {
+    let Ok(contribution) = contributors.get(event.entity) else {
+        return;
+    };
+    if let Ok(mut totals) = worlds.get_mut(contribution.root) {
+        let next = totals.replace(contribution.totals, ZooCleanlinessTotals::default());
+        totals.set_if_neq(next);
+    }
+}
+
+pub(super) fn withdraw_disabled_waste_contribution(
+    event: On<Add<Disabled>>,
+    contributors: Query<(), (With<WasteContribution>, Allow<Disabled>)>,
+    mut commands: Commands,
+) {
+    if contributors.contains(event.entity) {
+        commands.entity(event.entity).remove::<WasteContribution>();
+    }
+}
+
+#[allow(clippy::type_complexity)]
+pub(super) fn publish_changed_waste_contributions(
+    mut commands: Commands,
+    changed: Query<
+        Entity,
         (
             Or<(
                 With<FacilityContainedWaste>,
@@ -46,59 +97,93 @@ pub(super) fn aggregate_changed_waste_into_zoo_cleanliness_totals(
             )>,
         ),
     >,
-    waste_entities: Query<
-        (),
+    (mut removed_container, mut removed_litter, mut removed_dung, mut left_world, mut reenabled): (
+        RemovedComponents<FacilityContainedWaste>,
+        RemovedComponents<LooseLitterWaste>,
+        RemovedComponents<AnimalHabitatWaste>,
+        RemovedComponents<WorldMember>,
+        RemovedComponents<Disabled>,
+    ),
+    mut contributors: Query<
+        (
+            Option<&WorldMember>,
+            Option<&FacilityContainedWaste>,
+            Option<&LooseLitterWaste>,
+            Option<&AnimalHabitatWaste>,
+            Option<&mut WasteContribution>,
+        ),
         Or<(
             With<FacilityContainedWaste>,
             With<LooseLitterWaste>,
             With<AnimalHabitatWaste>,
+            With<WasteContribution>,
         )>,
     >,
-    mut removed_containers: RemovedComponents<FacilityContainedWaste>,
-    mut removed_litter: RemovedComponents<LooseLitterWaste>,
-    mut removed_animal_waste: RemovedComponents<AnimalHabitatWaste>,
-    mut removed_members: RemovedComponents<WorldMember>,
-    mut world_totals: Query<(Entity, &mut ZooCleanlinessTotals), With<WorldRoot>>,
+    mut worlds: Query<&mut ZooCleanlinessTotals, Allow<Disabled>>,
 ) {
-    let containers_removed = removed_containers.read().count() != 0;
-    let litter_removed = removed_litter.read().count() != 0;
-    let animal_waste_removed = removed_animal_waste.read().count() != 0;
-    let members_removed = removed_members
-        .read()
-        .any(|entity| waste_entities.contains(entity));
-    if !containers_removed
-        && !litter_removed
-        && !animal_waste_removed
-        && !members_removed
-        && changed_waste.is_empty()
-        && !world_totals.iter_mut().any(|(_, totals)| totals.is_added())
-    {
-        return;
-    }
-    let mut totals_by_world = HashMap::<Entity, ZooCleanlinessTotals>::new();
-    for (member, container, litter, animal_waste) in &waste {
-        let totals = totals_by_world.entry(member.root).or_default();
-        if let Some(container) = container {
-            totals.contained_waste_units = totals
-                .contained_waste_units
-                .saturating_add(u64::from(container.contained_waste_units));
-            totals.contained_waste_capacity_units = totals
-                .contained_waste_capacity_units
-                .saturating_add(u64::from(container.contained_waste_capacity_units));
+    let affected: EntityHashSet = changed
+        .iter()
+        .chain(removed_container.read())
+        .chain(removed_litter.read())
+        .chain(removed_dung.read())
+        .chain(left_world.read())
+        .chain(reenabled.read())
+        .collect();
+    for entity in affected {
+        let Ok((member, container, litter, dung, contribution)) = contributors.get_mut(entity)
+        else {
+            continue;
+        };
+        let Some(member) =
+            member.filter(|_| container.is_some() || litter.is_some() || dung.is_some())
+        else {
+            if contribution.is_some() {
+                commands.entity(entity).remove::<WasteContribution>();
+            }
+            continue;
+        };
+        let next = ZooCleanlinessTotals {
+            contained_waste_units: container
+                .map_or(0, |waste| u64::from(waste.contained_waste_units)),
+            contained_waste_capacity_units: container
+                .map_or(0, |waste| u64::from(waste.contained_waste_capacity_units)),
+            uncontained_waste_units: litter
+                .map_or(0, |waste| u64::from(waste.uncontained_waste_units))
+                + dung.map_or(0, |waste| u64::from(waste.uncontained_waste_units)),
+        };
+        if !worlds.contains(member.root) {
+            if contribution.is_some() {
+                commands.entity(entity).remove::<WasteContribution>();
+            }
+            continue;
         }
-        if let Some(litter) = litter {
-            totals.uncontained_waste_units = totals
-                .uncontained_waste_units
-                .saturating_add(u64::from(litter.uncontained_waste_units));
+        if let Some(mut contribution) = contribution {
+            if contribution.root == member.root {
+                if let Ok(mut totals) = worlds.get_mut(member.root) {
+                    let total = totals.replace(contribution.totals, next);
+                    totals.set_if_neq(total);
+                }
+            } else {
+                if let Ok(mut totals) = worlds.get_mut(contribution.root) {
+                    let total =
+                        totals.replace(contribution.totals, ZooCleanlinessTotals::default());
+                    totals.set_if_neq(total);
+                }
+                if let Ok(mut totals) = worlds.get_mut(member.root) {
+                    let total = totals.replace(ZooCleanlinessTotals::default(), next);
+                    totals.set_if_neq(total);
+                }
+                contribution.root = member.root;
+            }
+            contribution
+                .map_unchanged(|applied| &mut applied.totals)
+                .set_if_neq(next);
+        } else {
+            commands.entity(entity).insert(WasteContribution {
+                root: member.root,
+                totals: next,
+            });
         }
-        if let Some(animal_waste) = animal_waste {
-            totals.uncontained_waste_units = totals
-                .uncontained_waste_units
-                .saturating_add(u64::from(animal_waste.uncontained_waste_units));
-        }
-    }
-    for (root, mut totals) in &mut world_totals {
-        totals.set_if_neq(totals_by_world.remove(&root).unwrap_or_default());
     }
 }
 

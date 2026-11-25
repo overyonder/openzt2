@@ -119,6 +119,7 @@ pub(super) fn route_authored_show_editor_actions_into_selection_and_immersive_mo
                     commands.entity(controller).remove::<(
                         ShowEditing,
                         ShowMixerDropdown,
+                        super::show_mixer_presentation::ShowMixerMenu,
                         AddShowConfirmationPending,
                         DeleteShowConfirmationPending,
                     )>();
@@ -156,7 +157,10 @@ pub(super) fn route_authored_show_editor_actions_into_selection_and_immersive_mo
                     }
                 }
                 UiShowAction::DismissMixerDropdown => {
-                    commands.entity(controller).remove::<ShowMixerDropdown>();
+                    commands.entity(controller).remove::<(
+                        ShowMixerDropdown,
+                        super::show_mixer_presentation::ShowMixerMenu,
+                    )>();
                 }
                 UiShowAction::SetSelectedOpen { open } => {
                     if let Some(show) = selected_schedule_row.or(selected_stage) {

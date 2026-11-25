@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, io};
 
 use openzt2_game_data::AssetId;
 use serde::{Deserialize, Serialize};
@@ -16,4 +16,30 @@ pub struct ScenarioNodePolicy {
 pub struct AuthoredWorldScenarioState {
     pub scenario_nodes: BTreeMap<AssetId, ScenarioNodePolicy>,
     pub former_fence_types: BTreeMap<(AssetId, u64), AssetId>,
+    #[serde(skip)]
+    pub(super) legacy_script_references: bool,
+}
+
+impl AuthoredWorldScenarioState {
+    pub fn merge(&mut self, additional: Self) -> io::Result<()> {
+        if additional.scenario_nodes.iter().any(|(key, policy)| {
+            self.scenario_nodes
+                .get(key)
+                .is_some_and(|existing| existing != policy)
+        }) || additional.former_fence_types.iter().any(|(key, former)| {
+            self.former_fence_types
+                .get(key)
+                .is_some_and(|existing| existing != former)
+        }) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "conflicting authored world state",
+            ));
+        }
+        self.scenario_nodes.extend(additional.scenario_nodes);
+        self.former_fence_types
+            .extend(additional.former_fence_types);
+        self.legacy_script_references |= additional.legacy_script_references;
+        Ok(())
+    }
 }

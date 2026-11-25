@@ -50,7 +50,11 @@ pub(super) fn project_selected_photo_challenge_goals(
         Ref<CurrentPhotoChallengeSet>,
     )>,
     scenarios: Res<Assets<WorldScenarioDocumentAsset>>,
-    challenges: Query<(Ref<PhotoChallenge>, Ref<PhotoChallengeProgress>)>,
+    challenges: Query<(
+        Ref<PhotoChallenge>,
+        Ref<PhotoChallengeProgress>,
+        Option<Ref<super::PhotoChallengeHalfStars>>,
+    )>,
     fallback_fragment: Res<PhotoChallengeItemFragment>,
     documents: Res<Assets<UiDocumentAsset>>,
     localizations: Res<Assets<LocalizationAsset>>,
@@ -129,7 +133,7 @@ pub(super) fn project_selected_photo_challenge_goals(
             else {
                 continue;
             };
-            let Ok((challenge, progress)) = challenges.get(goal) else {
+            let Ok((challenge, progress, precise_rating)) = challenges.get(goal) else {
                 continue;
             };
             let Some(rule) = scenarios
@@ -152,6 +156,7 @@ pub(super) fn project_selected_photo_challenge_goals(
                 && !row.is_changed()
                 && !challenge.is_changed()
                 && !progress.is_changed()
+                && !precise_rating.as_ref().is_some_and(Ref::is_changed)
             {
                 continue;
             }
@@ -185,7 +190,10 @@ pub(super) fn project_selected_photo_challenge_goals(
                         });
                     }
                     "stars" => {
-                        visibility.set_if_neq(if progress.completed && progress.rating_stars > 0 {
+                        let half_stars = precise_rating
+                            .as_ref()
+                            .map_or(progress.rating_stars.saturating_mul(2), |rating| rating.0);
+                        visibility.set_if_neq(if progress.completed && half_stars > 0 {
                             Visibility::Inherited
                         } else {
                             Visibility::Hidden
@@ -199,8 +207,7 @@ pub(super) fn project_selected_photo_challenge_goals(
                             })
                             .map(|record| record.rect[2]);
                         if let (Some(mut node), Some(width)) = (node, authored_width) {
-                            let width =
-                                Val::Px(width * f32::from(progress.rating_stars.min(5)) / 5.0);
+                            let width = Val::Px(width * f32::from(half_stars.min(10)) / 10.0);
                             if node.width != width {
                                 node.width = width;
                             }

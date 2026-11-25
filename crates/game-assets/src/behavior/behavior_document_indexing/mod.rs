@@ -9,7 +9,7 @@ use bevy::{
     asset::{AssetId as DocumentId, AssetLoadFailedEvent, LoadState},
     prelude::*,
 };
-use openzt2_game_data::{behavior::document::BehaviorDocument, AssetId};
+use openzt2_game_data::{AssetId, behavior::document::BehaviorDocument};
 
 use super::behavior_asset_types::{
     BehaviorDeclarationLocation, BehaviorDeclarationRows, BehaviorDocumentAsset,
@@ -35,16 +35,33 @@ pub(super) fn discover_behavior_documents(
     }
 
     let index = collection.bypass_change_detection();
-    let mut retained = BTreeSet::new();
     let mut published_rows_changed = false;
-    for entry in archives.resolved_archive_entries().iter() {
+    let initial = archives
+        .is_added()
+        .then(|| archives.resolved_archive_entries());
+    let updated = if initial.is_some() {
+        Vec::new()
+    } else {
+        changed_paths
+            .iter()
+            .filter_map(|path| {
+                archives
+                    .resolved_winning_entry(path)
+                    .filter(|entry| entry.normalized_asset_path == *path)
+            })
+            .collect::<Vec<_>>()
+    };
+    for entry in initial
+        .iter()
+        .flat_map(|entries| entries.iter())
+        .chain(&updated)
+    {
         let path = &entry.normalized_asset_path;
         if !is_behavior_document_asset_path(path) {
             continue;
         }
         let handle = asset_server.load::<BehaviorDocumentAsset>(path.clone());
         let id = handle.id();
-        retained.insert(id);
         let precedence = (entry.archive_priority_index, entry.zip_entry_ordinal);
         if let Some(document) = index.documents.get_mut(&id) {
             if changed_paths.contains(path.as_path()) {
@@ -52,7 +69,8 @@ pub(super) fn discover_behavior_documents(
             }
             if document.precedence != precedence {
                 let rows = std::mem::take(&mut document.rows);
-                remove_rows(index, id, &rows);
+                let previous_precedence = document.precedence;
+                remove_rows(index, id, previous_precedence, &rows);
                 let Some(document) = index.documents.get_mut(&id) else {
                     continue;
                 };
@@ -81,15 +99,20 @@ pub(super) fn discover_behavior_documents(
             }
         }
     }
-    let removed: Vec<_> = index
-        .documents
-        .keys()
-        .filter(|id| !retained.contains(id))
-        .copied()
-        .collect();
-    for id in removed {
+    for path in changed_paths {
+        if archives
+            .resolved_winning_entry(path)
+            .is_some_and(|entry| entry.normalized_asset_path == path)
+        {
+            continue;
+        }
+        let Some(handle) = asset_server.get_handle::<BehaviorDocumentAsset>(path.to_path_buf())
+        else {
+            continue;
+        };
+        let id = handle.id();
         if let Some(document) = index.documents.remove(&id) {
-            published_rows_changed |= remove_rows(index, id, &document.rows);
+            published_rows_changed |= remove_rows(index, id, document.precedence, &document.rows);
             index.pending.remove(&id);
         }
     }
@@ -190,8 +213,9 @@ fn replace_rows(
         return false;
     }
     let handle = document.handle.clone();
+    let precedence = document.precedence;
     let previous = std::mem::replace(&mut document.rows, rows);
-    remove_rows(collection, id, &previous);
+    remove_rows(collection, id, precedence, &previous);
     let document = &collection.documents[&id];
     insert_rows(
         &collection.documents,
@@ -200,6 +224,11 @@ fn replace_rows(
         &handle,
         document.precedence,
     );
+    for &(key, declaration) in &document.rows.tasks {
+        collection
+            .behavior_task_order
+            .insert((precedence, declaration), (key, id));
+    }
     insert_rows(
         &collection.documents,
         &mut collection.behavior_tasks_by_unique_identifier,
@@ -239,6 +268,7 @@ fn insert_rows(
 fn remove_rows(
     collection: &mut LoadedBehaviorDocumentCollection,
     id: DocumentId<BehaviorDocumentAsset>,
+    precedence: (usize, usize),
     rows: &BehaviorDeclarationRows,
 ) -> bool {
     fn remove_locations(
@@ -263,5 +293,10 @@ fn remove_rows(
         &rows.tasks,
         id,
     );
+    for &(_, declaration) in &rows.tasks {
+        collection
+            .behavior_task_order
+            .remove(&(precedence, declaration));
+    }
     !(rows.sets.is_empty() && rows.tasks.is_empty())
 }

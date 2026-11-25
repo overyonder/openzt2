@@ -28,5 +28,6 @@ pub(super) struct FallingReleasedObject {
     pub(super) airborne_request: Option<usize>,
     pub(super) land_impact_clip: Option<String>,
     pub(super) water_impact_clip: Option<String>,
+    pub(super) previous_footprint: Option<openzt2_zoo_state::placement::placed_object_types::PlacedObjectFootprintOccupancy>,
     pub(super) instruction: Option<openzt2_zoo_state::behavior_task_execution_types::running_actions::BehaviorInstructionId>,
 }

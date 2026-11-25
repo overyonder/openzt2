@@ -1,3 +1,4 @@
+use bevy::ecs::entity::EntityHashSet;
 use openzt2_zoo_state::transport_tours::transport_pick_bounds::TransportPickBounds;
 use openzt2_zoo_state::transport_tours::transport_topology_types::{TrackRoute, TrackIncidence};
 use crate::transport_tours::topology::calculate_authored_transport_station_endpoint_world_position;
@@ -40,6 +41,7 @@ pub(super) fn find_nearest_compatible_transport_station_endpoint(
     _outgoing: bool,
     excluded_station: Option<Entity>,
     definitions: WorldDefinitionsView<'_>,
+    candidates: &EntityHashSet,
     stations: &Query<(
         Entity,
         &TransportStation,
@@ -53,7 +55,8 @@ pub(super) fn find_nearest_compatible_transport_station_endpoint(
     bounds: &TransportPickBounds,
 ) -> Option<(Entity, Entity, u8, Vec3)> {
     stations
-        .iter()
+        .iter_many(candidates.iter().copied())
+        .filter_map(Result::ok)
         .filter(|(entity, station, member, _, world_member)| {
             Some(*entity) != excluded_station
                 && world_member.root == wanted_world_root
@@ -63,6 +66,8 @@ pub(super) fn find_nearest_compatible_transport_station_endpoint(
                     .is_some_and(|definition| definition.kind == wanted_kind)
         })
         .flat_map(|(entity, station, member, transform, _)| {
+            let over_body =
+                pointer_ray.is_some_and(|ray| bounds.hit_distance(entity, ray).is_some());
             (0_u8..2).filter_map(move |endpoint_index| {
                 transport_station_endpoint_is_available(
                     entity,
@@ -78,13 +83,7 @@ pub(super) fn find_nearest_compatible_transport_station_endpoint(
                         transform,
                         endpoint_index,
                     )
-                    .map(|position| {
-                        (
-                            (entity, member.0, endpoint_index, position),
-                            pointer_ray
-                                .is_some_and(|ray| bounds.hit_distance(entity, ray).is_some()),
-                        )
-                    })
+                    .map(|position| ((entity, member.0, endpoint_index, position), over_body))
                 })
                 .flatten()
             })
@@ -108,6 +107,7 @@ pub(super) fn find_nearest_compatible_transport_track_junction(
     wanted_world_root: Entity,
     wanted_circuit: Option<Entity>,
     pointer_ray: Option<Ray3d>,
+    candidates: &EntityHashSet,
     junctions: &Query<(
         Entity,
         &TransportTrackJunction,
@@ -120,7 +120,8 @@ pub(super) fn find_nearest_compatible_transport_track_junction(
     bounds: &TransportPickBounds,
 ) -> Option<(Entity, Entity, u8, Vec3)> {
     junctions
-        .iter()
+        .iter_many(candidates.iter().copied())
+        .filter_map(Result::ok)
         .filter(|(entity, _, member, _, world_member)| {
             world_member.root == wanted_world_root
                 && wanted_circuit.is_none_or(|circuit| member.0 == circuit)

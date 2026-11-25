@@ -14,6 +14,15 @@ use openzt2_zoo_state::terrain::terrain_water_geometric_wave_shader_state::{
 use openzt2_zoo_state::terrain::terrain_water_presentation_types::{TerrainWaterMembershipIndex, TerrainWaterRegionQuery};
 use super::authored_water_surface_impact_projection::sample_accepted_water_surface;
 
+#[derive(Message)]
+pub struct NamedWaterSurfaceEffect {
+    pub surface: Entity,
+    pub source_position: Vec2,
+    pub joint_pose: GlobalTransform,
+    pub variant: openzt2_game_data::AssetId,
+    pub native_strength: f32,
+}
+
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(crate) fn project_animation_surface_effects_into_water_disturbances(
     mut requests: MessageReader<AnimationObjectCommand>,
@@ -29,6 +38,7 @@ pub(crate) fn project_animation_surface_effects_into_water_disturbances(
     mut impacts: MessageWriter<ActivateTerrainWaterImpactWave>,
     mut spray: MessageWriter<WaterSurfaceSpraySample>,
     mut wakes: MessageWriter<WaterSurfaceWakeSample>,
+    mut named_effects: MessageWriter<NamedWaterSurfaceEffect>,
 ) {
     let terrain_index = terrain_index.map(Single::into_inner);
     let Some(index) = terrain_index else { return };
@@ -39,14 +49,11 @@ pub(crate) fn project_animation_surface_effects_into_water_disturbances(
         let AuthoredAnimationTextAction::TriggerSurfaceEffect {
             surface_effect_kind,
             effect_strength,
-            ..
+            named_surface_effect_asset_key,
         } = &request.action
         else {
             continue;
         };
-        if *surface_effect_kind == AuthoredAnimationSurfaceEffectKind::NamedSurfaceEffect {
-            continue;
-        }
         let Ok(joint_transform) = transforms.get(request.joint) else {
             continue;
         };
@@ -80,6 +87,18 @@ pub(crate) fn project_animation_surface_effects_into_water_disturbances(
         let heading = joint_transform.affine().transform_vector3(Vec3::NEG_Z);
         let direction = Vec3::new(heading.x, 0.0, heading.z);
         let source_position = Vec2::new(position.x, -position.y);
+        if *surface_effect_kind == AuthoredAnimationSurfaceEffectKind::NamedSurfaceEffect {
+            if let Some(variant) = named_surface_effect_asset_key {
+                named_effects.write(NamedWaterSurfaceEffect {
+                    surface,
+                    source_position,
+                    joint_pose: *joint_transform,
+                    variant: openzt2_game_data::AssetId::from_key(&variant.to_ascii_lowercase()),
+                    native_strength: strength,
+                });
+            }
+            continue;
+        }
         if matches!(
             surface_effect_kind,
             AuthoredAnimationSurfaceEffectKind::SurfaceImpact

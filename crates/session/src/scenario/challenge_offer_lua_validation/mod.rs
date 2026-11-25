@@ -22,14 +22,6 @@ use super::{
     scenario_lua_virtual_machine::execute_loaded_scenario_lua_script_binding,
 };
 
-/// Challenge mode's authored scenario manager (`scenario/goals/challengegoals.xml`)
-/// has `interval="4"`. Its rule calls `decidechallengeset`, which measures its
-/// waits in fractions of a month (a `BFS_GET_CHALLENGE_DELAY` default of 0.2
-/// and `checkTimeLimit` margins of 0.03), so it must run many times a month.
-/// The interval is read as seconds of the authored 100 Hz simulation tick.
-const CHALLENGE_MANAGER_EVALUATION_INTERVAL: std::time::Duration =
-    std::time::Duration::from_secs(4);
-
 /// Script directory of the challenges `checkchallenges` offers to a new zoo.
 const INSTANT_CHALLENGE_SCRIPT_DIRECTORY: &str = "scenario/scripts/challenge/instant/";
 
@@ -88,10 +80,17 @@ pub(super) fn evaluate_challenge_manager_and_validate_one_picked_challenge(
     let Some(scenarios) = scenarios.get(&scenario_assets) else {
         return;
     };
-    let interval_ticks = u64::try_from(
-        CHALLENGE_MANAGER_EVALUATION_INTERVAL.as_nanos() / fixed_time.timestep().as_nanos().max(1),
-    )
-    .unwrap_or(u64::MAX);
+    let Some(interval) = scenarios
+        .scenario(openzt2_game_data::AssetId::from_key("challengegoals"))
+        .and_then(|manager| {
+            std::time::Duration::try_from_secs_f32(manager.evaluation_interval_seconds).ok()
+        })
+    else {
+        return;
+    };
+    let interval_ticks =
+        u64::try_from(interval.as_nanos() / fixed_time.timestep().as_nanos().max(1))
+            .unwrap_or(u64::MAX);
     let next_tick = clock.tick.saturating_add(interval_ticks);
     let Some(mut next_evaluation) = next_evaluation else {
         // The first evaluation sets `firstTick` and gives nothing.

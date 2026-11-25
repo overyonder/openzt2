@@ -20,6 +20,7 @@ pub(super) fn create_ui_document_asset_and_load_typed_dependencies(
     let mut scene_prefab_handles = Vec::new();
     let mut nested_ui_document_handles = Vec::new();
     let mut audio_source_handles = Vec::new();
+    let mut script_handles = Vec::new();
     for dependency in &canonical_ui_document.dependencies {
         match dependency.kind {
             UiDependencyKind::Texture => {
@@ -73,6 +74,9 @@ pub(super) fn create_ui_document_asset_and_load_typed_dependencies(
                 audio_source_handles
                     .push((dependency.id, load_context.load(dependency.path.clone())));
             }
+            UiDependencyKind::Script => {
+                script_handles.push((dependency.id, load_context.load(dependency.path.clone())));
+            }
         }
     }
     texture_image_handles.sort_unstable_by_key(|(asset_id, _)| asset_id.0);
@@ -80,6 +84,7 @@ pub(super) fn create_ui_document_asset_and_load_typed_dependencies(
     scene_prefab_handles.sort_unstable_by_key(|(asset_id, _)| asset_id.0);
     nested_ui_document_handles.sort_unstable_by_key(|(asset_id, _)| asset_id.0);
     audio_source_handles.sort_unstable_by_key(|(asset_id, _)| asset_id.0);
+    script_handles.sort_unstable_by_key(|(asset_id, _)| asset_id.0);
     UiDocumentAsset {
         canonical_ui_document,
         texture_image_handles: texture_image_handles.into_boxed_slice(),
@@ -88,5 +93,6 @@ pub(super) fn create_ui_document_asset_and_load_typed_dependencies(
         scene_prefab_handles: scene_prefab_handles.into_boxed_slice(),
         nested_ui_document_handles: nested_ui_document_handles.into_boxed_slice(),
         audio_source_handles: audio_source_handles.into_boxed_slice(),
+        script_handles: script_handles.into_boxed_slice(),
     }
 }

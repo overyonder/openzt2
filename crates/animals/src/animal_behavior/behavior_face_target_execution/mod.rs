@@ -1,8 +1,6 @@
 use bevy::prelude::*;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
-use openzt2_zoo_state::animal_behavior::behavior_target_placement_types::{
-    BehaviorPlacementTravelTargets,
-};
+use openzt2_zoo_state::animal_behavior::behavior_target_placement_types::BehaviorPlacementTravelTargets;
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::WhenBehaviorAction;
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
     RunBehaviorFaceTarget, RunningBehaviorInstruction,
@@ -47,7 +45,8 @@ fn face_current_behavior_targets(
             continue;
         }
         let action = running_action.0;
-        if let Some(toward) = travel_sites.for_actor(actor, task)
+        if let Some(toward) = travel_sites
+            .for_actor(actor, task)
             .and_then(|target| targets.get(target).ok())
             .and_then(|target| {
                 (target.translation() - transform.translation)

@@ -1,7 +1,7 @@
 //! NetImmerse inherited-property and native-material lowering.
 
 use bevy::math::{Mat3, Vec3};
-use std::collections::HashSet;
+use std::{collections::HashSet, sync::Arc};
 
 use super::super::{
     model::{
@@ -10,13 +10,113 @@ use super::super::{
     native_geometry_lowering_error::{
         NativeGeometryLoweringError, NativeGeometryLoweringErrorKind, NativeGeometrySourceFamily,
     },
+    native_model_source_lowering_types::{
+        NetImmerseMaterialAnimation, NetImmerseMaterialAnimationTrack,
+        NetImmerseMaterialColorChannel,
+    },
+    native_scene::nif_object_transform_controller_lowering::{
+        float_key_group_from_vector3_component, lower_netimmerse_float_key_group_to_prefab_curve,
+    },
     netimmerse_nif_source::{
         block_payload::NetImmerseNifBlockPayload, document_source_types::NetImmerseNifDocument,
+        interpolated_key_source_types::NetImmerseFloatKeyGroup,
         scene_object_source_types::NetImmerseNiGeometry,
     },
     nif_embedded_texture_lowering::embedded_nif_texture_label,
 };
 use super::validated_vertex_topology_assembly::native_geometry_lowering_error;
+
+pub(in crate::model_source) fn lower_netimmerse_material_animations(
+    document: &NetImmerseNifDocument,
+    geometry_block: u32,
+) -> anyhow::Result<Arc<[NetImmerseMaterialAnimation]>> {
+    let Some(geometry) =
+        document
+            .block(geometry_block as i32)
+            .and_then(|block| match &block.payload {
+                NetImmerseNifBlockPayload::NiTriShape(shape) => Some(&shape.geometry),
+                NetImmerseNifBlockPayload::NiTriStrips(strips) => Some(&strips.geometry),
+                _ => None,
+            })
+    else {
+        return Ok(Arc::from([]));
+    };
+    let property = inherited_netimmerse_property_references(document, geometry_block, geometry)?
+        .into_iter()
+        .find_map(|reference| match &document.block(reference)?.payload {
+            NetImmerseNifBlockPayload::NiMaterialProperty(material) => Some((reference, material)),
+            _ => None,
+        });
+    let Some((property_ref, property)) = property else {
+        return Ok(Arc::from([]));
+    };
+    let mut animations = Vec::new();
+    let mut reference = property.object.controller_ref;
+    let mut visited = HashSet::new();
+    while reference >= 0 {
+        anyhow::ensure!(
+            visited.insert(reference),
+            "cyclic NIF material controller chain"
+        );
+        let payload = &document
+            .block(reference)
+            .ok_or_else(|| anyhow::anyhow!("missing NIF material controller {reference}"))?
+            .payload;
+        let Some(clock) = payload.time_controller() else {
+            anyhow::bail!("NIF material controller {reference} has no time controller");
+        };
+        reference = clock.next_controller_ref;
+        if !clock.is_active() || clock.target_ref != property_ref {
+            continue;
+        }
+        let lower_curve = |keys: &NetImmerseFloatKeyGroup| {
+            lower_netimmerse_float_key_group_to_prefab_curve(&document.source_path, keys)
+        };
+        let track = match payload {
+            NetImmerseNifBlockPayload::NiAlphaController(alpha) if alpha.data_ref >= 0 => {
+                let Some(NetImmerseNifBlockPayload::NiFloatData(data)) =
+                    document.block(alpha.data_ref).map(|block| &block.payload)
+                else {
+                    anyhow::bail!("NIF alpha controller does not reference NiFloatData");
+                };
+                if data.data.keys.is_empty() {
+                    continue;
+                }
+                NetImmerseMaterialAnimationTrack::Alpha(lower_curve(&data.data)?)
+            }
+            NetImmerseNifBlockPayload::NiMaterialColorController(color) if color.data_ref >= 0 => {
+                let Some(NetImmerseNifBlockPayload::NiPosData(data)) =
+                    document.block(color.data_ref).map(|block| &block.payload)
+                else {
+                    anyhow::bail!("NIF material color controller does not reference NiPosData");
+                };
+                let channel = match color.target_color {
+                    Some(0) => NetImmerseMaterialColorChannel::Ambient,
+                    Some(1) => NetImmerseMaterialColorChannel::Diffuse,
+                    Some(2) => NetImmerseMaterialColorChannel::Specular,
+                    Some(3) => NetImmerseMaterialColorChannel::Emissive,
+                    _ => continue,
+                };
+                if data.data.keys.is_empty() {
+                    continue;
+                }
+                let [r, g, b] = std::array::from_fn(|axis| {
+                    float_key_group_from_vector3_component(&data.data, axis)
+                });
+                NetImmerseMaterialAnimationTrack::Color(
+                    channel,
+                    [lower_curve(&r)?, lower_curve(&g)?, lower_curve(&b)?],
+                )
+            }
+            _ => continue,
+        };
+        animations.push(NetImmerseMaterialAnimation {
+            clock: clock.prefab_clock(),
+            track,
+        });
+    }
+    Ok(animations.into())
+}
 
 pub(super) fn lower_netimmerse_native_material(
     document: &NetImmerseNifDocument,

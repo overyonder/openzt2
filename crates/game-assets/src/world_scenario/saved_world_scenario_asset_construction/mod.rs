@@ -5,7 +5,9 @@ use std::io;
 use bevy::prelude::*;
 use openzt2_game_data::AssetId;
 
-use crate::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
+use crate::{
+    asset_source::AssetArchives, terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset,
+};
 
 use super::{
     world_scenario_document_asset_and_dependency_handles::{
@@ -17,10 +19,26 @@ use super::{
 
 pub fn add_restored_world_scenario_asset(
     server: &AssetServer,
+    archives: &AssetArchives,
     mut source: WorldScenarioDocumentSource,
     terrain_id: AssetId,
     terrain: Handle<TerrainAsset>,
 ) -> io::Result<Handle<WorldScenarioDocumentAsset>> {
+    super::legacy_world_script_resolution::resolve_legacy_world_script_paths(
+        &mut source,
+        archives,
+    )?;
+    Ok(server.add(build_restored_world_scenario_asset(
+        server, source, terrain_id, terrain,
+    )?))
+}
+
+pub(crate) fn build_restored_world_scenario_asset(
+    server: &AssetServer,
+    mut source: WorldScenarioDocumentSource,
+    terrain_id: AssetId,
+    terrain: Handle<TerrainAsset>,
+) -> io::Result<WorldScenarioDocumentAsset> {
     validate_world_scenario_document_source(&source)?;
     if !source
         .terrains
@@ -58,7 +76,7 @@ pub fn add_restored_world_scenario_asset(
             (binding.clone(), path.clone(), server.load(path))
         })
         .collect::<Box<[_]>>();
-    Ok(server.add(WorldScenarioDocumentAsset {
+    Ok(WorldScenarioDocumentAsset {
         document: source.document,
         authored: source.authored,
         starting_zoos: source.starting_zoos,
@@ -72,7 +90,7 @@ pub fn add_restored_world_scenario_asset(
         textures,
         scripts,
         photo_scripts,
-    }))
+    })
 }
 
 fn load_dependency_paths<T: Asset>(

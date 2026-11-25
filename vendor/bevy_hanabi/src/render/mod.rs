@@ -233,6 +233,7 @@ pub(crate) struct SimParams {
     real_time: f64,
     /// Real delta time, in seconds, since last effect system update.
     real_delta_time: f32,
+    particle_budget: Option<u32>,
 }
 
 /// GPU representation of [`SimParams`], as well as additional per-frame
@@ -274,7 +275,7 @@ struct GpuSimParams {
     /// This is only used by the `vfx_indirect` compute shader.
     num_effects: u32,
 
-    pad0: u32,
+    particle_budget: u32,
 }
 
 impl Default for GpuSimParams {
@@ -289,7 +290,7 @@ impl Default for GpuSimParams {
             real_delta_time: 0.04,
             real_time: 0.0,
             num_effects: 0,
-            pad0: 0,
+            particle_budget: u32::MAX,
         }
     }
 }
@@ -310,6 +311,7 @@ impl From<&SimParams> for GpuSimParams {
             virtual_time: src.virtual_time as f32,
             real_delta_time: src.real_delta_time,
             real_time: src.real_time as f32,
+            particle_budget: src.particle_budget.unwrap_or(u32::MAX),
             ..default()
         }
     }
@@ -463,6 +465,10 @@ struct GpuParticleSpawnPoint {
     position: [f32; 4],
     velocity: [f32; 4],
 }
+
+// The spawn buffer begins with a 32-byte budget header and always provides
+// space for at least one point to satisfy the storage binding's minimum size.
+const SPAWN_INPUT_MIN_SIZE: u64 = 64;
 
 impl GpuSpawnerParams {
     /// Create a new [`GpuSpawnerParams`] from gathered CPU data.
@@ -1086,7 +1092,7 @@ impl FromWorld for DispatchIndirectPipeline {
                 ShaderStages::COMPUTE,
                 (
                     uniform_buffer::<GpuSimParams>(false),
-                    storage_buffer_read_only::<GpuParticleSpawnPoint>(false),
+                    storage_buffer_sized(false, NonZeroU64::new(SPAWN_INPUT_MIN_SIZE)),
                 ),
             ),
         );
@@ -1161,6 +1167,7 @@ pub(crate) struct DispatchIndirectPipelineKey {
     /// update pass optionally produce more events.
     /// Key: HAS_GPU_SPAWN_EVENTS
     has_events: bool,
+    reset_particle_budget: bool,
 }
 
 impl SpecializedComputePipeline for DispatchIndirectPipeline {
@@ -1205,7 +1212,14 @@ impl SpecializedComputePipeline for DispatchIndirectPipeline {
                 self.indirect_shader_noevent.clone()
             },
             shader_defs,
-            entry_point: Some("main".into()),
+            entry_point: Some(
+                if key.reset_particle_budget {
+                    "reset_particle_budget"
+                } else {
+                    "main"
+                }
+                .into(),
+            ),
             zero_initialize_workgroup_memory: false,
         }
     }
@@ -1863,7 +1877,7 @@ impl Default for ParticlesInitPipeline {
                 ShaderStages::COMPUTE,
                 (
                     uniform_buffer::<GpuSimParams>(false),
-                    storage_buffer_read_only::<GpuParticleSpawnPoint>(false),
+                    storage_buffer_sized(false, NonZeroU64::new(SPAWN_INPUT_MIN_SIZE)),
                 ),
             ),
         );
@@ -3128,6 +3142,7 @@ pub(crate) fn extract_sim_params(
     real_time: Extract<Res<Time<Real>>>,
     virtual_time: Extract<Res<Time<Virtual>>>,
     time: Extract<Res<Time<EffectSimulation>>>,
+    budget: Extract<Res<crate::EffectParticleBudget>>,
     mut sim_params: ResMut<SimParams>,
 ) {
     #[cfg(feature = "trace")]
@@ -3141,6 +3156,7 @@ pub(crate) fn extract_sim_params(
     sim_params.virtual_delta_time = virtual_time.delta_secs();
     sim_params.real_time = real_time.elapsed_secs_f64();
     sim_params.real_delta_time = real_time.delta_secs();
+    sim_params.particle_budget = budget.0;
     trace!(
         "SimParams: time={} delta_time={} vtime={} delta_vtime={} rtime={} delta_rtime={}",
         sim_params.time,
@@ -3337,6 +3353,7 @@ pub struct EffectsMeta {
     /// is either the -noevent or -events variant depending on whether there's
     /// any child effect with GPU events currently active.
     active_indirect_pipeline_id: CachedComputePipelineId,
+    reset_particle_budget_pipeline_id: CachedComputePipelineId,
 
     prefix_sum_shader: Handle<Shader>,
     prefix_sum_bind_group: Option<BindGroup>,
@@ -3390,6 +3407,7 @@ impl EffectsMeta {
                 CachedComputePipelineId::INVALID,
             ],
             active_indirect_pipeline_id: CachedComputePipelineId::INVALID,
+            reset_particle_budget_pipeline_id: CachedComputePipelineId::INVALID,
             prefix_sum_shader,
             prefix_sum_bind_group: None,
             prefix_sum_pipeline_id: CachedComputePipelineId::INVALID,
@@ -4308,14 +4326,30 @@ pub fn prepare_indirect_pipeline(
         effects_meta.indirect_pipeline_ids[0] = specialized_indirect_pipelines.specialize(
             pipeline_cache.as_ref(),
             &indirect_pipeline,
-            DispatchIndirectPipelineKey { has_events: false },
+            DispatchIndirectPipelineKey {
+                has_events: false,
+                reset_particle_budget: false,
+            },
         );
     }
     if effects_meta.indirect_pipeline_ids[1] == CachedComputePipelineId::INVALID {
         effects_meta.indirect_pipeline_ids[1] = specialized_indirect_pipelines.specialize(
             pipeline_cache.as_ref(),
             &indirect_pipeline,
-            DispatchIndirectPipelineKey { has_events: true },
+            DispatchIndirectPipelineKey {
+                has_events: true,
+                reset_particle_budget: false,
+            },
+        );
+    }
+    if effects_meta.reset_particle_budget_pipeline_id == CachedComputePipelineId::INVALID {
+        effects_meta.reset_particle_budget_pipeline_id = specialized_indirect_pipelines.specialize(
+            pipeline_cache.as_ref(),
+            &indirect_pipeline,
+            DispatchIndirectPipelineKey {
+                has_events: false,
+                reset_particle_budget: true,
+            },
         );
     }
 
@@ -4713,6 +4747,9 @@ pub(crate) fn prepare_batch_inputs(
     // frame
     effects_meta.spawner_buffer.clear();
     effects_meta.spawn_point_buffer.clear();
+    effects_meta
+        .spawn_point_buffer
+        .push(GpuParticleSpawnPoint::default());
     effects_meta
         .spawn_point_buffer
         .push(GpuParticleSpawnPoint::default());
@@ -5274,7 +5311,7 @@ impl Material {
         &'b self,
         binding_start: u32,
         gpu_images: &'a RenderAssets<GpuImage>,
-        select_sampler: impl Fn(bool, &'a Sampler) -> &'a Sampler,
+        select_sampler: impl Fn(usize, bool, &'a Sampler) -> &'a Sampler,
         entries: &'b mut Vec<BindGroupEntry<'a>>,
     ) -> Result<(), MaterialBindingError> {
         if self.layout.layout.len() != self.textures.len() {
@@ -5289,7 +5326,9 @@ impl Material {
         }
 
         let mut index = binding_start;
-        for (slot, asset_id) in self.layout.layout.iter().zip(self.textures.iter()) {
+        for (slot_index, (slot, asset_id)) in
+            self.layout.layout.iter().zip(&self.textures).enumerate()
+        {
             let Some(gpu_image) = gpu_images.get(*asset_id) else {
                 return Err(MaterialBindingError::MissingImage(*asset_id));
             };
@@ -5313,6 +5352,7 @@ impl Material {
             entries.push(BindGroupEntry {
                 binding: index + 1,
                 resource: BindingResource::Sampler(select_sampler(
+                    slot_index,
                     slot.clamp_linear,
                     &gpu_image.sampler,
                 )),
@@ -7718,6 +7758,24 @@ fn simulate(
         return;
     };
 
+    if effects_meta.sim_params_uniforms.get().particle_budget != u32::MAX {
+        let mut compute_pass = HanabiComputePass::new(
+            "hanabi:reset_particle_budget",
+            &pipeline_cache,
+            &mut render_context,
+        );
+        if compute_pass
+            .set_cached_compute_pipeline(effects_meta.reset_particle_budget_pipeline_id)
+            .is_err()
+        {
+            return;
+        }
+        compute_pass.set_bind_group(0, init_and_indirect_sim_params_bind_group, &[]);
+        compute_pass.set_bind_group(1, indirect_metadata_bind_group, &[]);
+        compute_pass.set_bind_group(2, indirect_spawner_bind_group, &[]);
+        compute_pass.dispatch_workgroups(1, 1, 1);
+    }
+
     // Compute init pass
     {
         trace!("init: loop over effect batches...");
@@ -8562,7 +8620,7 @@ mod tests {
         let mut entries = Vec::new();
 
         assert!(matches!(
-            material.append_binding_entries(4, &gpu_images, |_, sampler| sampler, &mut entries),
+            material.append_binding_entries(4, &gpu_images, |_, _, sampler| sampler, &mut entries),
             Err(MaterialBindingError::MissingImage(missing)) if missing == image
         ));
         assert!(entries.is_empty());

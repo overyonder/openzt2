@@ -100,6 +100,21 @@ pub(in super::super) enum NetImmerseNifBlockPayload {
     NiBoneLODController(NetImmerseNiBoneLodController),
 }
 impl NetImmerseNifBlockPayload {
+    pub(in super::super) fn time_controller(
+        &self,
+    ) -> Option<&super::animation_controller_source_types::NetImmerseNiTimeController> {
+        Some(match self {
+            Self::NiKeyframeController(value) => &value.controller,
+            Self::NiUVController(value) => &value.controller,
+            Self::NiVisController(value) => &value.controller,
+            Self::NiAlphaController(value) => &value.controller,
+            Self::NiMaterialColorController(value) => &value.controller,
+            Self::NiGeomMorpherController(value) => &value.controller,
+            Self::NiBoneLODController(value) => &value.controller,
+            Self::NiParticleSystemController(value) => &value.controller,
+            _ => return None,
+        })
+    }
     /// The common scene object header carried by every transformable NIF block.
     pub(in super::super) const fn av_object(&self) -> Option<&NetImmerseNiAvObject> {
         match self {

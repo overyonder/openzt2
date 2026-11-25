@@ -96,13 +96,21 @@ pub fn accept_queued_world_load_after_required_assets_resolve(
             .as_ref()
             .and_then(|assets| assets.get(handle))
         {
-            Some(initializer.starting_cash_cents)
+            initializer.starting_cash_cents()
         } else if matches!(
             asset_server.load_state(handle.id()),
             bevy::asset::LoadState::Failed(_)
         ) {
-            warn!("Challenge economy initializer is unavailable");
-            None
+            failed.write(WorldLoadFailed {
+                operation: request.operation,
+                root: None,
+                scenario: request.scenario,
+                reason: WorldLoadFailure::MissingDependency(AssetId::from_virtual_path(
+                    CHALLENGE_MODE_DOCUMENT,
+                )),
+            });
+            commands.entity(load_entity).despawn();
+            return;
         } else {
             return;
         }

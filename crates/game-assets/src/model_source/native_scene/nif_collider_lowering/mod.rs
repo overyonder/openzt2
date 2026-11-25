@@ -1,5 +1,6 @@
 //! NetImmerse collision-volume lowering into prefab colliders.
 
+use bevy::math::Vec3;
 use openzt2_game_data::scene_prefab::{PrefabColliderSource, PrefabTransform};
 
 use crate::source_coordinate_conversion::{
@@ -91,11 +92,32 @@ pub(super) fn lower_netimmerse_collision_volume(
                 lower_netimmerse_collision_volume(builder, owner, child, source_path)?;
             }
         }
-        NetImmerseBoundingVolume::HalfSpace(_) => {
-            return Err(NativeSceneLoweringError::new(
-                source_path,
-                "NIF half-space collision volume has no finite Bevy collider representation",
+        NetImmerseBoundingVolume::HalfSpace(half_space) => {
+            let normal = Vec3::from_array(convert_source_z_up_vector_to_bevy_y_up_coordinates(
+                half_space.plane.normal,
             ));
+            let length = normal.length();
+            if !length.is_finite()
+                || length <= f32::EPSILON
+                || !half_space.plane.constant.is_finite()
+            {
+                return Err(NativeSceneLoweringError::new(
+                    source_path,
+                    "invalid NIF half-space plane",
+                ));
+            }
+            let unit_normal = normal / length;
+            let offset = half_space.plane.constant / length;
+            let entity = builder.anonymous_child(
+                owner,
+                translated_prefab_transform((unit_normal * offset).to_array()),
+            )?;
+            builder.collider(
+                entity,
+                PrefabColliderSource::HalfSpace {
+                    normal: unit_normal.to_array(),
+                },
+            );
         }
         NetImmerseBoundingVolume::Unknown(kind) => {
             return Err(NativeSceneLoweringError::new(

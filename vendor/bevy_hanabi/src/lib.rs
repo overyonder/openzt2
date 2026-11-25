@@ -219,7 +219,13 @@ pub use graph::*;
 pub use modifier::*;
 pub use plugin::{EffectSystems, HanabiPlugin};
 pub use properties::*;
-pub use render::authored_draw::{EffectRenderPass, EffectRenderPassState, EffectRenderPasses};
+pub use render::authored_draw::{
+    EffectAlphaTest, EffectRenderPass, EffectRenderPassState, EffectRenderPasses, EffectSampler,
+};
+
+/// Renderer-wide cap on live particles. Existing particles age out when the cap falls.
+#[derive(Resource, Default, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EffectParticleBudget(pub Option<u32>);
 pub use render::{DebugSettings, LayoutFlags, ShaderCache};
 pub use render_feedback::{ParticleAliveCount, ParticleEffectGpuReady};
 pub use spawn::{
@@ -1253,6 +1259,7 @@ impl EffectShaderSources {
             asset.particle_layout(),
             parent_layout,
             num_event_bindings,
+            None,
         )
     }
 
@@ -1261,6 +1268,7 @@ impl EffectShaderSources {
         particle_layout: ParticleLayout,
         parent_layout: Option<&ParticleLayout>,
         num_event_bindings: u32,
+        alpha_test: Option<EffectAlphaTest>,
     ) -> Result<Self, ShaderGenerateError> {
         // The particle layout cannot be empty currently because we always emit
         // some Particle{} struct and it needs at least one field.
@@ -1512,10 +1520,10 @@ fn append_spawn_events_{0}(base_child_index: u32, particle_index: u32, count: u3
             }
 
             if particle_layout.contains(Attribute::POSITION) {
-                init_context.main_code.push_str("if ((*spawner).spawn_point_offset != 0u) { particle.position = explicit_spawn_points[(*spawner).spawn_point_offset + location.update_index].position.xyz; }\n");
+                init_context.main_code.push_str("if ((*spawner).spawn_point_offset != 0u) { particle.position = spawn_inputs.points[(*spawner).spawn_point_offset - 1u + location.update_index].position.xyz; }\n");
             }
             if particle_layout.contains(Attribute::VELOCITY) {
-                init_context.main_code.push_str("if ((*spawner).spawn_point_offset != 0u) { particle.velocity = explicit_spawn_points[(*spawner).spawn_point_offset + location.update_index].velocity.xyz; }\n");
+                init_context.main_code.push_str("if ((*spawner).spawn_point_offset != 0u) { particle.velocity = spawn_inputs.points[(*spawner).spawn_point_offset - 1u + location.update_index].velocity.xyz; }\n");
             }
             let sim_space_transform_code =
                 asset.simulation_space.eval(&init_context).map_err(|err| {
@@ -1623,7 +1631,10 @@ fn append_spawn_events_{0}(base_child_index: u32, particle_index: u32, count: u3
                     Attribute::VELOCITY.name()
                 );
                 if asset.motion_integration == MotionIntegration::PreUpdate {
-                    update_code.insert_str(0, &code);
+                    update_code.insert_str(
+                        0,
+                        &format!("let position_before_integration = particle.position;{code}"),
+                    );
                 } else {
                     update_code += &code;
                 }
@@ -1814,6 +1825,10 @@ fn append_spawn_events_{0}(base_child_index: u32, particle_index: u32, count: u3
             .replace("{{MATERIAL_BINDINGS}}", &material_bindings_code)
             .replace("{{VERTEX_MODIFIERS}}", &vertex_code)
             .replace("{{FRAGMENT_MODIFIERS}}", &fragment_code)
+            .replace(
+                "{{AUTHORED_ALPHA_TEST}}",
+                &alpha_test.map_or_else(String::new, EffectAlphaTest::fragment_code),
+            )
             .replace("{{RENDER_EXTRA}}", &render_extra)
             .replace("{{VERTEX_OUTPUT_FIELDS}}", &vertex_output_fields)
             .replace("{{ALPHA_CUTOFF}}", &alpha_cutoff_code)
@@ -1940,6 +1955,7 @@ impl CompiledParticleEffect {
             particle_layout.clone(),
             parent_layout.as_ref(),
             num_event_bindings,
+            None,
         ) {
             Ok(shader_source) => shader_source,
             Err(err) => {

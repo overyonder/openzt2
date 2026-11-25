@@ -10,12 +10,13 @@ use crate::{
     world_scenario::{
         original_saved_world_configuration_loading::load_saved_world_configuration,
         saved_world_map_metadata::lower_saved_world_map_metadata,
-        world_scenario_document_source::WorldScenarioDocumentSource,
+        saved_world_scenario_asset_construction::build_restored_world_scenario_asset,
+        world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset,
         world_source_document_dependency_lowering::lower_saved_world_starting_document_with_scene_dependencies,
     },
 };
 use bevy::{
-    asset::{AssetLoader, LoadContext, io::Reader},
+    asset::{AssetLoader, LoadContext, LoadedAsset, io::Reader},
     prelude::*,
 };
 use std::io;
@@ -23,7 +24,8 @@ use std::io;
 #[derive(Asset, TypePath, Debug)]
 pub struct OriginalSavedGameAsset {
     pub document: OrderedSourceDocument,
-    pub source: WorldScenarioDocumentSource,
+    #[dependency]
+    pub scenario: Handle<WorldScenarioDocumentAsset>,
     #[dependency]
     pub terrain: Handle<TerrainAsset>,
     #[dependency]
@@ -34,12 +36,14 @@ pub struct OriginalSavedGameAsset {
 #[derive(TypePath)]
 pub(crate) struct OriginalSavedGameAssetLoader {
     archives: AssetArchives,
+    server: AssetServer,
 }
 
 impl FromWorld for OriginalSavedGameAssetLoader {
     fn from_world(world: &mut World) -> Self {
         Self {
             archives: world.resource::<AssetArchives>().clone(),
+            server: world.resource::<AssetServer>().clone(),
         }
     }
 }
@@ -141,10 +145,15 @@ impl AssetLoader for OriginalSavedGameAssetLoader {
         source.authored.scenario_nodes = authored.scenario_nodes;
         source.document.scenarios = configuration.scenarios;
         source.document.scenario_script_bindings = configuration.scenario_script_bindings;
-        let terrain = context.load(path);
+        let terrain = context.load::<TerrainAsset>(path);
+        let terrain_id = map.terrain;
+        let scenario =
+            build_restored_world_scenario_asset(&self.server, source, terrain_id, terrain.clone())?;
+        let scenario = context
+            .add_loaded_labeled_asset("scenario", LoadedAsset::new_with_dependencies(scenario));
         Ok(OriginalSavedGameAsset {
             document,
-            source,
+            scenario,
             terrain,
             economy,
             unlimited_cash,

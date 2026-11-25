@@ -1,92 +1,134 @@
-//! Look input for the authored photo camera.
-
-use super::immersive_mode_state_types::ImmersiveCamera;
 use bevy::prelude::*;
+
+use openzt2_game_assets::world_definitions::{
+    world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions,
+    world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
+};
 use openzt2_game_data::world_definitions::immersive_mode_policy::ImmersiveModeActionFlags;
+use openzt2_interface_state::{
+    camera::camera_runtime_state_types::{CameraMode, CameraMouseLook, ZooCamera},
+    input::input_types::{ActionSource, ActiveInputDevice},
+    ui::{
+        input_frame_capture_types::AuthoredModalInputCapture,
+        pointer_capture_types::UiPointerCapture,
+    },
+};
 
-use crate::camera::camera_execution_types::CameraBounds;
-use crate::camera::camera_execution_types::CameraTuning;
-use crate::input::input_execution_types::DeviceControlAxes;
-use openzt2_interface_state::camera::camera_control_message_types::AimFreeCameraAt;
-use openzt2_interface_state::camera::camera_control_message_types::PositionFreeCamera;
-use openzt2_interface_state::camera::camera_runtime_state_types::CameraMode;
-use openzt2_interface_state::camera::camera_runtime_state_types::ZooCamera;
-use openzt2_interface_state::photos::photo_capture_types::PhotoMode;
+use crate::{
+    camera::{
+        camera_execution_types::{CameraIntent, CameraTransition, CameraTuning},
+        photo_zoom::PhotoCameraZoom,
+    },
+    input::input_execution_types::DeviceControlAxes,
+};
 
-use super::immersive_mode_input_policy_operations::interaction_action_flags_allow_required_mode_action_flags;
-use super::immersive_mode_policy_types::AllowedInteractionActions;
-use super::immersive_mode_state_types::ActiveImmersiveMode;
-use super::immersive_mode_state_types::ImmersiveMode;
+use super::{
+    first_person_view_angle_integration::integrate_first_person_view_angles_from_look_input_with_authored_speed_and_bounds,
+    immersive_control_execution_types::FirstPersonViewAngles,
+    immersive_mode_entry_and_policy_operations::find_authored_immersive_mode_policy,
+    immersive_mode_input_policy_operations::interaction_action_flags_allow_required_mode_action_flags,
+    immersive_mode_policy_types::AllowedInteractionActions,
+    immersive_mode_state_types::{
+        ActiveImmersiveMode, ImmersiveCamera, ImmersiveMode, ImmersiveSubject,
+    },
+};
 
-pub(super) fn aim_active_free_immersive_camera(
+pub(super) fn aim_player_driven_camera(
     time: Res<Time<Real>>,
     control_axes: Res<DeviceControlAxes>,
-    modal_input: Res<
-        openzt2_interface_state::ui::input_frame_capture_types::AuthoredModalInputCapture,
-    >,
-    active_modes: Query<(
+    active_input: Res<ActiveInputDevice>,
+    pointer: Res<UiPointerCapture>,
+    modal: Res<AuthoredModalInputCapture>,
+    definitions: Res<WorldDefinitions>,
+    assets: Res<Assets<WorldDefinitionAsset>>,
+    sessions: Query<(
         &ActiveImmersiveMode,
         &ImmersiveCamera,
         Option<&AllowedInteractionActions>,
+        Option<&ImmersiveSubject>,
+        Option<&FirstPersonViewAngles>,
     )>,
-    cameras: Query<
+    avatars: Query<&Transform, Without<ZooCamera>>,
+    mut cameras: Query<
         (
             &CameraMode,
             &CameraTuning,
-            &CameraBounds,
-            &Transform,
-            Has<PhotoMode>,
+            &CameraIntent,
+            &mut Transform,
+            Option<&PhotoCameraZoom>,
+            Has<CameraMouseLook>,
         ),
-        With<ZooCamera>,
+        (With<ZooCamera>, Without<CameraTransition>),
     >,
-    mut camera_position_requests: MessageWriter<PositionFreeCamera>,
-    mut camera_aim_requests: MessageWriter<AimFreeCameraAt>,
 ) {
-    if modal_input.0.is_some() {
-        return;
-    }
-    let Ok((active, camera, allowed_actions)) = active_modes.single() else {
+    let Some(definitions) = definitions.get(&assets) else {
         return;
     };
-    if active.mode != ImmersiveMode::Photo {
-        return;
-    }
-    let Ok((mode, camera_tuning, camera_bounds, camera_transform, photo)) = cameras.get(camera.0)
-    else {
-        return;
-    };
-    if *mode != CameraMode::Free || !photo {
-        return;
-    }
-    let look_input = interaction_action_flags_allow_required_mode_action_flags(
-        allowed_actions,
-        ImmersiveModeActionFlags::LOOK,
-    )
-    .then_some(control_axes.look)
-    .unwrap_or(Vec2::ZERO);
-    let elapsed_seconds = time.delta_secs();
-    if elapsed_seconds.is_finite()
-        && elapsed_seconds > 0.0
-        && camera_tuning.is_valid()
-        && camera_bounds.is_valid()
-        && look_input != Vec2::ZERO
-    {
-        let (yaw, pitch, _) = camera_transform.rotation.to_euler(EulerRot::YXZ);
-        let yaw = (yaw - look_input.x * camera_tuning.turn_speed_rps * elapsed_seconds)
-            .clamp(*camera_tuning.yaw.start(), *camera_tuning.yaw.end());
-        let pitch = (pitch - look_input.y * camera_tuning.turn_speed_rps * elapsed_seconds)
-            .clamp(*camera_tuning.pitch.start(), *camera_tuning.pitch.end());
-        let rotation = Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0);
-        let mut translation = camera_transform.translation;
-        translation.x = translation
-            .x
-            .clamp(camera_bounds.min.x, camera_bounds.max.x);
-        translation.z = translation
-            .z
-            .clamp(camera_bounds.min.y, camera_bounds.max.y);
-        camera_position_requests.write(PositionFreeCamera { world: translation });
-        camera_aim_requests.write(AimFreeCameraAt {
-            world: translation + rotation * Vec3::NEG_Z,
-        });
+    for (active, camera, actions, subject, angles) in &sessions {
+        let Ok((mode, tuning, intent, mut transform, zoom, mouse_look)) = cameras.get_mut(camera.0)
+        else {
+            continue;
+        };
+        if active.mode == ImmersiveMode::SuperStaff && *mode == CameraMode::FirstPerson {
+            if let (Some(avatar), Some(angles)) = (
+                subject.and_then(|subject| avatars.get(subject.0).ok()),
+                angles,
+            ) {
+                let rotation = avatar.rotation
+                    * Quat::from_euler(EulerRot::YXZ, angles.yaw, angles.pitch, 0.0);
+                transform
+                    .map_unchanged(|transform| &mut transform.rotation)
+                    .set_if_neq(rotation);
+            }
+            continue;
+        }
+        if active.mode != ImmersiveMode::Photo || *mode != CameraMode::Free || modal.0.is_some() {
+            continue;
+        }
+        let Some(policy) = find_authored_immersive_mode_policy(definitions, active.mode)
+            .and_then(|policy| policy.first_person_movement.as_ref())
+        else {
+            continue;
+        };
+        let look = if interaction_action_flags_allow_required_mode_action_flags(
+            actions,
+            ImmersiveModeActionFlags::LOOK,
+        ) {
+            let look = match active_input.source {
+                ActionSource::KeyboardMouse if mouse_look || !pointer.over_ui => {
+                    control_axes.mouse_look
+                }
+                ActionSource::KeyboardMouse => Vec2::ZERO,
+                _ => control_axes.look,
+            };
+            look.clamp_length_max(1.0)
+        } else {
+            Vec2::ZERO
+        };
+        let keyboard = intent.first_person_commands.turn_axis();
+        if (look == Vec2::ZERO && keyboard == 0.0) || !tuning.is_valid() {
+            continue;
+        }
+        let low = *tuning.distance.start();
+        let high = *tuning.distance.end();
+        let fraction = zoom
+            .filter(|_| high > low)
+            .map_or(0.0, |zoom| ((high - zoom.0) / (high - low)).clamp(0.0, 1.0));
+        let speed = policy.turn_speed_out_rps
+            + (policy.turn_speed_in_rps - policy.turn_speed_out_rps) * fraction;
+        let (yaw, pitch, _) = transform.rotation.to_euler(EulerRot::YXZ);
+        let mut pose = FirstPersonViewAngles { yaw, pitch };
+        integrate_first_person_view_angles_from_look_input_with_authored_speed_and_bounds(
+            &mut pose,
+            look,
+            keyboard,
+            [speed, policy.keyboard_rotate_speed_rps],
+            &tuning.pitch,
+            &tuning.yaw,
+            time.delta_secs(),
+        );
+        transform
+            .map_unchanged(|transform| &mut transform.rotation)
+            .set_if_neq(Quat::from_euler(EulerRot::YXZ, pose.yaw, pose.pitch, 0.0));
     }
 }

@@ -4,13 +4,14 @@ mod authored_wind_shader_presentation;
 mod daylight_curve_sampling;
 mod daylight_environment_presentation;
 mod daylight_environment_sampling;
-mod earthquake_ui_action_routing;
 mod environment_fog_attachment;
+mod environment_map_sampling;
 mod environment_presentation_hydration;
 mod environment_presentation_types;
 mod environment_random_sampling;
 mod environment_state_types;
 mod environment_visual_construction;
+mod scripted_overhead_camera_motion;
 mod sky_vertex_color_interpolation;
 mod underwater_environment_presentation;
 mod weather_animal_welfare;
@@ -34,9 +35,9 @@ pub struct EnvironmentPlugin;
 
 impl Plugin for EnvironmentPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<openzt2_zoo_state::environment::environment_presentation_types::EnvironmentTerrainAmbientLight>()
-            .init_resource::<openzt2_zoo_state::environment::environment_state_types::WaterEnvironmentMapSample>()
-            .add_message::<SetWeather>()
+        app.add_message::<SetWeather>()
+            .register_required_components::<ambient_animal_types::AmbientSpawnCadence, ambient_animal_lifecycle::WorldAmbientCandidates>()
+            .add_message::<openzt2_interface_state::camera::camera_control_message_types::ScriptedOverheadCameraMotion>()
             .add_message::<WeatherRequestApplied>()
             .add_message::<WeatherRequestRejected>()
             .add_message::<WeatherChanged>()
@@ -72,8 +73,9 @@ impl Plugin for EnvironmentPlugin {
             )
             .add_systems(
                 Update,
-                earthquake_ui_action_routing::apply_authored_earthquake_motion_to_overhead_camera
-                    .in_set(GameSet::Intent)
+                scripted_overhead_camera_motion::apply_scripted_overhead_camera_motion
+                    .after(openzt2_interface_state::ui::UiSet::DomainProjection)
+                    .in_set(GameSet::Ui)
                     .run_if(in_state(GamePhase::InGame)),
             )
             .add_systems(
@@ -104,7 +106,7 @@ impl Plugin for EnvironmentPlugin {
                         .after(environment_fog_attachment::attach_neutral_environment_fog_to_new_zoo_cameras),
                     underwater_environment_presentation::update_water_ray_environment_light_samples
                         .after(daylight_environment_presentation::project_current_daylight_weather_and_sky_into_bevy_renderer),
-                    underwater_environment_presentation::sample_water_environment_map,
+                    environment_map_sampling::sample_changed_environment_maps,
                 )
                     .in_set(openzt2_world_state::application_schedule::WaterPresentationSet::Environment)
                     .in_set(GameSet::Presentation)
@@ -121,7 +123,9 @@ impl Plugin for EnvironmentPlugin {
                     weather_animal_welfare::apply_current_weather_welfare_adjustment_to_zoo_animals
                         .after(weather_transition_lifecycle::advance_automatic_and_requested_weather_transitions),
                     ambient_animal_lifecycle::attempt_world_ambient_spawn
-                        .after(daylight_environment_presentation::publish_world_daylight_from_zoo_clock),
+                        .after(daylight_environment_presentation::publish_world_daylight_from_zoo_clock)
+                        .after(ambient_animal_lifecycle::reconcile_world_ambient_candidates),
+                    ambient_animal_lifecycle::reconcile_world_ambient_candidates,
                 )
                     .in_set(FixedGameSet::Think)
                     .run_if(in_state(GamePhase::InGame)),

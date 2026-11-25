@@ -8,7 +8,7 @@ use openzt2_game_assets::application_lifecycle::GamePhase;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
 use openzt2_game_data::AssetId;
 use openzt2_interface_state::camera::camera_control_message_types::SetCameraMode;
-use openzt2_interface_state::camera::camera_runtime_state_types::CameraMode;
+use openzt2_interface_state::camera::camera_runtime_state_types::{CameraMode, FirstPersonLocomotionTuning};
 use openzt2_interface_state::photos::photo_capture_types::PhotoMode;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_zoo_state::locomotion::locomotion_types::{DirectLocomotion, NavAgent};
@@ -56,7 +56,6 @@ struct OwnedImmersiveAvatars(Vec<Entity>);
 
 struct StaffAvatar {
     transform: Transform,
-    navigation: NavAgent,
     world: WorldMember,
 }
 
@@ -156,7 +155,6 @@ fn commit_admitted_mode<M: Component + Default>(
                     Name::new("super staff avatar"),
                     avatar.transform,
                     GlobalTransform::from(avatar.transform),
-                    avatar.navigation,
                     avatar.world,
                     OwnedImmersiveAvatar(session),
                 ))
@@ -196,6 +194,12 @@ fn commit_admitted_mode<M: Component + Default>(
     if let Some(angles) = admission.initial_angles {
         entity.insert(angles);
     }
+    if matches!(
+        mode,
+        ImmersiveMode::FirstPerson | ImmersiveMode::SuperStaff | ImmersiveMode::Photo
+    ) {
+        entity.insert(super::first_person_motion::FirstPersonMotion::default());
+    }
     if mode == ImmersiveMode::GuestView {
         entity.insert(GuestViewTileCount::default());
     }
@@ -205,14 +209,17 @@ fn commit_admitted_mode<M: Component + Default>(
     }
     if admission.lock_subject {
         if let Some(subject) = subject {
-            commands.entity(subject).insert((
-                ControlledEntity {
-                    controller: session,
-                },
-                DirectLocomotion {
-                    local_axes: Vec2::ZERO,
-                },
-            ));
+            commands.entity(subject).insert((ControlledEntity {
+                controller: session,
+            },));
+            if mode != ImmersiveMode::SuperStaff {
+                commands.entity(subject).insert(DirectLocomotion::default());
+            }
+            if mode == ImmersiveMode::FirstPerson {
+                commands
+                    .entity(subject)
+                    .insert(FirstPersonLocomotionTuning::default());
+            }
         }
     }
     if mode == ImmersiveMode::Photo {

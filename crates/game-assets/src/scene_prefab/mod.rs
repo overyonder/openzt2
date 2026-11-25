@@ -8,7 +8,10 @@ use bevy::{
     prelude::*,
 };
 use openzt2_game_data::{
-    scene_prefab::{ScenePrefabAssetDependencyKind, ScenePrefabDocument},
+    scene_prefab::{
+        PrefabRenderLodPolicy, PrefabRenderLodSource, ScenePrefabAssetDependencyKind,
+        ScenePrefabDocument,
+    },
     AssetId,
 };
 use std::collections::BTreeMap;
@@ -17,6 +20,45 @@ use crate::{
     animation::animation_set_asset_types::AnimationSetAsset, effect::ParticleEffectDocumentAsset,
 };
 use transform_animation_lowering::{lower_prefab_motion, PrefabMotion};
+
+pub fn select_prefab_render_lod_tier(
+    policy: &PrefabRenderLodPolicy,
+    distance_squared: f32,
+    threshold_scale_squared: f32,
+    switch_overrides_squared: &[f32],
+    minimum_overrides_squared: &[f32],
+) -> u16 {
+    if !distance_squared.is_finite() || !threshold_scale_squared.is_finite() {
+        return policy.initial_tier;
+    }
+    let threshold = |tier, overrides: &[f32], defaults: &[f32]| {
+        overrides
+            .get(tier)
+            .or_else(|| defaults.get(tier))
+            .copied()
+            .unwrap_or(0.0)
+    };
+    (0..policy.tier_count)
+        .rev()
+        .find(|&tier| {
+            let index = usize::from(tier);
+            let scaled = threshold(
+                index,
+                switch_overrides_squared,
+                &policy.switch_distance_squared,
+            ) * threshold_scale_squared;
+            let minimum = threshold(
+                index,
+                minimum_overrides_squared,
+                &policy.minimum_switch_distance_squared,
+            );
+            distance_squared >= scaled.max(minimum)
+        })
+        .unwrap_or_else(|| match policy.source {
+            PrefabRenderLodSource::BlueFang => 0,
+            PrefabRenderLodSource::NetImmerseBone => policy.tier_count.saturating_sub(1),
+        })
+}
 
 #[derive(Asset, TypePath, Debug)]
 pub struct ScenePrefabAsset {
@@ -204,6 +246,7 @@ fn register_scene_prefab_model_dependencies_and_retain_only_collider_models(
             }
             openzt2_game_data::scene_prefab::PrefabColliderSource::Box { .. }
             | openzt2_game_data::scene_prefab::PrefabColliderSource::Capsule { .. }
+            | openzt2_game_data::scene_prefab::PrefabColliderSource::HalfSpace { .. }
             | openzt2_game_data::scene_prefab::PrefabColliderSource::ConvexHull { .. } => None,
         })
         .collect::<std::collections::BTreeSet<_>>();

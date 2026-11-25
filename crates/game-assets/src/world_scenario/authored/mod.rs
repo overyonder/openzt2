@@ -3,7 +3,10 @@
 use super::authored_world_scenario_state::{AuthoredWorldScenarioState, ScenarioNodePolicy};
 use crate::world_scenario::world_scenario_source_reference_resolution::SourceReference;
 
-use std::{collections::BTreeMap, io};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    io,
+};
 
 use crate::source_document::ordered_source_document_types::{
     OrderedSourceDocument, OrderedSourceDocumentNode,
@@ -96,7 +99,13 @@ pub(in crate::world_scenario) fn lower_documents(
                         collect_rules(child, &mut rules);
                     }
                 }
-                if !rules.is_empty() {
+                if !rules.is_empty()
+                    || matches!(root, "BFScenarioGroup" | "ZTScenarioMgr")
+                    || document
+                        .root
+                        .element_children()
+                        .any(|node| local(&node.name) == "BFScenarioGroup")
+                {
                     let scenario = source_stem(&path)?;
                     collect_bindings(
                         document,
@@ -107,7 +116,7 @@ pub(in crate::world_scenario) fn lower_documents(
                         ScenarioScriptPhase::AlwaysRun,
                         &mut bindings,
                     )?;
-                    let mut objective_groups = Vec::new();
+                    let mut objective_groups = ObjectiveGroups::default();
                     let rule_ids = rules
                         .iter()
                         .enumerate()
@@ -226,7 +235,7 @@ pub(in crate::world_scenario) fn lower_documents(
                             .map(AssetId::from_key)
                             .unwrap_or_default(),
                         objectives,
-                        objective_groups,
+                        objective_groups: objective_groups.records,
                         time_limit_ticks: 0,
                         evaluation_interval_seconds: match document.root.attribute("interval") {
                             Some(value) => crate::source_document::blue_fang_source_numeric_lexeme::parse_blue_fang_source_numeric_lexeme::<f32>(value)
@@ -398,14 +407,23 @@ fn node_policy(
                 .parse()
                 .map_err(|error| at(document, node, error))
         })
-        .transpose()?;
+        .transpose()?
+        .unwrap_or_default();
     Ok(ScenarioNodePolicy {
-        initial_state,
-        sticky: node.attribute("sticky").map(truthy),
-        optional: node.attribute("optional").map(truthy),
+        initial_state: Some(initial_state),
+        sticky: Some(node.attribute("sticky").is_some_and(truthy)),
+        optional: Some(node.attribute("optional").is_some_and(truthy)),
         chain: node.attribute("chain").is_some_and(truthy),
-        update_when_paused: node.attribute("updateWhenPaused").is_some_and(truthy),
+        update_when_paused: ["persist", "updateWhenPaused"]
+            .into_iter()
+            .any(|attribute| node.attribute(attribute).is_some_and(truthy)),
     })
+}
+
+#[derive(Default)]
+struct ObjectiveGroups {
+    records: Vec<ScenarioObjectiveGroupRecord>,
+    empty: BTreeSet<AssetId>,
 }
 
 fn collect_objective_groups(
@@ -413,7 +431,7 @@ fn collect_objective_groups(
     node: &OrderedSourceDocumentNode,
     scenario: &str,
     rules: &BTreeMap<*const OrderedSourceDocumentNode, AssetId>,
-    groups: &mut Vec<ScenarioObjectiveGroupRecord>,
+    groups: &mut ObjectiveGroups,
     bindings: &mut Vec<ScenarioScriptBinding>,
     policies: &mut BTreeMap<AssetId, ScenarioNodePolicy>,
 ) -> io::Result<Vec<AssetId>> {
@@ -434,11 +452,22 @@ fn collect_objective_groups(
             document, child, scenario, rules, groups, bindings, policies,
         )?);
     }
-    if local(&node.name) == "children" || members.is_empty() {
+    if local(&node.name) == "children" {
         return Ok(members);
     }
-    let key = format!("{scenario}:group:{}", groups.len());
+    let has_rule = members.iter().any(|member| !groups.empty.contains(member));
+    let key = if has_rule {
+        format!(
+            "{scenario}:group:{}",
+            groups.records.len() - groups.empty.len()
+        )
+    } else {
+        format!("{scenario}:emptygroup:{}", groups.empty.len())
+    };
     let id = AssetId::from_key(&key);
+    if !has_rule {
+        groups.empty.insert(id);
+    }
     let policy = node_policy(document, node)?;
     policies.insert(id, policy);
     for (name, phase) in [
@@ -447,7 +476,7 @@ fn collect_objective_groups(
     ] {
         collect_bindings(document, node, scenario, &key, name, phase, bindings)?;
     }
-    groups.push(ScenarioObjectiveGroupRecord {
+    groups.records.push(ScenarioObjectiveGroupRecord {
         id,
         members,
         all_success: node.attribute("allsuccess").is_some_and(truthy),

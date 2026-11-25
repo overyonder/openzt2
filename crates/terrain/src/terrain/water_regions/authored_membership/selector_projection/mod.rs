@@ -128,122 +128,182 @@ fn apply_shape(codes: &mut [u8; 4], direction: usize, shape: u8) {
     }
 }
 
-pub(super) fn construct_selector_projection(
-    asset: &TerrainAsset,
+type FenceProbeSegments = Box<[[Vec2; 2]]>;
+pub(super) type SelectorTilePatch = (UVec2, [u8; 4], [FenceProbeSegments; 8]);
+type FenceSelection = (u8, Vec<[Vec2; 2]>);
+
+fn source_assignments(
+    edge: &FenceEdge,
+    prefab: Option<&FenceSegmentPrefab>,
+    endpoints: Option<&FenceTerrainEndpointPresentationCells>,
+    spacing: f32,
     definitions: WorldDefinitionsView<'_>,
     topology: &TopologyGrid,
-    fences: &SelectorFences,
-) -> Option<super::SelectorProjection> {
-    let grid = asset.canonical_terrain_grid();
-    let spacing = grid.units.cell_size_metres * 4.0;
-    if !spacing.is_finite() || spacing <= 0.0 {
+) -> Option<Vec<(EdgeKey, u8, Vec<[Vec2; 2]>)>> {
+    let curb = openzt2_game_data::AssetId::from_key("curb");
+    let mut assignments = Vec::new();
+    let object = definitions
+        .find_fence(edge.definition)
+        .and_then(|definition| definitions.find_object(definition.object))
+        .or_else(|| definitions.find_object(edge.definition))?;
+    if object.behavior_type_identifiers.contains(&curb) {
+        return Some(Vec::new());
+    }
+    let prefab = prefab?;
+    let [first, second] = endpoints?.endpoint_cells().map(|cell| {
+        let world = topology.cell_translation(cell);
+        Vec2::new(world.x, -world.z) / spacing
+    });
+    if !first.is_finite() || !second.is_finite() {
         return None;
     }
-    let mut assignments = BTreeMap::<EdgeKey, (Entity, u8, Vec<[Vec2; 2]>)>::new();
-    let curb = openzt2_game_data::AssetId::from_key("curb");
-    for (entity, edge, prefab, endpoints) in fences {
-        let object = definitions
-            .find_fence(edge.definition)
-            .and_then(|definition| definitions.find_object(definition.object))
-            .or_else(|| definitions.find_object(edge.definition))?;
-        if object.behavior_type_identifiers.contains(&curb) {
-            continue;
-        }
-        let prefab = prefab?;
-        let [first, second] = endpoints?.endpoint_cells().map(|cell| {
-            let world = topology.cell_translation(cell);
-            Vec2::new(world.x, -world.z) / spacing
-        });
-        if !first.is_finite() || !second.is_finite() {
-            return None;
-        }
-        let shape = selector_shape(prefab, first, second);
-        let fence = definitions.find_fence(edge.definition)?;
-        let binder = match (prefab.shape, first.x != second.x && first.y != second.y) {
-            (FenceSegmentShape::Straight, false) => "fence90",
-            (FenceSegmentShape::Straight, true) => "fence45",
-            (FenceSegmentShape::CardinalCurve90, _) => "fence90curve90",
-            (FenceSegmentShape::DiagonalCurve90, _) => "fence45curve90",
-            (FenceSegmentShape::CardinalCurve135, _) => "fence90curve135",
-            (FenceSegmentShape::DiagonalCurve135, _) => "fence45curve135",
-        };
-        let start = first * spacing;
-        let end = second * spacing;
-        let axis = (end - start).normalize_or_zero();
-        let normal = Vec2::new(-axis.y, axis.x) * if prefab.mirror_source_y { -1.0 } else { 1.0 };
-        let curve = fence
-            .fitting_curves
-            .iter()
-            .find(|curve| curve.binder == openzt2_game_data::AssetId::from_key(binder));
-        let segments: Vec<[Vec2; 2]> =
-            if let Some(curve) = curve.filter(|curve| !curve.points.is_empty()) {
-                let mut previous = start;
-                curve
-                    .points
-                    .iter()
-                    .map(|point| {
-                        let next = start + axis * point[0] + normal * point[1];
-                        let segment = [previous, next];
-                        previous = next;
-                        segment
-                    })
-                    .collect()
-            } else {
-                vec![[start - axis * 0.1, end + axis * 0.1]]
-            };
-        let delta = second - first;
-        if delta == Vec2::ZERO
-            || (delta.x != 0.0 && delta.y != 0.0 && (delta.x.abs() - delta.y.abs()).abs() > 0.001)
-        {
-            return None;
-        }
-        // Placement keys identify cells rather than requiring world endpoints
-        // to coincide with a terrain-grid vertex. Keep the fitting curve in
-        // its actual world position; only its assignment keys are quantized.
-        let first_cell = first.floor().as_ivec2();
-        let second_cell = second.floor().as_ivec2();
-        let direction = IVec2::new(
-            i32::from(delta.x > 0.0) - i32::from(delta.x < 0.0),
-            i32::from(delta.y > 0.0) - i32::from(delta.y < 0.0),
-        );
-        let steps = (second_cell - first_cell).abs().max_element().max(1);
-        for step in 0..steps {
-            let key = edge_key(
-                first_cell + direction * step,
-                first_cell + direction * (step + 1),
-            );
-            assignments
-                .entry(key)
-                .and_modify(|current| {
-                    if entity < current.0 {
-                        current.0 = entity;
-                        current.1 = shape;
-                    }
-                    current.2.extend_from_slice(&segments);
+    let shape = selector_shape(prefab, first, second);
+    let fence = definitions.find_fence(edge.definition)?;
+    let binder = match (prefab.shape, first.x != second.x && first.y != second.y) {
+        (FenceSegmentShape::Straight, false) => "fence90",
+        (FenceSegmentShape::Straight, true) => "fence45",
+        (FenceSegmentShape::CardinalCurve90, _) => "fence90curve90",
+        (FenceSegmentShape::DiagonalCurve90, _) => "fence45curve90",
+        (FenceSegmentShape::CardinalCurve135, _) => "fence90curve135",
+        (FenceSegmentShape::DiagonalCurve135, _) => "fence45curve135",
+    };
+    let start = first * spacing;
+    let end = second * spacing;
+    let axis = (end - start).normalize_or_zero();
+    let normal = Vec2::new(-axis.y, axis.x) * if prefab.mirror_source_y { -1.0 } else { 1.0 };
+    let curve = fence
+        .fitting_curves
+        .iter()
+        .find(|curve| curve.binder == openzt2_game_data::AssetId::from_key(binder));
+    let segments: Vec<[Vec2; 2]> =
+        if let Some(curve) = curve.filter(|curve| !curve.points.is_empty()) {
+            let mut previous = start;
+            curve
+                .points
+                .iter()
+                .map(|point| {
+                    let next = start + axis * point[0] + normal * point[1];
+                    let segment = [previous, next];
+                    previous = next;
+                    segment
                 })
-                .or_insert_with(|| (entity, shape, segments.clone()));
-        }
+                .collect()
+        } else {
+            vec![[start - axis * 0.1, end + axis * 0.1]]
+        };
+    let delta = second - first;
+    if delta == Vec2::ZERO
+        || (delta.x != 0.0 && delta.y != 0.0 && (delta.x.abs() - delta.y.abs()).abs() > 0.001)
+    {
+        return None;
     }
-    let width = (grid.width - 1) / 4;
-    let height = (grid.height - 1) / 4;
-    let empty_probes = || std::array::from_fn(|_| Box::<[[Vec2; 2]]>::default());
-    let mut probes: Vec<_> = (0..width * height).map(|_| empty_probes()).collect();
-    let mut codes = vec![Some([0; 4]); (width * height) as usize];
-    let mut touched = bevy::platform::collections::HashSet::default();
-    for &((ax, az), (bx, bz)) in assignments.keys() {
-        let minimum = IVec2::new(ax.min(bx), az.min(bz));
-        for y in -1..=0 {
-            for x in -1..=0 {
-                let tile = minimum + IVec2::new(x, y);
-                if tile.min_element() >= 0 && tile.as_uvec2().cmplt(UVec2::new(width, height)).all()
-                {
-                    touched.insert(tile.as_uvec2());
+    // Placement keys identify cells rather than requiring world endpoints
+    // to coincide with a terrain-grid vertex. Keep the fitting curve in
+    // its actual world position; only its assignment keys are quantized.
+    let first_cell = first.floor().as_ivec2();
+    let second_cell = second.floor().as_ivec2();
+    let direction = IVec2::new(
+        i32::from(delta.x > 0.0) - i32::from(delta.x < 0.0),
+        i32::from(delta.y > 0.0) - i32::from(delta.y < 0.0),
+    );
+    let steps = (second_cell - first_cell).abs().max_element().max(1);
+    for step in 0..steps {
+        let key = edge_key(
+            first_cell + direction * step,
+            first_cell + direction * (step + 1),
+        );
+        assignments.push((key, shape, segments.clone()));
+    }
+    Some(assignments)
+}
+
+#[derive(Component, Default)]
+pub(in crate::terrain) struct TerrainWaterSelectorProjection {
+    by_source: bevy::ecs::entity::EntityHashMap<Box<[EdgeKey]>>,
+    edges: BTreeMap<EdgeKey, BTreeMap<Entity, FenceSelection>>,
+}
+
+impl TerrainWaterSelectorProjection {
+    pub(super) fn empty(&self) -> bool {
+        self.edges.is_empty()
+    }
+
+    pub(super) fn patch(
+        &mut self,
+        changed: impl IntoIterator<Item = Entity>,
+        asset: &TerrainAsset,
+        definitions: WorldDefinitionsView<'_>,
+        topology: &TopologyGrid,
+        fences: &SelectorFences,
+    ) -> Option<Vec<SelectorTilePatch>> {
+        let grid = asset.canonical_terrain_grid();
+        let spacing = grid.units.cell_size_metres * 4.0;
+        if !spacing.is_finite() || spacing <= 0.0 {
+            return None;
+        }
+        let dimensions = UVec2::new(
+            grid.width.checked_sub(1)? / 4,
+            grid.height.checked_sub(1)? / 4,
+        );
+        let contributions = changed
+            .into_iter()
+            .map(|entity| {
+                let next = if let Ok((_, edge, prefab, endpoints)) = fences.get(entity) {
+                    source_assignments(edge, prefab, endpoints, spacing, definitions, topology)?
+                } else {
+                    Vec::new()
+                };
+                Some((entity, next))
+            })
+            .collect::<Option<Vec<_>>>()?;
+        let mut dirty_edges = std::collections::BTreeSet::new();
+        for (entity, next) in contributions {
+            if let Some(previous) = self.by_source.remove(&entity) {
+                for edge in previous.iter().copied() {
+                    if let std::collections::btree_map::Entry::Occupied(mut entry) =
+                        self.edges.entry(edge)
+                    {
+                        entry.get_mut().remove(&entity);
+                        if entry.get().is_empty() {
+                            entry.remove();
+                        }
+                    }
+                    dirty_edges.insert(edge);
+                }
+            }
+            if !next.is_empty() {
+                self.by_source
+                    .insert(entity, next.iter().map(|(edge, ..)| *edge).collect());
+            }
+            for (edge, shape, segments) in next {
+                self.edges
+                    .entry(edge)
+                    .or_default()
+                    .insert(entity, (shape, segments));
+                dirty_edges.insert(edge);
+            }
+        }
+        let mut tiles = bevy::platform::collections::HashSet::default();
+        for ((ax, az), (bx, bz)) in dirty_edges {
+            let minimum = IVec2::new(ax.min(bx), az.min(bz));
+            for y in -1..=0 {
+                for x in -1..=0 {
+                    let tile = minimum + IVec2::new(x, y);
+                    if tile.min_element() >= 0 && tile.as_uvec2().cmplt(dimensions).all() {
+                        tiles.insert(tile.as_uvec2());
+                    }
                 }
             }
         }
+        Some(
+            tiles
+                .into_iter()
+                .map(|tile| self.project_tile(tile))
+                .collect(),
+        )
     }
-    for &tile in &touched {
-        let index = (tile.y * width + tile.x) as usize;
+
+    pub(super) fn project_tile(&self, tile: UVec2) -> SelectorTilePatch {
         let origin = tile.as_ivec2();
         let corners = [
             origin,
@@ -262,26 +322,22 @@ pub(super) fn construct_selector_projection(
             (0, 3),
             (1, 3),
         ];
-        probes[index] = std::array::from_fn(|direction| {
-            let (first, second) = directional_edges[direction];
-            assignments
-                .get(&edge_key(corners[first], corners[second]))
-                .map_or_else(Box::default, |(_, _, segments)| {
-                    segments.clone().into_boxed_slice()
-                })
+        let assignments =
+            |(first, second)| self.edges.get(&edge_key(corners[first], corners[second]));
+        let probes = std::array::from_fn(|direction| {
+            assignments(directional_edges[direction]).map_or_else(Box::default, |edge| {
+                edge.values()
+                    .flat_map(|(_, segments)| segments.iter().copied())
+                    .collect()
+            })
         });
-        let mut tile_codes = [0; 4];
-        for (direction, (first, second)) in edges.into_iter().enumerate() {
-            if let Some((_, shape, _)) = assignments.get(&edge_key(corners[first], corners[second]))
+        let mut codes = [0; 4];
+        for (direction, edge) in edges.into_iter().enumerate() {
+            if let Some((_, (shape, _))) = assignments(edge).and_then(|edge| edge.first_key_value())
             {
-                apply_shape(&mut tile_codes, direction, *shape);
+                apply_shape(&mut codes, direction, *shape);
             }
         }
-        codes[index] = Some(tile_codes);
+        (tile, codes, probes)
     }
-    Some(super::SelectorProjection {
-        codes: codes.into(),
-        probes: probes.into(),
-        touched,
-    })
 }

@@ -103,9 +103,10 @@ pub(super) fn translate_keyboard_mouse_input(
     }
     let [forward, back, right, left, zoom_in, zoom_out] = magnitude.map(Option::unwrap_or_default);
     let pan_directions = [forward, back, right, left];
+    let mouse_look = (accumulated_mouse_motion.delta / MOUSE_LOOK_PIXELS_FOR_FULL_SCALE)
+        .clamp(Vec2::splat(-1.0), Vec2::ONE);
     let look = if mouse_buttons.pressed(MouseButton::Right) {
-        (accumulated_mouse_motion.delta / MOUSE_LOOK_PIXELS_FOR_FULL_SCALE)
-            .clamp(Vec2::splat(-1.0), Vec2::ONE)
+        mouse_look
     } else {
         Vec2::ZERO
     };
@@ -115,6 +116,7 @@ pub(super) fn translate_keyboard_mouse_input(
             pan: Vec2::new(right - left, forward - back),
             pan_directions,
             look,
+            mouse_look,
             zoom,
         },
         meaningful: pan_directions.iter().any(|value| *value > 0.0)

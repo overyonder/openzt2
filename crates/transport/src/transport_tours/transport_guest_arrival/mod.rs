@@ -1,8 +1,12 @@
 use bevy::prelude::*;
-use openzt2_game_data::world_definitions::guest_simulation_definitions::GuestVisitPurpose;
+use openzt2_game_data::{
+    world_definitions::guest_simulation_definitions::GuestVisitPurpose, AssetId,
+};
 
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
-use openzt2_zoo_state::animal_behavior::behavior_set_start_request_types::PendingBehaviorSet;
+use openzt2_zoo_state::animal_behavior::behavior_set_start_request_types::{
+    PendingBehaviorSet, StartBehaviorSet,
+};
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
 use openzt2_zoo_state::economy::service_types::ServiceReservation;
 use openzt2_zoo_state::guests::guest_simulation_types::Guest;
@@ -12,7 +16,6 @@ use openzt2_zoo_state::guests::guest_simulation_types::GuestPhase;
 use openzt2_zoo_state::locomotion::locomotion_types::Arrived;
 use openzt2_zoo_state::locomotion::locomotion_types::NavigationFailed;
 
-use openzt2_zoo_state::transport_tours::transport_rider_types::BoardTransportRequest;
 use openzt2_zoo_state::transport_tours::transport_rider_types::TransportRider;
 use openzt2_zoo_state::transport_tours::transport_rider_types::WaitingForTransport;
 use openzt2_zoo_state::transport_tours::transport_topology_types::TransportStation;
@@ -21,7 +24,7 @@ use openzt2_zoo_state::transport_tours::transport_topology_types::TransportStati
     clippy::type_complexity,
     reason = "guest ownership is expressed by ECS query filters"
 )]
-pub(super) fn request_transport_boarding_for_owned_guest_arrivals(
+pub(super) fn start_authored_station_queue_for_guest_arrivals(
     mut arrivals: MessageReader<Arrived>,
     mut failures: MessageReader<NavigationFailed>,
     mut guests: Query<
@@ -41,7 +44,7 @@ pub(super) fn request_transport_boarding_for_owned_guest_arrivals(
         ),
     >,
     stations: Query<(&Visibility, &WorldMember), With<TransportStation>>,
-    mut boarding: MessageWriter<BoardTransportRequest>,
+    mut behaviors: MessageWriter<StartBehaviorSet>,
     mut commands: Commands,
 ) {
     let failed_requests: bevy::platform::collections::HashSet<_> = failures
@@ -70,46 +73,11 @@ pub(super) fn request_transport_boarding_for_owned_guest_arrivals(
                 *visibility != Visibility::Hidden && station_world.root == world.root
             })
         {
-            boarding.write(BoardTransportRequest {
-                guest: arrival.entity,
-                station: destination.entity,
+            behaviors.write(StartBehaviorSet {
+                actor: arrival.entity,
+                program: AssetId::from_key("queuestation"),
+                target: Some(destination.entity),
             });
         }
-    }
-}
-
-#[allow(
-    clippy::type_complexity,
-    reason = "queue interruption reads existing activity owners"
-)]
-pub(super) fn cancel_interrupted_transport_queues(
-    guests: Query<
-        (
-            Entity,
-            &GuestPhase,
-            Option<&GuestDestination>,
-            Option<&GuestNavigationRequest>,
-        ),
-        (With<Guest>, With<WaitingForTransport>),
-    >,
-    interruptions: Query<
-        (),
-        Or<(
-            With<ServiceReservation>,
-            With<BehaviorTaskExecutionState>,
-            With<PendingBehaviorSet>,
-        )>,
-    >,
-    mut commands: Commands,
-) {
-    for (guest, phase, destination, navigation) in &guests {
-        if *phase == GuestPhase::Visiting
-            && destination.is_none()
-            && navigation.is_none_or(|request| request.0.is_none())
-            && !interruptions.contains(guest)
-        {
-            continue;
-        }
-        commands.entity(guest).remove::<WaitingForTransport>();
     }
 }

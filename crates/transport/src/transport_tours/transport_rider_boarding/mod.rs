@@ -1,16 +1,13 @@
 use bevy::ecs::entity::{EntityHashMap, EntityHashSet};
 use bevy::prelude::*;
 
-use openzt2_game_assets::world_definitions::{
-    world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions,
-    world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
-};
 use openzt2_interface_state::immersive_modes::immersive_mode_state_types::ControlledEntity;
+use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_zoo_state::{
     economy::facility_economy_types::{Price, Wallet},
     guests::guest_simulation_types::Guest,
     locomotion::locomotion_types::{
-        Arrived, Destination, Docking, LocomotionMode, NavAgent, Route, Steering,
+        Arrived, Destination, Docking, LocomotionMode, Route, Steering,
     },
     transport_tours::{
         tour_scoring_types::{TourObservationMemory, TourScore},
@@ -21,12 +18,10 @@ use openzt2_zoo_state::{
     },
 };
 
-pub(super) fn accept_affordable_transport_boarding_requests_at_reachable_stations(
+pub(super) fn accept_transport_queue_reservations(
     mut requests: MessageReader<BoardTransportRequest>,
-    definitions: Res<Assets<WorldDefinitionAsset>>,
-    active_definitions: Res<WorldDefinitions>,
     guests: Query<
-        (&Wallet, &GlobalTransform, &NavAgent),
+        (&Wallet, &WorldMember),
         (
             With<Guest>,
             Without<WaitingForTransport>,
@@ -36,32 +31,25 @@ pub(super) fn accept_affordable_transport_boarding_requests_at_reachable_station
     stations: Query<(
         &CircuitMember,
         &TransportStation,
-        &GlobalTransform,
+        &WorldMember,
         Option<&StationQueue>,
         Option<&StationBoardedRiders>,
     )>,
     circuits: Query<(&TransportCircuit, Option<&Price>)>,
     mut commands: Commands,
 ) {
-    let Some(definitions) = active_definitions.get(&definitions) else {
-        requests.clear();
-        return;
-    };
     let mut accepted_guests = EntityHashSet::default();
     let mut added_to_queue = EntityHashMap::<usize>::default();
     for request in requests.read() {
         if accepted_guests.contains(&request.guest) {
             continue;
         }
-        let (Ok((wallet, guest_pose, agent)), Ok((member, station, pose, queue, boarded))) =
+        let (Ok((wallet, guest_world)), Ok((member, station, station_world, queue, boarded))) =
             (guests.get(request.guest), stations.get(request.station))
         else {
             continue;
         };
-        let (Ok((circuit, fare)), Some(authored_station)) = (
-            circuits.get(member.0),
-            definitions.find_station(station.definition),
-        ) else {
+        let Ok((circuit, fare)) = circuits.get(member.0) else {
             continue;
         };
         let occupants = queue.map_or(0, |queue| queue.len())
@@ -70,26 +58,18 @@ pub(super) fn accept_affordable_transport_boarding_requests_at_reachable_station
                 .get(&request.station)
                 .copied()
                 .unwrap_or_default();
-        if circuit.closed
+        if guest_world.root != station_world.root
+            || circuit.closed
             || occupants >= usize::from(station.capacity)
             || !fare.is_some_and(|fare| fare.0 .0 >= 0 && wallet.0 >= fare.0)
         {
             continue;
         }
-        let reaches_dock = authored_station
-            .passenger_entry_offsets_cm
-            .into_iter()
-            .map(|[x, z]| pose.transform_point(Vec3::new(f32::from(x), 0.0, f32::from(z)) * 0.01))
-            .any(|dock| {
-                guest_pose.translation().distance_squared(dock) <= agent.radius_m * agent.radius_m
-            });
-        if reaches_dock {
-            accepted_guests.insert(request.guest);
-            *added_to_queue.entry(request.station).or_default() += 1;
-            commands.entity(request.guest).insert(WaitingForTransport {
-                station: request.station,
-            });
-        }
+        accepted_guests.insert(request.guest);
+        *added_to_queue.entry(request.station).or_default() += 1;
+        commands.entity(request.guest).insert(WaitingForTransport {
+            station: request.station,
+        });
     }
 }
 
@@ -98,8 +78,9 @@ pub(super) fn board_waiting_guests_when_transport_vehicle_arrives(
     vehicles: Query<(&CircuitMember, &Children), With<TransportVehicle>>,
     stations: Query<(&CircuitMember, &StationQueue), With<TransportStation>>,
     mounts: Query<(Entity, &TransportSeat), Without<RidersAtSeat>>,
+    circuits: Query<(&TransportCircuit, &Price)>,
     mut guests: Query<
-        (Has<ControlledEntity>, Option<&mut LocomotionMode>),
+        (Has<ControlledEntity>, Option<&mut LocomotionMode>, &Wallet),
         (
             With<Guest>,
             With<WaitingForTransport>,
@@ -120,7 +101,10 @@ pub(super) fn board_waiting_guests_when_transport_vehicle_arrives(
         else {
             continue;
         };
-        if station_circuit.0 != vehicle_circuit.0 {
+        let Ok((circuit, fare)) = circuits.get(station_circuit.0) else {
+            continue;
+        };
+        if circuit.closed || station_circuit.0 != vehicle_circuit.0 {
             continue;
         }
         let mut free_seats = mounts
@@ -129,13 +113,17 @@ pub(super) fn board_waiting_guests_when_transport_vehicle_arrives(
             .filter(|(mount, _)| !occupied_seats.contains(mount))
             .collect::<Vec<_>>();
         free_seats.sort_unstable_by_key(|(_, seat)| seat.index);
-        let mut waiting = queue
+        let waiting = queue
             .iter()
-            .filter(|&guest| guests.contains(guest) && !boarded_guests.contains(&guest))
+            .filter(|&guest| !boarded_guests.contains(&guest))
+            .filter(|&guest| {
+                guests
+                    .get(guest)
+                    .is_ok_and(|(_, _, wallet)| fare.0 .0 >= 0 && wallet.0 >= fare.0)
+            })
             .collect::<Vec<_>>();
-        waiting.sort_unstable_by_key(|guest| guest.to_bits());
         for (guest, (mount, seat)) in waiting.into_iter().zip(free_seats) {
-            let Ok((controlled, mode)) = guests.get_mut(guest) else {
+            let Ok((controlled, mode, _)) = guests.get_mut(guest) else {
                 continue;
             };
             boarded_guests.insert(guest);
@@ -150,6 +138,7 @@ pub(super) fn board_waiting_guests_when_transport_vehicle_arrives(
                     TransportSeatRider(mount),
                     BoardedAtStation(station_entity),
                     TourScore::default(),
+                    super::tour_view_scoring::RideTourContributions::default(),
                     TourObservationMemory::default(),
                     super::tour_view_scoring::TourObservationDwell::default(),
                 ));

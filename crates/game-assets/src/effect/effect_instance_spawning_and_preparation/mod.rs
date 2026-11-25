@@ -1,14 +1,15 @@
 //! Projects loaded particle graphs onto Bevy and Hanabi entities.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use bevy::asset::{
     AssetId as BevyAssetId, AssetLoadFailedEvent, LoadState, RecursiveDependencyLoadState,
-    VisitAssetDependencies,
+    RenderAssetUsages, VisitAssetDependencies,
 };
 use bevy::diagnostic::FrameCount;
 use bevy::ecs::system::SystemParam;
 use bevy::gltf::GltfMesh;
+use bevy::mesh::{Indices, PrimitiveTopology, VertexAttributeValues};
 use bevy::prelude::*;
 use bevy_hanabi::{
     EffectAsset, EffectChildren, EffectDeltaTime, EffectMesh, EffectParent, EffectSpawner,
@@ -112,6 +113,9 @@ pub(super) struct PreparedParticleInstanceProjection<'w, 's> {
     commands: Commands<'w, 's>,
     frame: Res<'w, FrameCount>,
     prototype_meshes: Res<'w, Assets<GltfMesh>>,
+    meshes: ResMut<'w, Assets<Mesh>>,
+    combined_prototypes:
+        Local<'s, HashMap<(BevyAssetId<ParticleEffectDocumentAsset>, AssetId), Handle<Mesh>>>,
     effects: Res<'w, Assets<EffectAsset>>,
     children: Query<'w, 's, &'static Children>,
     collision_children: Query<'w, 's, &'static EffectChildren>,
@@ -167,6 +171,7 @@ pub(super) fn reconcile_loaded_particle_effect_instances(
 ) {
     let mut changed = HashSet::new();
     let mut removed = HashSet::new();
+    let mut discarded_prototypes = HashSet::new();
     for event in events.read() {
         match *event {
             AssetEvent::Added { id } | AssetEvent::LoadedWithDependencies { id } => {
@@ -175,12 +180,16 @@ pub(super) fn reconcile_loaded_particle_effect_instances(
             AssetEvent::Modified { id } => {
                 changed.insert(id);
                 pending_reloads.insert(id);
+                discarded_prototypes.insert(id);
             }
             AssetEvent::Removed { id } => {
                 removed.insert(id);
                 pending_reloads.remove(&id);
+                discarded_prototypes.insert(id);
             }
-            AssetEvent::Unused { .. } => {}
+            AssetEvent::Unused { id } => {
+                discarded_prototypes.insert(id);
+            }
         }
     }
     let failed = failures
@@ -238,6 +247,11 @@ pub(super) fn reconcile_loaded_particle_effect_instances(
             .collect::<Vec<_>>()
     };
     let mut projection = graph.p1();
+    if !discarded_prototypes.is_empty() {
+        projection
+            .combined_prototypes
+            .retain(|(document, _), _| !discarded_prototypes.contains(document));
+    }
     let selected_pending: Vec<_> = if changed.is_empty()
         && removed.is_empty()
         && failed.is_empty()
@@ -437,12 +451,8 @@ impl PreparedParticleInstanceProjection<'_, '_> {
         }
         self.reconcile_child_order(entity, ordered, previous);
 
-        let prototype = emitter
-            .prototype_mesh
-            .as_ref()
-            .and_then(|handle| self.prototype_meshes.get(handle))
-            .and_then(|mesh| mesh.primitives.first())
-            .map(|primitive| EffectMesh(primitive.mesh.clone()));
+        let prototype =
+            self.prepare_prototype_mesh(source.id(), id, emitter.prototype_mesh.as_ref());
         let mut target = self.commands.entity(entity);
         target.remove::<ParticleEffectGraphReady>();
         if let Ok((
@@ -521,6 +531,31 @@ impl PreparedParticleInstanceProjection<'_, '_> {
         }
     }
 
+    fn prepare_prototype_mesh(
+        &mut self,
+        document: BevyAssetId<ParticleEffectDocumentAsset>,
+        emitter: AssetId,
+        prototype: Option<&Handle<GltfMesh>>,
+    ) -> Option<EffectMesh> {
+        let prototype = self.prototype_meshes.get(prototype?)?;
+        if let [primitive] = prototype.primitives.as_slice() {
+            return Some(EffectMesh(primitive.mesh.clone()));
+        }
+        let key = (document, emitter);
+        if let Some(handle) = self.combined_prototypes.get(&key) {
+            return Some(EffectMesh(handle.clone()));
+        }
+        let mesh = combine_particle_prototype_primitives(
+            prototype
+                .primitives
+                .iter()
+                .map(|primitive| self.meshes.get(&primitive.mesh)),
+        )?;
+        let handle = self.meshes.add(mesh);
+        self.combined_prototypes.insert(key, handle.clone());
+        Some(EffectMesh(handle))
+    }
+
     fn projected_children(&self, parent: Entity) -> Vec<(Entity, AuthoredParticleChild)> {
         self.children
             .get(parent)
@@ -569,4 +604,59 @@ impl PreparedParticleInstanceProjection<'_, '_> {
             self.commands.entity(parent).replace_children(&ordered);
         }
     }
+}
+
+fn combine_particle_prototype_primitives<'a>(
+    primitives: impl Iterator<Item = Option<&'a Mesh>>,
+) -> Option<Mesh> {
+    let mut positions = Vec::new();
+    let mut normals = Vec::new();
+    let mut uvs = Vec::new();
+    let mut indices = Vec::new();
+    for primitive in primitives {
+        let primitive = primitive?;
+        if primitive.primitive_topology() != PrimitiveTopology::TriangleList {
+            return None;
+        }
+        let VertexAttributeValues::Float32x3(primitive_positions) =
+            primitive.attribute(Mesh::ATTRIBUTE_POSITION)?
+        else {
+            return None;
+        };
+        let offset = positions.len();
+        if let Some(primitive_indices) = primitive.indices() {
+            for index in primitive_indices.iter() {
+                indices.push(u32::try_from(offset.checked_add(index)?).ok()?);
+            }
+        } else {
+            let start = u32::try_from(offset).ok()?;
+            let end = u32::try_from(offset.checked_add(primitive_positions.len())?).ok()?;
+            indices.extend(start..end);
+        }
+        positions.extend_from_slice(primitive_positions);
+        if let Some(VertexAttributeValues::Float32x3(primitive_normals)) =
+            primitive.attribute(Mesh::ATTRIBUTE_NORMAL)
+        {
+            normals.extend_from_slice(primitive_normals);
+        } else {
+            normals.resize(positions.len(), [0.0, 0.0, 1.0]);
+        }
+        if let Some(VertexAttributeValues::Float32x2(primitive_uvs)) =
+            primitive.attribute(Mesh::ATTRIBUTE_UV_0)
+        {
+            uvs.extend_from_slice(primitive_uvs);
+        } else {
+            uvs.resize(positions.len(), [0.0, 0.0]);
+        }
+    }
+    (!indices.is_empty()).then(|| {
+        Mesh::new(
+            PrimitiveTopology::TriangleList,
+            RenderAssetUsages::RENDER_WORLD,
+        )
+        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
+        .with_inserted_indices(Indices::U32(indices))
+    })
 }

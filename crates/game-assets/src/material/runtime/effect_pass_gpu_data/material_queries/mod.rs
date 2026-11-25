@@ -8,6 +8,7 @@ use bevy::{
     prelude::*,
     render::render_resource::{BlendState, ColorWrites, CompareFunction, StencilState},
 };
+use bevy_hanabi::{EffectAlphaTest, EffectSampler};
 
 /// Authored graphics state available to renderers that share an effect pass's
 /// material without using the PBR mesh draw command.
@@ -89,12 +90,18 @@ impl EffectPassMaterial {
         }
     }
 
-    pub fn bound_particle_texture(&self) -> Option<&Handle<Image>> {
+    pub(crate) fn particle_texture_bindings(
+        &self,
+    ) -> impl Iterator<Item = Option<(&Handle<Image>, EffectSampler)>> {
         self.texture_assets
             .ordered_texture_assets()
             .into_iter()
-            .flatten()
-            .next()
+            .zip(&self.evaluated_sampler_states)
+            .map(|(texture, sampler)| texture.map(|texture| (texture, sampler.descriptor().into())))
+    }
+
+    pub(crate) const fn particle_alpha_test(&self) -> Option<EffectAlphaTest> {
+        self.particle_alpha_test
     }
 
     pub(crate) fn hanabi_blend_mode(&self) -> Option<bevy_hanabi::AlphaMode> {

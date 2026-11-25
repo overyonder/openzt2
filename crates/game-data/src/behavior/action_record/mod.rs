@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::action;
-use crate::{animation::animation_text_key::AuthoredAnimationTextCommand, AssetId};
+use crate::{AssetId, animation::animation_text_key::AuthoredAnimationTextCommand};
 
 pub type BehaviorAnimationTextKeyAliases = Vec<(AssetId, Vec<AuthoredAnimationTextCommand>)>;
 
@@ -85,7 +85,9 @@ pub enum BehaviorAction {
     DockSpline(action::specialized::BehaviorDockSplineAction),
     Fall(action::specialized::BehaviorFallAction),
     KickOffRider,
-    AnimateForViewFromTransport { animation_type: String },
+    AnimateForViewFromTransport {
+        animation_type: String,
+    },
     FollowEntity(action::specialized::BehaviorFollowEntityAction),
     SplashGuest(action::specialized::BehaviorSplashGuestAction),
     UsePortal(action::specialized::BehaviorUsePortalAction),
@@ -161,6 +163,14 @@ pub enum BehaviorAction {
     Wander(action::wander::BehaviorWanderAction),
     SendSelfTokens(Vec<action::token::BehaviorSelfTokenDelivery>),
     SendSubjectTrigger(crate::AssetId),
+    EscapeObstacle(action::specialized::BehaviorEscapeObstacleAction),
+    ExitInteractionContainer {
+        exit_behavior_set: Option<AssetId>,
+    },
+    FindArtifact,
+    DigArtifact,
+    Tour,
+    TeleportToLocation(action::specialized::BehaviorTeleportToLocationAction),
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]

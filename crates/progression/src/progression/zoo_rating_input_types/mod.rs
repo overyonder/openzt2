@@ -9,7 +9,6 @@ pub(super) struct AnimalWelfareRating(pub(super) u16);
 pub(super) struct LivingAnimalPopulation {
     pub(super) animals: u32,
     pub(super) species: u32,
-    pub(super) observations: Vec<AnimalObservation>,
 }
 
 #[derive(Component, Default, PartialEq)]
@@ -17,21 +16,10 @@ pub(super) struct GuestRatingFacts {
     pub(super) count: u32,
     pub(super) satisfaction: u16,
     pub(super) education: u16,
-    pub(super) observations: Vec<GuestObservation>,
-    pub(super) species_seen: BTreeMap<AssetId, SeenSpecies>,
 }
 
-#[derive(PartialEq)]
-pub(super) struct AnimalObservation {
-    pub(super) species: AssetId,
-    pub(super) happiness: f32,
-}
-
-#[derive(PartialEq)]
-pub(super) struct GuestObservation {
-    pub(super) happiness: f32,
-    pub(super) education: f32,
-}
+#[derive(Component, Default, PartialEq)]
+pub(super) struct GuestSpeciesSeen(pub(super) BTreeMap<AssetId, SeenSpecies>);
 
 #[derive(Default, PartialEq)]
 pub(super) struct SeenSpecies {
@@ -40,9 +28,6 @@ pub(super) struct SeenSpecies {
     pub(super) entertainment: f32,
     pub(super) donation: f32,
 }
-
-#[derive(Component, Default, PartialEq, Eq)]
-pub(super) struct EarnedAwardFamePoints(pub(super) u32);
 
 #[derive(Component, Default, PartialEq, Eq)]
 pub(super) struct ZooSceneryRating(pub(super) u16);

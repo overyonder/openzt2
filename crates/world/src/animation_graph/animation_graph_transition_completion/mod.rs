@@ -11,21 +11,31 @@ use openzt2_world_state::animation_graph::animation_graph_playback_state_types::
 use openzt2_world_state::animation_graph::animation_graph_transition_operations::enter_animation_graph_node_playback;
 use openzt2_world_state::animation_graph::animation_presentation_relationship_types::AnimationPresentationOwner;
 
-pub(crate) fn complete_animation_graph_transitions_after_animation_clip_completion(
+pub(crate) fn complete_animation_graph_transitions_after_animation_clip_completion<
+    Lane: Component,
+>(
     animation_set_assets: Res<Assets<AnimationSetAsset>>,
     clip_sources: AnimationClipSources,
     mut completed_animations: MessageReader<AnimationCompleted>,
     gates: Query<(), With<Gate>>,
-    mut animation_playback_controllers: Query<(
-        &mut AnimationPlaybackController,
-        &mut AnimationGraphPlaybackState,
-        Option<&AnimationPresentationOwner>,
-    )>,
+    mut animation_playback_controllers: Query<
+        (
+            &mut AnimationPlaybackController,
+            &mut AnimationGraphPlaybackState,
+            Option<&AnimationPresentationOwner>,
+            Has<crate::world_spawn::prefab_renderable_components::PrefabAnimationBinding>,
+        ),
+        With<Lane>,
+    >,
 ) {
     for completed_animation in completed_animations.read() {
-        let Ok((mut animation_playback_controller, mut animation_graph_playback_state, owner)) =
-            animation_playback_controllers
-                .get_mut(completed_animation.animation_playback_controller_entity)
+        let Ok((
+            mut animation_playback_controller,
+            mut animation_graph_playback_state,
+            owner,
+            authored_prefab,
+        )) = animation_playback_controllers
+            .get_mut(completed_animation.animation_playback_controller_entity)
         else {
             continue;
         };
@@ -33,6 +43,13 @@ pub(crate) fn complete_animation_graph_transitions_after_animation_clip_completi
             != animation_playback_controller.playback_generation
             || completed_animation.explicit_clip_request_id
                 != animation_playback_controller.explicit_clip_request_id
+        {
+            continue;
+        }
+        if authored_prefab
+            && animation_playback_controller.playback_generation == 0
+            && animation_playback_controller.playback_repetition_policy
+                == AnimationPlaybackRepetitionPolicy::PlayOnce
         {
             continue;
         }

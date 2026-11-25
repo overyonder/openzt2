@@ -10,6 +10,14 @@ use openzt2_world_state::animation_playback::traversal_animation_path_types::{
 #[derive(Component)]
 pub(super) struct PendingTraversalClips(Vec<(String, Handle<AnimationClipSourceAsset>)>);
 
+#[derive(Message)]
+pub struct ConfigureTraversalSegmentTiming {
+    pub controller: Entity,
+    pub playback_generation: u64,
+    pub completion_fraction: f32,
+    pub segment_count: u32,
+}
+
 pub(super) fn bind_authored_traversal_animation_paths(
     mut commands: Commands,
     sets: Res<Assets<AnimationSetAsset>>,

@@ -24,12 +24,28 @@ fn openzt2_apply_morph_opacity(colour: vec4<f32>, position: vec4<f32>) -> vec4<f
 }
 "#;
 
+const DEPTH_BIAS_SHADER: &str = r#"
+struct D3d9ColourOutput {
+    @location(0) colour: vec4<f32>,
+    @if(D3D9_DEPTH_BIAS_BITS) @builtin(frag_depth) depth: f32,
+}
+
+@if(D3D9_DEPTH_BIAS_BITS)
+fn d3d9_biased_fragment_depth(position: vec4<f32>) -> f32 {
+    let constant_bias = bitcast<f32>(u32(constants::D3D9_DEPTH_BIAS_BITS));
+    let slope_bias = bitcast<f32>(u32(constants::D3D9_SLOPE_BIAS_BITS));
+    let maximum_slope = max(abs(dpdx(position.z)), abs(dpdy(position.z)));
+    return clamp(position.z - constant_bias - slope_bias * maximum_slope, 0.0, 1.0);
+}
+"#;
+
 pub(super) fn fixed_function_source_with_morph_opacity(source: &str) -> String {
     let mut source = source.replace(
-        "return evaluate_fixed_function_texture_stages(fragment_inputs, false);",
-        "return openzt2_apply_morph_opacity(evaluate_fixed_function_texture_stages(fragment_inputs, false), input.position);",
+        "output.colour = evaluate_fixed_function_texture_stages(fragment_inputs, false);",
+        "output.colour = openzt2_apply_morph_opacity(evaluate_fixed_function_texture_stages(fragment_inputs, false), input.position);",
     );
     source.push_str(MORPH_OPACITY_SHADER);
+    source.push_str(DEPTH_BIAS_SHADER);
     source
 }
 
@@ -65,8 +81,12 @@ pub(super) fn apply_morph_opacity_to_translated_fragment(source: &mut String) ->
         + 1..end];
     let position = fragment_position(source, arguments);
     let position_name = position.as_deref().unwrap_or("openzt2_morph_position");
-    let replacement = if output.contains("@location(0)") {
-        format!("return openzt2_apply_morph_opacity({value}, {position_name});")
+    let (replacement, biased_output, extra_output_type) = if output.contains("@location(0)") {
+        (
+            format!("var draw_output: D3d9ColourOutput;\n    draw_output.colour = openzt2_apply_morph_opacity({value}, {position_name});\n    @if(D3D9_DEPTH_BIAS_BITS) draw_output.depth = draw_depth;\n    return draw_output;"),
+            Some("D3d9ColourOutput"),
+            String::new(),
+        )
     } else {
         let declaration = format!("struct {} {{", output.trim());
         let Some((_, members)) = source.split_once(&declaration) else {
@@ -81,15 +101,44 @@ pub(super) fn apply_morph_opacity_to_translated_fragment(source: &mut String) ->
         }) else {
             return Ok(());
         };
-        format!(
-            "var openzt2_morph_output = {value};\n    openzt2_morph_output.{member} = openzt2_apply_morph_opacity(openzt2_morph_output.{member}, {position_name});\n    return openzt2_morph_output;"
-        )
+        let colour = format!("var openzt2_morph_output = {value};\n    openzt2_morph_output.{member} = openzt2_apply_morph_opacity(openzt2_morph_output.{member}, {position_name});\n");
+        if members.contains("@builtin(frag_depth)") {
+            (
+                colour + "    return openzt2_morph_output;",
+                None,
+                String::new(),
+            )
+        } else {
+            use std::fmt::Write;
+            let mut draw = colour + "    var draw_output: D3d9MrtOutput;\n";
+            for declaration in members.lines().filter_map(|line| line.split_once(':')) {
+                if let Some(field) = declaration.0.split_whitespace().last() {
+                    writeln!(
+                        draw,
+                        "    draw_output.{field} = openzt2_morph_output.{field};"
+                    )
+                    .map_err(io::Error::other)?;
+                }
+            }
+            draw += "    @if(D3D9_DEPTH_BIAS_BITS) draw_output.depth = draw_depth;\n    return draw_output;";
+            let output_type = format!("\nstruct D3d9MrtOutput {{{members}\n    @if(D3D9_DEPTH_BIAS_BITS) @builtin(frag_depth) depth: f32,\n}}\n");
+            (draw, Some("D3d9MrtOutput"), output_type)
+        }
     };
     let has_arguments = !arguments.trim().is_empty();
+    let output_start = signature.len() - output.len();
+    let body_start = stage + signature.len() + 1;
     source.replace_range(
         index..index + "return ".len() + value.len() + 1,
         &replacement,
     );
+    if let Some(biased_output) = biased_output {
+        source.insert_str(body_start, &format!("\n    @if(D3D9_DEPTH_BIAS_BITS) let draw_depth = d3d9_biased_fragment_depth({position_name});"));
+        source.replace_range(
+            stage + output_start..body_start - 1,
+            &format!(" {biased_output} "),
+        );
+    }
     if position.is_none() {
         source.insert_str(
             stage + end,
@@ -101,6 +150,8 @@ pub(super) fn apply_morph_opacity_to_translated_fragment(source: &mut String) ->
         );
     }
     source.push_str(MORPH_OPACITY_SHADER);
+    source.push_str(DEPTH_BIAS_SHADER);
+    source.push_str(&extra_output_type);
     Ok(())
 }
 
@@ -146,7 +197,12 @@ mod tests {
         assert!(
             shader.contains("t: vec4<f32>, @builtin(position) openzt2_morph_position: vec4<f32>")
         );
-        assert!(shader.contains("return openzt2_apply_morph_opacity(t, openzt2_morph_position);"));
+        assert!(shader.contains(
+            "draw_output.colour = openzt2_apply_morph_opacity(t, openzt2_morph_position);"
+        ));
+        assert!(
+            shader.contains("let draw_depth = d3d9_biased_fragment_depth(openzt2_morph_position);")
+        );
         Ok(())
     }
 

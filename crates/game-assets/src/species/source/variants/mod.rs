@@ -140,7 +140,7 @@ pub(super) fn lower_species_variant_source_record_to_canonical_variant(
         .find(|record| record.descendant_named("weights").is_some())
         .copied()
         .unwrap_or(*candidate);
-    let actor = std::iter::once(candidate)
+    let actors = std::iter::once(candidate)
         .chain(ancestors.iter())
         .chain(std::iter::once(species))
         .filter_map(|record| {
@@ -148,11 +148,16 @@ pub(super) fn lower_species_variant_source_record_to_canonical_variant(
                 record.source_document_element(),
                 "BFActorComponent",
             )
-        })
-        .find(|actor| actor.attribute_named_any(&["actorfile"]).is_some());
-    let Some(actorfile) = actor.and_then(|actor| actor.attribute_named_any(&["actorfile"])) else {
+        });
+    let Some(actorfile) = actors
+        .clone()
+        .find_map(|actor| actor.attribute_named_any(&["actorfile"]))
+    else {
         return Ok(None);
     };
+    let scale = actors
+        .filter_map(|actor| actor.attribute_named_any(&["scale"]))
+        .next();
     let actor_path = normalize_authored_actor_manifest_path(actorfile);
     let model = actor_manifest_resolution_index
         .native_model_source_path_for_normalized_actor_manifest_key(&actor_path)
@@ -205,9 +210,7 @@ pub(super) fn lower_species_variant_source_record_to_canonical_variant(
         initial_animation_clip_asset_key,
         initial_animation_loops,
         material_variant: None,
-        scale: [parse_positive_authored_scale_or_default(
-            actor.and_then(|actor| actor.attribute_named_any(&["scale"])),
-        ); 2],
+        scale: [parse_positive_authored_scale_or_default(scale); 2],
         weight_kg: [0.0; 2],
         probability,
         flags: if candidate.key.ends_with('2') {

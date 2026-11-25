@@ -6,8 +6,6 @@ use openzt2_zoo_state::aquatic::tank_navigation_water::TankNavigationWater;
 use avian3d::prelude::LinearVelocity;
 use bevy::prelude::*;
 
-use openzt2_zoo_state::animal_lifecycle::types::AnimalVariant;
-
 use crate::locomotion::animal_navigation_policy::AnimalNavigationPolicy;
 use crate::locomotion::fence_navigation_policy::FenceNavigationPolicy;
 use crate::locomotion::pathfinding::straight_line_sweep_admits_agent;
@@ -37,7 +35,6 @@ pub(super) fn accept_entity_pursuit_requests(
         &WorldMember,
         Option<&LocomotionMode>,
         &GlobalTransform,
-        Option<&AnimalVariant>,
         Option<&mut EntityPursuit>,
         Option<&mut Destination>,
     )>,
@@ -73,10 +70,10 @@ pub(super) fn accept_entity_pursuit_requests(
             .copied()
             .unwrap_or_else(|| pursuer.and_then(|(.., current, _)| current.copied()))
             .is_some_and(|current| current.request_id == request.request_id);
-        let line_is_clear = pursuer.is_some_and(|(agent, member, mode, transform, variant, ..)| {
+        let line_is_clear = pursuer.is_some_and(|(agent, member, mode, transform, ..)| {
             let (Ok((graph, tank_water)), Ok((agent, maximum_ground_slope_radians))) = (
                 roots.get(member.root),
-                animal_policy.agent_with_authored_collision_limits(agent, variant),
+                animal_policy.agent_with_collision_limits(request.entity, agent),
             ) else {
                 return false;
             };

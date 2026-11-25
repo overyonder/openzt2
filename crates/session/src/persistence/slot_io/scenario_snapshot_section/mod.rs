@@ -4,7 +4,11 @@ use super::super::{
     snapshot_container_types::WorldSnapshotSectionDirectoryEntry,
 };
 use crate::scenario::{
-    challenge_offer_types::*, scenario_lua_snapshot_types::ScenarioLuaSavedState,
+    challenge_offer_types::*,
+    scenario_lua_snapshot_types::{
+        saved_scenario_action_key, ScenarioLuaSavedState, ScenarioLuaSavedValue,
+        SAVED_SCENARIO_ACTION_ARGUMENTS,
+    },
     scenario_lua_types::ScenarioLuaContext,
 };
 use bevy::{
@@ -55,6 +59,8 @@ pub(super) struct ScenarioSnapshot {
     timing: Option<ScenarioScriptTiming>,
     #[serde(skip)]
     challenge: Option<ChallengeSnapshot>,
+    #[serde(skip)]
+    groups: ScenarioGroupSnapshots,
     version: u8,
     definition: AssetId,
     started_tick: u64,
@@ -62,6 +68,12 @@ pub(super) struct ScenarioSnapshot {
     objectives: Vec<ScenarioObjectiveSnapshot>,
     lua: Option<ScenarioLuaSavedState>,
     ui: crate::scenario::scenario_lua_ui::ScenarioUiSavedState,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+struct ScenarioGroupSnapshots {
+    session: BTreeMap<AssetId, u8>,
+    offer: BTreeMap<AssetId, u8>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -104,6 +116,8 @@ pub(in crate::persistence) struct ScenarioSnapshotCapture<'w, 's> {
         With<WorldRoot>,
     >,
     members: Query<'w, 's, &'static ScenarioObjectives>,
+    group_members: Query<'w, 's, &'static ScenarioObjectiveGroups>,
+    groups: Query<'w, 's, &'static ScenarioObjectiveGroup>,
     objectives: Query<
         'w,
         's,
@@ -164,6 +178,7 @@ pub(super) fn capture(
     let mut snapshot = ScenarioSnapshot {
         timing: timing.cloned(),
         challenge: None,
+        groups: ScenarioGroupSnapshots::default(),
         version: if session.is_some() { 1 } else { 2 },
         definition: session.map_or(AssetId::default(), |session| session.definition),
         started_tick: session.map_or(0, |session| session.started_tick),
@@ -182,6 +197,7 @@ pub(super) fn capture(
             .and_then(|asset| asset.document.find_scenario_record(session.definition))
             .ok_or(Failure::UnknownAssetIdentifier)?;
         snapshot.objectives = capture_objectives(parameters, owner, definition)?;
+        snapshot.groups.session = capture_groups(parameters, owner, definition)?;
         snapshot.lua = saved_lua(owner)?;
     }
     if is_challenge {
@@ -208,6 +224,7 @@ pub(super) fn capture(
                     .get(&source.0)
                     .and_then(|asset| asset.document.find_scenario_record(offer.definition))
                     .ok_or(Failure::UnknownAssetIdentifier)?;
+                snapshot.groups.offer = capture_groups(parameters, entity, definition)?;
                 Some(ChallengeOfferSnapshot {
                     id: id.0,
                     definition: offer.definition,
@@ -272,6 +289,46 @@ fn capture_objectives(
     Ok(objectives)
 }
 
+fn capture_groups(
+    parameters: &ScenarioSnapshotCapture,
+    owner: Entity,
+    scenario: &openzt2_game_data::world_scenario::ScenarioDefinitionRecord,
+) -> Result<BTreeMap<AssetId, u8>, Failure> {
+    let Ok(members) = parameters.group_members.get(owner) else {
+        return Ok(BTreeMap::new());
+    };
+    parameters
+        .groups
+        .iter_many(members.iter())
+        .map(|group| {
+            let group = group.map_err(|_| Failure::CorruptSnapshotSection)?;
+            let definition = scenario
+                .objective_groups
+                .get(group.record_index)
+                .ok_or(Failure::UnknownAssetIdentifier)?;
+            Ok((definition.id, encode_rule_status(group.status)))
+        })
+        .collect()
+}
+
+fn encode_rule_status(status: ScenarioObjectiveStatus) -> u8 {
+    match status {
+        ScenarioObjectiveStatus::Inactive => 0,
+        ScenarioObjectiveStatus::Active => 1,
+        ScenarioObjectiveStatus::Satisfied => 2,
+        ScenarioObjectiveStatus::Failed => 3,
+    }
+}
+
+fn decode_rule_status(status: u8) -> ScenarioObjectiveStatus {
+    match status {
+        0 => ScenarioObjectiveStatus::Inactive,
+        1 => ScenarioObjectiveStatus::Active,
+        2 => ScenarioObjectiveStatus::Satisfied,
+        _ => ScenarioObjectiveStatus::Failed,
+    }
+}
+
 pub(super) fn encode(snapshot: Option<&ScenarioSnapshot>) -> Result<Vec<u8>, Failure> {
     let Some(snapshot) = snapshot else {
         return Ok(Vec::new());
@@ -288,6 +345,12 @@ pub(super) fn encode(snapshot: Option<&ScenarioSnapshot>) -> Result<Vec<u8>, Fai
         bytes.extend_from_slice(b"SCL1");
         bytes
             .extend(postcard::to_allocvec(challenge).map_err(|_| Failure::CorruptSnapshotSection)?);
+    }
+    if snapshot.groups != ScenarioGroupSnapshots::default() {
+        bytes.extend_from_slice(b"SGP1");
+        bytes.extend(
+            postcard::to_allocvec(&snapshot.groups).map_err(|_| Failure::CorruptSnapshotSection)?,
+        );
     }
     if bytes.len() > MAX_PAYLOAD_BYTES {
         return Err(Failure::CapacityExceeded);
@@ -336,6 +399,12 @@ pub(super) fn decode(
         snapshot.challenge = Some(challenge);
         remaining = tail;
     }
+    if let Some(payload) = remaining.strip_prefix(b"SGP1") {
+        let (groups, tail): (ScenarioGroupSnapshots, _) =
+            postcard::take_from_bytes(payload).map_err(|_| Failure::CorruptSnapshotSection)?;
+        snapshot.groups = groups;
+        remaining = tail;
+    }
     if !remaining.is_empty() {
         return Err(Failure::CorruptSnapshotSection);
     }
@@ -356,6 +425,22 @@ fn validate(snapshot: &ScenarioSnapshot) -> Result<(), Failure> {
                 || !snapshot.objectives.is_empty()
                 || snapshot.lua.is_some()
                 || snapshot.timing.is_some()))
+    {
+        return Err(Failure::CorruptSnapshotSection);
+    }
+    if (snapshot.version == 2 && !snapshot.groups.session.is_empty())
+        || (!snapshot.groups.offer.is_empty()
+            && snapshot
+                .challenge
+                .as_ref()
+                .and_then(|c| c.offer.as_ref())
+                .is_none())
+        || snapshot
+            .groups
+            .session
+            .values()
+            .chain(snapshot.groups.offer.values())
+            .any(|status| *status > 3)
     {
         return Err(Failure::CorruptSnapshotSection);
     }
@@ -394,10 +479,7 @@ fn validate(snapshot: &ScenarioSnapshot) -> Result<(), Failure> {
 }
 
 fn validate_lua(lua: &ScenarioLuaSavedState) -> Result<(), Failure> {
-    if lua.modules.is_empty()
-        || lua.modules.len() > 1024
-        || lua.modules.iter().any(|path| path.len() > 1024)
-    {
+    if lua.modules.len() > 1024 || lua.modules.iter().any(|path| path.len() > 1024) {
         return Err(Failure::CorruptSnapshotSection);
     }
     Ok(())
@@ -518,6 +600,7 @@ pub(super) fn prepare(
             &view,
             snapshot.definition,
             &snapshot.objectives,
+            &snapshot.groups.session,
             snapshot.lua.as_ref(),
             parameters,
         )?)
@@ -540,6 +623,7 @@ pub(super) fn prepare(
                 &view,
                 saved.definition,
                 &saved.objectives,
+                &snapshot.groups.offer,
                 None,
                 parameters,
             )?);
@@ -557,13 +641,21 @@ fn prepare_rules(
     view: &openzt2_game_assets::world_scenario::world_scenario_asset_set_state_and_borrowing_queries::WorldScenariosView,
     scenario: AssetId,
     saved: &[ScenarioObjectiveSnapshot],
+    groups: &BTreeMap<AssetId, u8>,
     lua: Option<&ScenarioLuaSavedState>,
     parameters: &ScenarioSnapshotApplication,
 ) -> Result<PreparedScenarioRules, Failure> {
     let definition = view
         .scenario(scenario)
         .ok_or(Failure::UnknownAssetIdentifier)?;
-    if definition.objectives.len() != saved.len() {
+    if definition.objectives.len() != saved.len()
+        || (!groups.is_empty()
+            && (groups.len() != definition.objective_groups.len()
+                || definition
+                    .objective_groups
+                    .iter()
+                    .any(|group| !groups.contains_key(&group.id))))
+    {
         return Err(Failure::UnknownAssetIdentifier);
     }
     let document = view
@@ -598,6 +690,66 @@ fn prepare_rules(
 }
 
 fn prepare_runtime(
+    saved: &ScenarioLuaSavedState,
+    document: &Handle<WorldScenarioDocumentAsset>,
+    parameters: &ScenarioSnapshotApplication,
+) -> Result<ScenarioLuaContext, Failure> {
+    let Some(legacy_index) = saved
+        .globals
+        .iter()
+        .position(|(key, _)| key.as_slice() == b"__openzt2_rule_arguments")
+    else {
+        return prepare_current_runtime(saved, document, parameters);
+    };
+    let mut migrated = saved.clone();
+    let (_, ScenarioLuaSavedValue::Table(legacy)) = migrated.globals.remove(legacy_index) else {
+        return Err(Failure::CorruptSnapshotSection);
+    };
+    let document_asset = parameters
+        .assets
+        .as_deref()
+        .and_then(|assets| assets.get(document))
+        .ok_or(Failure::UnknownAssetIdentifier)?;
+    if !migrated
+        .globals
+        .iter()
+        .any(|(key, _)| key.as_slice() == SAVED_SCENARIO_ACTION_ARGUMENTS.as_bytes())
+    {
+        migrated.globals.push((
+            SAVED_SCENARIO_ACTION_ARGUMENTS.as_bytes().to_vec(),
+            ScenarioLuaSavedValue::Table(Vec::new()),
+        ));
+    }
+    let Some((_, ScenarioLuaSavedValue::Table(arguments))) = migrated
+        .globals
+        .iter_mut()
+        .find(|(name, _)| name.as_slice() == SAVED_SCENARIO_ACTION_ARGUMENTS.as_bytes())
+    else {
+        return Err(Failure::CorruptSnapshotSection);
+    };
+    let mut known = arguments
+        .iter()
+        .filter_map(|(key, _)| {
+            let ScenarioLuaSavedValue::Bytes(bytes) = key else {
+                return None;
+            };
+            Some(bytes.clone())
+        })
+        .collect::<BTreeSet<_>>();
+    for binding in &document_asset.document.scenario_script_bindings {
+        if let Some((_, value)) = legacy.iter().find(|(key, _)| {
+            matches!(key, ScenarioLuaSavedValue::Bytes(id) if id.as_slice() == binding.objective.0.as_slice())
+        }) {
+            let key = saved_scenario_action_key(binding).0.to_vec();
+            if known.insert(key.clone()) {
+                arguments.push((ScenarioLuaSavedValue::Bytes(key), value.clone()));
+            }
+        }
+    }
+    prepare_current_runtime(&migrated, document, parameters)
+}
+
+fn prepare_current_runtime(
     saved: &ScenarioLuaSavedState,
     document: &Handle<WorldScenarioDocumentAsset>,
     parameters: &ScenarioSnapshotApplication,
@@ -663,6 +815,7 @@ pub(super) fn apply(
             &snapshot.objectives,
             &campaign.objectives,
             &campaign.groups,
+            &snapshot.groups.session,
             read_authored(&campaign.document)?,
         );
         commands.entity(root).insert((
@@ -680,7 +833,9 @@ pub(super) fn apply(
         if let Some(timing) = snapshot.timing {
             commands.entity(root).insert(timing);
         } else {
-            commands.entity(root).remove::<ScenarioScriptTiming>();
+            commands
+                .entity(root)
+                .insert(ScenarioScriptTiming::default());
         }
         commands
             .entity(root)
@@ -766,6 +921,7 @@ pub(super) fn apply(
                 &saved.objectives,
                 &prepared.objectives,
                 &prepared.groups,
+                &snapshot.groups.offer,
                 authored,
             );
         }
@@ -783,18 +939,12 @@ fn spawn_restored_objectives(
     objectives: &[ScenarioObjectiveSnapshot],
     authored: &[(u32, Vec<AssetId>)],
     groups: &[openzt2_game_data::world_scenario::ScenarioObjectiveGroupRecord],
+    saved_groups: &BTreeMap<AssetId, u8>,
     policies: &openzt2_game_assets::world_scenario::authored_world_scenario_state::AuthoredWorldScenarioState,
 ) {
     let mut entities = BTreeMap::new();
-    let mut statuses = BTreeMap::new();
     for (saved, (index, _)) in objectives.iter().zip(authored) {
-        let status = match saved.status {
-            0 => ScenarioObjectiveStatus::Inactive,
-            1 => ScenarioObjectiveStatus::Active,
-            2 => ScenarioObjectiveStatus::Satisfied,
-            _ => ScenarioObjectiveStatus::Failed,
-        };
-        statuses.insert(saved.definition, status);
+        let status = decode_rule_status(saved.status);
         let mut entity = commands.spawn((
             PersistentId(saved.id),
             WorldMember { root },
@@ -824,7 +974,20 @@ fn spawn_restored_objectives(
         }
     }
     crate::scenario::scenario_group_completion::spawn_scenario_objective_groups(
-        commands, owner, groups, statuses, policies,
+        commands,
+        owner,
+        groups,
+        entities,
+        objectives
+            .iter()
+            .map(|objective| (objective.definition, decode_rule_status(objective.status)))
+            .chain(
+                saved_groups
+                    .iter()
+                    .map(|(&id, &status)| (id, decode_rule_status(status))),
+            )
+            .collect(),
+        policies,
     );
 }
 

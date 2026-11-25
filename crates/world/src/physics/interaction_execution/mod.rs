@@ -49,7 +49,7 @@ use openzt2_game_assets::{
 use openzt2_game_data::AssetId;
 use openzt2_world_state::{
     animation_graph::animation_graph_playback_message_types::{
-        AnimationClipActionOptions, AnimationClipPlaybackRequest,
+        AnimationClipActionSettings, AnimationClipPlaybackRequest,
         CancelAnimationClipPlaybackRequest,
     },
     animation_playback::animation_playback_controller_types::AnimationPlaybackRepetitionPolicy,
@@ -60,16 +60,16 @@ use openzt2_zoo_state::{
     animal_behavior::behavior_world_release_types::{
         BehaviorWorldObjectReleased, BehaviorWorldReleaseMotion, FallReleaseAnimationClips,
     },
+    behavior_task_execution_types::{
+        running_actions::{RunBehaviorFall, RunningBehaviorInstruction},
+        BehaviorTaskExecutionState, PendingBehaviorAnimationClipCompletion,
+    },
+    placement::placement_occupancy_index::PlacedObjectFootprintQueries,
     terrain::{
         terrain_chunk_types::{EditedTerrainSamples, TerrainChunk, TerrainIndex},
         terrain_water_presentation_types::{TerrainWaterMembershipIndex, TerrainWaterRegionQuery},
         terrain_world_sampling::{sample_terrain, terrain_chunk_at},
     },
-    behavior_task_execution_types::{
-        BehaviorTaskExecutionState, PendingBehaviorAnimationClipCompletion,
-        running_actions::{RunBehaviorFall, RunningBehaviorInstruction},
-    },
-    placement::placement_occupancy_index::PlacedObjectFootprintQueries,
     topology::topology_graph_types::TopologyGrid,
 };
 
@@ -89,15 +89,19 @@ pub(super) fn release_behavior_object_into_world(
         Has<RigidBodyDisabled>,
         Has<FallingReleasedObject>,
         Option<&FallReleaseAnimationClips>,
+        Option<&openzt2_zoo_state::placement::placed_object_types::PlacedObjectFootprintOccupancy>,
     )>,
     definitions: Res<WorldDefinitions>,
     assets: Res<Assets<WorldDefinitionAsset>>,
     mut clips: MessageWriter<AnimationClipPlaybackRequest>,
-    mut options: MessageWriter<AnimationClipActionOptions>,
-    authored_falls: Query<(&RunBehaviorFall, &RunningBehaviorInstruction, &BehaviorTaskExecutionState)>,
+    authored_falls: Query<(
+        &RunBehaviorFall,
+        &RunningBehaviorInstruction,
+        &BehaviorTaskExecutionState,
+    )>,
     clocks: Query<&ZooClock>,
 ) {
-    let Ok((member, mut transform, definition, body, disabled, falling, animation)) =
+    let Ok((member, mut transform, definition, body, disabled, falling, animation, footprint)) =
         objects.get_mut(released.object)
     else {
         return;
@@ -123,7 +127,9 @@ pub(super) fn release_behavior_object_into_world(
             }
         }
         BehaviorWorldReleaseMotion::Fall { speed_mps } => {
-            let authored = authored_falls.get(released.object).ok()
+            let authored = authored_falls
+                .get(released.object)
+                .ok()
                 .filter(|(_, instruction, task)| instruction.is_current(task));
             if object.is_some_and(|object| {
                 object
@@ -138,6 +144,9 @@ pub(super) fn release_behavior_object_into_world(
                 return;
             }
             let resume_body = body.is_some() && !disabled;
+            if footprint.is_some() {
+                entity.remove::<openzt2_zoo_state::placement::placed_object_types::PlacedObjectFootprintOccupancy>();
+            }
             if resume_body {
                 entity.insert(RigidBodyDisabled);
             }
@@ -157,16 +166,21 @@ pub(super) fn release_behavior_object_into_world(
                 })
                 .unwrap_or_default();
             let action = authored.map(|(action, _, _)| &action.0);
-            let airborne = action.and_then(|action| action.airborne.clone()).or(airborne);
-            let land_impact = action.and_then(|action| action.land_impact.clone()).or(land_impact);
-            let water_impact = action.and_then(|action| action.water_impact.clone()).or(water_impact);
+            let airborne = action
+                .and_then(|action| action.airborne.clone())
+                .or(airborne);
+            let land_impact = action
+                .and_then(|action| action.land_impact.clone())
+                .or(land_impact);
+            let water_impact = action
+                .and_then(|action| action.water_impact.clone())
+                .or(water_impact);
             let airborne_request = airborne.map(|clip| {
                 request_release_clip(
                     released.object,
                     clip,
                     AnimationPlaybackRepetitionPolicy::Loop,
                     &mut clips,
-                    &mut options,
                 )
             });
             entity.insert(FallingReleasedObject {
@@ -175,6 +189,7 @@ pub(super) fn release_behavior_object_into_world(
                 airborne_request,
                 land_impact_clip: land_impact,
                 water_impact_clip: water_impact,
+                previous_footprint: footprint.copied(),
                 instruction: authored.map(|(_, instruction, _)| instruction.id()),
             });
         }
@@ -193,11 +208,22 @@ pub(super) fn advance_falling_released_objects(
     spatial: SpatialQuery,
     placed_objects: PlacedObjectFootprintQueries,
     topology: Query<&TopologyGrid>,
-    (colliders, sensors, clocks): (Query<&ColliderOf>, Query<(), With<Sensor>>, Query<&ZooClock>),
-    authored_falls: Query<(&RunningBehaviorInstruction, &BehaviorTaskExecutionState), With<RunBehaviorFall>>,
-    mut falling: Query<(Entity, &WorldMember, &mut FallingReleasedObject, &mut Transform)>,
+    (colliders, sensors, clocks): (
+        Query<&ColliderOf>,
+        Query<(), With<Sensor>>,
+        Query<&ZooClock>,
+    ),
+    authored_falls: Query<
+        (&RunningBehaviorInstruction, &BehaviorTaskExecutionState),
+        With<RunBehaviorFall>,
+    >,
+    mut falling: Query<(
+        Entity,
+        &WorldMember,
+        &mut FallingReleasedObject,
+        &mut Transform,
+    )>,
     mut clips: MessageWriter<AnimationClipPlaybackRequest>,
-    mut options: MessageWriter<AnimationClipActionOptions>,
     mut cancel: MessageWriter<CancelAnimationClipPlaybackRequest>,
 ) {
     let terrain_index = terrain_index.map(Single::into_inner);
@@ -226,22 +252,31 @@ pub(super) fn advance_falling_released_objects(
             position.xz(),
         )
         .map(|(height, _)| height);
-        let supporting_collider = (next_height < position.y).then(|| {
-            let grid = topology.get(world.root).ok()?;
-            let cell = grid.position_cell(position).truncate();
-            placed_objects.entities_occupying_cell(world.root, cell)
-                .filter(|support| *support != entity)
-                .find_map(|support| {
-                    let hit = spatial.cast_ray_predicate(
-                        position, Dir3::NEG_Y, position.y - next_height, false,
-                        &SpatialQueryFilter::default(),
-                        &|collider| !sensors.contains(collider)
-                            && colliders.get(collider).map_or(collider, |owner| owner.body) == support,
-                    )?;
-                    let height = position.y - hit.distance;
-                    (next_height < height && height < position.y).then_some(height)
-                })
-        }).flatten();
+        let supporting_collider = (next_height < position.y)
+            .then(|| {
+                let grid = topology.get(world.root).ok()?;
+                let cell = grid.position_cell(position).truncate();
+                placed_objects
+                    .entities_occupying_cell(world.root, cell)
+                    .filter(|support| *support != entity)
+                    .find_map(|support| {
+                        let hit = spatial.cast_ray_predicate(
+                            position,
+                            Dir3::NEG_Y,
+                            position.y - next_height,
+                            false,
+                            &SpatialQueryFilter::default(),
+                            &|collider| {
+                                !sensors.contains(collider)
+                                    && colliders.get(collider).map_or(collider, |owner| owner.body)
+                                        == support
+                            },
+                        )?;
+                        let height = position.y - hit.distance;
+                        (next_height < height && height < position.y).then_some(height)
+                    })
+            })
+            .flatten();
         if let Some((support, in_water)) = fall_landing_surface(
             position.y,
             next_height,
@@ -252,6 +287,10 @@ pub(super) fn advance_falling_released_objects(
             transform.translation.y = support;
             let mut object = commands.entity(entity);
             object.remove::<FallingReleasedObject>();
+            if let Some(footprint) = fall.previous_footprint {
+                // Its authored footprint is projected at this landing transform.
+                object.insert(footprint);
+            }
             if fall.resume_body {
                 object.remove::<RigidBodyDisabled>();
             }
@@ -272,21 +311,24 @@ pub(super) fn advance_falling_released_objects(
                     impact_clip.clone(),
                     AnimationPlaybackRepetitionPolicy::PlayOnce,
                     &mut clips,
-                    &mut options,
                 );
                 (request_id, impact_clip)
             });
-            if let Some((step, task)) = authored_falls.get(entity).ok()
+            if let Some((step, task)) = authored_falls
+                .get(entity)
+                .ok()
                 .filter(|(step, task)| Some(step.id()) == fall.instruction && step.is_current(task))
             {
                 if let Some((request_id, clip_key)) = impact_request {
-                    commands.entity(entity).insert(PendingBehaviorAnimationClipCompletion {
-                        instruction: step.id(),
-                        request_id,
-                        clip_key,
-                        target: task.target,
-                        repeats: false,
-                    });
+                    commands
+                        .entity(entity)
+                        .insert(PendingBehaviorAnimationClipCompletion {
+                            instruction: step.id(),
+                            request_id,
+                            clip_key,
+                            target: task.target,
+                            repeats: false,
+                        });
                 } else if let Ok(clock) = clocks.get(world.root) {
                     step.complete(entity, clock.tick, &mut commands);
                 }
@@ -321,23 +363,20 @@ fn request_release_clip(
     clip: String,
     repetition: AnimationPlaybackRepetitionPolicy,
     clips: &mut MessageWriter<AnimationClipPlaybackRequest>,
-    options: &mut MessageWriter<AnimationClipActionOptions>,
 ) -> usize {
-    let request_id = clips
+    clips
         .write(AnimationClipPlaybackRequest {
             animation_subject_entity: subject,
             animation_clip_asset_key: clip,
             blend_duration_milliseconds: 0,
             playback_speed_permille: 1000,
             playback_repetition_policy: repetition,
+            action_settings: Some(AnimationClipActionSettings {
+                binder: None,
+                ground_fit: Some(false),
+                interrupts_current_animation: true,
+                interruptible: false,
+            }),
         })
-        .id;
-    options.write(AnimationClipActionOptions {
-        request_id,
-        binder: None,
-        ground_fit: Some(false),
-        interrupts_current_animation: true,
-        interruptible: false,
-    });
-    request_id
+        .id
 }

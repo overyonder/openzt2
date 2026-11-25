@@ -19,6 +19,7 @@ use super::{
         tokenize_blue_fang_localization_date_format,
     },
     loaded_localization_queries::LoadedLocalizationView,
+    localization_asset_loading::LocalizationTableSettings,
     localization_asset_types::LocalizationAsset,
     localization_configuration::{LOCALE_CONFIGURATION_PATH, LocalizationConfiguration},
 };
@@ -109,14 +110,18 @@ impl LocalizationPrecedenceIndex {
     fn update_date_time_formats(&mut self, assets: &Assets<LocalizationAsset>) {
         self.date_time_formats = std::array::from_fn(|index| {
             let id = self.configuration.date_time_formats[index];
-            self.find_asset_for_localization_entry(assets, id)
+            let pattern = self
+                .find_asset_for_localization_entry(assets, id)
                 .and_then(|asset| asset.localization_catalog.find_plain_localized_text(id))
-                .map_or_else(Vec::new, |format| {
-                    tokenize_blue_fang_localization_date_format(
-                        format,
-                        index == LocalizationDateTimeFormat::MinutesSeconds as usize,
-                    )
-                })
+                .filter(|pattern| !pattern.is_empty());
+            let time = index == LocalizationDateTimeFormat::MinutesSeconds as usize;
+            let calendar = &self.configuration.locale_conventions().calendar;
+            let pattern = pattern.unwrap_or(if time {
+                &calendar.time_format
+            } else {
+                &calendar.short_date
+            });
+            tokenize_blue_fang_localization_date_format(pattern, time)
         });
     }
 }
@@ -189,13 +194,33 @@ pub(super) fn index_loaded_localization_entries_after_asset_events(
                 .into_iter()
                 .filter(|path| configuration.selects_string_table(path))
                 .collect::<BTreeSet<_>>();
+            let load_table = |source_path: &Path, asset_path| {
+                let locale = configuration.table_locale(source_path)?.to_owned();
+                Some(
+                    server
+                        .load_builder()
+                        .with_settings(move |settings: &mut LocalizationTableSettings| {
+                            settings.locale.clone_from(&locale);
+                        })
+                        .load::<LocalizationAsset>(asset_path),
+                )
+            };
             let mut handles = archives
                 .resolved_archive_entries()
                 .iter()
                 .filter(|entry| loose.remove(&entry.normalized_asset_path))
-                .map(|entry| server.load(archive_entry_asset_path(entry)))
+                .filter_map(|entry| {
+                    load_table(
+                        &entry.normalized_asset_path,
+                        archive_entry_asset_path(entry),
+                    )
+                })
                 .collect::<Vec<_>>();
-            handles.extend(loose.into_iter().map(|path| server.load(path)));
+            handles.extend(
+                loose
+                    .into_iter()
+                    .filter_map(|path| load_table(&path, path.clone())),
+            );
             if !index.discovered
                 || index.localization_asset_handles != handles
                 || index.configuration != *configuration

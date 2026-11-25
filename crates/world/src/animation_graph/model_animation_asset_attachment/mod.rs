@@ -1,3 +1,4 @@
+use crate::world_spawn::prefab_renderable_components::PrefabAnimationBinding;
 use bevy::prelude::*;
 use openzt2_game_assets::animation::animation_clip_source_queries::AnimationClipSources;
 use openzt2_game_assets::animation::animation_set_asset_types::AnimationClipSourceAsset;
@@ -18,6 +19,9 @@ use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabModel;
 use openzt2_zoo_state::animal_lifecycle::types::SelectedAnimalPresentationModel;
 
 #[derive(Component)]
+pub(crate) struct InitialAnimationSeek(pub(crate) f32);
+
+#[derive(Component)]
 pub(super) struct InitialAnimationSelection {
     set: Handle<AnimationSetAsset>,
     library: Box<[Handle<AnimationSetAsset>]>,
@@ -31,6 +35,10 @@ pub(super) fn attach_loaded_animation_set_assets_to_animation_subject_entities(
     asset_server: Res<AssetServer>,
     clip_sources: AnimationClipSources,
     presentation_owners: Query<&AnimationPresentationOwner>,
+    live_world_members: Query<
+        (),
+        With<openzt2_world_state::world_spawn::world_membership_types::WorldMember>,
+    >,
     parents: Query<&ChildOf>,
     pending_animation_subjects: Query<
         (
@@ -39,6 +47,7 @@ pub(super) fn attach_loaded_animation_set_assets_to_animation_subject_entities(
             Option<&SelectedAnimalPresentationModel>,
             Option<&ChildOf>,
             Ref<PendingModelAnimationAssets>,
+            Option<&PrefabAnimationBinding>,
             Option<&InitialAnimationSelection>,
             Has<ModelExpanded>,
         ),
@@ -55,6 +64,7 @@ pub(super) fn attach_loaded_animation_set_assets_to_animation_subject_entities(
         animal_model,
         animation_subject_parent,
         pending_model_animation_assets,
+        authored_binding,
         initial_source,
         expanded,
     ) in &pending_animation_subjects
@@ -121,9 +131,13 @@ pub(super) fn attach_loaded_animation_set_assets_to_animation_subject_entities(
                     })
                 })
                 .or_else(|| {
-                    matching.iter().find_map(|&(handle, set)| {
-                        select_initial_animation_clip_asset_key(set).map(|clip| (handle, clip))
-                    })
+                    if authored_binding.is_none() {
+                        matching.iter().find_map(|&(handle, set)| {
+                            select_initial_animation_clip_asset_key(set).map(|clip| (handle, clip))
+                        })
+                    } else {
+                        matching.first().map(|(handle, _)| (*handle, String::new()))
+                    }
                 });
             let Some((set, clip)) = selected else {
                 finish_animation_asset_attachment(&mut commands, animation_subject_entity);
@@ -140,12 +154,13 @@ pub(super) fn attach_loaded_animation_set_assets_to_animation_subject_entities(
         else {
             continue;
         };
-        if clip_sources
-            .get(
-                initial_animation_set_asset,
-                &initial_animation_clip_asset_key,
-            )
-            .is_none()
+        if !initial_animation_clip_asset_key.is_empty()
+            && clip_sources
+                .get(
+                    initial_animation_set_asset,
+                    &initial_animation_clip_asset_key,
+                )
+                .is_none()
         {
             let source = clip_sources.request(
                 initial_animation_set_asset,
@@ -180,6 +195,9 @@ pub(super) fn attach_loaded_animation_set_assets_to_animation_subject_entities(
             }
             state
         };
+        let in_live_world = std::iter::once(animation_subject_entity)
+            .chain(parents.iter_ancestors::<ChildOf>(animation_subject_entity))
+            .any(|ancestor| live_world_members.contains(ancestor));
         let mut animation_subject_commands = commands.entity(animation_subject_entity);
         animation_subject_commands.try_insert((
             ModelAnimationAttachmentResolved,
@@ -210,11 +228,31 @@ pub(super) fn attach_loaded_animation_set_assets_to_animation_subject_entities(
                 preserve_seek_on_restart: false,
                 playback_speed_permille: 1000,
 
-                playback_repetition_policy:
-                    AnimationPlaybackRepetitionPolicy::UseAuthoredClipPolicy,
-                playback_clock: AnimationPlaybackClock::Simulation,
+                playback_repetition_policy: authored_binding
+                    .and_then(|binding| binding.start.as_ref())
+                    .map_or(
+                        AnimationPlaybackRepetitionPolicy::UseAuthoredClipPolicy,
+                        |start| {
+                            if start.looping {
+                                AnimationPlaybackRepetitionPolicy::Loop
+                            } else {
+                                AnimationPlaybackRepetitionPolicy::PlayOnce
+                            }
+                        },
+                    ),
+                playback_clock: if in_live_world {
+                    AnimationPlaybackClock::Simulation
+                } else {
+                    authored_binding
+                        .map_or(AnimationPlaybackClock::Simulation, |binding| binding.clock)
+                },
             },
         ));
+        if let Some(start) = authored_binding.and_then(|binding| binding.start.as_ref()) {
+            if start.time_seconds > 0.0 && !initial_animation_clip_asset_key.is_empty() {
+                animation_subject_commands.try_insert(InitialAnimationSeek(start.time_seconds));
+            }
+        }
         animation_subject_commands.try_insert(AnimationPlayer::default());
         animation_subject_commands.try_insert(initial_animation_graph_playback_state);
         if let Some(source) = clip_sources.retained_handle(

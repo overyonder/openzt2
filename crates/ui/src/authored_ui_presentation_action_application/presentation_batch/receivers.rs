@@ -565,10 +565,9 @@ impl ValuesWrites<'_, '_> {
                     (values.get_mut(entity), slider_bounds.get(entity))
                 {
                     let delta = match policy.axis {
-                        UiSliderAxis::Horizontal | UiSliderAxis::Both if position_delta[0] != 0 => {
-                            position_delta[0]
-                        }
-                        _ => position_delta[1],
+                        UiSliderAxis::Horizontal => position_delta[0],
+                        UiSliderAxis::Vertical => position_delta[1],
+                        UiSliderAxis::Both => 0,
                     };
                     let next = stepped_value(value.0, delta, policy, lower.0, upper.0);
                     if delta != 0 {

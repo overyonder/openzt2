@@ -28,6 +28,7 @@ pub mod native_source_byte_reading;
 pub mod native_source_byte_reading_error;
 pub mod netimmerse_bone_level_of_detail_selection;
 pub mod netimmerse_fixed_function_material_effect_lowering;
+mod netimmerse_morph_lowering;
 pub mod netimmerse_nif_source;
 pub mod netimmerse_texture_coordinate_animation_lowering;
 mod nif_embedded_texture_lowering;

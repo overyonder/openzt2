@@ -1,11 +1,14 @@
 //! Native exposure dragging routed through the album's authored controls.
 use bevy::picking::pointer::{PointerAction, PointerButton, PointerInput};
 use openzt2_interface_state::input::input_types::MousePointer;
-use openzt2_interface_state::photos::photo_album_types::PhotoAlbum;
+use openzt2_interface_state::photos::photo_album_types::AlbumMember;
+use openzt2_world_state::world_spawn::{
+    world_load_completion_marker::WorldLoadCompleted, world_membership_types::WorldRoot,
+};
 
 use openzt2_game_data::ui_document::action::UiTrigger;
 
-use bevy::prelude::*;
+use bevy::{ecs::relationship::RelationshipTarget, prelude::*};
 use openzt2_game_data::ui_document::action::photography::UiPhotoAction;
 
 use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
@@ -17,8 +20,8 @@ use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocum
 use openzt2_interface_state::ui::pointer_capture_types::UiPointerCapture;
 
 use super::photo_album_types::{
-    ActivePhotoAlbum, PhotoCameraRoll, PhotoCameraRollRow, PhotoMove, PhotoMoveTarget,
-    PhotoPointerDrag, SelectedAlbumPhoto,
+    PhotoCameraRollRow, PhotoMove, PhotoMoveTarget, PhotoPointerDrag, PhotoPointerPress,
+    SelectedAlbumPhoto, WorldActivePhotoAlbum, WorldPhotoCameraRoll,
 };
 
 /// The native album component starts a move while dragging an exposure and
@@ -31,7 +34,7 @@ pub(super) fn route_photo_exposure_pointer_drag_to_authored_album_controls(
     capture: Res<UiPointerCapture>,
     parents: Query<&ChildOf>,
     exposures: Query<&PhotoCameraRollRow>,
-    mut pressed_photo: Local<Option<Entity>>,
+    photo_memberships: Query<&AlbumMember>,
     documents: Res<Assets<UiDocumentAsset>>,
     roots: Query<&UiDocumentRoot>,
     controls: Query<(
@@ -40,11 +43,16 @@ pub(super) fn route_photo_exposure_pointer_drag_to_authored_album_controls(
         &UiDocumentOwner,
         &InheritedVisibility,
     )>,
-    albums: Query<
-        (Entity, Has<PhotoPointerDrag>, Has<PhotoMove>),
-        (With<PhotoAlbum>, With<ActivePhotoAlbum>),
+    mut storage: Query<
+        (
+            Option<&WorldActivePhotoAlbum>,
+            Option<&WorldPhotoCameraRoll>,
+            &mut SelectedAlbumPhoto,
+            &mut PhotoPointerPress,
+        ),
+        (With<WorldRoot>, With<WorldLoadCompleted>),
     >,
-    camera_rolls: Query<Entity, With<PhotoCameraRoll>>,
+    albums: Query<(Has<PhotoPointerDrag>, Has<PhotoMove>)>,
     mut activations: MessageWriter<UiNodeActivated>,
     mut commands: Commands,
 ) {
@@ -62,19 +70,38 @@ pub(super) fn route_photo_exposure_pointer_drag_to_authored_album_controls(
         }
     }
     let primary_pressed = pointer.primary_is_pressed();
-    let Ok((album, dragging, moving)) = albums.single() else {
+    let Ok((active, roll, mut selection, mut pressed)) = storage.single_mut() else {
+        return;
+    };
+    let Some(camera_roll) = roll.and_then(|roll| roll.iter().next()) else {
+        pressed.set_if_neq(PhotoPointerPress(None));
+        return;
+    };
+    let Some(album) = active.and_then(|active| active.iter().next()) else {
+        pressed.set_if_neq(PhotoPointerPress(None));
+        return;
+    };
+    let Ok((dragging, moving)) = albums.get(album) else {
         return;
     };
     if primary_just_pressed {
-        *pressed_photo = capture.target.and_then(|target| {
-            std::iter::successors(Some(target), |entity| {
-                parents.get(*entity).ok().map(ChildOf::parent)
+        let photo = capture
+            .target
+            .and_then(|target| {
+                std::iter::successors(Some(target), |entity| {
+                    parents.get(*entity).ok().map(ChildOf::parent)
+                })
+                .find_map(|entity| exposures.get(entity).ok().map(|row| row.0))
             })
-            .find_map(|entity| exposures.get(entity).ok().map(|row| row.0))
-        });
+            .filter(|&photo| {
+                photo_memberships
+                    .get(photo)
+                    .is_ok_and(|member| member.0 == camera_roll)
+            });
+        pressed.set_if_neq(PhotoPointerPress(photo.map(|photo| (album, photo))));
     }
-    if primary_just_released {
-        *pressed_photo = None;
+    if !primary_pressed || primary_just_released {
+        pressed.set_if_neq(PhotoPointerPress(None));
     }
     if dragging && primary_just_released {
         commands.entity(album).remove::<PhotoPointerDrag>();
@@ -143,7 +170,12 @@ pub(super) fn route_photo_exposure_pointer_drag_to_authored_album_controls(
     if dragging || moving || !primary_pressed || pointer_delta == Vec2::ZERO {
         return;
     }
-    let (Some(photo), Ok(camera_roll)) = (*pressed_photo, camera_rolls.single()) else {
+    let Some((_, photo)) = pressed.0.filter(|&(source, photo)| {
+        source == album
+            && photo_memberships
+                .get(photo)
+                .is_ok_and(|member| member.0 == camera_roll)
+    }) else {
         return;
     };
     for (node, actions, owner, visible) in &controls {
@@ -163,10 +195,7 @@ pub(super) fn route_photo_exposure_pointer_drag_to_authored_album_controls(
             })
         {
             commands.entity(album).insert(PhotoPointerDrag);
-            commands.entity(album).remove::<SelectedAlbumPhoto>();
-            commands
-                .entity(camera_roll)
-                .insert(SelectedAlbumPhoto(photo));
+            selection.set_if_neq(SelectedAlbumPhoto(Some((camera_roll, photo))));
             activations.write(UiNodeActivated {
                 source: active_input.source,
                 node,

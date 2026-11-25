@@ -33,7 +33,7 @@ use openzt2_zoo_state::progression::fame_types::{
 use super::super::{
     named_physical_presentation_projection::{
         NamedPhysicalPresentations, NamedPhysicalPresentationsHydrated,
-        PendingNamedPresentationNodeAttachment,
+        NamedPresentationNodeAttachment,
     },
     physical_presentation_state::ObjectPhysicalPresentationControllers,
 };
@@ -174,7 +174,7 @@ type AuxiliaryFameGatePrefabChild = (
         With<super::super::prefab_effect_trigger_hydration::PrefabEffectTrigger>,
         With<ModelRenderVisibilityGate>,
         With<Collider>,
-        With<PendingNamedPresentationNodeAttachment>,
+        With<NamedPresentationNodeAttachment>,
     )>,
     Allow<Disabled>,
 );

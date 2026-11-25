@@ -73,6 +73,39 @@ impl TrackTravelDistances {
             .then_some(distances)
     }
 
+    pub(super) fn ground_spans_between<'a>(
+        &'a self,
+        segment: &'a TrackSegment,
+        from: f32,
+        to: f32,
+    ) -> impl Iterator<Item = (f32, [Vec3; 2])> + 'a {
+        let low = from.min(to);
+        let high = from.max(to);
+        let first = self
+            .spans
+            .partition_point(|[start, length]| start + length <= low);
+        let last = self.spans.partition_point(|[start, _]| *start < high);
+        let reverse = from > to;
+        (first..last).map(move |step| {
+            let index = if reverse {
+                last - 1 - (step - first)
+            } else {
+                step
+            };
+            let [start, length] = self.spans[index];
+            let a = segment.travel_path_points[index];
+            let b = segment.travel_path_points[index + 1];
+            let low = low.max(start);
+            let high = high.min(start + length);
+            let points = [low, high].map(|distance| a.lerp(b, (distance - start) / length));
+            if reverse {
+                (from - high, [points[1], points[0]])
+            } else {
+                (low - from, points)
+            }
+        })
+    }
+
     pub(super) fn translation_and_tangent(
         &self,
         segment: &TrackSegment,

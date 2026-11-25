@@ -259,6 +259,7 @@ fn adapt_bfb_part(
             part.section_index,
         ),
         meshes: vec![MeshSource {
+            position_morph_targets: Vec::new(),
             vertices,
             indices,
             submeshes: vec![SubmeshSource {

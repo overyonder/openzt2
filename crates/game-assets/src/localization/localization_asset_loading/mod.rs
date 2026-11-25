@@ -19,18 +19,23 @@ use crate::{
     },
 };
 
+#[derive(Default, serde::Deserialize, serde::Serialize)]
+pub(super) struct LocalizationTableSettings {
+    pub(super) locale: String,
+}
+
 #[derive(Default, TypePath)]
 struct LocalizationAssetLoader;
 
 impl AssetLoader for LocalizationAssetLoader {
     type Asset = LocalizationAsset;
-    type Settings = ();
+    type Settings = LocalizationTableSettings;
     type Error = std::io::Error;
 
     async fn load(
         &self,
         reader: &mut dyn Reader,
-        _: &Self::Settings,
+        settings: &Self::Settings,
         load_context: &mut LoadContext<'_>,
     ) -> Result<Self::Asset, Self::Error> {
         let mut bytes = Vec::new();
@@ -42,10 +47,7 @@ impl AssetLoader for LocalizationAssetLoader {
             parse_blue_fang_source_document(AssetPath::new(&source_path.to_string_lossy()), &bytes)
                 .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
 
-        let locale_identifier = source_path
-            .parent()
-            .and_then(std::path::Path::file_name)
-            .map_or_else(String::new, |locale| locale.to_string_lossy().into_owned());
+        let locale_identifier = settings.locale.clone();
         let mut entries = std::collections::BTreeMap::new();
         let mut person_name_pools = std::collections::BTreeMap::new();
         lower_blue_fang_localization_entries(

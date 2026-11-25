@@ -132,6 +132,7 @@ pub(super) fn install_definitions(
     .map(|(name, content)| WorldObjectDefinition {
         authored_runtime: Default::default(),
         audio_cue_prefixes: Vec::new(),
+        audio_stage_volumes: Vec::new(),
         surface_effect_strength: None,
         presentation_caustic_policies: Vec::new(),
         traversal_animation_manifests: Vec::new(),

@@ -23,9 +23,6 @@ pub(super) fn install_scenario_game_query_and_command_functions<'scope, 'env: 's
         Vec<openzt2_zoo_state::scenario::scenario_objective_types::ShowScenarioRuleRequest>,
     >,
     available_content: &'env RefCell<Vec<openzt2_game_data::AssetId>>,
-    requested_panel: &'env RefCell<
-        Option<super::challenge_offer_types::ScenarioChallengePanelRequest>,
-    >,
     current_photo_challenge_set: &'env RefCell<Option<openzt2_game_data::AssetId>>,
     persist_profile_variables: &'env std::cell::Cell<bool>,
     ui: &'env RefCell<Vec<super::scenario_lua_ui::ScenarioUiCommand>>,
@@ -66,9 +63,12 @@ pub(super) fn install_scenario_game_query_and_command_functions<'scope, 'env: 's
         })?,
     )?;
     let state = globals
-        .get::<Option<Table>>("__openzt2_scenario_state")?
+        .get::<Option<Table>>(super::scenario_lua_snapshot_types::SCENARIO_GLOBAL_VARIABLES)?
         .unwrap_or(lua.create_table()?);
-    globals.set("__openzt2_scenario_state", state.clone())?;
+    globals.set(
+        super::scenario_lua_snapshot_types::SCENARIO_GLOBAL_VARIABLES,
+        state.clone(),
+    )?;
     globals.set(
         "getglobalvar",
         scope.create_function({
@@ -340,9 +340,7 @@ pub(super) fn install_scenario_game_query_and_command_functions<'scope, 'env: 's
             finance_value(queries, &request)
         })?,
     )?;
-    let ui_root =
-        super::challenge_lua_ui::create_challenge_ui_root(lua, scope, scenario, requested_panel)?;
-    let ui_root = super::scenario_lua_ui::extend_ui_root(lua, scope, ui_root, ui, queries)?;
+    let ui_root = super::scenario_lua_ui::create_ui_root(lua, scope, ui, queries)?;
     let mode =
         super::scenario_lua_ui::create_mode_adapter(lua, scope, ui, queries, entity_operations)?;
     let photo_challenges =

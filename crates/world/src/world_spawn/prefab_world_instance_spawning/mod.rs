@@ -18,7 +18,6 @@ use bevy::prelude::Transform;
 use bevy::prelude::Visibility;
 use bevy::prelude::{warn, Assets, Component, Has, MessageReader, Query, Res, With};
 use openzt2_game_data::scene_prefab::PrefabEntity;
-use openzt2_game_data::scene_prefab::PrefabLightKind;
 use openzt2_game_data::scene_prefab::ScenePrefabEntityFlags;
 use openzt2_game_data::scene_prefab::ScenePrefabRenderableVisibilityFlags;
 use openzt2_game_data::AssetId;
@@ -27,11 +26,9 @@ use openzt2_world_state::world_spawn::prefab_presentation_types::{
     PrefabMaterialOverrides, PrefabModel, PrefabRenderable, PrefabShadowPolicy,
 };
 
-use crate::model_render::world_entity_model_suppression::ModelRenderVisibilityGate;
 use crate::physics::collider_hydration::hydrate_scene_prefab_colliders_into_avian_physics;
 use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
 use openzt2_interface_state::information::entity_selection_types::Inspectable;
-use openzt2_world_state::animation_graph::model_animation_asset_binding_types::PendingModelAnimationAssets;
 
 use crate::model_render::prefab_render_lod_tier_projection::bind_prefab_lod;
 use crate::world_spawn::prefab_effect_trigger_hydration::spawn_prefab_effect_triggers;
@@ -213,34 +210,6 @@ fn hydrate_world_instance_prefab_rows(
                 transform.rotation,
             );
         }
-        for light in &row.lights {
-            let color = Color::srgb(
-                light.color_srgb[0],
-                light.color_srgb[1],
-                light.color_srgb[2],
-            );
-            let intensity = light.intensity;
-            let range = light.range_m;
-            match &light.kind {
-                // NIF directional and ambient effects are scoped to their
-                // authored subtree. Promoting every imported studio rig to a
-                // world light makes each object illuminate every other
-                // object. The environment plugin is the Bevy owner of
-                // world-wide directional and ambient lighting.
-                PrefabLightKind::Directional | PrefabLightKind::Ambient => {}
-                PrefabLightKind::Point => {
-                    entity.with_child((
-                        ModelRenderVisibilityGate,
-                        PointLight {
-                            color,
-                            intensity,
-                            range,
-                            ..default()
-                        },
-                    ));
-                }
-            }
-        }
         if let Some(root) = new_root.as_ref().filter(|_| index == 0) {
             entity.insert(Inspectable {
                 definition: root.definition,
@@ -273,6 +242,10 @@ fn hydrate_world_instance_prefab_rows(
                 .insert(ChildOf(entities[parent_index]));
         }
     }
+
+    crate::model_render::scoped_prefab_lighting::spawn_authored_scene_lights(
+        commands, prefab, &entities,
+    );
 
     hydrate_scene_prefab_colliders_into_avian_physics(
         commands,
@@ -354,16 +327,13 @@ fn attach_prefab_row_renderables(
             child.insert(renderable_components);
             child
         };
-        let animations = prefab
-            .loaded_animation_set_asset_handles()
-            .cloned()
-            .collect::<Vec<_>>();
-        if !animations.is_empty() {
-            renderable_entity.insert(PendingModelAnimationAssets {
-                pending_model_animation_set_asset_handles: animations.into_boxed_slice(),
-                requested_initial_animation_clip_asset_key: None,
-            });
-        }
+        super::prefab_renderable_components::attach_prefab_renderable_animations(
+            &mut renderable_entity,
+            prefab,
+            row_index,
+            renderable,
+            openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackClock::Simulation,
+        );
     }
 }
 

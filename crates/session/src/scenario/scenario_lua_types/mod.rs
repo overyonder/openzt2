@@ -70,6 +70,7 @@ pub(super) struct ScenarioLuaQueryFacts<'a> {
     pub(super) world_definitions: Option<openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView<'a>>,
     pub(super) scenario_document_assets: &'a bevy::prelude::Assets<WorldScenarioDocumentAsset>,
     pub(super) current_photo_challenge_sets: &'a ScenarioLuaCurrentPhotoChallengeSetQuery<'a, 'a>,
+    pub(super) selected_photo_set: Option<&'a std::cell::Cell<Option<AssetId>>>,
     pub(super) photo_challenges: &'a ScenarioLuaPhotoChallengeQuery<'a, 'a>,
     pub(super) selected_entity: Option<bevy::prelude::Entity>,
     pub(super) fence_edges: &'a ScenarioLuaFenceEdgeQuery<'a, 'a>,
@@ -180,10 +181,12 @@ pub(super) struct ScenarioLuaVirtualMachine {
 pub(super) type ScenarioLuaCurrentPhotoChallengeSetQuery<'w, 's> = bevy::prelude::Query<
     'w,
     's,
-    &'static openzt2_interface_state::photos::photo_challenge_types::PhotoChallengeSet,
-    bevy::prelude::With<
-        openzt2_interface_state::photos::photo_challenge_types::CurrentPhotoChallengeSet,
-    >,
+    (
+        &'static openzt2_interface_state::photos::photo_challenge_types::PhotoChallengeSet,
+        bevy::prelude::Has<
+            openzt2_interface_state::photos::photo_challenge_types::CurrentPhotoChallengeSet,
+        >,
+    ),
 >;
 
 /// Live photo challenges and their progress.
@@ -208,10 +211,14 @@ pub(super) struct ScenarioLuaPhotoChallengeMemberStars {
 impl ScenarioLuaQueryFacts<'_> {
     /// The current photo challenge set's members in authored order, or `None`
     /// when no set is current.
-    pub(super) fn read_current_photo_challenge_member_stars(
+    pub(super) fn read_photo_challenge_member_stars(
         &self,
+        requested: Option<AssetId>,
     ) -> Option<Vec<ScenarioLuaPhotoChallengeMemberStars>> {
-        let set = self.current_photo_challenge_sets.iter().next()?;
+        let (set, _) = self
+            .current_photo_challenge_sets
+            .iter()
+            .find(|(set, current)| requested.map_or(*current, |id| set.id == id))?;
         let asset = self.scenario_document_assets.get(&set.source)?;
         let record = asset.document.find_photo_challenge_set(set.id)?;
         record

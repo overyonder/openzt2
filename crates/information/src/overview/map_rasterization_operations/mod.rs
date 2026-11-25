@@ -1,6 +1,9 @@
-use bevy::{ecs::system::SystemParam, prelude::*};
+use bevy::{
+    ecs::{relationship::RelationshipTarget, system::SystemParam},
+    prelude::*,
+};
 use openzt2_game_data::{
-    ui_document::overview_map_presentation::UiOverviewCanvas,
+    AssetId, ui_document::overview_map_presentation::UiOverviewCanvas,
     world_definitions::transportation_and_tours::TransportationTrackKind,
 };
 
@@ -11,7 +14,7 @@ use openzt2_world_state::world_spawn::world_terrain_hydration::WorldTerrainHoriz
 use openzt2_zoo_state::{
     terrain::{terrain_chunk_types::TerrainChunk, terrain_edit_types::TerrainChanged},
     topology::topology_graph_types::{FenceEdge, FenceEnd, FenceSegment, FenceStart, PathTile, TopologyNode},
-    transport_tours::transport_topology_types::{TrackEnd, TrackRoute, TrackSegment, TrackStart},
+    transport_tours::transport_topology_types::{IncomingTracks, OutgoingTracks, TrackEnd, TrackRoute, TrackSegment, TrackStart},
 };
 
 use super::canvas_hydration_operations::OverviewCanvasPolicy;
@@ -56,10 +59,43 @@ pub(crate) struct OverviewMapTopologyChanges<'w, 's> {
     >,
     nodes: Query<'w, 's, (), (With<TopologyNode>, Changed<GlobalTransform>)>,
     fences_removed: RemovedComponents<'w, 's, FenceEdge>,
-    paths_removed: RemovedComponents<'w, 's, PathTile>,
-    tracks_removed: RemovedComponents<'w, 's, TrackSegment>,
-    track_starts_removed: RemovedComponents<'w, 's, TrackStart>,
-    track_ends_removed: RemovedComponents<'w, 's, TrackEnd>,
+    track_junctions: Query<
+        'w,
+        's,
+        (
+            Option<&'static OutgoingTracks>,
+            Option<&'static IncomingTracks>,
+        ),
+        Changed<GlobalTransform>,
+    >,
+    track_segments: Query<'w, 's, &'static TrackSegment>,
+    terrain_layers_changed: MessageReader<'w, 's, ChangedOverviewTopologyLayer>,
+}
+
+#[derive(Message)]
+pub(crate) enum ChangedOverviewTopologyLayer {
+    Path(AssetId),
+    Track(AssetId),
+}
+
+pub(crate) fn invalidate_discarded_overview_path(
+    event: On<Discard<PathTile>>,
+    paths: Query<&PathTile, bevy::ecs::query::Allow<bevy::ecs::entity_disabling::Disabled>>,
+    mut changes: MessageWriter<ChangedOverviewTopologyLayer>,
+) {
+    if let Ok(path) = paths.get(event.entity) {
+        changes.write(ChangedOverviewTopologyLayer::Path(path.definition));
+    }
+}
+
+pub(crate) fn invalidate_discarded_overview_track(
+    event: On<Discard<(TrackSegment, TrackStart, TrackEnd)>>,
+    tracks: Query<&TrackSegment, bevy::ecs::query::Allow<bevy::ecs::entity_disabling::Disabled>>,
+    mut changes: MessageWriter<ChangedOverviewTopologyLayer>,
+) {
+    if let Ok(track) = tracks.get(event.entity) {
+        changes.write(ChangedOverviewTopologyLayer::Track(track.definition));
+    }
 }
 
 pub(crate) fn invalidate_changed_overview_map_sources(
@@ -76,40 +112,57 @@ pub(crate) fn invalidate_changed_overview_map_sources(
     let edited_terrain = terrain.read().count() != 0;
     let removed_chunks = removed_chunks.read().count() != 0;
     let fences_removed = topology.fences_removed.read().count() != 0;
-    let paths_removed = topology.paths_removed.read().count() != 0;
-    let tracks_removed = topology.tracks_removed.read().count()
-        + topology.track_starts_removed.read().count()
-        + topology.track_ends_removed.read().count()
-        != 0;
     let all = definitions.is_changed() || definition_assets.is_changed() || !bounds.is_empty();
     let terrain_changed =
         edited_terrain || removed_chunks || !chunks.is_empty() || terrain_assets.is_changed();
     let fences_changed =
         fences_removed || !topology.fences.is_empty() || !topology.nodes.is_empty();
-    let mut path_kinds = [paths_removed; 2];
-    let mut track_kinds = [tracks_removed || !topology.nodes.is_empty(); 2];
-    if !all {
-        let view = definitions.get(&definition_assets);
-        for path in &topology.paths {
-            let policy = view.and_then(|view| view.find_path(path.definition));
-            if path.is_changed() && !path.is_added() || policy.is_none() {
-                path_kinds = [true; 2];
-                break;
+    let mut path_kinds = [false; 2];
+    let mut track_kinds = [false; 2];
+    let mut discarded = topology.terrain_layers_changed.read();
+    if let Some(view) = definitions.get(&definition_assets).filter(|_| !all) {
+        for event in &mut discarded {
+            match *event {
+                ChangedOverviewTopologyLayer::Path(id) => {
+                    if let Some(policy) = view.find_path(id) {
+                        path_kinds[usize::from(policy.elevated)] = true;
+                    }
+                }
+                ChangedOverviewTopologyLayer::Track(id) => {
+                    if let Some(policy) = view.find_track(id) {
+                        track_kinds[usize::from(policy.kind == TransportationTrackKind::Sky)] =
+                            true;
+                    }
+                }
             }
-            if let Some(policy) = policy {
+        }
+        for path in &topology.paths {
+            if let Some(policy) = view.find_path(path.definition) {
                 path_kinds[usize::from(policy.elevated)] = true;
             }
         }
-        for track in &topology.tracks {
-            let policy = view.and_then(|view| view.find_track(track.definition));
-            if track.is_changed() && !track.is_added() || policy.is_none() {
-                track_kinds = [true; 2];
-                break;
-            }
-            if let Some(policy) = policy {
+        let tracks_moved = topology
+            .track_junctions
+            .iter()
+            .flat_map(|(outgoing, incoming)| {
+                outgoing
+                    .into_iter()
+                    .flat_map(RelationshipTarget::iter)
+                    .chain(incoming.into_iter().flat_map(RelationshipTarget::iter))
+            });
+        for track in topology.tracks.iter().map(|track| track.definition).chain(
+            topology
+                .track_segments
+                .iter_many(tracks_moved)
+                .flatten()
+                .map(|track| track.definition),
+        ) {
+            if let Some(policy) = view.find_track(track) {
                 track_kinds[usize::from(policy.kind == TransportationTrackKind::Sky)] = true;
             }
         }
+    } else {
+        let _ = discarded.count();
     }
     for (canvas, mut paint) in &mut canvases {
         let changed = canvas.is_changed()

@@ -6,6 +6,7 @@ use openzt2_interface_state::{
     information::entity_selection_types::{InfoPanel, SelectedSubject},
     ui::authored_ui_node_projection_components::{UiValue, UiValueBinding, UiVisibleBinding},
 };
+use openzt2_shows::shows::show_timing_operations::RunningShowPhaseTimer;
 use openzt2_zoo_state::shows::{
     running_show_types::{RunningShow, RunningShowFromRow, ShowPhase, StageRunningShow},
     show_schedule_types::{
@@ -35,7 +36,8 @@ pub(crate) fn project_selected_show_schedule_status_to_visible_information_panel
         Option<&ShowTrickSlots>,
     )>,
     stages: Query<&StageRunningShow>,
-    running: Query<(&RunningShow, &RunningShowFromRow)>,
+    running: Query<(&RunningShow, &RunningShowFromRow, &RunningShowPhaseTimer)>,
+    time: Res<Time<Fixed>>,
     performances: Query<&ScheduledShowTrickPerformance>,
     mut values: Query<(&UiValueBinding, &mut UiValue), ShowField>,
     mut visibility: Query<(&UiVisibleBinding, &mut Visibility), ShowVisibilityField>,
@@ -53,8 +55,8 @@ pub(crate) fn project_selected_show_schedule_status_to_visible_information_panel
             .get(stage)
             .ok()
             .and_then(|stage| running.get(*stage.collection()).ok())
-            .filter(|(_, row)| selected_row.is_none() || row.0 == selection.0);
-        let plan = selected_row.or_else(|| active.and_then(|(_, row)| rows.get(row.0).ok()));
+            .filter(|(_, row, _)| selected_row.is_none() || row.0 == selection.0);
+        let plan = selected_row.or_else(|| active.and_then(|(_, row, _)| rows.get(row.0).ok()));
         let slots = plan.and_then(|(_, _, slots)| slots);
 
         for entity in integer_fields
@@ -71,9 +73,10 @@ pub(crate) fn project_selected_show_schedule_status_to_visible_information_panel
                 UiIntegerPropertyBindingSource::ShowScheduleCapacity => plan
                     .and_then(|(_, plan, _)| plan)
                     .map_or(0, |plan| i64::from(plan.trick_performance_capacity)),
-                UiIntegerPropertyBindingSource::ShowRemainingTicks => {
-                    active.map_or(0, |(show, _)| i64::from(show.remaining_ticks))
-                }
+                UiIntegerPropertyBindingSource::ShowRemainingTicks => active
+                    .map_or(0, |(_, _, timer)| {
+                        i64::from(timer.remaining_ticks(time.timestep()))
+                    }),
                 UiIntegerPropertyBindingSource::ShowSlotDurationTicks { slot } => slots
                     .and_then(|slots| slots.collection().get(usize::from(*slot)))
                     .and_then(|&entity| performances.get(entity).ok())
@@ -94,7 +97,7 @@ pub(crate) fn project_selected_show_schedule_status_to_visible_information_panel
                     slots.is_some_and(|slots| !slots.is_empty())
                 }
                 UiBooleanPropertyBindingSource::ShowRunning => {
-                    active.is_some_and(|(show, _)| show.phase != ShowPhase::BetweenShows)
+                    active.is_some_and(|(show, _, _)| show.phase != ShowPhase::BetweenShows)
                 }
                 _ => continue,
             };

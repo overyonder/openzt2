@@ -3,7 +3,7 @@
 use std::{collections::HashMap, io};
 
 use bevy::{audio::AudioSource, gltf::Gltf, prelude::*};
-use openzt2_game_data::terrain::{TerrainBiome, TerrainGrid};
+use openzt2_game_data::terrain::{TerrainBiome, TerrainGrid, TerrainShorelineRippleTiming};
 
 use crate::effect::ParticleEffectDocumentAsset;
 use crate::material::material_asset_types::MaterialAsset;
@@ -72,6 +72,20 @@ impl TerrainAsset {
         self.water_scene_prefabs_by_normalized_system
             .get(&system.to_ascii_lowercase())
     }
+
+    pub fn shoreline_ripple_for_region(
+        &self,
+        region_index: usize,
+    ) -> Option<(&Handle<ScenePrefabAsset>, TerrainShorelineRippleTiming)> {
+        let shoreline = &self
+            .water_biome_for_region(region_index)?
+            .water_presentation
+            .as_ref()?
+            .shoreline;
+        let prefab = self.water_scene_prefab(shoreline.ripple_system.as_deref()?)?;
+        Some((prefab, shoreline.ripple_timing()))
+    }
+
     pub fn water_material(&self, source_path: &str) -> Option<&Handle<MaterialAsset>> {
         self.water_materials_by_normalized_source_path
             .get(&source_path.to_ascii_lowercase())

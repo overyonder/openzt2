@@ -1,7 +1,5 @@
 use bevy::prelude::*;
 
-use openzt2_game_assets::localization::loaded_localization_queries::LoadedLocalizationView;
-
 pub(super) const PLOT_LEFT: f32 = 44.0;
 pub(super) const PLOT_RIGHT: f32 = 8.0;
 pub(super) const PLOT_TOP: f32 = 8.0;
@@ -21,6 +19,7 @@ pub(super) struct GeneratedGraphElementRectangle {
 pub(super) struct GraphDrawings {
     pub(super) plot: Option<Vec<(GeneratedGraphElementRectangle, UiTransform)>>,
     pub(super) labels: Option<Vec<GraphLabel>>,
+    pub(super) ticks: Vec<GraphTick>,
 }
 
 pub(super) struct GraphLabel {
@@ -82,65 +81,7 @@ pub(super) fn record_graph_line_segment(
     );
 }
 
-// The ratio is deliberately reduced to Bevy's f32 UI coordinate space.
-#[allow(clippy::cast_possible_truncation)]
-pub(super) fn record_numeric_graph_y_axis_labels(
-    drawings: &mut GraphDrawings,
-    count: u16,
-    minimum_value: f64,
-    maximum_value: f64,
-    plot_height: f32,
-) {
-    let intervals = f64::from(count - 1);
-    for index in 0..count {
-        let ratio = f64::from(index) / intervals;
-        let value = minimum_value + (maximum_value - minimum_value) * ratio;
-        let label = if value.fract().abs() < f64::EPSILON {
-            format!("{value:.0}")
-        } else {
-            format!("{value:.1}")
-        };
-        record_graph_text_label(
-            drawings,
-            &label,
-            0.0,
-            PLOT_BOTTOM + ratio as f32 * plot_height - 6.0,
-            PLOT_LEFT - 4.0,
-            Justify::Right,
-        );
-    }
-}
-
-// The ratio is deliberately reduced to Bevy's f32 UI coordinate space.
-#[allow(clippy::cast_possible_truncation)]
-pub(super) fn record_localized_currency_graph_y_axis_labels(
-    drawings: &mut GraphDrawings,
-    count: u16,
-    minimum_value: f64,
-    maximum_value: f64,
-    plot_height: f32,
-    localization: LoadedLocalizationView<'_>,
-) {
-    let intervals = f64::from(count - 1);
-    for index in 0..count {
-        let ratio = f64::from(index) / intervals;
-        let cents = minimum_value + (maximum_value - minimum_value) * ratio;
-        let mut label = String::new();
-        #[allow(clippy::cast_possible_truncation)]
-        let cents = cents.round() as i64;
-        if localization
-            .write_localized_currency_amount(cents, false, &mut label)
-            .is_err()
-        {
-            continue;
-        }
-        record_graph_text_label(
-            drawings,
-            &label,
-            0.0,
-            PLOT_BOTTOM + ratio as f32 * plot_height - 6.0,
-            PLOT_LEFT - 4.0,
-            Justify::Right,
-        );
-    }
+pub(super) struct GraphTick {
+    pub(super) value: f64,
+    pub(super) bottom: f32,
 }

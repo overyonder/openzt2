@@ -1,9 +1,10 @@
 import bevy_hanabi::render::vfx_common::{
-    ChildInfo, ChildInfoBuffer, DispatchIndirectArgs, EffectMetadata, SimParams, Spawner,
+    ChildInfo, ChildInfoBuffer, DispatchIndirectArgs, EffectMetadata, SimParams, SpawnInputs, Spawner,
     DRAW_INDEXED_INDIRECT_STRIDE,
 };
 
 @group(0) @binding(0) var<uniform> sim_params : SimParams;
+@group(0) @binding(1) var<storage, read_write> spawn_inputs: SpawnInputs;
 
 @group(1) @binding(0) var<storage, read_write> effect_metadatas : array<EffectMetadata>;
 // Tightly packed array of DrawIndexedIndirectArgs[], accessed as u32 array. This can contain
@@ -17,6 +18,40 @@ import bevy_hanabi::render::vfx_common::{
 
 @if(HAS_GPU_SPAWN_EVENTS)
 @group(3) @binding(0) var<storage, read_write> child_info_buffer : ChildInfoBuffer;
+
+var<workgroup> available_particles: atomic<u32>;
+
+// All init dispatches use the same remaining budget, including GPU child and
+// explicit point spawns. Count live particles before any new allocations.
+@compute @workgroup_size(64)
+fn reset_particle_budget(@builtin(local_invocation_index) lane: u32) {
+    if lane == 0u {
+        atomicStore(&available_particles, sim_params.particle_budget);
+    }
+    workgroupBarrier();
+
+    for (var index = lane; index < sim_params.num_effects; index += 64u) {
+        let metadata = spawner_buffer[index].effect_metadata_index;
+        let alive = atomicLoad(&effect_metadatas[metadata].alive_count);
+        var remaining = atomicLoad(&available_particles);
+        loop {
+            if alive == 0u || remaining == 0u {
+                break;
+            }
+            let next = remaining - min(alive, remaining);
+            let reserve = atomicCompareExchangeWeak(&available_particles, remaining, next);
+            if reserve.exchanged {
+                break;
+            }
+            remaining = reserve.old_value;
+        }
+    }
+    workgroupBarrier();
+
+    if lane == 0u {
+        atomicStore(&spawn_inputs.remaining_budget, atomicLoad(&available_particles));
+    }
+}
 
 /// Perform per-instance update between the init and update passes.
 ///

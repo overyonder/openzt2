@@ -1,6 +1,9 @@
 use std::{collections::HashMap, fmt::Write};
 
-use bevy::prelude::*;
+use bevy::{
+    ecs::{entity::EntityHashSet, entity_disabling::Disabled, system::SystemParam},
+    prelude::*,
+};
 use openzt2_game_data::{
     localization::LocalizationFormatArgument,
     ui_document::node_property_binding::UiTextPropertyBindingSource, AssetId,
@@ -13,56 +16,192 @@ use openzt2_game_assets::localization::{
 use openzt2_ui::authored_ui_text_content_binding::UiTextBinding;
 
 use openzt2_world_state::world_spawn::world_membership_types::{WorldMember, WorldRoot};
+use openzt2_zoo_state::economy::money_types::Money;
 
 use super::donation_payment_types::{DonationCategoryTotals, DonationTotal};
 
-#[derive(Component, Default, PartialEq, Eq)]
-pub(super) struct ZooDonationSummary(HashMap<Option<AssetId>, Option<DonationTotal>>);
+#[derive(Clone, Copy, Default)]
+struct DonationSum {
+    amount: i128,
+    count: u64,
+}
 
-pub(super) fn aggregate_zoo_donations_by_category(
-    acceptors: Query<(&WorldMember, &DonationCategoryTotals)>,
-    changed_acceptors: Query<
-        (),
+#[derive(Component, Default)]
+pub(super) struct ZooDonationSummary(HashMap<Option<AssetId>, DonationSum>);
+
+impl ZooDonationSummary {
+    fn total(&self, category: Option<AssetId>) -> Option<DonationTotal> {
+        let sum = self.0.get(&category).copied().unwrap_or_default();
+        Some(DonationTotal {
+            amount: Money(i64::try_from(sum.amount).ok()?),
+            count: u32::try_from(sum.count).ok()?,
+        })
+    }
+
+    fn add(&mut self, category: AssetId, contribution: DonationTotal) {
+        for key in [Some(category), None] {
+            let sum = self.0.entry(key).or_default();
+            sum.amount += i128::from(contribution.amount.0);
+            sum.count += u64::from(contribution.count);
+        }
+    }
+
+    fn subtract(&mut self, category: AssetId, contribution: DonationTotal) {
+        for key in [Some(category), None] {
+            let entry = self.0.entry(key);
+            if let std::collections::hash_map::Entry::Occupied(mut entry) = entry {
+                let sum = entry.get_mut();
+                sum.amount -= i128::from(contribution.amount.0);
+                sum.count -= u64::from(contribution.count);
+                if sum.count == 0 && sum.amount == 0 {
+                    entry.remove();
+                }
+            }
+        }
+    }
+}
+
+/// The contribution already included in a root summary.
+#[derive(Component)]
+pub(super) struct BookedDonations {
+    root: Entity,
+    totals: DonationCategoryTotals,
+}
+
+pub(super) fn add_booked_donations(
+    event: On<Add<BookedDonations>>,
+    booked: Query<&BookedDonations, Allow<Disabled>>,
+    mut summaries: Query<&mut ZooDonationSummary, Allow<Disabled>>,
+) {
+    if let Ok(booked) = booked.get(event.entity) {
+        if let Ok(mut summary) = summaries.get_mut(booked.root) {
+            for (category, total) in booked.totals.iter() {
+                summary.add(category, total);
+            }
+        }
+    }
+}
+
+pub(super) fn remove_booked_donations(
+    event: On<Remove<BookedDonations>>,
+    booked: Query<&BookedDonations, Allow<Disabled>>,
+    mut summaries: Query<&mut ZooDonationSummary, Allow<Disabled>>,
+) {
+    if let Ok(booked) = booked.get(event.entity) {
+        if let Ok(mut summary) = summaries.get_mut(booked.root) {
+            for (category, total) in booked.totals.iter() {
+                summary.subtract(category, total);
+            }
+        }
+    }
+}
+
+pub(super) fn withdraw_disabled_donations(
+    event: On<Add<Disabled>>,
+    booked: Query<(), (With<BookedDonations>, Allow<Disabled>)>,
+    mut commands: Commands,
+) {
+    if booked.contains(event.entity) {
+        commands.entity(event.entity).remove::<BookedDonations>();
+    }
+}
+
+/// Posts ordinary successful payments directly to the current acceptor's zoo.
+#[derive(SystemParam)]
+pub(super) struct DonationWorldDeltas<'w, 's> {
+    members: Query<'w, 's, &'static WorldMember>,
+    booked: Query<'w, 's, &'static mut BookedDonations>,
+    summaries: Query<'w, 's, &'static mut ZooDonationSummary, Allow<Disabled>>,
+}
+
+impl DonationWorldDeltas<'_, '_> {
+    pub(super) fn record(&mut self, acceptor: Entity, category: AssetId, amount: Money) {
+        let Ok(member) = self.members.get(acceptor) else {
+            return;
+        };
+        let Ok(mut booked) = self.booked.get_mut(acceptor) else {
+            return;
+        };
+        if booked.root != member.root {
+            return;
+        }
+        let Ok(mut summary) = self.summaries.get_mut(member.root) else {
+            return;
+        };
+        if booked
+            .totals
+            .accumulate_completed_donation(category, amount)
+            .is_some()
+        {
+            summary.add(category, DonationTotal { amount, count: 1 });
+        }
+    }
+}
+
+#[allow(clippy::type_complexity)]
+pub(super) fn reconcile_donation_contributors(
+    mut commands: Commands,
+    changed: Query<
+        Entity,
         (
             With<DonationCategoryTotals>,
             Or<(Changed<DonationCategoryTotals>, Changed<WorldMember>)>,
         ),
     >,
-    donation_acceptors: Query<(), With<DonationCategoryTotals>>,
-    mut removed_acceptors: RemovedComponents<DonationCategoryTotals>,
-    mut removed_members: RemovedComponents<WorldMember>,
-    mut summaries: Query<(Entity, &mut ZooDonationSummary), With<WorldRoot>>,
+    mut contributions: Query<
+        (
+            Option<&WorldMember>,
+            Option<&DonationCategoryTotals>,
+            Option<&mut BookedDonations>,
+        ),
+        Or<(With<DonationCategoryTotals>, With<BookedDonations>)>,
+    >,
+    mut summaries: Query<&mut ZooDonationSummary, Allow<Disabled>>,
+    mut removed_totals: RemovedComponents<DonationCategoryTotals>,
+    mut left_world: RemovedComponents<WorldMember>,
+    mut reenabled: RemovedComponents<Disabled>,
 ) {
-    let acceptors_removed = removed_acceptors.read().count() != 0;
-    let members_removed = removed_members
-        .read()
-        .any(|entity| donation_acceptors.contains(entity));
-    if !acceptors_removed
-        && !members_removed
-        && changed_acceptors.is_empty()
-        && !summaries.iter_mut().any(|(_, summary)| summary.is_added())
-    {
-        return;
-    }
-    let mut totals_by_world = HashMap::<Entity, ZooDonationSummary>::new();
-    for (member, categories) in &acceptors {
-        let totals = &mut totals_by_world.entry(member.root).or_default().0;
-        for (category, accepted) in categories.iter() {
-            for key in [Some(category), None] {
-                let total = totals.entry(key).or_insert(Some(DonationTotal::default()));
-                *total = total.and_then(|current| {
-                    Some(DonationTotal {
-                        count: current.count.checked_add(accepted.count)?,
-                        amount: openzt2_zoo_state::economy::money_types::Money(
-                            current.amount.0.checked_add(accepted.amount.0)?,
-                        ),
-                    })
-                });
+    let affected: EntityHashSet = changed
+        .iter()
+        .chain(removed_totals.read())
+        .chain(left_world.read())
+        .chain(reenabled.read())
+        .collect();
+    for entity in affected {
+        let Ok((member, totals, booked)) = contributions.get_mut(entity) else {
+            continue;
+        };
+        let Some((member, totals)) = member
+            .zip(totals)
+            .filter(|(member, _)| summaries.contains(member.root))
+        else {
+            if booked.is_some() {
+                commands.entity(entity).remove::<BookedDonations>();
             }
+            continue;
+        };
+        if let Some(mut booked) = booked {
+            if booked.root == member.root && &booked.totals == totals {
+                continue;
+            }
+            if let Ok(mut previous) = summaries.get_mut(booked.root) {
+                for (category, total) in booked.totals.iter() {
+                    previous.subtract(category, total);
+                }
+            }
+            if let Ok(mut next) = summaries.get_mut(member.root) {
+                for (category, total) in totals.iter() {
+                    next.add(category, total);
+                }
+            }
+            booked.root = member.root;
+            booked.totals.clone_from(totals);
+        } else {
+            commands.entity(entity).insert(BookedDonations {
+                root: member.root,
+                totals: totals.clone(),
+            });
         }
-    }
-    for (root, mut summary) in &mut summaries {
-        summary.set_if_neq(totals_by_world.remove(&root).unwrap_or_default());
     }
 }
 
@@ -95,12 +234,7 @@ pub(super) fn project_zoo_donation_summary(
             }
             _ => continue,
         };
-        let Some(total) = summary
-            .0
-            .get(&category)
-            .copied()
-            .unwrap_or(Some(DonationTotal::default()))
-        else {
+        let Some(total) = summary.total(category) else {
             continue;
         };
         let mut rendered = String::new();

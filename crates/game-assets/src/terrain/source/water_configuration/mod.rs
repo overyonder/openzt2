@@ -49,11 +49,9 @@ pub(crate) fn lower_biome_shoreline(
         submerged_texture: text(node, "waterSubmerged"),
         shore_texture: text(node, "shoreTexture"),
         ripple_system: text(node, "shoreRipple"),
-        ripple_maximum_percent: Some(number(node, "shoreRippleMaxPercent")?.unwrap_or(100.0)),
-        ripple_period: Some(number(node, "shoreRipplePeriod")?.unwrap_or(0.5)),
-        ripple_maximum_percent_per_period: Some(
-            number(node, "shoreRippleMaxPercentPerPeriod")?.unwrap_or(3.0),
-        ),
+        ripple_maximum_percent: number(node, "shoreRippleMaxPercent")?,
+        ripple_period: number(node, "shoreRipplePeriod")?,
+        ripple_maximum_percent_per_period: number(node, "shoreRippleMaxPercentPerPeriod")?,
     })
 }
 

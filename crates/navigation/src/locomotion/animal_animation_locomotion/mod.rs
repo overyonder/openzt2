@@ -1,20 +1,20 @@
 //! Source-backed default ground locomotion through the existing animation owner.
 
-use super::locomotion_clip_dependencies::LocomotionClipDependencies;
+use super::locomotion_clip_dependencies::{
+    GaitClipBinding, GaitRigJoints, LocomotionClipDependencies,
+};
 use bevy::prelude::*;
 use openzt2_game_assets::animation::animation_clip_source_queries::AnimationClipSources;
-use openzt2_game_assets::animation::animation_set_asset_types::AnimationSetAsset;
+use openzt2_game_assets::animation::animation_set_asset_types::{
+    AnimationClipSourceAsset, AnimationSetAsset,
+};
 use openzt2_game_assets::species::species_asset_types::SpeciesAsset;
 use openzt2_game_assets::species::species_asset_types::SpeciesAssets;
 use openzt2_game_data::behavior::action::wander::BehaviorGroundLocomotionSpeed;
 use openzt2_world_state::animation_graph::animation_graph_playback_message_types::AnimationClipPlaybackRequest;
 use openzt2_world_state::animation_graph::animation_graph_transition_operations::select_preferred_animation_clip_from_graph_node;
-use openzt2_world_state::animation_playback::animation_joint_target_types::{
-    AnimationJointTarget, AnimationRigJoints,
-};
 use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackController;
 use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackRepetitionPolicy;
-use openzt2_world_state::animation_playback::locomotion_root_motion::clip_motion_velocity;
 use openzt2_world_state::animation_playback::locomotion_root_motion::ConsumedLocomotionRootMotion;
 use openzt2_zoo_state::animal_lifecycle::types::Animal;
 use openzt2_zoo_state::animal_lifecycle::types::AnimalVariant;
@@ -45,6 +45,7 @@ struct AnimalAnimationProjectionPending(&'static str);
 #[derive(bevy::ecs::system::SystemParam)]
 pub(super) struct AnimalLocomotionRuntime<'w, 's> {
     fixed_time: Res<'w, Time<Fixed>>,
+    clip_assets: Res<'w, Assets<AnimationClipSourceAsset>>,
     random_streams: Query<'w, 's, &'static mut openzt2_zoo_state::animal_behavior::behavior_random_stream_state::BehaviorRandomStream>,
     unprojected: Query<'w, 's, &'static mut AnimalAnimationProjectionPending>,
     caffeine_flags: Query<'w, 's, &'static CaffeineFlags>,
@@ -66,13 +67,14 @@ pub(super) fn project_animal_animation_motion_to_navigation(
             Entity,
             &AnimationPlaybackController,
             &AnimationPlayer,
-            Option<&AnimationRigJoints>,
+            Option<&GaitRigJoints>,
             Option<&mut ConsumedLocomotionRootMotion>,
             Option<&mut LocomotionClipDependencies>,
+            Option<&mut GaitClipBinding>,
         ),
         With<Animal>,
     >,
-    joints: Query<(&AnimationJointTarget, &ChildOf)>,
+    parents: Query<&ChildOf>,
     transforms: Query<&GlobalTransform>,
     mut animals: Query<
         (
@@ -97,6 +99,7 @@ pub(super) fn project_animal_animation_motion_to_navigation(
 ) {
     let AnimalLocomotionRuntime {
         fixed_time,
+        clip_assets,
         mut random_streams,
         mut unprojected,
         caffeine_flags,
@@ -155,7 +158,8 @@ pub(super) fn project_animal_animation_motion_to_navigation(
     let Some(species) = species else {
         return;
     };
-    for (controller_entity, controller, player, rig, mut consumed, dependencies) in &mut controllers
+    for (controller_entity, controller, player, rig, mut consumed, dependencies, binding) in
+        &mut controllers
     {
         let Ok((
             animal_entity,
@@ -271,72 +275,62 @@ pub(super) fn project_animal_animation_motion_to_navigation(
             locomotion_key,
             set,
             &clip_sources,
+            animations.is_changed(),
         );
-        let resolve = |key: &str| clip_sources.get(set, key);
-        let pending = |key: &str| {
-            resolve(key).is_none()
-                && clip_sources
-                    .retained_handle(set, key)
-                    .is_some_and(|handle| !clip_sources.failed(&handle))
-        };
-        let clip_key = if let Some(node) = set
-            .animation_graph_nodes
-            .iter()
-            .find(|node| node.animation_graph_node_asset_key == *locomotion_key)
-        {
-            let selected = select_preferred_animation_clip_from_graph_node(
-                set,
-                |key| resolve(key).is_some(),
-                node,
-            );
-            let settled = selected.as_deref().is_some_and(|key| {
-                key.ends_with("_Idle")
-                    || (key.ends_with("_Ahead")
-                        && !node
-                            .animation_clip_asset_keys
-                            .iter()
-                            .any(|key| key.ends_with("_Idle") && pending(key)))
-            });
-            if !settled
-                && node
-                    .animation_clip_asset_keys
+        let resolved = GaitClipBinding::resolve(
+            &mut commands,
+            controller_entity,
+            binding,
+            controller.animation_set_asset.id(),
+            locomotion_key,
+            false,
+            animations.is_changed() || clip_assets.is_changed(),
+            set,
+            &clip_sources,
+            || {
+                let ready = |key: &str| clip_sources.get(set, key).is_some();
+                let pending = |key: &str| {
+                    !ready(key)
+                        && clip_sources
+                            .retained_handle(set, key)
+                            .is_some_and(|handle| !clip_sources.failed(&handle))
+                };
+                let Some(node) = set
+                    .animation_graph_nodes
                     .iter()
-                    .any(|key| pending(key))
-            {
-                wait(
-                    &mut commands,
-                    animal_entity,
-                    agent.as_mut(),
-                    "its ground clips are still loading",
-                );
+                    .find(|node| node.animation_graph_node_asset_key == *locomotion_key)
+                else {
+                    return Ok(locomotion_key.clone());
+                };
+                let selected = select_preferred_animation_clip_from_graph_node(set, ready, node);
+                let settled = selected.as_deref().is_some_and(|key| {
+                    key.ends_with("_Idle")
+                        || (key.ends_with("_Ahead")
+                            && !node
+                                .animation_clip_asset_keys
+                                .iter()
+                                .any(|key| key.ends_with("_Idle") && pending(key)))
+                });
+                if !settled
+                    && node
+                        .animation_clip_asset_keys
+                        .iter()
+                        .any(|key| pending(key))
+                {
+                    return Err("its ground clips are still loading");
+                }
+                selected.ok_or("its ground graph node selects no loaded clip")
+            },
+        );
+        let clip = match resolved {
+            Ok(clip) => clip,
+            Err(reason) => {
+                wait(&mut commands, animal_entity, agent.as_mut(), reason);
                 continue;
             }
-            let Some(selected) = selected else {
-                wait(
-                    &mut commands,
-                    animal_entity,
-                    agent.as_mut(),
-                    "its ground graph node selects no loaded clip",
-                );
-                continue;
-            };
-            selected
-        } else {
-            locomotion_key.clone()
         };
-        let Some(clip) = resolve(&clip_key) else {
-            wait(
-                &mut commands,
-                animal_entity,
-                agent.as_mut(),
-                "its ground clip is unavailable",
-            );
-            continue;
-        };
-        let Some(root) = clip
-            .metadata
-            .and_then(|metadata| metadata.root_motion_joint.as_ref())
-        else {
+        let clip_key = clip.key.as_ref();
+        let Some(joint) = clip.joint else {
             wait(
                 &mut commands,
                 animal_entity,
@@ -345,15 +339,7 @@ pub(super) fn project_animal_animation_motion_to_navigation(
             );
             continue;
         };
-        let joint = openzt2_game_data::AssetId::from_key(&root.joint_asset_key);
-        let parent = rig
-            .into_iter()
-            .flat_map(|rig| joints.iter_many(rig.joints()).matched())
-            .find_map(|(binding, parent)| {
-                (binding.authored_joint_id == joint)
-                    .then(|| transforms.get(parent.parent()).ok())
-                    .flatten()
-            });
+        let parent = rig.and_then(|rig| rig.root_parent(joint, &parents, &transforms));
         let Some(parent) = parent else {
             wait(
                 &mut commands,
@@ -372,7 +358,7 @@ pub(super) fn project_animal_animation_motion_to_navigation(
         if let Some(consumed) = consumed.as_deref_mut() {
             consumed.update_root_parent_transform(actor_from_root_parent);
         }
-        let Some(default_velocity) = clip_motion_velocity(&clip, parent, 1000) else {
+        let Some(default_velocity) = clip.velocity(parent) else {
             wait(
                 &mut commands,
                 animal_entity,
@@ -429,7 +415,7 @@ pub(super) fn project_animal_animation_motion_to_navigation(
                 let reset_seconds = row.reset_seconds_range[0]
                     + random.0.unit_f32()
                         * (row.reset_seconds_range[1] - row.reset_seconds_range[0]);
-                ownership.rate_reset = super::gait_rate_reset_timer(reset_seconds);
+                ownership.rate_reset = super::fixed_interval_timer(reset_seconds);
             } else {
                 ownership.playback_speed_permille = 1000;
             }
@@ -461,7 +447,7 @@ pub(super) fn project_animal_animation_motion_to_navigation(
         if moving && !task_animation && ownership.move_request_id.is_none() {
             let request = playback_requests.write(AnimationClipPlaybackRequest {
                 animation_subject_entity: controller_entity,
-                animation_clip_asset_key: clip_key.clone(),
+                animation_clip_asset_key: clip_key.to_owned(),
                 blend_duration_milliseconds: 0,
                 playback_speed_permille: rate,
                 playback_repetition_policy: AnimationPlaybackRepetitionPolicy::Loop,

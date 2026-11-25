@@ -120,6 +120,24 @@ pub struct TerrainBiomeShorelineConfiguration {
     pub ripple_maximum_percent_per_period: Option<f32>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TerrainShorelineRippleTiming {
+    pub maximum_coverage: f32,
+    pub period_seconds: f32,
+    pub maximum_coverage_per_period: f32,
+}
+
+impl TerrainBiomeShorelineConfiguration {
+    pub fn ripple_timing(&self) -> TerrainShorelineRippleTiming {
+        TerrainShorelineRippleTiming {
+            maximum_coverage: self.ripple_maximum_percent.unwrap_or(100.0) * 0.01,
+            period_seconds: self.ripple_period.unwrap_or(0.5),
+            maximum_coverage_per_period: self.ripple_maximum_percent_per_period.unwrap_or(3.0)
+                * 0.01,
+        }
+    }
+}
+
 /// Authored water settings. Missing values remain absent until their defaults are known.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct TerrainWaterConfiguration {

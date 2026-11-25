@@ -832,6 +832,8 @@ pub struct PropertyBindGroupKey {
     pub texture_layout: TextureLayout,
     /// Images used to build the texture bindings.
     pub textures: Vec<AssetId<Image>>,
+    /// Optional sampler overrides for the bound images.
+    pub samplers: Vec<Option<crate::EffectSampler>>,
 }
 
 // Note: use by HashMap to turn a key reference into an owned key when inserting
@@ -850,6 +852,7 @@ impl PropertyBindGroupKey {
             binding_size: properties.property_layout.min_binding_size().get() as u32,
             texture_layout,
             textures: Vec::new(),
+            samplers: Vec::new(),
         }
     }
 
@@ -860,6 +863,7 @@ impl PropertyBindGroupKey {
             binding_size: 0,
             texture_layout,
             textures: Vec::new(),
+            samplers: Vec::new(),
         }
     }
 
@@ -978,17 +982,31 @@ impl PropertyBindGroups {
             layout: texture_layout.clone(),
             textures: textures.iter().map(|h| h.id()).collect(),
         };
+        let samplers: Vec<_> = property_key
+            .samplers
+            .iter()
+            .map(|sampler| {
+                sampler
+                    .as_ref()
+                    .map(|sampler| render_device.create_sampler(&sampler.descriptor()))
+            })
+            .collect();
         assert_eq!(material.layout.layout.len(), material.textures.len());
         material
             .append_binding_entries(
                 4,
                 gpu_images,
-                |clamp_linear, sampler| {
-                    if clamp_linear {
-                        &property_cache.clamp_linear_sampler
-                    } else {
-                        sampler
-                    }
+                |slot, clamp_linear, sampler| {
+                    samplers
+                        .get(slot)
+                        .and_then(Option::as_ref)
+                        .unwrap_or_else(|| {
+                            if clamp_linear {
+                                &property_cache.clamp_linear_sampler
+                            } else {
+                                sampler
+                            }
+                        })
                 },
                 &mut entries,
             )

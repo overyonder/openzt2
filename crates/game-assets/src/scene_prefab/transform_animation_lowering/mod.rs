@@ -1,10 +1,10 @@
 use bevy::{
     animation::{
         animated_field, animation_curves::AnimatableCurve, graph::AnimationNodeIndex,
-        AnimationTargetId,
+        morph::WeightsCurve, AnimationTargetId,
     },
     asset::{LoadContext, VisitAssetDependencies},
-    curve::{cubic_splines::CubicSegment, FunctionCurve, Interval},
+    curve::{cubic_splines::CubicSegment, iterable::IterableCurve, FunctionCurve, Interval},
     prelude::*,
 };
 use openzt2_game_data::scene_prefab::{
@@ -25,12 +25,40 @@ pub struct PrefabMotion {
     pub transform_clocks: Arc<[(AnimationNodeIndex, bool)]>,
     pub spin: Option<AnimationNodeIndex>,
     pub has_rotation: bool,
+    pub has_visibility: bool,
+    pub morph_target_count: usize,
+    pub refresh_morph_bound: bool,
 }
 
 #[derive(Clone, Component, Reflect)]
 pub struct PrefabMotionRotation {
     pub sample: Quat,
     pub relative_to: Option<Quat>,
+}
+
+#[derive(Clone, Component, Reflect)]
+pub struct PrefabMotionVisibility {
+    pub sample: f32,
+}
+
+#[derive(Clone, Debug, Reflect)]
+#[reflect(opaque)]
+struct PrefabMorphWeightsCurve {
+    clock: PrefabControllerClock,
+    weights: Vec<PrefabScalarCurve>,
+}
+
+impl IterableCurve<f32> for PrefabMorphWeightsCurve {
+    fn domain(&self) -> Interval {
+        Interval::EVERYWHERE
+    }
+
+    fn sample_iter_unchecked(&self, elapsed: f32) -> impl Iterator<Item = f32> {
+        let time = controller_time(self.clock, elapsed);
+        self.weights
+            .iter()
+            .map(move |weight| scalar_at(weight, time, 0.0))
+    }
 }
 
 pub(super) fn lower_prefab_motion(
@@ -40,7 +68,12 @@ pub(super) fn lower_prefab_motion(
 ) -> Option<PrefabMotion> {
     let mut animations = std::mem::take(&mut source.transform_animations);
     let spin = std::mem::take(&mut source.rotation_cycles).pop();
-    if animations.is_empty() && spin.is_none() {
+    let visibility = source
+        .visibility_animation
+        .take()
+        .filter(|value| !value.keys.is_empty());
+    let morph = source.morph_animation.take();
+    if animations.is_empty() && spin.is_none() && visibility.is_none() && morph.is_none() {
         return None;
     }
     let target = AnimationTargetId::from_iter(["prefab_motion"]);
@@ -105,7 +138,7 @@ pub(super) fn lower_prefab_motion(
             clip.set_duration(f32::MAX);
             (clip, clock.flags & 1 != 0)
         };
-    let transform_clocks = animations
+    let mut transform_clocks = animations
         .into_iter()
         .enumerate()
         .filter_map(|(index, animation)| {
@@ -119,45 +152,109 @@ pub(super) fn lower_prefab_motion(
             let clip = context.add_labeled_asset(format!("PrefabTransform/{row}/{index}"), clip);
             Some((graph.add_clip(clip, 1.0, graph.root), instance_origin))
         })
-        .collect::<Arc<[_]>>();
-    let spin = spin.filter(|_| !has_rotation).map(|spin| {
+        .collect::<Vec<_>>();
+    let has_visibility = visibility.is_some();
+    if let Some(visibility) = visibility {
         let mut clip = AnimationClip::default();
-        let axis_rate = Vec3::from_array(spin.radians_per_second);
+        let clock = visibility.clock;
+        let keys = visibility.keys;
         clip.add_curve_to_target(
             target,
             AnimatableCurve::new(
-                animated_field!(PrefabMotionRotation::sample),
-                FunctionCurve::new(Interval::EVERYWHERE, move |seconds| {
-                    Quat::from_scaled_axis(axis_rate * seconds)
+                animated_field!(PrefabMotionVisibility::sample),
+                FunctionCurve::new(Interval::EVERYWHERE, move |elapsed| {
+                    let time = controller_time(clock, elapsed);
+                    let next = keys.partition_point(|(key_time, _)| *key_time <= time);
+                    let visible =
+                        keys.len() > 1 && next == keys.len() || keys[next.saturating_sub(1)].1;
+                    if visible {
+                        1.0
+                    } else {
+                        0.0
+                    }
                 }),
             ),
         );
         clip.set_duration(f32::MAX);
-        let clip = context.add_labeled_asset(format!("PrefabSpin/{row}"), clip);
-        graph.add_clip(clip, 1.0, graph.root)
-    });
+        let clip = context.add_labeled_asset(format!("PrefabVisibility/{row}"), clip);
+        transform_clocks.push((graph.add_clip(clip, 1.0, graph.root), clock.flags & 1 != 0));
+    }
+    let (morph_target_count, refresh_morph_bound) = if let Some(morph) = morph {
+        let mut clip = AnimationClip::default();
+        let clock = morph.clock;
+        let count = morph.weight_curves.len();
+        clip.add_curve_to_target(
+            target,
+            WeightsCurve(PrefabMorphWeightsCurve {
+                clock,
+                weights: morph.weight_curves,
+            }),
+        );
+        clip.set_duration(f32::MAX);
+        let clip = context.add_labeled_asset(format!("PrefabMorph/{row}"), clip);
+        transform_clocks.push((graph.add_clip(clip, 1.0, graph.root), clock.flags & 1 != 0));
+        (count, morph.refresh_bound)
+    } else {
+        (0, false)
+    };
+    let spin = spin
+        .filter(|spin| !has_rotation && spin.clock.stop_time_s > spin.key_time_s)
+        .map(|spin| {
+            let mut clip = AnimationClip::default();
+            let clock = spin.clock;
+            let key_time = spin.key_time_s;
+            let duration = clock.stop_time_s - key_time;
+            let [x, z, y] = spin.angles_xzy;
+            clip.add_curve_to_target(
+                target,
+                AnimatableCurve::new(
+                    animated_field!(PrefabMotionRotation::sample),
+                    FunctionCurve::new(Interval::EVERYWHERE, move |seconds| {
+                        let progress = ((controller_time(clock, seconds) - key_time) / duration)
+                            .clamp(0.0, 1.0);
+                        Quat::from_rotation_x(x * progress)
+                            * Quat::from_rotation_z(z * progress)
+                            * Quat::from_rotation_y(y * progress)
+                    }),
+                ),
+            );
+            clip.set_duration(f32::MAX);
+            let clip = context.add_labeled_asset(format!("PrefabSpin/{row}"), clip);
+            graph.add_clip(clip, 1.0, graph.root)
+        });
     Some(PrefabMotion {
         row,
         graph: context.add_labeled_asset(format!("PrefabMotion/{row}"), graph),
         target,
-        transform_clocks,
+        transform_clocks: transform_clocks.into(),
         spin,
         has_rotation: has_rotation || spin.is_some(),
+        has_visibility,
+        morph_target_count,
+        refresh_morph_bound,
     })
 }
 
-fn controller_time(clock: PrefabControllerClock, elapsed: f32) -> f32 {
+pub fn controller_time(clock: PrefabControllerClock, elapsed: f32) -> f32 {
     let start = clock.start_time_s;
     let stop = clock.stop_time_s;
     let duration = stop - start;
     if duration <= 0.0 {
         return start;
     }
-    let time = elapsed.mul_add(clock.frequency, clock.phase);
+    let time = elapsed * clock.frequency + clock.phase;
     match (clock.flags >> 1) & 3 {
-        0 => (start + (time - start).rem_euclid(duration)).clamp(start, stop),
+        0 => {
+            let wrapped = start + time % duration;
+            let wrapped = if wrapped < 0.0 {
+                wrapped + duration
+            } else {
+                wrapped
+            };
+            wrapped.clamp(start, stop)
+        }
         1 => {
-            let position = (time - start).rem_euclid(2.0 * duration);
+            let position = time.rem_euclid(2.0 * duration);
             start
                 + if position <= duration {
                     position
@@ -169,7 +266,7 @@ fn controller_time(clock: PrefabControllerClock, elapsed: f32) -> f32 {
     }
 }
 
-fn scalar_at(curve: &PrefabScalarCurve, time: f32, default: f32) -> f32 {
+pub fn scalar_at(curve: &PrefabScalarCurve, time: f32, default: f32) -> f32 {
     let segments = &curve.segments;
     let Some(first) = segments.first() else {
         return default;

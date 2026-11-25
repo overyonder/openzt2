@@ -1,9 +1,12 @@
-use bevy::prelude::*;
+use bevy::{
+    ecs::{entity::EntityHashSet, relationship::RelationshipTarget},
+    prelude::*,
+};
 use openzt2_game_data::{
+    AssetId,
     ui_document::node_property_binding::{
         UiBooleanPropertyBindingSource, UiIntegerPropertyBindingSource, UiTextPropertyBindingSource,
     },
-    AssetId,
 };
 
 use openzt2_game_assets::localization::localization_asset_types::LocalizationAsset;
@@ -19,6 +22,60 @@ use openzt2_interface_state::ui::authored_ui_node_projection_components::UiVisib
 use openzt2_ui::authored_ui_text_content_binding::UiTextBinding;
 
 use super::super::projection::text_replacement_operations::replace_projected_ui_text_if_changed;
+use openzt2_progression::progression::{AuthoredAwardName, ResearchPresentationProject};
+use openzt2_world_state::world_spawn::{
+    world_load_completion_marker::WorldLoadCompleted,
+    world_membership_types::{WorldMember, WorldMembers, WorldRoot},
+};
+
+#[derive(Component, Default, PartialEq, Eq)]
+pub(crate) struct ProgressionAwardSources {
+    by_id: std::collections::BTreeMap<AssetId, Entity>,
+    latest: Option<Entity>,
+}
+
+pub(crate) fn bind_progression_awards_to_world_status(
+    mut roots: Query<
+        (Entity, Option<&WorldMembers>, &mut ProgressionAwardSources),
+        (With<WorldRoot>, With<WorldLoadCompleted>),
+    >,
+    changed: Query<
+        &WorldMember,
+        (
+            With<EarnedProgressionAward>,
+            Or<(Changed<EarnedProgressionAward>, Changed<WorldMember>)>,
+        ),
+    >,
+    earned: Query<(Entity, &EarnedProgressionAward)>,
+    mut retired: RemovedComponents<EarnedProgressionAward>,
+) {
+    let affected: EntityHashSet = changed.iter().map(|member| member.root).collect();
+    let awards_removed = !retired.is_empty();
+    retired.clear();
+    for (root, members, mut sources) in &mut roots {
+        if !awards_removed && !affected.contains(&root) && !sources.is_added() {
+            continue;
+        }
+        let mut next = ProgressionAwardSources::default();
+        let mut running = std::collections::BTreeMap::<AssetId, (u64, Entity)>::new();
+        let mut latest = None;
+        for (entity, award) in earned
+            .iter_many(members.into_iter().flat_map(RelationshipTarget::iter))
+            .flatten()
+        {
+            let candidate = (award.earned_tick, entity);
+            let entry = running.entry(award.definition).or_insert(candidate);
+            *entry = (*entry).max(candidate);
+            latest = Some(latest.map_or(candidate, |latest: (u64, Entity)| latest.max(candidate)));
+        }
+        next.latest = latest.map(|(_, entity)| entity);
+        next.by_id = running
+            .into_iter()
+            .map(|(id, (_, entity))| (id, entity))
+            .collect();
+        sources.set_if_neq(next);
+    }
+}
 
 // Progression bindings combine calendar, fame, awards and rating values.
 #[allow(clippy::too_many_arguments)]
@@ -27,26 +84,55 @@ pub(crate) fn project_progression_status_to_authored_information_bindings(
     active_world_definitions: Res<WorldDefinitions>,
     active_localization: Res<LocalizationPrecedenceIndex>,
     localization_assets: Res<Assets<LocalizationAsset>>,
-    unlocked_catalogue_definitions: Single<&UnlockedCatalogueDefinitionSet>,
-    research_projects: Query<&ResearchProject>,
-    earned_progression_awards: Query<&EarnedProgressionAward>,
-    mut authored_text: Query<(&UiTextBinding, &mut Text)>,
-    mut authored_visibility: Query<(&UiVisibleBinding, &mut Visibility)>,
-    mut authored_values: Query<(&UiValueBinding, &mut UiValue)>,
+    unlocked_catalogue_definitions: Single<Ref<UnlockedCatalogueDefinitionSet>>,
+    research_selection: Query<
+        (
+            Ref<ResearchPresentationProject>,
+            Ref<ProgressionAwardSources>,
+        ),
+        (With<WorldRoot>, With<WorldLoadCompleted>),
+    >,
+    research_projects: Query<Ref<ResearchProject>>,
+    earned_progression_awards: Query<(Ref<EarnedProgressionAward>, Option<Ref<AuthoredAwardName>>)>,
+    mut authored_text: Query<(Ref<UiTextBinding>, &mut Text)>,
+    mut authored_visibility: Query<(Ref<UiVisibleBinding>, &mut Visibility)>,
+    mut authored_values: Query<(Ref<UiValueBinding>, &mut UiValue)>,
 ) {
     let unlocked_catalogue_definitions = unlocked_catalogue_definitions.into_inner();
-    let active_research_project = research_projects.iter().next();
-    let latest_earned_award = earned_progression_awards
-        .iter()
-        .max_by_key(|award| award.earned_tick);
+    let Ok((selection, awards)) = research_selection.single() else {
+        return;
+    };
+    let active_research_project = selection
+        .0
+        .and_then(|entity| research_projects.get(entity).ok());
+    let research_changed = selection.is_changed()
+        || active_research_project
+            .as_ref()
+            .is_some_and(Ref::is_changed);
+    let latest_earned_award = awards
+        .latest
+        .and_then(|entity| earned_progression_awards.get(entity).ok());
+    let sources_changed =
+        active_world_definitions.is_changed() || world_definition_assets.is_changed();
+    let locale_changed = active_localization.is_changed() || localization_assets.is_changed();
 
     for (property_binding, mut projected_visibility) in &mut authored_visibility {
         let should_be_visible = match &property_binding.0 {
-            UiBooleanPropertyBindingSource::ResearchActive => active_research_project.is_some(),
-            UiBooleanPropertyBindingSource::AwardEarned { award } => earned_progression_awards
-                .iter()
-                .any(|earned_award| earned_award.definition == *award),
-            UiBooleanPropertyBindingSource::DefinitionUnlocked { definition } => {
+            UiBooleanPropertyBindingSource::ResearchActive
+                if research_changed || property_binding.is_changed() =>
+            {
+                active_research_project.is_some()
+            }
+            UiBooleanPropertyBindingSource::AwardEarned { award }
+                if awards.is_changed() || property_binding.is_changed() =>
+            {
+                awards.by_id.contains_key(award)
+            }
+            UiBooleanPropertyBindingSource::DefinitionUnlocked { definition }
+                if sources_changed
+                    || unlocked_catalogue_definitions.is_changed()
+                    || property_binding.is_changed() =>
+            {
                 active_world_definitions
                     .get(&world_definition_assets)
                     .and_then(|world_definitions| {
@@ -72,19 +158,37 @@ pub(crate) fn project_progression_status_to_authored_information_bindings(
 
     for (property_binding, mut projected_value) in &mut authored_values {
         let value = match &property_binding.0 {
-            UiIntegerPropertyBindingSource::ResearchElapsedTicks => active_research_project
-                .and_then(|project| i64::try_from(project.elapsed_ticks).ok())
-                .unwrap_or(0),
-            UiIntegerPropertyBindingSource::ResearchRequiredTicks => active_research_project
-                .and_then(|project| i64::try_from(project.required_ticks).ok())
-                .unwrap_or(0),
-            UiIntegerPropertyBindingSource::AwardEarnedTick { award } => earned_progression_awards
-                .iter()
-                .filter(|earned_award| earned_award.definition == *award)
-                .map(|earned_award| earned_award.earned_tick)
-                .max()
-                .and_then(|earned_tick| i64::try_from(earned_tick).ok())
-                .unwrap_or(0),
+            UiIntegerPropertyBindingSource::ResearchElapsedTicks
+                if research_changed || property_binding.is_changed() =>
+            {
+                active_research_project
+                    .as_ref()
+                    .and_then(|project| i64::try_from(project.elapsed_ticks).ok())
+                    .unwrap_or(0)
+            }
+            UiIntegerPropertyBindingSource::ResearchRequiredTicks
+                if research_changed || property_binding.is_changed() =>
+            {
+                active_research_project
+                    .as_ref()
+                    .and_then(|project| i64::try_from(project.required_ticks).ok())
+                    .unwrap_or(0)
+            }
+            UiIntegerPropertyBindingSource::AwardEarnedTick { award } => {
+                let earned = awards
+                    .by_id
+                    .get(award)
+                    .and_then(|&entity| earned_progression_awards.get(entity).ok());
+                if !awards.is_changed()
+                    && !property_binding.is_changed()
+                    && !earned.as_ref().is_some_and(|(award, _)| award.is_changed())
+                {
+                    continue;
+                }
+                earned
+                    .and_then(|(award, _)| i64::try_from(award.earned_tick).ok())
+                    .unwrap_or_default()
+            }
             _ => continue,
         };
         projected_value.set_if_neq(UiValue(value));
@@ -100,19 +204,40 @@ pub(crate) fn project_progression_status_to_authored_information_bindings(
     };
     for (property_binding, projected_text) in &mut authored_text {
         let localization_key = match &property_binding.0 {
-            UiTextPropertyBindingSource::ResearchName => active_research_project
-                .and_then(|project| world_definitions.find_research(project.definition))
-                .map(|record| AssetId(record.name_key.0)),
-            UiTextPropertyBindingSource::LatestAwardName => latest_earned_award
-                .and_then(|award| world_definitions.find_award(award.definition))
-                .map(|record| AssetId(record.name_key.0)),
-            _ => None,
+            UiTextPropertyBindingSource::ResearchName
+                if research_changed
+                    || sources_changed
+                    || locale_changed
+                    || property_binding.is_changed() =>
+            {
+                active_research_project
+                    .as_ref()
+                    .and_then(|project| world_definitions.find_research(project.definition))
+                    .map(|record| AssetId(record.name_key.0))
+            }
+            UiTextPropertyBindingSource::LatestAwardName
+                if awards.is_changed()
+                    || sources_changed
+                    || locale_changed
+                    || property_binding.is_changed() =>
+            {
+                latest_earned_award.as_ref().and_then(|(award, name)| {
+                    name.as_ref()
+                        .map(|name| name.0)
+                        .filter(|&id| id != AssetId::default())
+                        .or_else(|| {
+                            world_definitions
+                                .find_award(award.definition)
+                                .map(|record| record.name_key)
+                        })
+                })
+            }
+            _ => continue,
         };
-        if let Some(localized_text) =
-            localization_key.and_then(|key| localization_catalogue.find_plain_localized_text(key))
-        {
-            replace_projected_ui_text_if_changed(projected_text, localized_text);
-        }
+        let localized_text = localization_key
+            .and_then(|key| localization_catalogue.find_plain_localized_text(key))
+            .unwrap_or_default();
+        replace_projected_ui_text_if_changed(projected_text, localized_text);
     }
 }
 

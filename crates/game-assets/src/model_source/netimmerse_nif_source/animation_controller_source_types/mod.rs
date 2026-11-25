@@ -14,6 +14,24 @@ pub(in super::super) struct NetImmerseNiTimeController {
     pub(in super::super) stop_time: f32,
     pub(in super::super) target_ref: i32,
 }
+
+impl NetImmerseNiTimeController {
+    pub(in super::super) fn is_active(&self) -> bool {
+        self.flags & 8 != 0
+    }
+
+    pub(in super::super) fn prefab_clock(
+        &self,
+    ) -> openzt2_game_data::scene_prefab::PrefabControllerClock {
+        openzt2_game_data::scene_prefab::PrefabControllerClock {
+            flags: self.flags,
+            frequency: self.frequency,
+            phase: self.phase,
+            start_time_s: self.start_time,
+            stop_time_s: self.stop_time,
+        }
+    }
+}
 #[derive(Debug, Clone, PartialEq)]
 pub(in super::super) struct NetImmerseNiAlphaController {
     pub(in super::super) controller: NetImmerseNiTimeController,
@@ -102,6 +120,7 @@ pub(in super::super) struct NetImmerseTextKey {
 pub(in super::super) struct NetImmerseNiBoneLodController {
     pub(in super::super) controller: NetImmerseNiTimeController,
     pub(in super::super) lod: u32,
+    pub(in super::super) lod_count: u32,
     pub(in super::super) node_groups: Vec<Vec<i32>>,
     pub(in super::super) shape_groups: Vec<Vec<NetImmerseNiBoneLodSkinInfo>>,
     pub(in super::super) shape_refs: Vec<i32>,

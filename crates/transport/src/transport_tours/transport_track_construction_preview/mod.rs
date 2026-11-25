@@ -1,3 +1,7 @@
+use openzt2_zoo_state::locomotion::locomotion_types::SpatialCell;
+use openzt2_zoo_state::transport_tours::transport_topology_types::{TrackStart, TrackEnd, TrackSegment};
+use openzt2_construction::construction::transport_spatial_picking::TransportSpatialPicking;
+use super::ground_track_policy::{GroundTrackPolicyAsset, TrackTerrain};
 use openzt2_zoo_state::transport_tours::transport_highlight_style::TransportHighlightStyle;
 use openzt2_zoo_state::transport_tours::transport_pick_bounds::TransportPickBounds;
 use openzt2_zoo_state::transport_tours::transport_topology_types::{TrackRoute, TrackIncidence};
@@ -99,15 +103,32 @@ pub(super) fn continue_track_preview_from_committed_junction(
     }
 }
 
+type TrackSocket = (Entity, Entity, u8, Vec3);
+
+#[derive(Component, Default, PartialEq)]
+pub(super) struct TransportPointerEndpoints {
+    start: Option<TrackSocket>,
+    destination: Option<TrackSocket>,
+    gap_heading: Option<Vec2>,
+}
+
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
-pub(super) fn begin_or_commit_transport_track_construction_from_primary_pointer_action(
+pub(super) fn resolve_transport_pointer_endpoints(
     mut commands: Commands,
-    mut pointer_inputs: MessageReader<PointerInput>,
-    ui_capture: Res<UiPointerCapture>,
     tool: Res<ConstructionTool>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
-    active_definitions: Res<WorldDefinitions>,
-    cursors: Query<(&ConstructionCursor, &WorldMember)>,
+    active: Res<WorldDefinitions>,
+    mut cursor: Query<(
+        Entity,
+        Ref<ConstructionCursor>,
+        &WorldMember,
+        Option<&mut TransportPointerEndpoints>,
+    )>,
+    (pointer, bounds, spatial): (
+        Res<openzt2_interface_state::camera::world_pointer_ray_types::WorldPointerRay>,
+        TransportPickBounds,
+        TransportSpatialPicking,
+    ),
     stations: Query<(
         Entity,
         &TransportStation,
@@ -124,26 +145,173 @@ pub(super) fn begin_or_commit_transport_track_construction_from_primary_pointer_
     )>,
     segments: Query<(Entity, &CircuitMember, TrackRoute, &TrackProfile)>,
     incidence: TrackIncidence,
+    previews: Query<&TransportTrackConstructionPreview>,
+    previous: Query<(), Added<TransportTrackConstructionPreview>>,
+    mut removed: RemovedComponents<TransportTrackConstructionPreview>,
+    (changed_routes, changed_endpoints): (
+        Query<
+            (),
+            Or<(
+                Changed<TrackStart>,
+                Changed<TrackEnd>,
+                Changed<TrackSegment>,
+            )>,
+        >,
+        Query<
+            (),
+            (
+                Or<(With<TransportStation>, With<TransportTrackJunction>)>,
+                Or<(
+                    Added<CircuitMember>,
+                    Changed<GlobalTransform>,
+                    Changed<SpatialCell>,
+                )>,
+            ),
+        >,
+    ),
+    mut discarded: MessageReader<
+        super::transport_track_piece_presentation::DiscardedTrackJointEndpoints,
+    >,
+) {
+    let route_removed = discarded.read().count() != 0;
+    let preview_removed = removed.read().count() != 0;
+    let Ok((cursor_entity, cursor, world, current)) = cursor.single_mut() else {
+        return;
+    };
+    let Some((_, kind)) = selected_transport_track_definition(*tool) else {
+        if current.is_some() {
+            commands
+                .entity(cursor_entity)
+                .remove::<TransportPointerEndpoints>();
+        }
+        return;
+    };
+    if current.is_some()
+        && !cursor.is_changed()
+        && !pointer.is_changed()
+        && !tool.is_changed()
+        && !active.is_changed()
+        && !definitions.is_changed()
+        && previous.is_empty()
+        && changed_routes.is_empty()
+        && changed_endpoints.is_empty()
+        && !route_removed
+        && !preview_removed
+    {
+        return;
+    }
+    let Some(definitions) = active.get(&definitions) else {
+        return;
+    };
+    let preview = previews.single().ok();
+    let mut candidates = spatial.nearby(world.root, cursor.world.xz(), 8.0);
+    if let Some(ray) = pointer.0 {
+        spatial.extend_along_ray(world.root, ray, 8.0, &mut candidates);
+    }
+    let station = find_nearest_compatible_transport_station_endpoint(
+        cursor.world,
+        kind,
+        world.root,
+        None,
+        preview.is_none(),
+        preview.map(|preview| preview.from_endpoint),
+        definitions,
+        &candidates,
+        &stations,
+        &segments,
+        &incidence,
+        pointer.0,
+        &bounds,
+    );
+    let next = if let Some(preview) = preview {
+        let gap = (kind == TransportationTrackKind::Ground)
+            .then(|| {
+                junctions
+                    .iter_many(candidates.iter().copied())
+                    .filter_map(Result::ok)
+                    .filter(|(entity, _, _, _, _)| {
+                        *entity != preview.from_endpoint
+                            && incidence.incoming(*entity).next().is_none()
+                    })
+                    .flat_map(|(entity, _, _, _, _)| incidence.outgoing(entity))
+                    .filter_map(|route| segments.get(route).ok())
+                    .filter(|(_, _, segment, profile)| {
+                        profile.kind == kind
+                            && segment.from_position.distance(cursor.world)
+                                <= GAP_START_SNAP_DISTANCE_METRES
+                    })
+                    .min_by(|(_, _, left, _), (_, _, right, _)| {
+                        left.from_position
+                            .distance_squared(cursor.world)
+                            .total_cmp(&right.from_position.distance_squared(cursor.world))
+                    })
+                    .and_then(|(_, member, segment, _)| {
+                        let heading = (*segment.path_points.get(1)?
+                            - *segment.path_points.first()?)
+                        .xz()
+                        .try_normalize()?;
+                        Some((
+                            (segment.from(), member.0, 0, segment.from_position),
+                            heading,
+                        ))
+                    })
+            })
+            .flatten();
+        let destination = nearer_transport_track_construction_endpoint(
+            cursor.world,
+            station,
+            gap.map(|(socket, _)| socket),
+        );
+        let gap_heading = gap
+            .filter(|(socket, _)| Some(*socket) == destination)
+            .map(|(_, heading)| heading);
+        TransportPointerEndpoints {
+            start: None,
+            destination,
+            gap_heading,
+        }
+    } else {
+        let junction = find_nearest_compatible_transport_track_junction(
+            cursor.world,
+            kind,
+            world.root,
+            None,
+            pointer.0,
+            &candidates,
+            &junctions,
+            &segments,
+            &incidence,
+            &bounds,
+        );
+        TransportPointerEndpoints {
+            start: nearer_transport_track_construction_endpoint(cursor.world, station, junction),
+            ..default()
+        }
+    };
+    if let Some(mut current) = current {
+        current.set_if_neq(next);
+    } else {
+        commands.entity(cursor_entity).insert(next);
+    }
+}
+
+pub(super) fn begin_or_commit_transport_track_construction_from_primary_pointer_action(
+    mut commands: Commands,
+    mut pointer_inputs: MessageReader<PointerInput>,
+    ui_capture: Res<UiPointerCapture>,
+    tool: Res<ConstructionTool>,
+    cursors: Query<(&TransportPointerEndpoints, &WorldMember), With<ConstructionCursor>>,
     previews: Query<(Entity, &ConstructionPreview), With<TransportTrackConstructionPreview>>,
     mut commits: MessageWriter<CommitConstruction>,
-    (pointer_ray, bounds): (
-        Res<openzt2_interface_state::camera::world_pointer_ray_types::WorldPointerRay>,
-        TransportPickBounds,
-    ),
 ) {
-    let primary_just_pressed = pointer_inputs.read().any(|input| {
+    let primary = pointer_inputs.read().any(|input| {
         input.pointer_id.is_mouse() && input.button_just_pressed(PointerButton::Primary)
     });
     pointer_inputs.clear();
-    let Some((definition, kind)) = selected_transport_track_definition(*tool) else {
+    let Some((definition, _)) = selected_transport_track_definition(*tool) else {
         return;
     };
-    let (Ok((cursor, world_member)), Some(definitions)) =
-        (cursors.single(), active_definitions.get(&definitions))
-    else {
-        return;
-    };
-    if !primary_just_pressed || ui_capture.over_ui {
+    if !primary || ui_capture.over_ui {
         return;
     }
     if let Ok((preview_entity, preview)) = previews.single() {
@@ -156,39 +324,11 @@ pub(super) fn begin_or_commit_transport_track_construction_from_primary_pointer_
         }
         return;
     }
-    let station_endpoint = find_nearest_compatible_transport_station_endpoint(
-        cursor.world,
-        kind,
-        world_member.root,
-        None,
-        true,
-        None,
-        definitions,
-        &stations,
-        &segments,
-        &incidence,
-        pointer_ray.0,
-        &bounds,
-    );
-    let junction_endpoint = find_nearest_compatible_transport_track_junction(
-        cursor.world,
-        kind,
-        world_member.root,
-        None,
-        pointer_ray.0,
-        &junctions,
-        &segments,
-        &incidence,
-        &bounds,
-    );
-    let Some(endpoint) = nearer_transport_track_construction_endpoint(
-        cursor.world,
-        station_endpoint,
-        junction_endpoint,
-    ) else {
-        return;
-    };
-    spawn_transport_track_construction_preview(&mut commands, definition, endpoint, *world_member);
+    if let Ok((hover, world)) = cursors.single() {
+        if let Some(endpoint) = hover.start {
+            spawn_transport_track_construction_preview(&mut commands, definition, endpoint, *world);
+        }
+    }
 }
 
 fn spawn_transport_track_construction_preview(
@@ -226,7 +366,11 @@ pub(super) fn update_transport_track_construction_preview_from_pointer_and_stati
     policy: Res<openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::ConstructionPlacementPolicy>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
-    cursors: Query<(&ConstructionCursor, &WorldMember)>,
+    cursors: Query<(
+        Ref<ConstructionCursor>,
+        &WorldMember,
+        Ref<TransportPointerEndpoints>,
+    )>,
     stations: Query<(
         Entity,
         &TransportStation,
@@ -242,17 +386,23 @@ pub(super) fn update_transport_track_construction_preview_from_pointer_and_stati
         &mut Transform,
     )>,
     terrain: TrackTerrain,
-    (pointer_ray, bounds): (
-        Res<openzt2_interface_state::camera::world_pointer_ray_types::WorldPointerRay>,
-        TransportPickBounds,
-    ),
+    ground_track: GroundTrackPolicyAsset,
+    mut terrain_changed: MessageReader<
+        openzt2_zoo_state::terrain::terrain_edit_types::TerrainChanged,
+    >,
 ) {
     let Some((selected_definition, selected_kind)) = selected_transport_track_definition(*tool)
     else {
         return;
     };
+    let changed = tool.is_changed()
+        || policy.is_changed()
+        || definitions.is_changed()
+        || active_definitions.is_changed()
+        || ground_track.is_changed()
+        || terrain_changed.read().count() != 0;
     let (
-        Ok((cursor, world_member)),
+        Ok((cursor, world_member, hover)),
         Ok((mut preview, mut track_preview, mut transform)),
         Some(definitions),
     ) = (
@@ -263,6 +413,9 @@ pub(super) fn update_transport_track_construction_preview_from_pointer_and_stati
     else {
         return;
     };
+    if !changed && !cursor.is_changed() && !hover.is_changed() && !track_preview.is_added() {
+        return;
+    }
     if preview.definition != selected_definition {
         preview.validity = PlacementValidity::Invalid(PlacementFailure::InvalidTopology);
         return;
@@ -291,53 +444,7 @@ pub(super) fn update_transport_track_construction_preview_from_pointer_and_stati
             })
     }
     .filter(|_| selected_kind == TransportationTrackKind::Ground);
-    let snapped_station_endpoint = find_nearest_compatible_transport_station_endpoint(
-        cursor.world,
-        selected_kind,
-        world_member.root,
-        Some(track_preview.circuit),
-        false,
-        Some(track_preview.from_endpoint),
-        definitions,
-        &stations,
-        &segments,
-        &incidence,
-        pointer_ray.0,
-        &bounds,
-    );
-    // A road left after a gap starts at a junction nothing leads into; a road
-    // can be built back into it, along the way that road leaves.
-    let gap_start = segments
-        .iter()
-        .filter(|(_, member, segment, profile)| {
-            member.0 == track_preview.circuit
-                && profile.kind == TransportationTrackKind::Ground
-                && segment.from() != track_preview.from_endpoint
-                && !stations.contains(segment.from())
-                && !incidence
-                    .incoming(segment.from())
-                    .any(|track| segments.contains(track))
-                && segment.from_position.distance(cursor.world) <= GAP_START_SNAP_DISTANCE_METRES
-        })
-        .min_by(|(_, _, left, _), (_, _, right, _)| {
-            left.from_position
-                .distance_squared(cursor.world)
-                .total_cmp(&right.from_position.distance_squared(cursor.world))
-        })
-        .and_then(|(_, member, segment, _)| {
-            let heading = (*segment.path_points.get(1)? - *segment.path_points.first()?)
-                .xz()
-                .try_normalize()?;
-            Some((
-                (segment.from(), member.0, 0, segment.from_position),
-                heading,
-            ))
-        });
-    let snapped_station_endpoint = nearer_transport_track_construction_endpoint(
-        cursor.world,
-        snapped_station_endpoint,
-        gap_start.map(|(endpoint, _)| endpoint),
-    );
+    let snapped_station_endpoint = hover.destination;
     let snapped_station_chain = snapped_station_endpoint.and_then(|endpoint| {
         build_authored_axis_and_diagonal_transport_track_piece_chain(
             track_definition,
@@ -351,7 +458,7 @@ pub(super) fn update_transport_track_construction_preview_from_pointer_and_stati
         .as_ref()
         .and_then(|((station, _, _, position), _)| {
             let Ok((_, _, _, transform, _)) = stations.get(*station) else {
-                return gap_start.map(|(_, heading)| heading);
+                return hover.gap_heading;
             };
             (transform.translation() - *position).xz().try_normalize()
         })
@@ -401,10 +508,22 @@ pub(super) fn update_transport_track_construction_preview_from_pointer_and_stati
             track_definition,
             &path_points,
         );
+        let across = selected_kind != TransportationTrackKind::Ground
+            || ground_track.get().is_some_and(|ground| {
+                terrain.across_grade_allowed(
+                    world_member.root,
+                    &path_points,
+                    [
+                        stations.contains(track_preview.from_endpoint),
+                        to_station.is_some_and(|to| stations.contains(to)),
+                    ],
+                    ground,
+                )
+            });
         let gentle = track_piece_chain_turns_are_gentle(from_heading, &path_points, to_heading);
         let validity = if !gentle {
             PlacementValidity::Invalid(PlacementFailure::InvalidTopology)
-        } else if valid {
+        } else if valid && across {
             PlacementValidity::Valid { cost }
         } else {
             PlacementValidity::Invalid(PlacementFailure::TooSteep)
@@ -517,13 +636,15 @@ pub(super) fn highlight_transport_track_connection_stations(
     mut commands: Commands,
     (blink, style): (Res<TransportHighlightBlink>, Res<TransportHighlightStyle>),
     tool: Res<ConstructionTool>,
-    definitions: Res<Assets<WorldDefinitionAsset>>,
-    active_definitions: Res<WorldDefinitions>,
-    cursors: Query<(
-        &ConstructionCursor,
-        &WorldMember,
-        Option<&openzt2_zoo_state::construction::construction_interaction_types::DeleteHoverTarget>,
-    )>,
+    cursors: Query<
+        (
+            Option<&TransportPointerEndpoints>,
+            Option<
+                &openzt2_zoo_state::construction::construction_interaction_types::DeleteHoverTarget,
+            >,
+        ),
+        With<ConstructionCursor>,
+    >,
     stations: Query<(
         Entity,
         &TransportStation,
@@ -538,7 +659,6 @@ pub(super) fn highlight_transport_track_connection_stations(
         &GlobalTransform,
         &WorldMember,
     )>,
-    segments: Query<(Entity, &CircuitMember, TrackRoute, &TrackProfile)>,
     incidence: TrackIncidence,
     previews: Query<(
         Entity,
@@ -553,16 +673,12 @@ pub(super) fn highlight_transport_track_connection_stations(
         Query<(), With<PrefabRenderable>>,
         Query<(), With<crate::transport_tours::transport_track_piece_presentation::SkyTrackRope>>,
     ),
-    (pointer_ray, bounds): (
-        Res<openzt2_interface_state::camera::world_pointer_ray_types::WorldPointerRay>,
-        TransportPickBounds,
-    ),
     mut highlights: Query<(Entity, &mut TrackHighlight)>,
 ) {
     let mut wanted = HashMap::new();
     let track_color = usize::from(blink.0[0].fraction() >= 0.5);
     let deletion_color = usize::from(blink.0[1].fraction() >= 0.5);
-    if let (ConstructionTool::Delete, Ok((_, _, Some(hovered)))) = (*tool, cursors.single()) {
+    if let (ConstructionTool::Delete, Ok((_, Some(hovered)))) = (*tool, cursors.single()) {
         light_deleted_track_leg(
             hovered.0,
             style.delete[deletion_color],
@@ -573,29 +689,16 @@ pub(super) fn highlight_transport_track_connection_stations(
             &mut wanted,
         );
     }
-    if let (Some((_, kind)), Ok((cursor, world_member, _)), Some(definitions)) = (
-        selected_transport_track_definition(*tool),
-        cursors.single(),
-        active_definitions.get(&definitions),
-    ) {
+    if let (Some((_, kind)), Ok((hover, _))) =
+        (selected_transport_track_definition(*tool), cursors.single())
+    {
         let preview = previews.single().ok();
         let valid = preview
             .is_none_or(|(_, _, state)| matches!(state.validity, PlacementValidity::Valid { .. }));
         let (start, target) = preview.map_or_else(
             || {
                 (
-                    endpoint_under_pointer(
-                        cursor.world,
-                        kind,
-                        world_member.root,
-                        pointer_ray.0,
-                        definitions,
-                        &stations,
-                        &junctions,
-                        &segments,
-                        &incidence,
-                        &bounds,
-                    ),
+                    hover.and_then(|hover| hover.start.map(|socket| socket.0)),
                     None,
                 )
             },
@@ -766,61 +869,6 @@ fn light_track_decals(
     }
 }
 
-/// The station end or line end a new line would start from at the pointer.
-#[allow(clippy::too_many_arguments, clippy::type_complexity)]
-fn endpoint_under_pointer(
-    pointer: Vec3,
-    kind: TransportationTrackKind,
-    world: Entity,
-    pointer_ray: Option<Ray3d>,
-    definitions: openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView<'_>,
-    stations: &Query<(
-        Entity,
-        &TransportStation,
-        &CircuitMember,
-        &GlobalTransform,
-        &WorldMember,
-    )>,
-    junctions: &Query<(
-        Entity,
-        &TransportTrackJunction,
-        &CircuitMember,
-        &GlobalTransform,
-        &WorldMember,
-    )>,
-    segments: &Query<(Entity, &CircuitMember, TrackRoute, &TrackProfile)>,
-    incidence: &TrackIncidence,
-    bounds: &TransportPickBounds,
-) -> Option<Entity> {
-    let station = find_nearest_compatible_transport_station_endpoint(
-        pointer,
-        kind,
-        world,
-        None,
-        true,
-        None,
-        definitions,
-        stations,
-        segments,
-        incidence,
-        pointer_ray,
-        bounds,
-    );
-    let junction = find_nearest_compatible_transport_track_junction(
-        pointer,
-        kind,
-        world,
-        None,
-        pointer_ray,
-        junctions,
-        segments,
-        incidence,
-        bounds,
-    );
-    nearer_transport_track_construction_endpoint(pointer, station, junction)
-        .map(|endpoint| endpoint.0)
-}
-
 /// `ZTDeleteMode` colours what the delete tool would remove `mouseover`
 /// (red), alternating with `alternate` (orange): here the whole road leg the
 /// hovered piece belongs to, which is what the sale removes.
@@ -849,24 +897,6 @@ fn light_deleted_track_leg(
     }
 }
 
-type TrackTerrain<'w, 's> = (
-    Query<'w, 's, &'static openzt2_zoo_state::terrain::terrain_chunk_types::TerrainIndex>,
-    Res<
-        'w,
-        Assets<
-            openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset,
-        >,
-    >,
-    Query<
-        'w,
-        's,
-        (
-            &'static openzt2_zoo_state::terrain::terrain_chunk_types::TerrainChunk,
-            Option<&'static openzt2_zoo_state::terrain::terrain_chunk_types::EditedTerrainSamples>,
-        ),
-    >,
-);
-
 /// A ground road whose ends both sit on the terrain follows the ground
 /// between them, as the original paints it into the terrain. Interpolating a
 /// straight line instead lifted every piece over a dip above the terrain, so
@@ -875,16 +905,9 @@ fn drape_ground_level_track_points_on_terrain(
     path_points: &mut [Vec3],
     world_root: Entity,
     free_end: bool,
-    (indexes, assets, chunks): &TrackTerrain,
+    terrain: &TrackTerrain,
 ) {
-    use openzt2_zoo_state::terrain::terrain_world_sampling::{sample_terrain, terrain_chunk_at};
-    let Ok(index) = indexes.get(world_root) else {
-        return;
-    };
-    let ground = |point: Vec3| {
-        let (chunk, edited) = chunks.get(terrain_chunk_at(index, point.xz())?).ok()?;
-        Some(sample_terrain(chunk, assets.get(&chunk.asset)?, edited, point.xz())?.height_m)
-    };
+    let ground = |point: Vec3| terrain.height_at(world_root, point.xz());
     // An end that isn't snapped to a station is the pointer projected onto
     // the road's axis, so it carries the pointer's height rather than the
     // ground's at its own position.

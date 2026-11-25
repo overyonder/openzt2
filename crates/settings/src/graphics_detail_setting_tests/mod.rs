@@ -1,99 +1,50 @@
-use bevy::prelude::*;
 use openzt2_game_assets::{
     graphics_settings_presets::{GraphicsDetailPreset, GraphicsSettingsPresets},
-    graphics_settings_types::{GraphicsEffectQuality, GraphicsSettings, ThreeLevelGraphicsDetail},
+    graphics_settings_types::GraphicsSettings,
 };
-use openzt2_interface_state::ui::authored_ui_node_projection_components::UiSliderValueChanged;
-
-use super::{
-    graphics_detail_setting_types::GraphicsDetailSetting,
-    graphics_detail_setting_ui_presentation::{
-        apply_accepted_graphics_detail_slider_edits_to_draft, graphics_detail_setting_level,
-        set_graphics_detail_setting_level,
-    },
-    options_screen_settings_draft_types::OptionsScreenDisplayGraphicsAndOnlineMessageDraft,
-};
+use openzt2_game_data::AssetId;
 
 #[test]
-fn every_slider_reproduces_the_source_presets_and_has_a_label_per_level() {
-    let presets = GraphicsSettingsPresets::from_test_source(
+fn custom_choices_reuse_the_winning_preset_rows_in_source_order() {
+    let table = GraphicsSettingsPresets::from_test_source(
         br#"<UserSettings><settings>
-        <environmentDetail low="0" medium="1" high="2">
-            <setting><ambientsOn value="false"/><skyboxQuality value="1"/></setting>
-            <setting><ambientsOn value="true"/><skyboxQuality value="2"/></setting>
-            <setting><ambientsOn value="true"/><skyboxQuality value="2"/></setting>
-        </environmentDetail>
-        <viewDistance low="0" medium="1" high="2"/>
-        <waterDetail low="1" medium="2" high="3"/>
-        <shadowDetail low="0" medium="2" high="3"/>
-        <screenDetail low="0" medium="1" high="1"/>
-        <shaderDetail low="0" medium="1" high="2"/>
-    </settings></UserSettings>"#,
+            <viewDistance labelLocID="options:viewdistance" settingWidget="View Distance Text"
+                low="0" medium="1" high="2" min="0" max="2">
+                <setting locid="options:low"/>
+                <setting locid="options:medium"/>
+                <setting locid="options:high"/>
+            </viewDistance>
+            <environmentDetail labelLocID="options:environmentdetail" settingWidget="Environment Text"
+                low="0" medium="1" high="1" min="0" max="1">
+                <setting locid="options:low">
+                    <ambientsOn type="bool" value="true"/>
+                    <skyboxQuality type="int" value="2"/>
+                </setting>
+                <setting locid="options:medium">
+                    <ambientsOn type="bool" value="false"/>
+                    <skyboxQuality type="int" value="1"/>
+                </setting>
+            </environmentDetail>
+        </settings></UserSettings>"#,
     )
-    .unwrap();
-    for (detail, multisample_count) in [
-        (GraphicsDetailPreset::Highest, 4),
-        (GraphicsDetailPreset::High, 4),
-        (GraphicsDetailPreset::Medium, 1),
-    ] {
-        let preset = presets.settings(detail, multisample_count);
-        let mut rebuilt = GraphicsSettings {
-            ambient_effects: !preset.ambient_effects,
-            skybox_quality: 0,
-            multisample_count: 8,
-            physical_animations: !preset.physical_animations,
-            prop_attachments: !preset.prop_attachments,
-            texture_replacement: !preset.texture_replacement,
-            effects: match preset.effects {
-                GraphicsEffectQuality::Low => GraphicsEffectQuality::High,
-                GraphicsEffectQuality::High => GraphicsEffectQuality::Low,
-            },
-            ..preset
-        };
-        for setting in GraphicsDetailSetting::ALL {
-            let level = graphics_detail_setting_level(setting, &preset);
-            assert!(usize::from(level) < setting.level_localization_keys().len());
-            set_graphics_detail_setting_level(setting, level, &mut rebuilt);
-        }
-        assert_eq!(rebuilt, preset);
-    }
-}
+    .expect("authored graphics rows");
 
-#[test]
-fn moving_a_slider_changes_only_the_draft() {
-    let mut app = App::new();
-    app.add_message::<UiSliderValueChanged>()
-        .add_systems(Update, apply_accepted_graphics_detail_slider_edits_to_draft);
-    let initial_graphics = GraphicsSettings {
-        view_distance: ThreeLevelGraphicsDetail::Medium,
-        ..default()
+    let [distance, environment] = table.detail_rows() else {
+        panic!("expected the two authored graphics rows");
     };
-    let owner = app
-        .world_mut()
-        .spawn(OptionsScreenDisplayGraphicsAndOnlineMessageDraft {
-            graphics: initial_graphics,
-            ..default()
-        })
-        .id();
-    let slider = app
-        .world_mut()
-        .spawn((GraphicsDetailSetting::ViewDistance, ChildOf(owner)))
-        .id();
-    app.world_mut()
-        .write_message(UiSliderValueChanged { slider, value: 2 });
-    app.update();
-
-    let draft = app
-        .world()
-        .get::<OptionsScreenDisplayGraphicsAndOnlineMessageDraft>(owner)
-        .unwrap();
+    assert_eq!(distance.label, AssetId::from_key("options:viewdistance"));
     assert_eq!(
-        draft.graphics,
-        GraphicsSettings {
-            view_distance:
-                openzt2_game_assets::graphics_settings_types::ThreeLevelGraphicsDetail::High,
-            ..initial_graphics
-        }
+        environment.value_label(1),
+        AssetId::from_key("options:medium")
     );
-    assert!(draft.dirty_graphics);
+
+    let mut graphics = GraphicsSettings::default();
+    environment.apply_value(0, &mut graphics);
+    assert!(graphics.ambient_effects);
+    assert_eq!(graphics.skybox_quality, 2);
+    environment.apply_value(1, &mut graphics);
+    let preset = table.settings(GraphicsDetailPreset::Highest, graphics.multisample_count);
+    assert_eq!(environment.selected_value(&preset), 1);
+    assert_eq!(graphics.ambient_effects, preset.ambient_effects);
+    assert_eq!(graphics.skybox_quality, preset.skybox_quality);
 }

@@ -6,7 +6,6 @@ use bevy::{
     prelude::*,
 };
 use openzt2_game_data::{
-    AssetId,
     behavior::eligibility::{
         BehaviorCandidateEligibilityFact, BehaviorCandidateEligibilityRequirements,
         BehaviorCandidateRole, BehaviorConditionEligibilityFact, BehaviorEligibilityFactInput,
@@ -14,11 +13,13 @@ use openzt2_game_data::{
         BehaviorEntityStateEligibilityFact, BehaviorSpatialEligibilityFact,
     },
     world_definitions::world_objects::{WorldObjectContainerContent, WorldObjectDefinition},
+    AssetId,
 };
-use openzt2_world_state::world_spawn::world_entity_crating::WorldEntityIsCrated;
+use openzt2_world_state::world_spawn::world_entity_crating::UncratedWorldEntity;
 use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_zoo_state::animal_lifecycle::types::Animal;
+use openzt2_zoo_state::authored_float_attributes::AuthoredFloatAttributes;
 use openzt2_zoo_state::feeding::container_quantity::DrinkContainer;
 use openzt2_zoo_state::feeding::container_quantity::FoodContainer;
 use openzt2_zoo_state::habitat::habitat_membership_and_containment::locate_habitat_at_world_position;
@@ -31,7 +32,7 @@ use openzt2_zoo_state::topology::topology_graph_types::TopologyGrid;
 #[derive(SystemParam)]
 pub(crate) struct WorldObjectTargetSources<'w, 's> {
     pub(super) objects:
-        Query<'w, 's, WorldObjectTargetFacts, (Without<Animal>, Without<WorldEntityIsCrated>)>,
+        Query<'w, 's, WorldObjectTargetFacts, (Without<Animal>, UncratedWorldEntity)>,
     roots: Query<'w, 's, (&'static HabitatIndex, &'static TopologyGrid)>,
     pub(super) terrain_surfaces: DrySurfaceEligibility<'w, 's>,
     /// Fences an animal bashes, jumps, climbs or tunnels under.
@@ -95,7 +96,7 @@ pub(crate) struct WorldObjectTargetFacts {
     pub(super) world: &'static WorldMember,
     food: Option<&'static FoodContainer>,
     drink: Option<&'static DrinkContainer>,
-    authored_values: Option<&'static crate::animal_behavior::ScriptFloatAttributes>,
+    authored_values: Option<&'static AuthoredFloatAttributes>,
     velocity: Option<&'static openzt2_zoo_state::locomotion::locomotion_types::Velocity>,
     attacked: Has<openzt2_zoo_state::guests::guest_simulation_types::GuestAttacked>,
 }
@@ -241,7 +242,7 @@ impl WorldObjectTargetFactsItem<'_, '_> {
                     .numeric_behavior_properties;
                 let Some(value) = self
                     .authored_values
-                    .and_then(|values| values.0.get(&property).copied())
+                    .and_then(|values| values.get(property))
                     .or_else(|| {
                         values
                             .binary_search_by_key(&property, |(key, _)| *key)

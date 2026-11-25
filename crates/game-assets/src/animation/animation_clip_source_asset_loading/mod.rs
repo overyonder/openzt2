@@ -75,10 +75,8 @@ impl AssetLoader for AnimationClipSourceAssetLoader {
             .ok_or_else(|| io::Error::other("animation asset contains no clips"))?;
         let default =
             prepare_animation_clip_source(clip, metadata, "", animation_clip_load_context);
-        if default_index != 0 {
-            animation_clip_load_context
-                .add_labeled_asset(kf_sequence_label(default_index), default.clone());
-        }
+        animation_clip_load_context
+            .add_labeled_asset(kf_sequence_label(default_index), default.clone());
         for (index, clip, metadata) in clips {
             let label = kf_sequence_label(index);
             let source = prepare_animation_clip_source(

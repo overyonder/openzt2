@@ -12,15 +12,15 @@ mod authored_animation_text_action_execution;
 mod authored_animation_text_action_execution_context;
 mod authored_binder_rig_binding;
 pub(crate) mod authored_decal_texture_cycles;
-mod managed_clip_binding;
+pub(crate) mod managed_clip_binding;
 mod model_joint_attachment_binding;
 mod named_model_animation_joint_target_binding;
-mod player_clock_lanes;
+pub(crate) mod player_clock_lanes;
 mod prefab_motion_rotation_projection;
 mod procedural_ground_fit;
 mod sampled_animation_joint_pose_blending;
 mod standard_bevy_animation_player_projection_types;
-mod traversal_animation_path_binding;
+pub mod traversal_animation_path_binding;
 
 use crate::world_spawn::prefab_world_instance_spawning::register_prefab_instance_animation;
 use bevy::prelude::*;
@@ -36,6 +36,7 @@ use openzt2_world_state::application_schedule::GameSet;
 
 use self::managed_clip_binding::{FixedAnimationPlayer, RealTimeAnimationPlayer};
 use self::player_clock_lanes::advance_managed_animation_players;
+use crate::animation_graph::animation_graph_blend_timer_advancement::advance_frozen_animation_pose_blends;
 use crate::animation_playback::named_model_animation_joint_target_binding::bind_new_named_model_entities_and_new_animation_playback_controller_descendants;
 use openzt2_world_state::animation_playback::animation_event_message_types::AnimationCompleted;
 use openzt2_world_state::animation_playback::animation_event_message_types::AnimationObjectCommand;
@@ -68,6 +69,14 @@ impl Plugin for AnimationPlaybackPlugin {
         }
         application
             .add_observer(managed_clip_binding::assign_animation_player_clock)
+            .add_observer(player_clock_lanes::dispatch_stock_render_animation_text_key)
+            .add_systems(
+                PostUpdate,
+                (
+                    player_clock_lanes::complete_stock_render_animation_players,
+                    authored_animation_presentation_action_delivery::deliver_presentation_text_actions::<true>,
+                ).after(bevy::app::AnimationSystems),
+            )
             .add_message::<authored_animation_presentation_action_delivery::AnimationPresentationTextAction<false>>()
             .add_message::<authored_animation_presentation_action_delivery::AnimationPresentationTextAction<true>>()
             .add_systems(PostUpdate, player_clock_lanes::advance_render_players
@@ -94,6 +103,8 @@ impl Plugin for AnimationPlaybackPlugin {
                     .before(bevy::app::AnimationSystems))
             .add_message::<DispatchBehaviorAnimationTextKeys>()
             .add_message::<AnimationCompleted>()
+            .add_message::<crate::animation_playback::traversal_animation_path_binding::ConfigureTraversalSegmentTiming>()
+            .add_message::<crate::physics::water_surface_disturbance_projection::NamedWaterSurfaceEffect>()
             .add_message::<openzt2_world_state::animation_playback::animation_event_message_types::AnimationAiCommandRequested>()
             .add_message::<openzt2_world_state::animation_playback::animation_event_message_types::AnimationWhapRequested>()
             .add_message::<openzt2_world_state::animation_playback::animation_event_message_types::AnimationObjectCommand>()
@@ -136,6 +147,7 @@ impl Plugin for AnimationPlaybackPlugin {
                 FixedUpdate,
                 (
                     managed_clip_binding::bind_selected_clips::<FixedAnimationPlayer>,
+                    advance_frozen_animation_pose_blends::<FixedAnimationPlayer, Fixed>,
                     advance_managed_animation_players::<FixedAnimationPlayer, false>,
                 ).chain()
                     .in_set(openzt2_world_state::animation_playback::locomotion_root_motion::AnimationLocomotionMotionSampling)
@@ -158,6 +170,7 @@ impl Plugin for AnimationPlaybackPlugin {
                 Update,
                 (
                     managed_clip_binding::bind_selected_clips::<RealTimeAnimationPlayer>,
+                    advance_frozen_animation_pose_blends::<RealTimeAnimationPlayer, Real>,
                     advance_managed_animation_players::<RealTimeAnimationPlayer, true>
                         .in_set(AuthoredAnimationRenderTextKeys),
                 )

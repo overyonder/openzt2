@@ -22,7 +22,9 @@ use super::{
         EffectPassPipelineSpecializationKey, EffectPassTextureAssets,
         EffectPassUniformBufferAssets, EFFECT_SHADER_BINDING_LAYOUT, FIXED_FUNCTION_SHADER,
     },
-    evaluated_d3d9_pass_state::{collect_evaluated_d3d9_pass_states, EvaluatedD3d9PassState},
+    evaluated_d3d9_pass_state::{
+        collect_evaluated_d3d9_pass_states, compare_unreversed, EvaluatedD3d9PassState,
+    },
     gpu_semantic_shader_registers::{
         reads_model, rewrite_translated_shader_with_gpu_semantic_registers, GpuSemanticRegisters,
         InstanceIndexInput, FORWARDED_INSTANCE_INDEX_LOCATION,
@@ -535,7 +537,17 @@ fn create_effect_pass_material_asset(
     if transform_inputs.is_empty() {
         transform_inputs.push(Vec4::ZERO);
     }
+    let particle_alpha_test = (state.effect_states[4] != 0)
+        .then(|| {
+            let compare = compare_unreversed(state.effect_states[11])?;
+            Ok::<_, io::Error>(bevy_hanabi::EffectAlphaTest {
+                compare,
+                reference: state.effect_states[10].to_le_bytes()[0],
+            })
+        })
+        .transpose()?;
     let material = EffectPassMaterial {
+        particle_alpha_test,
         morph_opacity: Vec4::X,
         texture_coordinate_animation_geometry: None,
         texture_coordinate_animations: std::sync::Arc::clone(texture_coordinate_animations),

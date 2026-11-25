@@ -23,9 +23,9 @@ use openzt2_zoo_state::economy::facility_economy_types::Wallet;
 use openzt2_zoo_state::economy::money_types::Money;
 use openzt2_zoo_state::progression::research_types::ResearchProject;
 
-use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator;
+use openzt2_world_state::world_spawn::persistent_id_index::PersistentIdIndex;
+use openzt2_world_state::world_spawn::persistent_id_types::{PersistentId, PersistentIdAllocator};
 use openzt2_world_state::world_spawn::world_entity_crating::AnimalCrate;
-use openzt2_world_state::world_spawn::world_hydration_types::WorldHydration;
 use openzt2_world_state::world_spawn::world_load_failure::WorldLoadFailure;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
@@ -38,13 +38,13 @@ pub(super) fn apply_all_authored_world_spawn_values_once(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     mut names: Query<&mut Name>,
     mut wallets: Query<&mut Wallet>,
+    persistent_ids: Res<PersistentIdIndex>,
     mut pending: Query<
         (
             Entity,
             &SelectedWorldIdentity,
             &SelectedWorldDocumentHandles,
             &mut PersistentIdAllocator,
-            &WorldHydration,
             &ZooSeed,
         ),
         (
@@ -66,9 +66,7 @@ pub(super) fn apply_all_authored_world_spawn_values_once(
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };
-    let Ok((root, selected_world, documents, mut allocator, hydration, seed)) =
-        pending.single_mut()
-    else {
+    let Ok((root, selected_world, documents, mut allocator, seed)) = pending.single_mut() else {
         return;
     };
     let Some(asset) = scenarios.get(&documents.start) else {
@@ -85,16 +83,17 @@ pub(super) fn apply_all_authored_world_spawn_values_once(
         return;
     };
 
+    let entity_at_source_ordinal = |ordinal: u32| {
+        let record = start.entities.get(ordinal as usize)?;
+        persistent_ids.get(root, PersistentId(record.persistent_id))
+    };
     let values = start.spawn_values.as_slice();
     let mut research_value_count = 0_usize;
     for (index, value) in values.iter().enumerate() {
         match value {
             StartingZooSpawnValue::Name { entity, .. }
             | StartingZooSpawnValue::CashRegister { entity, .. } => {
-                if hydration
-                    .spawned_world_prefab_root_at_record_index(*entity)
-                    .is_none()
-                {
+                if entity_at_source_ordinal(*entity).is_none() {
                     commands
                         .entity(root)
                         .insert_if_new(WorldLoadFailure::InvalidRecord(index as u32));
@@ -138,8 +137,7 @@ pub(super) fn apply_all_authored_world_spawn_values_once(
     for (index, record) in start.entities.iter().enumerate() {
         let mut occupant = None;
         for &contained in &record.contained_entities {
-            let Some(animal) = hydration.spawned_world_prefab_root_at_record_index(contained)
-            else {
+            let Some(animal) = entity_at_source_ordinal(contained) else {
                 commands
                     .entity(root)
                     .insert_if_new(WorldLoadFailure::InvalidRecord(contained));
@@ -160,8 +158,7 @@ pub(super) fn apply_all_authored_world_spawn_values_once(
             occupant = Some(animal);
         }
         if let Some(animal) = occupant {
-            let crate_entity = hydration
-                .spawned_world_prefab_root_at_record_index(index as u32)
+            let crate_entity = entity_at_source_ordinal(index as u32)
                 .expect("starting prefab completion provides all source rows");
             crate_links.push((animal, crate_entity));
         }
@@ -172,9 +169,8 @@ pub(super) fn apply_all_authored_world_spawn_values_once(
     for value in values {
         match value {
             StartingZooSpawnValue::Name { entity, text } => {
-                let target = hydration
-                    .spawned_world_prefab_root_at_record_index(*entity)
-                    .expect("validated authored name target");
+                let target =
+                    entity_at_source_ordinal(*entity).expect("validated authored name target");
                 if let Ok(mut name) = names.get_mut(target) {
                     if name.as_str() != text {
                         name.set(text.clone());
@@ -184,8 +180,7 @@ pub(super) fn apply_all_authored_world_spawn_values_once(
                 }
             }
             StartingZooSpawnValue::CashRegister { entity, cents } => {
-                let target = hydration
-                    .spawned_world_prefab_root_at_record_index(*entity)
+                let target = entity_at_source_ordinal(*entity)
                     .expect("validated authored cash-register target");
                 if let Ok(mut wallet) = wallets.get_mut(target) {
                     if wallet.0 != Money(*cents) {

@@ -13,7 +13,7 @@ use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::Ter
 use openzt2_game_data::terrain::TerrainWaterShoreConfiguration;
 use openzt2_world_state::model_render::authored_effect_technique_pass_submission_order::AuthoredEffectTechniquePassSubmissionOrder;
 use openzt2_world_state::model_render::authored_effect_technique_pass_submission_order::AuthoredEffectTransparentRenderStage;
-use openzt2_zoo_state::terrain::terrain_water_geometric_wave_shader_state::NativeTerrainWaterGeometricWaveShaderState;
+use openzt2_zoo_state::terrain::terrain_water_geometric_wave_shader_state::TerrainWaterWaveRegisters;
 use openzt2_zoo_state::terrain::terrain_water_presentation_types::{
     TerrainWaterMembershipIndex, TerrainWaterRegionQuery,
 };
@@ -48,7 +48,7 @@ pub(super) fn submit_prepared_terrain_shoreline_mesh_groups(
     mut prepared: Query<(
         Entity,
         &TerrainWaterShorelinePresentation,
-        &NativeTerrainWaterGeometricWaveShaderState,
+        &TerrainWaterWaveRegisters,
         &TerrainWaterRegionLight,
         &mut PreparedTerrainShorelineMeshGroups,
     )>,
@@ -174,7 +174,7 @@ fn project_authored_terrain_shoreline_mesh_group(
     uniform_buffers: &mut Assets<ShaderBuffer>,
     meshes: &mut Assets<Mesh>,
     presentation: &TerrainWaterShorelinePresentation,
-    wave_state: &NativeTerrainWaterGeometricWaveShaderState,
+    wave_state: &TerrainWaterWaveRegisters,
     active_environment_colour: Option<Vec3>,
     shore: Option<&TerrainWaterShoreConfiguration>,
 ) -> Result<Entity, ConstructedTerrainShorelineMeshGroup> {
@@ -261,7 +261,7 @@ pub(super) fn update_terrain_shoreline_material_animation_bindings(
     regions: TerrainWaterRegionQuery,
     materials: Query<(
         &TerrainWaterShorelinePresentation,
-        &NativeTerrainWaterGeometricWaveShaderState,
+        &TerrainWaterWaveRegisters,
         &TerrainWaterRegionLight,
     )>,
     mut surfaces: Query<(

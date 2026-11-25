@@ -3,13 +3,14 @@ use std::{collections::BTreeSet, io};
 use openzt2_game_assets::source_document::{
     ordered_source_document_types::OrderedSourceDocumentNode, path::AssetPath,
 };
-use openzt2_game_data::world_scenario::{
-    ScenarioDefinitionRecord, ScenarioScriptBinding, ScenarioScriptPhase,
+use openzt2_game_data::{
+    world_scenario::{ScenarioDefinitionRecord, ScenarioScriptBinding, ScenarioScriptPhase},
+    AssetId,
 };
 
 use crate::scenario::scenario_lua_snapshot_types::{
     saved_scenario_action_key, ScenarioLuaSavedState, ScenarioLuaSavedValue,
-    SAVED_SCENARIO_ACTION_ARGUMENTS,
+    SAVED_SCENARIO_ACTION_ARGUMENTS, SCENARIO_GLOBAL_VARIABLES,
 };
 
 pub(super) fn read_original_saved_scenario_lua_state(
@@ -20,20 +21,22 @@ pub(super) fn read_original_saved_scenario_lua_state(
     if manager.name != "ZTScenarioMgr" {
         return Err(invalid("expected ZTScenarioMgr"));
     }
-    if unique_child(manager, "globalvars")?
+    let globals = unique_child(manager, "globalvars")?
         .element_children()
-        .next()
-        .is_some()
-    {
-        return Err(invalid(
-            "ZTScenarioMgr globalvars restoration is unsupported",
-        ));
-    }
+        .map(|entry| {
+            if entry.name != "var" {
+                return Err(invalid("invalid scenario global variable record"));
+            }
+            Ok((
+                ScenarioLuaSavedValue::Bytes(required(entry, "key")?.as_bytes().to_vec()),
+                ScenarioLuaSavedValue::Bytes(required(entry, "value")?.as_bytes().to_vec()),
+            ))
+        })
+        .collect::<io::Result<Vec<_>>>()?;
     let mut arguments = Vec::new();
     let mut modules = Vec::new();
     let mut seen_modules = BTreeSet::new();
     let mut seen_actions = BTreeSet::new();
-    let mut objectives = BTreeSet::new();
     let mut restore_action = |action: &OrderedSourceDocumentNode, objective, phase| {
         if action.name != "BFScenarioScriptAction" {
             return Err(invalid("saved scenario contains an unsupported action"));
@@ -71,38 +74,18 @@ pub(super) fn read_original_saved_scenario_lua_state(
         }
         Ok(())
     };
-    for rule in unique_child(manager, "children")?.element_children() {
-        if rule.name != "BFScenarioRule" {
-            return Err(invalid("saved scenario contains an unsupported rule group"));
-        }
-        let name = required(rule, "name")?;
-        let matches = definition
-            .objectives
-            .iter()
-            .filter(|objective| objective.name == Some(openzt2_game_data::AssetId::from_key(name)))
-            .collect::<Vec<_>>();
-        let [objective] = matches.as_slice() else {
-            return Err(invalid(format!(
-                "saved scenario rule {name} has no unique authored objective"
-            )));
-        };
-        if !objectives.insert(objective.id) {
-            return Err(invalid(format!("saved scenario repeats rule {name}")));
-        }
+    for (id, node) in saved_scenario_nodes(manager, definition)? {
         for (name, phase) in [
             ("evaluate", ScenarioScriptPhase::Evaluate),
             ("success", ScenarioScriptPhase::Success),
             ("failure", ScenarioScriptPhase::Failure),
         ] {
-            for container in rule.element_children().filter(|node| node.name == name) {
+            for container in node.element_children().filter(|child| child.name == name) {
                 for action in container.element_children() {
-                    restore_action(action, objective.id, phase)?;
+                    restore_action(action, id, phase)?;
                 }
             }
         }
-    }
-    if objectives.len() != definition.objectives.len() {
-        return Err(invalid("saved scenario omits authored objectives"));
     }
     for container in manager
         .element_children()
@@ -114,11 +97,132 @@ pub(super) fn read_original_saved_scenario_lua_state(
     }
     Ok(ScenarioLuaSavedState {
         modules,
-        globals: vec![(
-            SAVED_SCENARIO_ACTION_ARGUMENTS.as_bytes().to_vec(),
-            ScenarioLuaSavedValue::Table(arguments),
-        )],
+        globals: vec![
+            (
+                SAVED_SCENARIO_ACTION_ARGUMENTS.as_bytes().to_vec(),
+                ScenarioLuaSavedValue::Table(arguments),
+            ),
+            (
+                SCENARIO_GLOBAL_VARIABLES.as_bytes().to_vec(),
+                ScenarioLuaSavedValue::Table(globals),
+            ),
+        ],
     })
+}
+
+pub(super) fn saved_scenario_nodes<'a>(
+    manager: &'a OrderedSourceDocumentNode,
+    definition: &ScenarioDefinitionRecord,
+) -> io::Result<Vec<(AssetId, &'a OrderedSourceDocumentNode)>> {
+    fn visit<'a>(
+        node: &'a OrderedSourceDocumentNode,
+        id: AssetId,
+        definition: &ScenarioDefinitionRecord,
+        output: &mut Vec<(AssetId, &'a OrderedSourceDocumentNode)>,
+    ) -> io::Result<()> {
+        if let Some(group) = definition
+            .objective_groups
+            .iter()
+            .find(|group| group.id == id)
+        {
+            if !matches!(node.name.as_str(), "ZTScenarioMgr" | "BFScenarioGroup") {
+                return Err(invalid("saved scenario group has the wrong record type"));
+            }
+            let children = unique_child(node, "children")?;
+            let mut saved = children.element_children();
+            for member in &group.members {
+                let child = saved
+                    .next()
+                    .ok_or_else(|| invalid("saved scenario group omits a child"))?;
+                visit(child, *member, definition, output)?;
+            }
+            if saved.next().is_some() {
+                return Err(invalid("saved scenario group has additional children"));
+            }
+        } else {
+            let Some(rule) = definition.objectives.iter().find(|rule| rule.id == id) else {
+                return Err(invalid("saved scenario child has no authored record"));
+            };
+            if node.name != "BFScenarioRule"
+                || rule.name != Some(AssetId::from_key(required(node, "name")?))
+            {
+                return Err(invalid(
+                    "saved scenario rule disagrees with its authored record",
+                ));
+            }
+        }
+        output.push((id, node));
+        Ok(())
+    }
+
+    let mut output = Vec::new();
+    if let Some(root) = definition.objective_groups.last() {
+        visit(manager, root.id, definition, &mut output)?;
+    } else {
+        let mut seen = BTreeSet::new();
+        for rule in unique_child(manager, "children")?.element_children() {
+            let name = AssetId::from_key(required(rule, "name")?);
+            let mut authored = definition
+                .objectives
+                .iter()
+                .filter(|rule| rule.name == Some(name));
+            let id = authored
+                .next()
+                .filter(|_| authored.next().is_none())
+                .ok_or_else(|| invalid("saved scenario rule has no unique authored record"))?
+                .id;
+            if !seen.insert(id) {
+                return Err(invalid("saved scenario repeats an authored rule"));
+            }
+            visit(rule, id, definition, &mut output)?;
+        }
+    }
+    if output.len() != definition.objectives.len() + definition.objective_groups.len() {
+        return Err(invalid("saved scenario omits authored nodes"));
+    }
+    Ok(output)
+}
+
+pub(super) fn read_saved_scenario_ui(
+    manager: &OrderedSourceDocumentNode,
+) -> io::Result<crate::scenario::scenario_lua_ui::ScenarioUiSavedState> {
+    let mut saved = crate::scenario::scenario_lua_ui::ScenarioUiSavedState::default();
+    if let Some(modifications) = manager
+        .element_children()
+        .find(|child| child.name == "uimods")
+    {
+        for modification in modifications.element_children() {
+            let name = required(modification, "name")?.to_ascii_lowercase();
+            let state = unique_child(unique_child(modification, "new")?, "UIState")?;
+            if let Some(active) = state.attribute("active") {
+                let enabled = match active {
+                    "normal" | "true" => true,
+                    "disabled" | "false" => false,
+                    value => {
+                        return Err(invalid(format!(
+                            "invalid saved UI interaction state {value}"
+                        )))
+                    }
+                };
+                saved.enabled.insert(name.clone(), enabled);
+            }
+            if let Some(visible) = state.attribute("visible") {
+                let shown = match visible {
+                    "normal" | "true" => true,
+                    "hidden" | "false" => false,
+                    value => return Err(invalid(format!("invalid saved UI visibility {value}"))),
+                };
+                saved.shown.insert(name, shown);
+            }
+        }
+    }
+    saved.continuation = unique_child(manager, "globalvars")?
+        .element_children()
+        .find(|entry| entry.attribute("key") == Some("nextScenario"))
+        .and_then(|entry| entry.attribute("value"))
+        .filter(|value| !value.is_empty())
+        .map(AssetId::from_key);
+    Ok(saved)
 }
 
 fn read_script_argument(action: &OrderedSourceDocumentNode) -> io::Result<ScenarioLuaSavedValue> {

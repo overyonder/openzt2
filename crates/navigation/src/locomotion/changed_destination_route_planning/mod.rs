@@ -4,9 +4,7 @@ use bevy::{
     utils::Parallel,
 };
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
-use openzt2_zoo_state::{
-    animal_lifecycle::types::AnimalVariant, aquatic::tank_navigation_water::TankNavigationWater,
-};
+use openzt2_zoo_state::aquatic::tank_navigation_water::TankNavigationWater;
 
 use super::{
     animal_navigation_policy::AnimalNavigationPolicy,
@@ -190,7 +188,6 @@ pub(super) fn advance_active_navigation_searches(
             Entity,
             &NavAgent,
             Ref<WorldMember>,
-            Option<&AnimalVariant>,
             &GlobalTransform,
             &Destination,
             Option<&LocomotionMode>,
@@ -210,7 +207,6 @@ pub(super) fn advance_active_navigation_searches(
             entity,
             agent,
             member,
-            variant,
             transform,
             destination,
             mode,
@@ -268,7 +264,7 @@ pub(super) fn advance_active_navigation_searches(
                 None => (position, destination.world),
             };
             let result = animal_policy
-                .agent_with_authored_collision_limits(agent, variant)
+                .agent_with_collision_limits(entity, agent)
                 .and_then(|(agent, maximum_ground_slope_radians)| {
                     let external_segment = connector.map(|(inbound, gate)| {
                         if inbound {

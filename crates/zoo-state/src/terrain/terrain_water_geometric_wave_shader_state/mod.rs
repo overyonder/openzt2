@@ -29,6 +29,7 @@ const INITIAL_WAVE_STEEPNESS: f32 = 20.0;
 const WAVE_STEEPNESS_DENOMINATOR: f32 = 25.132_742;
 
 #[derive(Component, Clone, Debug)]
+#[require(TerrainWaterWaveRegisters)]
 pub struct NativeTerrainWaterGeometricWaveShaderState {
     channels: [NativeTerrainWaterGeometricWaveChannel; 4],
     geometric_minimum_amplitude_ratio: f32,
@@ -349,7 +350,7 @@ impl NativeTerrainWaterGeometricWaveShaderState {
 
     /// Samples the renderer's registers after the wave channels advance.
     #[must_use]
-    pub fn wave_registers(&self) -> TerrainWaterWaveRegisters {
+    pub(super) fn wave_registers(&self) -> TerrainWaterWaveRegisters {
         let channels = self.channels;
         let amplitude = channels.map(|channel| channel.amplitude * channel.envelope);
         let steepness = channels.map(NativeTerrainWaterGeometricWaveChannel::native_wave_steepness);
@@ -377,7 +378,7 @@ impl NativeTerrainWaterGeometricWaveShaderState {
     }
 }
 
-#[derive(Component, Debug, Clone, Copy, PartialEq)]
+#[derive(Component, Debug, Clone, Copy, Default, PartialEq)]
 pub struct TerrainWaterWaveRegisters {
     frequency: Vec4,
     phase: Vec4,

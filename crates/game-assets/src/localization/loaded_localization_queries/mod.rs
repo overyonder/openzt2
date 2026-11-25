@@ -43,6 +43,27 @@ impl<'a> LoadedLocalizationView<'a> {
             .find_person_name_pool(self.localization_assets, id)
     }
 
+    pub fn render_person_name(
+        &self,
+        pool: AssetId,
+        first_row: Option<u32>,
+        last_row: Option<u32>,
+    ) -> Option<String> {
+        let pool = self.find_person_name_pool(pool)?;
+        let mut name = String::new();
+        if let Some(row) = first_row {
+            let first = pool.first_names.get(row as usize)?;
+            if !first.is_empty() {
+                name.push_str(first);
+                name.push_str(&pool.delimiter);
+            }
+        }
+        if let Some(row) = last_row {
+            name.push_str(pool.last_names.get(row as usize)?);
+        }
+        Some(name)
+    }
+
     pub fn find_plain_localized_text(&self, id: AssetId) -> Option<&'a str> {
         self.find_localization_asset_for_entry(id)?
             .localization_catalog
@@ -137,23 +158,25 @@ impl<'a> LoadedLocalizationView<'a> {
         if tokens.is_empty() {
             return Err(LocalizationFormatError::MissingKey);
         }
-        let calendar = &self
-            .localization_precedence_index
-            .configuration()
-            .locale_conventions()
-            .calendar;
+        let configuration = self.localization_precedence_index.configuration();
+        let calendar = &configuration.locale_conventions().calendar;
         let month_index = value.month0() as usize;
         let weekday_index = value.weekday().num_days_from_sunday() as usize;
+        let genitive_month = tokens
+            .iter()
+            .any(|token| matches!(token, Token::Day(1 | 2)));
         for token in tokens {
             match token {
                 Token::Literal(text) => target.write_str(text),
                 Token::Month(1) => write!(target, "{}", value.month()),
                 Token::Month(2) => write!(target, "{:02}", value.month()),
                 Token::Month(3) => target.write_str(
-                    self.localized_month_abbreviation(value.month() as u8)
-                        .ok_or(LocalizationFormatError::MissingKey)?,
+                    self.find_plain_localized_text(configuration.months[month_index])
+                        .unwrap_or_else(|| calendar.month_name(month_index, true, genitive_month)),
                 ),
-                Token::Month(_) => target.write_str(&calendar.month_names[month_index]),
+                Token::Month(_) => {
+                    target.write_str(calendar.month_name(month_index, false, genitive_month))
+                }
                 Token::Day(1) => write!(target, "{}", value.day()),
                 Token::Day(2) => write!(target, "{:02}", value.day()),
                 Token::Day(3) => {

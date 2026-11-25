@@ -1,6 +1,13 @@
-use avian3d::prelude::SpatialQuery;
-use avian3d::prelude::SpatialQueryFilter;
+use super::ground_track_policy::{GroundTrackPolicy, GroundTrackPolicyAsset};
+use avian3d::prelude::{ColliderAabb, SpatialQuery};
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
+use openzt2_game_data::world_definitions::transportation_and_tours::TransportationTrackKind;
+use openzt2_zoo_state::terrain::{
+    terrain_chunk_types::TerrainChunk,
+    terrain_collision_rebuilding_types::TerrainChunkCollisionSurface,
+};
+use openzt2_zoo_state::transport_tours::transport_topology_types::TrackProfile;
 use openzt2_zoo_state::transport_tours::transport_topology_types::{TrackIncidence, TrackRoute};
 
 use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackController;
@@ -22,8 +29,107 @@ use openzt2_zoo_state::transport_tours::transport_vehicle_types::{
     TransportVehicle, TransportVehicleArrival,
 };
 
+#[derive(SystemParam)]
+pub(super) struct GroundTrackObstruction<'w, 's> {
+    spatial: SpatialQuery<'w, 's>,
+    parents: Query<'w, 's, &'static ChildOf>,
+    bounds: Query<
+        'w,
+        's,
+        &'static ColliderAabb,
+        (Without<TerrainChunk>, Without<TerrainChunkCollisionSurface>),
+    >,
+    velocities: Query<'w, 's, &'static Velocity, Without<TransportVehicle>>,
+    vehicles: Query<'w, 's, (), With<TransportVehicle>>,
+    visibility: Query<'w, 's, &'static InheritedVisibility>,
+}
+
+impl GroundTrackObstruction<'_, '_> {
+    fn distance_ahead(
+        &self,
+        from: Vec3,
+        to: Vec3,
+        excluded: [Entity; 3],
+        policy: &GroundTrackPolicy,
+    ) -> Option<f32> {
+        let span = to.xz() - from.xz();
+        let length = span.length();
+        if !length.is_finite() || length <= f32::EPSILON {
+            return None;
+        }
+        let heading = span / length;
+        let radius = policy.collision_radius;
+        let pad = Vec3::splat(radius);
+        let mut closest = None::<f32>;
+        self.spatial.aabb_intersections_with_aabb_callback(
+            ColliderAabb {
+                min: from.min(to) - pad,
+                max: from.max(to) + pad,
+            },
+            |entity| {
+                let Ok(bounds) = self.bounds.get(entity) else {
+                    return true;
+                };
+                let mut owners =
+                    std::iter::once(entity).chain(self.parents.iter_ancestors::<ChildOf>(entity));
+                if excluded.contains(&entity)
+                    || self.vehicles.contains(entity)
+                    || self
+                        .parents
+                        .iter_ancestors::<ChildOf>(entity)
+                        .any(|owner| excluded.contains(&owner) || self.vehicles.contains(owner))
+                    || self
+                        .visibility
+                        .get(entity)
+                        .is_ok_and(|visibility| !visibility.get())
+                {
+                    return true;
+                }
+                let centre = bounds.min.midpoint(bounds.max).xz();
+                let extent = (bounds.max - bounds.min).xz().length() * 0.5;
+                let relative = centre - from.xz();
+                let along = relative.dot(heading);
+                let range = radius + extent;
+                let static_intersection =
+                    (0.0..=length).contains(&along) && relative.perp_dot(heading).abs() < range;
+                let intersection = if static_intersection {
+                    Some(along)
+                } else {
+                    let velocity = owners
+                        .find_map(|owner| self.velocities.get(owner).ok())
+                        .map_or(Vec2::ZERO, |velocity| velocity.0.xz());
+                    let side_speed = velocity.perp_dot(heading);
+                    if velocity.length_squared() < policy.minimum_obstruction_speed_squared
+                        || side_speed == 0.0
+                    {
+                        return true;
+                    }
+                    let arrival = -relative.perp_dot(heading) / side_speed;
+                    let intersection = along + velocity.dot(heading) * arrival;
+                    (arrival >= 0.0 && (0.0..=length).contains(&intersection))
+                        .then_some(intersection)
+                };
+                if let Some(intersection) = intersection {
+                    let distance = (intersection / length * from.distance(to) - extent).max(0.0);
+                    closest = Some(closest.map_or(distance, |previous| previous.min(distance)));
+                }
+                closest != Some(0.0)
+            },
+        );
+        closest
+    }
+}
+
+/// Carries a cabin between the two cable sockets of a station.
+#[derive(Component)]
+pub struct SkyStationCrossing {
+    pub next_track: Entity,
+    pub reverse: bool,
+    pub distance: f32,
+}
+
 pub(super) fn advance_transport_vehicles_along_canonical_track_segments(
-    spatial_query: SpatialQuery,
+    (obstructions, ground_policy): (GroundTrackObstruction, GroundTrackPolicyAsset),
     commands: bevy::ecs::system::ParallelCommands,
     incidence: TrackIncidence,
     fixed_time: Res<Time<Fixed>>,
@@ -38,10 +144,16 @@ pub(super) fn advance_transport_vehicles_along_canonical_track_segments(
         &CircuitMember,
         Option<&DirectLocomotion>,
         &mut TransportVehicleArrival,
+        Option<&mut SkyStationCrossing>,
     )>,
-    track_segments: Query<(Entity, TrackRoute, &CircuitMember, &TrackTravelDistances)>,
+    track_segments: Query<(
+        Entity,
+        TrackRoute,
+        &CircuitMember,
+        &TrackTravelDistances,
+        &TrackProfile,
+    )>,
     transport_stations: Query<(), With<TransportStation>>,
-    entity_parents: Query<&ChildOf>,
     transport_circuits: Query<(
         &TransportCircuit,
         Option<&CircuitRunning>,
@@ -61,6 +173,7 @@ pub(super) fn advance_transport_vehicles_along_canonical_track_segments(
             circuit_member,
             direct_locomotion,
             mut arrival,
+            crossing,
         )| {
             let Ok((transport_circuit, circuit_running, circuit_direction)) =
                 transport_circuits.get(circuit_member.0)
@@ -71,7 +184,7 @@ pub(super) fn advance_transport_vehicles_along_canonical_track_segments(
                 vehicle_velocity.set_if_neq(Velocity(Vec3::ZERO));
                 return;
             }
-            let Ok((_, track_segment, track_circuit_member, distances)) =
+            let Ok((_, track_segment, track_circuit_member, distances, profile)) =
                 track_segments.get(current_track.0)
             else {
                 return;
@@ -100,40 +213,128 @@ pub(super) fn advance_transport_vehicles_along_canonical_track_segments(
             let requested_travel_distance = transport_vehicle.maximum_speed_metres_per_second
                 * requested_throttle.abs()
                 * fixed_delta_seconds;
+            if let Some(mut crossing) = crossing {
+                let Ok((_, next_track, next_member, next_distances, _)) =
+                    track_segments.get(crossing.next_track)
+                else {
+                    commands.command_scope(|mut commands| {
+                        commands
+                            .entity(vehicle_entity)
+                            .remove::<SkyStationCrossing>();
+                    });
+                    return;
+                };
+                if next_member.0 != circuit_member.0 {
+                    commands.command_scope(|mut commands| {
+                        commands
+                            .entity(vehicle_entity)
+                            .remove::<SkyStationCrossing>();
+                    });
+                    return;
+                }
+                let next_length = next_distances.travel_length(next_track.geometry);
+                let exit_distance = if crossing.reverse { next_length } else { 0.0 };
+                let (entry, _) = distances.translation_and_tangent(
+                    track_segment.geometry,
+                    if crossing.reverse {
+                        0.0
+                    } else {
+                        distances.travel_length(track_segment.geometry)
+                    },
+                );
+                let (exit, _) =
+                    next_distances.translation_and_tangent(next_track.geometry, exit_distance);
+                let span = exit - entry;
+                let span_length = span.length();
+                let heading = span.try_normalize().unwrap_or(Vec3::Z);
+                let reversing = moving_in_reverse != crossing.reverse;
+                let step = if reversing {
+                    -requested_travel_distance
+                } else {
+                    requested_travel_distance
+                };
+                crossing.distance = (crossing.distance + step).clamp(0.0, span_length);
+                let next = entry + heading * crossing.distance;
+                let displacement = next - vehicle_transform.translation;
+                vehicle_transform.translation = next;
+                let forward = if reversing { -heading } else { heading };
+                vehicle_transform.rotation = Quat::from_rotation_arc(Vec3::Z, forward);
+                vehicle_velocity.set_if_neq(Velocity(if fixed_delta_seconds > 0.0 {
+                    displacement / fixed_delta_seconds
+                } else {
+                    Vec3::ZERO
+                }));
+                if (!reversing && crossing.distance == span_length)
+                    || (reversing && crossing.distance == 0.0)
+                {
+                    commands.command_scope(|mut commands| {
+                        let mut vehicle = commands.entity(vehicle_entity);
+                        vehicle.remove::<SkyStationCrossing>();
+                        if !reversing {
+                            vehicle.insert(VehicleOnTrack(crossing.next_track));
+                        }
+                    });
+                    if !reversing {
+                        route_position.distance = exit_distance;
+                        let destination = if crossing.reverse {
+                            next_track.from()
+                        } else {
+                            next_track.to()
+                        };
+                        if transport_stations.contains(destination) {
+                            station_destination.0 = destination;
+                        }
+                    }
+                }
+                return;
+            }
             let mut candidate_route_position = *route_position;
+            let track_length = distances.travel_length(track_segment.geometry);
+            let travel = if profile.kind == TransportationTrackKind::Ground {
+                ground_policy
+                    .get()
+                    .and_then(|policy| {
+                        let lookahead = requested_travel_distance + policy.collision_radius;
+                        let sign = if moving_in_reverse { -1.0 } else { 1.0 };
+                        let probe =
+                            (route_position.distance + sign * lookahead).clamp(0.0, track_length);
+                        distances
+                            .ground_spans_between(
+                                track_segment.geometry,
+                                route_position.distance,
+                                probe,
+                            )
+                            .filter_map(|(offset, [from, to])| {
+                                obstructions
+                                    .distance_ahead(
+                                        from,
+                                        to,
+                                        [vehicle_entity, track_segment.from(), track_segment.to()],
+                                        policy,
+                                    )
+                                    .map(|distance| offset + distance)
+                            })
+                            .min_by(f32::total_cmp)
+                    })
+                    .map_or(requested_travel_distance, |obstruction| {
+                        requested_travel_distance.min(obstruction)
+                    })
+            } else {
+                requested_travel_distance
+            };
+            if travel <= f32::EPSILON {
+                vehicle_velocity.set_if_neq(Velocity(Vec3::ZERO));
+                return;
+            }
             let reached_segment_endpoint = step_transport_route_position(
                 &mut candidate_route_position,
-                distances.travel_length(track_segment.geometry),
-                requested_travel_distance,
+                track_length,
+                travel,
                 moving_in_reverse,
             );
             let (candidate_translation, mut forward_displacement) = distances
                 .translation_and_tangent(track_segment.geometry, candidate_route_position.distance);
             let consumed_displacement = candidate_translation - vehicle_transform.translation;
-            let movement_is_obstructed =
-                Dir3::new(consumed_displacement).is_ok_and(|movement_direction| {
-                    spatial_query
-                        .cast_ray_predicate(
-                            vehicle_transform.translation,
-                            movement_direction,
-                            consumed_displacement.length(),
-                            false,
-                            &SpatialQueryFilter::DEFAULT,
-                            &|hit_entity| {
-                                let owners =
-                                    [vehicle_entity, track_segment.from(), track_segment.to()];
-                                !owners.contains(&hit_entity)
-                                    && !entity_parents
-                                        .iter_ancestors::<ChildOf>(hit_entity)
-                                        .any(|ancestor| owners.contains(&ancestor))
-                            },
-                        )
-                        .is_some()
-                });
-            if movement_is_obstructed {
-                vehicle_velocity.set_if_neq(Velocity(Vec3::ZERO));
-                return;
-            }
             *route_position = candidate_route_position;
             vehicle_transform.translation = candidate_translation;
             vehicle_velocity.set_if_neq(Velocity(if fixed_delta_seconds > 0.0 {
@@ -168,7 +369,7 @@ pub(super) fn advance_transport_vehicles_along_canonical_track_segments(
                         track_segments
                             .get(entity)
                             .ok()
-                            .filter(|(_, _, circuit, _)| circuit.0 == circuit_member.0)
+                            .filter(|(_, _, circuit, _, _)| circuit.0 == circuit_member.0)
                     })
             } else {
                 incidence
@@ -177,10 +378,23 @@ pub(super) fn advance_transport_vehicles_along_canonical_track_segments(
                         track_segments
                             .get(entity)
                             .ok()
-                            .filter(|(_, _, circuit, _)| circuit.0 == circuit_member.0)
+                            .filter(|(_, _, circuit, _, _)| circuit.0 == circuit_member.0)
                     })
             };
-            if let Some((next_segment_entity, next_track_segment, _, next_distances)) = next {
+            if let Some((next_segment_entity, next_track_segment, _, next_distances, _)) = next {
+                if distances.sky_cable().is_some()
+                    && next_distances.sky_cable().is_some()
+                    && transport_stations.contains(reached_station_entity)
+                {
+                    commands.command_scope(|mut commands| {
+                        commands.entity(vehicle_entity).insert(SkyStationCrossing {
+                            next_track: next_segment_entity,
+                            reverse: moving_in_reverse,
+                            distance: 0.0,
+                        });
+                    });
+                    return;
+                }
                 commands.command_scope(|mut commands| {
                     commands
                         .entity(vehicle_entity)

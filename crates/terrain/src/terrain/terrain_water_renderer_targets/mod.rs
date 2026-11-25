@@ -220,7 +220,6 @@ pub(super) fn initialize_authored_terrain_water_renderer_targets(
             refraction,
             fallback_reflection,
             water_bump_combination_materials,
-            elapsed_seconds: 0.0,
         });
 }
 
@@ -307,7 +306,6 @@ mod tests {
                 refraction: default(),
                 fallback_reflection: default(),
                 water_bump_combination_materials: default(),
-                elapsed_seconds: 0.0,
             })
             .id();
         let [bump_camera, reflection_camera, refraction_camera, fallback_reflection_camera] = [

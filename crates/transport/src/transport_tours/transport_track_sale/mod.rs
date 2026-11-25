@@ -1,21 +1,21 @@
 use bevy::prelude::*;
-use super::transport_track_sale_steps::{TrackSaleStepState, TransportTrackSaleStep};
+use super::transport_road_cut::PreparedRoadCut;
 use openzt2_zoo_state::construction::construction_interaction_types::PlacementFailure;
 use openzt2_zoo_state::construction::construction_transaction_types::PrepareDeletion;
 use openzt2_zoo_state::economy::money_types::Money;
-use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::{WorldDefinitions, WorldDefinitionsView};
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_zoo_state::transport_tours::transport_track_construction_types::TransportTrackConstructionEditPreparationRejected;
 use openzt2_zoo_state::transport_tours::transport_track_construction_types::TransportTrackConstructionEditPrepared;
 use openzt2_zoo_state::transport_tours::transport_track_sale::TransportTrackSaleQueries;
 use openzt2_zoo_state::transport_tours::transport_track_construction_types::PreparedTransportTrackConstructionEdit;
-use openzt2_zoo_state::transport_tours::transport_track_construction_types::TransportTrackConstructionEditSteps;
 use openzt2_zoo_state::transport_tours::transport_track_construction_types::{TrackPieces, TransportTrackConstructionPiece};
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_interface_state::information::entity_selection_types::SelectedSubject;
 use openzt2_interface_state::ui::ui_document_lifecycle_contracts::InGameUiOwner;
 use openzt2_game_data::world_definitions::world_objects::WorldObjectPropertyFlags;
+use openzt2_game_data::world_definitions::transportation_and_tours::TransportationTrackKind;
 use openzt2_zoo_state::economy::object_sale_refund::calculate_authored_object_sale_refund;
 use openzt2_zoo_state::transport_tours::transport_circuit_types::CircuitMember;
 use openzt2_zoo_state::transport_tours::transport_topology_types::{
@@ -74,7 +74,9 @@ pub(crate) fn refresh_selected_transport_sale_quote(
     let destination =
         route.and_then(|route| changes.routes.get(route).ok().map(|route| route.to()));
     let joint_discarded = changes.discarded.read().any(|event| {
-        event.0.contains(&target) || destination.is_some_and(|end| event.0.contains(&end))
+        route == Some(event.route)
+            || event.endpoints.contains(&target)
+            || destination.is_some_and(|end| event.endpoints.contains(&end))
     });
     changes.discarded.clear();
     let topology_changed = joint_discarded
@@ -104,7 +106,8 @@ pub(crate) fn refresh_selected_transport_sale_quote(
     }
     let quote = active
         .get(&definitions)
-        .and_then(|definitions| sales.quote(target, definitions));
+        .and_then(|definitions| resolve_track_sale(&sales, target, definitions))
+        .map(|(_, _, refund)| refund);
     match (quote, quotes.get_mut(target)) {
         (Some(refund), Ok(mut current)) => {
             current.set_if_neq(CurrentSellQuote(refund));
@@ -117,6 +120,35 @@ pub(crate) fn refresh_selected_transport_sale_quote(
         }
         (None, Err(_)) => {}
     }
+}
+
+fn resolve_track_sale(
+    sales: &TransportTrackSaleQueries,
+    target: Entity,
+    definitions: WorldDefinitionsView<'_>,
+) -> Option<(
+    PreparedTransportTrackConstructionEdit,
+    Option<(usize, WorldMember)>,
+    Money,
+)> {
+    let edit = sales.terminal_route_edit(target)?;
+    let piece = sales.single_piece(target);
+    let removed = if piece.is_some() {
+        1
+    } else {
+        edit.piece_entities.len()
+    };
+    let definition = definitions.find_track(edit.definition)?;
+    let object = definitions.find_object(definition.object)?;
+    if !object
+        .properties
+        .contains_all(WorldObjectPropertyFlags::DELETABLE)
+    {
+        return None;
+    }
+    let refund = calculate_authored_object_sale_refund(object)?;
+    let amount = refund.0.checked_mul(i64::try_from(removed).ok()?)?;
+    Some((edit, piece, Money(amount)))
 }
 
 pub(super) fn prepare_transport_track_sale(
@@ -133,58 +165,38 @@ pub(super) fn prepare_transport_track_sale(
         if !sales.requires_transport_sale(request.target) {
             continue;
         }
-        let piece = sales.single_piece(request.target);
-        let sale = active.get(&definitions).and_then(|definitions| {
-            let edit = sales.terminal_route_edit(request.target)?;
-            let removed = if piece.is_some() {
-                1
-            } else {
-                edit.piece_entities.len()
-            };
-            let definition = definitions.find_track(edit.definition)?;
-            let object = definitions.find_object(definition.object)?;
-            if !object
-                .properties
-                .contains_all(WorldObjectPropertyFlags::DELETABLE)
-            {
-                return None;
-            }
-            let refund = calculate_authored_object_sale_refund(object)?;
-            let cost = refund
-                .0
-                .checked_mul(i64::try_from(removed).ok()?)?
-                .checked_neg()?;
-            Some((edit, cost))
-        });
-        let Some((edit, cost)) = sale else {
+        let sale = active
+            .get(&definitions)
+            .and_then(|definitions| resolve_track_sale(&sales, request.target, definitions))
+            .and_then(|(edit, piece, refund)| Some((edit, piece, refund.0.checked_neg()?)));
+        let Some((edit, piece, cost)) = sale else {
             rejected.write(TransportTrackConstructionEditPreparationRejected {
                 transaction: request.transaction,
                 reason: PlacementFailure::InvalidTopology,
             });
             continue;
         };
+        let mut edit = edit;
+        edit.applied_entities.clear();
         if let Some((index, world)) = piece {
-            let steps = allocators
+            let cut = allocators
                 .get_mut(world.root)
                 .ok()
                 .and_then(|mut allocator| {
-                    single_piece_removal_steps(
-                        &mut commands,
-                        &mut allocator,
-                        request.transaction,
-                        &edit,
-                        index,
-                        world,
-                    )
+                    (edit.kind == TransportationTrackKind::Ground)
+                        .then(|| {
+                            PreparedRoadCut::new(index, edit.piece_entities.len(), &mut allocator)
+                        })
+                        .flatten()
                 });
-            let Some(steps) = steps else {
+            let Some(cut) = cut else {
                 rejected.write(TransportTrackConstructionEditPreparationRejected {
                     transaction: request.transaction,
                     reason: PlacementFailure::InvalidTopology,
                 });
                 continue;
             };
-            commands.entity(request.transaction).insert(steps);
+            commands.entity(request.transaction).insert(cut);
         }
         commands.entity(request.transaction).insert(edit);
         prepared.write(TransportTrackConstructionEditPrepared {
@@ -192,71 +204,6 @@ pub(super) fn prepare_transport_track_sale(
             cost: Money(cost),
         });
     }
-}
-
-/// Taking piece `index` out of a route: remove the route, then lay the road
-/// before the piece to a new junction and the road after it from another,
-/// as the original leaves a gap one piece long.
-fn single_piece_removal_steps(
-    commands: &mut Commands,
-    allocator: &mut PersistentIdAllocator,
-    transaction: Entity,
-    removal: &PreparedTransportTrackConstructionEdit,
-    index: usize,
-    world: WorldMember,
-) -> Option<TransportTrackConstructionEditSteps> {
-    let mut allocate = || allocator.allocate().ok();
-    let laid = |points: &[bevy::math::Vec3]| PreparedTransportTrackConstructionEdit {
-        removes_track: false,
-        piece_entities: Box::default(),
-        destination_junction_entity: None,
-        source_junction_entity: None,
-        path_points: points.into(),
-        tower_height_m: None,
-        applied_entities: Vec::new(),
-        preview: None,
-        application_in_flight: None,
-        to_endpoint: None,
-        to_endpoint_index: 0,
-        ..removal.clone()
-    };
-    let mut edits = vec![removal.clone()];
-    let points = &removal.path_points;
-    if index > 0 {
-        let mut before = laid(points.get(..=index)?);
-        before.piece_entities = (0..index).map(|_| allocate()).collect::<Option<_>>()?;
-        before.destination_junction_entity = Some(allocate()?);
-        edits.push(before);
-    }
-    if index + 2 < points.len() {
-        let mut after = laid(points.get(index + 1..)?);
-        after.piece_entities = (index + 1..points.len() - 1)
-            .map(|_| allocate())
-            .collect::<Option<_>>()?;
-        after.source_junction_entity = Some(allocate()?);
-        after.from_endpoint_index = 0;
-        // The road beyond keeps its end: a junction the route owned is laid
-        // again, anything else is met where it stands.
-        if removal.destination_junction_entity.is_some() {
-            after.destination_junction_entity = Some(allocate()?);
-        } else {
-            after.to_endpoint = removal.to_endpoint;
-            after.to_endpoint_index = removal.to_endpoint_index;
-        }
-        edits.push(after);
-    }
-    for (ordinal, edit) in edits.into_iter().enumerate() {
-        commands.spawn((
-            edit,
-            world,
-            ChildOf(transaction),
-            TransportTrackSaleStep {
-                ordinal,
-                state: TrackSaleStepState::Queued,
-            },
-        ));
-    }
-    Some(TransportTrackConstructionEditSteps::default())
 }
 
 #[cfg(test)]

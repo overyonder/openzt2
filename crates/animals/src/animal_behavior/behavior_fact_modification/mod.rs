@@ -1,4 +1,5 @@
 use bevy::{ecs::system::SystemParam, prelude::*};
+use openzt2_zoo_state::authored_float_attributes::AuthoredFloatAttributes;
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::WhenBehaviorAction;
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
     RunBehaviorFactModifications, RunningBehaviorInstruction,
@@ -27,9 +28,9 @@ use openzt2_zoo_state::animal_welfare::types::AdjustRest;
 use openzt2_zoo_state::animal_welfare::types::AdjustSocial;
 use openzt2_zoo_state::animal_welfare::types::AdjustStimulation;
 use openzt2_zoo_state::animal_welfare::types::AdjustThirst;
+use openzt2_zoo_state::feeding::container_quantity::apply_authored_container_quantity_write;
 use openzt2_zoo_state::feeding::container_quantity::DrinkContainer;
 use openzt2_zoo_state::feeding::container_quantity::FoodContainer;
-use openzt2_zoo_state::feeding::container_quantity::apply_authored_container_quantity_write;
 use openzt2_zoo_state::staff::staff_employment_types::Staff;
 
 use openzt2_zoo_state::guests::guest_simulation_types::{
@@ -83,7 +84,7 @@ pub(super) struct MaintenanceFacts<'w, 's> {
     trash: Query<'w, 's, &'static FacilityContainedWaste>,
     trash_changes: MessageWriter<'w, AdjustFacilityContainedWaste>,
     object_ids: Query<'w, 's, &'static openzt2_world_state::world_spawn::world_membership_types::DefinitionId>,
-    object_facts: Query<'w, 's, &'static mut super::ScriptFloatAttributes>,
+    object_facts: Query<'w, 's, &'static mut AuthoredFloatAttributes>,
     definitions: Option<Res<'w, openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions>>,
     assets: Option<Res<'w, Assets<openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset>>>,
 }
@@ -162,9 +163,11 @@ pub(super) fn apply_supported_current_behavior_fact_modifications(
     pregnancies: Query<(), With<Pregnancy>>,
     mates: Query<&AnimalMate>,
     mut caffeine_flags: Query<&mut CaffeineFlags>,
-    mut maintenance: MaintenanceFacts,
+    mut facts: ParamSet<(
+        MaintenanceFacts,
+        consumable_compatibility::AnimalConsumableCompatibility,
+    )>,
     price_effect: openzt2_zoo_state::economy::price_effect::BehaviorPriceEffectContext,
-    compatibility: consumable_compatibility::AnimalConsumableCompatibility,
     // A rampaging animal's attack scares its guest off (`AttackGuest_Rampage`).
     mut guests: Query<&mut GuestDeparturePoints>,
     mut commands: Commands,
@@ -192,13 +195,13 @@ pub(super) fn apply_supported_current_behavior_fact_modifications(
                 return scalar_supported && (if modification.modified_fact == BehaviorFact::Breath {
                     animals.contains(affected_entity)
                 } else {
-                    maintenance.initial_object_fact(affected_entity, key).is_some()
+                    facts.p0().initial_object_fact(affected_entity, key).is_some()
                 });
             }
             match modification.modified_fact {
-                BehaviorFact::WaterDirtiness => return scalar_supported && maintenance.tank(affected_entity).is_some(),
-                BehaviorFact::FilterDirtiness => return scalar_supported && maintenance.filters.contains(affected_entity),
-                BehaviorFact::TrashLevel => return maintenance.trash.contains(affected_entity)
+                BehaviorFact::WaterDirtiness => return scalar_supported && facts.p0().tank(affected_entity).is_some(),
+                BehaviorFact::FilterDirtiness => return scalar_supported && facts.p0().filters.contains(affected_entity),
+                BehaviorFact::TrashLevel => return facts.p0().trash.contains(affected_entity)
                     && (scalar_supported || modification.modification_operation == BehaviorFactModificationOperation::Clear),
                 _ => {}
             }
@@ -212,7 +215,7 @@ pub(super) fn apply_supported_current_behavior_fact_modifications(
                 let Some((source, content)) = source else {
                     return false;
                 };
-                if !compatibility.accepts(entity, affected_entity, source, content, &task, &assets) {
+                if !facts.p1().accepts(entity, affected_entity, source, content, &task, &assets) {
                     return false;
                 }
             }
@@ -238,7 +241,8 @@ pub(super) fn apply_supported_current_behavior_fact_modifications(
         }
         let mut new_caffeine_flags = bevy::ecs::entity::EntityHashMap::<CaffeineFlags>::default();
         let mut new_authored_floats =
-            bevy::ecs::entity::EntityHashMap::<super::ScriptFloatAttributes>::default();
+            bevy::ecs::entity::EntityHashMap::<AuthoredFloatAttributes>::default();
+        let mut maintenance = facts.p0();
         for modification in modifications {
             let animal = resolve_behavior_entity_role_to_live_entity(
                 modification.affected_entity_role,
@@ -274,17 +278,15 @@ pub(super) fn apply_supported_current_behavior_fact_modifications(
                     }
                 };
                 if let Ok(mut values) = maintenance.object_facts.get_mut(animal) {
-                    let current = values.0.get(&key).copied().unwrap_or(initial);
+                    let current = values.get(key).unwrap_or(initial);
                     let next = updated(current);
                     if current != next {
-                        values.0.insert(key, next);
+                        values.set(key, next);
                     }
                 } else {
-                    let values = new_authored_floats
-                        .entry(animal)
-                        .or_insert_with(|| super::ScriptFloatAttributes(Default::default()));
-                    let current = values.0.entry(key).or_insert(initial);
-                    *current = updated(*current);
+                    let values = new_authored_floats.entry(animal).or_default();
+                    let current = values.get(key).unwrap_or(initial);
+                    values.set(key, updated(current));
                 }
                 continue;
             }

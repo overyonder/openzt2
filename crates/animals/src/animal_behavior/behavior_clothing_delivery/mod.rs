@@ -16,11 +16,11 @@ use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabClothingTextures;
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabMaterialOverrides;
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabPresentation;
-use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
-use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorTaskFailure;
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
     RunBehaviorScript, RunningBehaviorInstruction,
 };
+use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
+use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorTaskFailure;
 
 #[derive(SystemParam)]
 pub(super) struct ClothingLoadChanges<'w, 's> {

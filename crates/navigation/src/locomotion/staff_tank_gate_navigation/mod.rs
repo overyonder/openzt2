@@ -1,3 +1,4 @@
+use super::locomotion_clip_dependencies::GaitRigJoints;
 use super::{fence_navigation_policy::FenceNavigationPolicy, pathfinding::plan_route};
 use avian3d::prelude::{LinearVelocity, RigidBody};
 use bevy::prelude::*;
@@ -24,7 +25,6 @@ use openzt2_world_state::{
     },
     animation_playback::{
         animation_event_message_types::AnimationCompleted,
-        animation_joint_target_types::{AnimationJointTarget, AnimationRigJoints},
         animation_playback_controller_types::{
             AnimationPlaybackController, AnimationPlaybackRepetitionPolicy,
         },
@@ -468,10 +468,10 @@ pub(super) fn execute_staff_tank_gate_journeys(
     presentations: Query<&AnimationPresentations>,
     mut controllers: Query<(
         &AnimationPlaybackController,
-        Option<&AnimationRigJoints>,
+        Option<&GaitRigJoints>,
         Option<&mut ConsumedLocomotionRootMotion>,
     )>,
-    joints: Query<(&AnimationJointTarget, &ChildOf)>,
+    parents: Query<&ChildOf>,
     transforms: Query<&GlobalTransform>,
     mut requests: MessageWriter<AnimationClipPlaybackRequest>,
     mut cancellations: MessageWriter<CancelAnimationClipPlaybackRequest>,
@@ -669,16 +669,8 @@ pub(super) fn execute_staff_tank_gate_journeys(
                 break;
             };
             let joint = openzt2_game_data::AssetId::from_key(&root.joint_asset_key);
-            let Some(parent) = rig.and_then(|rig| {
-                joints
-                    .iter_many(rig.joints())
-                    .matched()
-                    .find_map(|(binding, parent)| {
-                        (binding.authored_joint_id == joint)
-                            .then(|| transforms.get(parent.parent()).ok())
-                            .flatten()
-                    })
-            }) else {
+            let Some(parent) = rig.and_then(|rig| rig.root_parent(joint, &parents, &transforms))
+            else {
                 journey.failed = true;
                 break;
             };

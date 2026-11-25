@@ -6,12 +6,13 @@ use openzt2_game_assets::world_definitions::{
 };
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_zoo_state::{
-    donations::donation_payment_types::DonationPaymentRequested,
     economy::{
         account_transaction_types::{Account, TransactionKind, TransactionRequest},
         facility_economy_types::{Price, Wallet},
     },
-    guests::guest_simulation_types::{Guest, GuestReaction},
+    guests::guest_simulation_types::{
+        Guest, GuestDeparturePoints, GuestReaction, GuestSatisfaction,
+    },
     locomotion::locomotion_types::Arrived,
     transport_tours::{
         tour_scoring_types::{StationRatingPermille, TourScore, TransportTripCompleted},
@@ -27,6 +28,7 @@ use openzt2_zoo_state::{
 use crate::transport_tours::{
     tour_donation::TourDonation,
     tour_view_scoring::calculate_tour_rating_from_authored_score_ranges,
+    tour_view_scoring::RideTourContributions,
     transport_fare_settlement::publish_transport_trip,
     transport_fare_types::{FareGuest, FareOperations, PendingTransportFare, QueuedFare},
 };
@@ -44,13 +46,20 @@ pub(super) fn disembark_transport_riders_and_request_service_fare_transactions(
             &TourScore,
             &WorldMember,
             Has<FareOperations>,
-            Has<DonationPaymentRequested>,
+            Option<&RideTourContributions>,
             Option<&Wallet>,
         ),
         (With<Guest>, With<BoardedAtStation>),
     >,
     circuits: Query<&Price, With<TransportCircuit>>,
     donation: TourDonation,
+    mut feedback: Query<
+        (
+            Option<&mut GuestSatisfaction>,
+            Option<&mut GuestDeparturePoints>,
+        ),
+        With<Guest>,
+    >,
     mut ratings: Query<&mut StationRatingPermille>,
     mut transactions: MessageWriter<TransactionRequest>,
     mut trips: MessageWriter<TransportTripCompleted>,
@@ -98,13 +107,23 @@ pub(super) fn disembark_transport_riders_and_request_service_fare_transactions(
             });
         let mut last_rating = None;
         for guest in aboard.iter() {
-            let Ok((score, world, paying, donating, wallet)) = riders.get(guest) else {
+            let Ok((score, world, paying, contributions, wallet)) = riders.get(guest) else {
                 continue;
             };
             if paying || world.root != station_world.root || !disembarked.insert(guest) {
                 continue;
             }
             let rating = calculate_tour_rating_from_authored_score_ranges(catalogue, score.value);
+            if let (Some((happiness, departure)), Ok((satisfaction, departure_points))) =
+                (donation.ride_feedback(score.value), feedback.get_mut(guest))
+            {
+                if let Some(mut satisfaction) = satisfaction {
+                    satisfaction.add_wellness_q16(happiness.saturating_neg().saturating_mul(10));
+                }
+                if let Some(mut points) = departure_points {
+                    points.0 = points.0.saturating_add(departure);
+                }
+            }
             last_rating = Some(StationRatingPermille(
                 (rating.clamp(0.0, 1.0) * 1000.0).round() as u16,
             ));
@@ -129,15 +148,15 @@ pub(super) fn disembark_transport_riders_and_request_service_fare_transactions(
             } else {
                 publish_transport_trip(guest, &fare, &mut trips, &mut reactions);
             }
-            if let Some(budget) = wallet
-                .filter(|_| !donating)
-                .and_then(|wallet| wallet.0.checked_sub(price.0))
-            {
-                donation.request_at_station(
+            if let (Some(contributions), Some(budget)) = (
+                contributions,
+                wallet.and_then(|wallet| wallet.0.checked_sub(price.0)),
+            ) {
+                donation.offer(
                     &mut commands,
-                    &mut transactions,
                     (guest, *world, budget),
-                    fare,
+                    member.0,
+                    contributions.0,
                 );
             }
             if let (Some(exit), Ok(mut pose)) = (exit, poses.get_mut(guest)) {

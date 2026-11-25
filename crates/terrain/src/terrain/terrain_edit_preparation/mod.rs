@@ -112,13 +112,7 @@ pub(super) fn prepare_terrain_sample_deltas_for_construction_transactions(
                 chunk, asset, edited, x, z,
             )
         };
-        let smoothing = modes
-            .smooth_samples()
-            .map(|radius_samples| TerrainSmoothing {
-                radius_samples,
-                terrain: index,
-                read_height: &read_neighbour,
-            });
+
         let mut candidates = Vec::new();
         if index.chunk_span_m > 0.0 {
             let (minimum, maximum) = dabs.iter().fold(
@@ -131,8 +125,9 @@ pub(super) fn prepare_terrain_sample_deltas_for_construction_transactions(
                 },
             );
             let min_coord = ((minimum - index.origin) / index.chunk_span_m)
-                .floor()
-                .as_ivec2();
+                .ceil()
+                .as_ivec2()
+                .saturating_sub(IVec2::ONE);
             let max_coord = ((maximum - index.origin) / index.chunk_span_m)
                 .floor()
                 .as_ivec2();
@@ -159,6 +154,20 @@ pub(super) fn prepare_terrain_sample_deltas_for_construction_transactions(
             }
         }
         candidates.sort_unstable_by_key(|candidate| candidate.0);
+        let smoothing = (preview.kind == TerrainBrushKind::Smooth)
+            .then(|| {
+                let (_, chunk, _) = candidates.first()?;
+                prepare_smoothed_terrain_heights(
+                    index,
+                    chunk,
+                    assets.get(&chunk.asset)?,
+                    modes.smooth_samples()?,
+                    preview,
+                    dabs,
+                    read_neighbour,
+                )
+            })
+            .flatten();
 
         let mut water_surface_heights_cm: Vec<_> = dabs.iter().map(|dab| {
             crate::terrain::terrain_brush_sample_mutation::resolve_painted_water_surface_height_centimetres(
@@ -343,4 +352,4 @@ fn terrain_brush_circle_intersects_chunk_rectangle(
     let closest = center.clamp(min, max);
     closest.distance_squared(center) <= radius * radius
 }
-use super::terrain_brush_sample_mutation::TerrainSmoothing;
+use super::terrain_brush_sample_mutation::prepare_smoothed_terrain_heights;

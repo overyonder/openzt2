@@ -15,6 +15,7 @@ use super::authored_animation_event_execution::visit_interval;
 use super::authored_animation_text_action_execution_context::AuthoredAnimationTextActionExecutionContext;
 use super::managed_clip_binding::{
     FixedAnimationPlayer, ManagedAnimationClip, RealTimeAnimationPlayer,
+    StockRenderAnimationAdvance,
 };
 
 pub(super) fn advance_render_players(
@@ -23,10 +24,13 @@ pub(super) fn advance_render_players(
     graphs: Res<Assets<AnimationGraph>>,
     players: Query<
         (&mut AnimationPlayer, &AnimationGraphHandle),
-        (
-            Without<FixedAnimationPlayer>,
-            Without<RealTimeAnimationPlayer>,
-        ),
+        Or<(
+            (
+                Without<FixedAnimationPlayer>,
+                Without<RealTimeAnimationPlayer>,
+            ),
+            With<StockRenderAnimationAdvance>,
+        )>,
     >,
 ) {
     advance_animations(time, clips, graphs, players.transmute_lens_inner().query());
@@ -51,12 +55,12 @@ pub(super) fn advance_managed_animation_players<Lane: Component, const REAL_TIME
         (
             Entity,
             &mut AnimationPlaybackController,
-            Ref<ManagedAnimationClip>,
+            &mut ManagedAnimationClip,
             &mut AnimationPlayer,
             Option<&RetainedAnimationClipSource>,
             Option<&mut ConsumedLocomotionRootMotion>,
         ),
-        With<Lane>,
+        (With<Lane>, Without<StockRenderAnimationAdvance>),
     >,
     mut actions: AuthoredAnimationTextActionExecutionContext<REAL_TIME>,
     mut completed: MessageWriter<AnimationCompleted>,
@@ -66,7 +70,7 @@ pub(super) fn advance_managed_animation_players<Lane: Component, const REAL_TIME
     } else {
         time.delta_secs()
     };
-    for (entity, mut controller, binding, mut player, source, motion) in &mut players {
+    for (entity, mut controller, mut binding, mut player, source, motion) in &mut players {
         let mut motion = motion;
         if let Some(motion) = motion.as_deref_mut() {
             motion.clear_sample();
@@ -77,7 +81,10 @@ pub(super) fn advance_managed_animation_players<Lane: Component, const REAL_TIME
         let Some(active) = player.animation_mut(binding.node) else {
             continue;
         };
-        let clip_entry = binding.is_changed();
+        let clip_entry = binding.clip_entry;
+        if clip_entry {
+            binding.clip_entry = false;
+        }
         if active.is_paused() && !clip_entry {
             continue;
         }
@@ -172,5 +179,58 @@ pub(super) fn advance_managed_animation_players<Lane: Component, const REAL_TIME
                 }
             });
         }
+    }
+}
+
+pub(super) fn dispatch_stock_render_animation_text_key(
+    event: On<
+        openzt2_game_assets::animation::animation_set_asset_types::AuthoredAnimationKeyframeEvent,
+    >,
+    mut players: Query<&mut AnimationPlaybackController, With<StockRenderAnimationAdvance>>,
+    mut actions: AuthoredAnimationTextActionExecutionContext<true>,
+) {
+    let entity = event.trigger().target;
+    let Ok(mut controller) = players.get_mut(entity) else {
+        return;
+    };
+    for key in &event.timeline[event.first_key..event.end_key] {
+        for command in &key.commands {
+            actions.execute_one_crossed_authored_animation_text_command(
+                entity,
+                &mut controller,
+                key.milliseconds,
+                command,
+            );
+        }
+    }
+}
+
+pub(super) fn complete_stock_render_animation_players(
+    mut players: Query<
+        (
+            Entity,
+            &AnimationPlaybackController,
+            &ManagedAnimationClip,
+            &mut AnimationPlayer,
+        ),
+        With<StockRenderAnimationAdvance>,
+    >,
+    mut completed: MessageWriter<AnimationCompleted>,
+) {
+    for (entity, controller, binding, mut player) in &mut players {
+        let Some(active) = player.animation(binding.node) else {
+            continue;
+        };
+        if active.is_paused() || !active.is_finished() {
+            continue;
+        }
+        if let Some(active) = player.animation_mut(binding.node) {
+            active.pause();
+        }
+        completed.write(AnimationCompleted {
+            animation_playback_controller_entity: entity,
+            playback_generation: controller.playback_generation,
+            explicit_clip_request_id: controller.explicit_clip_request_id,
+        });
     }
 }

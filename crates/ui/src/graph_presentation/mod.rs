@@ -5,6 +5,7 @@ use openzt2_game_data::ui_document::action::information::{
 
 use openzt2_game_assets::localization::localization_asset_types::LocalizationAsset;
 use openzt2_game_assets::localization::localization_precedence_index::LocalizationPrecedenceIndex;
+use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 use openzt2_interface_state::information::information_graph_types::InformationGraph;
 use openzt2_zoo_state::economy::monthly_finance_types::MonthlyFinanceHistory;
 use openzt2_zoo_state::progression::fame_history_types::FameHistory;
@@ -31,6 +32,8 @@ pub(super) fn update_visible_authored_graph_drawings(
     fame: Single<Ref<FameHistory>>,
     active_localization: Res<LocalizationPrecedenceIndex>,
     localizations: Res<Assets<LocalizationAsset>>,
+    documents: Res<Assets<UiDocumentAsset>>,
+    mut label_instances: Query<&mut super::graph_tick_projection::UiGraphTickLabel>,
     graphs: Query<(
         Entity,
         Ref<UiGraphPresentationPolicy>,
@@ -67,6 +70,7 @@ pub(super) fn update_visible_authored_graph_drawings(
             _ => finance.is_changed(),
         };
         let update_plot = history_changed
+            || documents.is_changed()
             || policy.is_changed()
             || computed.is_changed()
             || inherited.is_changed()
@@ -79,10 +83,18 @@ pub(super) fn update_visible_authored_graph_drawings(
         let mut drawings = GraphDrawings {
             plot: update_plot.then(Vec::new),
             labels: Some(Vec::new()),
+            ticks: Vec::new(),
         };
+        let handle = selection
+            .as_ref()
+            .and_then(|selection| selection.label_document.as_ref());
+        let plot_left = handle
+            .and_then(|handle| documents.get(handle))
+            .and_then(|document| document.canonical_ui_document().nodes.first())
+            .map_or(PLOT_LEFT, |root| root.rect[2].max(0.0) + 4.0);
         let size = computed.size() * computed.inverse_scale_factor();
         if let Some(series) =
-            series.filter(|_| size.x > PLOT_LEFT + PLOT_RIGHT && size.y > PLOT_TOP + PLOT_BOTTOM)
+            series.filter(|_| size.x > plot_left + PLOT_RIGHT && size.y > PLOT_TOP + PLOT_BOTTOM)
         {
             let graph_type = selection
                 .as_ref()
@@ -94,12 +106,25 @@ pub(super) fn update_visible_authored_graph_drawings(
                 *policy,
                 graph_type,
                 size,
+                plot_left,
                 localization,
                 series,
                 &finance,
                 &fame,
             );
         }
+
+        super::graph_tick_projection::project_graph_tick_labels(
+            &mut commands,
+            entity,
+            children,
+            &mut label_instances,
+            handle,
+            &documents,
+            localization,
+            drawings.ticks,
+            plot_left - 4.0,
+        );
 
         let mut plot_entities = Vec::new();
         let mut label_entities = Vec::new();

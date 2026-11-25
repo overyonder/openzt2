@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     io,
     path::{Path, PathBuf},
     sync::OnceLock,
@@ -8,7 +8,8 @@ use std::{
 use crate::{
     asset_source::AssetArchives,
     source_document::{
-        blue_fang_source_document_parsing::parse_blue_fang_source_document, path::AssetPath,
+        blue_fang_source_document_parsing::parse_blue_fang_source_document,
+        path::{AssetPath, authored_source_reference_paths, is_authored_file_reference},
         source_document_semantic_name::canonicalize_source_document_record_key,
     },
 };
@@ -85,8 +86,7 @@ impl AuthoredBinderSources {
                 };
                 if document.root.name.eq_ignore_ascii_case("BFTypedBinder") {
                     if let Some(binder_type) = document.root.attribute_named_any(&["binderType"]) {
-                        let reference_types = crate::species::source::collect_authored_species_type_source_references(&document)
-                            .into_iter().map(|reference| canonicalize_source_document_record_key(&reference)).collect();
+                        let reference_types = crate::species::source::collect_authored_species_type_source_references(&document);
                         paths_by_type.entry(canonicalize_source_document_record_key(binder_type))
                             .or_default().push(BinderDeclaration { path, reference_types });
                     }
@@ -101,25 +101,40 @@ impl AuthoredBinderSources {
         archives: &AssetArchives,
     ) -> io::Result<BTreeSet<PathBuf>> {
         let declarations = self.declarations(archives)?;
-        let mut animal_types = BTreeSet::from(["animal"]);
-        loop {
-            let new_types = declarations
-                .iter()
-                .filter(|(key, _)| !animal_types.contains(key.as_str()))
-                .filter(|(_, candidates)| {
-                    candidates.iter().any(|candidate| {
-                        candidate
-                            .reference_types
-                            .iter()
-                            .any(|key| animal_types.contains(key.as_str()))
-                    })
-                })
-                .map(|(key, _)| key.as_str())
-                .collect::<Vec<_>>();
-            if new_types.is_empty() {
-                break;
+        let types_by_path = declarations
+            .iter()
+            .flat_map(|(key, sources)| {
+                sources
+                    .iter()
+                    .map(move |source| (source.path.as_path(), key.as_str()))
+            })
+            .collect::<BTreeMap<_, _>>();
+        let mut dependents = BTreeMap::<String, BTreeSet<&str>>::new();
+        for (key, sources) in declarations {
+            for source in sources {
+                let from = source.path.to_string_lossy();
+                for reference in &source.reference_types {
+                    let ancestor = if is_authored_file_reference(reference) {
+                        resolve_binder_file_reference(archives, &from, reference)
+                            .and_then(|path| types_by_path.get(&path.as_path()).copied())
+                            .map(str::to_owned)
+                    } else {
+                        Some(canonicalize_source_document_record_key(reference))
+                    };
+                    if let Some(ancestor) = ancestor {
+                        dependents.entry(ancestor).or_default().insert(key);
+                    }
+                }
             }
-            animal_types.extend(new_types);
+        }
+        let mut pending = VecDeque::from(["animal"]);
+        let mut animal_types = BTreeSet::from(["animal"]);
+        while let Some(ancestor) = pending.pop_front() {
+            for &dependent in dependents.get(ancestor).into_iter().flatten() {
+                if animal_types.insert(dependent) {
+                    pending.push_back(dependent);
+                }
+            }
         }
         Ok(animal_types
             .into_iter()
@@ -148,4 +163,14 @@ impl AuthoredBinderSources {
             None => Ok(None),
         }
     }
+}
+
+pub(crate) fn resolve_binder_file_reference(
+    archives: &AssetArchives,
+    from: &str,
+    reference: &str,
+) -> Option<PathBuf> {
+    authored_source_reference_paths(from, reference)
+        .map(|candidate| PathBuf::from(candidate.key()))
+        .find(|candidate| archives.source_exists(candidate))
 }

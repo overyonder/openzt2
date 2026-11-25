@@ -1,11 +1,10 @@
 use super::*;
-use crate::transport_tours::topology::apply_transport_station_and_track_topology_mutation_requests;
+use crate::transport_tours::topology::{
+    attach_stations, connect_tracks, detach_stations, disconnect_tracks,
+};
+use crate::transport_tours::transport_road_cut::apply_prepared_road_cuts;
 use crate::transport_tours::transport_track_construction_transaction::acknowledge_completed_transport_track_topology_applications;
 use crate::transport_tours::transport_track_construction_transaction::apply_prepared_transport_track_construction_edits;
-use crate::transport_tours::transport_track_sale_steps::{
-    begin_requested_transport_track_sales, settle_acknowledged_transport_track_sale_steps,
-    ApplyTransportTrackSaleStep, TransportTrackSaleStepAcknowledged,
-};
 use openzt2_construction::construction::construction_history::WorldConstructionHistory;
 use openzt2_construction::construction::deletion_transaction_preparation::begin_deletion_transaction_preparation;
 use openzt2_game_data::world_definitions::document::WorldDefinitionDocument;
@@ -35,6 +34,7 @@ fn sale_application(refund_percent: f32) -> (App, Entity, [Entity; 2], Entity, E
     let mut app = App::new();
     app.add_plugins(openzt2_world_state::world_spawn::persistent_id_index::PersistentIdIndexPlugin);
     app.init_resource::<Assets<WorldDefinitionAsset>>()
+        .init_resource::<Assets<crate::transport_tours::ground_track_policy::GroundTrackPolicy>>()
         .init_resource::<WorldDefinitions>()
         .add_message::<DeleteEntity>()
         .add_message::<PrepareDeletion>()
@@ -42,12 +42,11 @@ fn sale_application(refund_percent: f32) -> (App, Entity, [Entity; 2], Entity, E
         .add_message::<TransportTrackConstructionEditPreparationRejected>()
         .add_message::<ApplyPreparedTransportTrackConstructionEditRequest>()
         .add_message::<TransportTrackConstructionEditApplicationAcknowledged>()
-        .add_message::<ApplyTransportTrackSaleStep>()
-        .add_message::<TransportTrackSaleStepAcknowledged>()
         .add_message::<AttachTransportStationRequest>()
         .add_message::<DetachTransportStationRequest>()
         .add_message::<ConnectTransportTrackRequest>()
         .add_message::<DisconnectTransportTrackRequest>()
+        .add_message::<crate::transport_tours::topology::TransportEdgesDisconnected>()
         .add_message::<TransportTrackConnectionApplied>()
         .add_message::<TransportTrackConnectionRejected>()
         .add_message::<TransportTrackDisconnectionApplied>()
@@ -59,11 +58,10 @@ fn sale_application(refund_percent: f32) -> (App, Entity, [Entity; 2], Entity, E
                 refresh_selected_transport_sale_quote,
                 begin_deletion_transaction_preparation,
                 prepare_transport_track_sale,
-                begin_requested_transport_track_sales,
+                apply_prepared_road_cuts,
                 apply_prepared_transport_track_construction_edits,
-                apply_transport_station_and_track_topology_mutation_requests,
+                (disconnect_tracks, attach_stations, detach_stations, connect_tracks).chain(),
                 acknowledge_completed_transport_track_topology_applications,
-                settle_acknowledged_transport_track_sale_steps,
             )
                 .chain(),
         );
@@ -469,7 +467,7 @@ fn removing_one_piece_leaves_a_gap_and_undo_restores_the_route() {
         accepted
     };
     assert_eq!(apply(&mut app, EditApplication::InitialCommit), [true]);
-    // The second piece is laid again from a junction at its start.
+    // The second piece keeps its entity and starts at a new junction.
     let routes = app
         .world_mut()
         .query::<TrackRoute>()
@@ -479,8 +477,10 @@ fn removing_one_piece_leaves_a_gap_and_undo_restores_the_route() {
         .collect::<Vec<_>>();
     assert_eq!(routes, [vec![Vec3::X, Vec3::X * 2.0].into_boxed_slice()]);
     assert!(app.world().get_entity(pieces[0]).is_err());
+    assert!(app.world().get_entity(pieces[1]).is_ok());
 
     assert_eq!(apply(&mut app, EditApplication::Undo), [true]);
+    assert!(app.world().get_entity(pieces[1]).is_ok());
     let routes = app
         .world_mut()
         .query::<TrackRoute>()

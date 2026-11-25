@@ -9,6 +9,7 @@ use openzt2_zoo_state::guests::GuestViewingBegin;
 mod guest_animation_owner_projection;
 mod guest_arrival_calculations;
 pub(crate) mod guest_arrival_execution;
+mod guest_arrival_population;
 mod guest_behavior_fact_execution;
 mod guest_definition_queries;
 pub(crate) mod guest_destination_and_viewing_execution;
@@ -26,6 +27,7 @@ mod guest_task_need_facts;
 mod guest_task_progress_diagnostics;
 mod guest_task_target_loss;
 mod guest_view_animals_execution;
+mod guest_tour_need_execution;
 mod guest_view_event_meter_application;
 mod guest_viewing_lifecycle;
 pub(crate) mod view_event_execution;
@@ -64,9 +66,22 @@ impl Plugin for GuestsPlugin {
             activated_behavior_actor, update_waiting_behavior_actors,
         };
         app.add_observer(activated_behavior_actor::<openzt2_zoo_state::behavior_task_execution_types::running_actions::RunBehaviorViewAnimals>.pipe(guest_view_animals_execution::watch_animals_for_current_view_actions));
+        app.add_systems(FixedUpdate, (
+            guest_tour_need_execution::initialize_tour_need.after(initialize_spawned_guests)
+                .before(guest_self_task_selection::select_idle_guest_tasks),
+            guest_tour_need_execution::adjust_due_tour_needs.after(tick_guest_need_cadences)
+                .before(guest_self_task_selection::select_idle_guest_tasks)
+                .run_if(on_message::<GuestNeedAdjustmentDue>),
+        ).in_set(FixedGameSet::Think).run_if(in_state(GamePhase::InGame)));
 
         app.register_required_components::<Guest, openzt2_zoo_state::locomotion::locomotion_types::CaffeineFlags>()
+            .register_required_components::<openzt2_world_state::world_spawn::world_membership_types::WorldRoot, guest_arrival_population::ArrivalPopulation>()
+            .add_observer(guest_arrival_population::add_arrival_population_member)
+            .add_observer(guest_arrival_population::remove_arrival_population_member)
+            .add_observer(guest_arrival_population::disable_arrival_population_member)
+            .init_resource::<guest_need_execution::GuestArchetypeTables>()
             .add_message::<view_event_execution::BehaviorViewEventEmitted>()
+            .add_message::<openzt2_zoo_state::behavior_task_execution_types::BehaviorFeedbackDispatched>()
             .add_message::<GuestReaction>()
             .add_message::<GuestNeedAdjustmentDue>()
             .add_message::<guest_task_target_loss::GuestTaskTargetLost>()
@@ -83,6 +98,8 @@ impl Plugin for GuestsPlugin {
             .add_observer(guest_task_target_loss::observe_guest_task_target_removal)
             .add_observer(guest_task_target_loss::observe_guest_task_target_disabling)
             .add_observer(view_event_execution::emit_authored_view_events)
+            .add_observer(guest_view_animals_execution::retire_finished_view_meter)
+            .add_observer(guest_view_animals_execution::retire_replaced_view_meter)
             .add_observer(guest_behavior_departure_execution::remove_guest_after_authored_departure)
             .add_systems(
                 Update,
@@ -110,6 +127,7 @@ impl Plugin for GuestsPlugin {
                 FixedUpdate,
                 (
                     update_waiting_behavior_actors.pipe(guest_view_animals_execution::watch_animals_for_current_view_actions),
+                    view_event_execution::expire_view_thoughts,
                 ).in_set(BehaviorStepFixedSet::Think),
             )
             .add_systems(
@@ -122,7 +140,9 @@ impl Plugin for GuestsPlugin {
                     guest_destination_and_viewing_execution::project_authored_viewing_ground_slots
                         .after(project_viewing_opportunities),
                     tick_guest_need_cadences.after(initialize_spawned_guests),
+                    guest_need_execution::compile_guest_archetype_tables,
                     decay_due_guest_needs
+                        .after_ignore_deferred(guest_need_execution::compile_guest_archetype_tables)
                         .after_ignore_deferred(tick_guest_need_cadences)
                         .run_if(on_message::<GuestNeedAdjustmentDue>),
                     guest_task_need_facts::observe_guest_need_triggers.after_ignore_deferred(decay_due_guest_needs),
@@ -151,7 +171,10 @@ impl Plugin for GuestsPlugin {
             .add_systems(
                 FixedUpdate,
                 (
-                    spawn_arriving_guests.run_if(guest_arrival_execution::guest_arrivals_are_due),
+                    guest_arrival_population::synchronize_arrival_population,
+                    spawn_arriving_guests
+                        .after(guest_arrival_population::synchronize_arrival_population)
+                        .run_if(guest_arrival_execution::guest_arrivals_are_due),
                     guest_viewing_lifecycle::revoke_unowned_guest_observations,
                     begin_viewing
                         .after(guest_viewing_lifecycle::revoke_unowned_guest_observations)

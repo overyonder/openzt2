@@ -24,13 +24,48 @@ use openzt2_zoo_state::transport_tours::transport_vehicle_types::StationDestinat
 use openzt2_zoo_state::transport_tours::transport_vehicle_types::TransportVehicle;
 use openzt2_zoo_state::transport_tours::transport_vehicle_types::{RoutePosition, VehicleOnTrack};
 
+#[derive(Resource, Default, PartialEq)]
+pub(super) struct TourViewCatalogue {
+    by_subject: bevy::platform::collections::HashMap<AssetId, AssetId>,
+    pub(super) maximum_radius_m: f32,
+}
+
+pub(super) fn index_authored_tour_views(
+    assets: Res<Assets<WorldDefinitionAsset>>,
+    active: Res<WorldDefinitions>,
+    mut catalogue: ResMut<TourViewCatalogue>,
+) {
+    if !assets.is_changed() && !active.is_changed() {
+        return;
+    }
+    let mut next = TourViewCatalogue::default();
+    if let Some(definitions) = active.get(&assets) {
+        for view in definitions.tour_views() {
+            let id = AssetId(view.id.0);
+            next.by_subject.entry(AssetId(view.subject.0)).or_insert(id);
+            next.by_subject.entry(id).or_insert(id);
+            next.maximum_radius_m = next.maximum_radius_m.max(view.radius_cm as f32 * 0.01);
+        }
+    }
+    catalogue.set_if_neq(next);
+}
+
 pub(super) fn hydrate_transport_entities_from_authored_world_definitions(
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,
+    views: Res<TourViewCatalogue>,
+    changed: Query<
+        Entity,
+        (
+            Changed<DefinitionId>,
+            Without<TransportCircuit>,
+            Without<TransportTrackJunction>,
+        ),
+    >,
     mut entities: Query<
         (
             Entity,
-            Ref<DefinitionId>,
+            &DefinitionId,
             Option<&Children>,
             Option<&mut TransportStation>,
             Has<StationRatingPermille>,
@@ -48,11 +83,17 @@ pub(super) fn hydrate_transport_entities_from_authored_world_definitions(
     };
     let catalogue_changed =
         active_world_definitions.is_changed() || world_definition_assets.is_changed();
-    let mut tour_views = None;
-    for (entity, source, children, station, rating, track, vehicle, viewable) in &mut entities {
-        if !source.is_changed() && !catalogue_changed {
+    let mut updated = bevy::ecs::entity::EntityHashSet::default();
+    if catalogue_changed {
+        updated.extend(entities.iter().map(|(entity, ..)| entity));
+    }
+    updated.extend(changed.iter());
+    for entity in updated {
+        let Ok((_, source, children, station, rating, track, vehicle, viewable)) =
+            entities.get_mut(entity)
+        else {
             continue;
-        }
+        };
         if let Some(definition) = definitions.find_station(source.0) {
             let value = TransportStation {
                 definition: AssetId(definition.id.0),
@@ -117,19 +158,7 @@ pub(super) fn hydrate_transport_entities_from_authored_world_definitions(
                 ));
             }
         }
-        let views = tour_views.get_or_insert_with(|| {
-            let mut views = bevy::platform::collections::HashMap::<AssetId, AssetId>::default();
-            for view in definitions.tour_views() {
-                views
-                    .entry(AssetId(view.subject.0))
-                    .or_insert(AssetId(view.id.0));
-                views
-                    .entry(AssetId(view.id.0))
-                    .or_insert(AssetId(view.id.0));
-            }
-            views
-        });
-        match (viewable, views.get(&source.0)) {
+        match (viewable, views.by_subject.get(&source.0)) {
             (Some(mut viewable), Some(&definition)) => {
                 viewable.set_if_neq(TourViewable { definition });
             }

@@ -1,6 +1,6 @@
 import bevy_hanabi::render::vfx_common::{
     ChildInfo, ChildInfoBuffer, EventBuffer, DispatchIndirectArgs, IndirectBuffer,
-    EffectMetadata, RenderGroupIndirect, SimParams, Spawner, BatchInfo,
+    EffectMetadata, RenderGroupIndirect, SimParams, SpawnInputs, Spawner, BatchInfo,
     seed, tau, pcg_hash, to_float01, frand, frand2, frand3, frand4,
     rand_uniform_f, rand_uniform_vec2, rand_uniform_vec3, rand_uniform_vec4,
     rand_normal_f, rand_normal_vec2, rand_normal_vec3, rand_normal_vec4, proj
@@ -10,12 +10,7 @@ struct Particle {
 {{ATTRIBUTES}}
 }
 
-struct ExplicitSpawnPoint {
-    position: vec4<f32>,
-    velocity: vec4<f32>,
-}
-
-@group(0) @binding(1) var<storage, read> explicit_spawn_points: array<ExplicitSpawnPoint>;
+@group(0) @binding(1) var<storage, read_write> spawn_inputs: SpawnInputs;
 
 struct ParticleBuffer {
     particles: array<Particle>,
@@ -149,6 +144,20 @@ fn main(@builtin(global_invocation_id) global_invocation_id: vec3<u32>) {
     @if(!CONSUME_GPU_SPAWN_EVENTS)
     if (location.update_index >= spawn_count) {
         return;
+    }
+
+    if sim_params.particle_budget != 0xffffffffu {
+        var remaining = atomicLoad(&spawn_inputs.remaining_budget);
+        loop {
+            if remaining == 0u {
+                return;
+            }
+            let reserve = atomicCompareExchangeWeak(&spawn_inputs.remaining_budget, remaining, remaining - 1u);
+            if reserve.exchanged {
+                break;
+            }
+            remaining = reserve.old_value;
+        }
     }
 
     // Count as alive, and recycle a dead particle slot to store the newly spawned particle

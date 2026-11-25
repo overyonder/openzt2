@@ -28,12 +28,14 @@ use openzt2_zoo_state::{
     },
     shows::running_show_types::{
         AnimalPerformingShowTrick, RunningShow, RunningShowOnStage, RunningShowTrick,
-        ScheduledShowTrickScored, ShowAudienceReaction, ShowPhase, WorldTrickPopularity,
+        ScheduledShowTrickScored, ShowAudienceReaction, ShowPhase, StageRunningShow,
+        WorldTrickPopularity,
     },
 };
 
 use super::{
     authored_show_rewards::{AuthoredShowRewards, AuthoredShowRewardsSource},
+    running_show_schedule::ActiveShowTrickOf,
     scheduled_trick_execution::{ScheduledTrickToken, ShowTrickTokens},
     show_audience_types::{GuestShowExperience, GuestWatchingStage, StageShowAudience},
     show_event_types::AuthoredAnimalShowEvent,
@@ -55,7 +57,15 @@ pub(crate) struct ShowEventWindow {
 }
 
 #[derive(Component)]
-pub(super) struct ReleasedShowEvent;
+#[relationship(relationship_target = ReleasedShowEventsForRun)]
+pub(super) struct ReleasedShowEvent(Entity);
+
+#[derive(Component)]
+#[relationship_target(relationship = ReleasedShowEvent)]
+pub(super) struct ReleasedShowEventsForRun(Vec<Entity>);
+
+#[derive(Component)]
+pub(super) struct PendingShowReaction;
 
 pub(super) fn schedule_authored_animal_show_events(
     mut commands: Commands,
@@ -64,12 +74,8 @@ pub(super) fn schedule_authored_animal_show_events(
     assets: Res<Assets<WorldDefinitionAsset>>,
     events: Query<(Entity, &AuthoredAnimalShowEvent), Without<ShowEventWindow>>,
     performers: Query<&AnimalPerformingShowTrick, With<Animal>>,
-    tricks: Query<(
-        &WorldMember,
-        &RunningShow,
-        &RunningShowTrick,
-        &ShowTrickTokens,
-    )>,
+    tricks: Query<(&ActiveShowTrickOf, &RunningShowTrick, &ShowTrickTokens)>,
+    shows: Query<(&WorldMember, &RunningShow)>,
     popularity: Query<&WorldTrickPopularity>,
     tokens: Query<(&ScheduledTrickToken, &ClaimedBehaviorSelfToken, &ChildOf)>,
     reward_source: Res<AuthoredShowRewardsSource>,
@@ -86,11 +92,15 @@ pub(super) fn schedule_authored_animal_show_events(
         (f64::from(seconds) * f64::from(definitions.timing().fixed_hz)).ceil() as u64
     };
     for (entity, event) in &events {
-        let Ok(run) = performers.get(event.performer) else {
+        let Ok(active) = performers.get(event.performer) else {
             commands.entity(entity).try_despawn();
             continue;
         };
-        let Ok((member, show, trick, show_tokens)) = tricks.get(*run.collection()) else {
+        let Ok((run, trick, show_tokens)) = tricks.get(*active.collection()) else {
+            commands.entity(entity).try_despawn();
+            continue;
+        };
+        let Ok((member, show)) = shows.get(run.0) else {
             commands.entity(entity).try_despawn();
             continue;
         };
@@ -137,7 +147,7 @@ pub(super) fn schedule_authored_animal_show_events(
             };
             if let Some(score) = score {
                 scores.write(ScheduledShowTrickScored {
-                    show: *run.collection(),
+                    show: run.0,
                     performer: event.performer,
                     slot: trick.slot,
                     trick: trick.definition,
@@ -150,7 +160,7 @@ pub(super) fn schedule_authored_animal_show_events(
             .tick
             .saturating_add(event.policy.time_in_seconds.map_or(0, ticks));
         commands.entity(entity).insert((
-            ShowEventForRun(*run.collection()),
+            ShowEventForRun(run.0),
             ShowEventWindow {
                 release,
                 trick: trick.definition,
@@ -205,14 +215,14 @@ pub(super) fn update_authored_show_event_windows(
         {
             commands.entity(entity).try_despawn();
         } else if now_released && !released {
-            commands.entity(entity).insert(ReleasedShowEvent);
+            commands.entity(entity).insert(ReleasedShowEvent(run.0));
         }
     }
 }
 
 pub(super) fn discard_delivered_event_when_its_window_retires(
     retired: On<Remove<ReleasedShowEvent>>,
-    events: Query<&ShowEventForRun>,
+    events: Query<&ReleasedShowEvent>,
     shows: Query<&RunningShowOnStage>,
     audiences: Query<&StageShowAudience>,
     mut history: Query<&mut GuestShowExperience>,
@@ -243,7 +253,13 @@ pub(super) fn dispatch_released_animal_show_events(
     behavior_index: Res<LoadedBehaviorDocumentCollection>,
     events: Query<(&AuthoredAnimalShowEvent, &ShowEventWindow), With<ReleasedShowEvent>>,
     performers: Query<&SpeciesHandle, With<Animal>>,
-    shows: Query<(Entity, &RunningShowOnStage, &RunningShow, &RunShowEvents)>,
+    shows: Query<(&RunningShowOnStage, &RunningShow, &ReleasedShowEventsForRun)>,
+    stages: Query<&StageRunningShow>,
+    newly_released: Query<(Entity, &ShowEventWindow, &ReleasedShowEvent), Added<ReleasedShowEvent>>,
+    retry_watches: Query<
+        (Entity, &GuestWatchingStage),
+        Or<(Changed<GuestWatchingStage>, With<PendingShowReaction>)>,
+    >,
     audiences: Query<&StageShowAudience>,
     mut guests: Query<(
         &GuestWatchingStage,
@@ -261,19 +277,36 @@ pub(super) fn dispatch_released_animal_show_events(
         return;
     };
     let behavior = behavior_index.create_declaration_index_view(&behavior_documents);
-    let mut ready = shows
-        .iter()
-        .filter(|(_, _, show, related)| {
-            show.phase != ShowPhase::BetweenShows
-                && related.iter().any(|event| events.contains(event))
-        })
-        .collect::<Vec<_>>();
-    ready.sort_unstable_by_key(|(entity, ..)| *entity);
-    for (show_entity, stage, show, released) in ready {
+    let mut ready = std::collections::BTreeMap::<Entity, bevy::ecs::entity::EntityHashSet>::new();
+    for (_, _, run) in &newly_released {
+        if let Ok((stage, _, _)) = shows.get(run.0) {
+            if let Ok(audience) = audiences.get(stage.0) {
+                ready.entry(run.0).or_default().extend(audience.iter());
+            }
+        }
+    }
+    for (guest, watch) in &retry_watches {
+        if let Ok(run) = stages.get(watch.stage) {
+            ready.entry(*run.collection()).or_default().insert(guest);
+        } else {
+            commands.entity(guest).try_remove::<PendingShowReaction>();
+        }
+    }
+    for (show_entity, eligible) in ready {
+        let Ok((stage, show, released)) = shows.get(show_entity) else {
+            for guest in eligible {
+                commands.entity(guest).try_remove::<PendingShowReaction>();
+            }
+            continue;
+        };
         let stage = stage.0;
         let quality = (show.stars * 65_536.0).round() as i32;
         if let Ok(audience) = audiences.get(stage) {
-            for guest in audience.iter() {
+            for guest in audience.iter().filter(|guest| eligible.contains(guest)) {
+                if show.phase == ShowPhase::BetweenShows {
+                    commands.entity(guest).try_remove::<PendingShowReaction>();
+                    continue;
+                }
                 let Ok((
                     watch,
                     instruction,
@@ -288,6 +321,7 @@ pub(super) fn dispatch_released_animal_show_events(
                     continue;
                 };
                 if watch.instruction != Some(instruction.id()) {
+                    commands.entity(guest).try_remove::<PendingShowReaction>();
                     continue;
                 }
                 if history.show != Some(show_entity) {
@@ -300,6 +334,7 @@ pub(super) fn dispatch_released_animal_show_events(
                 let default = policies
                     .iter()
                     .find(|rule| rule.event == AssetId::from_key("defaultevent"));
+                let mut retry_count = 0;
                 let candidate = released
                     .iter()
                     .filter(|entity| !history.delivered_events.contains(entity))
@@ -309,6 +344,7 @@ pub(super) fn dispatch_released_animal_show_events(
                             .iter()
                             .find(|rule| rule.event == event.policy.name)
                             .or(default)?;
+                        retry_count += usize::from(window.expires.is_some());
                         Some((entity, event, window, rule))
                     })
                     .max_by_key(|(entity, event, _, rule)| {
@@ -320,10 +356,17 @@ pub(super) fn dispatch_released_animal_show_events(
                         )
                     });
                 let Some((entity, event, window, policy)) = candidate else {
+                    commands.entity(guest).try_remove::<PendingShowReaction>();
                     continue;
                 };
                 if window.expires.is_some() {
                     history.delivered_events.insert(entity);
+                    retry_count -= 1;
+                }
+                if retry_count > 0 {
+                    commands.entity(guest).try_insert(PendingShowReaction);
+                } else {
+                    commands.entity(guest).try_remove::<PendingShowReaction>();
                 }
                 let popularity = definitions
                     .find_trick(window.trick)
@@ -378,13 +421,10 @@ pub(super) fn dispatch_released_animal_show_events(
                 );
             }
         }
-        for entity in released.iter() {
-            if events
-                .get(entity)
-                .is_ok_and(|(_, window)| window.expires.is_none())
-            {
-                commands.entity(entity).try_despawn();
-            }
+    }
+    for (entity, window, _) in &newly_released {
+        if window.expires.is_none() {
+            commands.entity(entity).try_despawn();
         }
     }
 }

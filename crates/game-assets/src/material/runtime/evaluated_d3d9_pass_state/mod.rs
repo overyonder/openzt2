@@ -79,6 +79,7 @@ impl Default for EvaluatedD3d9PassState {
         // passes which do not author the state themselves. Blue Fang's Base
         // effects deliberately leave Lighting outside the material pass.
         effect_states[48] = 1; // D3DRS_LIGHTING = TRUE
+        effect_states[11] = 8; // D3DRS_ALPHAFUNC = D3DCMP_ALWAYS
         effect_states[52] = 1; // D3DRS_LOCALVIEWER = TRUE
         effect_states[51] = 1; // D3DRS_COLORVERTEX = TRUE
         effect_states[54] = 1; // D3DRS_DIFFUSEMATERIALSOURCE = COLOR1
@@ -331,7 +332,7 @@ impl EvaluatedD3d9PassState {
             53 => self.stencil.front.fail_op = stencil_operation(value)?,
             54 => self.stencil.front.depth_fail_op = stencil_operation(value)?,
             55 => self.stencil.front.pass_op = stencil_operation(value)?,
-            56 => self.stencil.front.compare = compare_stencil(value)?,
+            56 => self.stencil.front.compare = compare_unreversed(value)?,
             57 => self.stencil_reference = value,
             58 => self.stencil.read_mask = value,
             59 => self.stencil.write_mask = value,
@@ -349,7 +350,7 @@ impl EvaluatedD3d9PassState {
             186 => self.stencil.back.fail_op = stencil_operation(value)?,
             187 => self.stencil.back.depth_fail_op = stencil_operation(value)?,
             188 => self.stencil.back.pass_op = stencil_operation(value)?,
-            189 => self.stencil.back.compare = compare_stencil(value)?,
+            189 => self.stencil.back.compare = compare_unreversed(value)?,
             195 => self.depth_bias_bits = value,
             206 => self.separate_alpha_blend = value != 0,
             207 => self.source_alpha_blend = value,
@@ -451,7 +452,7 @@ fn compare(value: u32) -> io::Result<CompareFunction> {
         _ => return Err(invalid("compare function", value)),
     })
 }
-fn compare_stencil(value: u32) -> io::Result<CompareFunction> {
+pub(super) fn compare_unreversed(value: u32) -> io::Result<CompareFunction> {
     Ok(match value {
         1 => CompareFunction::Never,
         2 => CompareFunction::Less,
@@ -461,7 +462,7 @@ fn compare_stencil(value: u32) -> io::Result<CompareFunction> {
         6 => CompareFunction::NotEqual,
         7 => CompareFunction::GreaterEqual,
         8 => CompareFunction::Always,
-        _ => return Err(invalid("stencil comparison", value)),
+        _ => return Err(invalid("compare function", value)),
     })
 }
 

@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use openzt2_game_data::world_definitions::transportation_and_tours::TransportationVehicleSeatDefinition;
 use openzt2_game_data::AssetId;
 use openzt2_world_state::world_spawn::prefab_authored_attachment_identifier::PrefabAuthoredAttachmentIdentifier;
 
@@ -120,10 +121,64 @@ pub(super) fn project_seated_passenger_poses(
         let Ok(vehicle) = vehicles.get(parent.parent()) else {
             continue;
         };
-        let mut local = *authored;
-        if seat.back_facing {
-            local.rotation *= Quat::from_rotation_y(std::f32::consts::PI);
-        }
-        rider.set_if_neq(vehicle.mul_transform(local));
+        rider.set_if_neq(occupied_seat_pose(vehicle, authored, seat.back_facing));
     }
+}
+
+pub fn occupied_seat_pose(vehicle: &Transform, mount: &Transform, back_facing: bool) -> Transform {
+    let mut local = *mount;
+    if back_facing {
+        local.rotation *= Quat::from_rotation_y(std::f32::consts::PI);
+    }
+    vehicle.mul_transform(local)
+}
+
+fn seat_view_bearing(pose: &Transform, target: Vec3) -> f32 {
+    let local = pose.rotation.inverse() * (target - pose.translation);
+    local.x.atan2(local.z).to_degrees()
+}
+
+fn seat_bearing_is_within_band(bearing: f32, limits: [i16; 4], active: u8) -> bool {
+    (0..2).any(|index| {
+        let left = index == 0;
+        let angle = if left { bearing } else { -bearing };
+        let first = 2 * index;
+        let required = 0b11 << first;
+        active & required == required
+            && angle >= f32::from(limits[first])
+            && angle <= f32::from(limits[first + 1])
+    })
+}
+
+pub(super) fn seat_can_view_target(
+    definition: &TransportationVehicleSeatDefinition,
+    occupied_pose: &Transform,
+    target: Vec3,
+) -> bool {
+    seat_bearing_is_within_band(
+        seat_view_bearing(occupied_pose, target),
+        definition.view_limits_degrees,
+        0b1111,
+    )
+}
+
+/// Prefix used by the seated guest's authored directional animation action.
+pub fn seat_view_animation_prefix<'a>(
+    definition: &'a TransportationVehicleSeatDefinition,
+    occupied_pose: &Transform,
+    target: Vec3,
+) -> Option<&'a str> {
+    let bearing = seat_view_bearing(occupied_pose, target);
+    let offset = target - occupied_pose.translation;
+    let vertical = offset.xz().length().atan2(offset.y).to_degrees();
+    definition.animation_states.iter().find_map(|state| {
+        (state.up_degrees.unwrap_or(0.0) < vertical
+            && vertical <= state.down_degrees.unwrap_or(180.0)
+            && seat_bearing_is_within_band(
+                bearing,
+                state.angle_limits_degrees,
+                state.present_limits,
+            ))
+        .then_some(state.clip_prefix.as_str())
+    })
 }

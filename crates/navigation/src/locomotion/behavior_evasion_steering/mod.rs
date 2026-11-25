@@ -3,7 +3,6 @@ use bevy::prelude::*;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_zoo_state::aquatic::tank_navigation_water::TankNavigationWater;
 use openzt2_zoo_state::{
-    animal_lifecycle::types::AnimalVariant,
     behavior_task_execution_types::BehaviorEvasionSteering,
     locomotion::locomotion_types::{
         ActiveTerrainDerivedNavigationGraph, Destination, LocomotionMode, NavAgent, Route,
@@ -36,14 +35,12 @@ pub(super) fn project_behavior_evasion_steering(
         &WorldMember,
         &GlobalTransform,
         &NavAgent,
-        Option<&AnimalVariant>,
         Option<&LocomotionMode>,
         &mut Destination,
         &mut Route,
     )>,
 ) {
-    for (actor, evasion, member, transform, agent, variant, mode, mut destination, mut route) in
-        &mut actors
+    for (actor, evasion, member, transform, agent, mode, mut destination, mut route) in &mut actors
     {
         let Ok((graph, tank_water)) = roots.get(member.root) else {
             continue;
@@ -51,8 +48,7 @@ pub(super) fn project_behavior_evasion_steering(
         if destination.request_id != evasion.request_id {
             continue;
         }
-        let Ok((agent, slope)) = animal_policy.agent_with_authored_collision_limits(agent, variant)
-        else {
+        let Ok((agent, slope)) = animal_policy.agent_with_collision_limits(actor, agent) else {
             continue;
         };
         let position = transform.translation();

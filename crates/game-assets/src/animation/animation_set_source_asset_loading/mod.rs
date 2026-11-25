@@ -1,4 +1,4 @@
-use std::io;
+use std::{io, path::Path};
 
 use bevy::{
     asset::{io::Reader, AssetLoader, LoadContext},
@@ -10,9 +10,18 @@ use super::{
     bfm_animation_set_lowering::lower_bfm_source_to_animation_set_document,
     kfm_animation_set_lowering::lower_kfm_source_to_animation_set_document,
 };
+use crate::{
+    asset_source::AssetArchives, model_source::native_animation_source_lowering::kf_sequence_label,
+};
 
-#[derive(Default, TypePath)]
-pub(super) struct AnimationSetSourceAssetLoader;
+#[derive(TypePath)]
+pub(super) struct AnimationSetSourceAssetLoader(Option<AssetArchives>);
+
+impl FromWorld for AnimationSetSourceAssetLoader {
+    fn from_world(world: &mut World) -> Self {
+        Self(world.get_resource::<AssetArchives>().cloned())
+    }
+}
 
 impl AssetLoader for AnimationSetSourceAssetLoader {
     type Asset = AnimationSetAsset;
@@ -38,14 +47,36 @@ impl AssetLoader for AnimationSetSourceAssetLoader {
             .path()
             .to_string_lossy()
             .replace('\\', "/");
-        let animation_set_document = if std::path::Path::new(&animation_set_asset_path)
+        let animation_set_document = if Path::new(&animation_set_asset_path)
             .extension()
             .is_some_and(|extension| extension.eq_ignore_ascii_case("kfm"))
         {
-            lower_kfm_source_to_animation_set_document(
+            let mut document = lower_kfm_source_to_animation_set_document(
                 &animation_set_asset_path,
                 &animation_set_source_bytes,
-            )?
+            )?;
+            if let Some(archives) = &self.0 {
+                let owner = Path::new(&animation_set_asset_path);
+                let primary_sequence = kf_sequence_label(0);
+                for clip in &mut document.animation_clips {
+                    let Some((path, label)) = clip.animation_clip_asset_path.split_once('#') else {
+                        continue;
+                    };
+                    if label != primary_sequence
+                        || archives.resolve_source_reference(owner, path).is_some()
+                    {
+                        continue;
+                    }
+                    let compiled_path = Path::new(path).with_extension("bf");
+                    if let Some(selected) =
+                        archives.resolve_source_reference(owner, &compiled_path.to_string_lossy())
+                    {
+                        clip.animation_clip_asset_path =
+                            selected.to_string_lossy().replace('\\', "/");
+                    }
+                }
+            }
+            document
         } else {
             lower_bfm_source_to_animation_set_document(
                 &animation_set_asset_path,

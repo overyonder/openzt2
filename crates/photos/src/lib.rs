@@ -6,7 +6,9 @@ mod album_pointer_drag;
 mod album_presentation;
 mod photo_album_storage;
 mod photo_album_types;
+pub use photo_album_types::PhotoAlbumProfileOptions;
 mod photo_caption;
+pub use photo_caption::PhotoCaption;
 mod photo_capture;
 mod photo_capture_types;
 mod photo_challenge_goal_presentation;
@@ -15,6 +17,7 @@ mod photo_challenge_lua_scoring;
 mod photo_challenge_lua_scoring_types;
 mod photo_challenge_lua_virtual_machine_invalidation;
 mod photo_challenge_scoring;
+pub use photo_challenge_scoring::PhotoChallengeHalfStars;
 mod photo_configuration;
 mod photo_mode_presentation_lifecycle;
 mod photo_subject_evidence_collection;
@@ -69,7 +72,10 @@ impl Plugin for PhotosPlugin {
             .add_message::<PhotoCaptured>()
             .add_message::<PhotoChallengeCompleted>()
             .add_message::<PhotoCaptureFailed>()
+            .register_required_components::<openzt2_world_state::world_spawn::world_membership_types::WorldRoot, photo_album_types::SelectedAlbumPhoto>()
+            .register_required_components::<openzt2_world_state::world_spawn::world_membership_types::WorldRoot, photo_album_types::PhotoPointerPress>()
             .add_message::<DeletePhotoRequest>()
+            .add_observer(photo_album_storage::clear_retired_photo_selection)
             .add_observer(photo_mode_presentation_lifecycle::retire_photo_mode_presentation_when_control_is_removed)
             .add_observer(photo_mode_presentation_lifecycle::restore_photo_viewfinder_visibility_after_capture)
             .add_observer(photo_mode_presentation_lifecycle::hide_retired_photo_preview_layout)

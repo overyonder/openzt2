@@ -297,11 +297,7 @@ pub(super) fn project_document_on_entity(
                 .entity(entity)
                 .insert(crate::authored_ui_layout_participation::UiOverheadOnly);
         }
-        if data.role == UiDocumentRole::InGameHud
-            && index != 0
-            && record.parent == 0
-            && record.name.eq_ignore_ascii_case("Edge Scroller")
-        {
+        if document.edge_pan_surface_node_index() == Some(index as u32) {
             commands
                 .entity(entity)
                 .insert(crate::authored_ui_node_projection_components::UiEdgePanSurface::default());

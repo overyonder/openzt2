@@ -7,7 +7,7 @@ use crate::source_document::ui::model::{
 };
 use crate::ui_document::source::lower::authored_ui_document_lowering::AuthoredUiDocument;
 use crate::ui_document::source::lower::authored_ui_scalar_value_lowering::{
-    invalid, invalid_at, number, numeric_rect, parse_bool,
+    invalid, invalid_at, number, numeric_rect,
 };
 use crate::ui_document::source::lower::visuals;
 use openzt2_game_data::ui_document::document::UiDocumentRole;
@@ -885,7 +885,9 @@ pub(super) fn validate_represented_facts(
         if hotkey.localization_id.is_some() || hotkey.file.is_some() || hotkey.node.is_some() {
             return unsupported("hotkey localization/file/node routing");
         }
-        validate_event(&hotkey.event, input)?;
+        for event in &hotkey.events {
+            validate_event(event, input)?;
+        }
     }
     Ok(())
 }
@@ -929,9 +931,8 @@ pub(super) fn validate_event_payload(
                 && object.value.as_deref().is_some()
         });
     let typed_event_type = event.message == "UI_SEND_TEXT" && event.event_type.is_some();
-    let typed_photo_attribute = event.message == "ZT_SET_USER_ATTRIBUTE"
-        && event.key.as_deref() == Some("photohelpshown")
-        && event.val.as_deref().and_then(parse_bool) == Some(true);
+    let typed_profile_attribute =
+        event.message == "ZT_SET_USER_ATTRIBUTE" && event.key.is_some() && event.val.is_some();
     let typed_new_album = event.message == "ZT_PHOTOEVENT_NEW_ALBUM"
         && event.payload.len() == 1
         && event.payload[0]
@@ -942,10 +943,13 @@ pub(super) fn validate_event_payload(
         && event.payload[0].name.eq_ignore_ascii_case("autoPlacement");
     if (event.xml_object.is_some() && !typed_xml_object)
         || (!event.payload.is_empty() && !typed_new_album && !typed_biome_auto_placement_list)
-        || !event.unknown_attributes.is_empty()
+        || event.unknown_attributes.iter().any(|attribute|
+            event.message != "ZT_RUN_SCRIPT"
+                || attribute.name != crate::ui_document::source::selected_ui_source_dependency_winner_planning::SELECTED_SCRIPT_PATH_ATTRIBUTE
+        )
         || event.color.is_some()
         || (!geometry_payload && event.rect.iter().any(Option::is_some))
-        || ((event.key.is_some() || event.val.is_some()) && !typed_photo_attribute)
+        || ((event.key.is_some() || event.val.is_some()) && !typed_profile_attribute)
         || (event.event_type.is_some() && !typed_event_type)
     {
         return Err(invalid_at(

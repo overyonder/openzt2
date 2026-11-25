@@ -1,9 +1,12 @@
 //! Blue Fang BFB hierarchy, renderable, LOD, and collider scene lowering.
 
+use std::collections::{BTreeMap, BTreeSet};
+
 use openzt2_game_data::{
     scene_prefab::{
-        PrefabBillboard, PrefabColliderSource, PrefabEffect, PrefabLod, PrefabTransform,
-        ScenePrefabAssetDependencyKind, ScenePrefabDocument,
+        PrefabBillboard, PrefabColliderSource, PrefabEffect, PrefabLod, PrefabRenderLodPolicy,
+        PrefabRenderLodSource, PrefabTransform, ScenePrefabAssetDependencyKind,
+        ScenePrefabDocument,
     },
     AssetId,
 };
@@ -36,6 +39,7 @@ pub(in super::super) fn lower_blue_fang_scene_prefab(
 ) -> Result<ScenePrefabDocument> {
     let model_path = source.to_owned();
     let mut builder = ScenePrefabDocumentAssembler::new(&model_path);
+    let mut lod_groups = BTreeMap::<usize, (u32, u16)>::new();
     for (index, node) in document.hierarchy().enumerate() {
         let key = bfb_key(index);
         let parent = node.parent.map(bfb_key);
@@ -84,7 +88,10 @@ pub(in super::super) fn lower_blue_fang_scene_prefab(
                     }
                 }
             }
-            BlueFangBfbNodeKind::Node | BlueFangBfbNodeKind::LodGroup => {}
+            BlueFangBfbNodeKind::Node => {}
+            BlueFangBfbNodeKind::LodGroup => {
+                lod_groups.insert(index, (entity, 0));
+            }
             BlueFangBfbNodeKind::ModelJoint { component_name } => {
                 let joint = document
                     .mesh_blocks()
@@ -135,20 +142,18 @@ pub(in super::super) fn lower_blue_fang_scene_prefab(
                 },
             );
         }
-        if let Some(ordinal) = node.lod_index {
+        if let Some((group_entity, child_count)) =
+            node.parent.and_then(|parent| lod_groups.get_mut(&parent))
+        {
+            let ordinal = *child_count;
+            *child_count = ordinal.checked_add(1).ok_or_else(|| {
+                NativeSceneLoweringError::new(&document.source_path, "too many BFB LOD children")
+            })?;
             builder.lod(
                 entity,
                 PrefabLod {
-                    group_entity: node
-                        .parent
-                        .and_then(|parent| builder.entity_index(&bfb_key(parent)))
-                        .unwrap_or(entity),
-                    ordinal: u16::try_from(ordinal).map_err(|_| {
-                        NativeSceneLoweringError::new(
-                            &document.source_path,
-                            format!("BFB LOD ordinal {ordinal} exceeds u16::MAX"),
-                        )
-                    })?,
+                    group_entity: *group_entity,
+                    ordinal,
                     center_m: [0.0; 3],
                     near_m: 0.0,
                     far_m: 0.0,
@@ -158,11 +163,29 @@ pub(in super::super) fn lower_blue_fang_scene_prefab(
             );
         }
     }
+    for (entity, tier_count) in lod_groups.into_values() {
+        if tier_count == 0 {
+            continue;
+        }
+        builder.render_lod_policy(
+            entity,
+            PrefabRenderLodPolicy {
+                source: PrefabRenderLodSource::BlueFang,
+                metric_entity: entity,
+                initial_tier: 0,
+                tier_count,
+                switch_distance_squared: (0..tier_count)
+                    .map(|tier| f32::from(tier) * 225.0)
+                    .collect(),
+                minimum_switch_distance_squared: vec![0.0; usize::from(tier_count)],
+            },
+        );
+    }
     let footprint_shape_blocks = document
         .hierarchy()
         .filter(|node| node.name.eq_ignore_ascii_case("footprint"))
         .filter_map(|node| node.block_id.checked_add(1))
-        .collect::<std::collections::BTreeSet<_>>();
+        .collect::<BTreeSet<_>>();
     for collision in document
         .collision_boxes()
         .filter(|collision| !footprint_shape_blocks.contains(&collision.block_id))

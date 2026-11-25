@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use super::source_queries::authored_boolean_is_true;
 use super::source_queries::find_all_semantically_named_source_descendants;
 use crate::source_document::blue_fang_source_numeric_lexeme::parse_blue_fang_source_numeric_lexeme;
@@ -5,10 +7,10 @@ use crate::source_document::ordered_source_document_types::OrderedSourceDocument
 use crate::source_document::resolved_source_record_index::BindError;
 use crate::source_document::resolved_source_record_index::RecordView;
 use crate::source_document::source_document_semantic_name::source_document_names_are_semantically_equal;
+use openzt2_game_data::AssetId;
 use openzt2_game_data::species::NeedKind;
 use openzt2_game_data::species::NeedPreference;
 use openzt2_game_data::species::SpeciesNeed;
-use openzt2_game_data::AssetId;
 
 #[derive(Default)]
 struct EffectiveAuthoredAnimalNeedState {
@@ -23,36 +25,102 @@ struct EffectiveAuthoredAnimalNeedState {
     advanced: bool,
 }
 
+const AUTHORED_NEED_NAMES: [(NeedKind, &str); 12] = [
+    (NeedKind::Hunger, "hunger"),
+    (NeedKind::Thirst, "thirst"),
+    (NeedKind::Rest, "rest"),
+    (NeedKind::Privacy, "privacy"),
+    (NeedKind::Social, "social"),
+    (NeedKind::Exercise, "exercise"),
+    (NeedKind::Stimulation, "stimulation"),
+    (NeedKind::Environment, "environment"),
+    (NeedKind::Health, "health"),
+    (NeedKind::Hygiene, "hygiene"),
+    (NeedKind::Bathroom, "bathroom"),
+    (NeedKind::Reproduction, "reproduction"),
+];
+
+pub(crate) fn authored_need_identifier(kind: NeedKind) -> AssetId {
+    AssetId::from_key(
+        AUTHORED_NEED_NAMES
+            .iter()
+            .find_map(|(candidate, name)| (*candidate == kind).then_some(*name))
+            .expect("every NeedKind has an authored name"),
+    )
+}
+
+pub(super) fn lower_variant_need_adjustments(
+    variant: &RecordView<'_, '_>,
+    species: &RecordView<'_, '_>,
+) -> Result<Box<[(AssetId, i32)]>, BindError> {
+    if variant.key == species.key {
+        return Ok(Box::default());
+    }
+    let mut adjustments = BTreeMap::new();
+    for record in variant
+        .type_tokens()
+        .into_iter()
+        .rev()
+        .filter(|key| !source_document_names_are_semantically_equal(key, variant.key))
+        .filter_map(|key| variant.find_resolved_source_record_by_reference(&key))
+        .take_while(|record| record.key != species.key)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .chain(std::iter::once(*variant))
+    {
+        for adjustment in unnamed_need_adjustments(record.source_document_element()) {
+            for (name, value) in adjustment.attributes() {
+                if name.eq_ignore_ascii_case("name") {
+                    continue;
+                }
+                let value =
+                    parse_finite_authored_animal_need_number(variant, name, "adjustment", value)?;
+                adjustments.insert(
+                    AssetId::from_key(&name.to_ascii_lowercase()),
+                    wellness_adjustment_q16(value),
+                );
+            }
+        }
+    }
+    Ok(adjustments.into_iter().collect())
+}
+
+fn unnamed_need_adjustments(
+    node: &OrderedSourceDocumentNode,
+) -> impl Iterator<Item = &OrderedSourceDocumentNode> {
+    find_all_semantically_named_source_descendants(node, "BFAINeedAdjusts")
+        .into_iter()
+        .filter(|element| {
+            element
+                .attribute_named_any(&["Name"])
+                .is_none_or(|name| name.trim().is_empty())
+        })
+}
+
+fn wellness_adjustment_q16(adjustment: f64) -> i32 {
+    (-adjustment * 10.0 * 65_536.0)
+        .round()
+        .clamp(f64::from(i32::MIN), f64::from(i32::MAX)) as i32
+}
+
 pub(super) fn lower_effective_authored_species_need_facts(
     species: &RecordView<'_, '_>,
 ) -> Result<Vec<SpeciesNeed>, BindError> {
-    [
-        (NeedKind::Hunger, "hunger"),
-        (NeedKind::Thirst, "thirst"),
-        (NeedKind::Rest, "rest"),
-        (NeedKind::Privacy, "privacy"),
-        (NeedKind::Social, "social"),
-        (NeedKind::Exercise, "exercise"),
-        (NeedKind::Stimulation, "stimulation"),
-        (NeedKind::Environment, "environment"),
-        (NeedKind::Health, "health"),
-        (NeedKind::Hygiene, "hygiene"),
-        (NeedKind::Bathroom, "bathroom"),
-        (NeedKind::Reproduction, "reproduction"),
-    ]
-    .into_iter()
-    .filter_map(|(kind, authored_name)| {
-        match lower_effective_authored_animal_need_to_canonical_species_need(
-            species,
-            kind,
-            authored_name,
-        ) {
-            // Reproduction is optional: records without it keep the other needs.
-            Err(_) if kind == NeedKind::Reproduction => None,
-            result => Some(result),
-        }
-    })
-    .collect()
+    AUTHORED_NEED_NAMES
+        .into_iter()
+        .filter_map(|(kind, authored_name)| {
+            match lower_effective_authored_animal_need_to_canonical_species_need(
+                species,
+                kind,
+                authored_name,
+            ) {
+                // Reproduction is optional: records without it keep the other needs.
+                Err(_) if kind == NeedKind::Reproduction => None,
+                result => Some(result),
+            }
+        })
+        .collect()
 }
 
 fn lower_effective_authored_animal_need_to_canonical_species_need(
@@ -109,16 +177,7 @@ fn lower_effective_authored_animal_need_to_canonical_species_need(
                 }
             }
         }
-        for need_adjustments in find_all_semantically_named_source_descendants(
-            family_record.source_document_element(),
-            "BFAINeedAdjusts",
-        )
-        .into_iter()
-        .filter(|element| {
-            element
-                .attribute_named_any(&["Name"])
-                .is_none_or(|name| name.trim().is_empty())
-        }) {
+        for need_adjustments in unnamed_need_adjustments(family_record.source_document_element()) {
             if let Some(value) = need_adjustments.attribute_named_any(&[authored_name]) {
                 adjustment = parse_finite_authored_animal_need_number(
                     species,
@@ -165,10 +224,7 @@ fn lower_effective_authored_animal_need_to_canonical_species_need(
         lower_authored_animal_need_value_to_wellness_permille(species, authored_name, maximum)?,
         lower_authored_animal_need_value_to_wellness_permille(species, authored_name, minimum)?,
     ];
-    let wellness_adjustment_per_update_q16 = (-adjustment * 10.0 * 65_536.0)
-        .round()
-        .clamp(f64::from(i32::MIN), f64::from(i32::MAX))
-        as i32;
+    let wellness_adjustment_per_update_q16 = wellness_adjustment_q16(adjustment);
 
     Ok(SpeciesNeed {
         kind,

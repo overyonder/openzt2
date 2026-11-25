@@ -7,11 +7,9 @@ use openzt2_game_data::ui_document::action::camera::{
     UiCameraPanDirection, UiCameraSignedAxisDirection,
 };
 use openzt2_game_data::ui_document::action::information::InformationSortField;
-use openzt2_game_data::ui_document::action::staff_management::UiWorkerDuty;
 use openzt2_game_data::ui_document::action::{UiActionRecord, UiTrigger};
 use openzt2_game_data::ui_document::document::UiDocumentRole;
 use openzt2_game_data::ui_document::node::UiNodeDefinition;
-use openzt2_game_data::ui_document::timed_presentation::UiTimedEventAction;
 use openzt2_game_data::ui_document::widget::UiWidgetRecord;
 use openzt2_game_data::AssetId;
 use std::collections::BTreeMap;
@@ -29,6 +27,7 @@ pub(super) fn trigger(value: &SourceUiEventTrigger) -> UiTrigger {
         SourceUiEventTrigger::Off => UiTrigger::Off,
         SourceUiEventTrigger::TextChanged => UiTrigger::Change,
         SourceUiEventTrigger::DoubleClick => UiTrigger::Submit,
+        SourceUiEventTrigger::SecondaryPress => UiTrigger::SecondaryPress,
     }
 }
 
@@ -100,85 +99,96 @@ pub(super) fn resolve_repeated_target_names_to_nearest_scope(
         let records = node
             .actions
             .iter()
-            .chain(node.hotkeys.iter().map(|hotkey| &hotkey.action))
+            .chain(node.hotkeys.iter().flat_map(|hotkey| &hotkey.actions))
             .enumerate()
             .map(|(index, action)| (index, action, receivers.get(&(actor, index))));
-        let timed_start = node.actions.len() + node.hotkeys.len();
+        let timed_start = node.actions.len()
+            + node
+                .hotkeys
+                .iter()
+                .map(|hotkey| hotkey.actions.len())
+                .sum::<usize>();
         let timed_records = match &node.widget {
             UiWidgetRecord::TimedSequence { events, .. } => events.as_slice(),
             _ => &[],
         };
-        let timed_records = timed_records
-            .iter()
-            .enumerate()
-            .filter_map(|(index, event)| {
-                let UiTimedEventAction::Ui(action) = &event.action else {
-                    return None;
-                };
-                Some((
-                    timed_start + index,
-                    action,
-                    timed_receivers.get(&(actor, index)),
-                ))
-            });
+        let timed_records = timed_records.iter().enumerate().map(|(index, event)| {
+            (
+                timed_start + index,
+                &event.action,
+                timed_receivers.get(&(actor, index)),
+            )
+        });
         for (record_index, record, receiver) in records.chain(timed_records) {
-            let UiActionRecord::Presentation(record) = record else {
-                continue;
-            };
             let scope = receiver.map_or(actor, |receiver| {
-                    receiver.nodes.iter().fold(
-                        if receiver.from_root { 0 } else { actor },
-                        |scope, node| {
-                            named
-                                .get(node)
-                                .and_then(|candidates| nearest_in_scope(scope, candidates))
-                                .unwrap_or(scope)
-                        },
-                    )
-                });
-            let mut action = record.action.clone();
-            for (target_index, target) in action.local_node_targets_mut().enumerate() {
-                let Some(candidates) = named
-                    .get(&*target)
-                    .filter(|candidates| candidates.len() > 1)
-                else {
-                    continue;
-                };
-                let nearest = nearest_in_scope(scope, candidates);
-                if let Some(nearest) = nearest {
-                    resolved.push((
-                        actor,
-                        record_index,
-                        target_index,
-                        nodes[nearest as usize].id,
-                    ));
+                receiver.nodes.iter().fold(
+                    if receiver.from_root { 0 } else { actor },
+                    |scope, node| {
+                        named
+                            .get(node)
+                            .and_then(|candidates| nearest_in_scope(scope, candidates))
+                            .unwrap_or(scope)
+                    },
+                )
+            });
+            visit_local_targets(&mut record.clone(), |target_index, target| {
+                if let Some(candidates) =
+                    named.get(target).filter(|candidates| candidates.len() > 1)
+                {
+                    if let Some(nearest) = nearest_in_scope(scope, candidates) {
+                        resolved.push((
+                            actor,
+                            record_index,
+                            target_index,
+                            nodes[nearest as usize].id,
+                        ));
+                    }
                 }
-            }
+            });
         }
     }
     for (actor, record_index, target_index, id) in resolved {
         let node = &mut nodes[actor as usize];
         let action_count = node.actions.len();
-        let timed_start = action_count + node.hotkeys.len();
+        let timed_start = action_count
+            + node
+                .hotkeys
+                .iter()
+                .map(|hotkey| hotkey.actions.len())
+                .sum::<usize>();
         let record = if record_index < action_count {
             &mut node.actions[record_index]
         } else if record_index < timed_start {
-            &mut node.hotkeys[record_index - action_count].action
+            node.hotkeys
+                .iter_mut()
+                .flat_map(|hotkey| &mut hotkey.actions)
+                .nth(record_index - action_count)
+                .expect("hotkey action index")
         } else {
             let UiWidgetRecord::TimedSequence { events, .. } = &mut node.widget else {
                 continue;
             };
-            let UiTimedEventAction::Ui(action) = &mut events[record_index - timed_start].action
-            else {
-                continue;
-            };
-            action
+            &mut events[record_index - timed_start].action
         };
-        if let UiActionRecord::Presentation(record) = record {
-            if let Some(target) = record.action.local_node_targets_mut().nth(target_index) {
+        visit_local_targets(record, |index, target| {
+            if index == target_index {
                 *target = id;
             }
+        });
+    }
+}
+
+fn visit_local_targets(action: &mut UiActionRecord, mut visit: impl FnMut(usize, &mut AssetId)) {
+    match action {
+        UiActionRecord::Presentation(record) => {
+            for (index, target) in record.action.local_node_targets_mut().enumerate() {
+                visit(index, target);
+            }
         }
+        UiActionRecord::Script(record) if record.document_role.is_none() => {
+            visit(0, &mut record.receiver)
+        }
+        _ => {}
     }
 }
 
@@ -364,16 +374,11 @@ pub(super) fn current_named(current: AssetId, role: UiDocumentRole, name: &str) 
     current == UiDocumentRole::node_id(role, name)
 }
 
-pub(super) fn worker_duty(event: &SourceUiEvent) -> Option<UiWorkerDuty> {
-    let token = event.string.as_deref()?;
-    [
-        ("t_CleanWaterFilter", UiWorkerDuty::CleanAquaticTankFilter),
-        ("t_EmptyRecyclingBin", UiWorkerDuty::EmptyRecyclingContainer),
-        ("t_EmptyTrash", UiWorkerDuty::EmptyTrashContainer),
-        ("t_SweepTrash", UiWorkerDuty::SweepLitter),
-    ]
-    .into_iter()
-    .find_map(|(name, duty)| token.eq_ignore_ascii_case(name).then_some(duty))
+pub(super) fn worker_task(event: &SourceUiEvent) -> Option<AssetId> {
+    let token = event.string.as_deref()?.trim();
+    (!token.is_empty()).then(|| AssetId::from_key(
+        &crate::source_document::source_document_semantic_name::canonicalize_source_document_record_key(token),
+    ))
 }
 
 pub(super) fn price_index(

@@ -10,7 +10,7 @@ pub fn tick_need_adjustment(
     delay_steps: u32,
     random: &mut DeterministicRng,
 ) -> bool {
-    if !timer.tick(step).is_finished() {
+    if timer.is_paused() || !timer.tick(step).is_finished() {
         return false;
     }
     let Some(delay) = random.range_u32(delay_steps) else {

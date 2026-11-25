@@ -86,6 +86,8 @@ pub(super) fn select_idle_guest_tasks(
             &GuestNeedTriggers,
             Option<&GuestDeparturePoints>,
             Option<&GuestShowNeed>,
+            (Option<&openzt2_zoo_state::guests::guest_simulation_types::GuestSpeciesViewCounts>,
+                Option<&openzt2_zoo_state::behavior_task_execution_types::running_actions::GuestTourDepartureGate>),
             &GlobalTransform,
             &WorldMember,
             Option<&mut GuestTaskCooldowns>,
@@ -120,9 +122,10 @@ pub(super) fn select_idle_guest_tasks(
         Query<(&WorldMember, &ShowViewingLocations)>,
         Query<&ChildOf>,
     ),
-    (paths, viewable_animals, presentations, controllers): (
+    (paths, viewable_animals, presentations, controllers, stations, circuits): (
         Query<(Entity, &GlobalTransform, &WorldMember, &PathTile)>,
-        Query<(&GlobalTransform, &Visibility, &WorldMember), (With<Animal>, With<HabitatMember>)>,
+        Query<(&GlobalTransform, &Visibility, &WorldMember,
+            &openzt2_zoo_state::animal_lifecycle::types::SpeciesHandle), (With<Animal>, With<HabitatMember>)>,
         Query<&AnimationPresentations>,
         Query<
             (),
@@ -131,6 +134,11 @@ pub(super) fn select_idle_guest_tasks(
                 With<AnimationGraphPlaybackState>,
             ),
         >,
+        Query<(Entity, &GlobalTransform, &WorldMember,
+            &openzt2_zoo_state::transport_tours::transport_circuit_types::CircuitMember),
+            With<openzt2_zoo_state::transport_tours::transport_topology_types::TransportStation>>,
+        Query<(&openzt2_zoo_state::transport_tours::transport_circuit_types::TransportCircuit,
+            Option<&openzt2_zoo_state::transport_tours::transport_circuit_types::CircuitRunning>)>,
     ),
     mut commands: Commands,
 ) {
@@ -159,6 +167,8 @@ pub(super) fn select_idle_guest_tasks(
     let watch_sensor = AssetId::from_key("watchshow");
     let watch_token = AssetId::from_key("t_watchshow");
     let show_attribute = AssetId::from_key("show");
+    let tour_attribute = AssetId::from_key("tour");
+    let station_type = AssetId::from_key("station");
     let viewing_paths = definitions
         .guest_viewing()
         .map(|viewing| {
@@ -168,7 +178,7 @@ pub(super) fn select_idle_guest_tasks(
                 .filter(|(_, path, path_world, _)| {
                     viewable_animals
                         .iter()
-                        .any(|(animal, visibility, animal_world)| {
+                        .any(|(animal, visibility, animal_world, _)| {
                             animal_world.root == path_world.root
                                 && *visibility != Visibility::Hidden
                                 && animal
@@ -187,6 +197,17 @@ pub(super) fn select_idle_guest_tasks(
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
+    let mut viewable_species = bevy::ecs::entity::EntityHashMap::<bevy::platform::collections::HashSet<AssetId>>::default();
+    if let Some(viewing) = definitions.guest_viewing() {
+        for (animal, visibility, member, species) in &viewable_animals {
+            if *visibility != Visibility::Hidden && viewing_paths.iter().any(|(_, point, root, _)| {
+                *root == member.root && point.xz().distance_squared(animal.translation().xz())
+                    <= viewing.ground_range_m.powi(2)
+            }) {
+                viewable_species.entry(member.root).or_default().insert(species.species);
+            }
+        }
+    }
     let mut target_index = None;
     let mut combined_targets = Vec::new();
     for (
@@ -198,6 +219,7 @@ pub(super) fn select_idle_guest_tasks(
         triggers,
         departure_points,
         show_need,
+        (species_seen, tour_gate),
         transform,
         world,
         mut cooldowns,
@@ -235,6 +257,8 @@ pub(super) fn select_idle_guest_tasks(
         let source_need = |attribute| {
             if attribute == show_attribute {
                 show_need.map(GuestShowNeed::source_need)
+            } else if attribute == tour_attribute {
+                tour_gate.map(|tour| tour.source_need())
             } else {
                 need_facts.source_need(attribute, triggers)
             }
@@ -319,7 +343,11 @@ pub(super) fn select_idle_guest_tasks(
             let leaves_zoo = task.scores.iter().any(|score| matches!(
                 score, openzt2_game_data::behavior::score::BehaviorScore::LeaveZooPressure
             ));
-            if leaves_zoo && !departure_points.is_some_and(|points| points.0 <= 0) {
+            if leaves_zoo && departure_points.is_some_and(|points| points.0 > 0) && {
+                let observed = species_seen.map_or(0, |views| views.0.iter().filter(|(_, count)| *count != 0).count());
+                let required = viewable_species.get(&world.root).map_or(0, |species| species.len());
+                observed < required || (required != 0 && tour_gate.is_some_and(|tour| tour.threshold < tour.need))
+            } {
                 continue;
             }
             if cooldowns
@@ -374,6 +402,8 @@ pub(super) fn select_idle_guest_tasks(
                                 required == AssetId::from_key("self")
                             } else if is_path {
                                 required == AssetId::from_key("path")
+                            } else if required == station_type && stations.contains(target) {
+                                true
                             } else {
                                 target_definition
                                     .is_some_and(|object| matches_type(object, required))
@@ -571,6 +601,18 @@ pub(super) fn select_idle_guest_tasks(
                         }
                     }
                 };
+            if task.sensor_tag == Some(tour_attribute) {
+                for (station, pose, member, circuit) in &stations {
+                    if member.root == world.root && circuits.get(circuit.0)
+                        .is_ok_and(|(route, running)| !route.closed && running.is_none_or(|running| running.0))
+                    {
+                        let object = targets.get(station).ok()
+                            .and_then(|(_, name, ..)| definitions.find_object(name.0));
+                        consider_with_held_items(station, object, None, None, pose.translation());
+                    }
+                }
+                continue;
+            }
             if task.targets.iter().any(|target| target == "self") {
                 consider_with_held_items(guest, None, None, None, transform.translation());
             }
@@ -640,6 +682,7 @@ pub(super) fn select_idle_guest_tasks(
                 });
                 for target in index.candidates(
                     world.root,
+                    &task.targets,
                     &task.candidate_eligibility_requirements,
                     &mut combined_targets,
                 ) {

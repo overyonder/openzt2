@@ -10,7 +10,6 @@ use super::{
     super::ui_source_document_gap::UiSourceDocumentGap,
     authored_buy_information_panel_source_normalization::normalize_authored_buy_information_panel_position,
     authored_money_text_source_normalization::normalize_authored_money_text_widget,
-    authored_profile_name_edit_watch_binding_normalization::normalize_authored_profile_name_edit_watch_bindings,
     authored_rail_camera_ui_surface_source_normalization::{
         attach_rail_camera_scene_path_to_authored_ui_source_tree,
         normalize_authored_rail_camera_ui_surface,
@@ -43,16 +42,21 @@ pub(super) fn normalize_observed_authored_ui_widget_source_shapes(
             .attributes
             .retain(|attribute| attribute.name() != "template");
     }
-    normalize_authored_profile_name_edit_watch_bindings(&mut document)?;
     let rail_scene =
         super::super::rail_camera::document_lowering::rail_camera_scene_asset_path(&path);
-    normalize_root(&mut document.root, &rail_scene);
+    let document_key = openzt2_game_data::AssetId::from_virtual_path(&path);
+    normalize_root(&mut document.root, &rail_scene, document_key);
     Ok(document)
 }
 
-fn normalize_root(root: &mut OrderedSourceDocumentNode, rail_scene: &str) {
+fn normalize_root(
+    root: &mut OrderedSourceDocumentNode,
+    rail_scene: &str,
+    document: openzt2_game_data::AssetId,
+) {
     attach_rail_camera_scene_path_to_authored_ui_source_tree(&mut root.children, rail_scene);
-    root.children = normalize_children(&root.children);
+    root.children = normalize_children(&root.children, document);
+    normalize_authored_scenario_objective_collection(root, document);
     if root.name == "UITool" {
         root.children = OrderedSourceDocumentChildren::from_ordered_source_document_child_items(
             root.children
@@ -88,7 +92,7 @@ fn normalize_root(root: &mut OrderedSourceDocumentNode, rail_scene: &str) {
     }
 }
 
-fn normalize_node(node: &mut OrderedSourceDocumentNode) {
+fn normalize_node(node: &mut OrderedSourceDocumentNode, document: openzt2_game_data::AssetId) {
     if is_misspelled_children_wrapper(node) {
         node.name = "children".into();
     }
@@ -98,10 +102,10 @@ fn normalize_node(node: &mut OrderedSourceDocumentNode) {
     normalize_authored_zoopedia_table_of_contents_collection(node);
     if node.name == "ZTRailCam" {
         normalize_authored_rail_camera_ui_surface(&mut node.attributes, &mut node.children);
-        node.children = normalize_children(&node.children);
+        node.children = normalize_children(&node.children, document);
         return;
     }
-    node.children = normalize_children(&node.children);
+    node.children = normalize_children(&node.children, document);
     // Two shipped confirmation layouts place an ordinary child UILayout
     // inside UIAspect. The original loader hoisted it into the widget tree;
     // perform that source repair once rather than retaining an aspect payload
@@ -151,7 +155,7 @@ fn normalize_node(node: &mut OrderedSourceDocumentNode) {
     }
     node.children =
         OrderedSourceDocumentChildren::from_ordered_source_document_child_items(repaired);
-    normalize_authored_scenario_objective_collection(node);
+    normalize_authored_scenario_objective_collection(node, document);
     match node.name.as_str() {
         // Zoopedia and status systems populate these layout children.
         "ZTZoopediaComponent" | "ZTZooStatusComponent" => {
@@ -205,13 +209,6 @@ fn normalize_node(node: &mut OrderedSourceDocumentNode) {
                 child.name = "textchanged".into();
                 Some(OrderedSourceDocumentChild::Element(Box::new(child)))
             }
-            OrderedSourceDocumentChild::Element(child)
-                if node.name == "ZTUIFullscreenButton" && child.name == "rightmousedown" =>
-            {
-                let mut child = child.as_ref().clone();
-                child.name = "activate".into();
-                Some(OrderedSourceDocumentChild::Element(Box::new(child)))
-            }
             child => Some(child.clone()),
         })
         .collect::<Vec<_>>();
@@ -254,7 +251,10 @@ fn normalize_node(node: &mut OrderedSourceDocumentNode) {
     }
 }
 
-fn normalize_children(children: &OrderedSourceDocumentChildren) -> OrderedSourceDocumentChildren {
+fn normalize_children(
+    children: &OrderedSourceDocumentChildren,
+    document: openzt2_game_data::AssetId,
+) -> OrderedSourceDocumentChildren {
     OrderedSourceDocumentChildren::from_ordered_source_document_child_items(
         children
             .items()
@@ -265,7 +265,7 @@ fn normalize_children(children: &OrderedSourceDocumentChildren) -> OrderedSource
             .cloned()
             .map(|child| match child {
                 OrderedSourceDocumentChild::Element(mut node) => {
-                    normalize_node(&mut node);
+                    normalize_node(&mut node, document);
                     OrderedSourceDocumentChild::Element(node)
                 }
                 child => child,

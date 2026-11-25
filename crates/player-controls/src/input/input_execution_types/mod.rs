@@ -8,6 +8,7 @@ pub(crate) struct DeviceControlAxes {
     /// Forward, backward, right, and left magnitudes retained independently.
     pub(crate) pan_directions: [f32; 4],
     pub(crate) look: Vec2,
+    pub(crate) mouse_look: Vec2,
     pub(crate) zoom: f32,
 }
 

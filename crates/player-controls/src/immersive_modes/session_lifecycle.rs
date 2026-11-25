@@ -132,9 +132,10 @@ pub(super) fn release_direct_locomotion(
             });
         }
     }
-    commands
-        .entity(removed.entity)
-        .try_remove::<DirectLocomotion>();
+    commands.entity(removed.entity).try_remove::<(
+        DirectLocomotion,
+        openzt2_interface_state::camera::camera_runtime_state_types::FirstPersonLocomotionTuning,
+    )>();
 }
 
 pub(super) fn register(app: &mut App) {

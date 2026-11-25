@@ -56,26 +56,14 @@ fn lower_localization_entries_beneath_source_node(
             let candidates = |group: &str| {
                 source_node
                     .element_children()
-                    .filter(|child| child.name.eq_ignore_ascii_case(group))
+                    .find(|child| child.name.eq_ignore_ascii_case(group))
+                    .into_iter()
                     .flat_map(OrderedSourceDocumentNode::element_children)
-                    .filter(|child| child.name.eq_ignore_ascii_case("name"))
-                    .filter_map(OrderedSourceDocumentNode::first_text)
-                    .map(str::trim)
-                    .filter(|name| !name.is_empty())
-                    .map(str::to_owned)
+                    .map(|candidate| candidate.first_text().unwrap_or_default().to_owned())
                     .collect::<Vec<_>>()
             };
             let first_names = candidates("first");
             let last_names = candidates("last");
-            if first_names.is_empty() || last_names.is_empty() {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!(
-                        "{}: {key} lacks first or last names",
-                        source_document.path.as_str()
-                    ),
-                ));
-            }
             person_name_pools.insert(
                 id,
                 PersonNamePool {
@@ -84,7 +72,7 @@ fn lower_localization_entries_beneath_source_node(
                     key: id,
                     delimiter: source_node
                         .attribute_named_any(&["delimiter"])
-                        .unwrap_or(" ")
+                        .unwrap_or_default()
                         .to_owned(),
                     first_names,
                     last_names,

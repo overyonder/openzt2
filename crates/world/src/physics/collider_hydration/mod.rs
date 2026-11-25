@@ -1,4 +1,5 @@
 //! World-boundary, prefab, and deferred model-collider hydration.
+use bevy::asset::{asset_changed::AssetChanged, AsAssetId, AssetLoadFailedEvent};
 
 use avian3d::prelude::*;
 use bevy::gltf::Gltf;
@@ -146,15 +147,36 @@ pub(super) struct PendingModelCollider {
     primitive: usize,
 }
 
+impl AsAssetId for PendingModelCollider {
+    type Asset = Gltf;
+
+    fn as_asset_id(&self) -> AssetId<Gltf> {
+        self.model.id()
+    }
+}
+
 #[derive(Default)]
 pub(super) struct ModelColliderShapes {
-    primitives: HashMap<AssetId<Gltf>, Vec<AssetId<Mesh>>>,
+    primitives: HashMap<AssetId<Gltf>, ModelColliderPrimitives>,
     shapes: HashMap<AssetId<Mesh>, Option<Collider>>,
+}
+
+struct ModelColliderPrimitives {
+    gltf_meshes: Vec<AssetId<GltfMesh>>,
+    meshes: Vec<AssetId<Mesh>>,
 }
 
 pub(super) fn replace_loaded_model_collider_requests_with_avian_triangle_meshes(
     mut commands: Commands,
     pending: Query<(Entity, Ref<PendingModelCollider>, Has<RigidBody>)>,
+    changed_bindings: Query<Entity, Changed<PendingModelCollider>>,
+    changed_models: Query<Entity, AssetChanged<PendingModelCollider>>,
+    server: Res<AssetServer>,
+    (mut model_failures, mut gltf_mesh_failures, mut mesh_failures): (
+        MessageReader<AssetLoadFailedEvent<Gltf>>,
+        MessageReader<AssetLoadFailedEvent<GltfMesh>>,
+        MessageReader<AssetLoadFailedEvent<Mesh>>,
+    ),
     models: Res<Assets<Gltf>>,
     gltf_meshes: Res<Assets<GltfMesh>>,
     meshes: Res<Assets<Mesh>>,
@@ -163,41 +185,111 @@ pub(super) fn replace_loaded_model_collider_requests_with_avian_triangle_meshes(
     mut mesh_events: MessageReader<AssetEvent<Mesh>>,
     mut cache: Local<ModelColliderShapes>,
 ) {
-    let mut assets_changed = gltf_mesh_events.read().count() != 0;
-    if assets_changed {
-        cache.primitives.clear();
+    let model_failures = model_failures
+        .read()
+        .map(|failure| failure.id)
+        .collect::<bevy::platform::collections::HashSet<_>>();
+    let gltf_mesh_changed = gltf_mesh_events
+        .read()
+        .filter_map(|event| match *event {
+            AssetEvent::Added { id }
+            | AssetEvent::Modified { id }
+            | AssetEvent::Removed { id }
+            | AssetEvent::LoadedWithDependencies { id } => Some(id),
+            AssetEvent::Unused { .. } => None,
+        })
+        .chain(gltf_mesh_failures.read().map(|failure| failure.id))
+        .collect::<bevy::platform::collections::HashSet<_>>();
+    if !gltf_mesh_changed.is_empty() {
+        cache.primitives.retain(|_, mapping| {
+            !mapping
+                .gltf_meshes
+                .iter()
+                .any(|id| gltf_mesh_changed.contains(id))
+        });
     }
-    for event in model_events.read() {
-        match *event {
-            AssetEvent::Added { .. } | AssetEvent::LoadedWithDependencies { .. } => {
-                assets_changed = true;
-            }
-            AssetEvent::Modified { id } | AssetEvent::Removed { id } => {
-                cache.primitives.remove(&id);
-                assets_changed = true;
-            }
-            AssetEvent::Unused { .. } => {}
-        }
-    }
-    for event in mesh_events.read() {
-        match *event {
-            AssetEvent::Added { .. } => {
-                assets_changed = true;
-            }
+    let mesh_changes = mesh_events
+        .read()
+        .filter_map(|event| match *event {
             AssetEvent::Modified { id } | AssetEvent::Removed { id } => {
                 cache.shapes.remove(&id);
-                assets_changed = true;
+                Some(id)
             }
-            _ => {}
+            AssetEvent::Added { id } | AssetEvent::LoadedWithDependencies { id } => Some(id),
+            AssetEvent::Unused { .. } => None,
+        })
+        .chain(mesh_failures.read().map(|failure| failure.id))
+        .collect::<bevy::platform::collections::HashSet<_>>();
+    let model_changes = model_events
+        .read()
+        .filter_map(|event| match *event {
+            AssetEvent::Modified { id } | AssetEvent::Removed { id } => {
+                cache.primitives.remove(&id);
+                Some(id)
+            }
+            AssetEvent::Added { id } | AssetEvent::LoadedWithDependencies { id } => Some(id),
+            AssetEvent::Unused { .. } => None,
+        })
+        .collect::<bevy::platform::collections::HashSet<_>>();
+    let is_failed = |id: bevy::asset::UntypedAssetId| {
+        matches!(server.load_state(id), bevy::asset::LoadState::Failed(_))
+    };
+    let affected = if !gltf_mesh_changed.is_empty()
+        || !mesh_changes.is_empty()
+        || !model_failures.is_empty()
+        || !model_changes.is_empty()
+    {
+        pending
+            .iter()
+            .map(|(entity, ..)| entity)
+            .collect::<Vec<_>>()
+    } else {
+        changed_bindings
+            .iter()
+            .chain(changed_models.iter())
+            .collect::<bevy::ecs::entity::EntityHashSet>()
+            .into_iter()
+            .collect()
+    };
+    for (entity, pending, on_body) in pending.iter_many(affected).matched() {
+        if model_failures.contains(&pending.model.id()) {
+            reject_model_collider(&mut commands, entity, on_body);
+            continue;
         }
-    }
-    for (entity, pending, on_body) in &pending {
-        if !assets_changed && !pending.is_changed() {
+        let binding_changed = pending.is_changed()
+            || model_changes.contains(&pending.model.id())
+            || changed_models.contains(entity);
+        if !binding_changed && gltf_mesh_changed.is_empty() && mesh_changes.is_empty() {
             continue;
         }
         let Some(model) = models.get(&pending.model) else {
+            if binding_changed && is_failed(pending.model.id().untyped()) {
+                reject_model_collider(&mut commands, entity, on_body);
+            }
             continue;
         };
+        let gltf_dependency_changed = model
+            .meshes
+            .iter()
+            .any(|handle| gltf_mesh_changed.contains(&handle.id()));
+        if !binding_changed && !gltf_dependency_changed {
+            let changed = cache
+                .primitives
+                .get(&pending.model.id())
+                .and_then(|mapping| mapping.meshes.get(pending.primitive))
+                .is_some_and(|mesh| mesh_changes.contains(mesh));
+            if !changed {
+                continue;
+            }
+        }
+        if model
+            .meshes
+            .iter()
+            .any(|handle| is_failed(handle.id().untyped()))
+        {
+            reject_model_collider(&mut commands, entity, on_body);
+            continue;
+        }
         if !model
             .meshes
             .iter()
@@ -208,15 +300,20 @@ pub(super) fn replace_loaded_model_collider_requests_with_avian_triangle_meshes(
         let primitives = cache
             .primitives
             .entry(pending.model.id())
-            .or_insert_with(|| {
-                loaded_gltf_model_mesh_asset_handles(model, &gltf_meshes)
+            .or_insert_with(|| ModelColliderPrimitives {
+                gltf_meshes: model.meshes.iter().map(Handle::id).collect(),
+                meshes: loaded_gltf_model_mesh_asset_handles(model, &gltf_meshes)
                     .map(Handle::id)
-                    .collect()
+                    .collect(),
             });
-        let Some(id) = primitives.get(pending.primitive).copied() else {
+        let Some(id) = primitives.meshes.get(pending.primitive).copied() else {
+            reject_model_collider(&mut commands, entity, on_body);
             continue;
         };
         let Some(mesh) = meshes.get(id) else {
+            if is_failed(id.untyped()) {
+                reject_model_collider(&mut commands, entity, on_body);
+            }
             continue;
         };
         let Some(collider) = cache
@@ -225,20 +322,25 @@ pub(super) fn replace_loaded_model_collider_requests_with_avian_triangle_meshes(
             .or_insert_with(|| Collider::trimesh_from_mesh(mesh))
             .clone()
         else {
-            if on_body {
-                commands.entity(entity).remove::<(
-                    PendingModelCollider,
-                    CollisionEventsEnabled,
-                    CollisionLayers,
-                )>();
-            } else {
-                commands.entity(entity).despawn();
-            }
+            reject_model_collider(&mut commands, entity, on_body);
             continue;
         };
         commands
             .entity(entity)
             .insert(collider)
             .remove::<PendingModelCollider>();
+    }
+}
+
+fn reject_model_collider(commands: &mut Commands, entity: Entity, on_body: bool) {
+    warn!(?entity, "prefab model collider could not be constructed");
+    if on_body {
+        commands.entity(entity).try_remove::<(
+            PendingModelCollider,
+            CollisionEventsEnabled,
+            CollisionLayers,
+        )>();
+    } else {
+        commands.entity(entity).try_despawn();
     }
 }

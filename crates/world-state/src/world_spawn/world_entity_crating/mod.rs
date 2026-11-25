@@ -13,6 +13,9 @@ pub struct AnimalCrate(pub Entity);
 #[component(on_add = hide_crated_entity, on_remove = restore_uncrated_visibility)]
 pub struct ScriptedCrating;
 
+pub type CratedWorldEntity = Or<(With<AnimalCrate>, With<ScriptedCrating>)>;
+pub type UncratedWorldEntity = (Without<AnimalCrate>, Without<ScriptedCrating>);
+
 #[derive(Component, Debug)]
 #[relationship_target(relationship = AnimalCrate)]
 pub struct ContainedCratedAnimal(Entity);
@@ -46,3 +49,6 @@ fn restore_uncrated_visibility(mut world: DeferredWorld, context: HookContext) {
 
 #[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RemoveWorldEntityFromCrate(pub Entity);
+
+#[cfg(test)]
+mod tests;

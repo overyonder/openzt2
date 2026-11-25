@@ -45,6 +45,7 @@ pub enum NavigationPathGeometry {
 pub struct NavigationPathSurfaceChanges {
     pub ground_nodes: BTreeSet<u32>,
     pub elevated_nodes: BTreeSet<u32>,
+    pub affected_cells: BTreeSet<[u32; 2]>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

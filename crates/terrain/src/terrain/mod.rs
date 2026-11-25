@@ -3,6 +3,7 @@
 mod authored_terrain_brush_modes;
 mod defined_terrain_stroke_resolution;
 mod ground_path_surface_mask_selection;
+mod tank_water_surfaces;
 mod terrain_biome_detail_projection;
 mod terrain_biome_detail_types;
 mod terrain_brush_cursor_projection;
@@ -103,6 +104,7 @@ impl Plugin for TerrainPlugin {
     fn build(&self, app: &mut App) {
         app.init_asset::<authored_terrain_brush_modes::TerrainBrushMode>()
             .init_asset_loader::<authored_terrain_brush_modes::TerrainBrushModeLoader>()
+            .init_resource::<authored_terrain_brush_modes::TerrainBrushControls>()
             .add_systems(Startup, authored_terrain_brush_modes::load_authored_terrain_brush_modes)
             .register_required_components::<ZooCamera, TerrainWaterCameraPose>()
             .register_required_components::<ZooCamera, TerrainWaterCameraContact>()
@@ -129,6 +131,7 @@ impl Plugin for TerrainPlugin {
             .add_observer(terrain_ground_path_surface_projection::unlink_discarded_terrain_paint_footprint)
             .add_observer(water_regions::edit_retention::retain_water_owners_for_terrain_edit)
             .add_observer(water_regions::edit_retention::release_water_owners_from_discarded_terrain_edit)
+            .add_observer(tank_water_surfaces::remove_tank_wave_state)
             .add_message::<TerrainStroke>()
             .add_message::<DefinedTerrainStroke>()
             .add_message::<TerrainChanged>()
@@ -199,11 +202,13 @@ impl Plugin for TerrainPlugin {
                             .after(terrain_water_renderer_inputs::initialize_authored_terrain_water_region_material_state),
                         apply_authored_water_impact_events_to_geometric_wave_channels
                             .after(terrain_water_renderer_inputs::advance_authored_terrain_water_surface_effect_state),
+                        openzt2_zoo_state::terrain::terrain_water_wave_register_projection::publish_terrain_water_wave_registers
+                            .after(apply_authored_water_impact_events_to_geometric_wave_channels),
                         terrain_water_view_selection::sample_terrain_water_camera_pose
                             .after(openzt2_player_controls::camera::ZooCameraPoseUpdateSystems),
                         terrain_water_renderer_inputs::project_authored_terrain_water_surface_coverage
                             .after(terrain_water_view_selection::sample_terrain_water_camera_pose)
-                            .after(apply_authored_water_impact_events_to_geometric_wave_channels),
+                            .after(openzt2_zoo_state::terrain::terrain_water_wave_register_projection::publish_terrain_water_wave_registers),
                         terrain_water_view_selection::update_camera_terrain_water_membership
                             .after(terrain_water_view_selection::sample_terrain_water_camera_pose)
                             .after(water_regions::authored_membership::project_terrain_water_membership),
@@ -225,7 +230,11 @@ impl Plugin for TerrainPlugin {
                 Update,
                 (
                     terrain_water_renderer_targets::reconcile_water_material_render_views
-                        .after(publish_terrain_water_surfaces),
+                        .after(publish_terrain_water_surfaces)
+                        .after(tank_water_surfaces::project_authored_tank_water_draws),
+                    tank_water_surfaces::project_authored_tank_water_draws
+                        .after(initialize_authored_terrain_water_renderer_targets)
+                        .before(terrain_water_renderer_inputs::advance_authored_terrain_water_surface_effect_state),
                     terrain_water_wake_capability::reconcile_affected_water_wake_capabilities
                         .after(publish_terrain_water_surfaces)
                         .after(terrain_water_renderer_inputs::initialize_authored_terrain_water_region_material_state),
@@ -338,7 +347,9 @@ impl Plugin for TerrainPlugin {
             .add_systems(
                 Update,
                 (
-                    update_terrain_brush_preview_and_commit_completed_pointer_strokes.after(openzt2_zoo_state::construction::ConstructionCursorUpdateSet),
+                    authored_terrain_brush_modes::apply_authored_terrain_brush_controls
+                        .after(openzt2_zoo_state::construction::ConstructionCursorUpdateSet),
+                    update_terrain_brush_preview_and_commit_completed_pointer_strokes,
                     resolve_authored_terrain_brush_definitions_into_concrete_strokes,
                     terrain_live_brush_application::dispatch_held_terrain_strokes,
                 )

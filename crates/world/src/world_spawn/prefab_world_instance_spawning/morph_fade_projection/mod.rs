@@ -2,7 +2,6 @@ use std::time::Duration;
 
 use bevy::{
     app::{HierarchyPropagatePlugin, Propagate, PropagateSet},
-    color::Alpha,
     prelude::*,
 };
 use openzt2_world_state::application_schedule::FixedGameSet;
@@ -41,15 +40,23 @@ impl PrefabMorphFade {
 #[derive(Component, Clone, Copy, PartialEq)]
 pub(crate) struct PrefabMorphOpacity(pub(crate) f32);
 
-#[derive(Component)]
-struct PrefabMorphStandardMaterial {
-    source: Handle<StandardMaterial>,
-    variant: Handle<StandardMaterial>,
+#[derive(Component, Clone, Copy, PartialEq)]
+pub(crate) struct NamedPrefabOpacity(pub(crate) f32);
+
+pub(crate) fn projected_prefab_opacity(
+    morph: Option<&PrefabMorphOpacity>,
+    named: Option<&NamedPrefabOpacity>,
+) -> Option<f32> {
+    if morph.is_none() && named.is_none() {
+        return None;
+    }
+    Some(morph.map_or(1.0, |opacity| opacity.0) * named.map_or(1.0, |opacity| opacity.0))
 }
 
 pub(super) fn register_prefab_morph_fades(app: &mut App) {
-    app.add_plugins(HierarchyPropagatePlugin::<PrefabMorphOpacity>::new(
-        PostUpdate,
+    app.add_plugins((
+        HierarchyPropagatePlugin::<PrefabMorphOpacity>::new(PostUpdate),
+        HierarchyPropagatePlugin::<NamedPrefabOpacity>::new(PostUpdate),
     ))
     .add_systems(
         FixedUpdate,
@@ -57,11 +64,7 @@ pub(super) fn register_prefab_morph_fades(app: &mut App) {
     )
     .add_systems(
         PostUpdate,
-        (
-            publish_prefab_morph_opacity.before(PropagateSet::<PrefabMorphOpacity>::default()),
-            project_morph_opacity_onto_standard_materials
-                .after(PropagateSet::<PrefabMorphOpacity>::default()),
-        ),
+        publish_prefab_morph_opacity.before(PropagateSet::<PrefabMorphOpacity>::default()),
     );
 }
 
@@ -106,77 +109,6 @@ fn publish_prefab_morph_opacity(
             commands
                 .entity(entity)
                 .try_remove::<Propagate<PrefabMorphOpacity>>();
-        }
-    }
-}
-
-#[derive(bevy::ecs::query::QueryData)]
-#[query_data(mutable)]
-struct StandardMorphMaterial {
-    entity: Entity,
-    material: &'static mut MeshMaterial3d<StandardMaterial>,
-    opacity: Option<&'static PrefabMorphOpacity>,
-    binding: Option<&'static mut PrefabMorphStandardMaterial>,
-}
-
-fn project_morph_opacity_onto_standard_materials(
-    mut commands: Commands,
-    mut meshes: Query<
-        StandardMorphMaterial,
-        Or<(With<PrefabMorphOpacity>, With<PrefabMorphStandardMaterial>)>,
-    >,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-) {
-    for mut mesh in &mut meshes {
-        let Some(opacity) = mesh.opacity else {
-            if let Some(binding) = mesh.binding {
-                if mesh.material.0 == binding.variant {
-                    mesh.material.0 = binding.source.clone();
-                }
-                commands
-                    .entity(mesh.entity)
-                    .try_remove::<PrefabMorphStandardMaterial>();
-            }
-            continue;
-        };
-
-        if let Some(binding) = mesh
-            .binding
-            .as_ref()
-            .filter(|binding| mesh.material.0 == binding.variant)
-        {
-            let Some(source) = materials.get(&binding.source) else {
-                continue;
-            };
-            let alpha = source.base_color.alpha() * opacity.0;
-            let changed = materials
-                .get(&binding.variant)
-                .is_some_and(|variant| variant.base_color.alpha().to_bits() != alpha.to_bits());
-            if !changed {
-                continue;
-            }
-            if let Some(variant) = materials.get_mut(&binding.variant) {
-                variant.into_inner().base_color.set_alpha(alpha);
-            }
-            continue;
-        }
-
-        let Some(mut variant) = materials.get(&mesh.material.0).cloned() else {
-            continue;
-        };
-        variant.alpha_mode = AlphaMode::Blend;
-        variant
-            .base_color
-            .set_alpha(variant.base_color.alpha() * opacity.0);
-        let binding = PrefabMorphStandardMaterial {
-            source: mesh.material.0.clone(),
-            variant: materials.add(variant),
-        };
-        mesh.material.0 = binding.variant.clone();
-        if let Some(mut current) = mesh.binding {
-            *current = binding;
-        } else {
-            commands.entity(mesh.entity).try_insert(binding);
         }
     }
 }

@@ -1,7 +1,4 @@
-use bevy::{
-    ecs::{entity_disabling::Disabled, query::Allow},
-    prelude::*,
-};
+use bevy::prelude::*;
 
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
@@ -13,29 +10,23 @@ use openzt2_game_data::AssetId;
 use openzt2_interface_state::information::zoo_message_types::{ZooMessage, ZooMessages};
 use openzt2_world_state::world_spawn::{
     world_load_completion_marker::WorldLoadCompleted,
-    world_membership_types::{DefinitionId, WorldMember, WorldRoot},
-    zoo_entrance_anchor_synchronization::ZooEntrance,
+    world_membership_types::{WorldMembers, WorldRoot},
 };
 use openzt2_zoo_state::progression::{
     fame_types::{FameAuthoredPresentation, FameGateAppearanceRequested},
     profile_scenario_variables::ProfileScenarioVariables,
 };
-use super::authored_fame_script::{entrance_gate_definitions, AuthoredFameScript, FameScriptEffect};
+use super::authored_fame_script::{AuthoredFameScript, FameEntityFacts, FameScriptEffect};
 
 use super::{
     award_and_progression_fact_types::{ProgressionFactChanged, ScenarioAwardPointTotal},
-    catalogue_definition_index_queries::find_catalogue_definition_index,
-    catalogue_unlock_set_operations::{
-        catalogue_definition_is_unlocked_at_index, mark_catalogue_definition_unlocked_at_index,
-    },
     fame_calculations::{
         select_fame_level_for_rating_and_guest_count, update_current_and_maximum_fame,
     },
     fame_types::{Fame, ZooMaximumFame},
     profile_challenge_types::TotalAnimalsReleasedCount,
     rating_types::ZooRating,
-    unlock_types::UnlockedCatalogueDefinitionSet,
-    zoo_rating_input_types::{EarnedAwardFamePoints, GuestRatingFacts, LivingAnimalPopulation},
+    zoo_rating_input_types::{GuestRatingFacts, GuestSpeciesSeen},
 };
 
 pub(super) fn apply_scenario_maximum_fame_requests(
@@ -73,7 +64,7 @@ pub(super) struct FamePresentation<'w, 's> {
     variables: Option<Res<'w, ProfileScenarioVariables>>,
 }
 
-pub(super) fn update_fame_and_apply_authored_fame_unlocks(
+pub(super) fn update_authored_fame(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
 
@@ -84,26 +75,19 @@ pub(super) fn update_fame_and_apply_authored_fame_unlocks(
         (
             Entity,
             &mut Fame,
-            &LivingAnimalPopulation,
+            Option<&WorldMembers>,
             &GuestRatingFacts,
-            &EarnedAwardFamePoints,
+            Option<&GuestSpeciesSeen>,
+            &super::authored_award_programs::AuthoredAwardPoints,
+            Option<&super::AwardGlobalVariables>,
             &ZooRating,
             &ScenarioAwardPointTotal,
             &TotalAnimalsReleasedCount,
-            &mut UnlockedCatalogueDefinitionSet,
             Option<(&mut AuthoredFameScript, &mut FameAuthoredPresentation)>,
         ),
         With<WorldRoot>,
     >,
-    gates: Query<
-        (
-            Entity,
-            &WorldMember,
-            &DefinitionId,
-            Option<&openzt2_zoo_state::progression::fame_types::PendingFameGatePrefab>,
-        ),
-        (With<ZooEntrance>, Allow<Disabled>),
-    >,
+    entities: FameEntityFacts,
     mut presentation: FamePresentation,
     mut changed: MessageWriter<ProgressionFactChanged>,
 ) {
@@ -114,32 +98,33 @@ pub(super) fn update_fame_and_apply_authored_fame_unlocks(
     for (
         world,
         mut world_fame,
-        animals,
+        members,
         guests,
+        views,
         awards,
+        award_globals,
         rating,
         scenario_award_points,
         total_animals_released,
-        mut unlocks,
         script,
     ) in &mut worlds
     {
         let active = active_world == Some(world);
-        let mut fame_written = false;
         let mut next_fame = *world_fame;
         if let Some((mut script, mut authored_ui)) = script {
-            let gates = entrance_gate_definitions(world, definitions, &gates);
             let result = script.evaluate(
                 &script_sources,
                 &script_assets,
-                animals,
-                guests,
+                views,
                 next_fame,
                 awards.0,
                 scenario_award_points.0,
                 total_animals_released.0,
-                &gates,
+                &entities,
+                members,
+                definitions,
                 presentation.variables.as_deref(),
+                award_globals,
             );
             let result = match result {
                 Ok(result) => result,
@@ -153,7 +138,6 @@ pub(super) fn update_fame_and_apply_authored_fame_unlocks(
                 match effect {
                     FameScriptEffect::Fame(half_stars, percent) => {
                         update_current_and_maximum_fame(&mut next_fame, half_stars, percent);
-                        fame_written = true;
                         if world_fame.set_if_neq(next_fame) && active {
                             changed.write(ProgressionFactChanged::Fame);
                         }
@@ -201,39 +185,8 @@ pub(super) fn update_fame_and_apply_authored_fame_unlocks(
                 guests.count,
             );
             update_current_and_maximum_fame(&mut next_fame, next, f32::from(next) * 10.0);
-            fame_written = true;
             if world_fame.set_if_neq(next_fame) && active {
                 changed.write(ProgressionFactChanged::Fame);
-            }
-        }
-
-        if !active || !fame_written {
-            continue;
-        }
-        let next_half_stars = next_fame.half_stars;
-        for threshold in definitions
-            .fame_thresholds()
-            .filter(|threshold| threshold.level <= u16::from(next_half_stars))
-        {
-            let targets = &threshold.unlocks;
-            if !targets
-                .iter()
-                .all(|target| find_catalogue_definition_index(definitions, *target).is_some())
-            {
-                continue;
-            }
-            for target in targets {
-                let id = *target;
-                if let Some(index) = find_catalogue_definition_index(definitions, id) {
-                    if catalogue_definition_is_unlocked_at_index(&unlocks, index) {
-                        continue;
-                    }
-                    if mark_catalogue_definition_unlocked_at_index(&mut unlocks, index)
-                        == Some(true)
-                    {
-                        changed.write(ProgressionFactChanged::Unlock(id));
-                    }
-                }
             }
         }
     }

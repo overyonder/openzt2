@@ -17,7 +17,7 @@ pub(super) struct PendingDetachCreatedObject {
 }
 
 #[derive(Component)]
-struct HideDetachCreatedInventory;
+pub(super) struct HideDetachCreatedInventory;
 
 pub(super) fn hide_hydrated_inventory(
     hydrated: On<Add<PrefabSourceAssetHandle>>,
@@ -26,7 +26,9 @@ pub(super) fn hide_hydrated_inventory(
 ) {
     if let Ok(mut visibility) = inventory.get_mut(hydrated.entity) {
         visibility.set_if_neq(Visibility::Hidden);
-        commands.entity(hydrated.entity).try_remove::<HideDetachCreatedInventory>();
+        commands
+            .entity(hydrated.entity)
+            .try_remove::<HideDetachCreatedInventory>();
     }
 }
 
@@ -123,8 +125,18 @@ pub(super) fn hydrate_detach_created_objects(
     let Some(definitions) = assets.definitions.get(&assets.definition_assets) else {
         return;
     };
-    for (pending_entity, mut loading, definition, world, id, pose, transform, visibility, contained, motion) in
-        &mut pending
+    for (
+        pending_entity,
+        mut loading,
+        definition,
+        world,
+        id,
+        pose,
+        transform,
+        visibility,
+        contained,
+        motion,
+    ) in &mut pending
     {
         if let Some(prefab) = loading.prefab.as_ref() {
             if !loading.settled {
@@ -202,7 +214,9 @@ pub(super) fn hydrate_detach_created_objects(
         let hide_inventory = policy.is_some_and(|policy| policy.hides_contents);
         if let Some((prefab_handle, prefab)) = presentation.as_ref() {
             if hide_inventory {
-                commands.entity(pending_entity).insert(HideDetachCreatedInventory);
+                commands
+                    .entity(pending_entity)
+                    .insert(HideDetachCreatedInventory);
             }
             hydrate_loaded_scene_prefab_into_world_instance_root(
                 &mut commands,
@@ -219,13 +233,19 @@ pub(super) fn hydrate_detach_created_objects(
             );
         } else {
             let mut entity = commands.entity(pending_entity);
-            entity.insert(Inspectable { definition: object.id });
+            entity.insert(Inspectable {
+                definition: object.id,
+            });
             if let Some(mut transform) = transform {
                 transform.set_if_neq(instance_transform);
             } else {
                 entity.insert(instance_transform);
             }
-            let displayed = if hide_inventory { Visibility::Hidden } else { Visibility::Inherited };
+            let displayed = if hide_inventory {
+                Visibility::Hidden
+            } else {
+                Visibility::Inherited
+            };
             if let Some(mut visibility) = visibility {
                 visibility.set_if_neq(displayed);
             } else {

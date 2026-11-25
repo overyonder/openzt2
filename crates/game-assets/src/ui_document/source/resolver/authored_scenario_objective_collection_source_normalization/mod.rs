@@ -8,27 +8,41 @@ use crate::source_document::{
     ui::model::SourceUiWidgetKind,
 };
 
+pub(in crate::ui_document::source) const OBJECTIVE_GROUP_TEMPLATE_FIELD: &str =
+    "openzt2ObjectiveGroupTemplate";
+pub(super) const OBJECTIVE_GROUP_TEMPLATE_PREFIX: &str = "openzt2_scenario_objective_group_";
+pub(super) const OBJECTIVE_ROW_TEMPLATE_PREFIX: &str = "openzt2_scenario_objective_row_";
+
 pub(super) fn normalize_authored_scenario_objective_collection(
     node: &mut OrderedSourceDocumentNode,
+    document: openzt2_game_data::AssetId,
 ) {
     if node.name != "ZTGoalPanel" {
         return;
     }
 
-    let objective_row_template = create_authored_scenario_objective_row_template(node);
+    let template_owner = format!("{:032x}_{}", u128::from_le_bytes(document.0), node.span.start);
+    let row_template_name = format!("{OBJECTIVE_ROW_TEMPLATE_PREFIX}{template_owner}");
+    let objective_row_template =
+        create_authored_scenario_objective_row_template(node, &row_template_name);
     let scenario_overview = create_authored_scenario_overview_layout(node);
+    let group_template = node
+        .element_children()
+        .find(|child| child.name == "group")
+        .and_then(|group| {
+            group
+                .element_children()
+                .find(|widget| SourceUiWidgetKind::is_known_tag(&widget.name))
+        })
+        .cloned();
 
     node.name = "UIListBox".into();
-    node.attributes.extend([
+    node.attributes.push(
         OrderedSourceDocumentAttribute::new_synthetic_ordered_source_document_attribute(
             "openzt2ListSource",
             "scenarioObjectives",
         ),
-        OrderedSourceDocumentAttribute::new_synthetic_ordered_source_document_attribute(
-            "openzt2RowTemplate",
-            "openzt2_scenario_objective_row",
-        ),
-    ]);
+    );
 
     let mut normalized_children = node
         .children
@@ -47,6 +61,12 @@ pub(super) fn normalize_authored_scenario_objective_collection(
         .cloned()
         .collect::<Vec<_>>();
     if let Some(objective_row_template) = objective_row_template {
+        node.attributes.push(
+            OrderedSourceDocumentAttribute::new_synthetic_ordered_source_document_attribute(
+                "openzt2RowTemplate",
+                row_template_name,
+            ),
+        );
         normalized_children.push(OrderedSourceDocumentChild::Element(Box::new(
             objective_row_template,
         )));
@@ -56,6 +76,37 @@ pub(super) fn normalize_authored_scenario_objective_collection(
             scenario_overview,
         )));
     }
+    if let Some(mut group_template) = group_template {
+        let template_name = format!("{OBJECTIVE_GROUP_TEMPLATE_PREFIX}{template_owner}");
+        group_template
+            .attributes
+            .retain(|attribute| attribute.name() != "templateName");
+        group_template.attributes.push(
+            OrderedSourceDocumentAttribute::new_synthetic_ordered_source_document_attribute(
+                "templateName",
+                template_name.as_str(),
+            ),
+        );
+        let field = OrderedSourceDocumentNode::new_synthetic_ordered_source_document_node(
+            "field".into(),
+            vec![
+                OrderedSourceDocumentAttribute::new_synthetic_ordered_source_document_attribute(
+                    "name",
+                    OBJECTIVE_GROUP_TEMPLATE_FIELD,
+                ),
+                OrderedSourceDocumentAttribute::new_synthetic_ordered_source_document_attribute(
+                    "fmt",
+                    template_name,
+                ),
+            ],
+            OrderedSourceDocumentChildren::from_ordered_source_document_child_items(Vec::new()),
+            node.span,
+        );
+        normalized_children.extend(
+            [group_template, field]
+                .map(|child| OrderedSourceDocumentChild::Element(Box::new(child))),
+        );
+    }
     node.children = OrderedSourceDocumentChildren::from_ordered_source_document_child_items(
         normalized_children,
     );
@@ -63,6 +114,7 @@ pub(super) fn normalize_authored_scenario_objective_collection(
 
 fn create_authored_scenario_objective_row_template(
     node: &OrderedSourceDocumentNode,
+    template_name: &str,
 ) -> Option<OrderedSourceDocumentNode> {
     let objective_visual_rows = node
         .children
@@ -109,7 +161,7 @@ fn create_authored_scenario_objective_row_template(
                 ),
                 OrderedSourceDocumentAttribute::new_synthetic_ordered_source_document_attribute(
                     "templateName",
-                    "openzt2_scenario_objective_row",
+                    template_name,
                 ),
                 OrderedSourceDocumentAttribute::new_synthetic_ordered_source_document_attribute(
                     "autosize", "true",

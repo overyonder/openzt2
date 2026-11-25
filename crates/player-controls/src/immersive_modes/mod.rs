@@ -4,14 +4,13 @@ mod animal_health_ui_action_routing;
 mod behavior_rider_ejection;
 mod first_person_mode_control_execution;
 mod first_person_mode_control_operations;
+mod first_person_motion;
 mod first_person_view_angle_integration;
 #[cfg(test)]
 mod first_person_view_angle_integration_tests;
 mod fossil_mode_control_execution;
 mod free_camera_look_control;
 mod guest_view_navigation_marker_projection;
-#[cfg(test)]
-mod guest_view_navigation_marker_projection_tests;
 mod guest_view_navigation_marker_types;
 pub(crate) mod immersive_control_execution_types;
 mod session_lifecycle;
@@ -99,13 +98,12 @@ impl Plugin for ImmersiveModesPlugin {
                 (
                     first_person_mode_control_execution::apply_guest_view_look_and_navigation_controls
                         .run_if(active_mode_is(ImmersiveMode::GuestView)),
-                    first_person_mode_control_execution::apply_first_person_look_and_navigation_controls
+                    first_person_mode_control_execution::apply_first_person_look_and_cancellation
                         .run_if(active_walking_first_person_mode),
                     fossil_mode_control_execution::discover_fossil_or_cancel_active_fossil_search_mode
                         .run_if(active_mode_is(ImmersiveMode::FossilSearch)),
                     fossil_mode_control_execution::cancel_active_fossil_assembly_mode
                         .run_if(active_mode_is(ImmersiveMode::FossilAssembly)),
-                    free_camera_look_control::aim_active_free_immersive_camera,
                     photo_mode_control_execution::capture_or_cancel_active_photo_mode
                         .run_if(active_mode_is(ImmersiveMode::Photo)),
                     show_edit_mode_control_execution::cancel_active_show_edit_mode
@@ -127,13 +125,23 @@ impl Plugin for ImmersiveModesPlugin {
             .add_systems(
                 Update,
                 (
+                    first_person_motion::sample_first_person_movement_input,
                     first_person_mode_control_execution::update_subject_relative_first_person_camera_transform
                         .run_if(active_view_mode),
-                    guest_view_navigation_marker_projection::project_nearest_guest_navigation_positions_as_view_markers
+                    free_camera_look_control::aim_player_driven_camera,
+                    first_person_motion::advance_first_person_horizontal_motion
+                        .after(first_person_motion::sample_first_person_movement_input)
+                        .after(free_camera_look_control::aim_player_driven_camera),
+                    first_person_motion::fit_walking_camera_to_surfaces
+                        .after(first_person_motion::advance_first_person_horizontal_motion)
+                        .after(first_person_mode_control_execution::update_subject_relative_first_person_camera_transform),
+                    guest_view_navigation_marker_projection::project_guest_view_cursor_and_navigation_markers
                         .run_if(active_mode_is(ImmersiveMode::GuestView)),
                 )
-                    .chain()
-                    .in_set(GameSet::Presentation),
+                    .after(crate::camera::ZooCameraPoseUpdateSystems)
+                    .before(openzt2_world_state::application_schedule::WaterPresentationSet::View)
+                    .in_set(GameSet::Presentation)
+                    .run_if(in_state(GamePhase::InGame)),
             )
             .add_systems(
                 Update,

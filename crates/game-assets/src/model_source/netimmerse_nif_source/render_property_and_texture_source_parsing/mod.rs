@@ -23,7 +23,7 @@ use super::{
         parse_object_identity_and_controller_links, parse_transformable_scene_object,
     },
     source_error::NetImmerseNifSourceError,
-    NETIMMERSE_VERSION_10_0_1_3, NETIMMERSE_VERSION_10_2_0_0,
+    NETIMMERSE_VERSION_10_0_1_3, NETIMMERSE_VERSION_10_1_0_0, NETIMMERSE_VERSION_10_2_0_0,
 };
 
 type Result<T> = std::result::Result<T, NetImmerseNifSourceError>;
@@ -251,30 +251,21 @@ pub(super) fn parse_source_texture(
             )
         })
         .transpose()?;
-    let (file_name, pixel_data_ref) = if use_external == 1 {
-        (
-            Some(read_sized_string(
-                source_bytes,
-                cursor,
-                source_path,
-                "NiSourceTexture external file",
-            )?),
-            None,
-        )
-    } else if use_internal == Some(0) {
-        (None, None)
-    } else {
-        (
-            None,
-            Some(read_i32_little_endian(
+    let file_name = (use_external == 1 || encoded_version >= NETIMMERSE_VERSION_10_1_0_0)
+        .then(|| read_sized_string(source_bytes, cursor, source_path, "NiSourceTexture file"))
+        .transpose()?;
+    let pixel_data_ref = ((use_external == 0 && use_internal != Some(0))
+        || encoded_version >= NETIMMERSE_VERSION_10_1_0_0)
+        .then(|| {
+            read_i32_little_endian(
                 source_bytes,
                 cursor,
                 source_path,
                 "NiSourceTexture pixel data ref",
-            )?),
-        )
-    };
-    Ok(NetImmerseNiSourceTexture {
+            )
+        })
+        .transpose()?;
+    let texture = NetImmerseNiSourceTexture {
         object,
         use_external,
         use_internal,
@@ -304,7 +295,16 @@ pub(super) fn parse_source_texture(
             source_path,
             "NiSourceTexture static flag",
         )?,
-    })
+    };
+    if encoded_version >= 0x0a01_0067 {
+        read_u8(
+            source_bytes,
+            cursor,
+            source_path,
+            "NiSourceTexture direct render flag",
+        )?;
+    }
+    Ok(texture)
 }
 
 pub(super) fn parse_alpha_property(

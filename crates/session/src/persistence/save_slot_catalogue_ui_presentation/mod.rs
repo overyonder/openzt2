@@ -232,75 +232,76 @@ fn presents_originals(
 }
 
 #[derive(Component)]
-pub(super) struct OriginalSaveDeleteControlState {
-    previous_enabled: bool,
-}
+pub(super) struct OriginalSaveDeleteRestricted;
 
 pub(super) fn project_original_save_delete_control_state(
     mut commands: Commands,
     rows: Query<(&ChildOf, &UiSelected, &SavedGameSource), With<UiListRow>>,
+    changed_rows: Query<
+        (),
+        (
+            With<UiListRow>,
+            Or<(Changed<UiSelected>, Changed<SavedGameSource>)>,
+        ),
+    >,
+    mut removed_sources: RemovedComponents<SavedGameSource>,
     lists: Query<(&UiDocumentOwner, &UiListPolicy)>,
     roots: Query<&UiDocumentRoot>,
     documents: Res<Assets<UiDocumentAsset>>,
+    mut document_events: MessageReader<AssetEvent<UiDocumentAsset>>,
+    context: openzt2_ui::active_authored_ui_context::ActiveAuthoredUiContext,
     controls: Query<(
         Entity,
-        &openzt2_interface_state::ui::authored_ui_action_projection_components::UiPersistenceActions,
+        Ref<openzt2_interface_state::ui::authored_ui_action_projection_components::UiPersistenceActions>,
         &UiDocumentOwner,
-        &openzt2_interface_state::ui::authored_ui_node_projection_components::UiNodeId,
-        &openzt2_interface_state::ui::authored_ui_interaction_enabled_state::UiInteractionEnabled,
-        Option<&OriginalSaveDeleteControlState>,
+        Has<OriginalSaveDeleteRestricted>,
+        Has<bevy::ui::InteractionDisabled>,
     )>,
-    mut presentation: MessageWriter<
-        openzt2_ui::authored_ui_presentation_action_application::RequestUiPresentationAction,
-    >,
+    mut enabled_controls: RemovedComponents<bevy::ui::InteractionDisabled>,
 ) {
-    use openzt2_game_data::ui_document::action::{
-        persistence::UiPersistenceAction, presentation::UiPresentationAction,
-    };
-    use openzt2_ui::authored_ui_presentation_action_application::RequestUiPresentationAction;
-    for (entity, actions, owner, node, enabled, suppressed) in &controls {
-        let Some(document) = roots
-            .get(owner.0)
-            .ok()
-            .and_then(|root| documents.get(&root.document))
-        else {
-            continue;
-        };
-        if !actions
-            .authored_action_records(document)
-            .any(|record| record.action == UiPersistenceAction::DeleteWorldSnapshotFromSelectedSlot)
+    use openzt2_game_data::ui_document::action::persistence::UiPersistenceAction;
+
+    let selection_changed = !changed_rows.is_empty() | (removed_sources.read().count() != 0);
+    let documents_changed = document_events.read().count() != 0;
+    let native_gate_changed = enabled_controls.read().any(|entity| {
+        controls
+            .get(entity)
+            .is_ok_and(|(_, _, _, restricted, _)| restricted)
+    });
+    for (entity, actions, owner, restricted, native_disabled) in &controls {
+        if !selection_changed && !documents_changed && !native_gate_changed && !actions.is_changed()
         {
             continue;
         }
-        let original = matches!(
-            selected_save_slot_in_document(owner.0, &rows, &lists),
-            Some(SavedGameSource::Original(_))
-        );
-        let update = match (original, suppressed) {
-            (true, None) => {
+        let restrict = roots
+            .get(owner.0)
+            .ok()
+            .and_then(|root| documents.get(&root.document))
+            .is_some_and(|document| {
+                actions.authored_action_records(document).any(|record| {
+                    record.action == UiPersistenceAction::DeleteWorldSnapshotFromSelectedSlot
+                })
+            })
+            && matches!(
+                selected_save_slot_in_document(owner.0, &rows, &lists),
+                Some(SavedGameSource::Original(_))
+            );
+        if restrict {
+            if !restricted {
+                commands.entity(entity).insert(OriginalSaveDeleteRestricted);
+            }
+            if !native_disabled {
                 commands
                     .entity(entity)
-                    .insert(OriginalSaveDeleteControlState {
-                        previous_enabled: enabled.0,
-                    });
-                Some(false)
+                    .insert(bevy::ui::InteractionDisabled);
             }
-            (false, Some(state)) => {
-                commands
-                    .entity(entity)
-                    .remove::<OriginalSaveDeleteControlState>();
-                Some(state.previous_enabled)
+        } else if restricted {
+            let authored_enabled = context.enabled(entity);
+            let mut entity = commands.entity(entity);
+            entity.remove::<OriginalSaveDeleteRestricted>();
+            if authored_enabled {
+                entity.remove::<bevy::ui::InteractionDisabled>();
             }
-            _ => None,
-        };
-        if let Some(enabled) = update {
-            presentation.write(RequestUiPresentationAction {
-                document_root: owner.0,
-                action: UiPresentationAction::SetTargetNodeInteractionEnabled {
-                    target_node: node.id,
-                    enabled,
-                },
-            });
         }
     }
 }

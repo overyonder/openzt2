@@ -5,12 +5,18 @@ mod running_show_schedule;
 mod scheduled_trick_execution;
 mod show_audience_lifecycle;
 mod show_audience_types;
+mod show_run_presentation;
+pub use show_run_presentation::{ShowAudienceFeedback, ShowMasterOfCeremoniesCue};
 mod show_donation_summary_presentation;
 mod show_editor_interaction_types;
 mod show_editor_presentation_lifecycle;
+mod show_mixer_presentation;
+mod show_mixer_slots;
+pub use show_mixer_slots::{
+    EditShowMixerSlot, ShowMixerSlotChoice, ShowMixerTimeSlot, ShowMixerWait,
+};
 mod show_editor_ui_action_routing;
 pub(crate) mod show_event_lifecycle;
-mod show_guest_need;
 mod show_scoring;
 mod show_trick_props;
 mod show_viewing_locations;
@@ -25,7 +31,7 @@ mod show_schedule_ui_action_routing;
 mod show_schedule_ui_mutation_operations;
 mod show_stage_identification_and_hydration;
 use openzt2_zoo_state::shows::show_stage_types;
-mod show_timing_operations;
+pub mod show_timing_operations;
 
 use bevy::prelude::*;
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::BehaviorStepFixedSet;
@@ -50,19 +56,37 @@ impl Plugin for ShowsPlugin {
         };
         app.add_observer(activated_behavior_actor::<openzt2_zoo_state::behavior_task_execution_types::running_actions::RunBehaviorWatchShow>.pipe(show_audience_lifecycle::bind_ready_show_watch_actions));
 
+        app.add_observer(show_mixer_presentation::clear_closed_mixer_menu)
+            .add_systems(Startup, show_mixer_presentation::load_show_mixer_fragments)
+            .add_systems(
+                Update,
+                show_mixer_presentation::route_live_show_mixer_controls
+                    .in_set(GameSet::Intent)
+                    .run_if(in_state(GamePhase::InGame)),
+            )
+            .add_systems(
+                Update,
+                (
+                    show_mixer_presentation::project_live_show_mixer,
+                    show_mixer_presentation::project_authored_show_score_pips,
+                    show_mixer_presentation::bind_projected_show_mixer_fields
+                        .after(show_mixer_presentation::project_live_show_mixer),
+                    show_mixer_presentation::attach_show_mixer_tricks_to_authored_row
+                        .after(show_mixer_presentation::project_live_show_mixer),
+                )
+                    .in_set(GameSet::Ui)
+                    .run_if(in_state(GamePhase::InGame)),
+            );
+        app.add_systems(Update, show_mixer_slots::apply_show_mixer_slot_edits
+            .after(show_mixer_presentation::route_live_show_mixer_controls)
+            .in_set(GameSet::Intent)
+            .after(show_schedule_ui_action_routing::route_authored_show_schedule_actions_into_rows_and_editor_selection)
+            .after(show_editor_ui_action_routing::route_authored_show_editor_actions_into_selection_and_immersive_mode_state)
+            .run_if(in_state(GamePhase::InGame)));
         app.register_required_components::<openzt2_world_state::world_spawn::world_membership_types::WorldRoot, WorldTrickPopularity>()
             .init_asset::<authored_show_rewards::AuthoredShowRewards>()
             .init_asset_loader::<authored_show_rewards::AuthoredShowRewardsLoader>()
-            .init_asset::<show_guest_need::ShowNeedPolicy>()
-            .init_asset_loader::<show_guest_need::ShowNeedPolicyLoader>()
-            .add_systems(Startup, (
-                authored_show_rewards::load_authored_show_rewards,
-                show_guest_need::load_show_need_policy,
-            ))
-            .add_systems(FixedUpdate, show_guest_need::advance_show_needs
-                .in_set(FixedGameSet::Think)
-                .before(openzt2_zoo_state::guests::GuestDestinationSelection)
-                .run_if(in_state(GamePhase::InGame)))
+            .add_systems(Startup, authored_show_rewards::load_authored_show_rewards)
             .add_systems(FixedUpdate, show_scoring::grow_trick_popularity
                 .in_set(FixedGameSet::Clock)
                 .run_if(in_state(GamePhase::InGame)))
@@ -70,12 +94,14 @@ impl Plugin for ShowsPlugin {
             .add_message::<ScheduledShowTrickScored>()
             .add_message::<ShowRunFinished>()
             .add_message::<running_show_schedule::ShowRunCancelled>()
+            .add_message::<running_show_schedule::ShowPhaseStarted>()
             .add_message::<ShowAudienceReaction>()
+            .add_message::<EditShowMixerSlot>()
+            .add_message::<ShowAudienceFeedback>()
+            .add_message::<ShowMasterOfCeremoniesCue>()
             .add_observer(show_audience_lifecycle::clear_completed_show_watch_action)
             .add_observer(show_audience_lifecycle::discard_experience_when_guest_stops_watching)
             .add_observer(show_event_lifecycle::discard_delivered_event_when_its_window_retires)
-            .add_observer(show_trick_props::remove_completed_prop)
-            .add_observer(scheduled_trick_execution::release_tokens_when_running_show_trick_is_removed)
             .add_message::<CommitShowPlatformUpgradeEdit>()
             .add_message::<ShowPlatformUpgradeEditAcknowledged>()
             .add_message::<RestoreShowPlatformUpgrade>()
@@ -173,6 +199,8 @@ impl Plugin for ShowsPlugin {
                         .after(show_audience_lifecycle::retire_interrupted_show_watch_actions),
                     show_event_lifecycle::update_authored_show_event_windows
                         .after(show_event_lifecycle::schedule_authored_animal_show_events),
+                    show_run_presentation::dispatch_run_presentation
+                        .after(running_show_schedule::start_next_stage_show_or_break),
                     show_audience_lifecycle::complete_watch_actions_after_show
                         .after(running_show_schedule::advance_running_stage_shows),
                 )

@@ -1,6 +1,8 @@
-use super::guest_definition_queries::find_guest_definition;
 use super::guest_definition_queries::guest_need_rows;
-use bevy::prelude::*;
+use bevy::{platform::collections::HashMap, prelude::*};
+use openzt2_game_data::AssetId;
+use openzt2_game_data::world_definitions::guest_simulation_definitions::GuestRarity;
+use openzt2_world_state::simulation_time::deterministic_random_stream::DeterministicRng;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use super::guest_simulation_calculations::apply_q16;
@@ -83,8 +85,7 @@ pub(super) fn tick_guest_need_cadences(
 #[allow(clippy::type_complexity)]
 pub(super) fn decay_due_guest_needs(
     mut due: MessageReader<GuestNeedAdjustmentDue>,
-    definitions: Res<Assets<WorldDefinitionAsset>>,
-    active_definitions: Res<WorldDefinitions>,
+    rates: Res<GuestArchetypeTables>,
     mut guests: Query<
         (
             &GuestArchetype,
@@ -102,9 +103,6 @@ pub(super) fn decay_due_guest_needs(
         With<Guest>,
     >,
 ) {
-    let Some(definitions) = active_definitions.get(&definitions) else {
-        return;
-    };
     for adjustment in due.read() {
         let Ok((
             archetype,
@@ -122,65 +120,97 @@ pub(super) fn decay_due_guest_needs(
         else {
             continue;
         };
-        let Some((_, definition)) = find_guest_definition(definitions, archetype.0) else {
+        let Some(needs) = rates.rates.get(&archetype.0) else {
             continue;
         };
-        let Some(needs) = guest_need_rows(definition) else {
-            continue;
-        };
-        if let Some(policy) = definition.happiness_need {
-            satisfaction.add_wellness_q16(policy.adjustment_q16.saturating_mul(-10));
+        if let Some(adjustment) = needs.happiness {
+            satisfaction.add_wellness_q16(adjustment);
         }
-        if let (Some(mut need), Some(policy)) = (viewing_need, definition.viewing_need) {
-            need.add_source_delta(policy.adjustment_q16);
+        if let (Some(mut need), Some(adjustment)) = (viewing_need, needs.viewing) {
+            need.add_source_delta(adjustment);
         }
+        let ordered = needs.ordered;
         let hunger = &mut *hunger;
-        apply_q16(
-            &mut hunger.value,
-            &mut hunger.residual_q16,
-            needs[0].adjustment_q16,
-        );
+        apply_q16(&mut hunger.value, &mut hunger.residual_q16, ordered[0]);
         let thirst = &mut *thirst;
-        apply_q16(
-            &mut thirst.value,
-            &mut thirst.residual_q16,
-            needs[1].adjustment_q16,
-        );
+        apply_q16(&mut thirst.value, &mut thirst.residual_q16, ordered[1]);
         let dessert = &mut *dessert;
-        apply_q16(
-            &mut dessert.value,
-            &mut dessert.residual_q16,
-            needs[2].adjustment_q16,
-        );
+        apply_q16(&mut dessert.value, &mut dessert.residual_q16, ordered[2]);
         let gift = &mut *gift;
-        apply_q16(
-            &mut gift.value,
-            &mut gift.residual_q16,
-            needs[3].adjustment_q16,
-        );
+        apply_q16(&mut gift.value, &mut gift.residual_q16, ordered[3]);
         let energy = &mut *energy;
-        apply_q16(
-            &mut energy.value,
-            &mut energy.residual_q16,
-            needs[4].adjustment_q16,
-        );
+        apply_q16(&mut energy.value, &mut energy.residual_q16, ordered[4]);
         let restroom = &mut *restroom;
-        apply_q16(
-            &mut restroom.value,
-            &mut restroom.residual_q16,
-            needs[5].adjustment_q16,
-        );
+        apply_q16(&mut restroom.value, &mut restroom.residual_q16, ordered[5]);
         let social = &mut *social;
-        apply_q16(
-            &mut social.value,
-            &mut social.residual_q16,
-            needs[6].adjustment_q16,
-        );
+        apply_q16(&mut social.value, &mut social.residual_q16, ordered[6]);
         let amusement = &mut *amusement;
         apply_q16(
             &mut amusement.value,
             &mut amusement.residual_q16,
-            needs[7].adjustment_q16,
+            ordered[7],
         );
     }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct NeedRates {
+    ordered: [i32; 8],
+    viewing: Option<i32>,
+    happiness: Option<i32>,
+}
+
+#[derive(Resource, Default, PartialEq, Eq)]
+pub(super) struct GuestArchetypeTables {
+    rates: HashMap<AssetId, NeedRates>,
+    rarity: [Vec<AssetId>; 3],
+}
+
+impl GuestArchetypeTables {
+    pub(super) fn choose_archetype(
+        &self,
+        rarity: GuestRarity,
+        rng: &mut DeterministicRng,
+    ) -> Option<AssetId> {
+        [
+            rarity,
+            GuestRarity::Common,
+            GuestRarity::Uncommon,
+            GuestRarity::Rare,
+        ]
+        .into_iter()
+        .map(|rarity| self.rarity[rarity as usize].as_slice())
+        .find(|cohort| !cohort.is_empty())
+        .map(|cohort| cohort[rng.next_u32() as usize % cohort.len()])
+    }
+}
+
+pub(super) fn compile_guest_archetype_tables(
+    assets: Res<Assets<WorldDefinitionAsset>>,
+    definitions: Res<WorldDefinitions>,
+    mut rates: ResMut<GuestArchetypeTables>,
+) {
+    if !assets.is_changed() && !definitions.is_changed() {
+        return;
+    }
+    let mut resolved = GuestArchetypeTables::default();
+    if let Some(definitions) = definitions.get(&assets) {
+        for definition in definitions.guest_definitions() {
+            resolved.rarity[definition.rarity as usize].push(definition.id);
+            let Some(needs) = guest_need_rows(definition) else {
+                continue;
+            };
+            resolved.rates.insert(
+                definition.id,
+                NeedRates {
+                    ordered: needs.map(|need| need.adjustment_q16),
+                    viewing: definition.viewing_need.map(|need| need.adjustment_q16),
+                    happiness: definition
+                        .happiness_need
+                        .map(|need| need.adjustment_q16.saturating_mul(-10)),
+                },
+            );
+        }
+    }
+    rates.set_if_neq(resolved);
 }

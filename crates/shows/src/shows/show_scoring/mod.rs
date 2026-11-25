@@ -1,4 +1,7 @@
-use bevy::prelude::*;
+use bevy::{
+    ecs::{entity::EntityHashMap, relationship::RelationshipTarget},
+    prelude::*,
+};
 use openzt2_game_assets::world_definitions::{
     world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions,
     world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
@@ -13,8 +16,8 @@ use openzt2_zoo_state::{
     progression::fame_types::Fame,
     shows::{
         running_show_types::{
-            RunningShow, RunningShowFromRow, RunningShowTrick, ScheduledShowTrickScored, ShowPhase,
-            ShowRunFinished, ShowTrickBeingPerformedBy, WorldTrickPopularity,
+            AnimalPerformingShowTrick, RunningShow, RunningShowFromRow, RunningShowTrick,
+            ScheduledShowTrickScored, ShowPhase, ShowRunFinished, WorldTrickPopularity,
         },
         show_schedule_types::{
             ScheduledShowRating, ScheduledShowTrickPerformance, ScheduledTrickPerformer,
@@ -26,7 +29,7 @@ use super::{
     authored_show_rewards::{
         AuthoredShowRewards, AuthoredShowRewardsSource, TrickPopularityPolicy,
     },
-    running_show_schedule::ShowRunSlotOrder,
+    running_show_schedule::{ActiveShowTrickOf, ShowRunSlotOrder},
     scheduled_trick_execution::performance_level,
 };
 
@@ -75,8 +78,8 @@ pub(super) fn grow_trick_popularity(
 
 #[derive(Component)]
 pub(super) struct ShowScoreSamples {
-    predicted: Vec<f32>,
-    actual: Vec<f32>,
+    predicted: EntityHashMap<f32>,
+    actual: EntityHashMap<f32>,
 }
 
 pub(super) fn predict_performance_scores(
@@ -102,33 +105,30 @@ pub(super) fn predict_performance_scores(
             continue;
         }
         let predicted = order
-            .0
-            .iter()
-            .filter_map(|&slot| {
+            .slots()
+            .filter_map(|slot| {
                 let (performance, performer) = slots.get(slot).ok()?;
                 let trick = definitions.find_trick(performance.trick)?;
                 performance_level(trick, performers.get(performer.0).ok()?)?;
-                Some(
+                Some((
+                    slot,
                     scaled_popularity(popularity.get(member.root).ok(), trick, &rewards.popularity)
                         * rewards.success_multiplier,
-                )
+                ))
             })
             .collect();
         commands.entity(entity).insert(ShowScoreSamples {
             predicted,
-            actual: Vec::new(),
+            actual: EntityHashMap::default(),
         });
     }
 }
 
 pub(super) fn apply_authored_trick_outcome_scores(
     mut results: MessageReader<ScheduledShowTrickScored>,
-    mut shows: Query<(
-        &mut RunningShow,
-        &mut RunningShowTrick,
-        &ShowTrickBeingPerformedBy,
-        &mut ShowScoreSamples,
-    )>,
+    performers: Query<&AnimalPerformingShowTrick>,
+    mut actions: Query<(&ActiveShowTrickOf, &mut RunningShowTrick)>,
+    mut shows: Query<(&mut RunningShow, &mut ShowScoreSamples)>,
     definitions: Res<WorldDefinitions>,
     assets: Res<Assets<WorldDefinitionAsset>>,
     source: Res<AuthoredShowRewardsSource>,
@@ -144,19 +144,25 @@ pub(super) fn apply_authored_trick_outcome_scores(
         return;
     };
     for result in results.read() {
-        let Ok((mut show, mut trick, performer, mut samples)) = shows.get_mut(result.show) else {
+        let Ok(action) = performers.get(result.performer) else {
+            continue;
+        };
+        let Ok((run, mut trick)) = actions.get_mut(*action.collection()) else {
+            continue;
+        };
+        let Ok((mut show, mut samples)) = shows.get_mut(result.show) else {
             continue;
         };
         if show.phase != ShowPhase::Conducting
             || trick.definition != result.trick
             || trick.slot != result.slot
             || trick.scored
-            || performer.0 != result.performer
+            || run.0 != result.show
         {
             continue;
         }
         trick.scored = true;
-        samples.actual.push(result.score);
+        samples.actual.insert(result.slot, result.score);
         show.completed_tricks = u32::try_from(samples.actual.len()).unwrap_or(u32::MAX);
         show.failed_tricks = show.failed_tricks.saturating_add(u32::from(result.failed));
         (show.trick_score, show.stars) = samples.rating(policy, rewards.score_fraction);
@@ -165,12 +171,14 @@ pub(super) fn apply_authored_trick_outcome_scores(
 
 impl ShowScoreSamples {
     fn rating(&self, policy: &ShowScoringPolicy, fraction: f32) -> (f32, f32) {
-        let mut scores: Vec<_> = self
-            .actual
-            .iter()
-            .copied()
-            .chain(self.predicted.iter().skip(self.actual.len()).copied())
-            .collect();
+        let mut scores: Vec<_> =
+            self.actual
+                .values()
+                .copied()
+                .chain(self.predicted.iter().filter_map(|(slot, &score)| {
+                    (!self.actual.contains_key(slot)).then_some(score)
+                }))
+                .collect();
         scores.sort_unstable_by(f32::total_cmp);
         let count = ((scores.len() as f32 * fraction) as usize).min(scores.len());
         if count == 0 || self.actual.is_empty() {
@@ -240,9 +248,11 @@ mod tests {
 
     #[test]
     fn rating_replaces_predictions_then_keeps_low_failures_and_high_successes() {
+        let mut world = World::new();
+        let slots: [Entity; 4] = std::array::from_fn(|_| world.spawn_empty().id());
         let samples = ShowScoreSamples {
-            predicted: vec![100.0, 90.0, 60.0, 80.0],
-            actual: vec![40.0, -20.0],
+            predicted: slots.into_iter().zip([100.0, 90.0, 60.0, 80.0]).collect(),
+            actual: [(slots[0], 40.0), (slots[1], -20.0)].into_iter().collect(),
         };
         let policy = ShowScoringPolicy {
             minimum_score: 0.0,

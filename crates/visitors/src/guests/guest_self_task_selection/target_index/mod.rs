@@ -45,6 +45,7 @@ impl<'a> GuestTargetIndex<'a> {
     pub(super) fn candidates<'s>(
         &'s self,
         world: Entity,
+        task_targets: &[String],
         requirements: &[BehaviorCandidateEligibilityRequirements],
         combined: &'s mut Vec<usize>,
     ) -> impl Iterator<Item = &'s GuestTarget<'a>> {
@@ -60,7 +61,20 @@ impl<'a> GuestTargetIndex<'a> {
                 && !requirement.candidate_type_identifiers.is_empty()
         });
         let ordinals = match typed_requirement {
-            None => bucket(None),
+            None if task_targets.is_empty() => bucket(None),
+            None => {
+                combined.clear();
+                for target in task_targets
+                    .iter()
+                    .map(String::as_str)
+                    .filter(|target| !matches!(*target, "self" | "path" | "fromtoken"))
+                {
+                    combined.extend_from_slice(bucket(Some(AssetId::from_key(target))));
+                }
+                combined.sort_unstable();
+                combined.dedup();
+                combined.as_slice()
+            }
             Some(requirement) => match requirement.candidate_type_junction {
                 BehaviorEligibilityFactJunction::All => {
                     bucket(requirement.candidate_type_identifiers.first().copied())

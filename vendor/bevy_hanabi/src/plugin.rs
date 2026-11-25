@@ -206,6 +206,7 @@ impl Plugin for HanabiPlugin {
             .init_resource::<ShaderCache>()
             .init_resource::<DebugSettings>()
             .init_resource::<Time<EffectSimulation>>()
+            .init_resource::<crate::EffectParticleBudget>()
             .configure_sets(
                 PostUpdate,
                 (

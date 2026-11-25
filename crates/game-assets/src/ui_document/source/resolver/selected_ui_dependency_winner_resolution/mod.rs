@@ -164,7 +164,11 @@ pub(super) fn rewrite_ui_source_node_dependency_paths_to_selected_winners(
     node.events
         .iter_mut()
         .flat_map(|block| &mut block.events)
-        .chain(node.hotkeys.iter_mut().map(|hotkey| &mut hotkey.event))
+        .chain(
+            node.hotkeys
+                .iter_mut()
+                .flat_map(|hotkey| &mut hotkey.events),
+        )
         .for_each(|event| {
             rewrite_ui_event_image_or_cursor_path_to_selected_winner(
                 owner,

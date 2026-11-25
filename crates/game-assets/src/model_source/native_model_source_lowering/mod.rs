@@ -11,6 +11,7 @@ use super::{
         bfb_geometry_and_skin_lowering::lower_blue_fang_render_parts,
         native_geometry_identity::netimmerse_geometry_skin_variant_path,
         nif_geometry_lowering::lower_netimmerse_geometry_block,
+        nif_material_lowering::lower_netimmerse_material_animations,
     },
     native_model_glb_encoding::encode_models_as_glb,
     native_model_source_lowering_types::{LoweredNativeModel, LoweredNativeModelMaterial},
@@ -143,6 +144,7 @@ pub fn lower_native_model_source(
                             decal_uv_set: material.decal_0_texture.as_ref().map_or(0, |texture| texture.uv_set),
                         },
                         texture_coordinate_animations,
+                        material_animations: lower_netimmerse_material_animations(&netimmerse_document, geometry_block_index)?,
                         labelled_asset_path: native_model_material_labelled_asset_path(
                             native_model_asset_path,
                             geometry_block_index,

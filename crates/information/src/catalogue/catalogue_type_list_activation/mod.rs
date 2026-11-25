@@ -17,7 +17,9 @@ use openzt2_zoo_state::staff::staff_lifecycle_messages::BeginStaffHirePlacement;
 use openzt2_world_state::world_spawn::selected_world_identity::SelectedWorldIdentity;
 use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 
-use crate::catalogue::catalogue_type_list_policy_operations::choose_remembered_or_first_included_catalogue_entry;
+use crate::catalogue::catalogue_type_list_policy_operations::{
+    CatalogueTypeListMemoryPolicy, choose_remembered_or_first_included_catalogue_entry,
+};
 use crate::catalogue::catalogue_world_availability_context::resolve_catalogue_world_session_mode_and_scenario_availability;
 use openzt2_interface_state::information::catalogue_types::PurchaseChoice;
 use openzt2_interface_state::information::catalogue_types::RememberedCatalogueEntry;
@@ -39,7 +41,13 @@ type CataloguePlacementMessages<'w> = (
 pub(crate) fn choose_catalogue_entry_from_activated_type_list_row(
     mut commands: Commands,
     mut ui_node_activations: MessageReader<UiNodeActivated>,
-    type_lists: Query<(), With<UiTypeListPolicy>>,
+    mut type_lists: Query<
+        (
+            Option<&CatalogueTypeListMemoryPolicy>,
+            Option<&mut RememberedCatalogueEntry>,
+        ),
+        With<UiTypeListPolicy>,
+    >,
     catalogue_rows: Query<&CatalogueRowEntry>,
     parent_entities: Query<&ChildOf>,
     document_owners: Query<
@@ -113,9 +121,11 @@ pub(crate) fn choose_catalogue_entry_from_activated_type_list_row(
         })
         .find(|entity| type_lists.contains(*entity))
         {
-            commands
-                .entity(type_list)
-                .insert(RememberedCatalogueEntry(catalogue_row.definition));
+            if let Ok((memory, saved)) = type_lists.get_mut(type_list) {
+                if memory.is_none_or(|memory| memory.remembers(entry)) {
+                    remember_entry(&mut commands, type_list, entry, saved);
+                }
+            }
         }
 
         let sex = std::iter::successors(Some(activation.node), |entity| {
@@ -243,10 +253,11 @@ mod tests {
             });
         }
         app.update();
-        assert!(app
-            .world()
-            .resource::<Messages<PurchaseChoice>>()
-            .is_empty());
+        assert!(
+            app.world()
+                .resource::<Messages<PurchaseChoice>>()
+                .is_empty()
+        );
 
         // Removing the second row makes an unread second row press unable to
         // suppress the stale On event; a delayed choice would expose either
@@ -255,10 +266,11 @@ mod tests {
             .entity_mut(row_two)
             .remove::<CatalogueRowEntry>();
         app.update();
-        assert!(app
-            .world()
-            .resource::<Messages<PurchaseChoice>>()
-            .is_empty());
+        assert!(
+            app.world()
+                .resource::<Messages<PurchaseChoice>>()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -341,10 +353,11 @@ pub(crate) fn choose_catalogue_entry_from_activated_type_list(
     mut commands: Commands,
     mut ui_node_activations: MessageReader<UiNodeActivated>,
     mut row_activations: MessageReader<UiNodeActivated>,
-    type_lists: Query<(
+    mut type_lists: Query<(
         &UiTypeListPolicy,
         Option<&TypeListFilter>,
-        Option<&RememberedCatalogueEntry>,
+        Option<&CatalogueTypeListMemoryPolicy>,
+        Option<&mut RememberedCatalogueEntry>,
     )>,
     catalogue_rows: Query<&CatalogueRowEntry>,
     parent_entities: Query<&ChildOf>,
@@ -397,7 +410,8 @@ pub(crate) fn choose_catalogue_entry_from_activated_type_list(
         if activation.trigger != UiTrigger::On {
             continue;
         }
-        let Ok((type_list_policy, type_list_filter, remembered)) = type_lists.get(activation.node)
+        let Ok((type_list_policy, type_list_filter, memory, remembered)) =
+            type_lists.get_mut(activation.node)
         else {
             continue;
         };
@@ -413,7 +427,8 @@ pub(crate) fn choose_catalogue_entry_from_activated_type_list(
         let Some((_, catalogue_entry)) = choose_remembered_or_first_included_catalogue_entry(
             type_list_policy,
             type_list_filter.copied().unwrap_or_default(),
-            remembered.map(|entry| entry.0),
+            remembered.as_deref().map(|entry| entry.0),
+            memory,
             world_definitions,
             world_session_mode,
             scenario_availability,
@@ -422,9 +437,9 @@ pub(crate) fn choose_catalogue_entry_from_activated_type_list(
         ) else {
             continue;
         };
-        commands
-            .entity(activation.node)
-            .insert(RememberedCatalogueEntry(catalogue_entry.definition));
+        if memory.is_none_or(|memory| memory.remembers(catalogue_entry)) {
+            remember_entry(&mut commands, activation.node, catalogue_entry, remembered);
+        }
         let sex = document_owners
             .get(activation.node)
             .ok()
@@ -436,6 +451,20 @@ pub(crate) fn choose_catalogue_entry_from_activated_type_list(
             sex,
             &mut placements,
         );
+    }
+}
+
+fn remember_entry(
+    commands: &mut Commands,
+    list: Entity,
+    entry: &CatalogueEntry,
+    existing: Option<Mut<RememberedCatalogueEntry>>,
+) {
+    let remembered = RememberedCatalogueEntry(entry.definition);
+    if let Some(mut existing) = existing {
+        existing.set_if_neq(remembered);
+    } else {
+        commands.entity(list).insert(remembered);
     }
 }
 

@@ -9,6 +9,7 @@ use crate::source_document::ordered_source_document_types::{
 use super::super::authored_hotkey_file_references::{
     collect_authored_hotkey_file_paths, expand_authored_hotkey_files,
 };
+use super::super::selected_ui_source_dependency_winner_planning::annotate_ui_source_script_dependencies;
 use super::super::ui_source_document_gap::{
     UiSourceDocumentFamily, UiSourceDocumentGap, UiSourceDocumentGapKind,
 };
@@ -29,6 +30,7 @@ use super::{
     },
     gameplay_mode_ui_presentation_source_parsing::{
         parse_authored_interaction_cursors_from_gameplay_mode_document,
+        parse_authored_overhead_camera_hotkeys,
         parse_authored_placement_preview_from_gameplay_mode_document,
     },
     resolution_profile::SelectedUiSourceResolutionProfile,
@@ -61,6 +63,23 @@ pub(in crate::ui_document::source) fn resolve_selected_ui_source_documents_to_ro
             winners.insert(document.path.key(), (precedence, *document));
             winners
         });
+    let annotated_scripts = selected_source_document_winners_by_path
+        .iter()
+        .filter_map(|(path, (_, document))| {
+            annotate_ui_source_script_dependencies(
+                document,
+                &resolution_profile.resolved_dependencies.scripts,
+            )
+            .map(|document| (path.clone(), document))
+        })
+        .collect::<BTreeMap<_, _>>();
+    let selected_source_document_winners_by_path = selected_source_document_winners_by_path
+        .into_iter()
+        .map(|(path, (order, document))| {
+            let selected = annotated_scripts.get(&path).unwrap_or(document);
+            (path, (order, selected))
+        })
+        .collect::<BTreeMap<_, _>>();
     let hotkey_documents = selected_source_document_winners_by_path
         .iter()
         .filter(|(_, (_, document))| document.root.name.eq_ignore_ascii_case("hotkeys"))
@@ -136,12 +155,15 @@ pub(in crate::ui_document::source) fn resolve_selected_ui_source_documents_to_ro
         })
         .transpose()?;
     let mut parsed_ui_source_document_order = Vec::new();
+    let mut overhead_camera_hotkeys = Vec::new();
     let mut authored_biome_panels = Vec::new();
     let mut expansion_icons = Vec::new();
     let mut small_expansion_icons = Vec::new();
     for (_, document) in selected_source_documents_in_resolution_order {
         let path = document.path.key();
         if interaction_mode_path.as_deref() == Some(path.as_str()) {
+            let expanded = expand_authored_hotkey_files(document, &hotkey_documents)?;
+            overhead_camera_hotkeys = parse_authored_overhead_camera_hotkeys(&expanded);
             continue;
         }
         if let Some(panel) = parse_embedded_biome_panel_from_source_document(document)? {
@@ -227,6 +249,14 @@ pub(in crate::ui_document::source) fn resolve_selected_ui_source_documents_to_ro
                 span: shell.root.span,
                 message: "in-game shell has no authored Biome Panel composition point".into(),
             });
+        }
+    }
+    if let Some((_, hud_path)) = resolution_profile.role_paths.iter().find(|(role, _)| {
+        *role == openzt2_game_data::ui_document::document::UiDocumentRole::InGameHud
+    }) {
+        let key = crate::source_document::path::AssetPath::new(hud_path).key();
+        if let Some(hud) = parsed_ui_source_documents_by_path.get_mut(&key) {
+            hud.root.hotkeys.extend(overhead_camera_hotkeys);
         }
     }
     resolve_application_root_cursor_and_named_event_semantics(

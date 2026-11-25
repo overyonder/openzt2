@@ -104,6 +104,7 @@ impl EvaluatedD3d9SamplerState {
     )]
     pub(super) fn descriptor(&self) -> SamplerDescriptor<'static> {
         let anisotropic = matches!(self.mag_filter | self.min_filter, 3);
+        let lod_min_clamp = self.max_mip_level.min(32) as f32;
         SamplerDescriptor {
             label: Some("D3D9 effect sampler"),
             address_mode_u: address_mode(self.address[0]).expect("validated sampler address"),
@@ -119,9 +120,17 @@ impl EvaluatedD3d9SamplerState {
             } else {
                 filter_mode(self.min_filter).expect("validated sampler filter")
             },
-            mipmap_filter: mipmap_filter(self.mip_filter).expect("validated sampler mip filter"),
-            lod_min_clamp: self.max_mip_level as f32,
-            lod_max_clamp: 32.0,
+            mipmap_filter: if anisotropic {
+                MipmapFilterMode::Linear
+            } else {
+                mipmap_filter(self.mip_filter).expect("validated sampler mip filter")
+            },
+            lod_min_clamp,
+            lod_max_clamp: if self.mip_filter == 0 {
+                lod_min_clamp
+            } else {
+                32.0
+            },
             compare: None,
             anisotropy_clamp: if anisotropic {
                 self.max_anisotropy as u16

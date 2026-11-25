@@ -17,8 +17,18 @@ use super::{fame_types::Fame, rating_types::ZooRating, research_types::ResearchP
 pub(super) fn project_progression_facts_into_authored_ui_text(
     active_localization: Res<LocalizationPrecedenceIndex>,
     localizations: Res<Assets<LocalizationAsset>>,
-    worlds: Query<(Ref<Fame>, Ref<ZooRating>), (With<WorldRoot>, With<WorldLoadCompleted>)>,
-    projects: Query<Ref<ResearchProject>>,
+    worlds: Query<
+        (
+            Ref<Fame>,
+            Ref<ZooRating>,
+            Ref<super::ResearchPresentationProject>,
+        ),
+        (With<WorldRoot>, With<WorldLoadCompleted>),
+    >,
+    projects: Query<(
+        Ref<ResearchProject>,
+        Option<Ref<super::ResearchCompletionBasisPoints>>,
+    )>,
     mut removed_projects: RemovedComponents<ResearchProject>,
     mut fields: Query<(Ref<UiTextBinding>, &mut Text)>,
 ) {
@@ -27,20 +37,28 @@ pub(super) fn project_progression_facts_into_authored_ui_text(
         return;
     };
     let world = worlds.single().ok();
-    let project = projects.iter().next();
+    let project = world
+        .as_ref()
+        .and_then(|(_, _, selection)| projects.get(selection.0?).ok());
     let project_removed = removed_projects.read().next().is_some();
     let localization_changed = active_localization.is_changed() || localizations.is_changed();
 
     for (binding, mut text) in &mut fields {
         let source_changed = match &binding.0 {
             UiTextPropertyBindingSource::ZooFame { .. } => {
-                world.as_ref().is_some_and(|(fame, _)| fame.is_changed())
+                world.as_ref().is_some_and(|(fame, _, _)| fame.is_changed())
             }
             UiTextPropertyBindingSource::ZooRating { .. } => world
                 .as_ref()
-                .is_some_and(|(_, rating)| rating.is_changed()),
+                .is_some_and(|(_, rating, _)| rating.is_changed()),
             UiTextPropertyBindingSource::ResearchProgress { .. } => {
-                project_removed || project.as_ref().is_some_and(|project| project.is_changed())
+                project_removed
+                    || world
+                        .as_ref()
+                        .is_some_and(|(_, _, selection)| selection.is_changed())
+                    || project.as_ref().is_some_and(|(project, progress)| {
+                        project.is_changed() || progress.as_ref().is_some_and(Ref::is_changed)
+                    })
             }
             _ => continue,
         };
@@ -54,15 +72,15 @@ pub(super) fn project_progression_facts_into_authored_ui_text(
                 let _ = localization.write_localized_text_with_format_arguments(
                     *format,
                     &[LocalizationFormatArgument::Integer(i64::from(
-                        world.as_ref().map_or(0, |(fame, _)| fame.half_stars),
+                        world.as_ref().map_or(0, |(fame, _, _)| fame.half_stars),
                     ))],
                     &mut text.0,
                 );
             }
             UiTextPropertyBindingSource::ZooRating { format } => {
-                let Some((_, rating)) = world
+                let Some((_, rating, _)) = world
                     .as_ref()
-                    .filter(|(_, rating)| rating.overall_available)
+                    .filter(|(_, rating, _)| rating.overall_available)
                 else {
                     continue;
                 };
@@ -77,22 +95,18 @@ pub(super) fn project_progression_facts_into_authored_ui_text(
             UiTextPropertyBindingSource::ResearchProgress { format } => {
                 let (elapsed, required) = project
                     .as_ref()
-                    .map(|project| (project.elapsed_ticks, project.required_ticks))
+                    .map(|(project, _)| (project.elapsed_ticks, project.required_ticks))
                     .unwrap_or_default();
-                let percentage_basis_points = if required == 0 {
-                    0
-                } else {
-                    u64::try_from(u128::from(elapsed.min(required)) * 10_000 / u128::from(required))
-                        .unwrap_or(10_000)
-                };
+                let percentage_basis_points = project
+                    .as_ref()
+                    .and_then(|(_, progress)| progress.as_ref())
+                    .map_or(0, |progress| progress.0);
                 let arguments = [
                     LocalizationFormatArgument::Integer(i64::try_from(elapsed).unwrap_or(i64::MAX)),
                     LocalizationFormatArgument::Integer(
                         i64::try_from(required).unwrap_or(i64::MAX),
                     ),
-                    LocalizationFormatArgument::PercentBasisPoints(
-                        i64::try_from(percentage_basis_points).unwrap_or(i64::MAX),
-                    ),
+                    LocalizationFormatArgument::PercentBasisPoints(percentage_basis_points),
                 ];
                 let _ = localization.write_localized_text_with_format_arguments(
                     *format,

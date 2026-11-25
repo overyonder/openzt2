@@ -13,16 +13,22 @@ pub struct CarriedPrefabPresentation {
 
 /// A socket binding persists for the lifetime of the attachment.
 #[derive(Component)]
+#[relationship(relationship_target = ModelInstanceAttachments)]
 pub struct ModelJointAttachment {
+    #[relationship]
     pub instance: Entity,
-    joint: AnimationTargetId,
+    joint: Option<AnimationTargetId>,
 }
+
+#[derive(Component)]
+#[relationship_target(relationship = ModelJointAttachment, linked_spawn)]
+pub struct ModelInstanceAttachments(Vec<Entity>);
 
 impl ModelJointAttachment {
     pub fn new(instance: Entity, joint: &str) -> Self {
         Self {
             instance,
-            joint: AnimationTargetId::from_name(&Name::new(joint.to_owned())),
+            joint: Some(AnimationTargetId::from_name(&Name::new(joint.to_owned()))),
         }
     }
 
@@ -34,15 +40,15 @@ impl ModelJointAttachment {
     ) -> Option<Entity> {
         joints
             .0
-            .get(&self.joint)?
+            .get(&self.joint?)?
             .iter()
             .copied()
             .find(|&candidate| {
                 candidate != attachment
-                    && parents.contains(candidate)
                     && parents
                         .iter_ancestors::<ChildOf>(candidate)
-                        .all(|ancestor| ancestor != attachment)
+                        .take_while(|&ancestor| ancestor != attachment)
+                        .any(|ancestor| ancestor == self.instance)
             })
     }
 }

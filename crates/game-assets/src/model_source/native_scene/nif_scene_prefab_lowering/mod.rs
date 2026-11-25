@@ -4,8 +4,9 @@ use std::collections::BTreeSet;
 
 use openzt2_game_data::{
     scene_prefab::{
-        PrefabBillboard, PrefabEffect, PrefabLight, PrefabLightKind, PrefabRotationCycle,
-        PrefabTransform, ScenePrefabAssetDependencyKind, ScenePrefabDocument,
+        PrefabBillboard, PrefabEffect, PrefabLight, PrefabLightKind, PrefabRenderLodPolicy,
+        PrefabRenderLodSource, PrefabTransform, ScenePrefabAssetDependencyKind,
+        ScenePrefabDocument,
     },
     AssetId,
 };
@@ -33,10 +34,11 @@ use super::{
     native_scene_lowering_error::NativeSceneLoweringError,
     nif_collider_lowering::lower_netimmerse_collision_volume,
     nif_object_transform_controller_lowering::{
-        lower_netimmerse_object_transform_motion, NetImmerseObjectTransformMotion,
+        lower_netimmerse_float_key_group_to_prefab_curve, lower_netimmerse_object_transform_motion,
+        NetImmerseObjectTransformMotion,
     },
     scene_prefab_document_assembly::ScenePrefabDocumentAssembler,
-    scene_transform_and_collider_math::{identity_prefab_transform, netimmerse_point_light_range},
+    scene_transform_and_collider_math::identity_prefab_transform,
 };
 
 type Result<T> = std::result::Result<T, NativeSceneLoweringError>;
@@ -75,6 +77,28 @@ pub(in super::super) fn lower_netimmerse_scene_prefab(
                 )?;
             }
         }
+    }
+    for (controller, plan) in &bone_lod.controllers {
+        let Some(entity) = builder.entity_index(&bone_lod_controller_key(*controller)) else {
+            continue;
+        };
+        let metric_entity = builder.netimmerse_entity(plan.target_ref).unwrap_or(entity);
+        let defaults = [0.0, 225.0, 1_600.0, 4_225.0, 8_100.0, 13_225.0];
+        let mut switch_distance_squared = vec![0.0; usize::from(plan.tier_count)];
+        for (value, default) in switch_distance_squared.iter_mut().zip(defaults) {
+            *value = default;
+        }
+        builder.render_lod_policy(
+            entity,
+            PrefabRenderLodPolicy {
+                source: PrefabRenderLodSource::NetImmerseBone,
+                metric_entity,
+                initial_tier: plan.initial,
+                tier_count: plan.tier_count,
+                switch_distance_squared,
+                minimum_switch_distance_squared: vec![0.0; usize::from(plan.tier_count)],
+            },
+        );
     }
     if let Some(path) = animation_manifest {
         builder.dependency(
@@ -188,6 +212,30 @@ fn visit_netimmerse_scene_block(
         add_bone_lod_membership(builder, entity, group, node.ordinal, node.initial);
     }
     if geometry.is_some() {
+        if let Some((clock, data)) =
+            super::super::netimmerse_morph_lowering::geometry_morph_controller(document, block_ref)
+                .map_err(|error| {
+                    NativeSceneLoweringError::new(&document.source_path, error.to_string())
+                })?
+        {
+            let weight_curves = super::super::netimmerse_morph_lowering::animated_morph_targets(data).iter().map(|morph| {
+                let keys = super::super::netimmerse_nif_source::interpolated_key_source_types::NetImmerseFloatKeyGroup {
+                    interpolation: Some(morph.interpolation),
+                    keys: morph.keys.clone(),
+                };
+                lower_netimmerse_float_key_group_to_prefab_curve(&document.source_path, &keys)
+            }).collect::<Result<Vec<_>>>()?;
+            if !weight_curves.is_empty() {
+                builder.morph_animation(
+                    entity,
+                    openzt2_game_data::scene_prefab::PrefabMorphAnimation {
+                        clock: clock.prefab_clock(),
+                        weight_curves,
+                        refresh_bound: clock.flags & (1 << 4) != 0,
+                    },
+                );
+            }
+        }
         if let Some(shape) = shape_lod {
             let parent_key = builder.entity_key(entity).to_owned();
             let group = bone_lod_controller_row(builder, shape.controller, entity)?;
@@ -274,12 +322,13 @@ fn visit_netimmerse_scene_block(
             PrefabLight {
                 kind: PrefabLightKind::Point,
                 color_srgb: light.light.diffuse,
-                intensity: 800.0 * light.light.dimmer.max(0.0),
-                range_m: netimmerse_point_light_range(
+                intensity: light.light.dimmer,
+                range_m: 0.0,
+                attenuation: Some([
                     light.constant_attenuation,
                     light.linear_attenuation,
                     light.quadratic_attenuation,
-                ),
+                ]),
             },
         ),
         NetImmerseNifBlockPayload::NiAmbientLight(light) => builder.light(
@@ -289,6 +338,7 @@ fn visit_netimmerse_scene_block(
                 color_srgb: light.light.ambient,
                 intensity: light.light.dimmer.max(0.0),
                 range_m: 0.0,
+                attenuation: None,
             },
         ),
         NetImmerseNifBlockPayload::NiDirectionalLight(light) => builder.light(
@@ -298,6 +348,7 @@ fn visit_netimmerse_scene_block(
                 color_srgb: light.light.diffuse,
                 intensity: light.light.dimmer.max(0.0),
                 range_m: 0.0,
+                attenuation: None,
             },
         ),
         NetImmerseNifBlockPayload::NiParticles(_)
@@ -319,11 +370,14 @@ fn visit_netimmerse_scene_block(
         }
         _ => {}
     }
-    if let Some(radians_per_second) = transform_motion.spin {
-        builder.rotation_cycle(entity, PrefabRotationCycle { radians_per_second });
+    if let Some(cycle) = transform_motion.rotation_cycle {
+        builder.rotation_cycle(entity, cycle);
     }
     for animation in transform_motion.animations {
         builder.transform_animation(entity, animation);
+    }
+    for (target, animation) in transform_motion.visibility {
+        builder.pending_visibility_animation(target, animation);
     }
     if !within_footprint && object.collision_object_ref >= 0 {
         if let Some(NetImmerseNifBlockPayload::NiCollisionData(collision)) = document
@@ -472,7 +526,7 @@ fn bone_lod_controller_row(
     controller: u32,
     anchor: u32,
 ) -> Result<u32> {
-    let key = format!("nif_bone_lod_controller_{controller}");
+    let key = bone_lod_controller_key(controller);
     if let Some(entity) = builder.entity_index(&key) {
         return Ok(entity);
     }
@@ -487,6 +541,10 @@ fn bone_lod_controller_row(
         },
         true,
     )
+}
+
+fn bone_lod_controller_key(controller: u32) -> String {
+    format!("nif_bone_lod_controller_{controller}")
 }
 
 fn add_bone_lod_membership(

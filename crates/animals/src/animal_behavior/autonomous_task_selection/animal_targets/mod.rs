@@ -2,23 +2,23 @@
 //! to mate, and the inviting female a `fromToken` task answers.
 
 use bevy::{ecs::system::SystemParam, prelude::*};
-use openzt2_game_data::AssetId;
 use openzt2_game_data::behavior::eligibility::{
     BehaviorCandidateEligibilityFact, BehaviorEligibilityFactInput, BehaviorEligibilityFactValue,
     BehaviorEntityStateEligibilityFact, BehaviorRelationshipEligibilityFact,
     BehaviorSpatialEligibilityFact,
 };
-use openzt2_world_state::world_spawn::world_entity_crating::WorldEntityIsCrated;
+use openzt2_game_data::AssetId;
+use openzt2_world_state::world_spawn::world_entity_crating::UncratedWorldEntity;
 use openzt2_zoo_state::animal_behavior::animal_lineage::AnimalLineage;
 use openzt2_zoo_state::animal_lifecycle::types::{Animal, Parents};
 use openzt2_zoo_state::animal_welfare::types::Q16_ONE;
 
-use super::candidate_facts::{AnimalCandidateFacts, AnimalCandidateFactsItem, compare_q16};
+use super::candidate_facts::{compare_q16, AnimalCandidateFacts, AnimalCandidateFactsItem};
 
 #[derive(SystemParam)]
 pub(crate) struct AnimalTargetSources<'w, 's> {
     pub(super) animals:
-        Query<'w, 's, (Entity, AnimalCandidateFacts), (With<Animal>, Without<WorldEntityIsCrated>)>,
+        Query<'w, 's, (Entity, AnimalCandidateFacts), (With<Animal>, UncratedWorldEntity)>,
     lineage: AnimalLineage<'w, 's>,
     surfaces: openzt2_zoo_state::terrain::dry_surface_eligibility::DrySurfaceEligibility<'w, 's>,
     water_quality:

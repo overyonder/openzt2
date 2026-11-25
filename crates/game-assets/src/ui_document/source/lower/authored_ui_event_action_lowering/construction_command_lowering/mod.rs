@@ -1,5 +1,5 @@
 use crate::source_document::source_document_semantic_name::canonicalize_source_document_record_key;
-use crate::source_document::ui::model::SourceUiEvent;
+use crate::source_document::ui::model::{SourceUiEvent, SourceUiPayloadNode};
 use crate::ui_document::source::lower::authored_ui_action_argument_lowering::{
     event_i32, required_bool, required_i8, required_tenths,
 };
@@ -13,13 +13,15 @@ use openzt2_game_data::ui_document::action::construction::{
     UiTankEditMode, UiTerrainEditMode,
 };
 use openzt2_game_data::ui_document::action::{UiActionRecord, UiTrigger};
-use openzt2_game_data::world_definitions::biomes_locations_and_details::BiomeAutomaticPlacementVariationKind;
+use openzt2_game_data::world_definitions::biomes_locations_and_details::{
+    BiomeAutomaticPlacementChoice, BiomeAutomaticPlacementRange,
+};
+use openzt2_game_data::AssetId;
 use std::io;
 
 pub(super) fn lower_construction_command(
     trigger: UiTrigger,
     event: &SourceUiEvent,
-    current_stable_name: &str,
     input: &AuthoredUiDocument,
 ) -> io::Result<Option<UiActionRecord>> {
     let result = match event.message.as_str() {
@@ -179,16 +181,16 @@ pub(super) fn lower_construction_command(
                 enabled: event.value.as_deref().and_then(parse_bool).unwrap_or(false),
             },
         })),
-        "ZT_SET_AUTO_PLACEMENT_LIST" => Ok(UiActionRecord::Construction(UiConstructionActionRecord {
-            trigger,
-            action: UiConstructionAction::SetBiomeAutomaticPlacementVariation {
-                variation: match canonicalize_source_document_record_key(current_stable_name).as_str() {
-                    "foliage-mix" => BiomeAutomaticPlacementVariationKind::FoliageMix,
-                    "foliage-mix-terrain" => BiomeAutomaticPlacementVariationKind::FoliageMixTerrain,
-                    _ => return Err(invalid_at(input, format!("automatic-placement payload belongs to unsupported control {current_stable_name:?}"))),
-                },
-            },
-        })),
+        "ZT_SET_AUTO_PLACEMENT_LIST" => {
+            let [table] = event.payload.as_slice() else {
+                return Err(invalid_at(input, "ZT_SET_AUTO_PLACEMENT_LIST requires an autoPlacement table"));
+            };
+            let ranges = lower_automatic_placement_ranges(table).map_err(|message| invalid_at(input, message))?;
+            Ok(UiActionRecord::Construction(UiConstructionActionRecord {
+                trigger,
+                action: UiConstructionAction::SetBiomeAutomaticPlacementTable { ranges },
+            }))
+        }
         "ZT_SET_BIOME" => Ok(UiActionRecord::Construction(UiConstructionActionRecord {
             trigger,
             action: UiConstructionAction::SetBiome {
@@ -204,4 +206,65 @@ pub(super) fn lower_construction_command(
         _ => return Ok(None),
     };
     result.map(Some)
+}
+
+pub(crate) fn lower_automatic_placement_ranges(
+    table: &SourceUiPayloadNode,
+) -> Result<Vec<BiomeAutomaticPlacementRange>, String> {
+    fn attribute<'a>(node: &'a SourceUiPayloadNode, name: &str) -> Option<&'a str> {
+        node.attributes.iter().find_map(|value| {
+            value
+                .name
+                .eq_ignore_ascii_case(name)
+                .then_some(value.value.as_str())
+        })
+    }
+    let mut indexed = Vec::with_capacity(table.children.len());
+    for range in &table.children {
+        let index = range
+            .name
+            .to_ascii_lowercase()
+            .strip_prefix("range")
+            .and_then(|value| value.parse::<usize>().ok())
+            .ok_or_else(|| format!("invalid automatic-placement range {:?}", range.name))?;
+        let maximum_mask_value = attribute(range, "threshold")
+            .and_then(|value| value.parse::<u8>().ok())
+            .ok_or_else(|| format!("invalid automatic-placement threshold for {:?}", range.name))?;
+        let mut choices = Vec::with_capacity(range.children.len());
+        for entry in &range.children {
+            let weight = attribute(entry, "weight")
+                .and_then(|value| value.parse::<u32>().ok())
+                .filter(|weight| *weight != 0)
+                .ok_or_else(|| {
+                    format!("invalid automatic-placement weight for {:?}", entry.name)
+                })?;
+            let key = canonicalize_source_document_record_key(&entry.name);
+            choices.push(BiomeAutomaticPlacementChoice {
+                object: (key != "nothing").then(|| AssetId::from_key(&key)),
+                weight,
+            });
+        }
+        indexed.push((
+            index,
+            BiomeAutomaticPlacementRange {
+                maximum_mask_value,
+                choices,
+            },
+        ));
+    }
+    indexed.sort_unstable_by_key(|(index, _)| *index);
+    if indexed
+        .iter()
+        .enumerate()
+        .any(|(index, (authored, _))| index != *authored)
+        || indexed
+            .windows(2)
+            .any(|pair| pair[0].1.maximum_mask_value >= pair[1].1.maximum_mask_value)
+    {
+        return Err(
+            "automatic-placement ranges require contiguous indexes and ascending thresholds"
+                .to_owned(),
+        );
+    }
+    Ok(indexed.into_iter().map(|(_, range)| range).collect())
 }

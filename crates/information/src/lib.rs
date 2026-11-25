@@ -1,6 +1,7 @@
 //! Object information, catalogue and Zoopedia screens.
 
 pub mod catalogue;
+pub use catalogue::catalogue_type_list_policy_operations::CatalogueTypeListMemoryPolicy;
 mod information_entity_list_operations;
 mod information_graph_operations;
 mod information_list_types;
@@ -36,7 +37,21 @@ impl Plugin for InformationPlugin {
                     .before(projection::information_list_projection::project_live_world_entities_to_visible_information_list_rows),
             )
             .init_resource::<InformationViewFilters>()
+            .init_asset::<catalogue::catalogue_preview_camera_anchor::CataloguePreviewCameraAnchor>()
+            .init_asset_loader::<catalogue::catalogue_preview_camera_anchor::CataloguePreviewCameraAnchorLoader>()
+            .add_systems(Startup, catalogue::catalogue_preview_camera_anchor::load_catalogue_preview_camera_anchor)
+            .register_required_components::<
+                openzt2_world_state::world_spawn::world_membership_types::WorldRoot,
+                projection::scenario_status_projection::ScenarioPresentationObjectives,
+            >()
+            .register_required_components::<
+                openzt2_world_state::world_spawn::world_membership_types::WorldRoot,
+                projection::progression_status_projection::ProgressionAwardSources,
+            >()
             .add_message::<PurchaseChoice>()
+            .add_message::<overview::map_rasterization_operations::ChangedOverviewTopologyLayer>()
+            .add_observer(overview::map_rasterization_operations::invalidate_discarded_overview_path)
+            .add_observer(overview::map_rasterization_operations::invalidate_discarded_overview_track)
             .add_systems(
                 Update,
                 catalogue::animal_care_subject_projection::retain_selected_animal_for_care_catalogue
@@ -265,8 +280,11 @@ impl Plugin for InformationPlugin {
                     projection::habitat_and_tank_status_projection::project_selected_habitat_and_tank_status_to_visible_information_panels.after(projection::panel_binding_families::bind_information_panel_fields),
                     projection::show_status_projection::project_selected_show_schedule_status_to_visible_information_panels.after(projection::panel_binding_families::bind_information_panel_fields),
                     projection::transport_status_projection::project_selected_transport_status_to_visible_information_panels.after(projection::panel_binding_families::bind_information_panel_fields),
-                    projection::scenario_status_projection::project_active_scenario_status_to_authored_information_bindings,
-                    projection::progression_status_projection::project_progression_status_to_authored_information_bindings,
+                    projection::scenario_status_projection::bind_scenario_presentation_objectives,
+                        projection::scenario_status_projection::project_active_scenario_status_to_authored_information_bindings.after_ignore_deferred(projection::scenario_status_projection::bind_scenario_presentation_objectives),
+                    projection::progression_status_projection::bind_progression_awards_to_world_status,
+                    projection::progression_status_projection::project_progression_status_to_authored_information_bindings
+                        .after_ignore_deferred(projection::progression_status_projection::bind_progression_awards_to_world_status),
                 )
                     .in_set(GameSet::Ui)
                     .run_if(in_state(GamePhase::InGame)),

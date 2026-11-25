@@ -208,7 +208,18 @@ impl AssetArchives {
         let path = z2f::paths::normalize_asset_path_for_case_insensitive_archive_lookup(path);
         #[cfg(feature = "tracing")]
         let _read = bevy::log::info_span!("read_asset_source", path = %path.display()).entered();
-        let (source, result) = if let Some(entry) = self.files.resolve_archive_read_entry(&path) {
+        let archive_entry = self.files.resolve_archive_read_entry(&path);
+        let loose = match archive_entry {
+            Some(_) if path.components().count() == 1 => self
+                .resolved_winning_entry(&path)
+                .filter(|entry| entry.normalized_asset_path != path)
+                .and_then(|_| self.resolve_loose_path(&path).ok())
+                .filter(|path| path.is_file()),
+            _ => None,
+        };
+        let (source, result) = if let Some(loose) = loose {
+            ("loose", std::fs::read(loose))
+        } else if let Some(entry) = archive_entry {
             self.read_archive_source_entry(entry)
         } else {
             (
@@ -250,7 +261,8 @@ impl AssetArchives {
     }
 
     pub(crate) fn source_exists(&self, path: &Path) -> bool {
-        self.files.contains(path)
+        self.resolved_winning_entry(path)
+            .is_some_and(|entry| entry.normalized_asset_path == path)
             || self
                 .resolve_loose_path(path)
                 .is_ok_and(|path| path.is_file())
@@ -552,29 +564,53 @@ impl AssetArchives {
     }
 
     pub fn resolve_script_reference(&self, from: &Path, reference: &str) -> Option<PathBuf> {
-        self.files
-            .resolve_script_reference(from, reference)
-            .or_else(|| {
-                let reference = Path::new(reference.trim());
-                let stem = reference.with_extension("");
-                std::iter::once(reference.to_owned())
-                    .chain(
-                        ["lua", "bin", "luac"]
-                            .into_iter()
-                            .map(|extension| stem.with_extension(extension)),
-                    )
-                    .filter_map(|candidate| {
-                        if !candidate.extension().is_some_and(|extension| {
-                            ["lua", "bin", "luac"]
-                                .iter()
-                                .any(|candidate| extension.eq_ignore_ascii_case(candidate))
-                        }) {
-                            return None;
-                        }
-                        self.resolve_loose_reference(from, candidate.to_str()?)
-                    })
-                    .next()
-            })
+        const EXTENSIONS: [&str; 3] = ["lua", "bin", "luac"];
+        let normalize = z2f::paths::normalize_asset_path_for_case_insensitive_archive_lookup;
+        let reference = normalize(Path::new(reference.trim()));
+        let explicitly_relative = reference.starts_with(".") || reference.starts_with("..");
+        let from = normalize(from);
+        let directory = from.parent().unwrap_or_else(|| Path::new(""));
+        let exact = |path: PathBuf| {
+            let mut canonical = PathBuf::new();
+            for component in path.components() {
+                match component {
+                    Component::Normal(name) => canonical.push(name),
+                    Component::CurDir => {}
+                    Component::ParentDir if canonical.pop() => {}
+                    _ => return None,
+                }
+            }
+            if canonical.extension().is_none_or(|extension| {
+                !EXTENSIONS
+                    .iter()
+                    .any(|allowed| extension.eq_ignore_ascii_case(allowed))
+            }) {
+                return None;
+            }
+            self.source_exists(&canonical).then_some(canonical)
+        };
+        let root = (!explicitly_relative).then(|| reference.clone());
+        let local = directory.join(&reference);
+        let stem = reference.with_extension("");
+        let found = root
+            .into_iter()
+            .chain(std::iter::once(local))
+            .chain(EXTENSIONS.into_iter().flat_map(|extension| {
+                let candidate = stem.with_extension(extension);
+                (!explicitly_relative)
+                    .then(|| candidate.clone())
+                    .into_iter()
+                    .chain(std::iter::once(directory.join(candidate)))
+            }))
+            .find_map(exact);
+        found.or_else(|| {
+            if explicitly_relative {
+                return None;
+            }
+            self.files
+                .resolve_script_reference(&from, reference.to_str()?)
+                .map(|path| normalize(&path))
+        })
     }
 
     fn resolve_loose_reference(&self, from: &Path, reference: &str) -> Option<PathBuf> {

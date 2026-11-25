@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+pub(crate) const SCENARIO_GLOBAL_VARIABLES: &str = "__openzt2_scenario_state";
+
 pub(crate) const SAVED_SCENARIO_ACTION_ARGUMENTS: &str = "__openzt2_action_arguments";
 
 pub(crate) fn saved_scenario_action_key(

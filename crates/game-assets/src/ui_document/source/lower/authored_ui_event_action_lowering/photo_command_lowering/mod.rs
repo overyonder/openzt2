@@ -29,10 +29,6 @@ pub(super) fn lower_photo_command(
             trigger,
             action: UiPhotoAction::CreateNewPhotoAlbumFromActiveAlbumProfile,
         })),
-        "ZT_SET_USER_ATTRIBUTE" => Ok(UiActionRecord::Photo(UiPhotoActionRecord {
-            trigger,
-            action: UiPhotoAction::MarkPhotoAlbumHelpAsShown,
-        })),
         "ZT_PHOTOEVENT_DELETE_ALBUM" => Ok(UiActionRecord::Photo(UiPhotoActionRecord {
             trigger,
             action: UiPhotoAction::DeleteActivePhotoAlbumAndContainedPhotos,

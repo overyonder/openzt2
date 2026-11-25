@@ -63,3 +63,11 @@ pub struct OverheadRig {
     /// Original UDV directional ramps: forward, backward, right, left.
     pub pan_accumulators: [f32; 4],
 }
+
+/// Authored motion limits for the subject of a player-driven first-person view.
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
+pub struct FirstPersonLocomotionTuning {
+    pub maximum_speed_mps: f32,
+    pub damping_per_second: f32,
+    pub acceleration_mps2: f32,
+}

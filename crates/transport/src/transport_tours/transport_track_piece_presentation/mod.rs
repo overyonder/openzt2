@@ -1,3 +1,5 @@
+use super::ground_track_policy::{GroundTrackPaintSource, GroundTrackPolicyAsset};
+use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use openzt2_zoo_state::transport_tours::transport_topology_types::TrackRouteItem;
 use openzt2_zoo_state::transport_tours::transport_topology_types::{
     SkyTowerEndpoint, SkyTowerEndpoints,
@@ -9,13 +11,18 @@ use std::collections::HashSet;
 
 use bevy::asset::RenderAssetUsages;
 use bevy::mesh::Indices;
-use bevy::prelude::*;
 use bevy::render::render_resource::PrimitiveTopology;
 use bevy::render::storage::ShaderBuffer;
+use bevy::{ecs::system::SystemParam, prelude::*};
 use openzt2_game_data::world_definitions::transportation_and_tours::GroundTransportTrackPiecePresentationDefinition;
 use openzt2_game_data::world_definitions::transportation_and_tours::SkyTowerTrackPresentationDefinition;
 use openzt2_game_data::world_definitions::transportation_and_tours::TransportationTrackKind;
 use openzt2_world_state::world_spawn::prefab_authored_attachment_identifier::PrefabAuthoredAttachmentIdentifier;
+use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
+use openzt2_zoo_state::topology::{
+    topology_edit_types::PathConnectivityChanged,
+    topology_graph_types::{PathTile, TileSurface, TopologyGrid, TopologyIndex},
+};
 
 use openzt2_game_assets::material::material_asset_types::MaterialAsset;
 use openzt2_game_assets::material::runtime::effect_pass_gpu_data::EffectPassMaterial;
@@ -24,7 +31,6 @@ use openzt2_game_assets::world_definitions::world_definition_document_asset_and_
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
 use openzt2_game_assets::graphics_settings_types::GraphicsSettings;
-use openzt2_zoo_state::terrain::terrain_world_sampling::sample_terrain;
 use openzt2_zoo_state::terrain::terrain_world_sampling::terrain_chunk_at;
 use openzt2_zoo_state::terrain::terrain_chunk_presentation_types::TerrainPaintedTexture;
 use openzt2_zoo_state::terrain::terrain_chunk_types::EditedTerrainSamples;
@@ -143,61 +149,31 @@ pub(super) fn select_authored_ground_track_piece_presentation<'a>(
     let piece_type = authored_ground_track_piece_type(heading);
     let appearance = match (piece_type, turns) {
         (_, [None, None]) => 0,
-        // A diagonal curving at both ends.
-        (3, [Some(_), Some(_)]) => 9,
-        (4, [Some(_), Some(_)]) => 10,
+        (3 | 4, [Some(_), Some(_)]) => {
+            let start_away = compass_point(route[index - 1] - route[index]);
+            let end_away = compass_point(route[index + 2] - route[index + 1]);
+            let sign = |end: u8, away: u8| (away + 8 - end) % 8 == 1;
+            let mut flags = [sign((heading + 4) & 7, start_away), sign(heading, end_away)];
+            let canonical = if piece_type == 3 { 1 } else { 7 };
+            if heading == canonical {
+                flags.swap(0, 1);
+            }
+            match (piece_type, flags) {
+                (3, [false, false]) => 14,
+                (3, [false, true]) => 11,
+                (3, [true, false]) => 9,
+                (3, [true, true]) => 15,
+                (4, [false, false]) => 16,
+                (4, [false, true]) => 12,
+                (4, [true, false]) => 10,
+                _ => 13,
+            }
+        }
         (_, [Some(first), _] | [None, Some(first)]) => first,
     };
     definitions.iter().find(|definition| {
         definition.piece_type == piece_type && definition.appearance == appearance
     })
-}
-
-/// How far a straight piece turning at one end is painted towards that end:
-/// its turn texture's strip stops short of the joint, where the diagonal's
-/// curve texture meets it.
-// 0.75 m was fitted against the shipped textures, not taken from the original game.
-const AUTHORED_GROUND_TRACK_TURN_SHIFT_METRES: f32 = 0.75;
-
-fn authored_ground_track_paint_shift(route: &[Vec3], index: usize) -> Vec3 {
-    let direction = (route[index + 1] - route[index])
-        .with_y(0.0)
-        .normalize_or_zero();
-    match authored_ground_track_turns(route, index) {
-        (heading, _) if heading % 2 == 1 => Vec3::ZERO,
-        (_, [Some(_), _]) => -direction * AUTHORED_GROUND_TRACK_TURN_SHIFT_METRES,
-        (_, [None, Some(_)]) => direction * AUTHORED_GROUND_TRACK_TURN_SHIFT_METRES,
-        _ => Vec3::ZERO,
-    }
-}
-
-/// A straight's turn texture is painted towards its turn, which leaves the
-/// other end bare: that end is painted a second time towards it, with the end's
-/// own turn texture, or with the plain road where a straight carries on.
-fn authored_ground_track_second_paint<'a>(
-    definitions: &'a [GroundTransportTrackPiecePresentationDefinition],
-    route: &[Vec3],
-    index: usize,
-) -> Option<(&'a GroundTransportTrackPiecePresentationDefinition, Vec3)> {
-    let (heading, turns) = authored_ground_track_turns(route, index);
-    if heading % 2 == 1 {
-        return None;
-    }
-    let (appearance, towards_end) = match turns {
-        [Some(_), Some(end)] => (end, true),
-        [Some(_), None] if route.get(index + 2).is_some() => (0, true),
-        [None, Some(_)] if index > 0 => (0, false),
-        _ => return None,
-    };
-    let piece_type = authored_ground_track_piece_type(heading);
-    let definition = definitions.iter().find(|definition| {
-        definition.piece_type == piece_type && definition.appearance == appearance
-    })?;
-    let direction = (route[index + 1] - route[index])
-        .with_y(0.0)
-        .normalize_or_zero();
-    let shift = direction * AUTHORED_GROUND_TRACK_TURN_SHIFT_METRES;
-    Some((definition, if towards_end { shift } else { -shift }))
 }
 
 /// Lays a road texture as the original paints it: V runs north (-Z).
@@ -294,7 +270,10 @@ fn ground_route_points_with_joined_neighbours(
 pub(super) struct GroundTrackPieceDecal;
 
 #[derive(Message)]
-pub(super) struct DiscardedTrackJointEndpoints(pub(super) [Entity; 2]);
+pub(super) struct DiscardedTrackJointEndpoints {
+    pub(super) route: Entity,
+    pub(super) endpoints: [Entity; 2],
+}
 
 #[derive(Message)]
 pub(super) struct TransportTrackJointChanged(Entity);
@@ -312,7 +291,10 @@ pub(super) fn capture_discarded_track_joint_endpoints(
     mut joints: MessageWriter<DiscardedTrackJointEndpoints>,
 ) {
     if let Ok(route) = routes.get(discarded.entity) {
-        joints.write(DiscardedTrackJointEndpoints([route.from(), route.to()]));
+        joints.write(DiscardedTrackJointEndpoints {
+            route: discarded.entity,
+            endpoints: [route.from(), route.to()],
+        });
     }
 }
 
@@ -351,7 +333,7 @@ pub(super) fn invalidate_track_drawings_at_changed_joints(
 ) {
     let mut changed = discarded
         .read()
-        .flat_map(|endpoints| endpoints.0)
+        .flat_map(|discarded| discarded.endpoints)
         .collect::<HashSet<_>>();
     for route in &changed_routes {
         changed.extend([route.from(), route.to()]);
@@ -395,6 +377,72 @@ pub(super) fn invalidate_track_drawings_at_changed_joints(
         }
         commands
             .entity(route)
+            .remove::<AuthoredTransportTrackPiecePresentationProjected>();
+    }
+}
+
+pub(super) fn invalidate_ground_track_surface_drawings(
+    mut commands: Commands,
+    (graphics, policy, active, definition_assets): (
+        Res<GraphicsSettings>,
+        GroundTrackPolicyAsset,
+        Res<WorldDefinitions>,
+        Res<Assets<WorldDefinitionAsset>>,
+    ),
+    mut images: MessageReader<AssetEvent<Image>>,
+    mut paths: MessageReader<PathConnectivityChanged>,
+    grid: Single<&TopologyGrid>,
+    pieces: Query<
+        (Entity, &TrackProfile, &Transform, Option<&Children>),
+        With<AuthoredTransportTrackPiecePresentationProjected>,
+    >,
+    decals: Query<(), With<GroundTrackPieceDecal>>,
+) {
+    let changed: Vec<_> = paths.read().map(|change| change.0.xy()).collect();
+    let assets_changed = graphics.is_changed()
+        || policy.is_changed()
+        || images.read().fold(false, |changed, event| {
+            changed
+                || match event {
+                    AssetEvent::Modified { id } | AssetEvent::Removed { id } => {
+                        policy.get().is_some_and(|policy| policy.uses_image(*id))
+                    }
+                    _ => false,
+                }
+        });
+    let width = active.get(&definition_assets).map_or(0, |definitions| {
+        definitions
+            .paths()
+            .filter(|path| path.elevated)
+            .map(|path| path.width_cm)
+            .max()
+            .unwrap_or_default()
+    });
+    let reach = (f32::from(width) * 0.005 / grid.spacing_m).ceil() as i32;
+    if !assets_changed && changed.is_empty() {
+        return;
+    }
+    for (entity, profile, transform, children) in &pieces {
+        if profile.kind != TransportationTrackKind::Ground {
+            continue;
+        }
+        let centre = grid.position_cell(transform.translation).xy();
+        if !assets_changed
+            && !changed
+                .iter()
+                .any(|cell| (centre - cell).abs().max_element() <= reach)
+        {
+            continue;
+        }
+        for child in children
+            .into_iter()
+            .flat_map(|children| children.iter())
+            .filter(|&child| decals.contains(child))
+        {
+            commands.entity(child).try_despawn();
+        }
+        commands
+            .entity(entity)
             .remove::<AuthoredTransportTrackPiecePresentationProjected>();
     }
 }
@@ -542,23 +590,74 @@ pub(super) fn construct_elevated_ground_track_triangle_strip(
     Some(mesh)
 }
 
-pub(super) fn ground_track_piece_is_elevated_above_terrain(
-    points: [Vec3; 2],
-    terrain_index: &TerrainIndex,
-    terrain_assets: &Assets<TerrainAsset>,
-    terrain_chunks: &Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
-) -> bool {
-    points.into_iter().any(|point| {
-        terrain_chunk_at(terrain_index, point.xz())
-            .and_then(|entity| terrain_chunks.get(entity).ok())
-            .and_then(|(chunk, edited)| {
-                sample_terrain(chunk, terrain_assets.get(&chunk.asset)?, edited, point.xz())
+#[derive(SystemParam)]
+pub(super) struct TrackPathSurfaces<'w, 's> {
+    worlds: Query<'w, 's, (&'static TopologyGrid, &'static TopologyIndex)>,
+    paths: Query<'w, 's, (&'static PathTile, &'static TileSurface)>,
+}
+
+impl TrackPathSurfaces<'_, '_> {
+    pub(super) fn supports(
+        &self,
+        root: Entity,
+        points: [Vec3; 2],
+        definitions: WorldDefinitionsView<'_>,
+    ) -> bool {
+        let Ok((grid, index)) = self.worlds.get(root) else {
+            return false;
+        };
+        let reach = definitions
+            .paths()
+            .filter(|path| path.elevated)
+            .map(|path| path.width_cm)
+            .max()
+            .unwrap_or_default();
+        let reach = IVec2::splat((f32::from(reach) * 0.005 / grid.spacing_m).ceil() as i32);
+        // The two ends and centre must each have an elevated path surface
+        // at the track's level. A path passing beneath the road is unrelated.
+        [points[0], points[0].midpoint(points[1]), points[1]]
+            .into_iter()
+            .all(|point| {
+                let cell = grid.position_cell(point).xy();
+                index
+                    .paths_within(cell - reach, cell + reach)
+                    .any(|entity| {
+                        let Ok((tile, surface)) = self.paths.get(entity) else {
+                            return false;
+                        };
+                        let Some(path) = definitions
+                            .find_path(tile.definition)
+                            .filter(|path| path.elevated)
+                        else {
+                            return false;
+                        };
+                        let centre = grid.cell_translation(tile.cell);
+                        let local = (point.xz() - centre.xz()) / (f32::from(path.width_cm) * 0.005);
+                        if !local.abs().cmple(Vec2::ONE).all() {
+                            return false;
+                        }
+                        let [a, b, c, d, middle] =
+                            surface.height_cm.map(|height| f32::from(height) * 0.01);
+                        let u = local.abs().max_element();
+                        let edge = if local.x.abs() >= local.y.abs() {
+                            let t = (u + local.y) * 0.5;
+                            if local.x >= 0.0 {
+                                (u - t) * b + t * c
+                            } else {
+                                (u - t) * a + t * d
+                            }
+                        } else {
+                            let t = (u + local.x) * 0.5;
+                            if local.y >= 0.0 {
+                                (u - t) * d + t * c
+                            } else {
+                                (u - t) * a + t * b
+                            }
+                        };
+                        (point.y - (centre.y + (1.0 - u) * middle + edge)).abs() <= 0.005
+                    })
             })
-            // A road end at a station on a slope sits a little off the
-            // ground; only a real gap gets the elevated strip.
-            // Fixed 1 m; read a clearance from the track if one exists.
-            .is_some_and(|terrain| point.y > terrain.height_m + 1.0)
-    })
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -855,38 +954,101 @@ pub(super) struct PaintedTrackHighlight;
 /// size of a decal of the whole texture laid over it. Paint textures are
 /// authored at the terrain's texel size with their copy window centred, so a
 /// 43-texel window sits in 64 texels and an 86-texel one in 128.
+#[derive(Default)]
+pub(super) struct GroundTrackPaintImages(
+    bevy::platform::collections::HashMap<
+        (bevy::asset::AssetId<Image>, bevy::asset::AssetId<Image>, u8),
+        Handle<Image>,
+    >,
+);
+
 fn authored_ground_track_paint(
-    presentation: &GroundTransportTrackPiecePresentationDefinition,
+    source: &GroundTrackPaintSource,
+    flip: u8,
     centre: Vec2,
-    texture: Handle<Image>,
+    images: &mut Assets<Image>,
+    cache: &mut GroundTrackPaintImages,
+    terrain_index: &TerrainIndex,
     terrain_assets: &Assets<TerrainAsset>,
     terrain_chunks: &Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
 ) -> Option<(TerrainPaintedTexture, f32)> {
-    let start = Vec2::from(presentation.paint_sample_start_texels);
-    let copy = Vec2::from(presentation.paint_copy_dimension_texels);
-    if copy.cmple(Vec2::ZERO).any() {
-        return None;
-    }
-    let (chunk, _) = terrain_chunks.iter().next()?;
-    let presentation_grid = &terrain_assets
-        .get(&chunk.asset)?
-        .canonical_terrain_grid()
-        .presentation;
-    // A chunk's surface image also covers its margin cells on each side.
-    let texel_metres = f32::from(presentation_grid.surface_margin_cells)
+    let (chunk, _) = terrain_chunks
+        .get(terrain_chunk_at(terrain_index, centre)?)
+        .ok()?;
+    let terrain = terrain_assets.get(&chunk.asset)?.canonical_terrain_grid();
+    let grid = &terrain.presentation;
+    let texel_metres = f32::from(grid.surface_margin_cells)
         .mul_add(2.0, f32::from(chunk.side.checked_sub(1)?))
         * chunk.spacing_m
-        / f32::from(presentation_grid.surface_resolution);
-    let reference = start.x.mul_add(2.0, copy.x).max(1.0).log2().ceil().exp2();
+        / f32::from(grid.surface_resolution);
+    let key = (source.texture.id(), source.mask.id(), flip);
+    let texture = if let Some(handle) = cache.0.get(&key) {
+        handle.clone()
+    } else {
+        let texture = images.get(&source.texture)?;
+        let mask = images.get(&source.mask)?;
+        let [width, height] = texture.size().to_array();
+        let mask_size = mask.size();
+        let mut bytes = Vec::with_capacity((width * height * 4) as usize);
+        for y in 0..height {
+            for x in 0..width {
+                let color = texture.get_color_at(x, y).ok()?.to_srgba();
+                let mx = x * mask_size.x / width;
+                let my = y * mask_size.y / height;
+                let mx = if flip & 1 == 0 {
+                    mx
+                } else {
+                    mask_size.x - mx - 1
+                };
+                let my = if flip & 2 == 0 {
+                    my
+                } else {
+                    mask_size.y - my - 1
+                };
+                let mask_colour = mask.get_color_at(mx, my).ok()?;
+                let mask_sample = match mask.texture_descriptor.format {
+                    TextureFormat::Rgba8UnormSrgb | TextureFormat::Bgra8UnormSrgb => {
+                        let channels = mask_colour.to_srgba();
+                        channels.red * channels.alpha
+                    }
+                    _ => {
+                        let channels = mask_colour.to_linear();
+                        channels.red * channels.alpha
+                    }
+                };
+                let bytes_rgba: [u8; 4] = [color.red, color.green, color.blue, mask_sample * 0.5]
+                    .map(|value| (value.clamp(0.0, 1.0) * 255.0).round() as u8);
+                bytes.extend(bytes_rgba);
+            }
+        }
+        let image = Image::new(
+            Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            TextureDimension::D2,
+            bytes,
+            TextureFormat::Rgba8UnormSrgb,
+            RenderAssetUsages::default(),
+        );
+        let handle = images.add(image);
+        cache.0.insert(key, handle.clone());
+        handle
+    };
+    let texels = images.get(&texture)?.size().as_vec2();
+    if source.size.cmple(Vec2::ZERO).any() {
+        return None;
+    }
     Some((
         TerrainPaintedTexture {
             centre,
-            size_m: copy.x * texel_metres,
+            size_m: source.size.x * texel_metres,
             texture,
-            uv_min: start / reference,
-            uv_max: (start + copy) / reference,
+            uv_min: source.start / texels,
+            uv_max: (source.start + source.size) / texels,
         },
-        reference * texel_metres,
+        texels.x * texel_metres,
     ))
 }
 
@@ -898,13 +1060,28 @@ pub(super) fn project_committed_transport_track_piece_authored_prefabs(
     active_definitions: Res<WorldDefinitions>,
     authored_materials: Res<Assets<MaterialAsset>>,
     graphics_settings: Res<GraphicsSettings>,
+    (ground_tracks, mut images, mut paint_cache, mut image_events): (
+        GroundTrackPolicyAsset,
+        ResMut<Assets<Image>>,
+        Local<GroundTrackPaintImages>,
+        MessageReader<AssetEvent<Image>>,
+    ),
     mut effect_pass_materials: ResMut<Assets<EffectPassMaterial>>,
     mut effect_uniform_buffers: ResMut<Assets<ShaderBuffer>>,
     mut meshes: ResMut<Assets<Mesh>>,
     terrain_index: Single<&TerrainIndex>,
     terrain_assets: Res<Assets<TerrainAsset>>,
     terrain_chunks: Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
-    (endpoint_transforms, rope_anchors, children, sky_drawings, incidence, routes, distances): (
+    (
+        endpoint_transforms,
+        rope_anchors,
+        children,
+        sky_drawings,
+        incidence,
+        routes,
+        distances,
+        surfaces,
+    ): (
         Query<&GlobalTransform, With<TransportTrackJunction>>,
         SkyRopeAnchors,
         Query<&Children>,
@@ -912,6 +1089,7 @@ pub(super) fn project_committed_transport_track_piece_authored_prefabs(
         TrackIncidence,
         Query<TrackRoute>,
         Query<&super::transport_route_position_calculations::TrackTravelDistances>,
+        TrackPathSurfaces,
     ),
     pieces: Query<
         (
@@ -919,10 +1097,18 @@ pub(super) fn project_committed_transport_track_piece_authored_prefabs(
             &Transform,
             &TrackProfile,
             &TransportTrackConstructionPiece,
+            &WorldMember,
         ),
         Without<AuthoredTransportTrackPiecePresentationProjected>,
     >,
 ) {
+    for event in image_events.read() {
+        if let AssetEvent::Modified { id } | AssetEvent::Removed { id } = event {
+            paint_cache
+                .0
+                .retain(|(texture, mask, _), _| id != texture && id != mask);
+        }
+    }
     let terrain_index = terrain_index.into_inner();
     let Some(definitions) = active_definitions.get(&definition_assets) else {
         return;
@@ -937,7 +1123,7 @@ pub(super) fn project_committed_transport_track_piece_authored_prefabs(
         .and_then(|material| effect_pass_materials.get(material))
         .cloned();
     let mut tower_targets_projected_this_run = HashSet::new();
-    for (entity, transform, profile, piece) in &pieces {
+    for (entity, transform, profile, piece, member) in &pieces {
         let Some(track) = definitions.find_track(profile.definition) else {
             continue;
         };
@@ -1052,14 +1238,13 @@ pub(super) fn project_committed_transport_track_piece_authored_prefabs(
                     .insert(AuthoredTransportTrackPiecePresentationProjected);
                 continue;
             };
-            let elevated = ground_track_piece_is_elevated_above_terrain(
+            let elevated = surfaces.supports(
+                member.root,
                 [
                     route.path_points[usize::from(piece.piece_index)],
                     route.path_points[usize::from(piece.piece_index) + 1],
                 ],
-                &terrain_index,
-                &terrain_assets,
-                &terrain_chunks,
+                definitions,
             );
             let texture_identifier = if elevated {
                 presentation.elevated_path_texture
@@ -1109,24 +1294,24 @@ pub(super) fn project_committed_transport_track_piece_authored_prefabs(
                 presentation.ground_decal_offset_metres[0],
                 0.0,
                 presentation.ground_decal_offset_metres[1],
-            )) + authored_ground_track_paint_shift(
-                &joined_points,
-                usize::from(piece.piece_index) + first,
-            );
-            let paint = definitions
-                .texture_image(presentation.paint_texture)
-                .and_then(|paint_texture| {
-                    authored_ground_track_paint(
-                        presentation,
-                        decal_centre.xz(),
-                        paint_texture,
-                        &terrain_assets,
-                        &terrain_chunks,
-                    )
-                });
-            let decal_size = paint
-                .as_ref()
-                .map_or(presentation.ground_decal_size_metres[0], |(_, size)| *size);
+            ));
+            let Some((source, flip)) = ground_tracks.get().and_then(|policy| policy.paint(
+                presentation.piece_type, presentation.appearance,
+                graphics_settings.terrain_texture_size == openzt2_game_assets::graphics_settings_types::ThreeLevelGraphicsDetail::Low,
+            )) else { continue; };
+            let Some(paint) = authored_ground_track_paint(
+                source,
+                flip,
+                transform.translation.xz(),
+                &mut images,
+                &mut paint_cache,
+                &terrain_index,
+                &terrain_assets,
+                &terrain_chunks,
+            ) else {
+                continue;
+            };
+            let (paint, decal_size) = paint;
             let Some(mesh) = construct_square_surface_mesh_fitted_to_canonical_terrain_samples_with_rotated_texture_coordinates(
                 decal_size,
                 decal_centre,
@@ -1152,40 +1337,10 @@ pub(super) fn project_committed_transport_track_piece_authored_prefabs(
                 .id();
             // As in the original, the road is painted into the ground; the
             // decal only shows a highlight.
-            if let Some((paint, _)) = paint {
-                commands.entity(entity).insert(paint);
-                let end_paint = authored_ground_track_second_paint(
-                    &track.ground_piece_presentations,
-                    &joined_points,
-                    usize::from(piece.piece_index) + first,
-                )
-                .and_then(|(end, shift)| {
-                    let centre = transform.transform_point(Vec3::new(
-                        end.ground_decal_offset_metres[0],
-                        0.0,
-                        end.ground_decal_offset_metres[1],
-                    )) + shift;
-                    authored_ground_track_paint(
-                        end,
-                        centre.xz(),
-                        definitions.texture_image(end.paint_texture)?,
-                        &terrain_assets,
-                        &terrain_chunks,
-                    )
-                });
-                if let Some((end_paint, _)) = end_paint {
-                    commands.spawn((
-                        end_paint,
-                        Transform::IDENTITY,
-                        Visibility::Inherited,
-                        ChildOf(entity),
-                        GroundTrackPieceDecal,
-                    ));
-                }
-                commands
-                    .entity(decal)
-                    .insert((PaintedTrackHighlight, Visibility::Hidden));
-            }
+            commands.entity(entity).insert(paint);
+            commands
+                .entity(decal)
+                .insert((PaintedTrackHighlight, Visibility::Hidden));
         }
         commands
             .entity(entity)
@@ -1196,6 +1351,113 @@ pub(super) fn project_committed_transport_track_piece_authored_prefabs(
 #[cfg(test)]
 mod tests;
 
+#[derive(Component)]
+#[relationship(relationship_target = TransportConstructionMarkers)]
+pub(super) struct TransportConstructionMarkerOf {
+    #[relationship]
+    owner: Entity,
+    ordinal: u8,
+}
+
+#[derive(Component)]
+#[relationship_target(relationship = TransportConstructionMarkerOf)]
+pub(super) struct TransportConstructionMarkers(Vec<Entity>);
+
+pub(super) fn bind_authored_transport_construction_marker_roles(
+    mut commands: Commands,
+    nodes: Query<&PrefabAuthoredAttachmentIdentifier>,
+    changed_nodes: Query<
+        Entity,
+        (
+            With<PrefabAuthoredAttachmentIdentifier>,
+            Or<(
+                Changed<PrefabAuthoredAttachmentIdentifier>,
+                Changed<ChildOf>,
+            )>,
+        ),
+    >,
+    added_owners: Query<
+        Entity,
+        Or<(
+            Added<TransportStation>,
+            Added<TransportTrackConstructionPiece>,
+        )>,
+    >,
+    owners: Query<
+        Has<TransportStation>,
+        Or<(
+            With<TransportStation>,
+            With<TransportTrackConstructionPiece>,
+        )>,
+    >,
+    children: Query<&Children>,
+    parents: Query<&ChildOf>,
+    mut roles: Query<&mut TransportConstructionMarkerOf>,
+) {
+    let find_owner = |entity| {
+        parents
+            .iter_ancestors::<ChildOf>(entity)
+            .find(|&node| owners.contains(node))
+    };
+    let mut affected: bevy::ecs::entity::EntityHashSet = added_owners.iter().collect();
+    for entity in changed_nodes {
+        if let Ok(role) = roles.get(entity) {
+            affected.insert(role.owner);
+            if find_owner(entity).is_none() {
+                commands
+                    .entity(entity)
+                    .remove::<TransportConstructionMarkerOf>();
+            }
+        }
+        affected.extend(find_owner(entity));
+    }
+    let names = [
+        "constructionmarker1",
+        "constructionmarker2",
+        "constructionmarker3",
+        "constructionmarker4",
+    ]
+    .map(openzt2_game_data::AssetId::from_key);
+    for owner in affected {
+        let Ok(station) = owners.get(owner) else {
+            continue;
+        };
+        let mut authored = Vec::new();
+        for entity in children.iter_descendants(owner) {
+            let Ok(name) = nodes.get(entity) else {
+                continue;
+            };
+            if find_owner(entity) != Some(owner) {
+                continue;
+            }
+            let ordinal = names.iter().position(|id| *id == name.0);
+            if let Some(ordinal) = ordinal {
+                authored.push((entity, ordinal as u8));
+            } else if roles.contains(entity) {
+                commands
+                    .entity(entity)
+                    .remove::<TransportConstructionMarkerOf>();
+            }
+        }
+        let paired = station && authored.iter().any(|&(_, ordinal)| ordinal == 3);
+        for (entity, ordinal) in authored {
+            let ordinal = if paired { ordinal / 2 } else { ordinal };
+            match roles.get_mut(entity) {
+                Ok(mut current) if current.owner == owner => {
+                    current
+                        .map_unchanged(|role| &mut role.ordinal)
+                        .set_if_neq(ordinal);
+                }
+                _ => {
+                    commands
+                        .entity(entity)
+                        .insert(TransportConstructionMarkerOf { owner, ordinal });
+                }
+            }
+        }
+    }
+}
+
 /// Shows a road's construction marker only where the road stops at a
 /// junction no road leaves or starts at one no road leads into, as the original marks an unfinished road
 /// ("Click to place road"); every other piece keeps its markers hidden.
@@ -1204,7 +1466,7 @@ pub(super) fn show_construction_markers_at_unconnected_road_ends(
         (
             &TransportTrackConstructionPiece,
             &Transform,
-            &Children,
+            &TransportConstructionMarkers,
             &TrackProfile,
         ),
         Without<PrefabAuthoredAttachmentIdentifier>,
@@ -1214,7 +1476,7 @@ pub(super) fn show_construction_markers_at_unconnected_road_ends(
         (
             With<TransportTrackConstructionPiece>,
             Or<(
-                Changed<Children>,
+                Changed<TransportConstructionMarkers>,
                 Changed<Transform>,
                 Changed<TrackProfile>,
                 Changed<TransportTrackConstructionPiece>,
@@ -1222,22 +1484,22 @@ pub(super) fn show_construction_markers_at_unconnected_road_ends(
         ),
     >,
     route_pieces: Query<&TrackPieces>,
+    changed_roles: Query<&TransportConstructionMarkerOf, Changed<TransportConstructionMarkerOf>>,
     mut joints: MessageReader<TransportTrackJointChanged>,
     routes: Query<TrackRoute>,
     incidence: TrackIncidence,
     junctions: Query<(), With<TransportTrackJunction>>,
     mut markers: Query<
         (
-            &PrefabAuthoredAttachmentIdentifier,
+            &TransportConstructionMarkerOf,
             &mut Visibility,
             &mut Transform,
         ),
         Without<TransportTrackConstructionPiece>,
     >,
 ) {
-    let marker = openzt2_game_data::AssetId::from_key("constructionmarker1");
-    let hidden_marker = openzt2_game_data::AssetId::from_key("constructionmarker2");
     let mut dirty: bevy::ecs::entity::EntityHashSet = changed_pieces.iter().collect();
+    dirty.extend(changed_roles.iter().map(|role| role.owner));
     dirty.extend(
         joints
             .read()
@@ -1270,11 +1532,11 @@ pub(super) fn show_construction_markers_at_unconnected_road_ends(
                 None
             }
         });
-        for child in children {
-            let Ok((name, mut visibility, mut transform)) = markers.get_mut(*child) else {
+        for child in children.iter() {
+            let Ok((role, mut visibility, mut transform)) = markers.get_mut(child) else {
                 continue;
             };
-            let shown = if name.0 == marker {
+            let shown = if role.ordinal == 0 {
                 open_end
                     .inspect(|end| {
                         let local = piece_transform
@@ -1286,7 +1548,7 @@ pub(super) fn show_construction_markers_at_unconnected_road_ends(
                         }
                     })
                     .is_some()
-            } else if name.0 == hidden_marker {
+            } else if role.ordinal == 1 {
                 false
             } else {
                 continue;
@@ -1303,75 +1565,48 @@ pub(super) fn show_construction_markers_at_unconnected_road_ends(
     }
 }
 
-/// Whether a station carries the four markers of a sky station.
-fn names_in_pairs(
-    children: &Query<&Children>,
-    markers: &Query<(&PrefabAuthoredAttachmentIdentifier, &mut Visibility)>,
-    station: Entity,
-    names: [openzt2_game_data::AssetId; 4],
-) -> bool {
-    children.iter_descendants(station).any(|entity| {
-        markers
-            .get(entity)
-            .is_ok_and(|(name, ..)| name.0 == names[3])
-    })
-}
-
 /// A station shows the marker of each end no road is connected to yet, where
 /// the original marks the place a road can start ("Click to place road").
 #[allow(clippy::type_complexity)]
 pub(super) fn show_construction_markers_at_unconnected_station_ends(
     definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
-    stations: Query<(Entity, &TransportStation, &GlobalTransform)>,
+    stations: Query<(
+        Entity,
+        &TransportStation,
+        &GlobalTransform,
+        &TransportConstructionMarkers,
+    )>,
     changed_stations: Query<
         Entity,
         (
             With<TransportStation>,
-            Or<(Changed<TransportStation>, Changed<GlobalTransform>)>,
+            Or<(
+                Changed<TransportStation>,
+                Changed<GlobalTransform>,
+                Changed<TransportConstructionMarkers>,
+            )>,
         ),
     >,
-    added_attachments: Query<
-        (Entity, &PrefabAuthoredAttachmentIdentifier),
-        Added<PrefabAuthoredAttachmentIdentifier>,
-    >,
+    changed_roles: Query<&TransportConstructionMarkerOf, Changed<TransportConstructionMarkerOf>>,
     mut joints: MessageReader<TransportTrackJointChanged>,
-    parents: Query<&ChildOf>,
     routes: Query<TrackRoute>,
     incidence: TrackIncidence,
-    children: Query<&Children>,
-    mut markers: Query<(&PrefabAuthoredAttachmentIdentifier, &mut Visibility)>,
+    mut markers: Query<(&TransportConstructionMarkerOf, &mut Visibility)>,
 ) {
     let definitions_changed = definition_assets.is_changed() || active_definitions.is_changed();
     let Some(definitions) = active_definitions.get(&definition_assets) else {
         return;
     };
-    // A ground station marks each end with one marker; a sky station marks
-    // each rope end with a pair (markers 1-2 and 3-4).
-    let names = [
-        "constructionmarker1",
-        "constructionmarker2",
-        "constructionmarker3",
-        "constructionmarker4",
-    ]
-    .map(openzt2_game_data::AssetId::from_key);
     let mut dirty: bevy::ecs::entity::EntityHashSet = changed_stations.iter().collect();
+    dirty.extend(changed_roles.iter().map(|role| role.owner));
     dirty.extend(joints.read().map(|joint| joint.0));
-    dirty.extend(added_attachments.iter().filter_map(|(entity, name)| {
-        if !names.contains(&name.0) {
-            return None;
-        }
-        parents
-            .iter_ancestors::<ChildOf>(entity)
-            .find(|&ancestor| stations.contains(ancestor))
-    }));
     if definitions_changed {
         dirty.extend(stations.iter().map(|(entity, ..)| entity));
     }
-    for (station_entity, station, station_transform) in
+    for (station_entity, station, station_transform, station_markers) in
         stations.iter_many(dirty).filter_map(Result::ok)
     {
-        let pair = names_in_pairs(&children, &markers, station_entity, names);
         let mut connected = [false; 2];
         for route in incidence
             .incident(station_entity)
@@ -1388,17 +1623,11 @@ pub(super) fn show_construction_markers_at_unconnected_station_ends(
                 }
             }
         }
-        for descendant in children.iter_descendants(station_entity) {
-            let Ok((name, mut visibility)) = markers.get_mut(descendant) else {
+        for marker in station_markers.iter() {
+            let Ok((role, mut visibility)) = markers.get_mut(marker) else {
                 continue;
             };
-            let Some(marker) = (0_u8..)
-                .zip(names)
-                .find_map(|(index, marker)| (marker == name.0).then_some(index))
-            else {
-                continue;
-            };
-            let endpoint = if pair { marker / 2 } else { marker };
+            let endpoint = role.ordinal;
             let open_end = connected.get(usize::from(endpoint)).filter(|&&used| !used)
                 .and_then(|_| {
                     crate::transport_tours::topology::calculate_authored_transport_station_endpoint_world_position(

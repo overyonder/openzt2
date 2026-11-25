@@ -31,7 +31,11 @@ pub(super) fn project_transport_track_construction_preview_authored_prefabs(
     mut effect_pass_materials: ResMut<Assets<EffectPassMaterial>>,
     mut effect_uniform_buffers: ResMut<Assets<ShaderBuffer>>,
     mut meshes: ResMut<Assets<Mesh>>,
-    terrain: PreviewTerrain,
+    (terrain, surfaces, mut changed_paths): (
+        PreviewTerrain,
+        super::transport_track_piece_presentation::TrackPathSurfaces,
+        MessageReader<openzt2_zoo_state::topology::topology_edit_types::PathConnectivityChanged>,
+    ),
     previews: Query<(
         Entity,
         Ref<ConstructionPreview>,
@@ -48,6 +52,7 @@ pub(super) fn project_transport_track_construction_preview_authored_prefabs(
         ResMut<Assets<StandardMaterial>>,
     ),
 ) {
+    let paths_changed = changed_paths.read().count() != 0;
     let definitions_changed = active_definitions.is_changed()
         || definition_assets.is_changed()
         || graphics_settings.is_changed();
@@ -95,6 +100,7 @@ pub(super) fn project_transport_track_construction_preview_authored_prefabs(
             && !material_changed
             && !pass_changed
             && !definitions_changed
+            && !paths_changed
         {
             continue;
         }
@@ -149,12 +155,7 @@ pub(super) fn project_transport_track_construction_preview_authored_prefabs(
             else {
                 continue;
             };
-            let elevated = crate::transport_tours::transport_track_piece_presentation::ground_track_piece_is_elevated_above_terrain(
-                [points[0], points[1]],
-                terrain_index,
-                &terrain.assets,
-                &terrain.chunks,
-            );
+            let elevated = surfaces.supports(member.root, [points[0], points[1]], definitions);
             let texture_identifier = if elevated {
                 presentation.elevated_path_texture
             } else {

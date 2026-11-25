@@ -1,6 +1,7 @@
+use bevy::app::{HierarchyPropagatePlugin, Propagate, PropagateSet};
+use bevy::camera::visibility::{VisibilitySystems, VisibleEntities};
 use bevy::ecs::entity::EntityHashSet;
 use bevy::prelude::*;
-use openzt2_game_assets::graphics_settings_types::{GraphicsSettings, ThreeLevelGraphicsDetail};
 use openzt2_world_state::model_render::prefab_render_lod_tier::PrefabRenderLodSelection;
 use openzt2_world_state::world_spawn::prefab_model_level_of_detail_visibility_range::{
     PrefabLodRanges, PrefabModelLevelOfDetailVisibilityRange,
@@ -9,9 +10,53 @@ use openzt2_world_state::world_spawn::prefab_model_level_of_detail_visibility_ra
 use super::active_model_view_cameras::ActiveModelViewCameras;
 use super::prefab_render_layer_camera_matching::PrefabCameraRenderLayers;
 
+#[derive(Component, Clone, PartialEq, Eq)]
+pub(super) struct PrefabLodVisibleCameras(EntityHashSet);
+
+pub(super) fn register_prefab_lod_camera_visibility(app: &mut App) {
+    app.add_plugins(HierarchyPropagatePlugin::<PrefabLodVisibleCameras>::new(
+        PostUpdate,
+    ))
+    .configure_sets(
+        PostUpdate,
+        PropagateSet::<PrefabLodVisibleCameras>::default()
+            .after(project_prefab_model_level_of_detail_visibility)
+            .before(VisibilitySystems::CheckVisibility),
+    )
+    .add_systems(
+        PostUpdate,
+        retain_prefab_lod_draws_for_their_camera.after(VisibilitySystems::CheckVisibility),
+    );
+}
+
+fn retain_prefab_lod_draws_for_their_camera(
+    mut views: Query<(Entity, &mut VisibleEntities), With<Camera3d>>,
+    lod_members: Query<&PrefabLodVisibleCameras>,
+    parents: Query<&ChildOf>,
+    lod_group_members: Query<&Propagate<PrefabLodVisibleCameras>>,
+) {
+    if lod_members.is_empty() {
+        return;
+    }
+    views.par_iter_mut().for_each(|(camera, mut visible)| {
+        for entities in visible.entities.values_mut() {
+            entities.retain(|&entity| {
+                let Ok(nearest) = lod_members.get(entity) else {
+                    return true;
+                };
+                nearest.0.contains(&camera)
+                    && parents
+                        .iter_ancestors::<ChildOf>(entity)
+                        .filter_map(|ancestor| lod_group_members.get(ancestor).ok())
+                        .all(|ancestor| ancestor.0 .0.contains(&camera))
+            });
+        }
+    });
+}
+
 pub(super) fn project_prefab_model_level_of_detail_visibility(
+    mut commands: Commands,
     cameras: Res<ActiveModelViewCameras>,
-    graphics: Res<GraphicsSettings>,
     groups: Query<(Entity, Ref<PrefabLodRanges>, Option<Ref<GlobalTransform>>)>,
     changed_layers: Query<
         &PrefabModelLevelOfDetailVisibilityRange,
@@ -22,16 +67,26 @@ pub(super) fn project_prefab_model_level_of_detail_visibility(
         )>,
     >,
     mut removed_layers: RemovedComponents<PrefabCameraRenderLayers>,
+    mut removed_ranges: RemovedComponents<PrefabModelLevelOfDetailVisibilityRange>,
     mut lods: Query<(
         &GlobalTransform,
         &PrefabModelLevelOfDetailVisibilityRange,
         Option<&PrefabCameraRenderLayers>,
         Option<&PrefabRenderLodSelection>,
         &mut Visibility,
+        Option<&mut Propagate<PrefabLodVisibleCameras>>,
     )>,
     mut changed_groups: Local<EntityHashSet>,
 ) {
-    let refresh_all = graphics.is_changed() || cameras.is_changed();
+    for entity in removed_ranges
+        .read()
+        .filter(|&entity| !lods.contains(entity))
+    {
+        commands
+            .entity(entity)
+            .try_remove::<Propagate<PrefabLodVisibleCameras>>();
+    }
+    let refresh_all = cameras.is_changed();
     changed_groups.clear();
     if refresh_all {
         removed_layers.clear();
@@ -45,12 +100,6 @@ pub(super) fn project_prefab_model_level_of_detail_visibility(
                 .filter_map(|entity| lods.get(entity).ok().map(|(_, range, ..)| range.group)),
         );
     }
-    let view_factor: f32 = match graphics.object_detail {
-        ThreeLevelGraphicsDetail::Low => 2.0,
-        ThreeLevelGraphicsDetail::Medium => 1.0,
-        ThreeLevelGraphicsDetail::High => 1.0 / 1.5,
-    };
-    let view_factor_squared = view_factor * view_factor;
     for (group, members, transform) in &groups {
         if !refresh_all
             && !members.is_changed()
@@ -69,41 +118,62 @@ pub(super) fn project_prefab_model_level_of_detail_visibility(
                 .abs()
                 .max_element()
         });
-        let selected = members
-            .iter()
-            .filter_map(|member| {
-                let (fallback, range, layers, tier_selection, _) = lods.get(member).ok()?;
-                if tier_selection.is_some_and(|selection| !selection.0) {
-                    return None;
-                }
-                if range.active_without_range {
-                    return Some(range.ordinal);
-                }
-                let layers = layers.map(|layers| &layers.0).unwrap_or_default();
-                let camera = cameras.for_level_of_detail(layers)?;
-                let center = transform.map_or_else(
-                    || fallback.translation(),
-                    |transform| transform.transform_point(range.center_m),
-                );
-                let distance_squared =
-                    camera.pose.translation().distance_squared(center) * view_factor_squared;
-                let near = range.near_m * world_scale;
-                let far = range.far_m * world_scale;
-                (distance_squared >= near * near && distance_squared < far * far)
-                    .then_some(range.ordinal)
-            })
-            .max();
-        for member in members.iter() {
-            if let Ok((_, range, _, tier_selection, mut visibility)) = lods.get_mut(member) {
-                visibility.set_if_neq(
-                    if Some(range.ordinal) == selected
-                        && tier_selection.is_none_or(|selection| selection.0)
+        let mut selected_views =
+            bevy::platform::collections::HashMap::<u16, EntityHashSet>::default();
+        for (camera, camera_layers) in &cameras.views {
+            let selected = members
+                .iter()
+                .filter_map(|member| {
+                    let (fallback, range, layers, tier_selection, ..) = lods.get(member).ok()?;
+                    let layers = layers.map(|layers| &layers.0).unwrap_or_default();
+                    if !camera_layers.intersects(layers)
+                        || tier_selection.is_some_and(|selection| !selection.0)
                     {
-                        Visibility::Inherited
-                    } else {
-                        Visibility::Hidden
-                    },
-                );
+                        return None;
+                    }
+                    if range.active_without_range {
+                        return Some(range.ordinal);
+                    }
+                    let center = transform.map_or_else(
+                        || fallback.translation(),
+                        |transform| transform.transform_point(range.center_m),
+                    );
+                    let distance_squared = camera.pose.translation().distance_squared(center)
+                        * camera.lod_view_factor.powi(2);
+                    let near = range.near_m * world_scale;
+                    let far = range.far_m * world_scale;
+                    (distance_squared >= near * near && distance_squared < far * far)
+                        .then_some(range.ordinal)
+                })
+                .max();
+            if let Some(ordinal) = selected {
+                selected_views
+                    .entry(ordinal)
+                    .or_default()
+                    .insert(camera.entity);
+            }
+        }
+        for member in members.iter() {
+            if let Ok((_, range, _, tier_selection, mut visibility, selected)) =
+                lods.get_mut(member)
+            {
+                let cameras = selected_views
+                    .get(&range.ordinal)
+                    .cloned()
+                    .unwrap_or_default();
+                let visible =
+                    !cameras.is_empty() && tier_selection.is_none_or(|selection| selection.0);
+                visibility.set_if_neq(if visible {
+                    Visibility::Inherited
+                } else {
+                    Visibility::Hidden
+                });
+                let next = Propagate(PrefabLodVisibleCameras(cameras));
+                if let Some(mut selected) = selected {
+                    selected.set_if_neq(next);
+                } else {
+                    commands.entity(member).try_insert(next);
+                }
             }
         }
     }

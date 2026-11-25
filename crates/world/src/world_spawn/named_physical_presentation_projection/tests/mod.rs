@@ -132,27 +132,33 @@ fn unresolved_binder_is_skipped_and_finished_binder_starts_hidden() {
 }
 
 #[test]
-fn feeder_shows_the_fade_state_matching_its_food_level() {
+fn selects_authored_fade_states_from_a_named_float_value() {
     use super::select_named_presentation_fade_states;
     use openzt2_game_data::world_definitions::world_objects::WorldObjectFadeRange;
-    use openzt2_zoo_state::feeding::container_quantity::{
-        FoodContainer, AUTHORED_CONTAINER_CAPACITY_Q16,
-    };
+    use openzt2_zoo_state::authored_float_attributes::AuthoredFloatAttributes;
 
     let definition = AssetId::from_key("insects");
     let mut object = marker_object(definition);
+    let attribute = AssetId::from_key("f_custom_meter");
     object.named_physical_presentations = [("full", 50.0, 101.0), ("half", 1.0, 50.0)]
         .into_iter()
-        .map(
-            |(name, minimum, maximum)| WorldObjectNamedPhysicalPresentationDefinition {
+        .enumerate()
+        .map(|(state_ordinal, (name, minimum, maximum))| {
+            WorldObjectNamedPhysicalPresentationDefinition {
                 fade: Some(WorldObjectFadeRange {
-                    attribute: AssetId::from_key("f_foodlevel"),
+                    attribute,
                     minimum,
                     maximum,
+                    controller_ordinal: 0,
+                    state_ordinal: state_ordinal as u32,
+                    fade_period_seconds: 0.0,
+                    max_alpha: 1.0,
+                    fade_hold: false,
+                    wrap_value: false,
                 }),
                 ..presentation(name, AssetId::default(), name == "full")
-            },
-        )
+            }
+        })
         .collect();
     let mut application = App::new();
     application
@@ -178,14 +184,14 @@ fn feeder_shows_the_fade_state_matching_its_food_level() {
         .world_mut()
         .resource_mut::<WorldDefinitions>()
         .index_test_document(handle, &document);
-    let food = |points: i32| FoodContainer {
-        food: definition,
-        amount_q16: points << 16,
-        capacity_q16: AUTHORED_CONTAINER_CAPACITY_Q16,
+    let value = |points: f32| {
+        let mut values = AuthoredFloatAttributes::default();
+        values.set(attribute, points);
+        values
     };
     let owner = application
         .world_mut()
-        .spawn((DefinitionId(definition), food(100)))
+        .spawn((DefinitionId(definition), value(100.0)))
         .id();
     let visibility = |application: &mut App| {
         let world = application.world_mut();
@@ -203,17 +209,20 @@ fn feeder_shows_the_fade_state_matching_its_food_level() {
         visibility(&mut application),
         [Visibility::Inherited, Visibility::Hidden]
     );
-    application.world_mut().entity_mut(owner).insert(food(20));
+    application
+        .world_mut()
+        .entity_mut(owner)
+        .insert(value(20.0));
     application.update();
     assert_eq!(
         visibility(&mut application),
         [Visibility::Hidden, Visibility::Inherited]
     );
-    // An empty feeder has no state binder in range, so it shows neither.
-    application.world_mut().entity_mut(owner).insert(food(0));
+    // Values outside every state range leave the current state selected.
+    application.world_mut().entity_mut(owner).insert(value(0.0));
     application.update();
     assert_eq!(
         visibility(&mut application),
-        [Visibility::Hidden, Visibility::Hidden]
+        [Visibility::Hidden, Visibility::Inherited]
     );
 }

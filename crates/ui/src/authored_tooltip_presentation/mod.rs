@@ -34,7 +34,7 @@ pub struct UiLongTooltipKey(pub AssetId);
 pub struct UiShortTooltipKey(pub AssetId);
 
 #[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) struct UiHelpTopicKey(pub(crate) AssetId);
+pub struct UiHelpTopicKey(pub AssetId);
 
 #[derive(Component)]
 pub(super) struct UiTooltipTextPresentation;

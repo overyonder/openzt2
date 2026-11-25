@@ -1,4 +1,4 @@
-use bevy::platform::collections::{HashMap, HashSet};
+use bevy::platform::collections::HashSet;
 use bevy::{asset::AssetLoadFailedEvent, prelude::*};
 use openzt2_game_assets::animation::animation_clip_source_queries::AnimationClipSources;
 use openzt2_game_data::AssetId;
@@ -8,12 +8,9 @@ use openzt2_game_assets::animation::animation_set_asset_types::{
 };
 use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackController;
 
+use openzt2_world_state::animation_graph::animation_graph_playback_message_types::ActiveAnimationClipOptions;
 use openzt2_world_state::animation_graph::animation_graph_playback_message_types::AnimationClipPlaybackRequest;
 use openzt2_world_state::animation_graph::animation_graph_playback_message_types::AnimationClipPlaybackRequestRejected;
-use openzt2_world_state::animation_graph::animation_graph_playback_message_types::{
-    ActiveAnimationClipOptions, AnimationClipActionOptions,
-};
-use openzt2_world_state::animation_graph::animation_graph_playback_state_types::AnimationGraphBlend;
 use openzt2_world_state::animation_graph::animation_graph_playback_state_types::AnimationGraphEnabled;
 use openzt2_world_state::animation_graph::animation_graph_playback_state_types::AnimationGraphPlaybackState;
 use openzt2_world_state::animation_graph::animation_presentation_relationship_types::{
@@ -27,19 +24,17 @@ pub(super) struct PendingAnimationClipPlayback {
     request: AnimationClipPlaybackRequest,
     request_id: usize,
     source: Handle<AnimationClipSourceAsset>,
-    options: Option<AnimationClipActionOptions>,
 }
 
 #[derive(Component)]
 pub(super) struct ReadyPendingAnimationClipPlayback;
 
 #[allow(clippy::too_many_lines)]
-pub(super) fn execute_explicit_animation_clip_playback_requests(
+pub(super) fn execute_explicit_animation_clip_playback_requests<const RENDER: bool>(
     mut commands: Commands,
     clip_sources: AnimationClipSources,
     animation_set_assets: Res<Assets<AnimationSetAsset>>,
     mut animation_clip_requests: MessageReader<AnimationClipPlaybackRequest>,
-    mut presentation_selections: MessageReader<AnimationClipActionOptions>,
     mut rejected_animation_clip_requests: MessageWriter<AnimationClipPlaybackRequestRejected>,
     mut started_animation_clip_requests: MessageWriter<openzt2_world_state::animation_graph::animation_graph_playback_message_types::AnimationClipPlaybackRequestStarted>,
     (pending, ready_pending): (
@@ -51,6 +46,10 @@ pub(super) fn execute_explicit_animation_clip_playback_requests(
     ),
     mut cancellations: MessageReader<openzt2_world_state::animation_graph::animation_graph_playback_message_types::CancelAnimationClipPlaybackRequest>,
     subjects: Query<()>,
+    render_players: Query<
+        (),
+        With<crate::animation_playback::managed_clip_binding::RealTimeAnimationPlayer>,
+    >,
     presentations: Query<&AnimationPresentations>,
     presentation_binders: Query<&AnimationPresentationBinder>,
     pending_routes: Query<&super::animation_return_route::AnimationReturnRoute>,
@@ -65,6 +64,20 @@ pub(super) fn execute_explicit_animation_clip_playback_requests(
         Option<&mut ActiveAnimationClipOptions>,
     )>,
 ) {
+    let runs_in_render_lane = |subject: Entity, binder: Option<AssetId>| {
+        let default_binder = AssetId::from_key("mainobj");
+        AnimationPresentations::for_subject(subject, presentations.get(subject).ok())
+            .filter(|&controller| {
+                binder.is_none_or(|binder: AssetId| {
+                    presentation_binders
+                        .get(controller)
+                        .map_or(default_binder, |presentation| presentation.0)
+                        == binder
+                })
+            })
+            .find(|&controller| render_players.contains(controller))
+            .is_some()
+    };
     let cancelled = cancellations.read().copied().collect::<Vec<_>>();
     for cancellation in &cancelled {
         let subject = cancellation.animation_subject_entity;
@@ -75,6 +88,9 @@ pub(super) fn execute_explicit_animation_clip_playback_requests(
             ))
             .matched();
         while let Some((entity, _, mut controller, mut graph, _, _)) = controllers.fetch_next() {
+            if render_players.contains(entity) != RENDER {
+                continue;
+            }
             if controller.explicit_clip_request_id == Some(cancellation.request_id) {
                 controller.explicit_clip_request_id = None;
                 if let Ok(mut player) = active_players.get_mut(entity) {
@@ -102,18 +118,31 @@ pub(super) fn execute_explicit_animation_clip_playback_requests(
             }
         }
     }
-    let selections = presentation_selections
-        .read()
-        .map(|options| (options.request_id, *options))
-        .collect::<HashMap<_, _>>();
     let mut new_requests = animation_clip_requests
         .read_with_id()
-        .map(|(request, id)| (request, id.id, selections.get(&id.id).copied()))
+        .map(|(request, id)| (request, id.id))
         .collect::<Vec<_>>();
-    let new_subjects = new_requests
-        .iter()
-        .map(|(request, ..)| request.animation_subject_entity)
-        .collect::<HashSet<_>>();
+    let mut new_subjects = HashSet::<Entity>::default();
+    new_requests.reverse();
+    new_requests.retain(|(request, request_id)| {
+        let latest = new_subjects.insert(request.animation_subject_entity);
+        if runs_in_render_lane(
+            request.animation_subject_entity,
+            request.action_settings.and_then(|settings| settings.binder),
+        ) != RENDER
+        {
+            return false;
+        }
+        if !latest {
+            rejected_animation_clip_requests.write(AnimationClipPlaybackRequestRejected {
+                request_id: *request_id,
+                animation_subject_entity: request.animation_subject_entity,
+                animation_clip_asset_key: request.animation_clip_asset_key.clone(),
+            });
+        }
+        latest
+    });
+    new_requests.reverse();
     let mut pending_requests = Vec::new();
     let pending_subjects = ready_pending
         .iter()
@@ -128,6 +157,16 @@ pub(super) fn execute_explicit_animation_clip_playback_requests(
         let Ok((deferred, ready)) = pending.get(subject) else {
             continue;
         };
+        if runs_in_render_lane(
+            subject,
+            deferred
+                .request
+                .action_settings
+                .and_then(|settings| settings.binder),
+        ) != RENDER
+        {
+            continue;
+        }
         if new_subjects.contains(&subject) {
             rejected_animation_clip_requests.write(AnimationClipPlaybackRequestRejected {
                 request_id: deferred.request_id,
@@ -141,30 +180,17 @@ pub(super) fn execute_explicit_animation_clip_playback_requests(
             if !ready {
                 continue;
             }
-            pending_requests.push((&deferred.request, deferred.request_id, deferred.options));
+            pending_requests.push((&deferred.request, deferred.request_id));
         }
         commands.entity(subject).try_remove::<(
             PendingAnimationClipPlayback,
             ReadyPendingAnimationClipPlayback,
         )>();
     }
-    pending_requests.sort_unstable_by_key(|(_, request_id, _)| *request_id);
-    let mut seen_subjects = HashSet::<Entity>::default();
-    new_requests.reverse();
-    new_requests.retain(|(request, request_id, _)| {
-        let latest = seen_subjects.insert(request.animation_subject_entity);
-        if !latest {
-            rejected_animation_clip_requests.write(AnimationClipPlaybackRequestRejected {
-                request_id: *request_id,
-                animation_subject_entity: request.animation_subject_entity,
-                animation_clip_asset_key: request.animation_clip_asset_key.clone(),
-            });
-        }
-        latest
-    });
-    new_requests.reverse();
+    pending_requests.sort_unstable_by_key(|(_, request_id)| *request_id);
     let default_binder = AssetId::from_key("mainobj");
-    for (request, request_id, options) in pending_requests.into_iter().chain(new_requests) {
+    for (request, request_id) in pending_requests.into_iter().chain(new_requests) {
+        let options = request.action_settings;
         let subject = request.animation_subject_entity;
         if !subjects.contains(subject)
             || cancelled.iter().any(|cancellation| {
@@ -178,14 +204,15 @@ pub(super) fn execute_explicit_animation_clip_playback_requests(
         let candidates = || {
             AnimationPresentations::for_subject(subject, presentations.get(subject).ok()).filter(
                 |controller| {
-                    options
-                        .and_then(|options| options.binder)
-                        .is_none_or(|binder| {
-                            presentation_binders
-                                .get(*controller)
-                                .map_or(default_binder, |presentation| presentation.0)
-                                == binder
-                        })
+                    render_players.contains(*controller) == RENDER
+                        && options
+                            .and_then(|options| options.binder)
+                            .is_none_or(|binder| {
+                                presentation_binders
+                                    .get(*controller)
+                                    .map_or(default_binder, |presentation| presentation.0)
+                                    == binder
+                            })
                 },
             )
         };
@@ -242,10 +269,9 @@ pub(super) fn execute_explicit_animation_clip_playback_requests(
             };
             let mut replacement_animation_graph_playback_state =
                 AnimationGraphPlaybackState::default();
-            replacement_animation_graph_playback_state.active_animation_graph_blend =
-                AnimationGraphBlend::from_duration_milliseconds(
-                    animation_clip_request.blend_duration_milliseconds,
-                );
+            let milliseconds = animation_clip_request.blend_duration_milliseconds;
+            replacement_animation_graph_playback_state.requested_blend_duration_milliseconds =
+                (milliseconds != 0).then_some(milliseconds);
             if let Some(containing_graph_node_index) = animation_set_asset
                 .animation_graph_nodes
                 .iter()
@@ -283,12 +309,18 @@ pub(super) fn execute_explicit_animation_clip_playback_requests(
             }
             match (active_options, options) {
                 (Some(mut active), Some(options)) => {
-                    active.set_if_neq(ActiveAnimationClipOptions(options));
+                    active.set_if_neq(ActiveAnimationClipOptions {
+                        request_id,
+                        settings: options,
+                    });
                 }
                 (None, Some(options)) => {
                     commands
                         .entity(controller_entity)
-                        .try_insert(ActiveAnimationClipOptions(options));
+                        .try_insert(ActiveAnimationClipOptions {
+                            request_id,
+                            settings: options,
+                        });
                 }
                 (Some(_), None) => {
                     commands
@@ -343,7 +375,6 @@ pub(super) fn execute_explicit_animation_clip_playback_requests(
                     request: request.clone(),
                     request_id,
                     source,
-                    options,
                 });
             continue;
         }
@@ -402,11 +433,10 @@ mod tests {
             .init_asset::<AnimationSetAsset>()
             .init_asset::<AnimationClipSourceAsset>()
             .add_message::<AnimationClipPlaybackRequest>()
-            .add_message::<AnimationClipActionOptions>()
             .add_message::<AnimationClipPlaybackRequestRejected>()
             .add_message::<openzt2_world_state::animation_graph::animation_graph_playback_message_types::CancelAnimationClipPlaybackRequest>()
             .add_message::<openzt2_world_state::animation_graph::animation_graph_playback_message_types::AnimationClipPlaybackRequestStarted>()
-            .add_systems(Update, execute_explicit_animation_clip_playback_requests);
+            .add_systems(Update, execute_explicit_animation_clip_playback_requests::<false>);
         let subject = application.world_mut().spawn_empty().id();
         let request_id = application
             .world_mut()
@@ -416,6 +446,7 @@ mod tests {
                 blend_duration_milliseconds: 0,
                 playback_speed_permille: 1000,
                 playback_repetition_policy: AnimationPlaybackRepetitionPolicy::PlayOnce,
+                action_settings: None,
             });
         application.update();
         let rejected: Vec<_> = application

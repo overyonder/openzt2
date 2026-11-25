@@ -271,7 +271,12 @@ impl TerrainDerivedNavigationGraph {
             if let Some(node) = previous_node {
                 let slot = node as usize - self.navigation_nodes.len();
                 if let Some(old) = self.path_surfaces[slot].take() {
-                    self.unlink_elevated_path(node, &old, &mut elevated_candidates);
+                    self.unlink_elevated_path(
+                        node,
+                        &old,
+                        &mut elevated_candidates,
+                        &mut changes.affected_cells,
+                    );
                 }
                 changes.elevated_nodes.insert(node);
                 elevated_candidates.insert(node);
@@ -292,7 +297,12 @@ impl TerrainDerivedNavigationGraph {
                     let Some(node) = previous_node.or_else(|| self.reserve_path_slot()) else {
                         continue;
                     };
-                    self.link_elevated_path(node, surface, &mut elevated_candidates);
+                    self.link_elevated_path(
+                        node,
+                        surface,
+                        &mut elevated_candidates,
+                        &mut changes.affected_cells,
+                    );
                     changes.elevated_nodes.insert(node);
                     elevated_candidates.insert(node);
                 }
@@ -309,6 +319,9 @@ impl TerrainDerivedNavigationGraph {
             }
             if *flags != previous {
                 changes.ground_nodes.insert(node);
+                changes
+                    .affected_cells
+                    .extend(self.calculate_terrain_cell_for_navigation_node(node));
             }
         }
 
@@ -325,6 +338,9 @@ impl TerrainDerivedNavigationGraph {
         for node in elevated_candidates {
             if self.refresh_path_edges(node, &terrain_height) {
                 changes.elevated_nodes.insert(node);
+                if let Some(surface) = self.path_surface_at_node(node) {
+                    changes.affected_cells.extend(self.path_cells(surface));
+                }
             }
         }
         changes
@@ -380,9 +396,11 @@ impl TerrainDerivedNavigationGraph {
         &mut self,
         node: u32,
         surface: &NavigationPathSurface,
-        affected: &mut BTreeSet<u32>,
+        incident_nodes: &mut BTreeSet<u32>,
+        affected_cells: &mut BTreeSet<[u32; 2]>,
     ) {
         for cell in self.path_cells(surface) {
+            affected_cells.insert(cell);
             if let std::collections::btree_map::Entry::Occupied(mut entry) =
                 self.path_surfaces_by_cell.entry(cell)
             {
@@ -397,7 +415,7 @@ impl TerrainDerivedNavigationGraph {
                 self.path_nodes_by_edge.entry(key)
             {
                 entry.get_mut().remove(&node);
-                affected.extend(entry.get().iter().copied());
+                incident_nodes.extend(entry.get().iter().copied());
                 if entry.get().is_empty() {
                     entry.remove();
                 }
@@ -409,9 +427,11 @@ impl TerrainDerivedNavigationGraph {
         &mut self,
         node: u32,
         surface: &NavigationPathSurface,
-        affected: &mut BTreeSet<u32>,
+        incident_nodes: &mut BTreeSet<u32>,
+        affected_cells: &mut BTreeSet<[u32; 2]>,
     ) {
         for cell in self.path_cells(surface) {
+            affected_cells.insert(cell);
             self.path_surfaces_by_cell
                 .entry(cell)
                 .or_default()
@@ -419,7 +439,7 @@ impl TerrainDerivedNavigationGraph {
         }
         for key in surface.edge_keys() {
             let adjacent = self.path_nodes_by_edge.entry(key).or_default();
-            affected.extend(adjacent.iter().copied());
+            incident_nodes.extend(adjacent.iter().copied());
             adjacent.insert(node);
         }
         self.elevated_path_nodes.insert(surface.entity, node);

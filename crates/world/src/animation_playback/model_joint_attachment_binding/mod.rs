@@ -49,8 +49,10 @@ pub(super) fn bind_model_joint_attachments(
     mut attachments: Query<(Entity, Ref<ModelJointAttachment>, Option<&mut Transform>)>,
     indexes: Query<Ref<ModelInstanceJoints>>,
     parents: Query<&ChildOf>,
+    changed_parents: Query<(), Changed<ChildOf>>,
 ) {
-    if !indexes.iter().any(|index| index.is_changed())
+    if changed_parents.is_empty()
+        && !indexes.iter().any(|index| index.is_changed())
         && !attachments
             .iter()
             .any(|(_, attachment, _)| attachment.is_changed())
@@ -61,7 +63,7 @@ pub(super) fn bind_model_joint_attachments(
         let Ok(index) = indexes.get(attachment.instance) else {
             continue;
         };
-        if !attachment.is_changed() && !index.is_changed() {
+        if !attachment.is_changed() && !index.is_changed() && !changed_parents.contains(entity) {
             continue;
         }
         let joint = attachment.resolve(entity, &index, &parents);

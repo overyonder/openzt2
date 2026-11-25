@@ -1,3 +1,4 @@
+use crate::source_document::path::AssetPath;
 use crate::source_document::ui::model::{SourceUiEvent, SourceUiNode};
 use crate::ui_document::source::lower::authored_ui_action_argument_lowering::{
     cross_document_role, target_node, trigger,
@@ -6,11 +7,13 @@ use crate::ui_document::source::lower::authored_ui_document_lowering::AuthoredUi
 use crate::ui_document::source::lower::authored_ui_event_action_lowering;
 use crate::ui_document::source::lower::authored_ui_node_tree_lowering::BuildOutput;
 use crate::ui_document::source::lower::authored_ui_scalar_value_lowering::invalid_at;
+use crate::ui_document::source::selected_ui_source_dependency_winner_planning::SELECTED_SCRIPT_PATH_ATTRIBUTE;
 use openzt2_game_data::ui_document::action::information::{
     InformationGraphSeries, InformationGraphType, InformationListCategory,
     InformationSettingAction, InformationViewCategory,
 };
 use openzt2_game_data::ui_document::action::scenarios::ObjectiveStatusFilter;
+use openzt2_game_data::ui_document::action::script::UiScriptActionRecord;
 use openzt2_game_data::ui_document::action::shell_navigation::{
     UiShellAction, UiShellActionRecord,
 };
@@ -147,7 +150,7 @@ fn source_event_shows_main_menu_layout(event: &SourceUiEvent) -> bool {
             .is_some_and(|child| child.message == "UI_SHOW")
 }
 
-#[derive(Default)]
+#[derive(Default, PartialEq, Eq)]
 pub(super) struct UiActionReceiverPath {
     pub(super) from_root: bool,
     pub(super) nodes: Vec<AssetId>,
@@ -172,6 +175,7 @@ pub(super) fn flatten_event<'a>(
     let mut receiver = UiActionReceiverPath::default();
     let mut event = event;
     let mut foreign = None;
+    let mut receiver_name = None;
     while let Some(child) = event.child.as_deref().filter(|_| {
         matches!(
             event.message.as_str(),
@@ -182,15 +186,67 @@ pub(super) fn flatten_event<'a>(
             receiver.from_root = true;
             receiver.nodes.clear();
             foreign = None;
+            receiver_name = None;
         }
         if matches!(event.message.as_str(), "UI_CHILD" | "UI_ROOT_CHILD") {
             if let Some(target) = event.target_child.as_deref() {
                 confirmation_scope = Some(target);
+                receiver_name = Some(target);
                 foreign = foreign.or_else(|| cross_document_role(event, input));
                 receiver.nodes.push(UiDocumentRole::node_id(role, target));
             }
         }
         event = child;
+    }
+    if event.message == "ZT_RUN_SCRIPT" {
+        let mut operands = event
+            .string
+            .as_deref()
+            .unwrap_or_default()
+            .split(' ')
+            .filter(|token| !token.is_empty());
+        let (Some(context), Some(path), Some(entry)) =
+            (operands.next(), operands.next(), operands.next())
+        else {
+            return Err(invalid_at(
+                input,
+                "ZT_RUN_SCRIPT requires a context, script and entry",
+            ));
+        };
+        let script_key = AssetPath::new(path).key();
+        let path_winner = event
+            .unknown_attributes
+            .iter()
+            .find(|attribute| attribute.name == SELECTED_SCRIPT_PATH_ATTRIBUTE)
+            .map(|attribute| attribute.value.clone())
+            .or_else(|| {
+                input
+                    .resolved_dependencies
+                    .scripts
+                    .get(&format!("{}\0{script_key}", input.source.path.key()))
+                    .cloned()
+            });
+        let script = path_winner.map(|path| {
+            super::authored_ui_asset_dependency_resolution::dependency(Some(path), output)
+        });
+        let target_role = foreign.unwrap_or(role);
+        let target = event.target_child.as_deref().map_or_else(
+            || receiver_name.map_or(current, |name| UiDocumentRole::node_id(target_role, name)),
+            |name| UiDocumentRole::node_id(target_role, name),
+        );
+        output
+            .actions
+            .push(UiActionRecord::Script(UiScriptActionRecord {
+                trigger,
+                context: context.to_owned(),
+                script,
+                authored_path: path.to_owned(),
+                entry: entry.to_owned(),
+                arguments: operands.map(str::to_owned).collect(),
+                receiver: target,
+                document_role: foreign,
+            }));
+        return Ok(receiver);
     }
     if matches!(event.message.as_str(), "UI_SHOW" | "UI_HIDE") {
         if let Some(document_role) = foreign.or_else(|| cross_document_role(event, input)) {
@@ -391,15 +447,17 @@ pub(super) fn authored_graph_type(value: Option<&str>) -> Option<InformationGrap
     }
 }
 
-pub(super) fn information_graph_series(
-    value: Option<&str>,
+pub(super) fn information_graph_selection<'a>(
+    value: Option<&'a str>,
     input: &AuthoredUiDocument,
-) -> io::Result<InformationGraphSeries> {
-    closed_information_value(value, input, "graph series", |value| {
+) -> io::Result<(InformationGraphSeries, &'a str)> {
+    let selection = value.and_then(|value| {
         let mut fields = value.split_ascii_whitespace();
-        let (series, history) = (fields.next()?, fields.next()?);
-        let _layout = fields.next()?;
-        match (series, history) {
+        let (series, history, layout) = (fields.next()?, fields.next()?, fields.next()?);
+        if fields.next().is_some() {
+            return None;
+        }
+        let graph = match (series, history) {
             ("value", "Zoo") => Some(InformationGraphSeries::ZooValue),
             ("profit", "Zoo") => Some(InformationGraphSeries::ZooProfit),
             ("profit", "donations_income") => Some(InformationGraphSeries::DonationIncome),
@@ -407,6 +465,13 @@ pub(super) fn information_graph_series(
             ("fame", "fame") => Some(InformationGraphSeries::Fame),
             ("members", "members") => Some(InformationGraphSeries::Members),
             _ => None,
-        }
+        }?;
+        Some((graph, layout))
+    });
+    selection.ok_or_else(|| {
+        invalid_at(
+            input,
+            format!("invalid graph series, history or label layout {value:?}"),
+        )
     })
 }

@@ -58,4 +58,5 @@ pub(super) struct AuthoredAnimationControlTextActionExecutionContext<'w, 's> {
     pub(super) decal_cycles: Query<'w, 's, &'static mut super::authored_decal_texture_cycles::DecalCyclePlayback>,
     pub(super) whap_requests: MessageWriter<'w, AnimationWhapRequested>,
     pub(super) animation_node_messages: MessageWriter<'w, AnimationGraphNodePlaybackRequest>,
+    pub(super) traversal_timing: MessageWriter<'w, crate::animation_playback::traversal_animation_path_binding::ConfigureTraversalSegmentTiming>,
 }

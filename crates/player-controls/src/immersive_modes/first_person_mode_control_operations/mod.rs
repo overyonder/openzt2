@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use openzt2_game_data::world_definitions::immersive_mode_policy::ImmersiveModeActionFlags;
 
-use crate::camera::camera_execution_types::CameraTuning;
+use crate::camera::camera_execution_types::{CameraTuning, FirstPersonCommands};
 use crate::input::input_execution_types::DeviceControlAxes;
 use openzt2_interface_state::camera::camera_runtime_state_types::CameraMouseLook;
 use openzt2_interface_state::camera::camera_runtime_state_types::ZooCamera;
@@ -36,6 +36,16 @@ pub(super) fn apply_allowed_navigation_axes_to_directly_controlled_subject(
     if ownership.controller != controller_entity {
         return;
     }
+    let axes = allowed_first_person_movement_axes(control_axes.pan, allowed_interaction_actions);
+    direct_locomotion
+        .map_unchanged(|locomotion| &mut locomotion.local_axes)
+        .set_if_neq(Mat2::from_angle(view_yaw_radians) * axes);
+}
+
+pub(super) fn allowed_first_person_movement_axes(
+    axes: Vec2,
+    allowed_interaction_actions: Option<&AllowedInteractionActions>,
+) -> Vec2 {
     let allowed_axis = |value, negative, positive| {
         let direction = if value < 0.0 { negative } else { positive };
         if interaction_action_flags_allow_required_mode_action_flags(
@@ -47,22 +57,19 @@ pub(super) fn apply_allowed_navigation_axes_to_directly_controlled_subject(
             0.0
         }
     };
-    let allowed_local_axes = Vec2::new(
+    Vec2::new(
         allowed_axis(
-            control_axes.pan.x,
+            axes.x,
             ImmersiveModeActionFlags::STRAFE_LEFT,
             ImmersiveModeActionFlags::STRAFE_RIGHT,
         ),
         allowed_axis(
-            control_axes.pan.y,
+            axes.y,
             ImmersiveModeActionFlags::MOVE_BACK,
             ImmersiveModeActionFlags::MOVE_FORWARD,
         ),
     )
-    .clamp_length_max(1.0);
-    direct_locomotion
-        .map_unchanged(|locomotion| &mut locomotion.local_axes)
-        .set_if_neq(Mat2::from_angle(view_yaw_radians) * allowed_local_axes);
+    .clamp_length_max(1.0)
 }
 
 #[cfg(test)]
@@ -123,6 +130,7 @@ pub(super) fn apply_allowed_look_rotation_and_cancellation_to_first_person_view<
     first_person_view_angles: &mut Query<&mut FirstPersonViewAngles, With<M>>,
     zoo_camera_tuning: &Query<(&CameraTuning, Has<CameraMouseLook>), With<ZooCamera>>,
     exit_requests: &mut MessageWriter<ExitImmersiveMode>,
+    authored: Option<(FirstPersonCommands, [f32; 2])>,
 ) {
     let mut digital_horizontal_turn = 0.0;
     for action_request in action_requests.read() {
@@ -147,14 +155,25 @@ pub(super) fn apply_allowed_look_rotation_and_cancellation_to_first_person_view<
     ) else {
         return;
     };
-    let analog_look_is_enabled =
-        active_action_source != ActionSource::KeyboardMouse || camera_has_mouse_look;
+    let (commands, speeds) = authored.unwrap_or((
+        FirstPersonCommands::default(),
+        [camera_tuning.turn_speed_rps; 2],
+    ));
+    digital_horizontal_turn += commands.turn_axis();
+    let analog_look_is_enabled = active_action_source != ActionSource::KeyboardMouse
+        || camera_has_mouse_look
+        || commands.free_mouse_look;
     let allowed_look_input = if analog_look_is_enabled
         && interaction_action_flags_allow_required_mode_action_flags(
             allowed_interaction_actions,
             ImmersiveModeActionFlags::LOOK,
         ) {
-        control_axes.look.clamp_length_max(1.0)
+        let look = if authored.is_some() && active_action_source == ActionSource::KeyboardMouse {
+            control_axes.mouse_look
+        } else {
+            control_axes.look
+        };
+        look.clamp_length_max(1.0)
     } else {
         Vec2::ZERO
     };
@@ -162,7 +181,7 @@ pub(super) fn apply_allowed_look_rotation_and_cancellation_to_first_person_view<
         &mut view_angles,
         allowed_look_input,
         digital_horizontal_turn,
-        camera_tuning.turn_speed_rps,
+        speeds,
         &camera_tuning.pitch,
         &camera_tuning.yaw,
         elapsed_seconds,

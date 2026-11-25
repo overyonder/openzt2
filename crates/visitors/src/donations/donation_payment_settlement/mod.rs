@@ -39,6 +39,7 @@ pub(super) fn settle_completed_donation_transactions_and_update_acceptor_totals(
     mut fame_views: Query<&mut GuestSpeciesFameViews>,
     mut donation_totals: Query<&mut DonationTotal>,
     mut donation_category_totals: Query<&mut DonationCategoryTotals>,
+    mut world_deltas: super::zoo_donation_summary_presentation::DonationWorldDeltas,
     mut completed_donations: MessageWriter<DonationCompleted>,
     mut rejected_donations: MessageWriter<DonationRejected>,
     clock: Option<Single<&openzt2_world_state::simulation_time::simulation_clock_types::ZooClock>>,
@@ -156,6 +157,11 @@ pub(super) fn settle_completed_donation_transactions_and_update_acceptor_totals(
             );
             continue;
         }
+        world_deltas.record(
+            pending_payment.acceptor,
+            donation_opportunity.category,
+            pending_payment.amount,
+        );
 
         if let Ok(mut total) = donation_totals.get_mut(pending_payment.acceptor) {
             *total = updated_total;

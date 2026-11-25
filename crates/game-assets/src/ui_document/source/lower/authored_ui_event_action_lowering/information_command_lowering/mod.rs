@@ -2,12 +2,17 @@ use crate::source_document::ui::model::SourceUiEvent;
 use crate::ui_document::source::lower::authored_ui_action_argument_lowering::{
     information_sort_field, target_node,
 };
+use crate::ui_document::source::lower::authored_ui_asset_dependency_resolution::resolved_asset_dependency;
 use crate::ui_document::source::lower::authored_ui_document_lowering::AuthoredUiDocument;
 use crate::ui_document::source::lower::authored_ui_event_collection_lowering::{
-    information_graph_series, information_graph_type, information_setting,
+    information_graph_selection, information_graph_type, information_setting,
     information_view_category,
 };
+use crate::ui_document::source::lower::authored_ui_node_tree_lowering::BuildOutput;
 use crate::ui_document::source::lower::canonical_source_value_resolution;
+use openzt2_game_data::ui_document::action::audio_settings::{
+    UiAudioSettingAction, UiAudioSettingActionRecord,
+};
 use openzt2_game_data::ui_document::action::information::{
     InformationListCriterion, UiInformationAction, UiInformationActionRecord,
 };
@@ -24,6 +29,7 @@ pub(super) fn lower_information_command(
     event: &SourceUiEvent,
     role: UiDocumentRole,
     current: AssetId,
+    output: &mut BuildOutput,
     input: &AuthoredUiDocument,
 ) -> io::Result<Option<UiActionRecord>> {
     let result = match event.message.as_str() {
@@ -33,17 +39,6 @@ pub(super) fn lower_information_command(
                 action: UiPresentationAction::SetAllEmotePresentationsVisible {
                     visible: event.message == "ZT_VIEWFILTER_SHOW",
                 },
-            }))
-        }
-        "ZT_EVENT"
-            if event
-                .string
-                .as_deref()
-                .is_some_and(|value| matches!(value.to_ascii_lowercase().as_str(), "use8bitsoundson" | "use8bitsoundsoff")) =>
-        {
-            Ok(UiActionRecord::Presentation(UiPresentationActionRecord {
-                trigger,
-                action: UiPresentationAction::SetTargetNodeInteractionEnabled { target_node: current, enabled: false },
             }))
         }
         "ZT_SELECTNEXT_DISEASED_ANIMAL" => Ok(UiActionRecord::Information(UiInformationActionRecord {
@@ -70,6 +65,14 @@ pub(super) fn lower_information_command(
             action: UiInformationAction::ExportOverviewMap {
                 return_control: UiDocumentRole::node_id(role, "return"),
             },
+        })),
+        "ZT_EVENT" if event.string.as_deref().is_some_and(|value| {
+            value.eq_ignore_ascii_case("use8bitsoundson") || value.eq_ignore_ascii_case("use8bitsoundsoff")
+        }) => Ok(UiActionRecord::AudioSetting(UiAudioSettingActionRecord {
+            trigger,
+            action: UiAudioSettingAction::SetEightBitSound(
+                event.string.as_deref().is_some_and(|value| value.eq_ignore_ascii_case("use8bitsoundson")),
+            ),
         })),
         "ZT_EVENT" => Ok(UiActionRecord::Information(UiInformationActionRecord {
             trigger,
@@ -178,12 +181,16 @@ pub(super) fn lower_information_command(
                 descending: false,
             },
         })),
-        "ZT_GRAPH_SELECTION" => Ok(UiActionRecord::Information(UiInformationActionRecord {
-            trigger,
-            action: UiInformationAction::SelectGraph {
-                graph: information_graph_series(event.string.as_deref().or(event.value.as_deref()), input)?,
-            },
-        })),
+        "ZT_GRAPH_SELECTION" => {
+            let (graph, layout) = information_graph_selection(event.string.as_deref().or(event.value.as_deref()), input)?;
+            let label_document = resolved_asset_dependency(
+                Some(layout.to_owned()), &input.resolved_dependencies.documents, "graph label layout", output, input,
+            )?;
+            Ok(UiActionRecord::Information(UiInformationActionRecord {
+                trigger,
+                action: UiInformationAction::SelectGraph { graph, label_document },
+            }))
+        }
         _ => return Ok(None),
     };
     result.map(Some)

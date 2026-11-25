@@ -112,45 +112,96 @@ pub(super) fn project_selected_catalogue_research_panels(
     }
 }
 
+#[derive(Component, Default, PartialEq, Eq)]
+pub struct ResearchPresentationProject(pub Option<Entity>);
+
+pub(super) fn bind_selected_research_presentation_project(
+    selected: Query<Ref<SelectedCatalogueEntry>>,
+    mut worlds: Query<
+        (
+            Option<Ref<WorldResearchItems>>,
+            Option<Ref<super::research_types::WorldResearchItemMembers>>,
+            &mut ResearchPresentationProject,
+        ),
+        (With<WorldRoot>, With<WorldLoadCompleted>),
+    >,
+    projects: Query<(), With<ResearchProject>>,
+    started: Query<(), Added<ResearchProject>>,
+    mut retired: RemovedComponents<ResearchProject>,
+) {
+    use bevy::ecs::relationship::RelationshipTarget;
+
+    let Ok((definitions, members, mut current)) = worlds.single_mut() else {
+        retired.clear();
+        return;
+    };
+    let selected = selected.single().ok();
+    let pending = !started.is_empty() || !retired.is_empty();
+    retired.clear();
+    if !pending
+        && !current.is_added()
+        && !selected.as_ref().is_some_and(Ref::is_changed)
+        && !definitions.as_ref().is_some_and(Ref::is_changed)
+        && !members.as_ref().is_some_and(Ref::is_changed)
+    {
+        return;
+    }
+    let resolved = selected
+        .and_then(|selected| selected.0)
+        .and_then(|selected| {
+            let definitions = definitions.as_deref()?;
+            definitions
+                .definitions
+                .get(&selected)
+                .copied()
+                .filter(|&entity| projects.contains(entity))
+                .or_else(|| {
+                    definitions
+                        .unlocking(selected)
+                        .find(|&entity| projects.contains(entity))
+                })
+        })
+        .or_else(|| {
+            members
+                .as_deref()
+                .into_iter()
+                .flat_map(RelationshipTarget::iter)
+                .find(|&entity| projects.contains(entity))
+        });
+    current.set_if_neq(ResearchPresentationProject(resolved));
+}
+
 pub(super) fn project_selected_catalogue_research_progress(
-    selected: Single<&SelectedCatalogueEntry>,
-    world_items: Query<(Entity, &WorldResearchItems)>,
-    active_world: Query<Entity, (With<WorldRoot>, With<WorldLoadCompleted>)>,
-    projects: Query<&ResearchProject>,
+    selection: Query<Ref<ResearchPresentationProject>, (With<WorldRoot>, With<WorldLoadCompleted>)>,
+    projects: Query<Ref<super::ResearchCompletionBasisPoints>>,
+    mut retired: RemovedComponents<super::ResearchCompletionBasisPoints>,
     mut sliders: Query<(
-        &UiValueBinding,
+        Ref<UiValueBinding>,
         &mut UiValue,
         &mut UiMinimum,
         &mut UiMaximum,
         Option<&mut UiInteractionEnabled>,
     )>,
 ) {
-    let selected = selected.into_inner();
-    let project = selected.0.and_then(|selected| {
-        let (_, items) = world_items.get(active_world.single().ok()?).ok()?;
-        items
-            .definitions
-            .get(&selected)
-            .and_then(|&entity| projects.get(entity).ok())
-            .or_else(|| {
-                items
-                    .unlocking(selected)
-                    .find_map(|entity| projects.get(entity).ok())
-            })
-    });
+    let selection = selection.single().ok();
+    let project_entity = selection.as_ref().and_then(|selection| selection.0);
+    let project = project_entity.and_then(|entity| projects.get(entity).ok());
+    let refresh = selection.as_ref().is_some_and(Ref::is_changed)
+        || project.as_ref().is_some_and(Ref::is_changed)
+        || retired.read().any(|entity| Some(entity) == project_entity);
+    retired.clear();
     for (binding, mut value, mut minimum, mut maximum, enabled) in &mut sliders {
-        if !matches!(
-            binding.0,
-            UiIntegerPropertyBindingSource::SelectedCatalogueResearchProgressBasisPoints
-        ) {
+        if (!refresh && !binding.is_changed() && !value.is_added())
+            || !matches!(
+                binding.0,
+                UiIntegerPropertyBindingSource::SelectedCatalogueResearchProgressBasisPoints
+            )
+        {
             continue;
         }
         minimum.set_if_neq(UiMinimum(0));
         maximum.set_if_neq(UiMaximum(10_000));
-        value.set_if_neq(UiValue(project.map_or(0, |project| {
-            ((u128::from(project.elapsed_ticks.min(project.required_ticks)) * 10_000)
-                / u128::from(project.required_ticks.max(1))) as i64
-        })));
+        value.set_if_neq(UiValue(project.as_ref().map_or(0, |project| project.0)));
         if let Some(mut enabled) = enabled {
             enabled.set_if_neq(UiInteractionEnabled(false));
         }

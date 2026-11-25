@@ -4,6 +4,7 @@ use crate::{
     source_document::ordered_source_document_types::{
         OrderedSourceDocument, OrderedSourceDocumentChildren, OrderedSourceDocumentNode,
     },
+    source_document::ui::{model::SourceUiHotkey, parser::SourceUiDocument},
     ui_document::source::lower::authored_ui_document_lowering::{
         AuthoredUiInteractionCursors, AuthoredUiPlacementPreview,
     },
@@ -23,6 +24,31 @@ fn find_nested_ordered_source_document_node_by_name<'a>(
             .then_some(node)
             .or_else(|| find_nested_ordered_source_document_node_by_name(&node.children, tag))
     })
+}
+
+pub(super) fn parse_authored_overhead_camera_hotkeys(
+    document: &OrderedSourceDocument,
+) -> Vec<SourceUiHotkey> {
+    let Some(overhead) =
+        find_nested_ordered_source_document_node_by_name(&document.root.children, "ZTOverheadMode")
+    else {
+        return Vec::new();
+    };
+    let Some(camera) = find_nested_ordered_source_document_node_by_name(
+        &overhead.children,
+        "ZTCameraCommandReader",
+    ) else {
+        return Vec::new();
+    };
+    let mut root = camera.clone();
+    root.name = "UILayout".into();
+    SourceUiDocument::parse(&OrderedSourceDocument {
+        path: document.path.clone(),
+        format: document.format,
+        root,
+    })
+    .root
+    .hotkeys
 }
 
 pub(super) fn parse_authored_interaction_cursors_from_gameplay_mode_document(

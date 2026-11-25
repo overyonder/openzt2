@@ -1,4 +1,4 @@
-use crate::model_render::world_entity_model_suppression::ModelRenderVisibilityGate;
+use bevy::asset::{asset_changed::AssetChanged, AssetLoadFailedEvent};
 use bevy::platform::collections::HashSet;
 use bevy::prelude::*;
 use openzt2_game_data::scene_prefab::ScenePrefabEntityFlags;
@@ -6,7 +6,6 @@ use openzt2_game_data::scene_prefab::ScenePrefabRenderableVisibilityFlags;
 use openzt2_game_data::AssetId;
 
 use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
-use openzt2_world_state::animation_graph::model_animation_asset_binding_types::PendingModelAnimationAssets;
 use openzt2_world_state::world_spawn::prefab_model_replacement::PrefabModelReplaced;
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabLocalRenderBound;
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabPresentation;
@@ -71,7 +70,6 @@ pub fn spawn_prefab_render_tree(
         .expect("scene prefab asset must contain a root entity");
     commands.entity(root).insert(ChildOf(parent));
     let mut renderables = Vec::new();
-    let mut lights = Vec::new();
     for (index, row) in document.entities.iter().enumerate() {
         let spawned = entities[index];
         if let Some(joint) = &row.model_joint_binding {
@@ -106,61 +104,15 @@ pub fn spawn_prefab_render_tree(
                 child.insert(renderable_components);
                 child
             };
-            let animations = prefab
-                .loaded_animation_set_asset_handles()
-                .cloned()
-                .collect::<Vec<_>>();
-            if !animations.is_empty() {
-                renderable_entity.insert(PendingModelAnimationAssets {
-                    pending_model_animation_set_asset_handles: animations.into_boxed_slice(),
-                    requested_initial_animation_clip_asset_key: None,
-                });
-            }
+            super::prefab_renderable_components::attach_prefab_renderable_animations(
+                &mut renderable_entity,
+                prefab,
+                index,
+                renderable,
+                openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackClock::RealTime,
+            );
             let renderable = renderable_entity.id();
             renderables.push(renderable);
-        }
-        for light in row.lights.iter().filter(|_| authored_lights) {
-            let color = Color::srgb(
-                light.color_srgb[0],
-                light.color_srgb[1],
-                light.color_srgb[2],
-            );
-            match light.kind {
-                openzt2_game_data::scene_prefab::PrefabLightKind::Ambient => {}
-                openzt2_game_data::scene_prefab::PrefabLightKind::Directional => {
-                    let entity = commands
-                        .spawn((
-                            ModelRenderVisibilityGate,
-                            ChildOf(spawned),
-                            DirectionalLight {
-                                color,
-                                // The fixed-function shader maps DIRECT_SUNLIGHT
-                                // back to the authored unit directional intensity.
-                                illuminance: light.intensity * light_consts::lux::DIRECT_SUNLIGHT,
-                                shadow_maps_enabled: false,
-                                ..default()
-                            },
-                        ))
-                        .id();
-                    lights.push(entity);
-                }
-                openzt2_game_data::scene_prefab::PrefabLightKind::Point => {
-                    let entity = commands
-                        .spawn((
-                            ModelRenderVisibilityGate,
-                            ChildOf(spawned),
-                            PointLight {
-                                color,
-                                intensity: light.intensity,
-                                range: light.range_m,
-                                shadow_maps_enabled: false,
-                                ..default()
-                            },
-                        ))
-                        .id();
-                    lights.push(entity);
-                }
-            }
         }
         for child in &row.children {
             commands
@@ -173,6 +125,13 @@ pub fn spawn_prefab_render_tree(
             bind_prefab_lod(commands, &entities, entities[entity], lod);
         }
     }
+    let lights = if authored_lights {
+        crate::model_render::scoped_prefab_lighting::spawn_authored_scene_lights(
+            commands, prefab, &entities,
+        )
+    } else {
+        Vec::new()
+    };
     (root, renderables, lights)
 }
 
@@ -184,13 +143,30 @@ pub(super) struct PrefabPresentationRenderOf(Entity);
 #[relationship_target(relationship = PrefabPresentationRenderOf, linked_spawn)]
 pub(super) struct PrefabPresentationRenderRoot(Entity);
 
+#[derive(Component)]
+pub(super) struct PrefabPresentationHydrationFailed;
+
 pub(super) fn hydrate_prefab_presentations(
     mut commands: Commands,
     prefabs: Res<Assets<ScenePrefabAsset>>,
     mut asset_events: MessageReader<AssetEvent<ScenePrefabAsset>>,
     mut released: RemovedComponents<PrefabPresentationHydrated>,
+    mut failures: MessageReader<AssetLoadFailedEvent<ScenePrefabAsset>>,
+    server: Res<AssetServer>,
+    changed: Query<
+        Entity,
+        (
+            Without<PrefabPresentationHydrated>,
+            AssetChanged<PrefabPresentation>,
+        ),
+    >,
     pending: Query<
-        (Entity, Ref<PrefabPresentation>, Option<&PrefabShadowPolicy>),
+        (
+            Entity,
+            Ref<PrefabPresentation>,
+            Option<&PrefabShadowPolicy>,
+            Has<PrefabPresentationHydrationFailed>,
+        ),
         Without<PrefabPresentationHydrated>,
     >,
 ) {
@@ -206,10 +182,31 @@ pub(super) fn hydrate_prefab_presentations(
     let released = released
         .read()
         .collect::<bevy::ecs::entity::EntityHashSet>();
-    for (entity, request, inherited_shadow_policy) in &pending {
+    let failed = failures
+        .read()
+        .map(|event| event.id)
+        .collect::<HashSet<_>>();
+    for (entity, request, inherited_shadow_policy, failed_previously) in &pending {
+        if prefabs.get(&request.0).is_none()
+            && (failed.contains(&request.0.id())
+                || request.is_added()
+                    && matches!(
+                        server.load_state(request.0.id()),
+                        bevy::asset::LoadState::Failed(_)
+                    ))
+        {
+            if !failed_previously {
+                warn!(?entity, asset = ?request.0.id(), "prefab presentation could not be loaded");
+                commands
+                    .entity(entity)
+                    .try_insert(PrefabPresentationHydrationFailed);
+            }
+            continue;
+        }
         if !request.is_changed()
             && !released.contains(&entity)
             && !ready_assets.contains(&request.0.id())
+            && !changed.contains(entity)
         {
             continue;
         }
@@ -226,7 +223,10 @@ pub(super) fn hydrate_prefab_presentations(
         commands
             .entity(root)
             .insert(PrefabPresentationRenderOf(entity));
-        commands.entity(entity).insert(PrefabPresentationHydrated);
+        commands
+            .entity(entity)
+            .try_insert(PrefabPresentationHydrated)
+            .try_remove::<PrefabPresentationHydrationFailed>();
     }
 }
 

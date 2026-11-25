@@ -55,16 +55,80 @@ pub(in crate::scenario) struct ScenarioUiState {
     nodes: VecDeque<(Vec<String>, NodeOperation)>,
     hidden: VecDeque<(Vec<String>, NodeOperation)>,
     fence_placement_mode: Option<SetScenarioFencePlacementMode>,
-    pub(super) enabled: BTreeMap<String, bool>,
-    pub(super) shown: BTreeMap<String, bool>,
     pub(in crate::scenario) continuation: Option<AssetId>,
     selection: Option<ScenarioUiSelectionCompleted>,
-    cached: BTreeMap<(Entity, AssetId), CachedPanel>,
 }
 
-#[derive(Default)]
-struct CachedPanel {
-    visible: bool,
+#[derive(Component)]
+#[relationship(relationship_target = ScenarioUiNodeOverrides)]
+pub(super) struct ScenarioUiNodeOverrideOf(pub Entity);
+
+#[derive(Component)]
+#[relationship_target(relationship = ScenarioUiNodeOverrideOf, linked_spawn)]
+pub(super) struct ScenarioUiNodeOverrides(Vec<Entity>);
+
+#[derive(Component, Debug, PartialEq, Eq)]
+pub(super) struct ScenarioUiNodeOverride {
+    pub(super) name: String,
+    pub(super) enabled: Option<bool>,
+    pub(super) shown: Option<bool>,
+}
+
+#[derive(SystemParam)]
+pub(super) struct ScenarioUiNodeOverrideProjection<'w, 's> {
+    members: Query<'w, 's, &'static ScenarioUiNodeOverrides>,
+    nodes: Query<'w, 's, (Entity, &'static mut ScenarioUiNodeOverride)>,
+    changed_nodes:
+        Query<'w, 's, &'static ScenarioUiNodeOverrideOf, Changed<ScenarioUiNodeOverride>>,
+}
+
+impl ScenarioUiNodeOverrideProjection<'_, '_> {
+    fn changes(&self, owner: Entity) -> bool {
+        self.changed_nodes.iter().any(|target| target.0 == owner)
+    }
+
+    fn read(&self, owner: Entity) -> super::ScenarioUiSavedState {
+        let mut saved = super::ScenarioUiSavedState::default();
+        if let Ok(members) = self.members.get(owner) {
+            for (_, node) in self.nodes.as_readonly().iter_many(members.iter()).flatten() {
+                saved.capture_override(node);
+            }
+        }
+        saved
+    }
+
+    fn sync(
+        &mut self,
+        commands: &mut Commands,
+        owner: Entity,
+        mut values: super::ScenarioUiSavedState,
+    ) {
+        if let Ok(members) = self.members.get(owner) {
+            let mut nodes = self.nodes.iter_many_mut(members.iter());
+            while let Some(node) = nodes.fetch_next() {
+                let Ok((entity, mut node)) = node else {
+                    continue;
+                };
+                let enabled = values.enabled.remove(&node.name);
+                let shown = values.shown.remove(&node.name);
+                if enabled.is_none() && shown.is_none() {
+                    commands.entity(entity).despawn();
+                } else {
+                    node.reborrow()
+                        .map_unchanged(|node| &mut node.enabled)
+                        .set_if_neq(enabled);
+                    node.reborrow()
+                        .map_unchanged(|node| &mut node.shown)
+                        .set_if_neq(shown);
+                }
+            }
+        }
+        values.spawn_overrides(commands, owner);
+    }
+}
+
+#[derive(Component, Default)]
+pub(super) struct ScenarioPanelMessages {
     draft: Vec<UiPresentationAction>,
     entries: VecDeque<Vec<UiPresentationAction>>,
 }
@@ -93,6 +157,7 @@ pub(super) fn preload_scenario_ui_documents(
             UiDocumentRole::Tutorial,
             UiDocumentRole::Scenario,
             UiDocumentRole::ChallengeOffer,
+            UiDocumentRole::InstantChallengeOffer,
         ]
         .into_iter()
         .filter_map(select_bevy_asset_path_for_canonical_ui_document_role)
@@ -210,7 +275,11 @@ pub(super) fn apply_scenario_ui_commands(
     mut events: ScenarioUiProjectionEvents,
     mut roles: MessageWriter<ShowUiRole>,
     owners: Query<Entity, With<InGameUiOwner>>,
-    roots: Query<(Entity, &UiDocumentRoot)>,
+    (roots, document_owners, challenge_offers): (
+        Query<(Entity, &UiDocumentRoot)>,
+        Query<&ChildOf, With<UiDocumentRoot>>,
+        Query<(), With<crate::scenario::challenge_offer_types::ScenarioChallengeOffer>>,
+    ),
     added_nodes: Query<(&UiNodeId, &UiDocumentOwner), Added<UiNodeId>>,
     documents: Res<Assets<UiDocumentAsset>>,
     mut presentation: ParamSet<(
@@ -239,6 +308,10 @@ pub(super) fn apply_scenario_ui_commands(
     (all_nodes, members): (
         Query<(Entity, &UiNodeId, &UiDocumentOwner, &Visibility)>,
         Query<&UiDocumentMembers>,
+    ),
+    (mut panels, mut overrides): (
+        Query<&mut ScenarioPanelMessages>,
+        ScenarioUiNodeOverrideProjection,
     ),
     mut commands: Commands,
 ) {
@@ -310,24 +383,52 @@ pub(super) fn apply_scenario_ui_commands(
         }))
         .collect::<Vec<_>>();
     let mut presentation = presentation.p1();
-    for advance in advances {
-        if let Some(panel) = pending.cached.get_mut(&advance) {
-            if let Some(entry) = panel.entries.pop_front() {
-                panel.visible = true;
-                let _ = presentation.write_batch(entry.into_iter().map(|action| {
-                    RequestUiPresentationAction {
-                        document_root: advance.0,
-                        action,
-                    }
-                }));
-            } else {
-                panel.visible = false;
-            }
+    let mut new_panels = BTreeMap::<Entity, ScenarioPanelMessages>::new();
+    let mut requested_visibility = BTreeMap::<Entity, bool>::new();
+    let find_node = |root, id| {
+        let members = members.get(root).ok()?;
+        all_nodes
+            .iter_many(members.iter())
+            .flatten()
+            .find_map(|(entity, node, _, visibility)| {
+                (node.id == id).then_some((entity, *visibility != Visibility::Hidden))
+            })
+    };
+    for (document_root, node) in advances {
+        let Some((entity, _)) = find_node(document_root, node) else {
+            continue;
+        };
+        let Ok(mut panel) = panels.get_mut(entity) else {
+            continue;
+        };
+        if let Some(entry) = panel.entries.pop_front() {
+            requested_visibility.insert(entity, true);
+            let _ = presentation.write_batch(entry.into_iter().map(|action| {
+                RequestUiPresentationAction {
+                    document_root,
+                    action,
+                }
+            }));
+        } else {
+            requested_visibility.insert(entity, false);
         }
     }
 
     let projected = !added_nodes.is_empty();
     let assets_changed = events.document_assets.read().count() > 0;
+    let restrictions_changed = overrides.changes(owner);
+    let mut values = if projected
+        || assets_changed
+        || restrictions_changed
+        || state_added
+        || !requests.is_empty()
+        || !pending.nodes.is_empty()
+    {
+        overrides.read(owner)
+    } else {
+        super::ScenarioUiSavedState::default()
+    };
+    let mut visibility_updated = false;
     if projected || assets_changed {
         pending.nodes.append(&mut pending.hidden);
     }
@@ -363,11 +464,11 @@ pub(super) fn apply_scenario_ui_commands(
                         if ancestors(document, index)
                             .any(|ancestor| ancestor.name.eq_ignore_ascii_case(name))
                         {
-                            pending.enabled.remove(&node.name.to_ascii_lowercase());
+                            values.enabled.remove(&node.name.to_ascii_lowercase());
                         }
                     }
                 }
-                pending.enabled.insert(key.clone(), *enabled);
+                values.enabled.insert(key.clone(), *enabled);
                 changed_enabled.push(key);
             }
             ScenarioUiCommand::ResearchDuration {
@@ -414,7 +515,7 @@ pub(super) fn apply_scenario_ui_commands(
             _ => {}
         }
     }
-    if !changed_enabled.is_empty() || projected || state_added {
+    if !changed_enabled.is_empty() || projected || state_added || restrictions_changed {
         // Restrictions also apply to controls created after the script ran.
         for (root_entity, root) in &roots {
             let Some(asset) = documents.get(&root.document) else {
@@ -432,11 +533,11 @@ pub(super) fn apply_scenario_ui_commands(
                     .chain(ancestors(document, index))
                     .find_map(|restricted| {
                         let key = restricted.name.to_ascii_lowercase();
-                        pending.enabled.get(&key).map(|enabled| (key, *enabled))
+                        values.enabled.get(&key).map(|enabled| (key, *enabled))
                     });
                 // A buy-panel row enabled by name is no node of the document, so the
                 // list that holds it stays usable inside a disabled group.
-                let holds_enabled_row = pending.enabled.iter().any(|(name, enabled)| {
+                let holds_enabled_row = values.enabled.iter().any(|(name, enabled)| {
                     *enabled
                         && !document
                             .nodes
@@ -460,7 +561,7 @@ pub(super) fn apply_scenario_ui_commands(
                 // on its own has to work inside its disabled group. Its siblings
                 // stay disabled through their own flags.
                 if holds_enabled_row
-                    || pending.enabled.get(&key) == Some(&true) && changed_enabled.contains(&key)
+                    || values.enabled.get(&key) == Some(&true) && changed_enabled.contains(&key)
                 {
                     for ancestor in ancestors(document, index) {
                         presentation.write(RequestUiPresentationAction {
@@ -472,8 +573,8 @@ pub(super) fn apply_scenario_ui_commands(
                         });
                     }
                 }
-                if let Some(&visible) = pending.shown.get(&key) {
-                    if state_added || added() {
+                if let Some(&visible) = values.shown.get(&key) {
+                    if state_added || restrictions_changed || added() {
                         presentation.write(RequestUiPresentationAction {
                             document_root: root_entity,
                             action: UiPresentationAction::SetTargetNodeVisible {
@@ -487,7 +588,7 @@ pub(super) fn apply_scenario_ui_commands(
         }
     }
     // Scripts also address buy-panel rows, by the name of what each one sells.
-    if !changed_enabled.is_empty() || state_added {
+    if !changed_enabled.is_empty() || state_added || restrictions_changed {
         if let Ok(mut disabled) = disabled_catalogue.get_mut(owner) {
             let definitions = pending
                 .enabled
@@ -532,6 +633,15 @@ pub(super) fn apply_scenario_ui_commands(
         }
         let target = roots.iter().find_map(|(entity, root)| {
             let document = documents.get(&root.document)?.canonical_ui_document();
+            if matches!(
+                document.role,
+                UiDocumentRole::ChallengeOffer | UiDocumentRole::InstantChallengeOffer
+            ) && !document_owners
+                .get(entity)
+                .is_ok_and(|owner| challenge_offers.contains(owner.parent()))
+            {
+                return None;
+            }
             let id = resolve_node(document, &path)?;
             let ready = members.get(entity).is_ok_and(|members| {
                 all_nodes
@@ -543,6 +653,13 @@ pub(super) fn apply_scenario_ui_commands(
         });
         let Some((root, target_node)) = target else {
             if let Some(role) = role_for(&documents, &path) {
+                if matches!(
+                    role,
+                    UiDocumentRole::ChallengeOffer | UiDocumentRole::InstantChallengeOffer
+                ) {
+                    pending.hidden.push_back((path, operation));
+                    continue;
+                }
                 if (matches!(operation, NodeOperation::Visible(true))
                     && !(role == UiDocumentRole::PhotoMode && path.len() > 1))
                     || role == UiDocumentRole::Tutorial
@@ -702,21 +819,13 @@ pub(super) fn apply_scenario_ui_commands(
                         if matches!(record.action, UiPresentationAction::AdvanceTargetNodeMessageCursor { target_node } if target_node == node.id)
                 ))
             }));
-        if let Some(panel) = panel {
-            let cache = pending.cached.entry((root, panel.id)).or_insert_with(|| {
-                let visible = members.get(root).is_ok_and(|members| {
-                    all_nodes
-                        .iter_many(members.iter())
-                        .flatten()
-                        .any(|(_, node, _, visibility)| {
-                            node.id == panel.id && *visibility != Visibility::Hidden
-                        })
-                });
-                CachedPanel {
-                    visible,
-                    ..Default::default()
-                }
-            });
+        if let Some((panel, (panel_entity, projected_visible))) =
+            panel.and_then(|panel| Some((panel, find_node(root, panel.id)?)))
+        {
+            let mut live = panels.get_mut(panel_entity).ok();
+            let queue = live
+                .as_deref_mut()
+                .unwrap_or_else(|| new_panels.entry(panel_entity).or_default());
             let closes_panel = matches!(action, UiPresentationAction::SetTargetNodeVisible { target_node, visible: false } if target_node == panel.id);
             let opens_panel = matches!(action, UiPresentationAction::SetTargetNodeVisible { target_node, visible: true } if target_node == panel.id);
             let prepares_panel = matches!(
@@ -727,14 +836,18 @@ pub(super) fn apply_scenario_ui_commands(
                     | UiPresentationAction::SetTargetNodeVisible { .. }
             );
             if closes_panel {
-                cache.visible = false;
+                requested_visibility.insert(panel_entity, false);
             } else if opens_panel {
-                cache.draft.push(action);
-                let entry = std::mem::take(&mut cache.draft);
-                if cache.visible {
-                    cache.entries.push_back(entry);
+                queue.draft.push(action);
+                let entry = std::mem::take(&mut queue.draft);
+                if requested_visibility
+                    .get(&panel_entity)
+                    .copied()
+                    .unwrap_or(projected_visible)
+                {
+                    queue.entries.push_back(entry);
                 } else {
-                    cache.visible = true;
+                    requested_visibility.insert(panel_entity, true);
                     let _ = presentation.write_batch(entry.into_iter().map(|action| {
                         RequestUiPresentationAction {
                             document_root: root,
@@ -744,12 +857,13 @@ pub(super) fn apply_scenario_ui_commands(
                 }
                 continue;
             } else if prepares_panel {
-                cache.draft.push(action);
+                queue.draft.push(action);
                 continue;
             }
         } else if let UiPresentationAction::SetTargetNodeVisible { visible, .. } = action {
             if let [name] = path.as_slice() {
-                pending.shown.insert(name.to_ascii_lowercase(), visible);
+                values.shown.insert(name.to_ascii_lowercase(), visible);
+                visibility_updated = true;
             }
         }
         presentation.write(RequestUiPresentationAction {
@@ -760,13 +874,18 @@ pub(super) fn apply_scenario_ui_commands(
     if current.is_none()
         && (!initial.nodes.is_empty()
             || !initial.hidden.is_empty()
-            || !initial.enabled.is_empty()
-            || !initial.shown.is_empty()
             || initial.continuation.is_some()
-            || initial.selection.is_some()
-            || !initial.cached.is_empty())
+            || initial.selection.is_some())
     {
         commands.entity(owner).insert(initial);
+    }
+    if !changed_enabled.is_empty() || visibility_updated {
+        overrides.sync(&mut commands, owner, values);
+    }
+    for (entity, queue) in new_panels {
+        if !queue.draft.is_empty() || !queue.entries.is_empty() {
+            commands.entity(entity).insert(queue);
+        }
     }
 }
 

@@ -6,6 +6,7 @@ use openzt2_game_data::world_definitions::guest_simulation_definitions::GuestMem
 use openzt2_game_data::world_definitions::transportation_and_tours::TourViewDefinition;
 use openzt2_game_data::AssetId;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::GuestTourDepartureGate;
 
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
@@ -14,6 +15,7 @@ use openzt2_zoo_state::animal_behavior::behavior_set_start_request_types::StartB
 use openzt2_zoo_state::animal_lifecycle::types::Animal;
 use openzt2_zoo_state::guests::guest_simulation_types::Guest;
 use openzt2_zoo_state::guests::guest_simulation_types::GuestReaction;
+use openzt2_zoo_state::guests::guest_simulation_types::GuestRng;
 use openzt2_zoo_state::locomotion::locomotion_types::{SpatialGrid, SpatialGridMembership};
 
 use crate::transport_tours::tour_score_calculations::add_observation_value_to_tour_score;
@@ -27,6 +29,11 @@ use openzt2_zoo_state::transport_tours::transport_vehicle_types::TransportVehicl
 
 #[derive(Component, Default)]
 pub(super) struct TourObservationDwell(Option<Timer>);
+
+#[derive(Component, Default)]
+pub(super) struct RideTourContributions(pub(super) [f32; 2]);
+
+/// The visitor's tour state in authored source units.
 
 fn find_vehicle_seat_emote_behavior_for_tour_score(
     definitions: WorldDefinitionsView<'_>,
@@ -46,34 +53,11 @@ fn calculate_curved_tour_score(base: f32, curve: &[f32; 2]) -> f32 {
     base.signum() * curve[0] * magnitude
 }
 
-fn calculate_deterministic_unit_value_for_guest_and_subject(
-    entity: Entity,
-    subject: Entity,
-) -> f32 {
-    let bits = entity
-        .to_bits()
-        .wrapping_mul(0x9e37_79b9_7f4a_7c15)
-        .rotate_left(17)
-        ^ subject.to_bits();
-    (bits as u32) as f32 / u32::MAX as f32
-}
-
-fn calculate_deterministic_tour_score_factor(
-    entity: Entity,
-    subject: Entity,
-    bounds: &[f32; 2],
-) -> f32 {
-    let unit = calculate_deterministic_unit_value_for_guest_and_subject(entity, subject);
-    let minimum = bounds[0];
-    minimum + (bounds[1] - minimum) * unit
-}
-
 struct TourVehicleViewCandidate<'a> {
     entity: Entity,
     target: Vec3,
     definition: &'a TourViewDefinition,
     is_animal: bool,
-    shared_occluder: Option<Entity>,
 }
 
 fn first_tour_view_occluder(
@@ -108,7 +92,6 @@ fn gather_tour_view_candidates<'a>(
     membership: &SpatialGridMembership,
     center: UVec2,
     cell_radius: u32,
-    origin: Vec3,
     definitions: WorldDefinitionsView<'a>,
     viewables: &Query<(&TourViewable, &GlobalTransform, Has<Animal>)>,
 ) -> Vec<TourVehicleViewCandidate<'a>> {
@@ -127,16 +110,12 @@ fn gather_tour_view_candidates<'a>(
                     continue;
                 };
                 let target = transform.translation();
-                let radius = definition.radius_cm as f32 * 0.01;
-                if origin.distance_squared(target) <= radius * radius {
-                    candidates.push(TourVehicleViewCandidate {
-                        entity,
-                        target,
-                        definition,
-                        is_animal,
-                        shared_occluder: None,
-                    });
-                }
+                candidates.push(TourVehicleViewCandidate {
+                    entity,
+                    target,
+                    definition,
+                    is_animal,
+                });
             }
         }
     }
@@ -173,6 +152,7 @@ pub(super) fn calculate_tour_rating_from_authored_score_ranges(
 
 pub(super) fn observe_visible_tour_subjects_and_accumulate_rider_scores(
     fixed_time: Res<Time<Fixed>>,
+    view_catalogue: Res<super::transport_definition_hydration::TourViewCatalogue>,
     grids: Query<&SpatialGrid>,
     membership: SpatialGridMembership,
     spatial_query: SpatialQuery,
@@ -186,17 +166,20 @@ pub(super) fn observe_visible_tour_subjects_and_accumulate_rider_scores(
             &mut TourScore,
             &mut TourObservationMemory,
             &mut TourObservationDwell,
+            &mut GuestRng,
+            &mut RideTourContributions,
+            Option<&GuestTourDepartureGate>,
         ),
         With<Guest>,
     >,
     vehicles: Query<(
         Entity,
         &TransportVehicle,
-        &GlobalTransform,
+        &Transform,
         &VehicleRiders,
         &WorldMember,
     )>,
-    seats: Query<&TransportSeat>,
+    seats: Query<(&TransportSeat, &Transform)>,
     viewables: Query<(&TourViewable, &GlobalTransform, Has<Animal>)>,
     parents: Query<&ChildOf>,
     mut reactions: MessageWriter<GuestReaction>,
@@ -209,85 +192,81 @@ pub(super) fn observe_visible_tour_subjects_and_accumulate_rider_scores(
         return;
     };
     let policy = definitions.tour_scoring();
-    let maximum_radius_m = definitions
-        .tour_views()
-        .map(|definition| definition.radius_cm as f32 * 0.01)
-        .fold(0.0f32, f32::max);
     let memory_limit = policy.map_or(u16::MAX, |policy| policy.view_target_memory);
     let mut candidates_by_vehicle = EntityHashMap::default();
     for (vehicle, configuration, transform, passengers, member) in &vehicles {
         let Ok(grid) = grids.get(member.root) else {
             continue;
         };
-        let cell_radius = (maximum_radius_m / grid.cell_size_m).ceil() as u32;
-        let origin = transform.translation();
+        let origin = transform.translation;
         let Some(center) = grid
             .cell_of(origin.xz())
             .and_then(|cell| grid.cell_xy(cell))
         else {
             continue;
         };
-        let due = riders
+        let seat_radius = riders
             .iter_many(passengers.iter())
             .filter_map(Result::ok)
-            .filter(|(_, _, _, score, _, cadence)| {
+            .filter(|(_, _, _, score, _, cadence, ..)| {
                 cadence.0.as_ref().is_none_or(Timer::is_finished)
                     && policy
                         .is_none_or(|policy| score.observations < u32::from(policy.tour_history))
             })
-            .map(|(_, _, _, _, memory, _)| memory)
-            .collect::<Vec<_>>();
-        if due.is_empty() {
+            .filter_map(|(_, _, mount, ..)| seats.get(mount.0).ok())
+            .map(|(_, local)| (transform.scale * local.translation).length())
+            .reduce(f32::max);
+        let Some(seat_radius) = seat_radius else {
             continue;
-        }
-        let mut candidates = gather_tour_view_candidates(
+        };
+        let cell_radius =
+            ((view_catalogue.maximum_radius_m + seat_radius) / grid.cell_size_m).ceil() as u32;
+        let candidates = gather_tour_view_candidates(
             member.root,
             grid,
             &membership,
             center,
             cell_radius,
-            origin,
             definitions,
             &viewables,
         );
-        candidates.retain_mut(|candidate| {
-            if !due
-                .iter()
-                .any(|memory| memory.can_observe_with_limit(candidate.entity, memory_limit))
-            {
-                return false;
-            }
-            if candidate.definition.occlusion_required {
-                candidate.shared_occluder = first_tour_view_occluder(
-                    &spatial_query,
-                    &parents,
-                    origin,
-                    candidate.target,
-                    &[vehicle, candidate.entity],
-                );
-            }
-            true
-        });
-        candidates_by_vehicle.insert(vehicle, (configuration.definition, origin, candidates));
+        candidates_by_vehicle.insert(vehicle, (configuration.definition, *transform, candidates));
     }
 
     let mut feedback =
         bevy::utils::Parallel::<Vec<(Entity, Option<StartBehaviorSet>, GuestReaction)>>::default();
     let observation_step = fixed_time.timestep();
     riders.par_iter_mut().for_each(
-        |(guest, rider, mount, mut score, mut memory, mut cadence)| {
+        |(
+            guest,
+            rider,
+            mount,
+            mut score,
+            mut memory,
+            mut cadence,
+            mut rng,
+            mut contributions,
+            need,
+        )| {
             if let Some(timer) = cadence.0.as_mut().filter(|timer| !timer.is_finished()) {
                 timer.tick(observation_step);
                 return;
             }
-            let Some((vehicle_definition, origin, candidates)) =
+            let Some((vehicle_definition, vehicle_pose, candidates)) =
                 candidates_by_vehicle.get(&rider.vehicle)
             else {
                 return;
             };
-            let Ok(seat) = seats.get(mount.0) else {
+            let Ok((seat, local_seat)) = seats.get(mount.0) else {
                 return;
             };
+            let authored_seat =
+                definitions.find_vehicle_seat_by_index(*vehicle_definition, seat.index);
+            let seat_pose = super::transport_passenger_mounts::occupied_seat_pose(
+                vehicle_pose,
+                local_seat,
+                seat.back_facing,
+            );
             let mut next_observation = 0;
             for candidate in candidates {
                 if policy.is_some_and(|policy| score.observations >= u32::from(policy.tour_history))
@@ -300,23 +279,27 @@ pub(super) fn observe_visible_tour_subjects_and_accumulate_rider_scores(
                 }
                 let definition = candidate.definition;
                 let is_animal = candidate.is_animal;
-                if let Some(hit) = candidate.shared_occluder {
-                    let rider_owns_hit = hit == guest
-                        || parents
-                            .iter_ancestors::<ChildOf>(hit)
-                            .any(|ancestor| ancestor == guest);
-                    if !rider_owns_hit
-                        || first_tour_view_occluder(
+                let offset = candidate.target - seat_pose.translation;
+                let radius = definition.radius_cm as f32 * 0.01;
+                if offset.length_squared() > radius * radius
+                    || authored_seat.is_some_and(|seat| {
+                        !super::transport_passenger_mounts::seat_can_view_target(
+                            seat,
+                            &seat_pose,
+                            candidate.target,
+                        )
+                    })
+                    || definition.occlusion_required
+                        && first_tour_view_occluder(
                             &spatial_query,
                             &parents,
-                            *origin,
+                            seat_pose.translation,
                             candidate.target,
                             &[guest, rider.vehicle, subject],
                         )
                         .is_some()
-                    {
-                        continue;
-                    }
+                {
+                    continue;
                 }
                 memory.observe_with_limit(subject, memory_limit);
                 let raw_score = f32::from(definition.base_score);
@@ -338,12 +321,11 @@ pub(super) fn observe_visible_tour_subjects_and_accumulate_rider_scores(
                             .find(|row| row.category == definition.subject)
                             .map_or(0.0, |row| row.value as f32)
                     };
-                    (event_score + subject_score + category_bonus)
-                        * calculate_deterministic_tour_score_factor(
-                            guest,
-                            subject,
-                            &policy.inducement_random_factor,
-                        )
+                    let [minimum, maximum] = policy.inducement_random_factor;
+                    let factor = minimum + (maximum - minimum) * rng.0.unit_f32();
+                    contributions.0[0] += event_score * factor;
+                    contributions.0[1] += (subject_score + category_bonus) * factor;
+                    (event_score + subject_score + category_bonus) * factor
                 });
                 add_observation_value_to_tour_score(&mut score, observation_score);
                 next_observation = next_observation.max(definition.dwell_ticks);
@@ -351,11 +333,14 @@ pub(super) fn observe_visible_tour_subjects_and_accumulate_rider_scores(
                     if score.value < policy.score_threshold {
                         return false;
                     }
+                    if need.is_some_and(|need| need.need < need.threshold) {
+                        return false;
+                    }
                     if is_animal {
                         observation_score >= policy.animal_feedback_threshold
-                            && calculate_deterministic_unit_value_for_guest_and_subject(
-                                guest, subject,
-                            ) <= policy.animal_feedback_probability
+                            && rng.0.range_u32(100).is_some_and(|roll| {
+                                (roll as f32) < policy.animal_feedback_probability
+                            })
                     } else {
                         observation_score <= policy.object_feedback_thresholds[0]
                             || observation_score >= policy.object_feedback_thresholds[1]

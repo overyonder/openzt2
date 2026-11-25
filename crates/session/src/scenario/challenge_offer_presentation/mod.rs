@@ -15,6 +15,60 @@ use super::challenge_offer_types::{
     ScenarioChallengePanelSurface, ScenarioChallengePanelText,
 };
 
+pub(super) fn authored_panel_request(
+    scenario: openzt2_game_data::AssetId,
+    documents: &Assets<openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset>,
+    actions: &[super::scenario_lua_ui::ScenarioUiCommand],
+) -> Option<ScenarioChallengePanelRequest> {
+    use super::scenario_lua_ui::{presentation::resolve_node, NodeOperation, ScenarioUiCommand};
+    let mut request = ScenarioChallengePanelRequest {
+        source: None,
+        scenario,
+        show: None,
+        text: None,
+        description: None,
+    };
+    for action in actions {
+        let ScenarioUiCommand::Node { path, operation } = action else {
+            continue;
+        };
+        if !matches!(
+            operation,
+            NodeOperation::Visible(true) | NodeOperation::Localized(_)
+        ) {
+            continue;
+        }
+        for (_, asset) in documents.iter() {
+            let document = asset.canonical_ui_document();
+            let surface = match document.role {
+                UiDocumentRole::ChallengeOffer => ScenarioChallengePanelSurface::Offer,
+                UiDocumentRole::InstantChallengeOffer => {
+                    ScenarioChallengePanelSurface::InstantOffer
+                }
+                _ => continue,
+            };
+            let Some(node) = resolve_node(document, path)
+                .and_then(|id| document.nodes.iter().find(|node| node.id == id))
+            else {
+                continue;
+            };
+            match operation {
+                NodeOperation::Visible(true) if node.parent == 0 => {
+                    request.show = Some(surface);
+                }
+                NodeOperation::Localized(key) => match node.name.as_str() {
+                    "challenge text" | "instant challenge text" => request.text = Some(*key),
+                    "instant challenge description text" => request.description = Some(*key),
+                    _ => {}
+                },
+                _ => {}
+            }
+        }
+    }
+    (request.show.is_some() || request.text.is_some() || request.description.is_some())
+        .then_some(request)
+}
+
 pub(super) fn apply_authored_challenge_panel_requests(
     mut commands: Commands,
     mut requests: MessageReader<ScenarioChallengePanelRequest>,
@@ -117,7 +171,7 @@ pub(super) fn project_authored_challenge_panel_text(
     parents: Query<&ChildOf>,
     localization: Res<LocalizationPrecedenceIndex>,
     assets: Res<Assets<LocalizationAsset>>,
-    mut texts: Query<(&Name, &UiDocumentOwner, &mut Text)>,
+    mut texts: Query<(&Name, &UiDocumentOwner, &mut Text), Added<UiDocumentOwner>>,
 ) {
     let Some(localization) = localization.borrow_loaded_localization_view(&assets) else {
         return;

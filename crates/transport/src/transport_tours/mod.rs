@@ -1,14 +1,18 @@
 //! Ground and sky transport expressed as graph, vehicle, and rider ECS facts.
-mod transport_passenger_mounts;
+pub mod transport_passenger_mounts;
 mod transport_track_endpoint_queries;
 mod transport_track_piece_chain_geometry;
 mod transport_track_preview_presentation;
 
+mod behavior_rider_view_animation;
+mod behavior_tour_execution;
+mod ground_track_policy;
 mod sky_tower_navigation;
 mod topology;
-mod tour_donation;
+pub mod tour_donation;
 mod tour_score_calculations;
-mod tour_view_scoring;
+pub mod tour_view_scoring;
+mod transport_circuit_components;
 mod transport_circuit_validation;
 mod transport_construction_intent_routing;
 mod transport_definition_hydration;
@@ -19,17 +23,23 @@ mod transport_guest_arrival;
 mod transport_relationship_cleanup;
 mod transport_rider_boarding;
 mod transport_rider_disembarkation;
+mod transport_road_cut;
 mod transport_route_position_calculations;
 mod transport_track_construction_preview;
 mod transport_track_construction_transaction;
 mod transport_track_piece_presentation;
 mod transport_track_sale;
-mod transport_track_sale_steps;
 mod transport_ui_action_routing;
 mod transport_vehicle_movement;
 mod vehicle_generation;
 
+pub use transport_vehicle_movement::SkyStationCrossing;
+
 use bevy::prelude::*;
+use openzt2_construction::construction::construction_transaction_preparation::{
+    capture_submitted_preview, clear_submitted_preview, ConstructionSubmissionSet,
+};
+use openzt2_zoo_state::transport_tours::transport_track_construction_types::TransportTrackConstructionPreview;
 
 use openzt2_game_assets::application_lifecycle::GamePhase;
 use openzt2_world_state::application_schedule::FixedGameSet;
@@ -66,6 +76,27 @@ impl Plugin for TransportToursPlugin {
             app.add_plugins(PersistentIdIndexPlugin);
         }
         transport_relationship_cleanup::install(app);
+        behavior_tour_execution::register(app);
+        app.add_systems(Startup, ground_track_policy::load_ground_track_policy);
+        app.init_resource::<transport_definition_hydration::TourViewCatalogue>()
+            .add_systems(
+                PreUpdate,
+                transport_definition_hydration::index_authored_tour_views
+                    .after(openzt2_game_assets::world_definitions::WorldDefinitionPublicationSet),
+            );
+
+        app.add_systems(
+            Update,
+            capture_submitted_preview::<TransportTrackConstructionPreview>
+                .in_set(ConstructionSubmissionSet),
+        )
+        .add_systems(
+            FixedUpdate,
+            clear_submitted_preview::<TransportTrackConstructionPreview>
+                .after(FixedConstructionSet::Prepare)
+                .before(FixedConstructionSet::Apply),
+        );
+
         app.add_observer(behavior_rider_view_animation::animate_rider_for_authored_view);
         app.register_required_components_with::<
             TransportCircuit,
@@ -98,16 +129,17 @@ impl Plugin for TransportToursPlugin {
             .add_message::<DetachTransportStationRequest>()
             .add_message::<ConnectTransportTrackRequest>()
             .add_message::<DisconnectTransportTrackRequest>()
+            .add_message::<topology::TransportEdgesDisconnected>()
             .add_message::<TransportTrackConnectionRejected>()
             .add_message::<TransportTrackConnectionApplied>()
+            .init_asset::<ground_track_policy::GroundTrackPolicy>()
+            .init_asset_loader::<ground_track_policy::GroundTrackPolicyLoader>()
             .add_message::<TransportTrackDisconnectionApplied>()
             .add_message::<TransportStationAssignmentRejected>()
             .add_message::<TransportTrackConstructionEditPrepared>()
             .add_message::<TransportTrackConstructionEditPreparationRejected>()
             .add_message::<ApplyPreparedTransportTrackConstructionEditRequest>()
             .add_message::<TransportTrackConstructionEditApplicationAcknowledged>()
-            .add_message::<transport_track_sale_steps::ApplyTransportTrackSaleStep>()
-            .add_message::<transport_track_sale_steps::TransportTrackSaleStepAcknowledged>()
             .add_message::<GenerateTransportVehicleForCircuitRequest>()
             .add_message::<openzt2_zoo_state::transport_tours::transport_circuit_types::SetTransportCircuitFare>()
             .add_message::<BoardTransportRequest>()
@@ -129,6 +161,7 @@ impl Plugin for TransportToursPlugin {
                 Update,
                 (
                     crate::transport_tours::transport_track_construction_preview::continue_track_preview_from_committed_junction,
+                    transport_track_construction_preview::resolve_transport_pointer_endpoints,
                     crate::transport_tours::transport_track_construction_preview::update_transport_track_construction_preview_from_pointer_and_station_endpoints,
                     crate::transport_tours::transport_track_construction_preview::begin_or_commit_transport_track_construction_from_primary_pointer_action,
                 )
@@ -142,15 +175,20 @@ impl Plugin for TransportToursPlugin {
                 (
                     sky_tower_navigation::hydrate_sky_tower_endpoints,
                     crate::transport_tours::transport_track_piece_presentation::invalidate_track_drawings_at_changed_joints,
+                    crate::transport_tours::transport_track_piece_presentation::invalidate_ground_track_surface_drawings,
                     crate::transport_tours::transport_track_piece_presentation::show_construction_markers_at_open_sky_towers
                         .after(crate::transport_tours::transport_track_piece_presentation::project_committed_transport_track_piece_authored_prefabs),
                     crate::transport_tours::transport_track_preview_presentation::project_transport_track_construction_preview_authored_prefabs,
                     crate::transport_tours::transport_track_piece_presentation::project_committed_transport_track_piece_authored_prefabs
                         .after(crate::transport_tours::transport_track_piece_presentation::invalidate_track_drawings_at_changed_joints)
-                        .after(sky_tower_navigation::hydrate_sky_tower_endpoints),
+                        .after(sky_tower_navigation::hydrate_sky_tower_endpoints)
+                        .after(transport_track_piece_presentation::invalidate_ground_track_surface_drawings),
+                    transport_track_piece_presentation::bind_authored_transport_construction_marker_roles,
                     crate::transport_tours::transport_track_piece_presentation::show_construction_markers_at_unconnected_road_ends
+                        .after(transport_track_piece_presentation::bind_authored_transport_construction_marker_roles)
                         .after(crate::transport_tours::transport_track_piece_presentation::invalidate_track_drawings_at_changed_joints),
                     crate::transport_tours::transport_track_piece_presentation::show_construction_markers_at_unconnected_station_ends
+                        .after(transport_track_piece_presentation::bind_authored_transport_construction_marker_roles)
                         .after(crate::transport_tours::transport_track_piece_presentation::invalidate_track_drawings_at_changed_joints),
                 )
                     .in_set(GameSet::Presentation)
@@ -187,11 +225,17 @@ impl Plugin for TransportToursPlugin {
             .add_systems(
                 FixedUpdate,
                 (
-                    transport_track_sale_steps::begin_requested_transport_track_sales,
-                    crate::transport_tours::transport_track_construction_transaction::apply_prepared_transport_track_construction_edits
-                        .after(transport_track_sale_steps::begin_requested_transport_track_sales),
-                    crate::transport_tours::topology::apply_transport_station_and_track_topology_mutation_requests
-                        .after(crate::transport_tours::transport_track_construction_transaction::apply_prepared_transport_track_construction_edits),
+                    transport_road_cut::apply_prepared_road_cuts,
+                    crate::transport_tours::transport_track_construction_transaction::apply_prepared_transport_track_construction_edits,
+                    (
+                        topology::disconnect_tracks,
+                        topology::attach_stations,
+                        topology::detach_stations,
+                        topology::connect_tracks,
+                    )
+                        .chain()
+                        .after(crate::transport_tours::transport_track_construction_transaction::apply_prepared_transport_track_construction_edits)
+                        .after(transport_road_cut::apply_prepared_road_cuts),
                 )
                     .in_set(FixedConstructionSet::Apply)
                     .after(openzt2_zoo_state::construction::ConstructionDomainApplicationDispatchSet)
@@ -202,8 +246,8 @@ impl Plugin for TransportToursPlugin {
                 FixedUpdate,
                 (
                     crate::transport_tours::transport_track_construction_transaction::acknowledge_completed_transport_track_topology_applications,
-                    transport_track_sale_steps::settle_acknowledged_transport_track_sale_steps
-                        .after(crate::transport_tours::transport_track_construction_transaction::acknowledge_completed_transport_track_topology_applications),
+                    transport_circuit_components::split_disconnected_transport_circuits
+                        .after(crate::transport_tours::transport_track_construction_transaction::acknowledge_completed_transport_track_topology_applications)
                 )
                     .in_set(FixedConstructionSet::Cleanup)
                     .before(openzt2_zoo_state::construction::ConstructionDomainAcknowledgementCollectionSet)
@@ -225,17 +269,14 @@ impl Plugin for TransportToursPlugin {
             .add_systems(
                 FixedUpdate,
                 (
-                    crate::transport_tours::transport_guest_arrival::request_transport_boarding_for_owned_guest_arrivals,
-                    crate::transport_tours::transport_guest_arrival::cancel_interrupted_transport_queues,
-                    crate::transport_tours::transport_rider_boarding::accept_affordable_transport_boarding_requests_at_reachable_stations
-                        .after(crate::transport_tours::transport_guest_arrival::request_transport_boarding_for_owned_guest_arrivals)
-                        .after(crate::transport_tours::transport_guest_arrival::cancel_interrupted_transport_queues),
+                    crate::transport_tours::transport_guest_arrival::start_authored_station_queue_for_guest_arrivals,
+                    crate::transport_tours::transport_rider_boarding::accept_transport_queue_reservations,
                     crate::transport_tours::sky_tower_navigation::request_sky_tower_rider_navigation_to_authored_endpoint,
                     crate::transport_tours::tour_view_scoring::observe_visible_tour_subjects_and_accumulate_rider_scores,
                     crate::transport_tours::transport_rider_disembarkation::disembark_transport_riders_and_request_service_fare_transactions
                         .after(crate::transport_tours::tour_view_scoring::observe_visible_tour_subjects_and_accumulate_rider_scores),
                     crate::transport_tours::transport_rider_boarding::board_waiting_guests_when_transport_vehicle_arrives
-                        .after(crate::transport_tours::transport_rider_boarding::accept_affordable_transport_boarding_requests_at_reachable_stations)
+                        .after(crate::transport_tours::transport_rider_boarding::accept_transport_queue_reservations)
                         .after(crate::transport_tours::transport_rider_disembarkation::disembark_transport_riders_and_request_service_fare_transactions),
                 )
                     .in_set(FixedGameSet::Act)
@@ -245,7 +286,7 @@ impl Plugin for TransportToursPlugin {
                 Update,
                 (
                     crate::transport_tours::transport_definition_hydration::hydrate_transport_entities_from_authored_world_definitions,
-                    crate::transport_tours::transport_construction_intent_routing::attach_committed_transport_stations_to_compatible_or_new_circuits
+                    crate::transport_tours::transport_construction_intent_routing::create_circuits_for_new_transport_stations
                         .after(transport_definition_hydration::hydrate_transport_entities_from_authored_world_definitions),
                     transport_definition_hydration::materialize_restored_transport_prefabs
                         .after(transport_definition_hydration::hydrate_transport_entities_from_authored_world_definitions),

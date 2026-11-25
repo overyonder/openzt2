@@ -1,14 +1,13 @@
 //! Resolution of authored UI node semantics to canonical property bindings.
 
 use crate::source_document::ui::model::{
-    SourceUiEvent, SourceUiField, SourceUiNode, SourceUiWidgetData, SourceUiWidgetKind,
+    SourceUiEvent, SourceUiNode, SourceUiWidgetData, SourceUiWidgetKind,
 };
-use crate::ui_document::source::lower::authored_ui_action_argument_lowering::worker_duty;
+use crate::ui_document::source::lower::authored_ui_action_argument_lowering::worker_task;
 use crate::ui_document::source::lower::authored_ui_document_lowering::AuthoredUiDocument;
 use crate::ui_document::source::lower::authored_ui_node_tree_lowering::BuildOutput;
 use crate::ui_document::source::lower::authored_ui_scalar_value_lowering::parse_bool;
 use crate::ui_document::source::lower::canonical_source_value_resolution::lower_optional_authored_semantic_key_to_asset_id;
-use openzt2_game_data::ui_document::action::staff_management::UiWorkerDuty;
 use openzt2_game_data::ui_document::document::UiDocumentRole;
 use openzt2_game_data::ui_document::node_property_binding::{
     UiBooleanPropertyBindingSource, UiImagePropertyBindingSource, UiIntegerPropertyBindingSource,
@@ -753,17 +752,6 @@ pub(super) fn lower_authored_ui_node_property_bindings_to_canonical_records(
             UiBooleanPropertyBindingSource::TrainingAttemptRejected,
         ));
     }
-    if node
-        .fields
-        .iter()
-        .any(authored_ui_field_binds_profile_presence)
-    {
-        output
-            .bindings
-            .push(UiNodePropertyBinding::InteractionEnabled(
-                UiBooleanPropertyBindingSource::ProfilePresent,
-            ));
-    }
     let exact_live_value = match normalized_name.as_str() {
         // These are exact identities in the shipped entity-info and donation
         // row documents. live lowering binds them once; runtime never looks up a
@@ -801,7 +789,7 @@ pub(super) fn lower_authored_ui_node_property_bindings_to_canonical_records(
             .bindings
             .push(UiNodePropertyBinding::IntegerValue(source));
     }
-    let duty = node
+    let worker_task = node
         .events
         .iter()
         .flat_map(|block| &block.events)
@@ -813,22 +801,12 @@ pub(super) fn lower_authored_ui_node_property_bindings_to_canonical_records(
                         "ZT_ASSIGN_WORKER" | "ZT_UNASSIGN_WORKER"
                     )
                 })
-                .and_then(worker_duty)
+                .and_then(worker_task)
         });
-    if let Some(duty) = duty {
-        let source = match duty {
-            UiWorkerDuty::CleanAquaticTankFilter => {
-                UiBooleanPropertyBindingSource::WorkerCleansFilters
-            }
-            UiWorkerDuty::EmptyRecyclingContainer => {
-                UiBooleanPropertyBindingSource::WorkerCleansRecycling
-            }
-            UiWorkerDuty::EmptyTrashContainer => UiBooleanPropertyBindingSource::WorkerEmptiesTrash,
-            UiWorkerDuty::SweepLitter => UiBooleanPropertyBindingSource::WorkerSweepsTrash,
-        };
-        output
-            .bindings
-            .push(UiNodePropertyBinding::SelectionState(source));
+    if let Some(task) = worker_task {
+        output.bindings.push(UiNodePropertyBinding::SelectionState(
+            UiBooleanPropertyBindingSource::WorkerDutyAssigned(task),
+        ));
     }
     // The camera-set radio group reflects accepted gameplay modes, rather than
     // treating a requested mode change as a completed one.
@@ -951,11 +929,4 @@ pub(super) fn parse_authored_money_format_boolean_option(format: &str, field: &s
                 .and_then(|value| value.strip_prefix('='))
         })
         == Some("1")
-}
-
-pub(super) fn authored_ui_field_binds_profile_presence(field: &SourceUiField) -> bool {
-    field.name.as_deref() == Some("enabled")
-        && field.type_name.as_deref() == Some("bool")
-        && field.format.as_deref() == Some("openzt2:profile-present")
-        && field.unknown_attributes.is_empty()
 }

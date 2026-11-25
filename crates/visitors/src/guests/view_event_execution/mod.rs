@@ -1,11 +1,19 @@
 //! Emits authored view events and delivers them to the guests watching.
 
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::WhenBehaviorAction;
-use openzt2_zoo_state::behavior_task_execution_types::running_actions::{RunBehaviorViewAnimals, RunBehaviorViewEvent, RunningBehaviorInstruction};
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
+    AuthoredRadiusViewEvent, AuthoredViewThought, RunBehaviorViewAnimals, RunBehaviorViewEvent,
+    RunningBehaviorInstruction,
+};
+use openzt2_game_assets::localization::{
+    localization_asset_types::LocalizationAsset, localization_precedence_index::LocalizationPrecedenceIndex,
+};
+use openzt2_game_data::{behavior::action::feedback::{BehaviorFeedbackAction, BehaviorFeedbackEntry}, localization::LocalizationFormatArgument};
+use openzt2_interface_state::information::zoo_message_types::{ZooMessage, ZooMessages};
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_zoo_state::behavior_task_execution_types::running_actions::mark_behavior_task_for_failure_and_stop_navigation;
-use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
+use openzt2_zoo_state::behavior_task_execution_types::{BehaviorFeedbackDispatched, BehaviorTaskExecutionState};
 use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorTaskFailure;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_world_state::world_spawn::world_membership_types::{DefinitionId, WorldMember};
@@ -44,6 +52,73 @@ pub(crate) struct BehaviorViewEventEmitted {
     pub(crate) view_key: AssetId,
     pub(crate) education: f32,
     pub(crate) education_donation: f32,
+    pub(crate) feedback: Option<BehaviorFeedbackAction>,
+    pub(crate) source_target: Option<Entity>,
+    pub(crate) source_object: Option<Entity>,
+}
+
+#[derive(Component)]
+struct ViewThoughtTimeout(Timer);
+
+pub(super) fn expire_view_thoughts(
+    time: Res<Time<Fixed>>,
+    mut thoughts: Query<(Entity, &mut ViewThoughtTimeout)>,
+    mut commands: Commands,
+) {
+    for (thought, mut timeout) in &mut thoughts {
+        if timeout.0.tick(time.delta()).is_finished() {
+            commands.entity(thought).despawn();
+        }
+    }
+}
+
+fn deliver_view_thoughts(
+    commands: &mut Commands,
+    guest: Entity,
+    source: Entity,
+    target: Option<Entity>,
+    object: Option<Entity>,
+    feedback: Option<&BehaviorFeedbackAction>,
+) {
+    let entries = feedback.into_iter().flat_map(|feedback| &feedback.entries);
+    for entry in entries {
+        let BehaviorFeedbackEntry::Thought {
+            localization_key,
+            priority,
+            timeout_seconds,
+            globally_visible,
+            use_entity_name,
+            use_target_name,
+            use_target_target,
+            use_target_object,
+            use_target_species,
+        } = entry
+        else {
+            continue;
+        };
+        let mut thought = commands.spawn((
+            ChildOf(guest),
+            AuthoredViewThought {
+                localization_key: AssetId::from_key(&localization_key.to_ascii_lowercase()),
+                priority: priority.unwrap_or_default(),
+                globally_visible: globally_visible.unwrap_or_default(),
+                source,
+                arguments: [
+                    use_entity_name.then_some(guest),
+                    use_target_name.then_some(source),
+                    target.filter(|_| *use_target_target),
+                    object.filter(|_| *use_target_object),
+                    use_target_species.then_some(source),
+                ],
+            },
+        ));
+        if let Some(seconds) = timeout_seconds {
+            thought.insert(ViewThoughtTimeout(Timer::from_seconds(
+                f32::from(*seconds),
+                TimerMode::Once,
+            )));
+        }
+    }
 }
 
 pub(super) fn emit_authored_view_events(
@@ -66,11 +141,14 @@ pub(super) fn emit_authored_view_events(
     >,
     grids: Query<&SpatialGrid>,
     spatial: SpatialGridMembership,
+    recipients: Query<(
+        &WorldMember,
+        &GlobalTransform,
+        Option<&DefinitionId>,
+        Option<&GuestArchetype>,
+    )>,
     mut guests: Query<
         (
-            &GuestArchetype,
-            &WorldMember,
-            &GlobalTransform,
             &mut GuestEducation,
             &mut GuestSurveyExperience,
             Option<&mut GuestDonationMeters>,
@@ -78,6 +156,14 @@ pub(super) fn emit_authored_view_events(
         With<Guest>,
     >,
     mut events: MessageWriter<BehaviorViewEventEmitted>,
+    mut feedback: MessageWriter<BehaviorFeedbackDispatched>,
+    (feedback_assets, localization, names, mut zoo_messages, real_time): (
+        Option<Res<Assets<LocalizationAsset>>>,
+        Option<Res<LocalizationPrecedenceIndex>>,
+        Query<&Name>,
+        Query<&mut ZooMessages>,
+        Res<Time<Real>>,
+    ),
     mut commands: Commands,
 ) {
     let Some(definitions) = world_definitions.get(&world_assets) else {
@@ -135,37 +221,68 @@ pub(super) fn emit_authored_view_events(
                         for column in minimum.x..=maximum.x {
                             let cell = row as u32 * grid.width + column as u32;
                             for recipient in spatial.members(member.root, cell) {
-                                let Ok((
-                                    archetype,
-                                    guest_world,
-                                    pose,
-                                    mut value,
-                                    mut experience,
-                                    mut donations,
-                                )) = guests.get_mut(recipient)
+                                let Ok((recipient_world, pose, definition, archetype)) =
+                                    recipients.get(recipient)
                                 else {
                                     continue;
                                 };
-                                if guest_world.root != member.root
+                                if recipient_world.root != member.root
                                     || (pose.translation() - centre).abs().max_element()
                                         > radius.metres
                                     || radius.target_type.is_some_and(|target| {
-                                        !definitions.find_guest(archetype.0).is_some_and(|guest| {
-                                            guest
-                                                .behavior_subject_type_identifiers
-                                                .contains(&target)
-                                        })
+                                        let guest = archetype
+                                            .and_then(|archetype| {
+                                                definitions.find_guest(archetype.0)
+                                            })
+                                            .is_some_and(|guest| {
+                                                guest
+                                                    .behavior_subject_type_identifiers
+                                                    .contains(&target)
+                                            });
+                                        let object = definition
+                                            .and_then(|definition| {
+                                                definitions.find_object(definition.0)
+                                            })
+                                            .is_some_and(|object| {
+                                                object.id == target
+                                                    || object
+                                                        .behavior_type_identifiers
+                                                        .contains(&target)
+                                            });
+                                        !(guest || object)
                                     })
                                 {
                                     continue;
                                 }
-                                apply_authored_education(
+                                if let Ok((mut value, mut experience, mut donations)) =
+                                    guests.get_mut(recipient)
+                                {
+                                    apply_authored_education(
+                                        education,
+                                        education_donation,
+                                        &mut value,
+                                        &mut experience,
+                                        donations.as_deref_mut(),
+                                    );
+                                    deliver_view_thoughts(
+                                        &mut commands,
+                                        recipient,
+                                        source,
+                                        task.target,
+                                        task.object,
+                                        event.feedback.as_ref(),
+                                    );
+                                }
+                                commands.trigger(AuthoredRadiusViewEvent {
+                                    recipient,
+                                    source,
+                                    view_key: event.view_key,
                                     education,
-                                    education_donation,
-                                    &mut value,
-                                    &mut experience,
-                                    donations.as_deref_mut(),
-                                );
+                                    donation: education_donation,
+                                    feedback: event.feedback.clone(),
+                                    source_target: task.target,
+                                    source_object: task.object,
+                                });
                             }
                         }
                     }
@@ -178,6 +295,71 @@ pub(super) fn emit_authored_view_events(
                 view_key: event.view_key,
                 education,
                 education_donation,
+                feedback: event.feedback.clone(),
+                source_target: task.target,
+                source_object: task.object,
+            });
+        }
+        if let Some(data) = &event.feedback {
+            if let Some((mut messages, localization)) = position
+                .and_then(|(member, _)| zoo_messages.get_mut(member.root).ok())
+                .zip(
+                    localization
+                        .as_ref()
+                        .zip(feedback_assets.as_ref())
+                        .and_then(|(index, assets)| index.borrow_loaded_localization_view(assets)),
+                )
+            {
+                for entry in &data.entries {
+                    let BehaviorFeedbackEntry::Message {
+                        localization_key,
+                        timeout_seconds,
+                        globally_visible,
+                        use_entity_name,
+                        use_target_name,
+                        ..
+                    } = entry
+                    else {
+                        continue;
+                    };
+                    if *globally_visible != Some(true) {
+                        continue;
+                    }
+                    let arguments = [
+                        use_entity_name.then_some(source),
+                        task.target.filter(|_| *use_target_name),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    .map(|entity| {
+                        LocalizationFormatArgument::Text(
+                            names.get(entity).map_or("", |name| name.as_str()),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                    let mut text = String::new();
+                    if localization
+                        .write_localized_text_with_format_arguments(
+                            AssetId::from_key(&localization_key.to_ascii_lowercase()),
+                            &arguments,
+                            &mut text,
+                        )
+                        .is_ok()
+                    {
+                        messages.messages.push(ZooMessage {
+                            text,
+                            expires_at_seconds: real_time.elapsed_secs_f64()
+                                + f64::from(timeout_seconds.unwrap_or(10)),
+                        });
+                    }
+                }
+            }
+            feedback.write(BehaviorFeedbackDispatched {
+                actor: source,
+                document: task.document.clone(),
+                declaration: task.declaration,
+                phase: task.phase,
+                action: task.action,
             });
         }
         instruction.complete(source, clock.tick, &mut commands);
@@ -199,7 +381,7 @@ fn apply_authored_education(
         if let Some(donations) = donations {
             *donations
                 .0
-                .entry(AssetId::from_key("Donate_Education"))
+                .entry(AssetId::from_key("donate_education"))
                 .or_default() += donation;
         }
     }
@@ -220,6 +402,7 @@ pub(crate) fn apply_guest_reactions(
     mut events: MessageReader<BehaviorViewEventEmitted>,
     mut reactions: MessageReader<GuestReaction>,
     mut applied_views: MessageWriter<AppliedAnimalView>,
+    mut commands: Commands,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     viewers: Query<&GuestViewers>,
@@ -380,6 +563,14 @@ pub(crate) fn apply_guest_reactions(
                 event.education,
                 event.education_donation,
             ) {
+                deliver_view_thoughts(
+                    &mut commands,
+                    guest,
+                    event.source,
+                    event.source_target,
+                    event.source_object,
+                    event.feedback.as_ref(),
+                );
                 applied_views.write(AppliedAnimalView {
                     guest,
                     subject: event.source,

@@ -3,6 +3,7 @@ pub(super) mod animal_care_subject_projection;
 pub(super) mod catalogue_filter_menu;
 mod catalogue_ground_path_preview_construction;
 pub(super) mod catalogue_page_projection;
+pub(super) mod catalogue_preview_camera_anchor;
 pub mod catalogue_preview_scene_projection;
 pub(super) mod catalogue_research_overlay;
 pub(super) mod catalogue_selection_and_details_projection;

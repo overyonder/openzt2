@@ -9,7 +9,7 @@ use openzt2_game_data::ui_document::action::presentation::{
 };
 use openzt2_game_data::ui_document::action::{UiActionRecord, UiTrigger};
 use openzt2_game_data::ui_document::document::UiDocumentRole;
-use openzt2_game_data::ui_document::timed_presentation::{UiTimedEventAction, UiTimedEventRecord};
+use openzt2_game_data::ui_document::timed_presentation::UiTimedEventRecord;
 use openzt2_game_data::ui_document::widget::UiWidgetRecord;
 use openzt2_game_data::AssetId;
 use std::{io, time::Duration};
@@ -35,41 +35,6 @@ pub(super) fn lower_source_ui_timed_events_to_canonical_focused_presentation_wid
             .checked_add(authored_presentation_delay(timed.delay_seconds, input)?)
             .ok_or_else(|| invalid_at(input, "timed UI sequence duration overflow"))?;
         let event = &timed.event;
-        let mut message = event;
-        while let Some(child) = message.child.as_deref().filter(|_| {
-            matches!(
-                message.message.as_str(),
-                "UI_CHILD" | "UI_ROOT_CHILD" | "UI_SELF"
-            )
-        }) {
-            message = child;
-        }
-        let script = (message.message == "ZT_RUN_SCRIPT")
-            .then_some(message.string.as_deref())
-            .flatten();
-        let words = script.map(|script| script.split_ascii_whitespace().collect::<Vec<_>>());
-        if let Some(
-            ["global", "scripts/uiutil.lua", "setReplacementText", node, localization, count],
-        ) = words.as_deref()
-        {
-            let value = count
-                .parse::<i64>()
-                .map_err(|_| invalid_at(input, "replacement text requires an integer"))?;
-            actions.push(UiTimedEventRecord {
-                due,
-                action: UiTimedEventAction::Ui(UiActionRecord::Presentation(
-                    UiPresentationActionRecord {
-                        trigger: UiTrigger::Press,
-                        action: UiPresentationAction::FormatTargetNodeLocalizedInteger {
-                            target_node: UiDocumentRole::node_id(role, node),
-                            localization_key: AssetId::from_key(localization),
-                            value,
-                        },
-                    },
-                )),
-            });
-            continue;
-        }
         let first_action = output.actions.len();
         let receiver = super::authored_ui_event_collection_lowering::flatten_event(
             UiTrigger::Press,
@@ -84,14 +49,6 @@ pub(super) fn lower_source_ui_timed_events_to_canonical_focused_presentation_wid
             None,
             &[],
         )?;
-        if output.actions.len() == first_action {
-            if let Some(script) = script {
-                actions.push(UiTimedEventRecord {
-                    due,
-                    action: UiTimedEventAction::ScenarioScript(script.to_owned()),
-                });
-            }
-        }
         if (receiver.from_root || !receiver.nodes.is_empty()) && output.actions.len() > first_action
         {
             output
@@ -99,10 +56,7 @@ pub(super) fn lower_source_ui_timed_events_to_canonical_focused_presentation_wid
                 .insert((node_index, actions.len()), receiver);
         }
         for action in output.actions.drain(first_action..) {
-            actions.push(UiTimedEventRecord {
-                due,
-                action: UiTimedEventAction::Ui(action),
-            });
+            actions.push(UiTimedEventRecord { due, action });
         }
     }
     // A self-restarting visibility sequence is an ambient UI effect. Script
@@ -110,11 +64,11 @@ pub(super) fn lower_source_ui_timed_events_to_canonical_focused_presentation_wid
     let starts_active = actions.iter().any(|entry| {
         matches!(
             &entry.action,
-            UiTimedEventAction::Ui(UiActionRecord::Presentation(UiPresentationActionRecord {
+            UiActionRecord::Presentation(UiPresentationActionRecord {
                 action: UiPresentationAction::SetTargetNodeVisible { .. }
                     | UiPresentationAction::SetDocumentNodeVisible { .. },
                 ..
-            }))
+            })
         )
     }) && events.last().is_some_and(|event| {
         event.event.message == "UI_ACTIVATE_ON"

@@ -2,6 +2,7 @@
 
 pub mod authored;
 pub mod authored_world_scenario_state;
+mod legacy_world_script_resolution;
 pub mod saved_world_catalogue_metadata;
 pub mod saved_world_map_metadata;
 pub mod saved_world_scenario_asset_construction;

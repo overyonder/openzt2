@@ -287,9 +287,10 @@ pub(super) fn discard_experience_when_guest_stops_watching(
     removed: On<Remove<GuestWatchingStage>>,
     mut commands: Commands,
 ) {
-    commands
-        .entity(removed.entity)
-        .try_remove::<GuestShowExperience>();
+    commands.entity(removed.entity).try_remove::<(
+        GuestShowExperience,
+        super::show_event_lifecycle::PendingShowReaction,
+    )>();
 }
 
 pub(super) fn retire_interrupted_show_watch_actions(
@@ -367,6 +368,7 @@ pub(super) fn complete_watch_actions_after_show(
     rewards_source: Res<AuthoredShowRewardsSource>,
     rewards: Res<Assets<AuthoredShowRewards>>,
     runs: Query<&RunningShow>,
+    mut feedback: MessageWriter<super::ShowAudienceFeedback>,
     mut commands: Commands,
 ) {
     let reward_policy = rewards.get(&rewards_source.0);
@@ -410,15 +412,23 @@ pub(super) fn complete_watch_actions_after_show(
             if watch.instruction != Some(instruction.id()) {
                 continue;
             }
-            if let (Some(rewards), Some(timeout), true) = (reward_policy, timeout, can_reward) {
-                let favourite = experience.show == Some(show) && experience.saw_favourite;
-                let (dollars, need_update) =
-                    rewards.audience_feedback(score, favourite, || random.0.next_u32());
-                if let Some(mut need) = need {
-                    need.adjust(-need_update);
+            let favourite = experience.show == Some(show) && experience.saw_favourite;
+            if let Some(result) = reward_policy.filter(|_| can_reward).and_then(|rewards| {
+                rewards.audience_feedback(score, favourite, || random.0.next_u32())
+            }) {
+                if !result.presentation.is_empty() {
+                    feedback.write(super::ShowAudienceFeedback {
+                        guest,
+                        stage,
+                        entries: result.presentation.clone(),
+                    });
                 }
-                if let Some(amount) = authored_currency_to_money(dollars)
+                if let Some(mut need) = need {
+                    need.adjust(-result.need_update);
+                }
+                if let Some((amount, timeout)) = authored_currency_to_money(result.dollars)
                     .filter(|amount| amount.is_positive() && *amount <= wallet.0)
+                    .zip(timeout)
                 {
                     commands.spawn((
                         ChildOf(guest),

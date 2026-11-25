@@ -10,9 +10,13 @@ use openzt2_zoo_state::progression::rating_types;
 use openzt2_zoo_state::progression::research_duration_calculation;
 use openzt2_zoo_state::progression::research_types;
 use openzt2_zoo_state::progression::unlock_types;
+mod authored_award_programs;
 mod authored_fame_script;
-mod award_condition_calculations;
-mod award_evaluation_and_granting;
+pub use authored_award_programs::{
+    AuthoredAwardName, AuthoredAwardPoints, AwardGlobalVariables, AwardGroupPresentation,
+    AwardMilestonePresentation, AwardProgramEffect, AwardProgramOf, AwardProgramSuspended,
+    WorldAwardPrograms,
+};
 mod award_ui_action_routing;
 mod catalogue_unlock_application;
 mod catalogue_unlock_storage_initialization;
@@ -22,9 +26,10 @@ mod fame_progression;
 mod profile_challenge_fact_recording;
 mod progression_text_projection;
 mod research_execution;
-mod research_progress_calculations;
+pub use research_execution::ResearchCompletionBasisPoints;
 mod research_ui_action_routing;
 mod research_ui_presentation;
+pub use research_ui_presentation::ResearchPresentationProject;
 mod scenario_award_point_adjustment;
 pub(crate) mod scenario_content_availability;
 mod zoo_rating_calculations;
@@ -32,8 +37,8 @@ mod zoo_rating_input_types;
 mod zoo_rating_recomputation;
 
 use award_and_progression_fact_types::{
-    AdjustScenarioAwardPointTotalRequest, ProgressionAwardGrantCandidate, ProgressionAwardGranted,
-    ProgressionFactChanged, ScenarioAwardPointTotal,
+    AdjustScenarioAwardPointTotalRequest, ProgressionAwardGranted, ProgressionFactChanged,
+    ScenarioAwardPointTotal,
 };
 use fame_history_types::FameHistory;
 use fame_types::{Fame, ZooMaximumFame};
@@ -49,7 +54,7 @@ use unlock_types::{
     CatalogueDefinitionUnlockRejected, UnlockedCatalogueDefinitionSet,
 };
 use zoo_rating_input_types::{
-    AnimalWelfareRating, EarnedAwardFamePoints, GuestRatingFacts, LivingAnimalPopulation,
+    AnimalWelfareRating, GuestRatingFacts, GuestSpeciesSeen, LivingAnimalPopulation,
     ZooFinanceRating, ZooOverallRatingTarget, ZooSceneryRating,
 };
 
@@ -74,11 +79,19 @@ impl Plugin for ProgressionPlugin {
             .register_required_components::<WorldRoot, AnimalWelfareRating>()
             .register_required_components::<WorldRoot, LivingAnimalPopulation>()
             .register_required_components::<WorldRoot, GuestRatingFacts>()
-            .register_required_components::<WorldRoot, EarnedAwardFamePoints>()
+            .register_required_components::<WorldRoot, GuestSpeciesSeen>()
+            .register_required_components::<WorldRoot, zoo_rating_recomputation::GuestRatingSums>()
+            .add_observer(zoo_rating_recomputation::withdraw_retired_guest_rating_terms)
+            .register_required_components::<WorldRoot, authored_award_programs::AuthoredAwardPoints>()
+            .register_required_components::<WorldRoot, authored_award_programs::AwardGlobalVariables>()
+            .register_required_components::<WorldRoot, authored_award_programs::AwardProgramCursor>()
+            .add_message::<AwardProgramEffect>()
+            .add_message::<authored_award_programs::ShowAwardPanelAfterFame>()
             .register_required_components::<WorldRoot, ZooSceneryRating>()
             .register_required_components::<WorldRoot, ZooFinanceRating>()
             .register_required_components::<WorldRoot, ZooOverallRatingTarget>()
             .register_required_components::<WorldRoot, ZooRating>()
+            .register_required_components::<WorldRoot, ResearchPresentationProject>()
             .register_required_components::<WorldRoot, UnlockedCatalogueDefinitionSet>()
             .init_resource::<ProfileChallengeCompletionCounts>()
             .add_message::<ProgressionFactChanged>()
@@ -96,7 +109,6 @@ impl Plugin for ProgressionPlugin {
             .add_message::<ResearchProjectCompleted>()
             .add_message::<ProgressionAwardGranted>()
             .add_message::<RecordCompletedChallengeRequest>()
-            .add_message::<ProgressionAwardGrantCandidate>()
             .add_message::<AdjustScenarioAwardPointTotalRequest>()
             .add_message::<fame_types::SetScenarioMaximumFame>()
             .add_message::<fame_types::FameGateAppearanceRequested>()
@@ -131,11 +143,12 @@ impl Plugin for ProgressionPlugin {
                         initialize_catalogue_unlock_storage_from_active_world_definitions,
                     catalogue_unlock_storage_initialization::reconcile_authored_research_items
                         .after(research_ui_action_routing::route_authored_research_ui_actions_to_start_requests),
-                    award_evaluation_and_granting::initialize_award_condition_duration_storage,
+                    authored_award_programs::load_winning_award_programs,
                 )
                     .in_set(GameSet::Intent)
                     .run_if(in_state(GamePhase::InGame)),
             )
+            .add_systems(Update, research_ui_presentation::bind_selected_research_presentation_project.in_set(GameSet::Intent).run_if(in_state(GamePhase::InGame)))
             .add_systems(
                 Update,
                 (
@@ -144,6 +157,7 @@ impl Plugin for ProgressionPlugin {
                     research_ui_presentation::project_selected_catalogue_research_progress
                         .in_set(openzt2_interface_state::ui::UiSet::DomainProjection),
                     progression_text_projection::project_progression_facts_into_authored_ui_text,
+                    authored_award_programs::retire_resolved_award_notifications,
                 )
                     .in_set(GameSet::Ui)
                     .run_if(in_state(GamePhase::InGame)),
@@ -160,9 +174,12 @@ impl Plugin for ProgressionPlugin {
                 (
                     (
                         (
-                            zoo_rating_recomputation::reduce_living_animal_population,
-                            zoo_rating_recomputation::recompute_animal_welfare_rating,
-                            zoo_rating_recomputation::recompute_guest_ratings,
+                            zoo_rating_recomputation::reduce_living_animal_population_and_welfare,
+                            zoo_rating_recomputation::aggregate_changed_guest_species_views,
+                            (
+                                zoo_rating_recomputation::reconcile_changed_guest_rating_terms,
+                                zoo_rating_recomputation::publish_guest_rating_means,
+                            ).chain(),
                             zoo_rating_recomputation::recompute_scenery_rating,
                             zoo_rating_recomputation::recompute_finance_rating,
                         ),
@@ -182,7 +199,9 @@ impl Plugin for ProgressionPlugin {
                     profile_challenge_fact_recording::record_endangered_animal_births_for_profile_challenges,
                     research_execution::advance_research_availability_unlock_countdowns
                         .run_if(simulation_is_running),
-                    research_execution::advance_active_research_projects_by_one_tick
+                    research_execution::publish_restored_research_progress,
+                    research_execution::advance_active_research_projects
+                        .after(research_execution::publish_restored_research_progress)
                         .run_if(simulation_is_running),
                 )
                     .in_set(FixedGameSet::Economy)
@@ -192,18 +211,21 @@ impl Plugin for ProgressionPlugin {
                 FixedUpdate,
                 (
                     (
-                        award_evaluation_and_granting::evaluate_all_progression_award_conditions_and_queue_grants,
-                        award_evaluation_and_granting::grant_earned_progression_awards,
-                        zoo_rating_recomputation::count_earned_award_fame_points,
-                        fame_progression::update_fame_and_apply_authored_fame_unlocks
+                        authored_award_programs::process_authored_award_programs
+                            .run_if(simulation_is_running),
+
+                        fame_progression::update_authored_fame
                             .after(scenario_award_point_adjustment::apply_requested_scenario_award_point_total_adjustments),
                         fame_progression::apply_scenario_maximum_fame_requests,
                         fame_progression::publish_world_maximum_fame,
                     ).chain(),
+                    authored_award_programs::retire_settled_award_cash_payments,
+                    authored_award_programs::publish_award_panels_after_fame
+                        .after(fame_progression::update_authored_fame),
                     research_execution::refresh_authored_research_availability
                         .after_ignore_deferred(fame_progression::publish_world_maximum_fame),
                     research_execution::complete_research_projects_and_apply_authored_unlocks
-                        .after_ignore_deferred(fame_progression::update_fame_and_apply_authored_fame_unlocks),
+                        .after_ignore_deferred(fame_progression::update_authored_fame),
                     catalogue_unlock_application::apply_catalogue_definition_unlock_requests
                         .after(research_execution::complete_research_projects_and_apply_authored_unlocks),
                     catalogue_unlock_application::

@@ -3,9 +3,9 @@ use super::{
         FacilityContainedWaste, FacilityContainedWastePresentationLevel, LooseLitterWaste,
     },
     zoo_cleanliness_projection::{
-        aggregate_changed_waste_into_zoo_cleanliness_totals,
-        calculate_weighted_zoo_cleanliness_permille_from_explicit_weights,
-        divide_unsigned_ratio_with_half_up_rounding, ZooCleanlinessTotals,
+        add_waste_contribution, calculate_weighted_zoo_cleanliness_permille_from_explicit_weights,
+        divide_unsigned_ratio_with_half_up_rounding, publish_changed_waste_contributions,
+        remove_waste_contribution, withdraw_disabled_waste_contribution, ZooCleanlinessTotals,
     },
 };
 use bevy::prelude::*;
@@ -51,7 +51,10 @@ fn trash_level_is_derived_from_authoritative_container_thirds() {
 fn cleanliness_reduction_tracks_spawn_and_despawn() {
     let mut app = App::new();
     app.register_required_components::<WorldRoot, ZooCleanlinessTotals>()
-        .add_systems(Update, aggregate_changed_waste_into_zoo_cleanliness_totals);
+        .add_observer(add_waste_contribution)
+        .add_observer(remove_waste_contribution)
+        .add_observer(withdraw_disabled_waste_contribution)
+        .add_systems(Update, publish_changed_waste_contributions);
     let root = app
         .world_mut()
         .spawn(WorldRoot {

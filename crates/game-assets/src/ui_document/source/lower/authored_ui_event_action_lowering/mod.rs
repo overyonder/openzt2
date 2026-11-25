@@ -8,7 +8,6 @@ use std::io;
 
 pub mod animal_command_lowering;
 pub mod animal_health_command_lowering;
-pub mod application_command_lowering;
 pub mod camera_command_lowering;
 pub mod catalogue_command_lowering;
 pub mod confirmation_command_lowering;
@@ -48,7 +47,6 @@ pub(super) fn lower_authored_ui_event_to_canonical_action(
         "ZT_ENTER_DISEASE_MODE" | "ZT_ENTER_TRANQ_MODE" => {
             animal_health_command_lowering::lower_animal_health_command(trigger, event)
         }
-        "ZT_RUN_SCRIPT" => application_command_lowering::lower_application_command(trigger, event),
         "ZT_CAMERA_PAN"
         | "ZT_CAMERA_POSITION"
         | "ZT_CAMERA_ROTATE"
@@ -93,12 +91,9 @@ pub(super) fn lower_authored_ui_event_to_canonical_action(
         | "ZT_SKYTOWER_PLACEMENT_HEIGHT"
         | "ZT_TERRAINCURSOR_SIZE"
         | "ZT_UNCRATE_ENTITY"
-        | "ZT_UNDOACTION" => construction_command_lowering::lower_construction_command(
-            trigger,
-            event,
-            current_stable_name,
-            input,
-        ),
+        | "ZT_UNDOACTION" => {
+            construction_command_lowering::lower_construction_command(trigger, event, input)
+        }
         "ZT_GIVE_CASH_GRANT"
         | "ZT_SET_ADMISSION_PRICE_INDEX"
         | "ZT_SET_FILTER_MAINTENANCE"
@@ -138,8 +133,11 @@ pub(super) fn lower_authored_ui_event_to_canonical_action(
         | "ZT_VIEWFILTER_SHOW"
         | "ZT_ZOOPEDIA_BACK"
         | "ZT_ZOOPEDIA_FORWARD" => information_command_lowering::lower_information_command(
-            trigger, event, role, current, input,
+            trigger, event, role, current, output, input,
         ),
+        "ZT_SET_USER_ATTRIBUTE" => {
+            persistence_command_lowering::lower_persistence_command(trigger, event, input)
+        }
         "LOAD" | "SAVE" | "ZT_LOADGAME" | "ZT_LOAD_AFTER_SAVE" | "ZT_SAVEGAME" => {
             persistence_command_lowering::lower_persistence_command(trigger, event, input)
         }
@@ -168,8 +166,7 @@ pub(super) fn lower_authored_ui_event_to_canonical_action(
         | "ZT_PHOTOEVENT_NUM_PICTURES"
         | "ZT_PHOTOEVENT_SELECT_ALBUM"
         | "ZT_PHOTOEVENT_SHRINK"
-        | "ZT_PHOTOEVENT_TAKE_PHOTO"
-        | "ZT_SET_USER_ATTRIBUTE" => {
+        | "ZT_PHOTOEVENT_TAKE_PHOTO" => {
             photo_command_lowering::lower_photo_command(trigger, event, input)
         }
         "UI_ACTIVATE"
@@ -183,6 +180,7 @@ pub(super) fn lower_authored_ui_event_to_canonical_action(
         | "UI_COPY_NAME"
         | "UI_COPY_TEXT"
         | "UI_DISABLE"
+        | "UI_EDIT_WATCH"
         | "UI_ENABLE"
         | "UI_EXPAND"
         | "UI_HIDE"
