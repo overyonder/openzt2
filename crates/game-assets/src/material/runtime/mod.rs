@@ -10,6 +10,8 @@ pub mod effect_pass_material_asset_construction;
 pub mod effect_pass_uniform_bind_group_preparation;
 pub mod evaluated_d3d9_pass_state;
 pub mod evaluated_d3d9_sampler_state;
+mod gpu_semantic_shader_registers;
+mod gpu_texture_transforms;
 pub mod programmable_vertex_fixed_function_fragment_interface;
 
 #[cfg(test)]
@@ -20,7 +22,8 @@ mod evaluated_d3d9_sampler_state_tests;
 use bevy::{pbr::MaterialPlugin, prelude::*, render::storage::ShaderBuffer, shader::Shader};
 
 use effect_pass_gpu_data::{
-    D3d9FixedFunctionWorldLightContexts, EffectPassMaterial, FIXED_FUNCTION_WORLD_LIGHT_BUFFER,
+    D3d9FixedFunctionWorldLightContexts, EffectEnvironmentRegisters, EffectPassMaterial,
+    EFFECT_ENVIRONMENT_REGISTER_BUFFER, FIXED_FUNCTION_WORLD_LIGHT_BUFFER,
 };
 
 pub(super) fn register_effect_pass_material_asset_and_fixed_function_shader(application: &mut App) {
@@ -46,5 +49,10 @@ fn initialize_fixed_function_world_light_buffer(mut buffers: ResMut<Assets<Shade
     D3d9FixedFunctionWorldLightContexts::default().write_shader_buffer(&mut buffer);
     buffers
         .insert(FIXED_FUNCTION_WORLD_LIGHT_BUFFER.id(), buffer)
+        .expect("fixed UUID shader-buffer insertion cannot fail");
+    let mut buffer = ShaderBuffer::default();
+    EffectEnvironmentRegisters::default().write_shader_buffer(&mut buffer);
+    buffers
+        .insert(EFFECT_ENVIRONMENT_REGISTER_BUFFER.id(), buffer)
         .expect("fixed UUID shader-buffer insertion cannot fail");
 }

@@ -74,7 +74,10 @@ pub(super) fn prepare_terrain_sample_deltas_for_construction_transactions(
                 let Some(edit) = world.entity_mut(preview_entity).take::<TerrainEdit>() else {
                     return;
                 };
-                world.entity_mut(transaction).insert(edit);
+                world.entity_mut(transaction).insert((
+                    edit,
+                    crate::terrain::terrain_edit_application::LiveAppliedTerrainEdit,
+                ));
             });
             prepared.write(TerrainEditPrepared {
                 transaction: request.transaction,

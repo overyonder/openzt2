@@ -79,7 +79,7 @@ pub struct PlaceableDefinition {
     /// `ADJACENT_WATER_REACH_METRES` of its origin.
     #[serde(default)]
     pub adjacent_to_water: bool,
-    /// The arrow `zt.exe` draws at an entrance while the object is placed,
+    /// The arrow the original game draws at an entrance while the object is placed,
     /// for a `ZTPlacementData dockArrowStyle` of `special`; `standard` and
     /// `none` draw none.
     #[serde(default)]

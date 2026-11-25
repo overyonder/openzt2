@@ -11,6 +11,16 @@ pub(super) fn lower_optional_authored_semantic_key_to_asset_id(value: Option<&st
         .unwrap_or_default()
 }
 
+/// Object definitions are keyed by their canonical record key, so an event
+/// naming `DonationBox_df` selects the `donationbox_df` definition.
+pub(super) fn lower_optional_authored_object_key_to_asset_id(value: Option<&str>) -> AssetId {
+    value
+        .map(crate::source_document::source_document_semantic_name::canonicalize_source_document_record_key)
+        .filter(|value| !value.is_empty())
+        .map(|value| AssetId::from_key(&value))
+        .unwrap_or_default()
+}
+
 pub(super) fn lower_authored_encyclopedia_entry_reference_to_asset_id(
     value: Option<&str>,
 ) -> AssetId {

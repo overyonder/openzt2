@@ -15,6 +15,7 @@ mod tank_geometry_rules;
 mod tank_height_bounds;
 mod tank_normalized_fact_clamping;
 mod tank_presentation;
+mod tank_scripted_wall_height;
 mod tank_wall_enclosure_promotion;
 mod water_filter_operation;
 
@@ -58,6 +59,14 @@ impl Plugin for AquaticPlugin {
             .add_message::<TankGeometryEditAcknowledged>()
             .add_message::<TankGeometryEditPrepared>()
             .add_message::<TankGeometryEditPreparationRejected>()
+            .add_message::<tank_geometry_edit_types::SetTankWallHeights>()
+            .add_systems(
+                Update,
+                tank_scripted_wall_height::apply_scripted_tank_wall_heights
+                    .after(GameSet::Intent)
+                    .before(GameSet::Ui)
+                    .run_if(in_state(GamePhase::InGame)),
+            )
             .add_systems(
                 Update,
                 tank_geometry_edit_interaction::update_tank_geometry_gesture

@@ -33,6 +33,7 @@ pub(super) struct ScenarioLuaQueryFactSources<'w, 's> {
         openzt2_zoo_state::progression::profile_scenario_variables::ProfileScenarioVariables,
     >,
     zoo_cash: Res<'w, ZooCash>,
+    tanks: super::scenario_lua_types::ScenarioLuaTankQuery<'w, 's>,
     selected_worlds: Query<
         'w,
         's,
@@ -85,6 +86,7 @@ impl ScenarioLuaQueryFactSources<'_, '_> {
             &self.edited_terrain;
         let fence_edges: &'a super::scenario_lua_types::ScenarioLuaFenceEdgeQuery<'a, 'a> =
             &self.fence_edges;
+        let tanks: &'a super::scenario_lua_types::ScenarioLuaTankQuery<'a, 'a> = &self.tanks;
         let ui_nodes: &'a super::scenario_lua_types::ScenarioLuaUiNodeQuery<'a, 'a> =
             &self.ui_nodes;
         let ui_roots: &'a super::scenario_lua_types::ScenarioLuaUiRootQuery<'a, 'a> =
@@ -98,6 +100,8 @@ impl ScenarioLuaQueryFactSources<'_, '_> {
             species: self.species.get(&self.species_assets),
             profile_variables: &self.profile_variables,
             zoo_cash: &self.zoo_cash,
+            tank_in_world: !self.tanks.is_empty(),
+            tanks,
             world_session_mode: self.selected_worlds.single().ok().map(|world| world.mode),
             guest_admission_price: &self.guest_admission_price,
             finance_history: &self.finance_history,

@@ -118,7 +118,7 @@ pub(super) fn decode_blue_fang_dds_source_to_rgba_surface(
     })
 }
 
-pub(super) fn decode_blue_fang_dds_source_to_rgba(
+pub(crate) fn decode_blue_fang_dds_source_to_rgba(
     source_bytes: &[u8],
 ) -> io::Result<image::RgbaImage> {
     decode_blue_fang_dds_to_rgba(&read_blue_fang_dds_source(source_bytes)?)

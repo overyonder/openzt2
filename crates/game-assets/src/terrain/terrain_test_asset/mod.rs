@@ -33,3 +33,10 @@ pub fn terrain_test_water_mut(asset: &mut TerrainAsset) -> (&mut TerrainGrid, &m
         &mut asset.authored_water_region_membership,
     )
 }
+
+/// The source-path texture table, for tests that compose terrain surfaces.
+pub fn terrain_test_textures_mut(
+    asset: &mut TerrainAsset,
+) -> &mut std::collections::HashMap<String, bevy::prelude::Handle<bevy::prelude::Image>> {
+    &mut asset.texture_images_by_normalized_source_path
+}

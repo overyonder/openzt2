@@ -404,10 +404,13 @@ pub(super) fn index_loaded_world_definition_assets_by_identifier_and_singleton_k
     definitions.unlock_definition_identifiers_by_target = unlock_definition_identifiers_by_target;
     definitions.catalogue_authored_purchase_order = catalogue_authored_purchase_order;
     definitions.topology_cell_size_cm = topology_cell_size_cm;
-    definitions.pending_assets = definitions
-        .handles
-        .iter()
-        .any(|handle| assets.get(handle).is_none());
+    definitions.pending_assets = definitions.handles.iter().any(|handle| {
+        assets.get(handle).is_none()
+            && !matches!(
+                server.get_load_state(handle.id()),
+                Some(bevy::asset::LoadState::Failed(_))
+            )
+    });
     definitions.dirty = false;
     definitions.complete = true;
 }

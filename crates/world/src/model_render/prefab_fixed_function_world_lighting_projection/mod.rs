@@ -14,8 +14,6 @@ use openzt2_world_state::world_spawn::prefab_fixed_function_world_lighting_polic
 use openzt2_zoo_state::environment::environment_presentation_types::EnvironmentTerrainAmbientLight;
 use openzt2_zoo_state::terrain::terrain_chunk_presentation_types::TERRAIN_RENDER_LAYER;
 
-use crate::model_render::authored_model_material_pass_projection::EffectPassMaterialRenderViewProjection;
-use crate::model_render::authored_model_material_pass_projection::EffectPassMaterialSourceRenderLayers;
 use crate::model_render::prefab_render_layer_camera_matching::PrefabRenderLayers;
 use openzt2_world_state::model_render::ModelExpanded;
 
@@ -43,26 +41,15 @@ pub(super) fn project_prefab_fixed_function_world_lighting_policies(
     mut unsuppressed: RemovedComponents<
         super::world_entity_model_suppression::SuppressedModelRenderLayers,
     >,
-    changed_materials: Query<
-        Entity,
-        Or<(
-            Changed<MeshMaterial3d<EffectPassMaterial>>,
-            Changed<EffectPassMaterialSourceRenderLayers>,
-        )>,
-    >,
-    mut removed_source_layers: RemovedComponents<EffectPassMaterialSourceRenderLayers>,
+    changed_materials: Query<Entity, Changed<MeshMaterial3d<EffectPassMaterial>>>,
     parents: Query<&ChildOf>,
     expanded: Query<(), With<ModelExpanded>>,
     policies: Query<&PrefabFixedFunctionWorldLightingPolicy>,
     mut inherited_layers: PrefabRenderLayers,
-    primitives: Query<
-        (
-            &MeshMaterial3d<EffectPassMaterial>,
-            Option<&ProjectedPrefabFixedFunctionWorldLightingMaterial>,
-            Option<&EffectPassMaterialSourceRenderLayers>,
-        ),
-        Without<EffectPassMaterialRenderViewProjection>,
-    >,
+    primitives: Query<(
+        &MeshMaterial3d<EffectPassMaterial>,
+        Option<&ProjectedPrefabFixedFunctionWorldLightingMaterial>,
+    )>,
     mut materials: ResMut<Assets<EffectPassMaterial>>,
     mut effect_uniform_buffers: ResMut<Assets<ShaderBuffer>>,
 ) {
@@ -72,11 +59,11 @@ pub(super) fn project_prefab_fixed_function_world_lighting_policies(
             .chain(removed_policy.read())
             .chain(removed_layers.read())
             .chain(unsuppressed.read()),
-        changed_materials.iter().chain(removed_source_layers.read()),
+        changed_materials.iter(),
     );
     let mut missing = Vec::new();
     for entity in changes.candidates() {
-        let Ok((current, previous, source_layers)) = primitives.get(entity) else {
+        let Ok((current, previous)) = primitives.get(entity) else {
             continue;
         };
         let ancestors = || std::iter::once(entity).chain(parents.iter_ancestors(entity));
@@ -87,8 +74,8 @@ pub(super) fn project_prefab_fixed_function_world_lighting_policies(
                 .find_map(|node| policies.get(node).ok().copied())
         });
         let context = if model.is_some() {
-            source_layers
-                .map_or_else(|| inherited_layers.get(entity), |saved| saved.0.clone())
+            inherited_layers
+                .get(entity)
                 .iter()
                 .next()
                 .filter(|index| *index < FIXED_FUNCTION_WORLD_LIGHT_CONTEXT_COUNT)

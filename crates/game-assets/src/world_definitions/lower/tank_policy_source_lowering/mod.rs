@@ -27,6 +27,22 @@ pub(super) fn bind_fence_placement_mode_policy(
         default_tank_wall_height_cm: distance("defaultTankWallHeight")?,
         minimum_tank_wall_height_cm: distance("minimumTankWallHeight")?,
         hill_threshold_cm: distance("hillThreshold")?,
+        gate_wizard_placement_object: record
+            .descendant_named("wizard")
+            .and_then(|wizard| wizard.element_children().find(|child| child.name == "gate"))
+            .and_then(|gate| {
+                gate.element_children().find_map(|event| {
+                    (event.attribute_named_any(&["msg"]) == Some("ZT_SETPLACEMENTOBJECT"))
+                        .then(|| event.attribute_named_any(&["string"]))
+                        .flatten()
+                })
+            })
+            .filter(|name| !name.is_empty())
+            .map(|name| {
+                openzt2_game_data::AssetId::from_key(
+                    &crate::source_document::source_document_semantic_name::canonicalize_source_document_record_key(name),
+                )
+            }),
     });
     Ok(())
 }

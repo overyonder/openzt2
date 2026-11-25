@@ -31,6 +31,20 @@ pub(super) const EFFECT_SHADER_BINDING_LAYOUT: d3d9_effects::shader_types::D3d9S
         first_sampler_binding: 10,
         first_cube_texture_binding: 38,
     };
+/// Wind, light rig and fog distances shared by every programmable effect draw.
+pub const EFFECT_ENVIRONMENT_REGISTER_BUFFER: Handle<ShaderBuffer> =
+    bevy::asset::uuid_handle!("6f5006a8-346c-449e-a19d-c0f42e21d856");
+
+/// The environment registers programmable effects read, in the layout
+/// `gpu_semantic_shader_registers` addresses.
+#[derive(ShaderType, Clone, Copy, Debug, Default, PartialEq)]
+pub struct EffectEnvironmentRegisters {
+    pub wind: [Vec4; 7],
+    pub light_rig: [Vec4; 7],
+    /// Fog start, `1 / (end - start)` and end. The far distance is the view's.
+    pub fog_distances: Vec4,
+}
+
 pub const FIXED_FUNCTION_WORLD_LIGHT_BUFFER: Handle<ShaderBuffer> =
     bevy::asset::uuid_handle!("3cc37db8-d774-40c4-80dc-790933570ae3");
 
@@ -112,6 +126,8 @@ pub struct EffectPassTextureAssets {
     texture7: Option<Handle<Image>>,
     #[storage(37, read_only)]
     fixed_function_world_lights: Handle<ShaderBuffer>,
+    #[storage(47, read_only)]
+    environment_registers: Handle<ShaderBuffer>,
 }
 
 #[derive(Asset, TypePath, Clone, Debug)]
@@ -138,15 +154,13 @@ pub struct EffectPassMaterial {
     pub(super) pipeline_specialization_key: EffectPassPipelineSpecializationKey,
     pub(super) dynamic_parameter_register_bindings:
         std::sync::Arc<[DynamicEffectParameterRegisterBinding]>,
-    pub(super) parameter_input_dependencies: u8,
     pub(super) fixed_transform_bindings:
         Vec<fixed_function_transform_binding::DynamicFixedFunctionTransformBinding>,
     pub(super) dirty_fixed_transforms: bool,
     pub(super) dirty_fixed_function: bool,
-    pub(super) fixed_transform_render_view: Option<Entity>,
-    pub(super) fixed_transform_evaluations: u64,
-    pub(super) fixed_transform_evaluation_failures: u64,
-    pub(super) fixed_transform_buffer_writes: u64,
+    /// Owner-set and authored inputs of the texture transforms the shader computes.
+    pub(super) transform_inputs: Vec<Vec4>,
+    pub(super) dirty_transform_inputs: bool,
     pub(super) dirty_float_register_stages: u8,
     pub(super) dynamic_texture_semantics: [Option<String>; 8],
 }
@@ -169,6 +183,8 @@ pub(super) struct EffectPassUniformBufferAssets {
     pub(super) pixel_booleans: Handle<ShaderBuffer>,
     #[dependency]
     pub(super) fixed_transforms: Handle<ShaderBuffer>,
+    #[dependency]
+    pub(super) transform_inputs: Handle<ShaderBuffer>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

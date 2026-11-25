@@ -340,6 +340,7 @@ fn campaign_next_and_retry_unload_before_start_and_preserve_locks() {
                         starting_cash_cents: 50_000,
                         difficulty: id(16),
                         name_key: scenario,
+                        short_name_key: scenario,
                         description_key: scenario,
                     })
                     .collect(),

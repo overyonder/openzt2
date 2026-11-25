@@ -8,8 +8,11 @@ use crate::{
     error::D3d9EffectProcessingError,
     native_abi::{
         openzt2_effect_evaluate_transform, openzt2_effect_open_parameter_scratch,
-        openzt2_effect_parameter_count, openzt2_effect_transform_dependency_count,
-        openzt2_effect_transform_dependency_index, openzt2_effect_transform_output_layout,
+        openzt2_effect_parameter_count, openzt2_effect_parameter_layout,
+        openzt2_effect_transform_dependency_count, openzt2_effect_transform_dependency_index,
+        openzt2_effect_transform_output_layout, openzt2_effect_transform_preshader,
+        openzt2_preshader_counts, openzt2_preshader_instruction, openzt2_preshader_literal,
+        openzt2_preshader_register, openzt2_preshader_symbol,
     },
 };
 
@@ -27,6 +30,56 @@ pub struct D3d9TransformOutputLayout {
     pub component_count: u32,
 }
 
+/// How a texture-stage state computes its value from its dependencies.
+#[derive(Clone, Debug)]
+pub enum D3d9TransformProgram {
+    /// Copies its one dependency. A matrix of fewer than four columns is stored
+    /// in padded rows and packed to `columns` components per row.
+    Parameter {
+        packed_columns: Option<u32>,
+        component_count: u32,
+    },
+    /// Runs a compiled expression.
+    Preshader(Arc<D3d9Preshader>),
+}
+
+/// A compiled FX expression, as MojoShader runs it in double precision.
+#[derive(Clone, Debug)]
+pub struct D3d9Preshader {
+    pub literals: Box<[f64]>,
+    pub temp_count: u32,
+    /// Default input register components, four per register.
+    pub registers: Box<[f32]>,
+    /// The first input register and register count each dependency fills.
+    pub dependency_registers: Box<[(u32, u32)]>,
+    pub instructions: Box<[D3d9PreshaderInstruction]>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum D3d9PreshaderOperandType {
+    Input,
+    Output,
+    Literal,
+    Temp,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct D3d9PreshaderOperand {
+    pub operand_type: D3d9PreshaderOperandType,
+    pub index: u32,
+    /// Non-zero for an input indexed through other registers.
+    pub array_register_count: u32,
+}
+
+/// One instruction. The last operand is the destination.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct D3d9PreshaderInstruction {
+    /// `MOJOSHADER_preshaderOpcode`.
+    pub opcode: u32,
+    pub element_count: u32,
+    pub operands: Box<[D3d9PreshaderOperand]>,
+}
+
 /// A fixed transform's compiled expression and its canonical FX parameter indices.
 /// Keeps the native program alive after the initial evaluated commands are copied.
 #[derive(Clone, Debug)]
@@ -37,6 +90,7 @@ pub struct RetainedD3d9TransformExpression {
     state_index: u32,
     parameter_indices: Box<[u32]>,
     output_layout: D3d9TransformOutputLayout,
+    compiled: D3d9TransformProgram,
 }
 
 impl RetainedD3d9TransformExpression {
@@ -49,6 +103,11 @@ impl RetainedD3d9TransformExpression {
     #[must_use]
     pub const fn output_layout(&self) -> D3d9TransformOutputLayout {
         self.output_layout
+    }
+
+    #[must_use]
+    pub const fn compiled_program(&self) -> &D3d9TransformProgram {
+        &self.compiled
     }
 
     /// Evaluates using the load-time defaults plus these semantic/name assignments.
@@ -194,7 +253,7 @@ impl RetainedD3d9EffectProgram {
             return Ok(None);
         }
         let parameter_count = unsafe { openzt2_effect_parameter_count(pointer) };
-        let parameter_indices = (0..count)
+        let parameter_indices: Box<[u32]> = (0..count)
             .map(|dependency| {
                 let index = unsafe {
                     openzt2_effect_transform_dependency_index(
@@ -220,11 +279,30 @@ impl RetainedD3d9EffectProgram {
                 layout.as_mut_ptr(),
             );
         }
+        let preshader = unsafe {
+            openzt2_effect_transform_preshader(pointer, technique_index, pass_index, state_index)
+        };
+        let compiled = if preshader.is_null() {
+            let mut source = [0; 4];
+            unsafe {
+                openzt2_effect_parameter_layout(pointer, parameter_indices[0], source.as_mut_ptr());
+            }
+            // MATRIX_ROWS and MATRIX_COLUMNS, as MOJOSHADER_copyEffectNumericParameterToState packs them.
+            let packed_columns = (matches!(source[0], 2 | 3) && source[2] < 4).then_some(source[2]);
+            let source_count = packed_columns.map_or(source[3], |columns| source[3] / 4 * columns);
+            D3d9TransformProgram::Parameter {
+                packed_columns,
+                component_count: source_count.min(layout[3]),
+            }
+        } else {
+            D3d9TransformProgram::Preshader(Arc::new(unsafe { copy_preshader(preshader) }?))
+        };
         Ok(Some(RetainedD3d9TransformExpression {
             program: self.clone(),
             technique_index,
             pass_index,
             state_index,
+            compiled,
             parameter_indices,
             output_layout: D3d9TransformOutputLayout {
                 parameter_class: layout[0],
@@ -234,4 +312,68 @@ impl RetainedD3d9EffectProgram {
             },
         }))
     }
+}
+
+/// Copies a native preshader into owned Rust values.
+///
+/// # Safety
+///
+/// `preshader` must point to a live `MOJOSHADER_preshader`.
+#[allow(
+    unsafe_code,
+    reason = "reads the native preshader through its accessors"
+)]
+unsafe fn copy_preshader(
+    preshader: *const std::ffi::c_void,
+) -> Result<D3d9Preshader, D3d9EffectProcessingError> {
+    let mut counts = [0; 5];
+    unsafe { openzt2_preshader_counts(preshader, counts.as_mut_ptr()) };
+    let [literal_count, temp_count, instruction_count, register_count, symbol_count] = counts;
+    let instructions = (0..instruction_count)
+        .map(|index| {
+            let mut fields = [0; 15];
+            unsafe { openzt2_preshader_instruction(preshader, index, fields.as_mut_ptr()) };
+            let operand_count = fields[2].min(4) as usize;
+            let operands = (0..operand_count)
+                .map(|operand| {
+                    let field = &fields[3 + operand * 3..6 + operand * 3];
+                    Ok(D3d9PreshaderOperand {
+                        operand_type: match field[0] {
+                            0 => D3d9PreshaderOperandType::Input,
+                            1 => D3d9PreshaderOperandType::Output,
+                            2 => D3d9PreshaderOperandType::Literal,
+                            3 => D3d9PreshaderOperandType::Temp,
+                            _ => return Err(
+                                D3d9EffectProcessingError::NativeDependencyReturnedMalformedOutput,
+                            ),
+                        },
+                        index: field[1],
+                        array_register_count: field[2],
+                    })
+                })
+                .collect::<Result<_, _>>()?;
+            Ok(D3d9PreshaderInstruction {
+                opcode: fields[0],
+                element_count: fields[1],
+                operands,
+            })
+        })
+        .collect::<Result<_, _>>()?;
+    Ok(D3d9Preshader {
+        literals: (0..literal_count)
+            .map(|index| unsafe { openzt2_preshader_literal(preshader, index) })
+            .collect(),
+        temp_count,
+        registers: (0..register_count * 4)
+            .map(|component| unsafe { openzt2_preshader_register(preshader, component) })
+            .collect(),
+        dependency_registers: (0..symbol_count)
+            .map(|index| {
+                let mut symbol = [0; 2];
+                unsafe { openzt2_preshader_symbol(preshader, index, symbol.as_mut_ptr()) };
+                (symbol[0], symbol[1])
+            })
+            .collect(),
+        instructions,
+    })
 }

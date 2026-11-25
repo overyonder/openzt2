@@ -46,6 +46,7 @@ gltf = { version = "1.4", default-features = false, features = ["extras", "names
 sysinfo = { version = "0.38", default-features = false, features = ["system"] }
 ureq.workspace = true
 bevy.workspace = true
+naga = { version = "30", features = ["spv-in", "wgsl-out"] }
 
 # Apple's wgpu backend is Metal; raw Vulkan initialization is unavailable there.
 [target.'cfg(not(target_vendor = "apple"))'.dependencies]
@@ -56,3 +57,4 @@ windows-sys.workspace = true
 
 [dev-dependencies]
 zip.workspace = true
+naga = { version = "30", features = ["wgsl-in"] }

@@ -24,6 +24,13 @@ use super::{
 #[derive(Message, Debug, Clone)]
 pub(super) enum ScenarioUiCommand {
     Tool(openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::ConstructionTool),
+    /// `ZT_SET_TANK_WALL_HEIGHT`: every tank's wall tops, in world units.
+    TankWallHeight(f32),
+    /// `ZT_DISPLAY_ZOO_MESSAGE`: localized text for the zoo message bar.
+    ZooMessage {
+        text: String,
+        timeout_seconds: f64,
+    },
     /// Selects the placement, fence or path tool for an authored type.
     PlacementObject(AssetId),
     Node {

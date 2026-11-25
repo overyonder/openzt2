@@ -5,6 +5,7 @@ use crate::terrain::terrain_water_material_binding::bind_authored_water_surface_
 use crate::terrain::terrain_water_mesh_construction::construct_terrain_water_low_detail_mesh_groups;
 use crate::terrain::terrain_water_mesh_construction::construct_terrain_water_surface_and_waterfall_mesh_groups;
 use crate::terrain::terrain_waterfall_projection::spawn_authored_waterfall_groups;
+use crate::terrain::water_regions::authored_membership::TerrainWaterMembershipChanged;
 use bevy::camera::visibility::NoFrustumCulling;
 use bevy::camera::visibility::RenderLayers;
 use bevy::prelude::*;
@@ -41,12 +42,15 @@ use openzt2_zoo_state::terrain::terrain_water_renderer_types::TERRAIN_WATER_REND
 #[derive(bevy::ecs::system::SystemParam)]
 pub(super) struct WaterRegionMaterialProjectionQueries<'w, 's> {
     projection_status: Local<'s, bevy::platform::collections::HashMap<Entity, &'static str>>,
+    membership_changes: MessageReader<'w, 's, TerrainWaterMembershipChanged>,
+    /// Chunks whose water inputs changed and have not been rebuilt since.
+    pending: Local<'s, bevy::platform::collections::HashSet<Entity>>,
     scrolls: Query<'w, 's, &'static TerrainWaterScumScroll>,
     low_textures: Query<'w, 's, &'static TerrainWaterLowDetailTextureState>,
     changed: Query<
         'w,
         's,
-        (),
+        Entity,
         Or<(
             Changed<TerrainWaterRegionSource>,
             Changed<TerrainWaterRegionEdit>,
@@ -86,6 +90,74 @@ pub(super) fn project_changed_terrain_water_surfaces_and_waterfalls(
     let Some(renderer_targets) = renderer_targets else {
         return;
     };
+    // A chunk's surfaces depend only on the water within it, so only chunks
+    // holding changed points or changed regions are rebuilt.
+    let mut changed_points = bevy::platform::collections::HashMap::<
+        bevy::asset::AssetId<TerrainAsset>,
+        Option<Vec<UVec2>>,
+    >::new();
+    for change in region_state.membership_changes.read() {
+        let entry = changed_points
+            .entry(change.terrain)
+            .or_insert_with(|| Some(Vec::new()));
+        match (entry.as_mut(), &change.points) {
+            (Some(points), Some(changed)) => points.extend(changed),
+            _ => *entry = None,
+        }
+    }
+    let changed_owners = region_state.changed.iter().collect::<Vec<_>>();
+    if !changed_owners.is_empty() {
+        for membership in &memberships {
+            if let Some(points) = changed_points
+                .entry(membership.terrain())
+                .or_insert_with(|| Some(Vec::new()))
+            {
+                for owner in &changed_owners {
+                    points.extend(membership.accepted_points(*owner));
+                    points.extend(
+                        membership
+                            .render_tiles(*owner)
+                            .flat_map(|tile| [tile * 4, tile * 4 + UVec2::splat(4)]),
+                    );
+                }
+            }
+        }
+    }
+    for (terrain, points) in changed_points {
+        let chunks = terrain_chunks
+            .iter()
+            .filter(|(_, chunk, ..)| chunk.asset.id() == terrain)
+            .map(|(entity, chunk, ..)| (entity, chunk.source_coord, chunk.side))
+            .collect::<Vec<_>>();
+        let Some(points) = points else {
+            region_state
+                .pending
+                .extend(chunks.iter().map(|(entity, ..)| *entity));
+            continue;
+        };
+        let Some(cells) = chunks
+            .first()
+            .map(|(_, _, side)| u32::from(side.saturating_sub(1)).max(1))
+        else {
+            continue;
+        };
+        let mut coords = bevy::platform::collections::HashSet::<IVec2>::new();
+        for point in points {
+            let column = point / cells;
+            let below = (point % cells).cmpeq(UVec2::ZERO) & point.cmpgt(UVec2::ZERO);
+            for dx in [0, u32::from(below.test(0))] {
+                for dy in [0, u32::from(below.test(1))] {
+                    coords.insert((column - UVec2::new(dx, dy)).as_ivec2());
+                }
+            }
+        }
+        region_state.pending.extend(
+            chunks
+                .iter()
+                .filter(|(_, coord, _)| coords.contains(coord))
+                .map(|(entity, ..)| *entity),
+        );
+    }
     for (chunk_entity, chunk, edited_samples, dirty, children, projected_revision) in
         &terrain_chunks
     {
@@ -111,15 +183,12 @@ pub(super) fn project_changed_terrain_water_surfaces_and_waterfalls(
             continue;
         };
         let target_revision = dirty.map_or(0, |dirty| dirty.revision);
-        if region_state.changed.is_empty()
-            && !membership.is_changed()
-            && !graphics_settings.is_changed()
-            && projected_revision.is_some_and(|revision| revision.0 >= target_revision)
-        {
+        let current = projected_revision.is_some_and(|revision| revision.0 >= target_revision);
+        let pending = region_state.pending.contains(&chunk_entity);
+        if !pending && !graphics_settings.is_changed() && current {
             continue;
         }
-        if region_state.changed.is_empty()
-            && !membership.is_changed()
+        if !pending
             && !graphics_settings.is_changed()
             && projected_revision.is_some()
             && dirty.is_some_and(|dirty| {
@@ -132,6 +201,7 @@ pub(super) fn project_changed_terrain_water_surfaces_and_waterfalls(
                 .insert(TerrainWaterRevision(target_revision));
             continue;
         }
+        let _rebuild_span = info_span!("rebuild_chunk_water_surfaces").entered();
         let Some(terrain_asset) = terrain_assets.get(&chunk.asset) else {
             report("terrain pending");
             continue;
@@ -530,6 +600,7 @@ pub(super) fn project_changed_terrain_water_surfaces_and_waterfalls(
                 mesh_group.waterfall_mesh_groups,
             );
         }
+        region_state.pending.remove(&chunk_entity);
         commands
             .entity(chunk_entity)
             .insert(TerrainWaterRevision(target_revision));

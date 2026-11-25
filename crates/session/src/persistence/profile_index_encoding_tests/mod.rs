@@ -167,6 +167,10 @@ fn disabled_message_of_the_day_survives_the_profile_index() {
                     openzt2_interface_state::settings::online_message_policy_types::OnlineMessagePolicy {
                         enabled: false,
                     },
+                modder_tools:
+                    openzt2_interface_state::settings::modder_tools_settings_types::ModderToolsSettings {
+                        enabled: true,
+                    },
             },
         ],
         None,
@@ -176,6 +180,7 @@ fn disabled_message_of_the_day_survives_the_profile_index() {
         super::profile_index_encoding::decode_stored_profile_index(&encoded_profile_index_bytes)
             .unwrap();
     assert!(!decoded[0].online_messages.enabled);
+    assert!(decoded[0].modder_tools.enabled);
     // Profiles written before the flag carry zero there and keep it enabled.
     let (legacy, _) = super::profile_index_encoding::decode_stored_profile_index(
         &super::profile_index_encoding::encode_profile_index_for_test(

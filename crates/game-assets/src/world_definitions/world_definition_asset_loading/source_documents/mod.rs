@@ -286,6 +286,7 @@ mod tests {
                     br#"<BFGameContext><BFBinderRoot><root path="guests/ai"/></BFBinderRoot></BFGameContext>"#,
                 ),
                 ("guests/ai/adult.xml", br#"<BFTypedBinder binderType="Guest_Adult"/>"#),
+                ("guests/ai/malformed.xml", b"this is not a binder document"),
                 ("guests/ai/young.xml", br#"<BFTypedBinder binderType="Guest_Young"/>"#),
                 ("guests/ai/other.xml", br#"<BFTypedBinder binderType="Guest_Young"/>"#),
                 ("guests/guest_young.xml", b"<BFAnimationGraph/>"),

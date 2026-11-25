@@ -1,4 +1,5 @@
-//! Loads NIF and BFB models as glTF assets and labelled subassets.
+//! Loads NIF, BFB and mod-supplied glTF models as glTF assets and labelled
+//! subassets.
 
 use std::io;
 
@@ -14,7 +15,15 @@ use crate::{
         effect::ParticleEffectDocumentAsset,
         material::evaluated_effect_material_asset_construction::create_material_asset_from_evaluated_d3d9_effect,
         model::bevy_gltf_loader_configuration::create_bevy_gltf_loader_for_lowered_source_assets,
-        model_source::native_model_source_lowering::lower_native_model_source, scene_prefab,
+        model_source::{
+            gltf_model_source::{
+                gltf_model_scene_prefab, is_gltf_model_asset_path,
+                replace_scene_prefab_renderables_with_whole_gltf_scene,
+            },
+            native_model_source_lowering::lower_native_model_source,
+            native_model_source_lowering_types::LoweredNativeModel,
+        },
+        scene_prefab,
     },
 };
 
@@ -40,7 +49,10 @@ impl AssetLoader for NativeModelAssetLoader {
     type Settings = ();
     type Error = io::Error;
 
-    #[cfg_attr(feature = "tracing", tracing::instrument(name = "load_native_model", skip_all))]
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "load_native_model", skip_all)
+    )]
     async fn load(
         &self,
         native_model_source_reader: &mut dyn Reader,
@@ -56,19 +68,66 @@ impl AssetLoader for NativeModelAssetLoader {
             .path()
             .to_string_lossy()
             .into_owned();
-        let lowered_native_model = lower_native_model_source(
-            &native_model_asset_path,
-            &native_model_source_bytes,
-            |texture_reference| {
-                self.archives
-                    .resolve_model_texture_reference(
-                        native_model_load_context.path().path(),
-                        texture_reference,
+        let lowered_native_model =
+            if is_gltf_model_asset_path(native_model_load_context.path().path()) {
+                if let Some(replacement) = self
+                    .archives
+                    .live_model_replacement(native_model_load_context.path().path())
+                {
+                    native_model_source_bytes = replacement.to_vec();
+                }
+                LoweredNativeModel {
+                    scene_prefab_document: gltf_model_scene_prefab(
+                        &native_model_asset_path,
+                        &native_model_source_bytes,
                     )
-                    .map(|resolved| resolved.to_string_lossy().into_owned())
-            },
-        )
-        .map_err(io::Error::other)?;
+                    .map_err(io::Error::other)?,
+                    glb: native_model_source_bytes,
+                    particle_effects: Vec::new(),
+                    materials: Vec::new(),
+                }
+            } else {
+                let replacement = self
+                    .archives
+                    .gltf_model_replacement(native_model_load_context.path().path())?;
+                let lowered = lower_native_model_source(
+                    &native_model_asset_path,
+                    &native_model_source_bytes,
+                    |texture_reference| {
+                        self.archives
+                            .resolve_model_texture_reference(
+                                native_model_load_context.path().path(),
+                                texture_reference,
+                            )
+                            .map(|resolved| resolved.to_string_lossy().into_owned())
+                    },
+                );
+                match (lowered, replacement) {
+                    (Ok(lowered), None) => lowered,
+                    (Ok(lowered), Some(replacement)) => LoweredNativeModel {
+                        scene_prefab_document:
+                            replace_scene_prefab_renderables_with_whole_gltf_scene(
+                                lowered.scene_prefab_document,
+                                &native_model_asset_path,
+                            ),
+                        glb: replacement.to_vec(),
+                        particle_effects: lowered.particle_effects,
+                        materials: Vec::new(),
+                    },
+                    // A replacement still loads when the model it replaces cannot.
+                    (Err(_), Some(replacement)) => LoweredNativeModel {
+                        scene_prefab_document: gltf_model_scene_prefab(
+                            &native_model_asset_path,
+                            &replacement,
+                        )
+                        .map_err(io::Error::other)?,
+                        glb: replacement.to_vec(),
+                        particle_effects: Vec::new(),
+                        materials: Vec::new(),
+                    },
+                    (Err(error), None) => return Err(io::Error::other(error)),
+                }
+            };
         let loaded_gltf = GltfLoader::load_gltf(
             &self.bevy_gltf_loader,
             &lowered_native_model.glb,
@@ -128,7 +187,8 @@ impl AssetLoader for NativeModelAssetLoader {
 
 /// Bevy matches loader extensions case-sensitively, and the shipped archives
 /// keep some models as `.NIF` (Lion, Jaguar, LeopardSnow, PenguinEmperor).
-const NATIVE_MODEL_EXTENSIONS: &[&str] = &["nif", "bfb", "NIF", "BFB"];
+/// glTF models from mods arrive under their routed extensions.
+const NATIVE_MODEL_EXTENSIONS: &[&str] = &["nif", "bfb", "NIF", "BFB", "z2glb", "z2gltf"];
 
 fn labelled_native_model_subasset_label(path: &str) -> Option<String> {
     path.split_once('#').map(|(_, label)| label.to_owned())

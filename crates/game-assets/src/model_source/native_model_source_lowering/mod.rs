@@ -185,7 +185,10 @@ pub fn native_model_scene_labelled_asset_path(native_model_asset_path: &str) -> 
     let path = z2f::paths::normalize_asset_path_for_case_insensitive_archive_lookup(Path::new(
         native_model_asset_path,
     ));
-    format!("{}#Scene", path.display())
+    format!(
+        "{}#Scene",
+        super::gltf_model_source::gltf_model_asset_path_for_source_path(&path).display()
+    )
 }
 
 pub(super) fn native_model_particle_effect_labelled_asset_path(

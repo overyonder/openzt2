@@ -129,7 +129,7 @@ pub(super) fn select_authored_ground_track_piece_presentation<'a>(
 /// How far a straight piece turning at one end is painted towards that end:
 /// its turn texture's strip stops short of the joint, where the diagonal's
 /// curve texture meets it.
-// 0.75 m was fitted against the shipped textures, not read from zt.exe.
+// 0.75 m was fitted against the shipped textures, not taken from the original game.
 const AUTHORED_GROUND_TRACK_TURN_SHIFT_METRES: f32 = 0.75;
 
 fn authored_ground_track_paint_shift(route: &[Vec3], index: usize) -> Vec3 {
@@ -1140,7 +1140,7 @@ pub(super) fn show_construction_markers_at_unconnected_station_ends(
                         .station_wheel(station_entity, end)
                         .unwrap_or(end)
                         + side
-                        // Fixed lift above the roof, match zt.exe if a station differs
+                        // Fixed lift above the roof; match the original game if a station differs
                         + Vec3::Y * 3.0
                 } else {
                     end + outward * 1.5

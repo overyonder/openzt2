@@ -19,7 +19,7 @@ use openzt2_zoo_state::terrain::terrain_water_presentation_types::TerrainWaterRe
 use openzt2_zoo_state::terrain::terrain_water_view_state::{
     TerrainWaterRegionFade, TerrainWaterRegionVisibility,
 };
-use openzt2_zoo_state::terrain::terrain_world_sampling::sample_authored_terrain;
+use openzt2_zoo_state::terrain::terrain_world_sampling::sample_terrain_water;
 
 /// Retired edited owners survive only while an undo transaction references them.
 pub(super) fn cleanup_unreferenced_retired_water_region_entities(
@@ -147,9 +147,13 @@ struct LiveWaterCell {
     owner_origin: Vec2,
 }
 
-/// Rebuilds spatial-audio emitters after a committed water edit. These connected
-/// audio regions do not supply water-effect affiliation. Sample/style state
-/// remains in the terrain overlays.
+/// Rebuilds spatial-audio emitters and animal water targets after a water edit.
+/// These connected regions do not supply water-effect affiliation. Sample/style
+/// state remains in the terrain overlays.
+///
+/// The rebuild walks every cell of the map, so it waits until a held terrain
+/// brush, which changes water dab after dab, is released.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn rebuild_edited_water_regions(
     mut commands: Commands,
     mut changes: MessageReader<TerrainWaterChanged>,
@@ -157,10 +161,19 @@ pub(super) fn rebuild_edited_water_regions(
     chunks: Query<(Entity, &TerrainChunk, Option<&EditedTerrainSamples>)>,
     regions: Query<(Entity, Option<&TerrainWaterRegionSource>), With<NaturalWaterRegion>>,
     membership_indexes: Query<Entity, With<TerrainWaterMembershipIndex>>,
+    held_brushes: Query<
+        (),
+        With<openzt2_zoo_state::terrain::terrain_brush_interaction_state::ActiveTerrainBrush>,
+    >,
+    mut pending: Local<bool>,
 ) {
-    if changes.read().count() == 0 {
+    if changes.read().count() != 0 {
+        *pending = true;
+    }
+    if !*pending || !held_brushes.is_empty() {
         return;
     }
+    *pending = false;
     for (entity, source) in &regions {
         if source.is_some() {
             commands
@@ -199,17 +212,17 @@ pub(super) fn rebuild_edited_water_regions(
                     let center = chunk.origin
                         + (Vec2::new(f32::from(x), f32::from(z)) + Vec2::splat(0.5))
                             * chunk.spacing_m;
-                    let Some(sample) = sample_authored_terrain(chunk, asset, edited, center) else {
+                    let Some((geometry, water)) =
+                        sample_terrain_water(chunk, asset, edited, center)
+                    else {
                         continue;
                     };
-                    let (Some(water), Some(height)) =
-                        (sample.water, sample.geometry.water_height_m)
-                    else {
+                    let (Some((_, style)), Some(height)) = (water, geometry.water_height_m) else {
                         continue;
                     };
                     cells.push(LiveWaterCell {
                         key: chunk.coord * cells_per_chunk + IVec2::new(i32::from(x), i32::from(z)),
-                        style: water.style,
+                        style,
                         position: Vec3::new(center.x, height, center.y),
                         area_m2: chunk.spacing_m * chunk.spacing_m,
                         owner: entity,

@@ -19,6 +19,8 @@ use super::effect_pass_gpu_data::{
     EFFECT_SHADER_BINDING_LAYOUT,
 };
 
+use super::gpu_texture_transforms::TRANSFORM_INPUT_BINDING;
+
 const FIRST_TEXTURE_BINDING: u32 = EFFECT_SHADER_BINDING_LAYOUT.first_texture_binding;
 const FIRST_CUBE_TEXTURE_BINDING: u32 = EFFECT_SHADER_BINDING_LAYOUT.first_cube_texture_binding;
 // Read by the fixed-function shader to choose each stage's texture type.
@@ -133,7 +135,10 @@ impl AsBindGroup for EffectPassMaterial {
             (29, &self.uniform_buffer_assets.pixel_booleans),
             (36, &self.uniform_buffer_assets.fixed_transforms),
         ];
-        for (binding, handle) in uniforms {
+        for (binding, handle) in uniforms.into_iter().chain([(
+            TRANSFORM_INPUT_BINDING,
+            &self.uniform_buffer_assets.transform_inputs,
+        )]) {
             let Some(buffer) = param.1.get(handle) else {
                 return Err(AsBindGroupError::RetryNextUpdate);
             };
@@ -187,6 +192,16 @@ impl AsBindGroup for EffectPassMaterial {
             },
             count: None,
         }));
+        entries.push(BindGroupLayoutEntry {
+            binding: TRANSFORM_INPUT_BINDING,
+            visibility: ShaderStages::FRAGMENT,
+            ty: BindingType::Buffer {
+                ty: BufferBindingType::Storage { read_only: true },
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        });
         entries.push(BindGroupLayoutEntry {
             binding: CUBE_TEXTURE_STAGE_MASK_BINDING,
             visibility: ShaderStages::FRAGMENT,

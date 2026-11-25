@@ -195,7 +195,7 @@ fn footprint_rectangle(
     ))
 }
 
-/// `zt.exe` draws a building being placed without its alpha-blended meshes,
+/// The original game draws a building being placed without its alpha-blended meshes,
 /// such as a station's glass and the track under it.
 pub(super) fn hide_alpha_blended_meshes_of_object_placement_previews(
     materials: Res<
@@ -516,7 +516,7 @@ fn convert_authored_srgba_bytes_to_bevy_color(value: [u8; 4]) -> Color {
     Color::srgba_u8(value[0], value[1], value[2], value[3])
 }
 
-/// The models' `Dock_Arrow` nodes, where `zt.exe` stands a `special` arrow.
+/// The models' `Dock_Arrow` nodes, where the original game stands a `special` arrow.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(super) struct DockArrowNodes<'w, 's> {
     children: Query<'w, 's, &'static Children>,
@@ -569,7 +569,7 @@ impl DockArrowNodes<'_, '_> {
     }
 
     /// A station has `Dock_Arrow` and `Dock_Arrow1` on opposite sides;
-    /// `zt.exe` draws one arrow, on the `Dock_Arrow1` side.
+    /// the original game draws one arrow, on the `Dock_Arrow1` side.
     fn dock_arrow(&self, preview: Entity) -> Option<Vec3> {
         let find = |key| {
             let wanted = AssetId::from_key(key);

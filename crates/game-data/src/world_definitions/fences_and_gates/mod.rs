@@ -60,6 +60,10 @@ pub struct FencePlacementModePolicy {
     /// A closed tank shape whose ground falls this far below its anchor keeps
     /// its wall tops at the anchor's ground height.
     pub hill_threshold_cm: i32,
+    /// Object the mode's `wizard/gate` events offer once the entrance prompted
+    /// by a closed rectangular tank is placed, as a single placement.
+    #[serde(default)]
+    pub gate_wizard_placement_object: Option<AssetId>,
 }
 
 #[derive(Clone, Debug, Default, serde::Deserialize, Eq, PartialEq, serde::Serialize)]

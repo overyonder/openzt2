@@ -43,6 +43,11 @@ pub(super) struct ScenarioLuaQueryFacts<'a> {
     pub(super) species: Option<openzt2_game_assets::species::species_asset_types::SpeciesView<'a>>,
     pub(super) profile_variables: &'a openzt2_zoo_state::progression::profile_scenario_variables::ProfileScenarioVariables,
     pub(super) zoo_cash: &'a ZooCash,
+    /// Whether any closed tank exists, as `ZT_IS_TANK_IN_WORLD` reports.
+    pub(super) tank_in_world: bool,
+    /// Every tank's heights, for `ZT_GET_TANK_WATER_HEIGHT` and
+    /// `ZT_GET_TANK_FLOOR_HEIGHT`.
+    pub(super) tanks: &'a ScenarioLuaTankQuery<'a, 'a>,
     /// The rule set of the loaded world, which `ZT_GET_IS_CAMPAIGN` and
     /// `ZT_GET_IS_FREEFORM` report.
     pub(super) world_session_mode:
@@ -76,6 +81,17 @@ pub(super) struct ScenarioLuaQueryFacts<'a> {
     pub(super) overhead_camera: Option<&'a openzt2_interface_state::camera::camera_runtime_state_types::OverheadRig>,
     pub(super) construction_tool: Option<openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::ConstructionTool>,
 }
+
+/// Live tanks and their heights.
+pub(super) type ScenarioLuaTankQuery<'w, 's> = bevy::prelude::Query<
+    'w,
+    's,
+    (
+        bevy::prelude::Entity,
+        &'static openzt2_zoo_state::aquatic::aquatic_simulation_types::TankGeometry,
+    ),
+    bevy::prelude::With<openzt2_zoo_state::aquatic::aquatic_simulation_types::Tank>,
+>;
 
 /// Fence runs, which scripts count by type like any other entity.
 pub(super) type ScenarioLuaFenceEdgeQuery<'w, 's> = bevy::prelude::Query<

@@ -44,66 +44,12 @@ impl EffectPassMaterial {
             pixel_integers: buffers.add(shader_buffer_from_uniform_value(&self.pixel_integers)),
             pixel_booleans: buffers.add(shader_buffer_from_uniform_value(&self.pixel_booleans)),
             fixed_transforms: buffers.add(shader_buffer_from_uniform_value(&self.fixed_transforms)),
+            transform_inputs: buffers.add(ShaderBuffer::from(self.transform_inputs.clone())),
         };
         self.dirty_float_register_stages = 0;
         self.dirty_fixed_transforms = false;
         self.dirty_fixed_function = false;
-    }
-
-    /// Allocates independent mutable register and fixed-transform buffers for a draw/view.
-    pub fn allocate_dynamic_uniform_buffers_for_model_view(
-        &mut self,
-        buffers: &mut Assets<ShaderBuffer>,
-    ) {
-        if self.pipeline_specialization_key.vertex_shader == super::FIXED_FUNCTION_SHADER {
-            self.uniform_buffer_assets.fixed_function =
-                buffers.add(shader_buffer_from_uniform_value(&self.fixed_function));
-        }
-        for (stage, handle, values, order) in [
-            (
-                D3d9ProgrammableShaderStage::Vertex,
-                &mut self.uniform_buffer_assets.vertex_floats,
-                &self.vertex_floats,
-                self.vertex_uniform_upload_order.as_deref(),
-            ),
-            (
-                D3d9ProgrammableShaderStage::Pixel,
-                &mut self.uniform_buffer_assets.pixel_floats,
-                &self.pixel_floats,
-                self.pixel_uniform_upload_order.as_deref(),
-            ),
-        ] {
-            if self
-                .dynamic_parameter_register_bindings
-                .iter()
-                .any(|binding| binding.shader_stage == stage && binding.register_set == 2)
-            {
-                let (integers, booleans) = match stage {
-                    D3d9ProgrammableShaderStage::Vertex => {
-                        (&self.vertex_integers, &self.vertex_booleans)
-                    }
-                    D3d9ProgrammableShaderStage::Pixel => {
-                        (&self.pixel_integers, &self.pixel_booleans)
-                    }
-                };
-                *handle = buffers.add(shader_buffer_from_packed_registers(
-                    &pack_programmable_shader_registers(values, integers, booleans, order),
-                ));
-            }
-        }
-        if !self.fixed_transform_bindings.is_empty()
-            || !self.texture_coordinate_animations.is_empty()
-            || self
-                .model_reflection_projections
-                .iter()
-                .any(Option::is_some)
-        {
-            self.uniform_buffer_assets.fixed_transforms =
-                buffers.add(shader_buffer_from_uniform_value(&self.fixed_transforms));
-        }
-        self.dirty_float_register_stages = 0;
-        self.dirty_fixed_transforms = false;
-        self.dirty_fixed_function = false;
+        self.dirty_transform_inputs = false;
     }
 
     pub fn write_changed_fixed_function_registers_to_persistent_buffer(
@@ -172,7 +118,6 @@ impl EffectPassMaterial {
                 &self.fixed_transforms,
                 buffers,
             );
-            self.fixed_transform_buffer_writes += 1;
             self.dirty_fixed_transforms = false;
         }
     }
@@ -183,6 +128,15 @@ impl EffectPassMaterial {
     ) {
         if self.dirty_fixed_transforms {
             self.write_fixed_function_transforms_to_persistent_buffer(buffers);
+        }
+        if self.dirty_transform_inputs {
+            if let Some(mut buffer) = buffers.get_mut(&self.uniform_buffer_assets.transform_inputs)
+            {
+                if let Some(values) = buffer.cast_slice_mut::<Vec4>() {
+                    values.copy_from_slice(&self.transform_inputs);
+                    self.dirty_transform_inputs = false;
+                }
+            }
         }
     }
 }
@@ -337,6 +291,16 @@ fn shader_upload_bytes(buffer: &mut ShaderBuffer, len: usize) -> &mut [u8] {
     buffer
         .cast_slice_mut::<u8>()
         .expect("shader upload initialized its byte array")
+}
+
+impl super::EffectEnvironmentRegisters {
+    /// Writes the registers in the shader's storage-buffer layout.
+    pub fn write_shader_buffer(&self, buffer: &mut ShaderBuffer) {
+        let bytes = shader_upload_bytes(buffer, self.size().get() as usize);
+        bevy::render::render_resource::encase::StorageBuffer::new(bytes)
+            .write(self)
+            .expect("environment registers have a fixed storage layout");
+    }
 }
 
 impl D3d9FixedFunctionWorldLightContexts {

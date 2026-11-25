@@ -3,6 +3,8 @@ mod diagnostics;
 
 mod launch;
 mod missing_game_content_screen;
+#[cfg(feature = "mod-audit")]
+mod mod_audit;
 mod openzt2_game_plugin_group;
 mod render_scheduling;
 
@@ -69,6 +71,8 @@ fn run_game_application(launch_configuration: GameLaunchConfiguration) -> std::i
         .add_plugins(OpenZt2AssetLoadingPluginGroup)
         .add_plugins(OpenZt2GamePluginGroup);
     add_developer_diagnostics_when_enabled(&mut game_application);
+    #[cfg(feature = "mod-audit")]
+    mod_audit::install(&mut game_application);
     execute_short_main_world_systems_without_per_system_task_dispatch(&mut game_application);
     execute_short_render_world_systems_without_per_system_task_dispatch(&mut game_application);
     if game_application.run().is_error() {

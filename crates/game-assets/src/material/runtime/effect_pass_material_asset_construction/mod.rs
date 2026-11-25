@@ -2,7 +2,10 @@
 
 use std::io;
 
-use bevy::{asset::LoadContext, image::ImageLoaderSettings, prelude::*, shader::Shader};
+use bevy::{
+    asset::LoadContext, image::ImageLoaderSettings, prelude::*, render::storage::ShaderBuffer,
+    shader::Shader,
+};
 
 use super::{
     d3d9_shader_and_vertex_layout_mapping::map_d3d9_shader_input_to_bevy_vertex_attribute,
@@ -20,6 +23,14 @@ use super::{
         EffectPassUniformBufferAssets, EFFECT_SHADER_BINDING_LAYOUT, FIXED_FUNCTION_SHADER,
     },
     evaluated_d3d9_pass_state::{collect_evaluated_d3d9_pass_states, EvaluatedD3d9PassState},
+    gpu_semantic_shader_registers::{
+        reads_model, rewrite_translated_shader_with_gpu_semantic_registers, GpuSemanticRegisters,
+        InstanceIndexInput, FORWARDED_INSTANCE_INDEX_LOCATION,
+    },
+    gpu_texture_transforms::{
+        computed_on_gpu, default_inputs, fixed_function_source_with_texture_transforms,
+        GpuTextureTransform, GPU_TRANSFORM_STAGE_REGISTER,
+    },
     programmable_vertex_fixed_function_fragment_interface::create_fixed_function_fragment_shader_for_programmable_vertex_outputs,
     resolved_effect_transform_bindings::ResolvedEffectTransformSemantic,
 };
@@ -54,6 +65,34 @@ pub(in crate::material) fn create_effect_pass_material_assets_from_evaluated_tec
             )
         })
         .collect()
+}
+
+/// Uses the translated SPIR-V directly unless the shader computes renderer
+/// semantics for itself.
+fn translated_shader_asset(
+    shader: d3d9_effects::shader_types::SpirvShaderTranslation,
+    uniform_binding: u32,
+    registers: &[GpuSemanticRegisters],
+    instance_index: Option<InstanceIndexInput>,
+    forward_instance_index: bool,
+    path: String,
+) -> io::Result<Shader> {
+    if registers.is_empty() && !forward_instance_index {
+        return Ok(Shader::from_spirv(
+            shader.spirv_bytecode,
+            format!("{path}.spv"),
+        ));
+    }
+    let source = rewrite_translated_shader_with_gpu_semantic_registers(
+        &shader.spirv_bytecode,
+        uniform_binding,
+        &shader.uniform_register_upload_order[0],
+        registers,
+        instance_index,
+        forward_instance_index,
+    )
+    .map_err(|error| io::Error::new(error.kind(), format!("{path}: {error}")))?;
+    Ok(Shader::from_wesl(source, format!("{path}.wesl")))
 }
 
 #[allow(
@@ -142,11 +181,35 @@ fn create_effect_pass_material_asset(
         })
     })
     .collect();
-    if context.path().to_string().contains("waterflat") {
-        bevy::log::debug!(target: "openzt2_effect_bindings", path = %context.path(), pass_index = index,
-            bindings = ?dynamic_parameter_register_bindings,
-            "loaded water shader semantic register bindings");
-    }
+    let gpu_registers = |stage| {
+        dynamic_parameter_register_bindings
+            .iter()
+            .filter(|binding| {
+                binding.shader_stage == stage
+                    && binding.register_set == 2
+                    && binding.transform_semantic.is_computed_on_gpu()
+            })
+            .map(|binding| GpuSemanticRegisters {
+                semantic: binding.transform_semantic,
+                first_register: binding.first_register,
+                register_count: binding.register_count,
+                is_row_major_matrix: binding.is_row_major_matrix,
+            })
+            .collect::<Vec<_>>()
+    };
+    let vertex_gpu_registers = gpu_registers(D3d9ProgrammableShaderStage::Vertex);
+    let pixel_gpu_registers = gpu_registers(D3d9ProgrammableShaderStage::Pixel);
+    let forward_instance_index = reads_model(&pixel_gpu_registers);
+    // The renderer supplies these registers in the shader; owners bind the rest.
+    let dynamic_parameter_register_bindings: std::sync::Arc<
+        [DynamicEffectParameterRegisterBinding],
+    > = dynamic_parameter_register_bindings
+        .iter()
+        .filter(|binding| {
+            binding.register_set != 2 || !binding.transform_semantic.is_computed_on_gpu()
+        })
+        .cloned()
+        .collect();
     let vertex_uniform_upload_order = vertex
         .as_ref()
         .map(|shader| std::sync::Arc::new(shader.uniform_register_upload_order.clone()));
@@ -181,35 +244,47 @@ fn create_effect_pass_material_asset(
         })
         .transpose()?;
     let vertex_entry = if vertex.is_some() { "main" } else { "vertex" };
-    let vertex_shader = vertex.map_or_else(
-        || FIXED_FUNCTION_SHADER.clone(),
-        |shader| {
-            context.add_labeled_asset(
-                format!("{labelled_asset_prefix}-{index}-vertex"),
-                Shader::from_spirv(
-                    shader.spirv_bytecode,
-                    format!("{labelled_asset_prefix}-{index}-vertex.spv"),
-                ),
-            )
-        },
-    );
+    let programmable_vertex = vertex.is_some();
+    let vertex_shader = match vertex {
+        None => FIXED_FUNCTION_SHADER.clone(),
+        Some(shader) => {
+            let label = format!("{labelled_asset_prefix}-{index}-vertex");
+            let asset = translated_shader_asset(
+                shader,
+                EFFECT_SHADER_BINDING_LAYOUT.vertex_uniform_binding,
+                &vertex_gpu_registers,
+                Some(InstanceIndexInput::VertexBuiltin),
+                forward_instance_index,
+                format!("{}#{label}", context.path()),
+            )?;
+            context.add_labeled_asset(label, asset)
+        }
+    };
+    let programmable_fragment = fragment.is_some();
     let fragment_entry = if fragment.is_some() {
         "main"
     } else {
         "fragment"
     };
-    let fragment_shader = fragment.map_or_else(
-        || fixed_fragment_for_programmable_vertex.unwrap_or_else(|| FIXED_FUNCTION_SHADER.clone()),
-        |shader| {
-            context.add_labeled_asset(
-                format!("{labelled_asset_prefix}-{index}-fragment"),
-                Shader::from_spirv(
-                    shader.spirv_bytecode,
-                    format!("{labelled_asset_prefix}-{index}-fragment.spv"),
-                ),
-            )
-        },
-    );
+    let fragment_shader = match fragment {
+        None => {
+            fixed_fragment_for_programmable_vertex.unwrap_or_else(|| FIXED_FUNCTION_SHADER.clone())
+        }
+        Some(shader) => {
+            let label = format!("{labelled_asset_prefix}-{index}-fragment");
+            let asset = translated_shader_asset(
+                shader,
+                EFFECT_SHADER_BINDING_LAYOUT.pixel_uniform_binding,
+                &pixel_gpu_registers,
+                programmable_vertex.then_some(InstanceIndexInput::FlatLocation(
+                    FORWARDED_INSTANCE_INDEX_LOCATION,
+                )),
+                false,
+                format!("{}#{label}", context.path()),
+            )?;
+            context.add_labeled_asset(label, asset)
+        }
+    };
     let blend = state.blend()?;
     let dynamic_texture_semantics = std::array::from_fn(|stage| {
         state.textures[stage].as_ref().and_then(|parameter_name| {
@@ -284,7 +359,7 @@ fn create_effect_pass_material_asset(
             _ => None,
         }
     });
-    let fixed_function = D3d9FixedFunctionRegisters {
+    let mut fixed_function = D3d9FixedFunctionRegisters {
         values: std::array::from_fn(|index| match index {
             0..40 => {
                 let texture_stage = index / 5;
@@ -333,7 +408,7 @@ fn create_effect_pass_material_asset(
             _ => unreachable!("fixed function register index is bounded by its array"),
         }),
     };
-    let fixed_transform_bindings = state
+    let mut fixed_transform_bindings = state
         .texture_transform_expressions
         .iter()
         .enumerate()
@@ -342,9 +417,6 @@ fn create_effect_pass_material_asset(
             DynamicFixedFunctionTransformBinding::resolve(stage, expression, parameter_descriptions)
         })
         .collect::<io::Result<Vec<_>>>()?;
-    let fixed_transform_dependencies = fixed_transform_bindings
-        .iter()
-        .fold(0, |mask, binding| mask | binding.input_dependencies());
     let mut model_reflection_projections = [None; 8];
     for &(pass, stage, matrix) in reflection_projections {
         if pass == index {
@@ -357,12 +429,79 @@ fn create_effect_pass_material_asset(
             *target = Some(Mat4::from_cols_array(&matrix));
         }
     }
-    let reflection_dependencies = if model_reflection_projections.iter().any(Option::is_some) {
-        super::resolved_effect_transform_bindings::MODEL_INPUT
-            | super::resolved_effect_transform_bindings::VIEW_INPUT
+    // Texture-stage transforms apply only where the fixed-function vertex and
+    // fragment stages both run. Those that read renderer values run in the shader.
+    let mut transform_inputs = Vec::new();
+    let mut gpu_programs = Vec::new();
+    if !programmable_vertex && !programmable_fragment {
+        for binding in &mut fixed_transform_bindings {
+            let semantics = binding.semantics();
+            if !computed_on_gpu(&semantics) {
+                continue;
+            }
+            let first_input = u32::try_from(transform_inputs.len()).map_err(io::Error::other)?;
+            transform_inputs.extend(default_inputs(binding.program()).chunks(4).map(|chunk| {
+                Vec4::from_array(std::array::from_fn(|component| {
+                    chunk.get(component).copied().unwrap_or_default()
+                }))
+            }));
+            binding.compute_on_gpu(first_input);
+            gpu_programs.push((binding.stage(), semantics, first_input));
+        }
+    }
+    let gpu_transforms = gpu_programs
+        .iter()
+        .filter_map(|(stage, dependencies, first_input)| {
+            let binding = fixed_transform_bindings
+                .iter()
+                .find(|binding| binding.stage() == *stage)?;
+            Some((
+                *stage,
+                GpuTextureTransform::Program {
+                    program: binding.program(),
+                    dependencies,
+                    first_input: *first_input,
+                },
+            ))
+        })
+        .chain(
+            model_reflection_projections
+                .iter()
+                .enumerate()
+                .filter(|(stage, _)| {
+                    !programmable_vertex
+                        && !programmable_fragment
+                        && !fixed_transform_bindings
+                            .iter()
+                            .any(|binding| binding.stage() == *stage)
+                })
+                .filter_map(|(stage, projection)| {
+                    projection
+                        .map(|projection| (stage, GpuTextureTransform::Reflection(projection)))
+                }),
+        )
+        .collect::<Vec<_>>();
+    // Stages the generated shader computes, which runtime reconfiguration can clear.
+    fixed_function.values[GPU_TRANSFORM_STAGE_REGISTER].w = gpu_transforms
+        .iter()
+        .fold(0_u32, |mask, (stage, _)| mask | 1 << stage)
+        as f32;
+    let (vertex_shader, fragment_shader) = if gpu_transforms.is_empty() {
+        (vertex_shader, fragment_shader)
     } else {
-        0
+        let label = format!("{labelled_asset_prefix}-{index}-fixed-function");
+        let source = fixed_function_source_with_texture_transforms(&gpu_transforms)
+            .map_err(|error| io::Error::new(error.kind(), format!("{label}: {error}")))?;
+        let shader = context.add_labeled_asset(
+            label.clone(),
+            Shader::from_wesl(source, format!("{}#{label}.wesl", context.path())),
+        );
+        (shader.clone(), shader)
     };
+    drop(gpu_transforms);
+    if transform_inputs.is_empty() {
+        transform_inputs.push(Vec4::ZERO);
+    }
     let material = EffectPassMaterial {
         texture_coordinate_animations: std::sync::Arc::clone(texture_coordinate_animations),
         lighting_state_is_authored: state.lighting_state_is_authored || material_lighting.is_some(),
@@ -454,6 +593,10 @@ fn create_effect_pass_material_asset(
                     values: state.texture_transforms,
                 }),
             ),
+            transform_inputs: context.add_labeled_asset(
+                format!("{labelled_asset_prefix}-{index}-transform-inputs"),
+                ShaderBuffer::from(transform_inputs.clone()),
+            ),
         },
         texture_assets: EffectPassTextureAssets::from_ordered_texture_assets(textures),
         evaluated_sampler_states: state.samplers,
@@ -470,18 +613,12 @@ fn create_effect_pass_material_asset(
             blend_state: blend,
             color_writes: state.color_writes,
         },
-        parameter_input_dependencies: dynamic_parameter_register_bindings.iter().fold(
-            fixed_transform_dependencies | reflection_dependencies,
-            |mask, binding| mask | binding.transform_semantic.input_dependencies(),
-        ),
         dirty_float_register_stages: 0,
         fixed_transform_bindings,
         dirty_fixed_transforms: false,
         dirty_fixed_function: false,
-        fixed_transform_render_view: None,
-        fixed_transform_evaluations: 0,
-        fixed_transform_evaluation_failures: 0,
-        fixed_transform_buffer_writes: 0,
+        transform_inputs,
+        dirty_transform_inputs: false,
         dynamic_parameter_register_bindings,
         dynamic_texture_semantics,
         vertex_uniform_upload_order,

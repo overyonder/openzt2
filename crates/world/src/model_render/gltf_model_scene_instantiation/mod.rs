@@ -15,6 +15,8 @@ use crate::model_render::authored_model_material_pass_projection::AuthoredModelM
 use crate::model_render::model_scene_visibility_and_shadow_projection::ModelSceneVisibilityAndShadowPolicyProjected;
 use openzt2_world_state::model_render::ModelExpanded;
 
+use crate::world_spawn::prefab_world_instance_spawning::ReleasePrefabRenderable;
+
 #[derive(Component)]
 pub(super) struct HiddenPrefabModelWorldAssetInstanceReleasePending;
 
@@ -32,7 +34,11 @@ pub(super) fn instantiate_visible_gltf_model_scenes(
             &mut PrefabMaterialOverrides,
             Ref<InheritedVisibility>,
         ),
-        (With<PrefabRenderable>, Without<ModelExpanded>),
+        (
+            With<PrefabRenderable>,
+            Without<ModelExpanded>,
+            Without<ReleasePrefabRenderable>,
+        ),
     >,
 ) {
     let gltf_assets_changed = gltf_asset_events.read().next().is_some();
@@ -128,6 +134,7 @@ pub(super) fn request_hidden_prefab_model_asset_release(
             &mut PrefabMaterialOverrides,
             &InheritedVisibility,
             Option<&WorldInstance>,
+            Has<ReleasePrefabRenderable>,
         ),
         (
             With<ModelExpanded>,
@@ -137,10 +144,11 @@ pub(super) fn request_hidden_prefab_model_asset_release(
     children: Query<&Children>,
     additional_material_passes: Query<Entity, With<AdditionalAuthoredModelMaterialPass>>,
 ) {
-    for (entity, mut model, mut material_overrides, visibility, world_instance) in
+    for (entity, mut model, mut material_overrides, visibility, world_instance, releasing) in
         &mut hidden_models
     {
-        if visibility.get() {
+        // A renderable being rebuilt is released as if it were hidden.
+        if visibility.get() && !releasing {
             continue;
         }
         if let Some(world_instance) = world_instance {

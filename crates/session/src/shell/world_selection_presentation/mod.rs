@@ -281,6 +281,12 @@ pub(super) fn project_selected_world_facts_into_authored_map_selection_controls(
             UiBooleanPropertyBindingSource::SelectedWorldAdjustableCash => {
                 selection.mode == Some(WorldSessionMode::Challenge)
             }
+            // Campaigns show their fixed starting cash in the disabled slider,
+            // whose spinners the original hides.
+            UiBooleanPropertyBindingSource::SelectedWorldStartingCashShown => matches!(
+                selection.mode,
+                Some(WorldSessionMode::Challenge | WorldSessionMode::Campaign)
+            ),
             UiBooleanPropertyBindingSource::SelectedWorldUnlimitedCash => {
                 selection.mode == Some(WorldSessionMode::Freeform)
             }
@@ -307,7 +313,7 @@ pub(super) fn project_selected_world_facts_into_authored_map_selection_controls(
             UiTextPropertyBindingSource::SelectedWorldName => {
                 selected.map_or("", |(_, map, scenario)| {
                     localized(Some(
-                        scenario.map_or(map.name_key, |scenario| scenario.name_key),
+                        scenario.map_or(map.name_key, |scenario| scenario.short_name_key),
                     ))
                 })
             }
@@ -340,6 +346,10 @@ pub(super) fn project_selected_world_facts_into_authored_map_selection_controls(
             UiTextPropertyBindingSource::SelectedWorldStartingCash => {
                 starting_cash.as_deref().unwrap_or("")
             }
+            UiTextPropertyBindingSource::SelectedWorldDifficulty => selected
+                .map_or("", |(_, _, scenario)| {
+                    localized(scenario.map(|scenario| scenario.difficulty))
+                }),
             _ => continue,
         };
         let mut has_existing_bevy_text_presentation = false;

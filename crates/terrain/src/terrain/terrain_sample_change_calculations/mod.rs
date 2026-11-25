@@ -2,6 +2,7 @@ use bevy::prelude::*;
 
 use crate::terrain::terrain_change_tracking_types::TerrainDirty;
 use crate::terrain::terrain_change_tracking_types::TerrainDirtyFlags;
+use crate::terrain::terrain_change_tracking_types::TerrainDirtyRegion;
 use openzt2_zoo_state::terrain::terrain_edit_data_types::TerrainSample;
 
 pub(super) fn determine_terrain_dirty_flags_from_changed_samples(
@@ -38,23 +39,50 @@ pub(super) fn determine_terrain_dirty_flags_from_changed_samples(
         )
 }
 
+/// Inclusive bounds of the samples that differ between `before` and `after`,
+/// which cover the row-major rectangle from `min` to `max`.
+pub(super) fn changed_terrain_sample_bounds(
+    before: &[TerrainSample],
+    after: &[TerrainSample],
+    min: UVec2,
+    max: UVec2,
+) -> Option<(UVec2, UVec2)> {
+    let width = (max.x - min.x + 1) as usize;
+    before
+        .iter()
+        .zip(after)
+        .enumerate()
+        .filter(|(_, (before, after))| before != after)
+        .map(|(index, _)| min + UVec2::new((index % width) as u32, (index / width) as u32))
+        .fold(None, |bounds, sample| match bounds {
+            None => Some((sample, sample)),
+            Some((low, high)) => Some((low.min(sample), high.max(sample))),
+        })
+}
+
 pub(super) fn merge_terrain_dirty_sample_rectangle_and_advance_revision(
     current: Option<TerrainDirty>,
     min: UVec2,
     max: UVec2,
     flags: TerrainDirtyFlags,
 ) -> TerrainDirty {
+    let region = TerrainDirtyRegion { min, max, flags };
     match current {
         Some(current) => TerrainDirty {
-            min: current.min.min(min),
-            max: current.max.max(max),
             flags: current.flags | flags,
+            render: Some(match current.render {
+                Some(pending) => TerrainDirtyRegion {
+                    min: pending.min.min(min),
+                    max: pending.max.max(max),
+                    flags: pending.flags | flags,
+                },
+                None => region,
+            }),
             revision: current.revision.checked_add(1).unwrap_or(u64::MAX),
         },
         None => TerrainDirty {
-            min,
-            max,
             flags,
+            render: Some(region),
             revision: 1,
         },
     }

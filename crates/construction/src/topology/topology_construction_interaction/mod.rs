@@ -11,6 +11,7 @@ use openzt2_zoo_state::construction::construction_interaction_types::PlacementVa
 use openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::ConstructionPlacementPolicy;
 use openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::ConstructionTool;
 use openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::FencePlacementShape;
+use openzt2_interface_state::information::catalogue_types::PurchaseChoice;
 use openzt2_zoo_state::construction::construction_transaction_types::ConstructionCommitted;
 use openzt2_zoo_state::construction::construction_transaction_types::EditCommitPhase;
 use openzt2_zoo_state::construction::construction_transaction_types::EditCommitProgress;
@@ -32,8 +33,10 @@ use crate::topology::topology_construction_preview_types::FencePreview;
 use crate::topology::topology_construction_preview_types::PathPreview;
 use crate::topology::topology_construction_preview_types::PlaceFence;
 use crate::topology::topology_construction_preview_types::PlacePath;
+use openzt2_game_data::AssetId;
 use openzt2_zoo_state::topology::topology_edit_types::TopologyEdit;
 use openzt2_zoo_state::topology::topology_edit_types::TopologySnapshot;
+use openzt2_zoo_state::topology::topology_graph_types::EdgeKey;
 use openzt2_zoo_state::topology::topology_graph_types::TopologyGrid;
 use openzt2_zoo_state::topology::topology_graph_types::TopologyIndex;
 use openzt2_zoo_state::topology::topology_graph_types::TopologyNode;
@@ -115,7 +118,7 @@ mod tests {
     }
 
     #[test]
-    fn gate_pointer_picks_the_nearest_fence_segment_within_reach() {
+    fn gate_pointer_picks_the_nearest_fence_segment_or_prompted_enclosure_wall() {
         let grid = TopologyGrid::default();
         let mut index = TopologyIndex::default();
         let near = EdgeKey::new(IVec3::ZERO, IVec3::new(4, 0, 0)).unwrap();
@@ -137,6 +140,16 @@ mod tests {
         assert_eq!(
             hovered_fence_edge(&index, grid, above(IVec3::new(20, 20, 0), Vec3::ZERO)),
             None
+        );
+        let prompt = RectangularEnclosureGatePrompt { edges: vec![far] };
+        assert_eq!(
+            nearest_prompted_enclosure_edge(
+                &prompt,
+                &index,
+                grid,
+                above(IVec3::new(20, 20, 0), Vec3::ZERO)
+            ),
+            Some((far.lo, far.hi))
         );
     }
 }
@@ -205,7 +218,10 @@ pub fn drive_selected_topology_placement_pointer_sequence(
     mut fences: MessageWriter<PlaceFence>,
     mut paths: MessageWriter<PlacePath>,
     mut commits: MessageWriter<CommitConstruction>,
-    mut anchor_diagnostics: Option<ResMut<InitialFenceAnchorPressDiagnosticState>>,
+    (mut anchor_diagnostics, gate_prompt): (
+        Option<ResMut<InitialFenceAnchorPressDiagnosticState>>,
+        Option<Res<RectangularEnclosureGatePrompt>>,
+    ),
 ) {
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
@@ -292,7 +308,11 @@ pub fn drive_selected_topology_placement_pointer_sequence(
         return;
     };
     if let (Some(fence), true) = (fence, gate) {
-        let (from, to) = hovered_fence_edge(&index, *grid, cursor.world).unwrap_or((cell, cell));
+        let (from, to) = gate_prompt
+            .as_deref()
+            .and_then(|prompt| nearest_prompted_enclosure_edge(prompt, &index, *grid, cursor.world))
+            .or_else(|| hovered_fence_edge(&index, *grid, cursor.world))
+            .unwrap_or((cell, cell));
         if !ui_capture.over_ui && (fence.from, fence.to) != (from, to) {
             fences.write(PlaceFence {
                 preview,
@@ -337,17 +357,115 @@ pub fn drive_selected_topology_placement_pointer_sequence(
     }
 }
 
+/// The walls of the enclosure that rectangular placement last closed. While
+/// they stand, its prompted gate snaps to whichever is nearest the pointer
+/// however far away it is, so the entrance is always offered on that enclosure.
+#[derive(Resource, Default)]
+pub struct RectangularEnclosureGatePrompt {
+    edges: Vec<EdgeKey>,
+}
+
+/// Records the gate-capable walls of a closed rectangular run and forgets them
+/// once a gate is placed or another tool replaces the prompted gate.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn track_rectangular_enclosure_gate_prompt(
+    mut committed: MessageReader<ConstructionCommitted>,
+    tool: Res<ConstructionTool>,
+    mut policy: ResMut<ConstructionPlacementPolicy>,
+    active_definitions: Res<WorldDefinitions>,
+    definitions: Res<Assets<WorldDefinitionAsset>>,
+    edits: Query<&TopologyEdit>,
+    nodes: Query<(&PersistentId, &TopologyNode)>,
+    mut prompt: ResMut<RectangularEnclosureGatePrompt>,
+    mut purchases: MessageWriter<PurchaseChoice>,
+) {
+    let Some(definitions) = active_definitions.get(&definitions) else {
+        committed.clear();
+        return;
+    };
+    let gate_tool = matches!(*tool, ConstructionTool::Fence(definition)
+        if fence_definition_is_gate(definitions, definition));
+    if tool.is_changed() && !gate_tool && !prompt.edges.is_empty() {
+        prompt.edges.clear();
+    }
+    for commit in committed.read() {
+        if gate_tool {
+            // The mode's `wizard/gate` events follow the prompted entrance
+            // with a single placement of their object (a donation box).
+            let wizard = definitions
+                .fence_placement_mode_policy()
+                .and_then(|mode| mode.gate_wizard_placement_object)
+                .filter(|object| definitions.find_placeable(*object).is_some());
+            if let (false, Some(object)) = (prompt.edges.is_empty(), wizard) {
+                purchases.write(PurchaseChoice { definition: object });
+                policy.repeat_placement = false;
+            }
+            prompt.edges.clear();
+            continue;
+        }
+        if policy.fence_shape == FencePlacementShape::Freeform {
+            continue;
+        }
+        let Ok(edit) = edits.get(commit.transaction) else {
+            continue;
+        };
+        let cell = |id: PersistentId| {
+            nodes
+                .iter()
+                .find_map(|(node_id, node)| (*node_id == id).then_some(node.cell))
+        };
+        let edges = edit
+            .created
+            .iter()
+            .filter_map(|snapshot| match snapshot {
+                TopologySnapshot::Fence {
+                    definition, a, b, ..
+                } if definitions
+                    .find_fence(*definition)
+                    .is_some_and(|fence| fence.gate != AssetId::default()) =>
+                {
+                    EdgeKey::new(cell(*a)?, cell(*b)?)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        if !edges.is_empty() {
+            prompt.edges = edges;
+        }
+    }
+}
+
 /// The fence segment nearest the pointer, within reach of a gate click.
 fn hovered_fence_edge(
     index: &TopologyIndex,
     grid: TopologyGrid,
     world: Vec3,
 ) -> Option<(IVec3, IVec3)> {
-    const REACH_M: f32 = 1.5;
-    let point = world.xz();
-    index
+    nearest_fence_edge(index.edges.keys(), grid, world, 1.5)
+}
+
+/// The prompted enclosure wall nearest the pointer, at any distance.
+fn nearest_prompted_enclosure_edge(
+    prompt: &RectangularEnclosureGatePrompt,
+    index: &TopologyIndex,
+    grid: TopologyGrid,
+    world: Vec3,
+) -> Option<(IVec3, IVec3)> {
+    let standing = prompt
         .edges
-        .keys()
+        .iter()
+        .filter(|edge| index.edges.contains_key(*edge));
+    nearest_fence_edge(standing, grid, world, f32::INFINITY)
+}
+
+fn nearest_fence_edge<'a>(
+    edges: impl Iterator<Item = &'a EdgeKey>,
+    grid: TopologyGrid,
+    world: Vec3,
+    reach_m: f32,
+) -> Option<(IVec3, IVec3)> {
+    let point = world.xz();
+    edges
         .map(|edge| {
             let (lo, hi) = (
                 grid.cell_translation(edge.lo).xz(),
@@ -356,7 +474,7 @@ fn hovered_fence_edge(
             let along = (point - lo).dot(hi - lo) / (hi - lo).length_squared().max(f32::EPSILON);
             (edge, point.distance(lo + (hi - lo) * along.clamp(0.0, 1.0)))
         })
-        .filter(|(_, distance)| *distance <= REACH_M)
+        .filter(|(_, distance)| *distance <= reach_m)
         .min_by(|a, b| a.1.total_cmp(&b.1))
         .map(|(edge, _)| (edge.lo, edge.hi))
 }

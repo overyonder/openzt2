@@ -186,17 +186,18 @@ pub(crate) fn consume_wheel_zoom(queue: &mut WheelZoomQueue, delta_seconds: f32)
 
 pub(crate) fn overhead_eye_and_target(rig: &OverheadRig) -> (Vec3, Vec3) {
     let hierarchy_root = Vec3::new(rig.focus.x, rig.height_m, rig.focus.y);
-    // The node assembly is root -> rotated vertical node ->
-    // `-lookAtDist` node -> `-currZoom` node -> camera. Flatten that single
-    // pitched radial branch into the authoritative Bevy camera transform.
+    // The node assembly is root -> vertical node -> `rotNode`, translated
+    // `-lookAtDist` and rotated by the pitch -> `camNode`, translated
+    // `-currZoom` in `rotNode`'s pitched frame -> camera, which aims at the
+    // `lookAtHeight` node. The pitch therefore swings only the zoom arm about
+    // a pivot `lookAtDist` behind the target, so zooming in flattens the view.
     // `parentingOffset` belongs to a sibling node used by parented modes.
-    let radial_distance = rig.look_at_distance_m + rig.distance;
-    let horizontal = radial_distance * rig.pitch.cos();
+    let horizontal = rig.look_at_distance_m + rig.distance * rig.pitch.cos();
     let eye = hierarchy_root
         + Vec3::Y * (rig.minimum_zoom_offset_m + rig.camera_ground_fit_offset_m)
         + Vec3::new(
             -rig.yaw.sin() * horizontal,
-            radial_distance * rig.pitch.sin(),
+            rig.distance * rig.pitch.sin(),
             rig.yaw.cos() * horizontal,
         );
     let target = hierarchy_root

@@ -3,12 +3,22 @@ use std::ops::BitOrAssign;
 
 use bevy::prelude::*;
 
+/// `flags` accumulates every kind of change the chunk has had,
+/// whereas `render` holds only what changed since the chunk's mesh and surface
+/// image were last rebuilt, which the render refresh takes.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct TerrainDirty {
+    pub(crate) flags: TerrainDirtyFlags,
+    pub(crate) render: Option<TerrainDirtyRegion>,
+    pub(crate) revision: u64,
+}
+
+/// Inclusive sample bounds of a change and the kinds of change inside them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct TerrainDirtyRegion {
     pub(crate) min: UVec2,
     pub(crate) max: UVec2,
     pub(crate) flags: TerrainDirtyFlags,
-    pub(crate) revision: u64,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -23,6 +33,10 @@ impl TerrainDirtyFlags {
 
     pub(super) const fn contains(self, other: Self) -> bool {
         self.0 & other.0 == other.0
+    }
+
+    pub(super) const fn intersects(self, other: Self) -> bool {
+        self.0 & other.0 != 0
     }
 }
 

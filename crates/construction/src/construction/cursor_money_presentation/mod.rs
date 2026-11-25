@@ -1,9 +1,9 @@
 use bevy::prelude::*;
 use bevy::ui::UiGlobalTransform;
 use bevy::window::PrimaryWindow;
-use openzt2_game_data::AssetId;
 use openzt2_game_data::localization::LocalizationFormatArgument;
 use openzt2_game_data::ui_document::node_property_binding::UiTextPropertyBindingSource;
+use openzt2_game_data::AssetId;
 
 use openzt2_game_assets::localization::localization_asset_types::LocalizationAsset;
 use openzt2_game_assets::localization::localization_precedence_index::LocalizationPrecedenceIndex;
@@ -112,7 +112,9 @@ pub(super) fn project_cursor_money_text_position_and_animation(
                 visibility.set_if_neq(Visibility::Hidden);
                 continue;
             };
-            (cost, position, true, false, false)
+            // A credit (negative net cost) uses the positive format, as the
+            // original negates the net cost before formatting it by sign.
+            (cost, position, cost.0 > 0, false, false)
         } else if let Ok(mut spend_fragment_owner) = spend_fragment_owners.get_mut(parent.parent())
         {
             let start_animation = !spend_fragment_owner.animation_started;
@@ -120,7 +122,7 @@ pub(super) fn project_cursor_money_text_position_and_animation(
             (
                 spend_fragment_owner.cost,
                 spend_fragment_owner.screen_position,
-                true,
+                spend_fragment_owner.cost.0 > 0,
                 true,
                 start_animation,
             )
@@ -167,13 +169,11 @@ pub(super) fn project_cursor_money_text_position_and_animation(
             node.reborrow()
                 .map_unchanged(|n| &mut n.left)
                 .set_if_neq(px(authored_position.x
-                    + animation.base_rect[0]
                     + animation.rect_intervals[0]
                         .map_or(animation.base_rect[0], |[_, end]| end)));
             node.reborrow()
                 .map_unchanged(|n| &mut n.top)
                 .set_if_neq(px(authored_position.y
-                    + animation.base_rect[1]
                     + animation.rect_intervals[1]
                         .map_or(animation.base_rect[1], |[_, end]| end)));
             node.reborrow()

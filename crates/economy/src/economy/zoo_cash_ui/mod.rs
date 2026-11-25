@@ -25,7 +25,6 @@ use openzt2_interface_state::ui::authored_ui_activation_contracts::UiNodeActivat
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentRoot;
 use openzt2_ui::authored_ui_text_content_binding::UiTextBinding;
-use std::fmt::Write;
 
 #[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(super) struct UiCashGrantPendingTransaction;
@@ -75,11 +74,14 @@ pub(super) fn project_zoo_cash_balance_into_authored_ui_text(
             selected_format = *positive_format;
         } else {
             let dollars = cash.0 .0 / 100;
-            let _ = if dollars < 0 {
-                write!(text.0, "-${}", dollars.unsigned_abs())
-            } else {
-                write!(text.0, "${dollars}")
-            };
+            // The original groups thousands: "$100,000".
+            if dollars < 0 {
+                text.0.push('-');
+            }
+            openzt2_zoo_state::economy::currency_formatting::write_whole_dollar_currency_with_thousands_separators(
+                &mut text.0,
+                (cash.0 .0 / 100 * 100).saturating_abs(),
+            );
             selected_format = if dollars < 0 {
                 *negative_format
             } else {

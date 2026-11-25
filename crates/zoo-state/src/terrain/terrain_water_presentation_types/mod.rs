@@ -162,6 +162,7 @@ impl TerrainWaterRegionView<'_> {
 
 /// Binds an existing region entity to its immutable terrain source row.
 #[derive(Component, Debug)]
+#[require(Transform, Visibility)]
 pub struct TerrainWaterRegionSource {
     terrain: Handle<TerrainAsset>,
     source_region_index: usize,
@@ -195,7 +196,7 @@ impl TerrainWaterRegionSource {
 }
 
 /// Derived spatial index; removed when terrain edits invalidate its source.
-#[derive(Component, Debug)]
+#[derive(Component, Debug, Clone)]
 pub struct TerrainWaterMembershipIndex {
     terrain: bevy::asset::AssetId<TerrainAsset>,
     width: u32,
@@ -213,11 +214,49 @@ pub struct TerrainWaterMembershipIndex {
     edited_point_heights: Option<Box<[f32]>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct TerrainWaterRegionSpatialIndex {
     owner: Entity,
     points: Box<[UVec2]>,
     tiles: Box<[UVec2]>,
+}
+
+impl TerrainWaterRegionSpatialIndex {
+    /// `points` are in row-major order.
+    fn new(owner: Entity, points: Vec<UVec2>, width: u32, height: u32) -> Self {
+        let tile_width = (width - 1) / 4;
+        let tile_height = (height - 1) / 4;
+        let mut tiles = Vec::new();
+        for point in &points {
+            let tile = *point / 4;
+            for x in [
+                Some(tile.x),
+                (point.x % 4 == 0).then(|| tile.x.checked_sub(1)).flatten(),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                for y in [
+                    Some(tile.y),
+                    (point.y % 4 == 0).then(|| tile.y.checked_sub(1)).flatten(),
+                ]
+                .into_iter()
+                .flatten()
+                {
+                    if x < tile_width && y < tile_height {
+                        tiles.push(UVec2::new(x, y));
+                    }
+                }
+            }
+        }
+        tiles.sort_unstable_by_key(|tile| (tile.y, tile.x));
+        tiles.dedup();
+        Self {
+            owner,
+            points: points.into_boxed_slice(),
+            tiles: tiles.into_boxed_slice(),
+        }
+    }
 }
 
 impl TerrainWaterMembershipIndex {
@@ -238,47 +277,19 @@ impl TerrainWaterMembershipIndex {
         if point_owners.len() != points || side_owners.len() != tiles {
             return None;
         }
-        let mut grouped = std::collections::BTreeMap::<Entity, (Vec<UVec2>, Vec<UVec2>)>::new();
-        let tile_width = (width - 1) / 4;
-        let tile_height = (height - 1) / 4;
+        let mut grouped = std::collections::BTreeMap::<Entity, Vec<UVec2>>::new();
         for (index, owner) in point_owners.iter().enumerate() {
-            let Some(owner) = *owner else {
-                continue;
-            };
-            let point = UVec2::new(index as u32 % width, index as u32 / width);
-            let entry = grouped.entry(owner).or_default();
-            entry.0.push(point);
-            let tile = point / 4;
-            for x in [
-                Some(tile.x),
-                (point.x % 4 == 0).then(|| tile.x.checked_sub(1)).flatten(),
-            ]
-            .into_iter()
-            .flatten()
-            {
-                for y in [
-                    Some(tile.y),
-                    (point.y % 4 == 0).then(|| tile.y.checked_sub(1)).flatten(),
-                ]
-                .into_iter()
-                .flatten()
-                {
-                    if x < tile_width && y < tile_height {
-                        entry.1.push(UVec2::new(x, y));
-                    }
-                }
+            if let Some(owner) = *owner {
+                grouped
+                    .entry(owner)
+                    .or_default()
+                    .push(UVec2::new(index as u32 % width, index as u32 / width));
             }
         }
         let regions = grouped
             .into_iter()
-            .map(|(owner, (points, mut tiles))| {
-                tiles.sort_unstable_by_key(|tile| (tile.y, tile.x));
-                tiles.dedup();
-                TerrainWaterRegionSpatialIndex {
-                    owner,
-                    points: points.into_boxed_slice(),
-                    tiles: tiles.into_boxed_slice(),
-                }
+            .map(|(owner, points)| {
+                TerrainWaterRegionSpatialIndex::new(owner, points, width, height)
             })
             .collect();
         let point_count = point_owners.len();
@@ -437,6 +448,147 @@ impl TerrainWaterMembershipIndex {
 
     pub fn has_water_sides(&self) -> bool {
         self.has_water_sides
+    }
+
+    /// Sets the owners and edited heights of `points`, returning the points
+    /// whose owner or height changed. Only the regions that gained or lost a
+    /// point are re-indexed.
+    pub fn set_edited_points(
+        &mut self,
+        points: impl IntoIterator<Item = (UVec2, Option<Entity>, f32)>,
+        terrain: &TerrainAsset,
+    ) -> Option<Vec<UVec2>> {
+        let width = self.width;
+        let heights = match &mut self.edited_point_heights {
+            Some(heights) => heights,
+            heights @ None => {
+                let grid = terrain.canonical_terrain_grid();
+                if grid.samples.len() != self.point_owners.len() {
+                    return None;
+                }
+                heights.insert(
+                    grid.samples
+                        .iter()
+                        .map(|sample| {
+                            grid.units.base_height_metres + sample.height_relative_to_base_metres
+                        })
+                        .collect(),
+                )
+            }
+        };
+        let mut changed = Vec::new();
+        let mut lost = std::collections::BTreeSet::new();
+        let mut gained = std::collections::BTreeMap::<Entity, Vec<UVec2>>::new();
+        for (point, owner, height) in points {
+            if point.x >= width || point.y >= self.height {
+                return None;
+            }
+            let index = (point.y * width + point.x) as usize;
+            let before = self.point_owners[index];
+            if before == owner && heights[index].to_bits() == height.to_bits() {
+                continue;
+            }
+            changed.push(point);
+            heights[index] = height;
+            if before != owner {
+                self.point_owners[index] = owner;
+                lost.extend(before);
+                if let Some(owner) = owner {
+                    gained.entry(owner).or_default().push(point);
+                }
+            }
+        }
+        let affected: std::collections::BTreeSet<_> =
+            lost.into_iter().chain(gained.keys().copied()).collect();
+        for owner in affected {
+            let position = self
+                .regions
+                .binary_search_by_key(&owner, |region| region.owner);
+            let mut points: Vec<_> = position
+                .ok()
+                .map(|position| self.regions[position].points.to_vec())
+                .unwrap_or_default();
+            points.retain(|point| {
+                self.point_owners[(point.y * width + point.x) as usize] == Some(owner)
+            });
+            points.extend(gained.remove(&owner).unwrap_or_default());
+            points.sort_unstable_by_key(|point| (point.y, point.x));
+            points.dedup();
+            let mut regions = std::mem::take(&mut self.regions).into_vec();
+            match (position, points.is_empty()) {
+                (Ok(position), true) => {
+                    regions.remove(position);
+                }
+                (Ok(position), false) => {
+                    regions[position] =
+                        TerrainWaterRegionSpatialIndex::new(owner, points, width, self.height);
+                }
+                (Err(position), false) => regions.insert(
+                    position,
+                    TerrainWaterRegionSpatialIndex::new(owner, points, width, self.height),
+                ),
+                (Err(_), true) => {}
+            }
+            self.regions = regions.into_boxed_slice();
+        }
+        Some(changed)
+    }
+
+    /// Points whose owner, edited height, side owners or selector codes differ
+    /// from `previous`, or `None` when the grids differ in shape. A changed
+    /// slope tile reports its two opposite corners.
+    pub fn changed_points_since(&self, previous: &Self) -> Option<Vec<UVec2>> {
+        if previous.terrain != self.terrain
+            || previous.width != self.width
+            || previous.height != self.height
+        {
+            return None;
+        }
+        let point = |index: usize| UVec2::new(index as u32 % self.width, index as u32 / self.width);
+        let mut changed: Vec<_> = self
+            .point_owners
+            .iter()
+            .zip(&previous.point_owners)
+            .enumerate()
+            .filter(|(_, (now, before))| now != before)
+            .map(|(index, _)| point(index))
+            .collect();
+        match (&self.edited_point_heights, &previous.edited_point_heights) {
+            (Some(now), Some(before)) => changed.extend(
+                now.iter()
+                    .zip(before.iter())
+                    .enumerate()
+                    .filter(|(_, (now, before))| now.to_bits() != before.to_bits())
+                    .map(|(index, _)| point(index)),
+            ),
+            (None, None) => {}
+            _ => return None,
+        }
+        let tile_width = (self.width - 1) / 4;
+        for index in 0..self.side_owners.len() {
+            if self.side_owners[index] != previous.side_owners[index]
+                || self.selector_projection[index] != previous.selector_projection[index]
+            {
+                let tile = UVec2::new(index as u32 % tile_width, index as u32 / tile_width);
+                changed.extend([tile * 4, tile * 4 + UVec2::splat(4)]);
+            }
+        }
+        Some(changed)
+    }
+
+    /// Replaces one slope tile's side owners, returning whether they changed.
+    pub fn set_side_owners(&mut self, tile: UVec2, sides: [Option<Entity>; 4]) -> Option<bool> {
+        let width = (self.width - 1) / 4;
+        if tile.x >= width || tile.y >= (self.height - 1) / 4 {
+            return None;
+        }
+        let slots = &mut self.side_owners[(tile.y * width + tile.x) as usize];
+        if *slots == sides {
+            return Some(false);
+        }
+        *slots = sides;
+        self.has_water_sides = self.side_owners.iter().flatten().any(Option::is_some);
+        Some(true)
     }
 
     pub fn selector_codes(&self, tile: UVec2) -> Option<&[u8; 4]> {
