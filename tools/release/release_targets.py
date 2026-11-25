@@ -1,12 +1,15 @@
 """Release target metadata shared by workflow generation and packaging."""
 
 import argparse
+import datetime
 import hashlib
 import json
 import os
 from pathlib import Path
 import re
 import shutil
+import subprocess
+import tempfile
 import tomllib
 
 WORKSPACE = Path(__file__).resolve().parents[2]
@@ -56,28 +59,81 @@ def write_package_checksums(output, identifier, version):
     (output / "SHA256SUMS").write_text("\n".join(lines) + "\n")
 
 
-def collect_release_packages(root, output, version):
-    expected = {name for identifier in TARGETS for name in artifact_names(identifier, version)}
-    seen = set()
-    checksums = []
-    output.mkdir(parents=True, exist_ok=True)
-    for manifest in sorted(root.rglob("SHA256SUMS")):
-        for line in manifest.read_text().splitlines():
-            digest, name = line.split(maxsplit=1)
-            name = name.strip()
-            if name not in expected or name in seen or Path(name).name != name:
-                raise ValueError(f"Unexpected or duplicate release package: {name}")
-            package = manifest.parent / name
-            with package.open("rb") as stream:
-                actual = hashlib.file_digest(stream, "sha256").hexdigest()
-            if actual != digest:
-                raise ValueError(f"Checksum mismatch: {name}")
-            seen.add(name)
-            shutil.copy2(package, output / name)
-            checksums.append(f"{digest}  {name}")
-    if seen != expected:
-        raise ValueError(f"Missing release packages: {sorted(expected - seen)}")
-    (output / "SHA256SUMS").write_text("\n".join(sorted(checksums)) + "\n")
+RELEASE_NOTES = """Downloads for Windows, macOS, and Linux are available at **[openzt2.org/download](https://openzt2.org/download/)** (Discord sign-in required for members of the [Songstorm Studios Discord](https://discord.gg/ZPqPCCtVFh)).
+
+OpenZT2 is in early development and requires your own Zoo Tycoon 2 Ultimate Collection game files.
+
+The [package guide](https://github.com/{repository}/blob/{tag}/tools/release/README.md) covers installation and runtime requirements."""
+
+
+def release_notes(tag):
+    return RELEASE_NOTES.format(repository=os.environ["GITHUB_REPOSITORY"], tag=tag)
+
+
+def r2(*arguments, check=True):
+    endpoint = f"https://{os.environ['R2_ACCOUNT_ID']}.r2.cloudflarestorage.com"
+    return subprocess.run(
+        ["aws", "s3", *arguments, "--endpoint-url", endpoint, "--no-progress"],
+        check=check, capture_output=True, text=True,
+    )
+
+
+def r2_key(key):
+    return f"s3://{os.environ['R2_BUCKET']}/{key}"
+
+
+def read_r2_json(key):
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / "object.json"
+        if r2("cp", r2_key(key), str(path), check=False).returncode != 0:
+            return None
+        return json.loads(path.read_text())
+
+
+def write_r2_json(key, value):
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / "object.json"
+        path.write_text(json.dumps(value, indent=2))
+        r2("cp", str(path), r2_key(key), "--content-type", "application/json")
+
+
+def target_status_key(tag, identifier):
+    return f"{tag}/status/{identifier}.json"
+
+
+def announce_release(tag):
+    """List the release with every target still building, before any finishes."""
+    entry = {
+        "tag_name": tag,
+        "name": tag,
+        "published_at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "body": release_notes(tag),
+        "targets": [{"id": identifier, "platform": target["platform"]} for identifier, target in TARGETS.items()],
+        "assets": [],
+    }
+    releases = read_r2_json("releases.json") or []
+    write_r2_json("releases.json", [entry] + [release for release in releases if release.get("tag_name") != tag])
+
+
+def publish_target(tag, identifier, version):
+    """Upload one target's packages, then mark it published."""
+    staged = WORKSPACE / "build/artifacts" / identifier
+    assets = []
+    for name in artifact_names(identifier, version):
+        path = staged / name
+        r2("cp", str(path), r2_key(f"{tag}/{name}"))
+        assets.append({"name": name, "size": path.stat().st_size})
+    checksums = f"SHA256SUMS-{identifier}"
+    r2("cp", str(staged / "SHA256SUMS"), r2_key(f"{tag}/{checksums}"))
+    assets.append({"name": checksums, "size": (staged / "SHA256SUMS").stat().st_size})
+    write_r2_json(target_status_key(tag, identifier), {"state": "published", "assets": assets})
+
+
+def fail_unpublished_targets(tag, identifiers):
+    """Mark targets that never published as failed."""
+    for identifier in identifiers:
+        if read_r2_json(target_status_key(tag, identifier)) is None:
+            write_r2_json(target_status_key(tag, identifier), {"state": "failed"})
 
 
 def main():
@@ -92,9 +148,16 @@ def main():
     checksums.add_argument("output", type=Path)
     stage = commands.add_parser("stage")
     stage.add_argument("identifier", choices=TARGETS)
-    collect = commands.add_parser("collect")
-    collect.add_argument("input", type=Path)
-    collect.add_argument("output", type=Path)
+    announce = commands.add_parser("announce")
+    announce.add_argument("tag")
+    notes = commands.add_parser("notes")
+    notes.add_argument("tag")
+    publish = commands.add_parser("publish")
+    publish.add_argument("tag")
+    publish.add_argument("identifier", choices=TARGETS)
+    fail = commands.add_parser("fail")
+    fail.add_argument("tag")
+    fail.add_argument("identifier", nargs="*", help="targets to check; every target when omitted")
     arguments = parser.parse_args()
     version = workspace_version()
     if arguments.command == "matrix":
@@ -135,8 +198,17 @@ def main():
         destination.mkdir(parents=True, exist_ok=True)
         for name in [*artifact_names(arguments.identifier, version), "SHA256SUMS"]:
             shutil.copy2(output / name, destination / name)
+    elif arguments.command == "announce":
+        announce_release(arguments.tag)
+    elif arguments.command == "notes":
+        print(release_notes(arguments.tag))
+    elif arguments.command == "publish":
+        publish_target(arguments.tag, arguments.identifier, version)
     else:
-        collect_release_packages(arguments.input, arguments.output, version)
+        unknown = set(arguments.identifier) - set(TARGETS)
+        if unknown:
+            parser.error(f"unknown targets: {sorted(unknown)}")
+        fail_unpublished_targets(arguments.tag, arguments.identifier or list(TARGETS))
 
 
 if __name__ == "__main__":

@@ -53,6 +53,37 @@ jobs:
       - id: targets
         run: python3 tools/release/release_targets.py matrix --target '${{ inputs.target || 'all' }}'
 
+  announce:
+    needs: targets
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    environment: release
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_TAG: ${{ github.ref_name }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.OPENZT2_R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.OPENZT2_R2_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: auto
+      R2_ACCOUNT_ID: ${{ secrets.OPENZT2_R2_ACCOUNT_ID }}
+      R2_BUCKET: ${{ secrets.OPENZT2_R2_BUCKET }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: List the release with every target building
+        run: python3 tools/release/release_targets.py announce "$RELEASE_TAG"
+      - name: Publish tagged release notes on GitHub
+        run: |
+          python3 tools/release/release_targets.py notes "$RELEASE_TAG" > release-notes.md
+          options=()
+          if [[ "$RELEASE_TAG" == *-* ]]; then options+=(--prerelease --latest=false); fi
+          gh release create "$RELEASE_TAG" --verify-tag --title "$RELEASE_TAG" \
+            --notes-file release-notes.md "${options[@]}"
+
   package:
     needs: targets
     if: needs.targets.outputs.build == 'true'
@@ -252,26 +283,36 @@ jobs:
           path: build/releases/${{ matrix.id }}/*.zip
           if-no-files-found: ignore
           retention-days: 1
-      - if: github.ref_type == 'tag'
-        uses: actions/upload-artifact@v4
-        with:
-          name: OpenZT2-${{ matrix.id }}
-          path: build/artifacts/${{ matrix.id }}/
-          if-no-files-found: error
-          retention-days: 1
+      - name: Publish this target's packages
+        if: github.ref_type == 'tag'
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.OPENZT2_R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.OPENZT2_R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          R2_ACCOUNT_ID: ${{ secrets.OPENZT2_R2_ACCOUNT_ID }}
+          R2_BUCKET: ${{ secrets.OPENZT2_R2_BUCKET }}
+        run: python3 tools/release/release_targets.py publish '${{ github.ref_name }}' '${{ matrix.id }}'
+      - name: Mark this target failed
+        if: failure() && github.ref_type == 'tag'
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.OPENZT2_R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.OPENZT2_R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          R2_ACCOUNT_ID: ${{ secrets.OPENZT2_R2_ACCOUNT_ID }}
+          R2_BUCKET: ${{ secrets.OPENZT2_R2_BUCKET }}
+        run: python3 tools/release/release_targets.py fail '${{ github.ref_name }}' '${{ matrix.id }}'
 
-  publish:
+  finish:
     needs: [targets, package]
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    if: always() && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-24.04
     permissions:
-      contents: write
+      contents: read
       actions: write
     environment: release
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
-      RELEASE_TAG: ${{ github.ref_name }}
       AWS_ACCESS_KEY_ID: ${{ secrets.OPENZT2_R2_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.OPENZT2_R2_SECRET_ACCESS_KEY }}
       AWS_DEFAULT_REGION: auto
@@ -282,54 +323,9 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.13'
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: OpenZT2-*
-          path: artifacts
-      - name: Collect declared packages and checksums
-        run: python3 tools/release/release_targets.py collect artifacts release
-      - name: Upload release binaries to R2 and update manifest
-        run: |
-          ENDPOINT="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
-          for file in release/*; do
-            name=$(basename "$file")
-            aws s3 cp "$file" "s3://${R2_BUCKET}/${RELEASE_TAG}/${name}" --endpoint-url "$ENDPOINT" --no-progress
-          done
-          aws s3 cp "s3://${R2_BUCKET}/releases.json" old-releases.json --endpoint-url "$ENDPOINT" --no-progress || echo '[]' > old-releases.json
-          cat > release-notes.md <<EOF
-          Downloads for Windows, macOS, and Linux are available at **[openzt2.org/download](https://openzt2.org/download/)** (Discord sign-in required for members of the [Songstorm Studios Discord](https://discord.gg/ZPqPCCtVFh)).
-
-          OpenZT2 is in early development and requires your own Zoo Tycoon 2 Ultimate Collection game files.
-
-          The [package guide](https://github.com/$GH_REPO/blob/$RELEASE_TAG/tools/release/README.md) covers installation and runtime requirements.
-          EOF
-          python3 - <<'PY'
-          import datetime, json, os
-          from pathlib import Path
-          tag = os.environ["RELEASE_TAG"]
-          body = Path("release-notes.md").read_text().strip()
-          assets = sorted(
-              [{"name": p.name, "size": p.stat().st_size} for p in Path("release").iterdir() if p.is_file()],
-              key=lambda a: a["name"],
-          )
-          entry = {
-              "tag_name": tag,
-              "name": tag,
-              "published_at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-              "body": body,
-              "assets": assets,
-          }
-          old = json.loads(Path("old-releases.json").read_text())
-          updated = [entry] + [r for r in old if r.get("tag_name") != tag]
-          Path("releases.json").write_text(json.dumps(updated, indent=2))
-          PY
-          aws s3 cp releases.json "s3://${R2_BUCKET}/releases.json" --endpoint-url "$ENDPOINT" --content-type "application/json" --no-progress
-      - name: Publish tagged release notes on GitHub
-        run: |
-          options=()
-          if [[ "$RELEASE_TAG" == *-* ]]; then options+=(--prerelease --latest=false); fi
-          gh release create "$RELEASE_TAG" --verify-tag --title "$RELEASE_TAG" \
-            --notes-file release-notes.md "${options[@]}"
+      # Cancelled or lost runners never reach their own failure step.
+      - name: Mark targets that never published as failed
+        run: python3 tools/release/release_targets.py fail '${{ github.ref_name }}'
       - name: Delete workflow artifacts from GitHub
         if: always()
         run: |

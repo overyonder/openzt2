@@ -263,6 +263,12 @@ fn add_openzt2_game_states_and_update_schedules(game_application: &mut App) {
 }
 
 fn add_developer_diagnostics_when_enabled(game_application: &mut App) {
+    // Bevy's remote protocol on 127.0.0.1:15702, for inspecting a running game.
+    #[cfg(feature = "remote")]
+    game_application.add_plugins((
+        bevy::remote::RemotePlugin::default(),
+        bevy::remote::http::RemoteHttpPlugin::default(),
+    ));
     #[cfg(feature = "dev-tools")]
     game_application.add_plugins(diagnostics::OpenZt2DeveloperDiagnosticsPlugin);
     #[cfg(not(feature = "dev-tools"))]

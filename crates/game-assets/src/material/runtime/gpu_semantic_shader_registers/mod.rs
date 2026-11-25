@@ -131,8 +131,16 @@ pub(super) fn rewrite_translated_shader_with_gpu_semantic_registers(
 
 impl TranslatedShaderText {
     fn from_spirv(spirv: &[u8]) -> io::Result<Self> {
-        let module = naga::front::spv::parse_u8_slice(spirv, &naga::front::spv::Options::default())
-            .map_err(io::Error::other)?;
+        // Read the SPIR-V as wgpu does. The translated shader already writes
+        // wgpu's y-up clip space, so naga must not flip it again.
+        let module = naga::front::spv::parse_u8_slice(
+            spirv,
+            &naga::front::spv::Options {
+                adjust_coordinate_space: false,
+                ..naga::front::spv::Options::default()
+            },
+        )
+        .map_err(io::Error::other)?;
         let info = naga::valid::Validator::new(
             naga::valid::ValidationFlags::all(),
             naga::valid::Capabilities::all(),
