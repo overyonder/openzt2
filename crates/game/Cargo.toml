@@ -13,7 +13,9 @@ mod-audit = ["dep:openzt2_game_data"]
 tracing = ["bevy/trace_tracy", "bevy/debug", "openzt2_game_assets/tracing", "openzt2_world/tracing"]
 trace-tracy-gpu = ["tracing"]
 trace-tracy-memory = ["tracing", "bevy/trace_tracy_memory"]
+remote = ["bevy/bevy_remote"]
 dev-tools = [
+    "remote",
     "dep:bevy-inspector-egui",
     "bevy/bevy_dev_tools",
     "bevy/render_dev_tools",

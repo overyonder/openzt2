@@ -28,10 +28,17 @@ pub(super) fn project_prefab_model_level_of_detail_visibility(
 ) {
     let selection = &mut *selection;
     current_cameras.clear();
+    // Water reflection and refraction captures also see the world's layers,
+    // but render to textures before the view that shows them. List the views
+    // drawn last first, so a model's level of detail follows the screen.
+    let mut active_cameras = cameras
+        .iter()
+        .filter(|(_, camera, ..)| camera.is_active)
+        .collect::<Vec<_>>();
+    active_cameras.sort_by_key(|(entity, camera, ..)| (std::cmp::Reverse(camera.order), *entity));
     current_cameras.extend(
-        cameras
-            .iter()
-            .filter(|(_, camera, ..)| camera.is_active)
+        active_cameras
+            .into_iter()
             .map(|(entity, _, transform, layers)| {
                 (
                     entity,
