@@ -365,7 +365,6 @@ pub(super) fn decode_validate_and_apply_snapshot_to_loaded_baseline_world(
             topology_snapshot_records.as_deref().unwrap_or_default(),
             placement_records,
             &tank_snapshot_records,
-            &economy_snapshot_records,
             &progression_snapshot_records,
             &show_snapshot_records,
             &transport_snapshot_records,

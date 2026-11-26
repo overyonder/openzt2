@@ -48,10 +48,14 @@ pub(super) fn apply_economy_snapshot_records_to_live_economy_resources_and_facil
         behavior_transaction_state::EconomyUsage, facility_economy_types::*,
     };
     for record in economy_snapshot_records.entity_economy_records {
-        let entity = entities_with_persistent_identifiers
-            .get(&record.persistent_identifier.0)
-            .copied()
-            .ok_or(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference)?;
+        // Economy state is saved for every defined object, also one no
+        // section restores, such as the food a guest holds; it has nowhere
+        // to go.
+        let Some(&entity) =
+            entities_with_persistent_identifiers.get(&record.persistent_identifier.0)
+        else {
+            continue;
+        };
         let mut entity = commands.entity(entity);
         if record.complete_component_state {
             entity.remove::<(

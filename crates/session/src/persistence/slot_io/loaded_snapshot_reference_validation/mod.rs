@@ -15,7 +15,6 @@ use super::{
         progression_snapshot_application::ProgressionSnapshotApplicationParameters,
         progression_snapshot_types::ProgressionSnapshotRecords,
     },
-    economy_snapshot_types::EconomySnapshotRecords,
     photo_snapshot_types::{PhotoChallengeProgressSnapshotRecord, PhotoSnapshotRecord},
     show_snapshot_types::ShowSnapshotRecords,
     tank_snapshot_types::{LoadedTankSnapshotIdentity, LoadedTankSnapshotRecord},
@@ -36,7 +35,6 @@ pub(super) fn validate_loaded_snapshot_references_and_imported_persistent_identi
     topology_snapshot_records: &[openzt2_zoo_state::topology::topology_edit_types::TopologySnapshot],
     placement_snapshot_records: &[super::placement_snapshot_section::PlacementSnapshotRecord],
     tank_snapshot_records: &[LoadedTankSnapshotRecord],
-    economy_snapshot_records: &EconomySnapshotRecords,
     progression_snapshot_records: &ProgressionSnapshotRecords,
     show_snapshot_records: &ShowSnapshotRecords,
     transport_snapshot_records: &TransportSnapshotRecords,
@@ -111,28 +109,6 @@ pub(super) fn validate_loaded_snapshot_references_and_imported_persistent_identi
                         .any(|candidate| *candidate == id)
                 }
             })
-            && economy_snapshot_records
-                .entity_economy_records
-                .iter()
-                .all(|record| {
-                    let id = record.persistent_identifier;
-                    persistent_identifier_exists(id)
-                        || placement_snapshot_records
-                            .iter()
-                            .any(|record| record.persistent_identifier == id.0)
-                        || animal_snapshot_records
-                            .iter()
-                            .any(|record| record.persistent_identifier == id.0)
-                        || staff_snapshot_records
-                            .iter()
-                            .any(|record| record.persistent_identifier == id.0)
-                        || loose_waste_records
-                            .iter()
-                            .any(|record| record.persistent_identifier == id.0)
-                        || topology_snapshot_records
-                            .iter()
-                            .any(|record| record.id() == id)
-                })
             && show_snapshot_records.stage_records.iter().all(|record| {
                 show_stages_with_mutable_snapshot_state.iter_mut().any(
                     |(_, persistent_identifier, ..)| {
@@ -329,15 +305,6 @@ pub(super) fn validate_loaded_snapshot_references_and_imported_persistent_identi
             .filter(|id| persistent_identifier_exists(**id))
             .map(|id| id.0)
             .collect::<Vec<_>>();
-        let missing_economy_owners = economy_snapshot_records
-            .entity_economy_records
-            .iter()
-            .filter(|record| {
-                !existing_persistent_identifiers.contains(&record.persistent_identifier)
-                    && !imported_persistent_identifiers.contains(&record.persistent_identifier)
-            })
-            .map(|record| record.persistent_identifier.0)
-            .collect::<Vec<_>>();
         bevy::log::warn!(
             animal_identifiers_are_available,
             waste_identifiers_are_available,
@@ -347,7 +314,6 @@ pub(super) fn validate_loaded_snapshot_references_and_imported_persistent_identi
             every_transport_member_and_vehicle_refers_to_a_saved_circuit,
             every_imported_persistent_identifier_is_valid_and_unique,
             ?conflicting_imports,
-            ?missing_economy_owners,
             "snapshot reference inventory rejected"
         );
         Err(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference)
